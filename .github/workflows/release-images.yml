@@ -1,0 +1,77 @@
+name: Release Docker images
+
+# Builds and pushes multi-arch (amd64 + arm64) images to Docker Hub.
+#
+# Triggers:
+#   - manually via workflow_dispatch (optionally overriding the tag)
+#   - on version tags (v*)
+#
+# Required repository secrets:
+#   DOCKERHUB_USERNAME — Docker Hub username with push access to the nordinit namespace
+#   DOCKERHUB_TOKEN    — Docker Hub access token (hub.docker.com → Account Settings → Security)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish alongside latest (e.g. 0.1.27)"
+        required: false
+        default: ""
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-images
+  cancel-in-progress: false
+
+jobs:
+  push-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version tag
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$(node -p "require('./cli/package.json').version")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.api
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            nordinit/agent-hq-api:latest
+            nordinit/agent-hq-api:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build and push UI image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.ui
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            nordinit/agent-hq-ui:latest
+            nordinit/agent-hq-ui:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=ui
+          cache-to: type=gha,scope=ui,mode=max
