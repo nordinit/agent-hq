@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Agent HQ social preview</title>
+  <desc id="desc">A branded preview card describing Agent HQ as a task routing and agent orchestration control plane.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#f6efe4"/>
+      <stop offset="100%" stop-color="#d9e6dd"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#153229"/>
+      <stop offset="100%" stop-color="#244a3a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <circle cx="1120" cy="120" r="160" fill="#c4d8c7" opacity="0.55"/>
+  <circle cx="180" cy="530" r="130" fill="#d8b88b" opacity="0.4"/>
+  <rect x="64" y="64" width="1152" height="512" rx="32" fill="url(#panel)"/>
+  <rect x="104" y="108" width="328" height="424" rx="22" fill="#f6efe4"/>
+  <rect x="136" y="148" width="264" height="18" rx="9" fill="#244a3a" opacity="0.2"/>
+  <rect x="136" y="188" width="220" height="66" rx="14" fill="#d9e6dd"/>
+  <rect x="136" y="274" width="220" height="66" rx="14" fill="#d8b88b"/>
+  <rect x="136" y="360" width="220" height="66" rx="14" fill="#c4d8c7"/>
+  <rect x="382" y="188" width="18" height="238" rx="9" fill="#244a3a" opacity="0.14"/>
+  <rect x="480" y="126" width="640" height="54" rx="16" fill="#ffffff" opacity="0.09"/>
+  <rect x="480" y="208" width="298" height="132" rx="20" fill="#ffffff" opacity="0.1"/>
+  <rect x="804" y="208" width="316" height="132" rx="20" fill="#ffffff" opacity="0.1"/>
+  <rect x="480" y="366" width="640" height="112" rx="20" fill="#ffffff" opacity="0.1"/>
+  <text x="480" y="274" fill="#f6efe4" font-family="Georgia, 'Times New Roman', serif" font-size="72" font-weight="700">Agent HQ</text>
+  <text x="480" y="330" fill="#d9e6dd" font-family="'Helvetica Neue', Arial, sans-serif" font-size="28">Task routing and orchestration control plane for AI agent teams</text>
+  <text x="480" y="418" fill="#f6efe4" font-family="'Helvetica Neue', Arial, sans-serif" font-size="26">Projects • Tasks • Routing • Chat • Telemetry</text>
+  <text x="480" y="458" fill="#f6efe4" font-family="'Helvetica Neue', Arial, sans-serif" font-size="26">OpenClaw • Claude Code • Webhook runtimes</text>
+  <text x="480" y="520" fill="#d8b88b" font-family="'Helvetica Neue', Arial, sans-serif" font-size="22" letter-spacing="2">SOURCE-AVAILABLE AGENT OPS</text>

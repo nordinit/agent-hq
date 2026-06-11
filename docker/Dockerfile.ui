@@ -1,0 +1,68 @@
+###############################################################################
+# Dockerfile.ui — Production image for the Agent HQ UI
+#
+# Stack: Node.js 20 LTS (Alpine), Next.js built and served with `next start`
+# Port:  3500 (default; override via PORT env var)
+#
+# ── Build ─────────────────────────────────────────────────────────────────────
+#   docker build -f docker/Dockerfile.ui \
+#     --build-arg NEXT_PUBLIC_API_URL=http://my-api-host:3501 \
+#     -t agent-hq-ui .
+#
+# ── Run ───────────────────────────────────────────────────────────────────────
+#   docker run -p 3500:3500 agent-hq-ui
+#
+# ── Environment variables ─────────────────────────────────────────────────────
+#   NEXT_PUBLIC_API_URL  Full base URL of the Agent HQ API   (build-time ARG)
+#                        Example: http://api.example.com:3501
+#                        Default: http://localhost:3501
+#   PORT                 Port the UI server listens on        (default: 3500)
+#   NODE_ENV             production | development             (default: production)
+###############################################################################
+
+# ── Stage 1: build ────────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+
+# NEXT_PUBLIC_* vars are inlined at build time by Next.js — accept via ARG and
+# promote to ENV so the `next build` process can read them.
+ARG NEXT_PUBLIC_API_URL=http://localhost:3501
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+WORKDIR /build
+
+# Install dependencies first (layer-cached until package files change)
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci --ignore-scripts
+
+# Copy the rest of the UI source
+COPY ui/ ./
+
+# Build the Next.js production bundle
+RUN npm run build
+
+# ── Stage 2: runtime ──────────────────────────────────────────────────────────
+FROM node:20-alpine AS runtime
+
+# Create a non-root user for the UI process
+RUN addgroup -S agenthq && adduser -S agenthq -G agenthq
+
+WORKDIR /app
+
+# Copy only what next start needs: built output, public assets (if present), and prod deps
+COPY --from=builder --chown=agenthq:agenthq /build/.next ./.next
+COPY --from=builder --chown=agenthq:agenthq /build/node_modules ./node_modules
+COPY --from=builder --chown=agenthq:agenthq /build/package.json ./
+COPY --from=builder --chown=agenthq:agenthq /build/next.config.js ./
+# Copy public/ only if it exists (Next.js does not require it)
+# If your project adds a public/ directory, uncomment the line below:
+# COPY --from=builder --chown=agenthq:agenthq /build/public ./public
+
+ENV NODE_ENV=production \
+    PORT=3500
+
+EXPOSE 3500
+
+USER agenthq
+
+# Serve the pre-built Next.js app in production mode
+CMD ["node_modules/.bin/next", "start", "-p", "3500"]

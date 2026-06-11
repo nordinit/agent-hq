@@ -1,0 +1,41 @@
+# Node modules — always reinstalled inside the container
+node_modules
+api/node_modules
+ui/node_modules
+
+# Compiled output — rebuilt inside the container
+api/dist
+ui/dist
+ui/.next
+ui/out
+
+# Database files — data is mounted via volume at runtime
+*.db
+*.db-shm
+*.db-wal
+
+# Local env / secrets
+.env
+.env.*
+!.env.*.example
+
+# Git
+.git
+.gitignore
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+coverage
+.nyc_output
+
+# Editor
+.vscode
+.idea
+*.swp

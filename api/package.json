@@ -1,0 +1,86 @@
+{
+  "name": "agent-hq-api",
+  "version": "1.0.0",
+  "description": "Agent HQ API — agent management backend",
+  "main": "dist/index.js",
+  "bin": {
+    "agent-hq-mcp": "dist/mcp/server.js"
+  },
+  "scripts": {
+    "mcp": "tsx src/mcp/server.ts",
+    "dev": "tsx watch src/index.ts",
+    "dev:dev": "AGENT_HQ_DB_PATH=../agent-hq-dev.db PORT=3511 tsx watch src/index.ts",
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc",
+    "db:migrate": "node dist/db/migrate.js",
+    "db:install": "node dist/db/migrate.js",
+    "db:migrate:preflight": "node dist/db/migrate.js",
+    "db:repair-tenants": "node dist/db/repair-tenant-ownership.js",
+    "db:migrate:status": "node dist/db/migrateStatus.js",
+    "db:provision-defaults": "npx tsx src/db/provision-defaults.ts",
+    "start": "node dist/index.js",
+    "start:dev": "AGENT_HQ_DB_PATH=../agent-hq-dev.db PORT=3511 node dist/index.js",
+    "lint": "tsc --noEmit",
+    "test": "jest",
+    "test:chat-deep-link": "jest --runInBand --config '{\"preset\":\"ts-jest\",\"testEnvironment\":\"node\",\"testMatch\":[\"**/src/lib/chatDeepLink.test.js\"]}'",
+    "seed:dev": "AGENT_HQ_DB_PATH=../agent-hq-dev.db npx tsx src/db/seed-dev.ts"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/*.test.ts"
+    ],
+    "globalSetup": "<rootDir>/src/db/jest-global-setup.ts",
+    "setupFiles": [
+      "<rootDir>/src/db/jest-setup-env.ts"
+    ],
+    "setupFilesAfterEnv": [
+      "<rootDir>/src/db/jest-after-env.ts"
+    ],
+    "globals": {
+      "ts-jest": {
+        "tsconfig": "tsconfig.json"
+      }
+    },
+    "moduleNameMapper": {
+      "^@anthropic-ai/claude-agent-sdk$": "<rootDir>/src/__mocks__/@anthropic-ai/claude-agent-sdk.ts"
+    },
+    "modulePathIgnorePatterns": [
+      "<rootDir>/dist/"
+    ]
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.81",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/multer": "^2.1.0",
+    "@types/ws": "^8.18.1",
+    "better-sqlite3": "^12.6.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "express": "^4.18.2",
+    "multer": "^2.1.1",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^3.3.2",
+    "playwright-core": "^1.58.2",
+    "simple-git": "^3.22.0",
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
+  },
+  "overrides": {
+    "hono": "^4.12.12",
+    "@hono/node-server": "^1.19.13"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^20.11.5",
+    "@types/node-cron": "^3.0.11",
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.6",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

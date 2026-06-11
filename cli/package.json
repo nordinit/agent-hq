@@ -1,0 +1,35 @@
+{
+  "name": "@nordinit/agent-hq",
+  "version": "0.1.26",
+  "description": "CLI launcher for Agent HQ — task management for AI agent teams",
+  "license": "SEE LICENSE IN LICENSE",
+  "bin": {
+    "agent-hq": "bin/cli.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/cli.js",
+    "lib/",
+    "docker-compose.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "agent-hq",
+    "task-management",
+    "ai-agents",
+    "docker",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nordinit/agent-hq"
+  },
+  "homepage": "https://github.com/nordinit/agent-hq#readme",
+  "bugs": {
+    "url": "https://github.com/nordinit/agent-hq/issues"
+  }
+}

@@ -1,0 +1,362 @@
+#!/usr/bin/env node
+/**
+ * agent-hq-callback — Agent HQ lifecycle callback helper for local agents.
+ *
+ * Provides a simple CLI surface for all Agent HQ lifecycle events so agents
+ * don't need to handcraft curl calls from prompt prose.
+ *
+ * Usage:
+ *   agent-hq-callback start
+ *   agent-hq-callback checkin [--stage progress|heartbeat] [--summary "..."] [--meaningful]
+ *   agent-hq-callback blocker --reason "..."
+ *   agent-hq-callback outcome --outcome completed_for_review [--summary "..."]
+ *   agent-hq-callback complete [--status done] [--summary "..."] [--outcome completed_for_review]
+ *   agent-hq-callback evidence --branch "..." --commit "..." [--dev-url "..."] [--notes "..."]
+ *
+ * Context resolution (highest priority wins):
+ *   1. CLI flags: --instance-id, --task-id, --session-key, --api-base, --agent-slug
+ *   2. Environment variables: AGENT_HQ_INSTANCE_ID, AGENT_HQ_TASK_ID, AGENT_HQ_SESSION_KEY,
+ *      AGENT_HQ_API_BASE, AGENT_HQ_AGENT_SLUG
+ *   3. .agent-hq-run-context.json in CWD or up to 5 parent directories
+ *
+ * Exit codes:
+ *   0 — success
+ *   1 — missing required context or args
+ *   2 — HTTP request failed
+ */
+
+'use strict';
+
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+
+// ── Argument parsing ────────────────────────────────────────────────────────
+
+function parseArgs(argv) {
+  const args = argv.slice(2);
+  const command = args[0] || '';
+  const flags = {};
+  const positional = [];
+
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2);
+      // Boolean flags (no value)
+      if (key === 'meaningful' || key === 'help' || key === 'json' || key === 'verbose') {
+        flags[key] = true;
+        continue;
+      }
+      const val = args[i + 1];
+      if (val !== undefined && !val.startsWith('--')) {
+        flags[key] = val;
+        i++;
+      } else {
+        flags[key] = true;
+      }
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  return { command, flags, positional };
+}
+
+// ── Context resolution ──────────────────────────────────────────────────────
+
+const CONTEXT_FILENAME = '.agent-hq-run-context.json';
+
+function findContextFile(startDir) {
+  let dir = startDir || process.cwd();
+  for (let i = 0; i < 6; i++) {
+    const candidate = path.join(dir, CONTEXT_FILENAME);
+    if (fs.existsSync(candidate)) {
+      try {
+        return JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+      } catch {
+        return null;
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function resolveContext(flags) {
+  const fileCtx = findContextFile(process.cwd()) || {};
+
+  return {
+    instanceId: flags['instance-id'] || process.env.AGENT_HQ_INSTANCE_ID || fileCtx.instance_id || null,
+    taskId: flags['task-id'] || process.env.AGENT_HQ_TASK_ID || fileCtx.task_id || null,
+    sessionKey: flags['session-key'] || process.env.AGENT_HQ_SESSION_KEY || fileCtx.session_key || null,
+    apiBase: flags['api-base'] || process.env.AGENT_HQ_API_BASE || fileCtx.api_base || 'http://localhost:3501',
+    agentSlug: flags['agent-slug'] || process.env.AGENT_HQ_AGENT_SLUG || fileCtx.agent_slug || null,
+  };
+}
+
+// ── HTTP helpers ────────────────────────────────────────────────────────────
+
+function request(method, url, body) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const lib = parsed.protocol === 'https:' ? https : http;
+    const data = body ? JSON.stringify(body) : null;
+
+    const req = lib.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: parsed.pathname + parsed.search,
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+        },
+      },
+      (res) => {
+        let chunks = '';
+        res.on('data', (d) => (chunks += d));
+        res.on('end', () => {
+          let json = null;
+          try {
+            json = JSON.parse(chunks);
+          } catch {
+            json = chunks;
+          }
+          resolve({ status: res.statusCode, body: json });
+        });
+      }
+    );
+
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+// ── Commands ────────────────────────────────────────────────────────────────
+
+async function cmdStart(ctx, flags) {
+  requireFields(ctx, ['instanceId', 'sessionKey']);
+  const url = `${ctx.apiBase}/api/v1/instances/${ctx.instanceId}/start`;
+  const body = { session_key: ctx.sessionKey };
+  return request('PUT', url, body);
+}
+
+async function cmdCheckin(ctx, flags) {
+  requireFields(ctx, ['instanceId', 'sessionKey']);
+  const stage = flags.stage || 'heartbeat';
+  const summary = flags.summary || 'Still working';
+  const url = `${ctx.apiBase}/api/v1/instances/${ctx.instanceId}/check-in`;
+  const body = {
+    stage,
+    summary,
+    session_key: ctx.sessionKey,
+  };
+  if (flags.meaningful || stage === 'progress') {
+    body.meaningful_output = true;
+  }
+  return request('POST', url, body);
+}
+
+async function cmdBlocker(ctx, flags) {
+  requireFields(ctx, ['instanceId', 'sessionKey']);
+  const reason = flags.reason || flags.summary || 'Blocked — no details provided';
+  const url = `${ctx.apiBase}/api/v1/instances/${ctx.instanceId}/check-in`;
+  const body = {
+    stage: 'blocker',
+    summary: reason,
+    blocker_reason: reason,
+    session_key: ctx.sessionKey,
+    meaningful_output: true,
+  };
+  return request('POST', url, body);
+}
+
+async function cmdOutcome(ctx, flags) {
+  requireFields(ctx, ['taskId', 'agentSlug']);
+  const outcome = flags.outcome;
+  if (!outcome) {
+    die('--outcome is required (e.g. completed_for_review, blocked, failed, qa_pass, qa_fail, deployed_live, live_verified)');
+  }
+  const summary = flags.summary || `Task #${ctx.taskId} ${outcome}`;
+  const url = `${ctx.apiBase}/api/v1/tasks/${ctx.taskId}/outcome`;
+  const body = {
+    outcome,
+    summary,
+    changed_by: ctx.agentSlug,
+    instance_id: Number(ctx.instanceId) || undefined,
+  };
+  return request('POST', url, body);
+}
+
+async function cmdComplete(ctx, flags) {
+  requireFields(ctx, ['instanceId']);
+  const status = flags.status || 'done';
+  const summary = flags.summary || `Instance #${ctx.instanceId} completed`;
+  const outcome = flags.outcome || 'completed_for_review';
+  const url = `${ctx.apiBase}/api/v1/instances/${ctx.instanceId}/complete`;
+  const body = { status, summary, outcome };
+  return request('PUT', url, body);
+}
+
+async function cmdEvidence(ctx, flags) {
+  requireFields(ctx, ['taskId']);
+  const evidenceType = flags.type || 'review';
+  let url, body;
+
+  switch (evidenceType) {
+    case 'review':
+      url = `${ctx.apiBase}/api/v1/tasks/${ctx.taskId}/review-evidence`;
+      body = {
+        branch: flags.branch,
+        commit: flags.commit,
+        dev_url: flags['dev-url'] || undefined,
+        notes: flags.notes || undefined,
+      };
+      break;
+    case 'qa':
+      url = `${ctx.apiBase}/api/v1/tasks/${ctx.taskId}/qa-evidence`;
+      body = {
+        qa_url: flags['qa-url'],
+        verified_commit: flags.commit,
+        notes: flags.notes || undefined,
+      };
+      break;
+    case 'deploy':
+      url = `${ctx.apiBase}/api/v1/tasks/${ctx.taskId}/deploy-evidence`;
+      body = {
+        merged_commit: flags['merged-commit'] || flags.commit,
+        deployed_commit: flags['deployed-commit'] || flags.commit,
+        deploy_target: flags['deploy-target'] || 'production',
+        deployed_at: flags['deployed-at'] || new Date().toISOString(),
+      };
+      break;
+    default:
+      die(`Unknown evidence type: ${evidenceType}. Use review, qa, or deploy.`);
+  }
+
+  return request('PUT', url, body);
+}
+
+// ── Help ────────────────────────────────────────────────────────────────────
+
+function printHelp() {
+  console.log(`agent-hq-callback — Agent HQ lifecycle callback helper
+
+Commands:
+  start                          Mark the instance as started
+  checkin                        Send a heartbeat or progress check-in
+    --stage progress|heartbeat   Check-in stage (default: heartbeat)
+    --summary "..."              Progress description
+    --meaningful                 Flag as meaningful output
+  blocker                        Report a blocker
+    --reason "..."               Blocker description (required)
+  outcome                        Report the final task outcome
+    --outcome <value>            Outcome value (required):
+                                   completed_for_review, blocked, failed,
+                                   qa_pass, qa_fail, deployed_live, live_verified
+    --summary "..."              One-line summary
+  complete                       Close the job instance
+    --status done|failed         Instance status (default: done)
+    --summary "..."              One-line summary
+    --outcome <value>            Matching outcome (default: completed_for_review)
+  evidence                       Record review/QA/deploy evidence
+    --type review|qa|deploy      Evidence type (default: review)
+    --branch "..."               Branch name (review)
+    --commit "..."               Commit SHA
+    --dev-url "..."              Dev environment URL (review)
+    --qa-url "..."               QA URL (qa)
+    --notes "..."                Optional notes
+
+Context flags (override env / context file):
+  --instance-id <id>             Instance ID
+  --task-id <id>                 Task ID
+  --session-key <key>            Session key
+  --api-base <url>               Agent HQ API base (default: http://localhost:3501)
+  --agent-slug <slug>            Agent identifier
+
+Context resolution order:
+  1. CLI flags
+  2. Environment variables (AGENT_HQ_INSTANCE_ID, AGENT_HQ_TASK_ID, etc.)
+  3. .agent-hq-run-context.json in CWD or parent directories`);
+}
+
+// ── Utilities ───────────────────────────────────────────────────────────────
+
+function requireFields(ctx, fields) {
+  for (const f of fields) {
+    if (!ctx[f]) {
+      die(
+        `Missing required context: ${f}.\n` +
+        `Set via --${f.replace(/([A-Z])/g, '-$1').toLowerCase()}, ` +
+        `ATLAS_${f.replace(/([A-Z])/g, '_$1').toUpperCase()} env var, ` +
+        `or .agent-hq-run-context.json`
+      );
+    }
+  }
+}
+
+function die(msg) {
+  console.error(`[agent-hq-callback] Error: ${msg}`);
+  process.exit(1);
+}
+
+// ── Main ────────────────────────────────────────────────────────────────────
+
+const COMMANDS = {
+  start: cmdStart,
+  checkin: cmdCheckin,
+  'check-in': cmdCheckin,
+  blocker: cmdBlocker,
+  outcome: cmdOutcome,
+  complete: cmdComplete,
+  evidence: cmdEvidence,
+};
+
+async function main() {
+  const { command, flags } = parseArgs(process.argv);
+
+  if (!command || command === 'help' || flags.help) {
+    printHelp();
+    process.exit(0);
+  }
+
+  const handler = COMMANDS[command];
+  if (!handler) {
+    die(`Unknown command: ${command}\nRun 'agent-hq-callback help' for usage.`);
+  }
+
+  const ctx = resolveContext(flags);
+  const verbose = flags.verbose || process.env.AGENT_HQ_CALLBACK_VERBOSE === '1';
+
+  try {
+    const result = await handler(ctx, flags);
+
+    if (verbose || flags.json) {
+      console.log(JSON.stringify(result.body, null, 2));
+    }
+
+    if (result.status >= 200 && result.status < 300) {
+      if (!flags.json && !verbose) {
+        console.log(`✓ ${command} OK`);
+      }
+      process.exit(0);
+    } else {
+      const errMsg = typeof result.body === 'object' && result.body
+        ? (result.body.error || result.body.message || JSON.stringify(result.body))
+        : String(result.body);
+      console.error(`[agent-hq-callback] ${command} failed (HTTP ${result.status}): ${errMsg}`);
+      process.exit(2);
+    }
+  } catch (err) {
+    console.error(`[agent-hq-callback] ${command} error: ${err.message}`);
+    process.exit(2);
+  }
+}
+
+main();

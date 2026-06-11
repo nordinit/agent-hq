@@ -1,0 +1,805 @@
+import { spawn } from "child_process";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import type Database from "better-sqlite3";
+import type {
+  AgentRuntime,
+  DispatchParams,
+  PrepareAuthProfilesParams,
+  RuntimeAuthProfileSyncResult,
+  RuntimeEndEvent,
+} from "../types";
+import { skippedRuntimeAuthProfileSync } from "../types";
+import { applyRuntimeEndToJobInstance } from "../../domains/runs/runtimeEnd";
+import {
+  materializeAgentMcpConfig,
+  materializeHermesMcpConfig,
+} from "../mcpMaterialization";
+import {
+  resolveOAuthCredentialForProvider,
+  type OpenClawOAuthCredential,
+} from "../../lib/openclawOAuthProfiles";
+import { detectProviderLimitFailureText } from "../providerLimitFailure";
+import {
+  ingestHermesTranscriptForRun,
+  prependAgentHqRunContext,
+} from "../hermesTranscriptIngestion";
+import {
+  normalizeHermesRuntimeConfig,
+  type HermesRuntimeConfig,
+  type NormalizedHermesRuntimeConfig,
+} from "./config";
+import {
+  parseHermesInstanceIdFromRunId,
+  stopHermesActiveRun,
+  waitForHermesChildProcess,
+  type ActiveHermesRun,
+  type ProcessExitResult,
+} from "./abort";
+
+const HERMES_TRANSCRIPT_POLL_INTERVAL_MS = 2_000;
+
+function extractFailureSummary(base: string, details: string): string {
+  const trimmed = details.trim();
+  if (!trimmed) return base;
+  return `${base} — ${trimmed.replace(/\s+/g, " ").slice(0, 240)}`;
+}
+
+function toStringEnv(
+  values: Record<string, string | null | undefined>,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (typeof value === "string") env[key] = value;
+  }
+  return env;
+}
+
+function readJsonObject(filePath: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeJsonObjectAtomic(filePath: string, data: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+  fs.renameSync(tmpPath, filePath);
+}
+
+function resolveHermesAuthPath(config: NormalizedHermesRuntimeConfig): string {
+  return path.join(resolveHermesProfileHome(config), "auth.json");
+}
+
+function resolveDefaultHermesRoot(): string {
+  return path.join(os.homedir(), ".hermes");
+}
+
+function resolveHermesProfileHome(config: NormalizedHermesRuntimeConfig): string {
+  const explicitHome = config.hermesHome?.trim();
+  if (explicitHome) {
+    const resolved = path.resolve(explicitHome);
+    if (path.basename(resolved) === config.profile && path.basename(path.dirname(resolved)) === "profiles") {
+      return resolved;
+    }
+    return path.join(resolved, "profiles", config.profile);
+  }
+  return path.join(resolveDefaultHermesRoot(), "profiles", config.profile);
+}
+
+function buildHermesCredentialId(credential: OpenClawOAuthCredential): string {
+  const basis = credential.accountId ?? credential.email ?? credential.access ?? credential.refresh;
+  let hash = 0;
+  for (let i = 0; i < basis.length; i += 1) {
+    hash = ((hash << 5) - hash + basis.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(16).slice(0, 6).padStart(6, "0");
+}
+
+function upsertHermesOpenAiCodexAuth(filePath: string, credential: OpenClawOAuthCredential): boolean {
+  const existing = readJsonObject(filePath);
+  const nowIso = new Date().toISOString();
+  const providers = existing.providers && typeof existing.providers === "object" && !Array.isArray(existing.providers)
+    ? existing.providers as Record<string, unknown>
+    : {};
+  const credentialPool = existing.credential_pool && typeof existing.credential_pool === "object" && !Array.isArray(existing.credential_pool)
+    ? existing.credential_pool as Record<string, unknown>
+    : {};
+
+  const tokenPayload = {
+    access_token: credential.access,
+    refresh_token: credential.refresh,
+    ...(credential.accountId ? { account_id: credential.accountId } : {}),
+  };
+
+  providers["openai-codex"] = {
+    tokens: tokenPayload,
+    last_refresh: nowIso,
+    auth_mode: "chatgpt",
+  };
+
+  credentialPool["openai-codex"] = [
+    {
+      id: buildHermesCredentialId(credential),
+      label: "agent-hq",
+      auth_type: "oauth",
+      priority: 0,
+      source: "agent-hq",
+      access_token: credential.access,
+      refresh_token: credential.refresh,
+      base_url: "https://chatgpt.com/backend-api/codex",
+      last_refresh: nowIso,
+      request_count: 0,
+    },
+  ];
+
+  const next = {
+    ...existing,
+    version: 1,
+    providers,
+    credential_pool: credentialPool,
+    updated_at: nowIso,
+    active_provider: "openai-codex",
+  };
+
+  const previous = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
+  const serialized = JSON.stringify(next, null, 2) + "\n";
+  if (previous === serialized) return false;
+  writeJsonObjectAtomic(filePath, next);
+  return true;
+}
+
+function hermesOpenAiCodexAuthReady(filePath: string): boolean {
+  const data = readJsonObject(filePath);
+  const providers = data.providers && typeof data.providers === "object" && !Array.isArray(data.providers)
+    ? data.providers as Record<string, unknown>
+    : {};
+  const provider = providers["openai-codex"];
+  if (!provider || typeof provider !== "object" || Array.isArray(provider)) return false;
+  const tokens = (provider as Record<string, unknown>).tokens;
+  if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) return false;
+  const access = typeof (tokens as Record<string, unknown>).access_token === "string"
+    ? ((tokens as Record<string, unknown>).access_token as string).trim()
+    : "";
+  const refresh = typeof (tokens as Record<string, unknown>).refresh_token === "string"
+    ? ((tokens as Record<string, unknown>).refresh_token as string).trim()
+    : "";
+  return Boolean(access || refresh);
+}
+
+export class HermesRuntime implements AgentRuntime {
+  private readonly baseConfig: HermesRuntimeConfig;
+  private readonly activeRuns = new Map<number, ActiveHermesRun>();
+
+  constructor(config: HermesRuntimeConfig = {}) {
+    this.baseConfig = config;
+  }
+
+  async prepareAuthProfiles(params: PrepareAuthProfilesParams): Promise<RuntimeAuthProfileSyncResult> {
+    const mergedConfig = normalizeHermesRuntimeConfig({
+      ...this.baseConfig,
+      ...((params.runtimeConfig as HermesRuntimeConfig | undefined) ?? {}),
+    });
+    const provider =
+      mergedConfig.provider ??
+      params.preferredProvider ??
+      null;
+
+    if (provider !== "openai-codex") {
+      return skippedRuntimeAuthProfileSync("Hermes runtime auth sync is only required for openai-codex provider selection.");
+    }
+
+    const authPath = resolveHermesAuthPath(mergedConfig);
+    const resolved = await resolveOAuthCredentialForProvider({ provider: "openai-codex" });
+    if (!resolved.ok || !resolved.credential) {
+      return {
+        ok: false,
+        status: "failed",
+        providersSynced: [],
+        runtimeAuthProvidersSynced: [],
+        openclawAuthProvidersSynced: [],
+        runtimeAuthPath: authPath,
+        source: resolved.source,
+        refreshed: resolved.refreshed,
+        error: resolved.error ?? "No usable openai-codex OAuth credential was found for Hermes runtime auth.",
+      };
+    }
+
+    upsertHermesOpenAiCodexAuth(authPath, resolved.credential);
+    const ready = hermesOpenAiCodexAuthReady(authPath);
+    return {
+      ok: ready,
+      status: ready ? "synced" : "failed",
+      providersSynced: ready ? ["openai-codex"] : [],
+      runtimeAuthProvidersSynced: ready ? ["openai-codex"] : [],
+      openclawAuthProvidersSynced: [],
+      runtimeAuthPath: authPath,
+      source: resolved.source,
+      refreshed: resolved.refreshed,
+      details: {
+        profile: mergedConfig.profile,
+        auth_ready: ready,
+        expires_at: resolved.expiresAt ?? null,
+      },
+      ...(ready ? {} : { error: `Hermes auth file ${authPath} does not contain usable openai-codex token state after sync.` }),
+    };
+  }
+
+  async dispatch(params: DispatchParams): Promise<{ runId: string }> {
+    const mergedConfig = normalizeHermesRuntimeConfig({
+      ...this.baseConfig,
+      ...((params.runtimeConfig as HermesRuntimeConfig | undefined) ?? {}),
+      model:
+        params.model ??
+        (params.runtimeConfig as HermesRuntimeConfig | undefined)?.model ??
+        this.baseConfig.model ??
+        null,
+      fastMode:
+        params.fastMode ??
+        (params.runtimeConfig as HermesRuntimeConfig | undefined)?.fastMode ??
+        this.baseConfig.fastMode ??
+        null,
+    });
+    const runId = `hermes:${params.instanceId ?? Date.now()}`;
+    const cwd =
+      params.activeRepoRoot ??
+      mergedConfig.workingDirectory ??
+      params.workspaceRoot ??
+      null;
+
+    if (!cwd) {
+      throw new Error(
+        "Hermes runtime requires activeRepoRoot, runtime_config.workingDirectory, or workspaceRoot",
+      );
+    }
+
+    const prompt = params.message;
+    const hermesProfileHome = resolveHermesProfileHome(mergedConfig);
+    const hermesPrompt =
+      params.instanceId != null
+        ? prependAgentHqRunContext(prompt, {
+            instanceId: params.instanceId,
+            durableRunId: params.durableRunId ?? null,
+            taskId: params.taskId ?? null,
+            sessionKey: params.sessionKey,
+          })
+        : prompt;
+    const transcriptConfig = { ...mergedConfig, hermesHome: hermesProfileHome };
+
+    const db = params.db ?? null;
+    const agentId = this.materializeMcpConfigForRun(db, params.instanceId ?? null, cwd, hermesProfileHome);
+    this.persistUserPrompt(db, params.instanceId ?? null, prompt);
+
+    const command = this.buildCommandArgs(mergedConfig, hermesPrompt);
+    const env = {
+      ...process.env,
+      ...toStringEnv({
+        AGENT_HQ_INSTANCE_ID:
+          params.instanceId != null ? String(params.instanceId) : "",
+        AGENT_HQ_DURABLE_RUN_ID: params.durableRunId ?? "",
+        AGENT_HQ_TASK_ID: params.taskId != null ? String(params.taskId) : "",
+        AGENT_HQ_SESSION_KEY: params.sessionKey,
+        AGENT_HQ_AGENT_SLUG: params.agentSlug,
+        AGENT_HQ_WORKSPACE_ROOT: params.workspaceRoot ?? cwd,
+        AGENT_HQ_ACTIVE_REPO_ROOT: params.activeRepoRoot ?? cwd,
+        AGENT_HQ_FAST_MODE:
+          mergedConfig.fastMode == null ? "" : String(mergedConfig.fastMode),
+        HERMES_FAST_MODE:
+          mergedConfig.fastMode == null ? "" : String(mergedConfig.fastMode),
+        HERMES_HOME: hermesProfileHome,
+      }),
+      ...mergedConfig.env,
+    };
+
+    const child = spawn(mergedConfig.hermesBin, command, {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    const processState: ActiveHermesRun = {
+      child,
+      killGraceMs: mergedConfig.killGraceMs,
+      exited: false,
+      aborted: false,
+      timedOut: false,
+    };
+
+    const { spawned, exited } = waitForHermesChildProcess(child);
+
+    try {
+      await spawned;
+    } catch (err) {
+      throw new Error(
+        `Hermes runtime failed to launch: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (params.instanceId != null) {
+      this.activeRuns.set(params.instanceId, processState);
+      db?.prepare("UPDATE job_instances SET run_id = ? WHERE id = ?").run(
+        runId,
+        params.instanceId,
+      );
+      if (db && agentId != null) {
+        processState.transcriptPoller = this.startTranscriptPoller({
+          db,
+          agentId,
+          instanceId: params.instanceId,
+          durableRunId: params.durableRunId ?? null,
+          sessionKey: params.sessionKey,
+          config: transcriptConfig,
+          state: processState,
+        });
+      }
+    }
+
+    const timeoutTimer =
+      params.timeoutSeconds > 0
+        ? setTimeout(() => {
+            processState.timedOut = true;
+            if (!processState.exited) {
+              processState.child.kill("SIGTERM");
+              setTimeout(() => {
+                if (!processState.exited) {
+                  processState.child.kill("SIGKILL");
+                }
+              }, mergedConfig.killGraceMs).unref();
+            }
+          }, params.timeoutSeconds * 1000)
+        : null;
+
+    const heartbeatTimer = null;
+
+    void this.monitorRun({
+      params,
+      config: transcriptConfig,
+      runId,
+      db,
+      state: processState,
+      exited,
+      getStdout: () => stdout,
+      getStderr: () => stderr,
+      timeoutTimer,
+      heartbeatTimer,
+    });
+
+    return { runId };
+  }
+
+  async abort(runId: string, _sessionKey: string): Promise<void> {
+    const instanceId = parseHermesInstanceIdFromRunId(runId);
+    if (instanceId == null) return;
+
+    const active = this.activeRuns.get(instanceId);
+    if (!active || active.exited) return;
+
+    stopHermesActiveRun(active);
+  }
+
+  private buildCommandArgs(
+    config: NormalizedHermesRuntimeConfig,
+    prompt: string,
+  ): string[] {
+    const args: string[] = ["--profile", config.profile];
+
+    if (config.ignoreUserConfig) args.push("--ignore-user-config");
+    if (config.ignoreRules) args.push("--ignore-rules");
+    if (config.provider) args.push("--provider", config.provider);
+    if (config.model) args.push("--model", config.model);
+    args.push(...config.extraArgs);
+
+    if (config.invocationMode === "chat-q") {
+      args.push("chat", "-q", prompt);
+    } else {
+      args.push("-z", prompt);
+    }
+
+    return args;
+  }
+
+  private async monitorRun(args: {
+    params: DispatchParams;
+    config: NormalizedHermesRuntimeConfig;
+    runId: string;
+    db: Database.Database | null;
+    state: ActiveHermesRun;
+    exited: Promise<ProcessExitResult>;
+    getStdout: () => string;
+    getStderr: () => string;
+    timeoutTimer: ReturnType<typeof setTimeout> | null;
+    heartbeatTimer: ReturnType<typeof setInterval> | null;
+  }): Promise<void> {
+    const {
+      params,
+      runId,
+      db,
+      state,
+      exited,
+      getStdout,
+      getStderr,
+      timeoutTimer,
+      heartbeatTimer,
+    } = args;
+
+    let runtimeEndEvent: RuntimeEndEvent | null = null;
+
+    try {
+      const result = await exited;
+      state.exited = true;
+      if (params.instanceId != null) this.activeRuns.delete(params.instanceId);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (state.transcriptPoller) clearInterval(state.transcriptPoller);
+      this.ingestTranscriptOnce(db, params.instanceId ?? null, args.config, {
+        durableRunId: params.durableRunId ?? null,
+        sessionKey: params.sessionKey,
+      });
+
+      const stdout = getStdout();
+      const stderr = getStderr();
+      const transcriptOutput = stdout.trim() || stderr.trim();
+
+      if (state.aborted) {
+        if (transcriptOutput && !this.hasHermesJsonTranscriptRows(db, params.instanceId ?? null)) {
+          this.persistAssistantMessage(
+            db,
+            params.instanceId ?? null,
+            transcriptOutput,
+          );
+        }
+        runtimeEndEvent = {
+          type: "runEnded",
+          source: "hermes",
+          sessionKey: params.sessionKey,
+          runId,
+          success: false,
+          endedAt: new Date().toISOString(),
+          reason: "aborted",
+          error: stderr.trim() || undefined,
+        };
+        return;
+      }
+
+      if (result.error || state.timedOut || result.code !== 0) {
+        if (transcriptOutput && !this.hasHermesJsonTranscriptRows(db, params.instanceId ?? null)) {
+          this.persistAssistantMessage(
+            db,
+            params.instanceId ?? null,
+            transcriptOutput,
+          );
+        }
+
+        const combinedDetails = `${stderr}\n${stdout}`.trim();
+        const summary = state.timedOut
+          ? `Hermes run timed out after ${params.timeoutSeconds}s`
+          : result.error
+            ? extractFailureSummary(
+                "Hermes runtime error",
+                result.error.message,
+              )
+            : extractFailureSummary(
+                `Hermes exited with code ${result.code ?? "unknown"}${result.signal ? ` (${result.signal})` : ""}`,
+                combinedDetails,
+              );
+
+        runtimeEndEvent = {
+          type: "runEnded",
+          source: "hermes",
+          sessionKey: params.sessionKey,
+          runId,
+          success: false,
+          endedAt: new Date().toISOString(),
+          reason: state.timedOut ? "timeout" : "error",
+          error: summary,
+          metadata: {
+            exit_code: result.code,
+            signal: result.signal,
+            stderr: stderr || null,
+            fast_mode: args.config.fastMode,
+          },
+        };
+        return;
+      }
+
+      if (transcriptOutput && !this.hasHermesJsonTranscriptRows(db, params.instanceId ?? null)) {
+        this.persistAssistantMessage(
+          db,
+          params.instanceId ?? null,
+          transcriptOutput,
+        );
+      }
+
+      const providerLimitFailure = detectProviderLimitFailureText(
+        `${stdout}\n${stderr}`,
+      );
+      if (providerLimitFailure) {
+        runtimeEndEvent = {
+          type: "runEnded",
+          source: "hermes",
+          sessionKey: params.sessionKey,
+          runId,
+          success: false,
+          endedAt: new Date().toISOString(),
+          reason: "error",
+          error: `Hermes provider/API limit failure: ${providerLimitFailure}`,
+          metadata: {
+            exit_code: result.code,
+            signal: result.signal,
+            stderr: stderr || null,
+            fast_mode: args.config.fastMode,
+            provider_limit_failure_detected: true,
+            hermes_process_success: true,
+          },
+        };
+        return;
+      }
+
+      runtimeEndEvent = {
+        type: "runEnded",
+        source: "hermes",
+        sessionKey: params.sessionKey,
+        runId,
+        success: true,
+        endedAt: new Date().toISOString(),
+        reason: "completed",
+        metadata: {
+          stderr: stderr || null,
+          fast_mode: args.config.fastMode,
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      runtimeEndEvent = {
+        type: "runEnded",
+        source: "hermes",
+        sessionKey: params.sessionKey,
+        runId,
+        success: false,
+        endedAt: new Date().toISOString(),
+        reason: "error",
+        error: message,
+      };
+    } finally {
+      if (params.instanceId != null && runtimeEndEvent) {
+        await this.handleRuntimeEnd(db, params.instanceId, runtimeEndEvent);
+      }
+      if (runtimeEndEvent) {
+        await params.onRuntimeEnd?.(runtimeEndEvent);
+      }
+    }
+  }
+
+  private async handleRuntimeEnd(
+    db: Database.Database | null,
+    instanceId: number,
+    event: RuntimeEndEvent,
+  ): Promise<void> {
+    if (!db) return;
+
+    await applyRuntimeEndToJobInstance(db, {
+      instanceId,
+      event,
+      runtimeName: "Hermes",
+      runtimeEndSource: event.source,
+    });
+    this.persistRuntimeEndEvent(db, instanceId, event);
+  }
+
+
+  private materializeMcpConfigForRun(
+    db: Database.Database | null,
+    instanceId: number | null,
+    cwd: string,
+    hermesProfileHome: string,
+  ): number | null {
+    if (!db || instanceId == null) return null;
+    const agentId = this.lookupAgentId(db, instanceId);
+    if (agentId == null) return null;
+
+    const targets = Array.from(new Set([cwd, hermesProfileHome].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
+    for (const workingDirectory of targets) {
+      const result = materializeAgentMcpConfig({ db, agentId, workingDirectory });
+      if (!result.ok) {
+        console.warn(`[hermes-runtime] MCP materialization failed for ${workingDirectory}: ${result.error ?? 'unknown error'}`);
+      }
+      for (const warning of result.warnings) console.warn(`[hermes-runtime] ${warning}`);
+    }
+
+    const hermesConfig = materializeHermesMcpConfig({
+      db,
+      agentId,
+      hermesHome: hermesProfileHome,
+    });
+    if (!hermesConfig.ok) {
+      console.warn(`[hermes-runtime] Hermes MCP config materialization failed for ${hermesConfig.path}: ${hermesConfig.error ?? 'unknown error'}`);
+    }
+    for (const warning of hermesConfig.warnings) console.warn(`[hermes-runtime] ${warning}`);
+    return agentId;
+  }
+
+  private startTranscriptPoller(args: {
+    db: Database.Database;
+    agentId: number;
+    instanceId: number;
+    durableRunId: string | null;
+    sessionKey: string;
+    config: NormalizedHermesRuntimeConfig;
+    state: ActiveHermesRun;
+  }): ReturnType<typeof setInterval> {
+    const poll = () => {
+      if (args.state.exited || args.state.aborted || args.state.timedOut) return;
+      this.ingestTranscriptOnce(args.db, args.instanceId, args.config, {
+        agentId: args.agentId,
+        durableRunId: args.durableRunId,
+        sessionKey: args.sessionKey,
+      });
+    };
+    poll();
+    const timer = setInterval(poll, HERMES_TRANSCRIPT_POLL_INTERVAL_MS);
+    timer.unref?.();
+    return timer;
+  }
+
+  private ingestTranscriptOnce(
+    db: Database.Database | null,
+    instanceId: number | null,
+    config: NormalizedHermesRuntimeConfig,
+    identity: {
+      agentId?: number | null;
+      durableRunId?: string | null;
+      sessionKey?: string | null;
+    },
+  ): void {
+    if (!db || instanceId == null) return;
+    const agentId = identity.agentId ?? this.lookupAgentId(db, instanceId);
+    if (agentId == null) return;
+    try {
+      ingestHermesTranscriptForRun({
+        db,
+        agentId,
+        instanceId,
+        durableRunId: identity.durableRunId ?? null,
+        sessionKey: identity.sessionKey ?? '',
+        profile: config.profile,
+        hermesHome: config.hermesHome ?? null,
+      });
+    } catch (err) {
+      console.warn('[hermes-runtime] Hermes transcript ingest failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private hasHermesJsonTranscriptRows(
+    db: Database.Database | null,
+    instanceId: number | null,
+  ): boolean {
+    if (!db || instanceId == null) return false;
+    const row = db.prepare(`
+      SELECT 1 AS found
+      FROM chat_messages
+      WHERE instance_id = ? AND id LIKE ?
+      LIMIT 1
+    `).get(instanceId, `hermes-json-${instanceId}-%`) as { found?: number } | undefined;
+    return Boolean(row?.found);
+  }
+
+  private persistUserPrompt(
+    db: Database.Database | null,
+    instanceId: number | null,
+    prompt: string,
+  ): void {
+    if (!db || instanceId == null) return;
+    const agentId = this.lookupAgentId(db, instanceId);
+    if (agentId == null) return;
+
+    db.prepare(
+      `
+      INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
+      VALUES (?, ?, ?, 'user', ?, ?)
+    `,
+    ).run(
+      `hermes-user-${instanceId}`,
+      agentId,
+      instanceId,
+      prompt,
+      new Date().toISOString(),
+    );
+  }
+
+  private persistAssistantMessage(
+    db: Database.Database | null,
+    instanceId: number | null,
+    content: string,
+  ): void {
+    if (!db || instanceId == null || !content) return;
+    const agentId = this.lookupAgentId(db, instanceId);
+    if (agentId == null) return;
+
+    db.prepare(
+      `
+      INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
+      VALUES (?, ?, ?, 'assistant', ?, ?)
+      ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp
+    `,
+    ).run(
+      `hermes-asst-${instanceId}`,
+      agentId,
+      instanceId,
+      content,
+      new Date().toISOString(),
+    );
+  }
+
+  private persistRuntimeEndEvent(
+    db: Database.Database | null,
+    instanceId: number,
+    event: RuntimeEndEvent,
+  ): void {
+    if (!db) return;
+
+    db.prepare(
+      `
+      INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+      SELECT ?, agent_id, id, 'system', ?, ?, 'turn_end', ?
+      FROM job_instances
+      WHERE id = ?
+      ON CONFLICT(id) DO UPDATE SET
+        content = excluded.content,
+        timestamp = excluded.timestamp,
+        event_type = excluded.event_type,
+        event_meta = excluded.event_meta
+    `,
+    ).run(
+      `hermes-runtime-end-${instanceId}`,
+      `Runtime ${event.type} (${event.reason ?? (event.success ? "completed" : "error")})`,
+      event.endedAt,
+      JSON.stringify({
+        runtime_end_type: event.type,
+        terminal_reason:
+          event.reason ?? (event.success ? "completed" : "error"),
+        session_key: event.sessionKey,
+        run_id: event.runId ?? null,
+        success: event.success,
+        error: event.error ?? null,
+        ...(event.metadata ?? {}),
+      }),
+      instanceId,
+    );
+
+    db.prepare(
+      `
+      UPDATE job_instances
+      SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+      WHERE id = ?
+    `,
+    ).run(JSON.stringify(event), instanceId);
+  }
+
+  private lookupAgentId(
+    db: Database.Database,
+    instanceId: number,
+  ): number | null {
+    const row = db
+      .prepare("SELECT agent_id FROM job_instances WHERE id = ?")
+      .get(instanceId) as { agent_id?: number } | undefined;
+    return typeof row?.agent_id === "number" ? row.agent_id : null;
+  }
+}

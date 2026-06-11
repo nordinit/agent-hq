@@ -1,0 +1,228 @@
+@import 'highlight.js/styles/github-dark-dimmed.min.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #1a2236;
+  --foreground: #e2e8f0;
+  --surface-page: #1a2236;
+  --app-viewport-height: 100vh;
+  --mobile-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html.light {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --surface-page: #f1f5f9;
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --app-viewport-height: 100dvh;
+  }
+}
+
+html,
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
+.safe-area-inset-bottom {
+  padding-bottom: var(--mobile-safe-area-bottom);
+}
+
+.safe-area-bottom-offset {
+  bottom: calc(5rem + var(--mobile-safe-area-bottom));
+}
+
+.safe-area-bottom-padding {
+  padding-bottom: calc(1rem + var(--mobile-safe-area-bottom));
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #1e2d45;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Hide scrollbar while keeping scroll functionality */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Syntax highlighting overrides — blend with app dark theme */
+.syntax-hl-wrapper .hljs {
+  background: transparent;
+  padding: 0;
+}
+.syntax-hl-wrapper pre {
+  background: transparent;
+}
+
+.agent-hq-docs-reference .docs-mobile-group-nav > button {
+  scroll-snap-align: start;
+}
+
+.agent-hq-docs-reference .docs-mobile-group-nav {
+  scroll-snap-type: x proximity;
+}
+
+html.light ::-webkit-scrollbar-track {
+  background: #e2e8f0;
+}
+
+html.light ::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+}
+
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+html.light .bg-slate-950,
+html.light .bg-zinc-950 {
+  background-color: #f8fafc;
+}
+
+html.light .bg-slate-925,
+html.light .bg-slate-925\/95 {
+  background-color: rgba(241, 245, 249, 0.95);
+}
+
+html.light .bg-slate-900,
+html.light .bg-slate-900\/80,
+html.light .bg-slate-900\/70,
+html.light .bg-slate-900\/50,
+html.light .bg-slate-900\/40,
+html.light .bg-zinc-900,
+html.light .bg-zinc-900\/80 {
+  background-color: #ffffff;
+}
+
+html.light .bg-slate-850,
+html.light .bg-slate-800,
+html.light .bg-slate-800\/70,
+html.light .bg-slate-800\/60,
+html.light .bg-slate-800\/50,
+html.light .bg-slate-800\/40,
+html.light .bg-slate-800\/30,
+html.light .bg-zinc-800,
+html.light .bg-zinc-800\/50,
+html.light .bg-zinc-800\/30 {
+  background-color: #f1f5f9;
+}
+
+html.light .bg-slate-700,
+html.light .bg-slate-700\/60,
+html.light .bg-slate-700\/50,
+html.light .bg-zinc-700,
+html.light .bg-zinc-700\/50 {
+  background-color: #e2e8f0;
+}
+
+html.light .hover\:bg-slate-900\/80:hover,
+html.light .hover\:bg-slate-800:hover,
+html.light .hover\:bg-slate-800\/70:hover,
+html.light .hover\:bg-slate-800\/50:hover,
+html.light .hover\:bg-zinc-700:hover {
+  background-color: #e2e8f0;
+}
+
+html.light .border-slate-800,
+html.light .border-slate-800\/50,
+html.light .border-slate-700,
+html.light .border-slate-700\/70,
+html.light .border-slate-700\/60,
+html.light .border-slate-700\/50,
+html.light .border-slate-700\/40,
+html.light .border-slate-600,
+html.light .border-slate-600\/50,
+html.light .border-zinc-800,
+html.light .border-zinc-700,
+html.light .border-zinc-700\/60,
+html.light .border-zinc-700\/40,
+html.light .border-zinc-600 {
+  border-color: #cbd5e1;
+}
+
+html.light .hover\:border-slate-700:hover,
+html.light .hover\:border-slate-600:hover,
+html.light .hover\:border-slate-500:hover,
+html.light .hover\:border-zinc-500:hover,
+html.light .hover\:border-zinc-400:hover {
+  border-color: #94a3b8;
+}
+
+html.light .text-white,
+html.light .text-slate-100,
+html.light .text-slate-200,
+html.light .text-zinc-100,
+html.light .text-zinc-200,
+html.light .text-zinc-300 {
+  color: #0f172a;
+}
+
+html.light .text-slate-300,
+html.light .text-slate-400,
+html.light .text-zinc-400 {
+  color: #334155;
+}
+
+html.light .text-slate-500,
+html.light .text-slate-600,
+html.light .text-zinc-500,
+html.light .text-zinc-600 {
+  color: #64748b;
+}
+
+html.light .hover\:text-white:hover,
+html.light .hover\:text-slate-300:hover,
+html.light .hover\:text-zinc-200:hover {
+  color: #0f172a;
+}
+
+html.light .placeholder\:text-slate-600::placeholder,
+html.light .placeholder\:text-zinc-600::placeholder,
+html.light .placeholder-slate-500::placeholder {
+  color: #94a3b8;
+}
+
+html.light .ring-amber-500\/30 {
+  --tw-ring-color: rgba(245, 158, 11, 0.35);
+}
+
+html.light .shadow-2xl {
+  --tw-shadow-color: rgba(15, 23, 42, 0.16);
+}
+
+
+/* Chat widget slide-up animation */
+@keyframes chat-widget-slide-up {
+  from { opacity: 0; transform: translateY(20px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.chat-widget-enter {
+  animation: chat-widget-slide-up 0.22s ease-out;
+}

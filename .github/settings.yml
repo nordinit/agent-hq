@@ -1,0 +1,16 @@
+repository:
+  name: agent-hq
+  description: Task routing and orchestration control plane for teams running multiple AI agents.
+  homepage: https://github.com/nordinit/agent-hq
+  private: false
+  has_issues: true
+  has_projects: true
+  has_wiki: false
+  default_branch: main
+  topics:
+    - ai-agents
+    - orchestration
+    - task-routing
+    - workflow
+    - openclaw
+    - agent-ops

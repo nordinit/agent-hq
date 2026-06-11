@@ -1,0 +1,74 @@
+{
+  "_comment": "openclaw.json template for containerized agents. Copy this to the host path you will bind-mount at /root/.openclaw/openclaw.json. Fill in all <PLACEHOLDER> values.",
+  "meta": {
+    "lastTouchedVersion": "2026.3.13"
+  },
+  "auth": {
+    "profiles": {
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "token",
+        "token": "<ANTHROPIC_API_KEY>"
+      },
+      "minimax:default": {
+        "provider": "minimax",
+        "mode": "token",
+        "token": "<MINIMAX_API_KEY>"
+      }
+    },
+    "order": {
+      "anthropic": ["anthropic:default"],
+      "minimax": ["minimax:default"]
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "<OPENCLAW_MODEL>"
+      },
+      "workspace": "/workspace",
+      "contextPruning": {
+        "mode": "cache-ttl",
+        "ttl": "1h"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      }
+    },
+    "list": [
+      {
+        "id": "<AGENT_ID>",
+        "default": true,
+        "name": "<AGENT_ID>",
+        "workspace": "/workspace",
+        "agentDir": "/root/.openclaw/agent"
+      }
+    ]
+  },
+  "hooks": {
+    "enabled": true,
+    "path": "/hooks",
+    "token": "<HOOKS_TOKEN>",
+    "allowRequestSessionKey": true,
+    "allowedSessionKeyPrefixes": ["hook:"],
+    "allowedAgentIds": ["*"],
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "boot-md": { "enabled": true },
+        "command-logger": { "enabled": true },
+        "session-memory": { "enabled": true },
+        "bootstrap-extra-files": { "enabled": true }
+      }
+    }
+  },
+  "gateway": {
+    "port": 3700,
+    "mode": "local",
+    "bind": "all",
+    "auth": {
+      "mode": "token",
+      "token": "<GATEWAY_AUTH_TOKEN>"
+    }
+  }
+}

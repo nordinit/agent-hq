@@ -1,0 +1,43 @@
+node_modules/
+.next/
+*.db
+*.db-shm
+*.db-wal
+*.db.backup*
+*.db.bak.*
+*.db.pre-atlas-copy.*
+*.db-shm.pre-atlas-copy.*
+*.db-wal.pre-atlas-copy.*
+*.tsbuildinfo
+.env
+.env.*
+.env.local
+dist/
+
+uploads/
+api/dist/
+ui/.next/
+
+# Per-agent SSH keys — never commit private keys
+docker/keys/*
+!docker/keys/.gitkeep
+
+# Fleet env file — contains secrets
+.env.agents
+
+# Local Docker Compose overrides — may contain secrets
+docker-compose.override.yml
+cli/.npmrc
+.claude/
+.mcp.json
+.openclaw/
+*.log
+logs/
+!ui/app/logs/
+!ui/app/logs/**
+backups/
+memory/
+.agent-hq-run-context.json
+.atlas-gh-identity.env
+.atlas-gh-token
+skills/.agent-hq-managed-skills.json

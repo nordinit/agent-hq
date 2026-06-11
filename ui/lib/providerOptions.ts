@@ -1,0 +1,83 @@
+import type { ProviderSlug, ProviderRecord } from '@/lib/api';
+
+export interface AgentModelOption {
+  value: string;
+  label: string;
+  provider: ProviderSlug | 'legacy';
+}
+
+export const AGENT_MODEL_OPTIONS: AgentModelOption[] = [
+  { value: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' },
+  { value: 'anthropic/claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' },
+  { value: 'openai/gpt-5.5', label: 'GPT-5.5 (Codex)', provider: 'openai-codex' },
+  { value: 'openai/gpt-5.4', label: 'GPT-5.4 (Codex)', provider: 'openai-codex' },
+];
+
+export const PROVIDER_LABELS: Record<ProviderSlug, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google',
+  ollama: 'Ollama',
+  'openai-codex': 'OpenAI Codex (OAuth)',
+  'mlx-studio': 'MLX Studio',
+  minimax: 'MiniMax',
+};
+
+/** Providers that require dynamic model fetching (no static model list) */
+export const DYNAMIC_MODEL_PROVIDERS: ProviderSlug[] = ['minimax'];
+
+export function getConnectedProviders(providers: ProviderRecord[]): ProviderRecord[] {
+  return providers.filter(provider => provider.status === 'connected');
+}
+
+export function getAgentProviderOptions(providers: ProviderRecord[]) {
+  return getConnectedProviders(providers).map(provider => ({
+    value: provider.slug,
+    label: provider.display_name || PROVIDER_LABELS[provider.slug],
+  }));
+}
+
+export function getAgentModelOptionsForProvider(provider: string | null | undefined) {
+  if (!provider) return [];
+  return AGENT_MODEL_OPTIONS.filter(option => option.provider === provider);
+}
+
+export function getDefaultAgentModelForProvider(provider: string | null | undefined) {
+  return getAgentModelOptionsForProvider(provider)[0]?.value ?? null;
+}
+
+export function getAgentModelLabel(model: string | null | undefined) {
+  if (!model) return 'Default (inherit)';
+  return AGENT_MODEL_OPTIONS.find(option => option.value === model)?.label ?? model;
+}
+
+export function isProviderConnected(providers: ProviderRecord[], provider: string | null | undefined) {
+  return !!provider && getConnectedProviders(providers).some(item => item.slug === provider);
+}
+
+export function isModelAllowedForProvider(model: string | null | undefined, provider: string | null | undefined) {
+  if (!model) return true;
+  // Local/OpenAI-compatible providers (Ollama, MLX Studio) accept freeform model names
+  if (provider === 'ollama' || provider === 'mlx-studio') return true;
+  // Dynamic model providers (MiniMax) accept any model string since models are fetched at runtime
+  if (isDynamicModelProvider(provider)) return true;
+  return getAgentModelOptionsForProvider(provider).some(option => option.value === model);
+}
+
+/** Returns true for providers that accept freeform model name entry (no fixed model list) */
+export function isLocalModelProvider(provider: string | null | undefined): boolean {
+  return provider === 'ollama' || provider === 'mlx-studio';
+}
+
+/** Returns true for providers that fetch their model list dynamically from an external API */
+export function isDynamicModelProvider(provider: string | null | undefined): boolean {
+  return !!provider && DYNAMIC_MODEL_PROVIDERS.includes(provider as ProviderSlug);
+}
+
+/**
+ * Returns true for providers that should only appear when the agent runtime is OpenClaw.
+ * MiniMax requires the OpenClaw runtime to work correctly.
+ */
+export function isOpenClawOnlyProvider(provider: string | null | undefined): boolean {
+  return provider === 'minimax' || provider === 'openai-codex';
+}

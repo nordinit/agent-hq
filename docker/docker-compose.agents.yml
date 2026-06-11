@@ -1,0 +1,277 @@
+###############################################################################
+# docker/docker-compose.agents.yml
+#
+# Full OpenClaw agent fleet for the Agent HQ Agency operation.
+# Each service maps to one agent, builds from the shared Dockerfile.agent,
+# and uses a named workspace volume so state persists across container restarts.
+#
+# ── Quick start ──────────────────────────────────────────────────────────────
+#   1. Copy .env.agents.example to .env.agents and fill in secrets.
+#   2. Generate SSH keys if not present:
+#      ./scripts/provision-agent-ssh-key.sh <agent_id>
+#   3. Build and start the fleet:
+#      docker compose -f docker/docker-compose.agents.yml --env-file .env.agents up -d
+#
+# ── Port map (host → container 3700) ─────────────────────────────────────────
+#   pixel   (agency-frontend)  → 3710
+#   forge   (agency-backend)   → 3711
+#   harbor  (agency-devops)    → 3712
+#   scout   (agency-qa)        → 3713
+#   rook    (agency-qa2)       → 3714
+#   archer  (agency-sales)     → 3715
+#   wren    (agency-pm)        → 3716
+#   maven   (agency-ads)       → 3717
+#   pulse   (pulse)            → 3718
+#
+# ── Required env vars (provide via .env.agents) ───────────────────────────────
+#   OPENCLAW_MODEL        Model string, e.g. anthropic/claude-sonnet-4-6
+#   ANTHROPIC_API_KEY     Anthropic API key for inference
+#   HOOKS_TOKEN           Gateway hooks auth token (all agents share one token)
+#   GATEWAY_AUTH_TOKEN    Gateway HTTP auth token (all agents share one token)
+#   AGENT_HQ_API_URL      Default: http://host.docker.internal:3501
+###############################################################################
+
+name: openclaw-agents
+
+# ── Shared network ────────────────────────────────────────────────────────────
+# Agents only need to reach the host Agent HQ API — not each other.
+# extra_hosts adds host.docker.internal on Linux (Docker 20.10+).
+networks:
+  agent-net:
+    driver: bridge
+
+# ── Workspace volumes ─────────────────────────────────────────────────────────
+# One named volume per agent.  Data persists across container restarts and
+# recreations.  To wipe and reset a workspace: docker volume rm <name>
+volumes:
+  workspace-agency-frontend:
+  workspace-agency-backend:
+  workspace-agency-devops:
+  workspace-agency-qa:
+  workspace-agency-qa2:
+  workspace-agency-sales:
+  workspace-agency-pm:
+  workspace-agency-ads:
+  workspace-pulse:
+
+# ── Shared service defaults ───────────────────────────────────────────────────
+x-agent-defaults: &agent-defaults
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.agent
+  restart: unless-stopped
+  networks:
+    - agent-net
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+# ── Services ──────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Pixel — Agency Frontend ─────────────────────────────────────────────────
+  pixel:
+    <<: *agent-defaults
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+      args:
+        AGENT_ID: agency-frontend
+    environment:
+      AGENT_ID: agency-frontend
+      OPENCLAW_MODEL: "${OPENCLAW_MODEL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+      HOOKS_TOKEN: "${HOOKS_TOKEN}"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+      CONTAINER_PORT: "3700"
+      AGENT_HQ_API_URL: "${AGENT_HQ_API_URL:-http://host.docker.internal:3501}"
+    volumes:
+      - workspace-agency-frontend:/workspace
+      - ./keys/agency-frontend:/root/.ssh:ro
+    ports:
+      - "3710:3700"
+
+  # ── Forge — Agency Backend ──────────────────────────────────────────────────
+  forge:
+    <<: *agent-defaults
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+      args:
+        AGENT_ID: agency-backend
+    environment:
+      AGENT_ID: agency-backend
+      OPENCLAW_MODEL: "${OPENCLAW_MODEL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+      HOOKS_TOKEN: "${HOOKS_TOKEN}"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+      CONTAINER_PORT: "3700"
+      AGENT_HQ_API_URL: "${AGENT_HQ_API_URL:-http://host.docker.internal:3501}"
+    volumes:
+      - workspace-agency-backend:/workspace
+      - ./keys/agency-backend:/root/.ssh:ro
+    ports:
+      - "3711:3700"
+
+  # ── Harbor — Agency DevOps ──────────────────────────────────────────────────
+  harbor:
+    <<: *agent-defaults
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+      args:
+        AGENT_ID: agency-devops
+    environment:
+      AGENT_ID: agency-devops
+      OPENCLAW_MODEL: "${OPENCLAW_MODEL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+      HOOKS_TOKEN: "${HOOKS_TOKEN}"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+      CONTAINER_PORT: "3700"
+      AGENT_HQ_API_URL: "${AGENT_HQ_API_URL:-http://host.docker.internal:3501}"
+    volumes:
+      - workspace-agency-devops:/workspace
+      - ./keys/agency-devops:/root/.ssh:ro
+    ports:
+      - "3712:3700"
+
+  # ── Scout — Agency QA ───────────────────────────────────────────────────────
+  scout:
+    <<: *agent-defaults
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+      args:
+        AGENT_ID: agency-qa
+    environment:
+      AGENT_ID: agency-qa
+      OPENCLAW_MODEL: "${OPENCLAW_MODEL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+      HOOKS_TOKEN: "${HOOKS_TOKEN}"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+      CONTAINER_PORT: "3700"
+      AGENT_HQ_API_URL: "${AGENT_HQ_API_URL:-http://host.docker.internal:3501}"
+    volumes:
+      - workspace-agency-qa:/workspace
+      - ./keys/agency-qa:/root/.ssh:ro
+    ports:
+      - "3713:3700"
+
+  # ── Rook — Agency QA2 ──────────────────────────────────────────────────────
+  rook:
+    <<: *agent-defaults
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+      args:
+        AGENT_ID: agency-qa2
+    environment:
+      AGENT_ID: agency-qa2
+      OPENCLAW_MODEL: "${OPENCLAW_MODEL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+      HOOKS_TOKEN: "${HOOKS_TOKEN}"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+      CONTAINER_PORT: "3700"
+      AGENT_HQ_API_URL: "${AGENT_HQ_API_URL:-http://host.docker.internal:3501}"
+    volumes:
+      - workspace-agency-qa2:/workspace
+      - ./keys/agency-qa2:/root/.ssh:ro
+    ports:
+      - "3714:3700"
+
+  # ── Archer — Agency Sales ───────────────────────────────────────────────────
+  archer:
+    <<: *agent-defaults
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+      args:
+        AGENT_ID: agency-sales
+    environment:
+      AGENT_ID: agency-sales
+      OPENCLAW_MODEL: "${OPENCLAW_MODEL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+      HOOKS_TOKEN: "${HOOKS_TOKEN}"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+      CONTAINER_PORT: "3700"
+      AGENT_HQ_API_URL: "${AGENT_HQ_API_URL:-http://host.docker.internal:3501}"
+    volumes:
+      - workspace-agency-sales:/workspace
+      - ./keys/agency-sales:/root/.ssh:ro
+    ports:
+      - "3715:3700"
+
+  # ── Wren — Agency PM ───────────────────────────────────────────────────────
+  wren:
+    <<: *agent-defaults
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+      args:
+        AGENT_ID: agency-pm
+    environment:
+      AGENT_ID: agency-pm
+      OPENCLAW_MODEL: "${OPENCLAW_MODEL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+      HOOKS_TOKEN: "${HOOKS_TOKEN}"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+      CONTAINER_PORT: "3700"
+      AGENT_HQ_API_URL: "${AGENT_HQ_API_URL:-http://host.docker.internal:3501}"
+    volumes:
+      - workspace-agency-pm:/workspace
+      - ./keys/agency-pm:/root/.ssh:ro
+    ports:
+      - "3716:3700"
+
+  # ── Maven — Agency Ads ─────────────────────────────────────────────────────
+  maven:
+    <<: *agent-defaults
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+      args:
+        AGENT_ID: agency-ads
+    environment:
+      AGENT_ID: agency-ads
+      OPENCLAW_MODEL: "${OPENCLAW_MODEL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+      HOOKS_TOKEN: "${HOOKS_TOKEN}"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+      CONTAINER_PORT: "3700"
+      AGENT_HQ_API_URL: "${AGENT_HQ_API_URL:-http://host.docker.internal:3501}"
+    volumes:
+      - workspace-agency-ads:/workspace
+      - ./keys/agency-ads:/root/.ssh:ro
+    ports:
+      - "3717:3700"
+
+  # ── Pulse — System Monitor ─────────────────────────────────────────────────
+  pulse:
+    <<: *agent-defaults
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+      args:
+        AGENT_ID: pulse
+    environment:
+      AGENT_ID: pulse
+      OPENCLAW_MODEL: "${OPENCLAW_MODEL}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      MINIMAX_API_KEY: "${MINIMAX_API_KEY:-}"
+      HOOKS_TOKEN: "${HOOKS_TOKEN}"
+      GATEWAY_AUTH_TOKEN: "${GATEWAY_AUTH_TOKEN}"
+      CONTAINER_PORT: "3700"
+      AGENT_HQ_API_URL: "${AGENT_HQ_API_URL:-http://host.docker.internal:3501}"
+    volumes:
+      - workspace-pulse:/workspace
+      - ./keys/pulse:/root/.ssh:ro
+    ports:
+      - "3718:3700"

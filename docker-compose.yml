@@ -1,0 +1,77 @@
+###############################################################################
+# docker-compose.yml — Agent HQ full-stack one-command local install
+#
+# Spins up:
+#   agent-hq-api   Agent HQ API      → http://localhost:3501
+#   agent-hq-ui    Agent HQ UI       → http://localhost:3500
+#
+# Named volume:
+#   agent-hq-data  SQLite database persistence (/data inside the API container)
+#
+# ── Quick start ───────────────────────────────────────────────────────────────
+#   docker compose up          # build images and start everything (foreground)
+#   docker compose up -d       # same, detached
+#   docker compose down        # stop and remove containers (data volume kept)
+#   docker compose down -v     # ⚠️  also removes the data volume (wipes DB)
+#
+# ── Local overrides ───────────────────────────────────────────────────────────
+#   Copy docker-compose.override.yml.example to docker-compose.override.yml
+#   and edit it. Docker Compose merges it automatically — no extra flags needed.
+#
+# ── Environment variables ─────────────────────────────────────────────────────
+#   AGENT_HQ_API_PORT            Host port for the API     (default: 3501)
+#   AGENT_HQ_UI_PORT             Host port for the UI      (default: 3500)
+#   NEXT_PUBLIC_API_URL          API URL baked into the UI build
+#                                (default: http://localhost:3501)
+###############################################################################
+
+name: agent-hq
+
+# ── Named volume for SQLite persistence ───────────────────────────────────────
+volumes:
+  agent-hq-data:
+    driver: local
+
+# ── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ── API ─────────────────────────────────────────────────────────────────────
+  agent-hq-api:
+    image: nordinit/agent-hq-api:latest
+    container_name: agent-hq-api
+    restart: unless-stopped
+    ports:
+      - "${AGENT_HQ_API_PORT:-3501}:3501"
+    volumes:
+      - agent-hq-data:/data
+    environment:
+      NODE_ENV: production
+      PORT: "3501"
+      AGENT_HQ_DB_PATH: /data/agent-hq.db
+      AGENT_HQ_DATA_DIR: /data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3501/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  # ── UI ──────────────────────────────────────────────────────────────────────
+  agent-hq-ui:
+    image: nordinit/agent-hq-ui:latest
+    container_name: agent-hq-ui
+    restart: unless-stopped
+    ports:
+      - "${AGENT_HQ_UI_PORT:-3500}:3500"
+    environment:
+      NODE_ENV: production
+      PORT: "3500"
+    depends_on:
+      agent-hq-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3500"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s

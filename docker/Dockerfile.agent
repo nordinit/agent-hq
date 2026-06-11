@@ -1,0 +1,138 @@
+###############################################################################
+# Dockerfile.agent — OpenClaw agent container template
+#
+# Produces a self-contained image for a single OpenClaw agent.
+# One image per agent slug; build args and runtime mounts handle per-agent
+# configuration.
+#
+# ── Build args ────────────────────────────────────────────────────────────────
+#   NODE_VERSION       Node.js major version (default: 22 — current LTS)
+#   OPENCLAW_VERSION   npm version tag, e.g. "latest" or "2026.3.13"
+#   AGENT_ID           Agent slug, e.g. "agency-backend"  (required)
+#
+# ── Build context layout expected ─────────────────────────────────────────────
+#   docker/config/<AGENT_ID>/SOUL.md         agent persona / mandate
+#   docker/config/<AGENT_ID>/IDENTITY.md     name, role, slug
+#   docker/config/<AGENT_ID>/AGENTS.md       operating manual
+#   docker/config/<AGENT_ID>/TOOLS.md        tool & environment notes
+#   docker/config/<AGENT_ID>/BOOTSTRAP.md    startup checklist   (optional)
+#   docker/config/<AGENT_ID>/HEARTBEAT.md    heartbeat template  (optional)
+#   docker/config/<AGENT_ID>/USER.md         client context      (optional)
+#
+# ── Runtime env vars (required) ───────────────────────────────────────────────
+#   OPENCLAW_MODEL       Model string, e.g. "anthropic/claude-sonnet-4-6"
+#   AGENT_ID             Must match the slug embedded at build time
+#   HOOKS_TOKEN          Gateway hooks auth token
+#   AGENT_HQ_API_URL     Agent HQ API base URL, e.g. http://host.docker.internal:3501
+#
+# ── Volume mounts (required at runtime) ───────────────────────────────────────
+#   /root/.openclaw/openclaw.json   Agent config file (contains auth secrets)
+#   /workspace                      Agent working directory
+#   /root/.ssh                      SSH keys for git / remote access
+#
+# ── Exposed ports ─────────────────────────────────────────────────────────────
+#   3700   OpenClaw gateway  (map to any available host port with -p HOST:3700)
+#
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+#   /entrypoint.sh  → validates env, then execs `openclaw gateway start`
+###############################################################################
+
+ARG NODE_VERSION=22
+FROM node:${NODE_VERSION}-slim
+
+# ── System packages ───────────────────────────────────────────────────────────
+# Install Chromium and all headless-browser dependencies needed by the
+# OpenClaw browser tool.  Also add git, curl, and ssh for workspace operations.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        chromium \
+        fonts-liberation \
+        libatk-bridge2.0-0 \
+        libatk1.0-0 \
+        libcups2 \
+        libdrm2 \
+        libgbm1 \
+        libgtk-3-0 \
+        libnspr4 \
+        libnss3 \
+        libx11-xcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxrandr2 \
+        libxss1 \
+        xdg-utils \
+        ca-certificates \
+        git \
+        curl \
+        openssh-client \
+        gettext-base \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tell OpenClaw (and Puppeteer) to use the system Chromium instead of
+# downloading its own bundle.
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# ── OpenClaw binary ───────────────────────────────────────────────────────────
+ARG OPENCLAW_VERSION=latest
+RUN npm install -g openclaw@${OPENCLAW_VERSION}
+
+# ── Directory layout ──────────────────────────────────────────────────────────
+# /workspace              agent working directory  (volume-mounted at runtime)
+# /root/.openclaw         openclaw config root
+#   └─ openclaw.json      bind-mounted at runtime  (contains auth secrets)
+#   └─ workspace-<slug>   symlink → /workspace
+# /root/.ssh              SSH keys                 (volume-mounted at runtime)
+ARG AGENT_ID=agent
+RUN mkdir -p /workspace /root/.openclaw /root/.openclaw/agent /root/.ssh \
+    && chmod 700 /root/.ssh \
+    && ln -s /workspace /root/.openclaw/workspace-${AGENT_ID}
+
+# Persist AGENT_ID as an env var so entrypoint and openclaw can read it.
+ENV AGENT_ID=${AGENT_ID}
+
+# ── Agent config files (baked in at build time) ───────────────────────────────
+# Identity and persona files are static per agent and safe to layer into the
+# image.  openclaw.json is NOT included here — it holds auth tokens and must
+# be rendered at runtime from the template.
+#
+# Expected build context path:  docker/config/<AGENT_ID>/
+#   SOUL.md       required — agent persona and mandate
+#   IDENTITY.md   required — name, role, slug, session-key
+#   AGENTS.md     required — operating manual
+#   TOOLS.md      required — tool notes and environment config
+#   BOOTSTRAP.md  optional — startup checklist
+#   HEARTBEAT.md  optional — heartbeat template
+#   USER.md       optional — client / project context
+COPY config/${AGENT_ID}/ /workspace/
+
+# ── openclaw.json template (baked in, rendered at runtime via envsubst) ───────
+# Baking the template into the image means no host-side pre-rendering is
+# required.  The entrypoint script runs envsubst at startup to produce the
+# final openclaw.json from runtime env vars.
+COPY config/openclaw.template.json /root/.openclaw/openclaw.template.json
+
+# ── Runtime env vars ──────────────────────────────────────────────────────────
+# Defaults are intentionally empty so the container fails fast on launch
+# rather than silently using wrong values.  Override every one of these at
+# `docker run` time (or via docker-compose environment section).
+ENV OPENCLAW_MODEL=""
+ENV HOOKS_TOKEN=""
+ENV GATEWAY_AUTH_TOKEN=""
+ENV ANTHROPIC_API_KEY=""
+ENV MINIMAX_API_KEY=""
+ENV CONTAINER_PORT=3700
+ENV AGENT_HQ_API_URL=""
+
+# ── Entrypoint script ─────────────────────────────────────────────────────────
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# ── Exposed ports ─────────────────────────────────────────────────────────────
+# OpenClaw gateway default for containerized agents.
+# The host-side port is chosen at `docker run` time:  -p <host-port>:3700
+EXPOSE 3700
+
+# ── Launch ────────────────────────────────────────────────────────────────────
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["openclaw", "gateway", "start"]

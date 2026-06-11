@@ -1,0 +1,13 @@
+{
+  "id": "agent-hq-capability-tools",
+  "name": "Agent HQ capability tools",
+  "description": "Fetches Agent HQ assigned tools and registers them as native OpenClaw tools.",
+  "contracts": {
+    "tools": []
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

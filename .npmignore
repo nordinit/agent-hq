@@ -1,0 +1,55 @@
+# ── Directories not needed in the npm package ──────────────────────────────
+backups/
+docs/
+docker/
+logs/
+memory/
+package/
+scripts/
+uploads/
+.claude/
+.git/
+.github/
+
+# ── Backup / temp build artifacts ──────────────────────────────────────────
+api/dist/
+api/dist.bak*/
+api/src_backup*/
+api/*.db
+api/*.db-shm
+api/*.db-wal
+api/node_modules/
+ui/.next/
+ui/node_modules/
+ui/tsconfig.tsbuildinfo
+
+# ── Test files and fixtures ────────────────────────────────────────────────
+**/*.test.ts
+**/*.test.js
+**/*.spec.ts
+**/*.spec.js
+api/src/__mocks__/
+api/src/db/jest-*.ts
+api/src/db/seed-dev.ts
+bin/agent-hq.test.js
+
+# ── .bak files ─────────────────────────────────────────────────────────────
+**/*.bak.*
+**/*.bak
+
+# ── Data and env files ─────────────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
+.env.agents
+
+# ── Non-essential root files ───────────────────────────────────────────────
+start.sh
+ecosystem.dev.config.js
+docker-compose.override.yml.example
+
+# ── Source maps ────────────────────────────────────────────────────────────
+**/*.map
+**/*.d.ts.map
