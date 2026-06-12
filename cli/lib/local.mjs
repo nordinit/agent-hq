@@ -562,6 +562,21 @@ function ensureSource() {
   if (isGitWorktree(SOURCE_DIR) && isAgentHqSourceDir(SOURCE_DIR)) {
     info('Updating Agent HQ source…');
     try {
+      // Older releases cloned from a repository URL that no longer exists.
+      // Repoint origin so cached installs keep receiving updates.
+      const origin = execSync('git remote get-url origin', {
+        cwd: SOURCE_DIR,
+        stdio: 'pipe',
+      }).toString().trim();
+      if (origin !== REPO_URL) {
+        info(`Repointing source origin to ${REPO_URL}`);
+        execSync(`git remote set-url origin "${REPO_URL}"`, {
+          cwd: SOURCE_DIR,
+          stdio: 'pipe',
+        });
+      }
+    } catch { /* fall through to fetch with the existing origin */ }
+    try {
       execSync('git fetch origin && git reset --hard origin/main', {
         cwd: SOURCE_DIR,
         stdio: 'pipe',
