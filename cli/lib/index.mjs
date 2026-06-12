@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { localStart, localStop, localStatus } from './local.mjs';
+import { localStart, localStop, localStatus, ensureBundledOpenClawPluginConfig } from './local.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const COMPOSE_SOURCE = join(__dirname, '..', 'docker-compose.yml');
@@ -219,6 +219,10 @@ function cmdStart(flags) {
   info('Starting Agent HQ…');
   compose(['up', '-d', '--remove-orphans']);
 
+  // OpenClaw runs on the host, not in the containers — wire the bundled
+  // capability-tools plugin into ~/.openclaw/openclaw.json, same as local mode.
+  ensureBundledOpenClawPluginConfig();
+
   success(`Agent HQ is starting!`);
   console.log(`  UI:  http://localhost:${uiPort}`);
   console.log(`  API: http://localhost:${apiPort}`);
@@ -264,6 +268,8 @@ function cmdRestart(flags) {
   info('Restarting Agent HQ…');
   compose(['down'], { ignoreError: true });
   compose(['up', '-d', '--remove-orphans']);
+
+  ensureBundledOpenClawPluginConfig();
 
   success('Agent HQ restarted.');
   console.log(`  UI:  http://localhost:${uiPort}`);

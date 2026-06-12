@@ -13,10 +13,14 @@
   "files": [
     "bin/cli.js",
     "lib/",
+    "plugin/",
     "docker-compose.yml",
     "README.md",
     "LICENSE"
   ],
+  "scripts": {
+    "prepack": "node scripts/sync-plugin.mjs"
+  },
   "keywords": [
     "agent-hq",
     "task-management",

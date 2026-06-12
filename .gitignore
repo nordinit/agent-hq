@@ -41,3 +41,6 @@ memory/
 .atlas-gh-identity.env
 .atlas-gh-token
 skills/.agent-hq-managed-skills.json
+
+# Generated at pack time by cli/scripts/sync-plugin.mjs
+cli/plugin/

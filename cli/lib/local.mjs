@@ -300,7 +300,40 @@ function ensureAgentHqOpenClawPluginConfig(sourceDir) {
     warn(`Agent HQ OpenClaw capability tools plugin was not found at ${pluginDir}.`);
     return false;
   }
+  return configureOpenClawPluginAt(pluginDir);
+}
 
+/**
+ * Docker mode has no source checkout, so the plugin ships inside the npm
+ * package (cli/plugin, generated at pack time). Copy it to a stable path under
+ * the data dir — npx caches are ephemeral, and openclaw.json keeps an absolute
+ * path — then wire it into the OpenClaw config.
+ */
+export function ensureBundledOpenClawPluginConfig() {
+  const candidates = [
+    // Published package layout: <package root>/plugin
+    join(MODULE_DIR, '..', 'plugin'),
+    // Repo checkout layout: <repo root>/plugins/openclaw-capability-tools
+    join(MODULE_DIR, '..', '..', AGENT_HQ_OPENCLAW_PLUGIN_RELATIVE_PATH),
+  ];
+  const source = candidates.find((dir) => existsSync(join(dir, 'openclaw.plugin.json')));
+  if (!source) {
+    warn('Agent HQ OpenClaw capability tools plugin is not bundled with this CLI install.');
+    return false;
+  }
+
+  const managedDir = join(DATA_DIR, 'openclaw-plugin');
+  try {
+    mkdirSync(managedDir, { recursive: true });
+    cpSync(source, managedDir, { recursive: true });
+  } catch (error) {
+    warn(`Could not copy the Agent HQ OpenClaw plugin to ${managedDir}.\n  ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  return configureOpenClawPluginAt(managedDir);
+}
+
+function configureOpenClawPluginAt(pluginDir) {
   let config;
   try {
     config = readJsonObjectFile(OPENCLAW_CONFIG_FILE);
