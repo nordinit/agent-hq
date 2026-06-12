@@ -785,7 +785,22 @@ export function localStart(flags) {
   // Copy static assets into the standalone bundle so CSS/JS are served correctly.
   copyStandaloneStatics(join(sourceDir, 'ui'));
 
-  // 4. Start API
+  // 4. Install or migrate the database. API startup is deliberately
+  // non-mutating — it verifies the schema ledger and refuses to serve a
+  // missing or stale database, so migrations must run before launch.
+  info('Preparing database…');
+  run('npm run db:migrate', {
+    cwd: join(sourceDir, 'api'),
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      AGENT_HQ_DB_PATH: DB_PATH,
+      AGENT_HQ_DATA_DIR: DATA_DIR,
+      PATH: runtimePath,
+    },
+  });
+
+  // 5. Start API
   info('Starting API…');
   const apiPid = spawnDetached(
     process.execPath,
@@ -803,7 +818,7 @@ export function localStart(flags) {
     },
   );
 
-  // 5. Start UI
+  // 6. Start UI
   info('Starting UI…');
 
   // Determine how to start Next.js — standalone if available, else npx next start
