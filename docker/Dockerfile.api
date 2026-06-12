@@ -71,5 +71,8 @@ EXPOSE 3501
 
 USER agenthq
 
-# Start the compiled API
-CMD ["node", "dist/index.js"]
+# Install or migrate the database, then start the compiled API.
+# API startup is deliberately non-mutating — it verifies the schema ledger and
+# refuses to serve a missing or stale database, so the container bootstraps the
+# schema itself before launch (idempotent; a no-op when already up to date).
+CMD ["sh", "-c", "node dist/db/migrate.js && node dist/index.js"]
