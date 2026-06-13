@@ -29,11 +29,6 @@ const STATE_FILE = join(DATA_DIR, 'local.json');
 const DB_PATH = join(DATA_DIR, 'agent-hq.db');
 const REPO_URL = 'https://github.com/nordinit/agent-hq.git';
 const OPENCLAW_HOME = join(homedir(), '.openclaw');
-const OPENCLAW_INSTALL_DIR = OPENCLAW_HOME;
-const OPENCLAW_BIN_DIR = join(OPENCLAW_INSTALL_DIR, 'node_modules', '.bin');
-const OPENCLAW_CLI_ENTRY = join(OPENCLAW_INSTALL_DIR, 'node_modules', 'openclaw', 'openclaw.mjs');
-const OPENCLAW_DIST_ENTRY = join(OPENCLAW_INSTALL_DIR, 'node_modules', 'openclaw', 'dist', 'index.js');
-const OPENCLAW_GATEWAY_CMD = join(OPENCLAW_HOME, 'gateway.cmd');
 const OPENCLAW_CONFIG_FILE = join(OPENCLAW_HOME, 'openclaw.json');
 const MODULE_DIR = fileURLToPath(new URL('.', import.meta.url));
 const AGENT_HQ_OPENCLAW_PLUGIN_ID = 'agent-hq-capability-tools';
@@ -114,27 +109,8 @@ function buildPathWith(extraDirs = []) {
   return Array.from(new Set(parts)).join(delimiter);
 }
 
-function bundledOpenClawCandidates() {
-  if (process.platform === 'win32') {
-    return [
-      join(OPENCLAW_BIN_DIR, 'openclaw.cmd'),
-      join(OPENCLAW_BIN_DIR, 'openclaw.exe'),
-      join(OPENCLAW_BIN_DIR, 'openclaw'),
-    ];
-  }
-  return [join(OPENCLAW_BIN_DIR, 'openclaw')];
-}
-
-function resolveBundledOpenClawExecutable() {
-  return bundledOpenClawCandidates().find(candidate => existsSync(candidate)) ?? null;
-}
-
 function shouldUseShell(executable) {
   return process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
-}
-
-function quoteWindowsArg(value) {
-  return `"${String(value).replace(/"/g, '""')}"`;
 }
 
 function runCommandSync(executable, args, opts = {}) {
@@ -154,114 +130,6 @@ function runCommandSync(executable, args, opts = {}) {
   }
 
   return opts.encoding ? result.stdout : result.stdout?.toString() ?? '';
-}
-
-function parseJson(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function sleep(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function canRunOpenClaw(executable, extraPathDirs = []) {
-  try {
-    runCommandSync(executable, ['--version'], {
-      stdio: 'pipe',
-      env: {
-        ...process.env,
-        PATH: buildPathWith(extraPathDirs),
-      },
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolveOpenClawExecutable() {
-  const bundled = resolveBundledOpenClawExecutable();
-  if (bundled && canRunOpenClaw(bundled, [OPENCLAW_BIN_DIR])) {
-    return bundled;
-  }
-  if (canRunOpenClaw('openclaw', [OPENCLAW_BIN_DIR])) {
-    return 'openclaw';
-  }
-  return bundled ?? 'openclaw';
-}
-
-function repairOpenClawGatewayCommand() {
-  if (process.platform !== 'win32') return;
-  const cliEntry = existsSync(OPENCLAW_CLI_ENTRY) ? OPENCLAW_CLI_ENTRY : OPENCLAW_DIST_ENTRY;
-  if (!existsSync(cliEntry)) return;
-
-  let version = '';
-  try {
-    const pkg = JSON.parse(readFileSync(join(OPENCLAW_INSTALL_DIR, 'node_modules', 'openclaw', 'package.json'), 'utf8'));
-    version = typeof pkg.version === 'string' ? pkg.version.trim() : '';
-  } catch {
-    version = '';
-  }
-
-  const home = process.env.HOME ?? homedir();
-  const tmpDir = process.env.TMPDIR ?? process.env.TEMP ?? join(home, 'AppData', 'Local', 'Temp');
-  const port = process.env.OPENCLAW_GATEWAY_PORT ?? '18789';
-  const next = [
-    '@echo off',
-    version ? `rem OpenClaw Gateway (v${version})` : 'rem OpenClaw Gateway',
-    `set "HOME=${home}"`,
-    `set "TMPDIR=${tmpDir}"`,
-    `set "OPENCLAW_GATEWAY_PORT=${port}"`,
-    'set "OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service"',
-    'set "OPENCLAW_WINDOWS_TASK_NAME=OpenClaw Gateway"',
-    'set "OPENCLAW_SERVICE_MARKER=openclaw"',
-    'set "OPENCLAW_SERVICE_KIND=gateway"',
-    ...(version ? [`set "OPENCLAW_SERVICE_VERSION=${version}"`] : []),
-    `${quoteWindowsArg(process.execPath)} ${quoteWindowsArg(cliEntry)} gateway --port ${port}`,
-    '',
-  ].join('\r\n');
-
-  const current = existsSync(OPENCLAW_GATEWAY_CMD) ? readFileSync(OPENCLAW_GATEWAY_CMD, 'utf8') : '';
-  if (current !== next) {
-    writeFileSync(OPENCLAW_GATEWAY_CMD, next);
-  }
-}
-
-function ensureFreshInstallGatewayMode() {
-  let config = {};
-
-  if (existsSync(OPENCLAW_CONFIG_FILE)) {
-    try {
-      const parsed = JSON.parse(readFileSync(OPENCLAW_CONFIG_FILE, 'utf8'));
-      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-        warn('Fresh OpenClaw config has an unexpected shape. Leaving gateway.mode unchanged.');
-        return false;
-      }
-      config = parsed;
-    } catch {
-      warn('Fresh OpenClaw config could not be parsed. Leaving gateway.mode unchanged.');
-      return false;
-    }
-  }
-
-  const gateway = config.gateway;
-  if (gateway && typeof gateway === 'object' && !Array.isArray(gateway)) {
-    if (typeof gateway.mode === 'string' && gateway.mode.trim()) {
-      return false;
-    }
-    config.gateway = { ...gateway, mode: 'local' };
-  } else {
-    config.gateway = { mode: 'local' };
-  }
-
-  mkdirSync(OPENCLAW_HOME, { recursive: true });
-  writeFileSync(OPENCLAW_CONFIG_FILE, `${JSON.stringify(config, null, 2)}\n`);
-  info('Configured OpenClaw gateway.mode=local for the fresh install.');
-  return true;
 }
 
 function isAgentHqSourceDir(dir) {
@@ -438,140 +306,6 @@ function findSourceInParents(startDir) {
 
 function resolveLocalWorkspaceSource() {
   return findSourceInParents(process.cwd()) ?? findSourceInParents(MODULE_DIR);
-}
-
-function ensureOpenClaw() {
-  if (canRunOpenClaw(resolveOpenClawExecutable(), [OPENCLAW_BIN_DIR])) {
-    return {
-      runtimePath: buildPathWith(existsSync(OPENCLAW_BIN_DIR) ? [OPENCLAW_BIN_DIR] : []),
-      openclawExec: resolveOpenClawExecutable(),
-      freshInstall: false,
-    };
-  }
-
-  info('Installing OpenClaw runtime…');
-  mkdirSync(OPENCLAW_HOME, { recursive: true });
-  mkdirSync(OPENCLAW_INSTALL_DIR, { recursive: true });
-  run(`npm install --prefix "${OPENCLAW_INSTALL_DIR}" openclaw`);
-
-  const installedExec = resolveOpenClawExecutable();
-  if (!canRunOpenClaw(installedExec, [OPENCLAW_BIN_DIR])) {
-    die(
-      'OpenClaw installation completed but the CLI is still unavailable.\n' +
-        `  Expected bin path: ${OPENCLAW_BIN_DIR}`
-    );
-  }
-
-  success('OpenClaw installed.');
-  return {
-    runtimePath: buildPathWith([OPENCLAW_BIN_DIR]),
-    openclawExec: installedExec,
-    freshInstall: true,
-  };
-}
-
-function runOpenClawGateway(args, runtime) {
-  return runCommandSync(runtime.openclawExec, ['gateway', ...args], {
-    stdio: 'pipe',
-    encoding: 'utf8',
-    timeout: 30000,
-    env: {
-      ...process.env,
-      PATH: runtime.runtimePath,
-    },
-  });
-}
-
-function readOpenClawGatewayStatus(runtime) {
-  try {
-    return parseJson(runOpenClawGateway(['status', '--json'], runtime));
-  } catch {
-    return null;
-  }
-}
-
-function isOpenClawGatewayReachable(status) {
-  return Boolean(status?.rpc?.ok) || status?.port?.status === 'busy';
-}
-
-function spawnDetachedOpenClawGateway(runtime) {
-  const port = process.env.OPENCLAW_GATEWAY_PORT ?? '18789';
-  const cliEntry = existsSync(OPENCLAW_CLI_ENTRY) ? OPENCLAW_CLI_ENTRY : OPENCLAW_DIST_ENTRY;
-  if (process.platform === 'win32' && existsSync(cliEntry)) {
-    return spawnDetached(process.execPath, [cliEntry, 'gateway', 'run', '--force', '--port', port], {
-      env: {
-        ...process.env,
-        PATH: runtime.runtimePath,
-        OPENCLAW_HIDE_BANNER: '1',
-        OPENCLAW_SUPPRESS_NOTES: '1',
-      },
-    });
-  }
-
-  return spawnDetached(runtime.openclawExec, ['gateway', 'run', '--force', '--port', port], {
-    env: {
-      ...process.env,
-      PATH: runtime.runtimePath,
-      OPENCLAW_HIDE_BANNER: '1',
-      OPENCLAW_SUPPRESS_NOTES: '1',
-    },
-  });
-}
-
-function ensureOpenClawGateway(runtime) {
-  repairOpenClawGatewayCommand();
-  let status = readOpenClawGatewayStatus(runtime);
-
-  if (isOpenClawGatewayReachable(status)) {
-    info('OpenClaw gateway is already running.');
-    return;
-  }
-
-  const loaded = Boolean(status?.service?.loaded);
-  const running = status?.service?.runtime?.status === 'running';
-  const command = loaded || running ? 'restart' : 'start';
-  info(`${command === 'start' ? 'Starting' : 'Restarting'} OpenClaw gateway…`);
-
-  try {
-    const output = runOpenClawGateway([command, '--json'], runtime);
-    const parsed = output ? parseJson(output) : null;
-    if (parsed?.message) info(parsed.message);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    warn(`OpenClaw gateway ${command} failed.\n  ${message}`);
-  }
-
-  const serviceDeadline = Date.now() + 20000;
-  while (Date.now() <= serviceDeadline) {
-    status = readOpenClawGatewayStatus(runtime);
-    if (isOpenClawGatewayReachable(status)) {
-      success(
-        command === 'start'
-          ? 'OpenClaw gateway started.'
-          : 'OpenClaw gateway restarted.'
-      );
-      return;
-    }
-    sleep(500);
-  }
-
-  info('Falling back to a direct OpenClaw gateway process…');
-  const pid = spawnDetachedOpenClawGateway(runtime);
-  const directDeadline = Date.now() + 30000;
-  while (Date.now() <= directDeadline) {
-    status = readOpenClawGatewayStatus(runtime);
-    if (isOpenClawGatewayReachable(status)) {
-      success('OpenClaw gateway is running in direct background mode.');
-      return;
-    }
-    sleep(1000);
-  }
-
-  if (pid) {
-    warn(`OpenClaw gateway direct fallback started in the background (PID ${pid}) but is still warming up.`);
-  } else {
-    warn('OpenClaw gateway did not become reachable. Agent HQ will continue starting.');
-  }
 }
 
 // ── Source management ────────────────────────────────────────────────────────
