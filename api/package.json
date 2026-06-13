@@ -57,18 +57,21 @@
     "better-sqlite3": "^12.6.2",
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
-    "express": "^4.18.2",
+    "express": "^4.22.2",
     "multer": "^2.1.1",
-    "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "playwright-core": "^1.58.2",
-    "simple-git": "^3.22.0",
-    "ws": "^8.19.0",
+    "simple-git": "^3.36.0",
+    "ws": "^8.21.0",
     "zod": "^4.3.6"
   },
   "overrides": {
-    "hono": "^4.12.12",
-    "@hono/node-server": "^1.19.13"
+    "hono": "^4.12.25",
+    "@hono/node-server": "^1.19.13",
+    "express-rate-limit": "^8.5.2",
+    "ip-address": "^10.2.0",
+    "fast-uri": "^3.1.2",
+    "qs": "^6.15.2"
   },
   "devDependencies": {
     "@apidevtools/swagger-parser": "^12.1.0",
@@ -77,10 +80,9 @@
     "@types/express": "^4.17.21",
     "@types/jest": "^30.0.0",
     "@types/node": "^20.11.5",
-    "@types/node-cron": "^3.0.11",
     "jest": "^30.3.0",
     "ts-jest": "^29.4.6",
-    "tsx": "^4.7.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.3.3"
   }
 }
