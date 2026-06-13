@@ -362,7 +362,7 @@ function SelectCard<T extends string>({
 export default function OnboardingWizard({ onClose }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>('personalize');
-  const [showPersonalizeIntro, setShowPersonalizeIntro] = useState(true);
+  const [manualSetupLoading, setManualSetupLoading] = useState(false);
 
   // Step 1 — personalization
   const [userName, setUserName] = useState('');
@@ -406,6 +406,24 @@ export default function OnboardingWizard({ onClose }: Props) {
   const gatewayTone = gatewayStatusTone(gatewayStatus, isRemoteGateway);
   const gatewayNeedsToken = isGatewayTokenMismatch(gatewayStatus?.error);
   const gatewayRestartState: { phase: 'idle' | 'loading' | 'done' | 'error'; message?: string } = { phase: 'idle' };
+
+  // ── Manual setup: skip the guided wizard entirely ───────────────────────────
+  // Creates an unprovisioned Atlas agent server-side and marks onboarding
+  // complete, dropping the user into an empty instance to configure themselves.
+  async function handleManualSetup() {
+    setManualSetupLoading(true);
+    setPersonalizeError(null);
+    try {
+      await api.skipOnboarding();
+      markOnboarded();
+      beginGettingStartedGuide(0);
+      onClose();
+      router.push('/');
+    } catch (e) {
+      setPersonalizeError(e instanceof Error ? e.message : String(e));
+      setManualSetupLoading(false);
+    }
+  }
 
   // ── Step 1: save name to localStorage + create project via API ──────────────
   async function handlePersonalizeNext() {
@@ -721,44 +739,42 @@ export default function OnboardingWizard({ onClose }: Props) {
               </div>
               <button
                 type="button"
-                onClick={() => setShowPersonalizeIntro((value) => !value)}
-                className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white"
+                onClick={handleManualSetup}
+                disabled={manualSetupLoading}
+                className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {showPersonalizeIntro ? 'Skip intro' : 'Show intro'}
+                {manualSetupLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+                Set up manually
               </button>
             </div>
 
-            {showPersonalizeIntro && (
-              <>
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-400/15">
-                    <Sparkles className="h-5 w-5 text-amber-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm leading-relaxed text-slate-400">
-                      I&apos;m your AI-powered headquarters for managing agents, tasks, and projects.
-                      I coordinate the team so nothing falls through the cracks.
-                    </p>
-                  </div>
-                </div>
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-400/15">
+                <Sparkles className="h-5 w-5 text-amber-400" />
+              </div>
+              <div>
+                <p className="text-sm leading-relaxed text-slate-400">
+                  I&apos;m your AI-powered headquarters for managing agents, tasks, and projects.
+                  I coordinate the team so nothing falls through the cracks.
+                </p>
+              </div>
+            </div>
 
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { icon: Bot, color: 'text-blue-400', bg: 'bg-blue-400/10 border-blue-400/20', label: 'Agents', desc: 'AI workers that run your jobs' },
-                    { icon: FolderOpen, color: 'text-amber-400', bg: 'bg-amber-400/10 border-amber-400/20', label: 'Projects', desc: 'Organise tasks + agents' },
-                    { icon: CheckCircle2, color: 'text-green-400', bg: 'bg-green-400/10 border-green-400/20', label: 'Tasks', desc: 'Track progress end-to-end' },
-                  ].map(({ icon: Icon, color, bg, label, desc }) => (
-                    <div key={label} className={`rounded-xl border ${bg} p-3 flex flex-col gap-1.5`}>
-                      <Icon className={`w-4 h-4 ${color}`} />
-                      <p className="text-xs font-semibold text-white">{label}</p>
-                      <p className="text-[11px] text-slate-500 leading-snug">{desc}</p>
-                    </div>
-                  ))}
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { icon: Bot, color: 'text-blue-400', bg: 'bg-blue-400/10 border-blue-400/20', label: 'Agents', desc: 'AI workers that run your jobs' },
+                { icon: FolderOpen, color: 'text-amber-400', bg: 'bg-amber-400/10 border-amber-400/20', label: 'Projects', desc: 'Organise tasks + agents' },
+                { icon: CheckCircle2, color: 'text-green-400', bg: 'bg-green-400/10 border-green-400/20', label: 'Tasks', desc: 'Track progress end-to-end' },
+              ].map(({ icon: Icon, color, bg, label, desc }) => (
+                <div key={label} className={`rounded-xl border ${bg} p-3 flex flex-col gap-1.5`}>
+                  <Icon className={`w-4 h-4 ${color}`} />
+                  <p className="text-xs font-semibold text-white">{label}</p>
+                  <p className="text-[11px] text-slate-500 leading-snug">{desc}</p>
                 </div>
+              ))}
+            </div>
 
-                <hr className="border-slate-700/60" />
-              </>
-            )}
+            <hr className="border-slate-700/60" />
 
             {/* User name */}
             <div className="space-y-4">

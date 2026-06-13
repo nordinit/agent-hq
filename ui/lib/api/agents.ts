@@ -7,6 +7,8 @@ getAgents: (projectId?: number | null) => apiFetch<Agent[]>(projectId ? `/api/v1
 getSetupStatus: () => apiFetch<SetupStatus>('/api/v1/setup/status'),
 completeOnboarding: () =>
   apiFetch<{ ok: boolean; onboarding_completed: boolean; onboarding_provider_gate_passed: boolean }>('/api/v1/setup/onboarding/complete', { method: 'POST' }),
+skipOnboarding: () =>
+  apiFetch<{ ok: boolean; onboarding_completed: boolean; atlas_created: boolean }>('/api/v1/setup/onboarding/skip', { method: 'POST' }),
 getAgent: (id: number) => apiFetch<Agent>(`/api/v1/agents/${id}`),
 createAgent: (data: Partial<Agent> & { provision_openclaw?: boolean }) =>
   apiFetch<Agent>('/api/v1/agents', { method: 'POST', body: JSON.stringify(data) }),

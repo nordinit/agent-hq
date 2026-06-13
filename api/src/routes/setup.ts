@@ -1,7 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { isProviderGatePassed, countConnectedProviders } from './providers';
-import { getAtlasAgentRecord } from '../lib/atlasAgent';
+import {
+  getAtlasAgentRecord,
+  ATLAS_AGENT_NAME,
+  ATLAS_SESSION_KEY,
+  ATLAS_SYSTEM_ROLE,
+} from '../lib/atlasAgent';
+import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 
 const router = Router();
 
@@ -78,6 +84,45 @@ router.post('/onboarding/complete', (_req: Request, res: Response) => {
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+// ─── POST /api/v1/setup/onboarding/skip ──────────────────────────────────────
+// Manual-setup path: bypass the guided wizard entirely. Creates the Atlas agent
+// record if missing (DB only — no workspace or OpenClaw provisioning) and marks
+// onboarding complete without requiring a connected provider.
+router.post('/onboarding/skip', (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = resolveTenantIdFromRequest(db, req);
+
+    let atlasCreated = false;
+    if (!getAtlasAgentRecord()) {
+      db.prepare(`
+        INSERT INTO agents (tenant_id, name, role, session_key, system_role)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        tenantId,
+        ATLAS_AGENT_NAME,
+        'Built-in assistant for chat, task routing, and coordination.',
+        ATLAS_SESSION_KEY,
+        ATLAS_SYSTEM_ROLE,
+      );
+      atlasCreated = true;
+    }
+
+    setSetting('onboarding_completed', 'true');
+
+    res.json({
+      ok: true,
+      onboarding_completed: true,
+      atlas_created: atlasCreated,
+      onboarding_provider_gate_passed: isProviderGatePassed(),
+      connected_provider_count: countConnectedProviders(),
+    });
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status ?? 500;
+    res.status(status).json({ error: String(err) });
   }
 });
 

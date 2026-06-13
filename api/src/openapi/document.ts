@@ -191,6 +191,18 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
+    '/setup/onboarding/skip': {
+      post: {
+        tags: ['Setup'],
+        summary: 'Skip the guided wizard for manual setup; creates an unprovisioned Atlas agent and marks onboarding complete without the provider gate.',
+        operationId: 'skipOnboarding',
+        requestBody: requestBody(ref('EmptyObject'), {}, false),
+        responses: {
+          '200': response('Onboarding skipped for manual setup.', ref('OnboardingSkipResponse')),
+          default: errorResponseRef,
+        },
+      },
+    },
     '/providers': {
       get: {
         tags: ['Providers'],
@@ -1577,6 +1589,17 @@ export const openApiDocument: OpenApiDocument = {
         properties: {
           ok: { type: 'boolean' },
           onboarding_completed: { type: 'boolean' },
+          onboarding_provider_gate_passed: { type: 'boolean' },
+          connected_provider_count: { type: 'integer' },
+        },
+      },
+      OnboardingSkipResponse: {
+        type: 'object',
+        required: ['ok', 'onboarding_completed', 'atlas_created', 'onboarding_provider_gate_passed', 'connected_provider_count'],
+        properties: {
+          ok: { type: 'boolean' },
+          onboarding_completed: { type: 'boolean' },
+          atlas_created: { type: 'boolean' },
           onboarding_provider_gate_passed: { type: 'boolean' },
           connected_provider_count: { type: 'integer' },
         },
