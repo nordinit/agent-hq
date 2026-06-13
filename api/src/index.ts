@@ -27,7 +27,6 @@ import { startScheduler } from './scheduler';
 import { startSprintScheduler } from './scheduler/sprintScheduler';
 import { startWatchdog } from './scheduler/watchdog';
 import { startReconciler } from './scheduler/reconciler';
-import { ensureOpenClawMcpWorkspaceBundleEnabled } from './runtimes/mcpMaterialization';
 import projectFilesRouter from './routes/project-files';
 import telemetryRouter from './routes/telemetry';
 import browserRouter from './routes/browser';
@@ -551,20 +550,6 @@ app.get('/api/v1/stats', (req, res) => {
 // Verify DB schema and start. Startup must not run schema/data migrations.
 verifyStartupSchemaCurrent();
 
-// One-time trust grant for the Agent HQ workspace MCP bundle. OpenClaw only
-// discovers the per-workspace bundle when `agent-hq-mcp` is enabled in the
-// global plugin config; granting it here (boot/provisioning time) keeps the
-// per-dispatch path free of global OpenClaw config writes.
-try {
-  const bundleTrust = ensureOpenClawMcpWorkspaceBundleEnabled();
-  if (bundleTrust.changed) {
-    console.log(`[boot] Enabled OpenClaw workspace bundle plugin 'agent-hq-mcp' in ${bundleTrust.path}`);
-  } else if (!bundleTrust.ok) {
-    console.warn(`[boot] Could not enable OpenClaw workspace bundle plugin in ${bundleTrust.path}: ${bundleTrust.error ?? 'unknown error'}`);
-  }
-} catch (err) {
-  console.warn('[boot] OpenClaw workspace bundle trust grant failed:', err);
-}
 const automationDisabled = process.env.AGENT_HQ_DISABLE_AUTOMATION === '1';
 if (automationDisabled) {
   console.warn('[boot] Background automation disabled by AGENT_HQ_DISABLE_AUTOMATION=1');

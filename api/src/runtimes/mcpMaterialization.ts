@@ -433,7 +433,9 @@ function buildOpenClawAgentSlugCandidates(
  * the global OpenClaw config (`plugins.entries['agent-hq-mcp'].enabled`).
  *
  * Enabling the plugin rewrites the shared OpenClaw config and triggers a
- * plugin-registry refresh, so this must only run at provisioning/boot time —
+ * plugin-registry refresh, so this only runs when a workspace bundle is
+ * materialized (provisioning/MCP sync) — never at API boot, where it would
+ * pre-seed an entry OpenClaw flags as stale before any bundle exists, and
  * never on the per-dispatch hot path. Idempotent: a no-op once enabled.
  */
 export function ensureOpenClawMcpWorkspaceBundleEnabled(configPath = resolveOpenClawConfigPath()): {
