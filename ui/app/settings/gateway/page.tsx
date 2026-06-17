@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Save, ServerCog, TerminalSquare } from 'lucide-react';
-import { api, type GatewayConfig, type GatewayRuntimeHint, type GatewayStatus } from '@/lib/api';
+import { api, type GatewayConfig, type GatewayPairResponse, type GatewayRuntimeHint, type GatewayStatus } from '@/lib/api';
+import { buildGatewayPairingGuide, isGatewayScopeReapprovalRequired } from '@/lib/gatewayPairing';
 
 function commandBlock(): { title: string; lines: string[]; note: string } {
   return {
@@ -12,17 +13,6 @@ function commandBlock(): { title: string; lines: string[]; note: string } {
       'openclaw onboard --install-daemon',
     ],
     note: 'If OpenClaw is already installed and running, you can skip this. Otherwise run these commands in another terminal, then come back here and re-check the gateway connection.',
-  };
-}
-
-function remotePairingBlock(): { title: string; lines: string[]; note: string } {
-  return {
-    title: 'Remote gateway approval',
-    lines: [
-      'openclaw devices list',
-      'openclaw devices approve <requestId>',
-    ],
-    note: 'Remote gateways require a one-time device approval. Click Re-check Gateway here to create the pending request, approve it on the remote machine, then click Re-check Gateway again.',
   };
 }
 
@@ -39,7 +29,7 @@ function isRemoteGatewayRuntime(runtimeHint: GatewayRuntimeHint): boolean {
   return runtimeHint === 'external';
 }
 
-function statusTone(status: GatewayStatus | null, isRemoteGateway: boolean): { label: string; className: string } {
+function statusTone(status: GatewayStatus | null): { label: string; className: string } {
   if (!status) {
     return {
       label: 'Unknown',
@@ -54,7 +44,7 @@ function statusTone(status: GatewayStatus | null, isRemoteGateway: boolean): { l
       };
     case 'pairing_required':
       return {
-        label: isRemoteGateway ? 'Pairing Required' : 'Connection Required',
+        label: 'Pairing Required',
         className: 'border-amber-700/50 bg-amber-500/10 text-amber-300',
       };
     case 'auth_error':
@@ -87,8 +77,8 @@ function gatewayStatusDetails(status: GatewayStatus | null, isRemoteGateway: boo
   }
   if (status.state === 'pairing_required') {
     return isRemoteGateway
-      ? 'The remote gateway is waiting for device approval. Run the approval commands on the remote machine, then re-check here.'
-      : 'OpenClaw rejected the connection request. Restart OpenClaw and verify the gateway auth token, then try again.';
+      ? 'The remote gateway is waiting for device approval. Run the approval commands in the environment that owns the gateway, then re-check here.'
+      : 'OpenClaw is waiting for this Agent HQ device to be approved. Run the approval commands on this machine, then re-check here.';
   }
   return status.error;
 }
@@ -104,15 +94,23 @@ export default function SettingsGatewayPage() {
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [pairing, setPairing] = useState(false);
+  const [pairingResult, setPairingResult] = useState<GatewayPairResponse | null>(null);
+  const [pairingError, setPairingError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [details, setDetails] = useState<string | null>(null);
 
   const guide = useMemo(() => commandBlock(), []);
-  const remoteGuide = useMemo(() => remotePairingBlock(), []);
   const isRemoteGateway = isRemoteGatewayRuntime(runtimeHint);
-  const tone = statusTone(status, isRemoteGateway);
+  const tone = statusTone(status);
   const gatewayNeedsToken = isGatewayTokenMismatch(status?.error);
+  const scopeReapprovalRequired = isGatewayScopeReapprovalRequired(status?.error, pairingResult?.error);
+  const pairingGuide = useMemo(
+    () => buildGatewayPairingGuide(isRemoteGateway, scopeReapprovalRequired),
+    [isRemoteGateway, scopeReapprovalRequired],
+  );
+  const showPairingRecovery = status?.state === 'pairing_required' || pairingResult?.state === 'pairing_required';
 
   const load = async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
@@ -158,12 +156,14 @@ export default function SettingsGatewayPage() {
     setSaving(true);
     setError(null);
     setSuccess(null);
+    setPairingError(null);
+    setPairingResult(null);
     try {
       const next = await persistConfig();
       setSuccess('Gateway settings saved.');
       const nextStatus = await api.getGatewayStatus();
       setStatus(nextStatus);
-      setDetails(gatewayStatusDetails(nextStatus, isRemoteGateway));
+      setDetails(gatewayStatusDetails(nextStatus, isRemoteGatewayRuntime(next.runtime_hint)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -175,11 +175,13 @@ export default function SettingsGatewayPage() {
     setChecking(true);
     setError(null);
     setSuccess(null);
+    setPairingError(null);
+    setPairingResult(null);
     try {
-      await persistConfig();
+      const next = await persistConfig();
       const nextStatus = await api.getGatewayStatus();
       setStatus(nextStatus);
-      setDetails(gatewayStatusDetails(nextStatus, isRemoteGateway));
+      setDetails(gatewayStatusDetails(nextStatus, isRemoteGatewayRuntime(next.runtime_hint)));
       setSuccess(nextStatus.state === 'ready' ? 'Gateway is reachable.' : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -188,10 +190,34 @@ export default function SettingsGatewayPage() {
     }
   };
 
+  const handlePair = async () => {
+    setPairing(true);
+    setError(null);
+    setSuccess(null);
+    setPairingError(null);
+    setPairingResult(null);
+    try {
+      const next = await persistConfig();
+      const nextIsRemoteGateway = isRemoteGatewayRuntime(next.runtime_hint);
+      const result = await api.pairGateway();
+      setPairingResult(result);
+      setStatus(result);
+      setDetails(gatewayStatusDetails(result, nextIsRemoteGateway));
+      const nextStatus = await api.getGatewayStatus();
+      setStatus(nextStatus);
+      setDetails(gatewayStatusDetails(nextStatus, nextIsRemoteGateway));
+    } catch (err) {
+      setPairingError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPairing(false);
+    }
+  };
+
   const handleRestart = async () => {
     setRestarting(true);
     setError(null);
     setSuccess(null);
+    setPairingError(null);
     try {
       const response = await api.restartGateway();
       setSuccess(response.message ?? 'Gateway restart attempted.');
@@ -204,6 +230,99 @@ export default function SettingsGatewayPage() {
     } finally {
       setRestarting(false);
     }
+  };
+
+  const renderPairingBody = () => (
+    <div className="space-y-3">
+      <p className={`text-xs leading-5 ${showPairingRecovery ? 'text-amber-100/90' : 'text-zinc-400'}`}>
+        {pairingGuide.description} Run these commands {pairingGuide.location}. Replace{' '}
+        <span className="font-mono">&lt;gateway-url&gt;</span> with the Gateway URL above.
+      </p>
+      <pre className={`overflow-x-auto rounded-lg border p-3 text-xs leading-6 ${
+        showPairingRecovery
+          ? 'border-amber-400/30 bg-zinc-950 text-amber-100'
+          : 'border-zinc-700 bg-zinc-950 text-zinc-200'
+      }`}>
+        {pairingGuide.commands.join('\n')}
+      </pre>
+      <div className="space-y-2">
+        <p className={`text-xs leading-5 ${showPairingRecovery ? 'text-amber-100/90' : 'text-zinc-400'}`}>
+          Explicit request alternative:
+        </p>
+        <pre className={`overflow-x-auto rounded-lg border p-3 text-xs leading-6 ${
+          showPairingRecovery
+            ? 'border-amber-400/30 bg-zinc-950 text-amber-100'
+            : 'border-zinc-700 bg-zinc-950 text-zinc-200'
+        }`}>
+          {pairingGuide.explicitCommand}
+        </pre>
+      </div>
+      <p className={`text-xs leading-5 ${showPairingRecovery ? 'text-amber-100/90' : 'text-zinc-400'}`}>
+        {pairingGuide.afterApproval}
+      </p>
+      {pairingResult?.message && (
+        <div className={`rounded-lg border p-3 text-xs leading-5 ${
+          showPairingRecovery
+            ? 'border-amber-400/30 bg-amber-950/20 text-amber-100'
+            : 'border-zinc-700 bg-zinc-950/70 text-zinc-300'
+        }`}>
+          <div className={showPairingRecovery ? 'font-medium text-amber-100' : 'font-medium text-zinc-200'}>
+            Last pairing check
+          </div>
+          <div>{pairingResult.message}</div>
+        </div>
+      )}
+      {pairingError && (
+        <div className="flex items-start gap-2 rounded-lg border border-rose-700/40 bg-rose-900/20 p-3 text-xs leading-5 text-rose-300">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{pairingError}</span>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={handlePair}
+        disabled={pairing || loading}
+        className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+          showPairingRecovery
+            ? 'bg-amber-500 text-black hover:bg-amber-400'
+            : 'border border-zinc-600 text-zinc-200 hover:border-zinc-400 hover:text-white'
+        }`}
+      >
+        {pairing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+        Check pairing
+      </button>
+    </div>
+  );
+
+  const renderPairingPanel = () => {
+    if (showPairingRecovery) {
+      return (
+        <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 p-4 space-y-3">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+            <div>
+              <p className="text-sm font-semibold text-amber-200">{pairingGuide.title}</p>
+              <p className="text-xs leading-5 text-amber-100/90">
+                OpenClaw returned a pairing-required response for this gateway.
+              </p>
+            </div>
+          </div>
+          {renderPairingBody()}
+        </div>
+      );
+    }
+
+    return (
+      <details className="rounded-xl border border-zinc-700 bg-zinc-900/80 p-4">
+        <summary className="cursor-pointer text-sm font-semibold text-white">
+          {pairingGuide.title}
+          <span className="ml-2 text-xs font-normal text-zinc-500">Manual recovery steps</span>
+        </summary>
+        <div className="mt-3">
+          {renderPairingBody()}
+        </div>
+      </details>
+    );
   };
 
   const setGatewayLocation = (mode: 'local' | 'remote') => {
@@ -224,7 +343,7 @@ export default function SettingsGatewayPage() {
           <h2 className="text-lg font-semibold text-white">OpenClaw Gateway Setup</h2>
           <p className="text-sm text-zinc-400">
             {isRemoteGateway
-              ? 'Agent HQ is pointed at a remote OpenClaw gateway. Re-check here to create the pending device request, approve it on the remote machine, then re-check again.'
+              ? 'Agent HQ is pointed at a remote OpenClaw gateway. Use Re-check Gateway or Check pairing to create the pending device request, approve it in the environment that owns the gateway, then check again.'
               : 'Agent HQ automatically checks the saved local gateway URL and token. Start OpenClaw, then verify the gateway here.'}
           </p>
         </div>
@@ -333,24 +452,13 @@ export default function SettingsGatewayPage() {
               </div>
             )}
 
-            {isRemoteGateway && (
-              <div className="rounded-xl border border-amber-400/30 bg-zinc-900/80 p-4 space-y-3">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-amber-400" />
-                  <h3 className="text-sm font-semibold text-white">{remoteGuide.title}</h3>
-                </div>
-                <pre className="overflow-x-auto rounded-lg border border-zinc-700 bg-zinc-950 p-4 text-xs leading-6 text-zinc-200">
-                  {remoteGuide.lines.join('\n')}
-                </pre>
-                <p className="text-xs leading-5 text-zinc-400">{remoteGuide.note}</p>
-              </div>
-            )}
+            {renderPairingPanel()}
 
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={saving || loading}
+                disabled={saving || loading || pairing}
                 className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -359,7 +467,7 @@ export default function SettingsGatewayPage() {
               <button
                 type="button"
                 onClick={handleCheck}
-                disabled={checking || loading}
+                disabled={checking || loading || pairing}
                 className="inline-flex items-center gap-2 rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -369,7 +477,7 @@ export default function SettingsGatewayPage() {
                 <button
                   type="button"
                   onClick={handleRestart}
-                  disabled={restarting || loading}
+                  disabled={restarting || loading || pairing}
                   className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:border-zinc-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {restarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ServerCog className="h-4 w-4" />}
