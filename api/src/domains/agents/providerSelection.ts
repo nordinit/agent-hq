@@ -1,23 +1,52 @@
 import { getDb } from '../../db/client';
 
 export const CONNECTABLE_PROVIDER_SLUGS = ['anthropic', 'openai', 'openai-codex', 'google', 'ollama', 'mlx-studio', 'minimax'] as const;
+export type ConnectableProviderSlug = typeof CONNECTABLE_PROVIDER_SLUGS[number];
 
-const AGENT_MODEL_PROVIDER_PREFIX: Record<string, string> = {
-  'anthropic/claude-sonnet-4-6': 'anthropic',
-  'anthropic/claude-opus-4-6': 'anthropic',
-  'openai/gpt-5.5': 'openai-codex',
-  'openai/gpt-5.4': 'openai-codex',
-};
+export type AgentModelSource =
+  | { type: 'static'; models: Array<{ id: string; label: string }> }
+  | { type: 'dynamic'; models: Array<{ id: string; label: string }> }
+  | { type: 'freeform' };
 
-const DEFAULT_AGENT_MODEL_BY_PROVIDER: Record<string, string> = {
-  anthropic: 'anthropic/claude-sonnet-4-6',
-  'openai-codex': 'openai/gpt-5.5',
+const OPENAI_AGENT_MODELS = [
+  { id: 'openai/gpt-5.5', label: 'GPT-5.5' },
+  { id: 'openai/gpt-5.4', label: 'GPT-5.4' },
+];
+
+export const MINIMAX_AGENT_MODELS = [
+  { id: 'MiniMax-M2.7', label: 'MiniMax M2.7' },
+  { id: 'MiniMax-M2.7-highspeed', label: 'MiniMax M2.7 Highspeed' },
+  { id: 'MiniMax-M2.5', label: 'MiniMax M2.5' },
+  { id: 'MiniMax-M2.5-highspeed', label: 'MiniMax M2.5 Highspeed' },
+  { id: 'MiniMax-M2.5-Lightning', label: 'MiniMax M2.5 Lightning' },
+];
+
+export const PROVIDER_MODEL_SOURCES: Record<ConnectableProviderSlug, AgentModelSource> = {
+  anthropic: {
+    type: 'static',
+    models: [
+      { id: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+      { id: 'anthropic/claude-opus-4-6', label: 'Claude Opus 4.6' },
+    ],
+  },
+  openai: { type: 'static', models: OPENAI_AGENT_MODELS },
+  google: {
+    type: 'static',
+    models: [
+      { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    ],
+  },
+  ollama: { type: 'freeform' },
+  'openai-codex': {
+    type: 'static',
+    models: OPENAI_AGENT_MODELS.map(model => ({ ...model, label: `${model.label} (Codex)` })),
+  },
+  'mlx-studio': { type: 'freeform' },
+  minimax: { type: 'dynamic', models: MINIMAX_AGENT_MODELS },
 };
 
 const DEFAULT_SCHEMA_SAFE_AGENT_PROVIDER = 'anthropic';
-
-// Local/OpenAI-compatible providers that accept freeform model names (no fixed model list)
-const LOCAL_MODEL_PROVIDER_SLUGS: string[] = ['ollama', 'mlx-studio', 'minimax'];
 
 export function getConnectedProviderSlugs(tenantId: number): string[] {
   const db = getDb();
@@ -35,14 +64,17 @@ export function validateAgentProviderSelection(tenantId: number, preferredProvid
     return `preferred_provider '${preferredProvider}' is not currently connected`;
   }
   if (model) {
-    // Local providers (Ollama, MLX Studio) accept any freeform model name.
-    if (LOCAL_MODEL_PROVIDER_SLUGS.includes(preferredProvider)) return null;
-    const expectedProvider = AGENT_MODEL_PROVIDER_PREFIX[model];
-    if (!expectedProvider) {
+    const source = PROVIDER_MODEL_SOURCES[preferredProvider as ConnectableProviderSlug];
+    if (source.type === 'freeform') return null;
+    if (!source.models.some(option => option.id === model)) {
+      const matchingProviders = CONNECTABLE_PROVIDER_SLUGS.filter(slug => {
+        const candidate = PROVIDER_MODEL_SOURCES[slug];
+        return candidate.type !== 'freeform' && candidate.models.some(option => option.id === model);
+      });
+      if (matchingProviders.length > 0) {
+        return `model '${model}' does not belong to preferred_provider '${preferredProvider}'`;
+      }
       return `model '${model}' is not allowed for agent preferences`;
-    }
-    if (expectedProvider !== preferredProvider) {
-      return `model '${model}' does not belong to preferred_provider '${preferredProvider}'`;
     }
   }
   return null;
@@ -50,7 +82,10 @@ export function validateAgentProviderSelection(tenantId: number, preferredProvid
 
 export function defaultAgentModelForProvider(preferredProvider: string | null | undefined): string | null {
   if (!preferredProvider) return null;
-  return DEFAULT_AGENT_MODEL_BY_PROVIDER[preferredProvider] ?? null;
+  const source = PROVIDER_MODEL_SOURCES[preferredProvider as ConnectableProviderSlug];
+  return source?.type === 'static' || source?.type === 'dynamic'
+    ? source.models[0]?.id ?? null
+    : null;
 }
 
 export function resolveSchemaSafePreferredProvider(connectedProviders: string[]): string {

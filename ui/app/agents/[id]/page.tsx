@@ -3,7 +3,7 @@ import { formatDateTime, formatTime } from '@/lib/date';
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { api, Agent, AgentRuntimeType, JobInstance, LogEntry, AgentDoc, ProvisionStatus, ClaudeMdResult, Tool, AgentToolAssignment, AgentMcpAssignment, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, McpServer, ProviderRecord, AgentMcpPermissionPolicy, AgentMcpPermissionCapability } from '@/lib/api';
+import { api, Agent, AgentRuntimeType, JobInstance, LogEntry, AgentDoc, ProvisionStatus, ClaudeMdResult, Tool, AgentToolAssignment, AgentMcpAssignment, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, McpServer, ProviderRecord, AgentMcpPermissionPolicy, AgentMcpPermissionCapability, ProviderSlug } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Badge, StatusDot } from '@/components/ui/badge';
 import { getRunLifecycle, getRunStatusLabel } from '@/lib/runLifecycle';
@@ -112,17 +112,25 @@ function hermesRuntimeConfigToJson(cfg: HermesRuntimeConfig): string {
   return JSON.stringify(out, null, 2);
 }
 
-function agentToForm(agent: Agent): EditFormState {
+function agentToForm(agent: Agent, providers: ProviderRecord[] = []): EditFormState {
   const runtimeType = agent.runtime_type ?? 'openclaw';
   const rc = agent.runtime_config ?? (runtimeType === 'hermes' ? { ...emptyHermesRuntimeConfig } : { ...emptyClaudeRuntimeConfig });
+  const providerOptions = getAgentProviderOptions(providers);
+  const savedProvider = agent.preferred_provider ?? '';
+  const preferredProvider = providerOptions.some(option => option.value === savedProvider)
+    ? savedProvider
+    : providerOptions[0]?.value ?? '';
+  const model = preferredProvider === savedProvider && isModelAllowedForProvider(agent.model, preferredProvider)
+    ? agent.model ?? ''
+    : '';
   return {
     name: agent.name,
     role: agent.role ?? '',
     session_key: agent.session_key,
     workspace_path: agent.workspace_path,
     status: agent.status,
-    model: agent.model ?? '',
-    preferred_provider: agent.preferred_provider ?? 'anthropic',
+    model,
+    preferred_provider: preferredProvider,
     runtime_type: runtimeType,
     runtime_config: {
       ...(runtimeType === 'hermes'
@@ -291,8 +299,8 @@ export default function AgentDetailPage() {
 
   // ── Edit mode helpers ────────────────────────────────────────────────────────
 
-  const enterEditMode = (a: Agent) => {
-    setEditForm(agentToForm(a));
+  const enterEditMode = (a: Agent, availableProviders = providers) => {
+    setEditForm(agentToForm(a, availableProviders));
     setSaveError(null);
     setEditMode(true);
     // Check local-mlx status
@@ -317,7 +325,7 @@ export default function AgentDetailPage() {
       workspace_path: form.workspace_path,
       status: form.status,
       model: form.model || null,
-      preferred_provider: form.preferred_provider || 'anthropic',
+      preferred_provider: form.preferred_provider || null,
       runtime_type: form.runtime_type,
       runtime_config: null as AgentRuntimeConfig | null,
       job_instructions: form.job_instructions,
@@ -582,7 +590,7 @@ export default function AgentDetailPage() {
         if (a.runtime_type === 'claude-code') loadClaudeMd('claude-code');
         // Auto-enter edit mode if ?mode=edit is in the URL
         if (searchParams.get('mode') === 'edit') {
-          enterEditMode(a);
+          enterEditMode(a, providerResponse.providers);
         }
       })
       .catch(e => setError(String(e)))
@@ -600,7 +608,7 @@ export default function AgentDetailPage() {
     }
     setDynamicModelsLoading(true);
     setDynamicModelsError(null);
-    api.getMiniMaxModels()
+    api.getProviderModels(editForm.preferred_provider as ProviderSlug)
       .then(r => {
         setDynamicModels(r.models);
         setDynamicModelsLoading(false);

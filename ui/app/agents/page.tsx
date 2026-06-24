@@ -3,7 +3,7 @@ import { formatDateTime } from '@/lib/date';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, Agent, AgentRuntimeType, Project, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, ProviderRecord } from '@/lib/api';
+import { api, Agent, AgentRuntimeType, Project, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, ProviderRecord, ProviderSlug } from '@/lib/api';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
 import { Card } from '@/components/ui/card';
 import { Badge, StatusDot } from '@/components/ui/badge';
@@ -118,7 +118,7 @@ const emptyForm: FormState = {
   workspace_path: '',
   status: 'idle',
   model: '',
-  preferred_provider: 'anthropic',
+  preferred_provider: '',
   provision_openclaw: false,
   // Default to OpenClaw, but keep runtime_config aligned with the selected runtime.
   runtime_type: 'openclaw',
@@ -278,7 +278,7 @@ export default function AgentsPage() {
     }
     setDynamicModelsLoading(true);
     setDynamicModelsError(null);
-    api.getMiniMaxModels()
+    api.getProviderModels(form.preferred_provider as ProviderSlug)
       .then(r => {
         setDynamicModels(r.models);
         setDynamicModelsLoading(false);
@@ -326,7 +326,7 @@ export default function AgentsPage() {
       workspace_path: form.workspace_path,
       status: form.status,
       model: form.model || null,
-      preferred_provider: form.preferred_provider || 'anthropic',
+      preferred_provider: form.preferred_provider || null,
       runtime_type: form.runtime_type,
       runtime_config: null as AgentRuntimeConfig | null,
     };

@@ -1802,7 +1802,7 @@ router.put('/:id', (req: Request, res: Response) => {
     if (model !== undefined || preferred_provider !== undefined) {
       const runtimeType = (updated.runtime_type as string | null) ?? 'openclaw';
       const agentSlug = resolveSlug(updated);
-      const provider = (updated.preferred_provider as string | null) ?? 'anthropic';
+      const provider = (updated.preferred_provider as string | null) ?? resolveSchemaSafePreferredProvider(getConnectedProviderSlugs(tenantId));
       const newModel = (updated.model as string | null) ?? defaultAgentModelForProvider(provider);
       if (runtimeType === 'openclaw' && agentSlug && newModel) {
         try {

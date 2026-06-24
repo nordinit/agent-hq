@@ -21,4 +21,6 @@ setupToken: (slug: ProviderSlug, token: string) =>
   apiFetch<{ ok: boolean; message: string }>(`/api/v1/providers/${slug}/setup-token`, { method: 'POST', body: JSON.stringify({ token }) }),
 getMiniMaxModels: () =>
   apiFetch<{ models: Array<{ id: string; label: string }> }>('/api/v1/providers/minimax/models'),
+getProviderModels: (slug: ProviderSlug) =>
+  apiFetch<{ models: Array<{ id: string; label: string }>; source?: string }>(`/api/v1/providers/${slug}/models`),
 };

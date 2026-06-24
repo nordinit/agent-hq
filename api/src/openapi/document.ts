@@ -240,13 +240,22 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
-    '/providers/minimax/models': {
+    '/providers/{slug}/models': {
       get: {
         tags: ['Providers'],
-        summary: 'List static MiniMax model options.',
-        operationId: 'listMiniMaxModels',
+        summary: 'List assignable model options for a connected provider.',
+        operationId: 'listProviderModels',
+        parameters: [{
+          name: 'slug',
+          in: 'path',
+          required: true,
+          description: 'Provider slug.',
+          schema: { type: 'string' },
+        }],
         responses: {
-          '200': response('MiniMax models.', ref('ModelListResponse')),
+          '200': response('Provider-scoped agent model options.', ref('ModelListResponse')),
+          '400': errorResponseRef,
+          '404': notFoundResponseRef,
           default: errorResponseRef,
         },
       },

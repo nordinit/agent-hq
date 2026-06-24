@@ -15,6 +15,11 @@ import {
 } from '../lib/openclawOAuthProfiles';
 import type { OAuthProviderSlug } from '../lib/openclawOAuthProfiles';
 import { reloadOpenClawSecretsRuntimeForAuthSync } from '../runtimes/OpenClawRuntime';
+import {
+  CONNECTABLE_PROVIDER_SLUGS,
+  PROVIDER_MODEL_SOURCES,
+  type ConnectableProviderSlug,
+} from '../domains/agents/providerSelection';
 
 const router = Router();
 
@@ -33,9 +38,9 @@ interface ProviderRow {
   updated_at: string;
 }
 
-type ProviderSlug = 'anthropic' | 'openai' | 'google' | 'ollama' | 'openai-codex' | 'mlx-studio' | 'minimax';
+type ProviderSlug = ConnectableProviderSlug;
 
-const VALID_SLUGS: ProviderSlug[] = ['anthropic', 'openai', 'google', 'ollama', 'openai-codex', 'mlx-studio', 'minimax'];
+const VALID_SLUGS: ProviderSlug[] = [...CONNECTABLE_PROVIDER_SLUGS];
 
 const OAUTH_SLUGS: ProviderSlug[] = ['openai-codex'];
 
@@ -404,28 +409,33 @@ router.delete('/:id', (req: Request, res: Response) => {
   }
 });
 
-// ─── GET /api/v1/providers/minimax/models ────────────────────────────────────
-// Returns the known MiniMax text models. MiniMax uses the Anthropic-compatible
-// API at api.minimax.io/anthropic but has no /models endpoint, so we return
-// the known model catalog statically.
-router.get('/minimax/models', (_req: Request, res: Response) => {
+// ─── GET /api/v1/providers/:slug/models ──────────────────────────────────────
+// Provider-scoped assignable agent models. Dynamic providers may still be backed
+// by a known catalog when the upstream API has no model list endpoint.
+router.get('/:slug/models', (req: Request, res: Response) => {
   try {
-    const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, _req);
-    const row = db.prepare("SELECT * FROM provider_config WHERE slug = 'minimax' AND tenant_id = ?").get(tenantId) as ProviderRow | undefined;
-    if (!row) {
-      res.status(404).json({ error: 'MiniMax provider is not configured. Add it in Settings → Providers first.' });
+    const slug = req.params.slug as ProviderSlug;
+    if (!VALID_SLUGS.includes(slug)) {
+      res.status(400).json({ error: `Invalid provider slug. Must be one of: ${VALID_SLUGS.join(', ')}` });
       return;
     }
 
+    const db = getDb();
+    const tenantId = resolveTenantIdFromRequest(db, req);
+    const row = db.prepare("SELECT * FROM provider_config WHERE slug = ? AND tenant_id = ? AND status = 'connected'").get(slug, tenantId) as ProviderRow | undefined;
+    if (!row) {
+      res.status(404).json({ error: `Provider '${slug}' is not connected. Add it in Settings → Providers first.` });
+      return;
+    }
+
+    const source = PROVIDER_MODEL_SOURCES[slug];
+    if (source.type === 'freeform') {
+      res.json({ models: [], source: 'freeform' });
+      return;
+    }
     res.json({
-      models: [
-        { id: 'MiniMax-M2.7', label: 'MiniMax M2.7' },
-        { id: 'MiniMax-M2.7-highspeed', label: 'MiniMax M2.7 Highspeed' },
-        { id: 'MiniMax-M2.5', label: 'MiniMax M2.5' },
-        { id: 'MiniMax-M2.5-highspeed', label: 'MiniMax M2.5 Highspeed' },
-        { id: 'MiniMax-M2.5-Lightning', label: 'MiniMax M2.5 Lightning' },
-      ],
+      models: source.models,
+      source: source.type,
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
