@@ -42,5 +42,13 @@ memory/
 .atlas-gh-token
 skills/.agent-hq-managed-skills.json
 
+# Local-only workspace skills and host operations overlays.
+# These may exist in production/dev checkouts, but are not part of the public repo.
+skills/ui-ux-pro-max-skill/
+scripts/backup-db.sh
+scripts/harden-production-dirs.sh
+scripts/rotate-gateway-logs.sh
+scripts/ops-local/
+
 # Generated at pack time by cli/scripts/sync-plugin.mjs
 cli/plugin/
