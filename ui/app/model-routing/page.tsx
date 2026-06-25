@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { api, apiFetch, type Project, type ProviderRecord, type Sprint, type SprintType } from '@/lib/api';
-import { PROVIDER_LABELS } from '@/lib/providerOptions';
+import { getAgentProviderOptions, PROVIDER_LABELS } from '@/lib/providerOptions';
 import { formatSprintNumber } from '@/lib/sprintLabel';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
 import { Button } from '@/components/ui/button';
@@ -49,8 +49,6 @@ type RoutingScopeMode = 'sprint' | 'sprint_type' | 'project';
 interface ProviderOption {
   value: string;
   label: string;
-  status: ProviderRecord['status'];
-  configured: boolean;
 }
 
 const TABLE_EDIT_ACTION_CLASS = 'inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-700/60 hover:text-slate-100';
@@ -135,24 +133,8 @@ function providerDisplayName(provider: ProviderRecord) {
   return provider.display_name || PROVIDER_LABELS[provider.slug] || provider.slug;
 }
 
-function buildProviderOptions(providers: ProviderRecord[], currentProvider?: string | null): ProviderOption[] {
-  const options: ProviderOption[] = providers.map(provider => ({
-    value: provider.slug,
-    label: providerDisplayName(provider),
-    status: provider.status,
-    configured: true,
-  }));
-
-  if (currentProvider && !options.some(option => option.value === currentProvider)) {
-    options.push({
-      value: currentProvider,
-      label: `${currentProvider} (not configured)`,
-      status: 'failed',
-      configured: false,
-    });
-  }
-
-  return options;
+function buildProviderOptions(providers: ProviderRecord[]): ProviderOption[] {
+  return getAgentProviderOptions(providers);
 }
 
 function formatProviderLabel(provider: string | null | undefined, providers: ProviderRecord[]) {
@@ -170,7 +152,7 @@ function ProviderSelect({
   onChange: (value: string) => void;
   providers: ProviderRecord[];
 }) {
-  const options = buildProviderOptions(providers, value);
+  const options = buildProviderOptions(providers);
 
   return (
     <select
@@ -180,8 +162,8 @@ function ProviderSelect({
     >
       <option value="">Any configured provider</option>
       {options.map(option => (
-        <option key={option.value} value={option.value} disabled={!option.configured}>
-          {option.label}{option.configured && option.status !== 'connected' ? ` (${option.status})` : ''}
+        <option key={option.value} value={option.value}>
+          {option.label}
         </option>
       ))}
     </select>

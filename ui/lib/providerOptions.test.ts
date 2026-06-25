@@ -1,12 +1,29 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  getAgentProviderOptions,
   getAgentModelOptionsForProvider,
   getDefaultAgentModelForProvider,
   isDynamicModelProvider,
   isLocalModelProvider,
   isModelAllowedForProvider,
 } from './providerOptions.ts';
+import type { ProviderRecord } from './api/types.ts';
+
+function provider(overrides: Partial<ProviderRecord>): ProviderRecord {
+  return {
+    id: 1,
+    slug: 'openai',
+    display_name: 'OpenAI',
+    status: 'connected',
+    config: {},
+    last_validated_at: null,
+    validation_error: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 test('OpenAI API-key providers expose OpenAI models without Claude options', () => {
   const options = getAgentModelOptionsForProvider('openai');
@@ -31,4 +48,19 @@ test('local providers are freeform while dynamic providers are catalog-constrain
   assert.equal(isDynamicModelProvider('minimax'), true);
   assert.equal(isModelAllowedForProvider('MiniMax-M2.7', 'minimax'), true);
   assert.equal(isModelAllowedForProvider('openai/gpt-5.5', 'minimax'), false);
+});
+
+test('provider dropdown options include only connected configured providers', () => {
+  const options = getAgentProviderOptions([
+    provider({ id: 1, slug: 'openai-codex', display_name: 'OpenAI Codex', status: 'connected' }),
+    provider({ id: 2, slug: 'openai', display_name: 'OpenAI failed', status: 'failed' }),
+    provider({ id: 3, slug: 'anthropic', display_name: 'Anthropic pending', status: 'pending' }),
+    provider({ id: 4, slug: 'google', display_name: 'Google untested', status: 'untested' }),
+    provider({ id: 5, slug: 'mlx-studio', display_name: '', status: 'connected' }),
+  ]);
+
+  assert.deepEqual(options, [
+    { value: 'openai-codex', label: 'OpenAI Codex' },
+    { value: 'mlx-studio', label: 'MLX Studio' },
+  ]);
 });
