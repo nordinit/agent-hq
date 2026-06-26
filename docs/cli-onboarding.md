@@ -165,7 +165,7 @@ Generated software-delivery MVP:
 
 ```text
 Statuses:
-todo -> ready -> in_progress -> review -> qa_pass -> ready_to_merge -> deployed -> done
+todo -> ready -> in_progress -> review -> ready_to_merge -> deployed -> done
 
 Fallback / recovery status:
 blocked
@@ -174,8 +174,8 @@ Task types:
 frontend, backend, fullstack, qa, pm, ops, adhoc
 
 Outcomes:
-completed_for_review, qa_pass, qa_fail, approved_for_merge, deployed_live,
-live_verified, blocked, failed
+completed_for_review, qa_pass, qa_fail, deployed_live, live_verified, blocked,
+failed
 
 Evidence gates:
 completed_for_review requires review_branch, review_commit
@@ -265,10 +265,9 @@ ready + dispatch start -> in_progress
 in_progress + completed_for_review -> review
 in_progress + blocked -> blocked
 in_progress + failed -> blocked
-review + qa_pass -> qa_pass
+review + qa_pass -> ready_to_merge
 review + qa_fail -> ready
 review + blocked -> blocked
-qa_pass + approved_for_merge -> ready_to_merge
 ready_to_merge + deployed_live -> deployed
 deployed + live_verified -> done
 blocked + resolved -> ready
