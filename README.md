@@ -124,6 +124,11 @@ Use Docker explicitly if you want the Docker Compose stack:
 agent-hq start --docker
 ```
 
+The planned first-install guided setup flow is defined in
+[`docs/cli-onboarding.md`](docs/cli-onboarding.md), including the `agenthq init`
+wizard contract, generated software-delivery defaults, artifact policy, and
+repair mode behavior.
+
 ---
 
 ## Docker Compose
