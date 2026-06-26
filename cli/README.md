@@ -49,6 +49,9 @@ Local mode:
 | `agent-hq open`    | Open the UI in your browser          |
 | `agent-hq help`    | Show help                            |
 
+The planned guided first-install command is `agenthq init`. Its onboarding
+contract is documented in [`../docs/cli-onboarding.md`](../docs/cli-onboarding.md).
+
 ## Options
 
 | Flag              | Description                          | Default |
