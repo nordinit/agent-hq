@@ -83,7 +83,13 @@ export async function cmdInit(argv, io = {}) {
   }
 
   const level = flags.level ?? 'starter';
-  const inputConfig = flags.nonInteractive ? loadInitInputConfig(flags.config) : {};
+  let inputConfig;
+  try {
+    inputConfig = flags.nonInteractive ? loadInitInputConfig(flags.config) : {};
+  } catch (error) {
+    err(`\x1b[31m✗\x1b[0m ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
   const config = buildInitConfig({
     level,
     template: flags.template,
@@ -102,7 +108,13 @@ export async function cmdInit(argv, io = {}) {
   }
 
   const finalConfig = existingConfig && flags.repair
-    ? mergeInitConfig(existingConfig, config)
+    ? buildInitConfig({
+        level: flags.level ?? existingConfig.setupLevel ?? level,
+        template: flags.template,
+        skipProviders: flags.skipProviders,
+        skipRuntime: flags.skipRuntime,
+        inputConfig: mergeInitConfig(existingConfig, inputConfig),
+      })
     : config;
   const validation = validateInitConfig(finalConfig);
   if (!validation.ok) {
