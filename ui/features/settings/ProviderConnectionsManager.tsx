@@ -79,6 +79,17 @@ const PROVIDERS: ProviderMeta[] = [
     helperUrl: 'https://aistudio.google.com/app/apikey',
   },
   {
+    slug: 'openrouter',
+    name: 'OpenRouter',
+    tagline: 'Multi-provider model routing',
+    icon: <Key className="w-5 h-5" />,
+    connectionMethod: 'api-key',
+    inputLabel: 'API Key',
+    inputPlaceholder: 'sk-or-...',
+    helperText: 'Get your API key at openrouter.ai/settings/keys',
+    helperUrl: 'https://openrouter.ai/settings/keys',
+  },
+  {
     slug: 'ollama',
     name: 'Ollama',
     tagline: 'Local models',

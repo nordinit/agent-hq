@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { localStart, localStop, localStatus, ensureBundledOpenClawPluginConfig } from './local.mjs';
+import { runInit } from './onboarding.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const COMPOSE_SOURCE = join(__dirname, '..', 'docker-compose.yml');
@@ -22,12 +23,15 @@ Commands:
   restart   Restart Agent HQ
   stop      Stop Agent HQ
   status    Show current runtime status
+  init      Guided first-time setup, including provider connection
   open      Open the Agent HQ UI in a browser
   help      Show this help message
 
 Options:
   --port-api <port>   Host port for the API  (default: 3501, env: AGENT_HQ_API_PORT)
   --port-ui  <port>   Host port for the UI   (default: 3500, env: AGENT_HQ_UI_PORT)
+  --api-url <url>     API base URL for init   (default: http://localhost:3501)
+  --skip-provider     Complete init without connecting a provider
   --docker            Run with Docker Compose
   --no-docker         Alias for local mode (kept for compatibility)
 
@@ -39,6 +43,8 @@ Examples:
   agent-hq restart
   agent-hq start --docker
   agent-hq start --port-ui 8080
+  agent-hq init
+  agent-hq init --skip-provider
   agent-hq status
   agent-hq stop
 `.trim();
@@ -144,6 +150,12 @@ function parseFlags(argv) {
       flags.apiPort = argv[++i];
     } else if (argv[i] === '--port-ui' && argv[i + 1]) {
       flags.uiPort = argv[++i];
+    } else if (argv[i] === '--api-url' && argv[i + 1]) {
+      flags.apiUrl = argv[++i];
+    } else if (argv[i] === '--skip-provider') {
+      flags.skipProvider = true;
+    } else if (argv[i] === '--non-interactive') {
+      flags.nonInteractive = true;
     } else if (argv[i] === '--docker') {
       flags.docker = true;
     } else if (argv[i] === '--no-docker') {
@@ -314,7 +326,7 @@ function readLocalState() {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-export function run(argv) {
+export async function run(argv) {
   const command = argv[0];
   const flags = parseFlags(argv.slice(1));
 
@@ -330,6 +342,9 @@ export function run(argv) {
       break;
     case 'status':
       cmdStatus(flags);
+      break;
+    case 'init':
+      await runInit(flags, { openBrowser });
       break;
     case 'open':
       cmdOpen(flags);

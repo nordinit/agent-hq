@@ -39,6 +39,14 @@ export const PROVIDER_MODEL_SOURCES: Record<ProviderSlug, ModelSource> = {
       { value: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
     ],
   },
+  openrouter: {
+    type: 'static',
+    models: [
+      { value: 'openrouter/auto', label: 'OpenRouter Auto' },
+      { value: 'openai/gpt-5.5', label: 'GPT-5.5 via OpenRouter' },
+      { value: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6 via OpenRouter' },
+    ],
+  },
   ollama: { type: 'freeform' },
   'openai-codex': {
     type: 'static',
@@ -55,6 +63,7 @@ export const PROVIDER_LABELS: Record<ProviderSlug, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
   google: 'Google',
+  openrouter: 'OpenRouter',
   ollama: 'Ollama',
   'openai-codex': 'OpenAI Codex (OAuth)',
   'mlx-studio': 'MLX Studio',

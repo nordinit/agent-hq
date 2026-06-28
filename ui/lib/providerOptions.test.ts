@@ -40,6 +40,12 @@ test('Google has a catalog-backed model path', () => {
   assert.equal(isModelAllowedForProvider('openai/gpt-5.5', 'google'), false);
 });
 
+test('OpenRouter is a canonical provider slug with model options', () => {
+  assert.equal(getDefaultAgentModelForProvider('openrouter'), 'openrouter/auto');
+  assert.equal(isModelAllowedForProvider('openrouter/auto', 'openrouter'), true);
+  assert.equal(isModelAllowedForProvider('google/gemini-2.5-pro', 'openrouter'), false);
+});
+
 test('local providers are freeform while dynamic providers are catalog-constrained', () => {
   assert.equal(isLocalModelProvider('ollama'), true);
   assert.equal(isLocalModelProvider('mlx-studio'), true);

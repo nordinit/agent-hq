@@ -64,6 +64,15 @@ describe('agent provider/model selection', () => {
       .toBe("model 'openai/gpt-5.5' does not belong to preferred_provider 'google'");
   });
 
+  it('accepts OpenRouter as a canonical provider slug with catalog-backed defaults', () => {
+    connectProvider('openrouter');
+
+    expect(defaultAgentModelForProvider('openrouter')).toBe('openrouter/auto');
+    expect(validateAgentProviderSelection(1, 'openrouter', 'openrouter/auto')).toBeNull();
+    expect(validateAgentProviderSelection(1, 'OpenRouter', 'openrouter/auto'))
+      .toBe('preferred_provider must be one of: anthropic, openai, openai-codex, google, openrouter, ollama, mlx-studio, minimax');
+  });
+
   it('allows freeform local model providers and constrains dynamic catalogs', () => {
     connectProvider('ollama');
     connectProvider('minimax');

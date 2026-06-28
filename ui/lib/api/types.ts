@@ -1308,7 +1308,7 @@ export interface SetupStatus {
 
 // ─── Provider types ───────────────────────────────────────────────────────────
 
-export type ProviderSlug = 'anthropic' | 'openai' | 'google' | 'ollama' | 'openai-codex' | 'mlx-studio' | 'minimax';
+export type ProviderSlug = 'anthropic' | 'openai' | 'google' | 'openrouter' | 'ollama' | 'openai-codex' | 'mlx-studio' | 'minimax';
 
 export interface ProviderRecord {
   id: number;

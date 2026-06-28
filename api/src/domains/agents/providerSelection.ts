@@ -1,6 +1,6 @@
 import { getDb } from '../../db/client';
 
-export const CONNECTABLE_PROVIDER_SLUGS = ['anthropic', 'openai', 'openai-codex', 'google', 'ollama', 'mlx-studio', 'minimax'] as const;
+export const CONNECTABLE_PROVIDER_SLUGS = ['anthropic', 'openai', 'openai-codex', 'google', 'openrouter', 'ollama', 'mlx-studio', 'minimax'] as const;
 export type ConnectableProviderSlug = typeof CONNECTABLE_PROVIDER_SLUGS[number];
 
 export type AgentModelSource =
@@ -35,6 +35,14 @@ export const PROVIDER_MODEL_SOURCES: Record<ConnectableProviderSlug, AgentModelS
     models: [
       { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
       { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    ],
+  },
+  openrouter: {
+    type: 'static',
+    models: [
+      { id: 'openrouter/auto', label: 'OpenRouter Auto' },
+      { id: 'openai/gpt-5.5', label: 'GPT-5.5 via OpenRouter' },
+      { id: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6 via OpenRouter' },
     ],
   },
   ollama: { type: 'freeform' },

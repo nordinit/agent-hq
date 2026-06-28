@@ -94,6 +94,20 @@ const VALIDATION_SPECS: Record<ProviderSlug, ValidationSpec> = {
       };
     },
   },
+  openrouter: {
+    requiredFields: ['api_key'],
+    buildRequest(config) {
+      return {
+        url: 'https://openrouter.ai/api/v1/models',
+        init: {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${config.api_key as string}`,
+          },
+        },
+      };
+    },
+  },
   ollama: {
     requiredFields: ['base_url'],
     buildRequest(config) {

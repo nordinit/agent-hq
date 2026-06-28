@@ -5099,7 +5099,7 @@ function ensureProviderConfigTable(): void {
     CREATE TABLE IF NOT EXISTS provider_config (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id         INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
-      slug              TEXT NOT NULL CHECK(slug IN ('anthropic','openai','google','ollama','openai-codex','mlx-studio','minimax')),
+      slug              TEXT NOT NULL CHECK(slug IN ('anthropic','openai','google','openrouter','ollama','openai-codex','mlx-studio','minimax')),
       display_name      TEXT NOT NULL DEFAULT '',
       status            TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','connected','failed')),
       config            TEXT NOT NULL DEFAULT '{}',
@@ -5137,7 +5137,7 @@ function ensureProviderConfigTable(): void {
     const providerDdl = (db.prepare(
       `SELECT sql FROM sqlite_master WHERE type='table' AND name='provider_config'`
     ).get() as { sql: string } | undefined)?.sql ?? '';
-    if (providerDdl && (!providerDdl.includes("'minimax'") || /slug\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(providerDdl))) {
+    if (providerDdl && (!providerDdl.includes("'minimax'") || !providerDdl.includes("'openrouter'") || /slug\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(providerDdl))) {
       const cols = (db.prepare(`PRAGMA table_info(provider_config)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       db.pragma('foreign_keys = OFF');
@@ -5146,7 +5146,7 @@ function ensureProviderConfigTable(): void {
           CREATE TABLE provider_config_new (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
             tenant_id         INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
-            slug              TEXT NOT NULL CHECK(slug IN ('anthropic','openai','google','ollama','openai-codex','mlx-studio','minimax')),
+            slug              TEXT NOT NULL CHECK(slug IN ('anthropic','openai','google','openrouter','ollama','openai-codex','mlx-studio','minimax')),
             display_name      TEXT NOT NULL DEFAULT '',
             status            TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','connected','failed')),
             config            TEXT NOT NULL DEFAULT '{}',
@@ -5166,7 +5166,7 @@ function ensureProviderConfigTable(): void {
       });
       migrate();
       db.pragma('foreign_keys = ON');
-      console.log('[schema] Migrated: expanded provider_config.slug CHECK to include minimax');
+      console.log('[schema] Migrated: expanded provider_config.slug CHECK to include current provider slugs');
     }
   } catch (err) {
     console.error('[schema] Failed to migrate provider_config slug constraint:', err);

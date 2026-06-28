@@ -1615,7 +1615,7 @@ export const openApiDocument: OpenApiDocument = {
       },
       ProviderSlug: {
         type: 'string',
-        enum: ['anthropic', 'openai', 'google', 'ollama', 'openai-codex', 'mlx-studio', 'minimax'],
+        enum: ['anthropic', 'openai', 'google', 'openrouter', 'ollama', 'openai-codex', 'mlx-studio', 'minimax'],
       },
       Provider: {
         type: 'object',
