@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { localStart, localStop, localStatus, ensureBundledOpenClawPluginConfig } from './local.mjs';
+import { cmdInit } from './init.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const COMPOSE_SOURCE = join(__dirname, '..', 'docker-compose.yml');
@@ -18,6 +19,7 @@ Usage:
   agent-hq <command> [options]
 
 Commands:
+  init      Plan or write first-install local configuration
   start     Start Agent HQ
   restart   Restart Agent HQ
   stop      Stop Agent HQ
@@ -31,10 +33,24 @@ Options:
   --docker            Run with Docker Compose
   --no-docker         Alias for local mode (kept for compatibility)
 
+Init options:
+  --level <level>        Setup level: minimal, starter, full (default: starter)
+  --yes, -y              Apply without confirmation
+  --template <name>      Workflow/project template to use
+  --non-interactive      Read setup input from --config
+  --config <path>        JSON setup input for --non-interactive
+  --dry-run              Print the setup plan without writing config
+  --repair               Merge with an existing local config
+  --skip-providers       Leave provider setup out of the plan
+  --skip-runtime         Leave runtime setup out of the plan
+
 Agent HQ defaults to local mode.
 Use --docker only when you explicitly want the Docker Compose stack.
 
 Examples:
+  agent-hq init --dry-run
+  agent-hq init --level minimal --yes
+  agent-hq init --non-interactive --config ./agenthq-init.json
   agent-hq start
   agent-hq restart
   agent-hq start --docker
@@ -314,11 +330,16 @@ function readLocalState() {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-export function run(argv) {
+export async function run(argv) {
   const command = argv[0];
   const flags = parseFlags(argv.slice(1));
 
   switch (command) {
+    case 'init': {
+      const code = await cmdInit(argv.slice(1));
+      if (code !== 0) process.exit(code);
+      break;
+    }
     case 'start':
       cmdStart(flags);
       break;

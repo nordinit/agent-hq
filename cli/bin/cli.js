@@ -2,4 +2,4 @@
 
 import { run } from '../lib/index.mjs';
 
-run(process.argv.slice(2));
+await run(process.argv.slice(2));
