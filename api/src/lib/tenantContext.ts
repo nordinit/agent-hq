@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { NODE_BIN_DIR } from '../config';
 import { seedTenantDefaultWorkflowEventMappings } from '../domains/routing/externalEventMappings';
+import { buildRuntimeConfigDefaults } from './runtimeOnboarding';
 import {
   ATLAS_AGENT_NAME,
   ATLAS_SYSTEM_ROLE,
@@ -1354,6 +1355,7 @@ function ensureTenantDefaultAtlasAgent(db: Database.Database, tenantId: number, 
 }
 
 function buildStarterAgentRuntimeConfig(
+  db: Database.Database,
   definition: typeof STARTER_AGENT_DEFINITIONS[number],
   workspacePath: string,
   openclawAgentId: string,
@@ -1377,6 +1379,7 @@ function buildStarterAgentRuntimeConfig(
       skill_names: definition.skillNames,
       requirements: definition.requirements,
     },
+    ...buildRuntimeConfigDefaults(db),
   };
 }
 
@@ -1614,7 +1617,7 @@ function ensureTenantStarterAgents(db: Database.Database, tenantId: number, proj
       agentName: definition.name,
       role: definition.jobTitle,
     });
-    const runtimeConfig = buildStarterAgentRuntimeConfig(definition, workspacePath, openclawAgentId);
+    const runtimeConfig = buildStarterAgentRuntimeConfig(db, definition, workspacePath, openclawAgentId);
     const existing = db.prepare(`
       SELECT id
       FROM agents

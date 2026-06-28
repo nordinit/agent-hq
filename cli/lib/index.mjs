@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { localStart, localStop, localStatus, ensureBundledOpenClawPluginConfig } from './local.mjs';
 import { cmdInit } from './init.mjs';
+import { printRuntimeStatus } from './onboarding.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const COMPOSE_SOURCE = join(__dirname, '..', 'docker-compose.yml');
@@ -298,10 +299,13 @@ function cmdRestart(flags) {
   console.log(`  API: http://localhost:${apiPort}`);
 }
 
-function cmdStatus(flags) {
+async function cmdStatus(flags) {
   const localState = readLocalState();
   if (!flags.docker && localState && localState.mode === 'local') {
     localStatus();
+    await printRuntimeStatus(`http://localhost:${localState.apiPort}`).catch(error => {
+      warn(`Runtime status unavailable: ${error.message}`);
+    });
     return;
   }
 
@@ -356,7 +360,7 @@ export async function run(argv) {
       cmdStop(flags);
       break;
     case 'status':
-      cmdStatus(flags);
+      await cmdStatus(flags);
       break;
     case 'open':
       cmdOpen(flags);
