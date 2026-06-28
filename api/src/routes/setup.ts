@@ -8,6 +8,14 @@ import {
   ATLAS_SYSTEM_ROLE,
 } from '../lib/atlasAgent';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import {
+  checkRuntimeConnection,
+  detectRuntimeConnectionConfig,
+  readRuntimeConnectionConfig,
+  saveRuntimeConnectionConfig,
+  type RuntimeKind,
+  type RuntimeConnectionConfig,
+} from '../lib/runtimeOnboarding';
 
 const router = Router();
 
@@ -26,6 +34,20 @@ function setSetting(key: string, value: string): void {
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
   `).run(key, value);
+}
+
+function normalizeRuntimeKind(value: unknown): RuntimeKind | null {
+  if (value === 'openclaw' || value === 'hermes' || value === 'custom') return value;
+  return null;
+}
+
+function runtimeConfigResponse(config: RuntimeConnectionConfig): Record<string, unknown> {
+  return {
+    kind: config.kind,
+    endpoint: config.endpoint,
+    label: config.label ?? null,
+    auth_token_configured: Boolean(config.authToken),
+  };
 }
 
 // ─── GET /api/v1/setup/status ────────────────────────────────────────────────
@@ -123,6 +145,76 @@ router.post('/onboarding/skip', (req: Request, res: Response) => {
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: String(err) });
+  }
+});
+
+// ─── Runtime setup ───────────────────────────────────────────────────────────
+router.get('/runtime/detect', (_req: Request, res: Response) => {
+  try {
+    res.json({ ok: true, runtime: runtimeConfigResponse(detectRuntimeConnectionConfig()) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+router.get('/runtime/status', async (_req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const config = readRuntimeConnectionConfig(db) ?? detectRuntimeConnectionConfig();
+    const status = await checkRuntimeConnection(config);
+    res.json({ ok: true, configured: Boolean(readRuntimeConnectionConfig(db)), ...status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+router.post('/runtime/test', async (req: Request, res: Response) => {
+  try {
+    const kind = normalizeRuntimeKind(req.body?.kind);
+    const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint.trim() : '';
+    if (!kind) {
+      res.status(400).json({ ok: false, error: 'runtime kind must be openclaw, hermes, or custom' });
+      return;
+    }
+    if (!endpoint) {
+      res.status(400).json({ ok: false, error: 'runtime endpoint is required' });
+      return;
+    }
+    const status = await checkRuntimeConnection({
+      kind,
+      endpoint,
+      authToken: typeof req.body?.auth_token === 'string' ? req.body.auth_token : null,
+      label: typeof req.body?.label === 'string' ? req.body.label : null,
+    });
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+router.post('/runtime/config', async (req: Request, res: Response) => {
+  try {
+    const kind = normalizeRuntimeKind(req.body?.kind);
+    const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint.trim() : '';
+    if (!kind) {
+      res.status(400).json({ ok: false, error: 'runtime kind must be openclaw, hermes, or custom' });
+      return;
+    }
+    if (!endpoint) {
+      res.status(400).json({ ok: false, error: 'runtime endpoint is required' });
+      return;
+    }
+    const db = getDb();
+    const config = saveRuntimeConnectionConfig(db, {
+      kind,
+      endpoint,
+      authToken: typeof req.body?.auth_token === 'string' ? req.body.auth_token : null,
+      label: typeof req.body?.label === 'string' ? req.body.label : null,
+    });
+    const status = await checkRuntimeConnection(config);
+    res.status(201).json({ ok: true, configured: true, runtime: runtimeConfigResponse(config), status });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
   }
 });
 

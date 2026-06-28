@@ -17,6 +17,7 @@ import { seedStarterWorkflowRelationshipTypes } from './taskRelationshipTypes';
 import { buildCanonicalAgentMainSessionKey, slugifySessionKeyPart } from './sessionKeys';
 import { AGENT_MCP_CAPABILITY_CATALOG } from './mcpApiAuth';
 import { ensureTenantAgentHqMcpServer, repairAgentMcpAssignmentsForTenant } from './tenantContext';
+import { buildRuntimeConfigDefaults } from './runtimeOnboarding';
 
 export const DEFAULT_INSTALL_PACKAGE_KEY = 'agent-hq-default';
 export const DEFAULT_INSTALL_PACKAGE_VERSION = 1;
@@ -483,6 +484,7 @@ function ensureAgent(db: Database.Database, tenantId: number, tenantSlug: string
     role: seed.jobTitle,
   });
   const workspacePath = workspacePathForAgent(tenantSlug, seed.key);
+  const runtimeConfig = { ...seed.runtimeConfig, ...buildRuntimeConfigDefaults(db) };
   ensureDocs(workspacePath, seed);
   const deletedFilter = tableHasColumn(db, 'agents', 'deleted_at') ? "AND (deleted_at IS NULL OR deleted_at = '')" : '';
   const existing = db.prepare(`
@@ -520,8 +522,8 @@ function ensureAgent(db: Database.Database, tenantId: number, tenantSlug: string
           last_active = COALESCE(last_active, datetime('now'))
       WHERE id = ?
     `).run(...(hasJobInstructions
-      ? [projectId, seed.role, seed.jobTitle, seed.systemRole, JSON.stringify(seed.runtimeConfig), runtimeSlug, sessionKey, workspacePath, seed.provider, seed.model, instructions, existing.id]
-      : [projectId, seed.role, seed.jobTitle, seed.systemRole, JSON.stringify(seed.runtimeConfig), runtimeSlug, sessionKey, workspacePath, seed.provider, seed.model, existing.id]));
+      ? [projectId, seed.role, seed.jobTitle, seed.systemRole, JSON.stringify(runtimeConfig), runtimeSlug, sessionKey, workspacePath, seed.provider, seed.model, instructions, existing.id]
+      : [projectId, seed.role, seed.jobTitle, seed.systemRole, JSON.stringify(runtimeConfig), runtimeSlug, sessionKey, workspacePath, seed.provider, seed.model, existing.id]));
     addCount(result.restored, 'agents');
     return existing.id;
   }
@@ -533,7 +535,7 @@ function ensureAgent(db: Database.Database, tenantId: number, tenantSlug: string
   ];
   const values: unknown[] = [
     tenantId, projectId, seed.name, seed.role, seed.jobTitle, sessionKey, workspacePath, 'idle',
-    runtimeSlug, 'openclaw', JSON.stringify(seed.runtimeConfig), seed.provider, seed.model,
+    runtimeSlug, 'openclaw', JSON.stringify(runtimeConfig), seed.provider, seed.model,
     seed.systemRole, 1, 900, '[]', '[]',
   ];
   if (hasJobInstructions) {

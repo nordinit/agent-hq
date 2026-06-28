@@ -62,6 +62,24 @@ export const PROVIDERS = [
   },
 ];
 
+export const RUNTIMES = [
+  {
+    kind: 'openclaw',
+    label: 'OpenClaw Gateway',
+    description: 'Local or remote OpenClaw gateway WebSocket runtime.',
+  },
+  {
+    kind: 'hermes',
+    label: 'Hermes',
+    description: 'Hermes HTTP runtime adapter.',
+  },
+  {
+    kind: 'custom',
+    label: 'Custom runtime',
+    description: 'Future runtime endpoint with optional bearer token.',
+  },
+];
+
 function info(msg) {
   console.log(`\x1b[36mℹ\x1b[0m ${msg}`);
 }
@@ -138,6 +156,14 @@ function printProviderMenu() {
   console.log('  s. Skip provider setup');
 }
 
+function printRuntimeMenu() {
+  console.log('\nAgent runtime');
+  RUNTIMES.forEach((runtime, index) => {
+    console.log(`  ${index + 1}. ${runtime.label} (${runtime.kind}) - ${runtime.description}`);
+  });
+  console.log('  s. Skip runtime setup');
+}
+
 async function chooseProvider(io) {
   while (true) {
     printProviderMenu();
@@ -150,6 +176,21 @@ async function chooseProvider(io) {
     const bySlug = providerBySlug(answer);
     if (bySlug) return bySlug;
     warn('Choose a provider number, slug, or skip.');
+  }
+}
+
+async function chooseRuntime(io) {
+  while (true) {
+    printRuntimeMenu();
+    const answer = (await io.ask('Select runtime', '1')).toLowerCase();
+    if (answer === 's' || answer === 'skip') return null;
+    const index = Number(answer);
+    if (Number.isInteger(index) && index >= 1 && index <= RUNTIMES.length) {
+      return RUNTIMES[index - 1];
+    }
+    const byKind = RUNTIMES.find(runtime => runtime.kind === answer);
+    if (byKind) return byKind;
+    warn('Choose a runtime number, kind, or skip.');
   }
 }
 
@@ -263,6 +304,77 @@ async function skipOnboarding(apiBase, fetchImpl) {
   return result;
 }
 
+function runtimeDefaultEndpoint(runtime, detected) {
+  if (runtime.kind === 'openclaw') return detected?.runtime?.endpoint || 'ws://127.0.0.1:17601';
+  if (runtime.kind === 'hermes') return 'http://127.0.0.1:8787';
+  return '';
+}
+
+export function formatRuntimeStatus(status) {
+  const lines = [
+    `Runtime: ${status.kind || 'unknown'} (${status.state || 'unknown'})`,
+    `  Endpoint: ${status.endpoint || 'not configured'}`,
+    `  Auth: ${status.auth_present ? 'configured' : 'not configured'}`,
+    `  Capabilities: ${(status.capabilities || []).length ? status.capabilities.join(', ') : 'none discovered'}`,
+    `  Callback: ${status.callback_ready ? 'ready' : 'needs attention'}${status.callback_url ? ` (${status.callback_url})` : ''}`,
+  ];
+  for (const item of status.repair_guidance || []) {
+    lines.push(`  Repair: ${item}`);
+  }
+  if (status.error) lines.push(`  Error: ${status.error}`);
+  return lines.join('\n');
+}
+
+async function fetchRuntimeStatus(apiBase, fetchImpl) {
+  return apiJson(apiBase, '/setup/runtime/status', undefined, fetchImpl);
+}
+
+export async function printRuntimeStatus(apiUrl, fetchImpl = fetch) {
+  const apiBase = normalizeApiBase(apiUrl);
+  const status = await fetchRuntimeStatus(apiBase, fetchImpl);
+  console.log(formatRuntimeStatus(status));
+  return status;
+}
+
+async function connectRuntime(apiBase, io, fetchImpl) {
+  const detected = await apiJson(apiBase, '/setup/runtime/detect', undefined, fetchImpl).catch(() => null);
+  if (detected?.runtime?.endpoint) {
+    info(`Detected ${detected.runtime.label || detected.runtime.kind}: ${detected.runtime.endpoint}`);
+  }
+
+  const shouldConnect = await io.confirm('Configure an agent runtime now?', true);
+  if (!shouldConnect) {
+    warn('Runtime setup skipped. Starter agents will use runtime defaults only if configured later.');
+    return null;
+  }
+
+  const runtime = await chooseRuntime(io);
+  if (!runtime) {
+    warn('Runtime setup skipped. Starter agents will use runtime defaults only if configured later.');
+    return null;
+  }
+
+  const endpoint = await io.ask(`${runtime.label} endpoint`, runtimeDefaultEndpoint(runtime, detected));
+  const authToken = await io.ask(`${runtime.label} auth token (optional)`, '');
+  const payload = {
+    kind: runtime.kind,
+    endpoint,
+    ...(authToken ? { auth_token: authToken } : {}),
+  };
+  const saved = await apiJson(apiBase, '/setup/runtime/config', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, fetchImpl);
+  const status = saved.status || saved;
+  console.log(formatRuntimeStatus(status));
+  if (status.state === 'healthy' || status.state === 'partial') {
+    success(`${runtime.label} runtime configured.`);
+  } else {
+    warn(`${runtime.label} runtime saved, but checks need repair before dispatch will be reliable.`);
+  }
+  return saved;
+}
+
 export async function runInit(flags = {}, deps = {}) {
   const io = deps.io || createPromptIo();
   const fetchImpl = deps.fetch || fetch;
@@ -282,6 +394,9 @@ export async function runInit(flags = {}, deps = {}) {
     const connected = (list.providers || []).filter(item => item.status === 'connected');
     if (connected.length > 0) {
       success(`Provider already connected: ${connected.map(item => `${item.display_name || item.slug} (${item.slug})`).join(', ')}`);
+      if (!deps.nonInteractive && !flags.nonInteractive) {
+        await connectRuntime(apiBase, io, fetchImpl);
+      }
       await apiJson(apiBase, '/setup/onboarding/complete', { method: 'POST' }, fetchImpl).catch(error => {
         warn(`Provider gate passed, but full onboarding completion is not ready yet: ${error.message}`);
       });
@@ -308,6 +423,7 @@ export async function runInit(flags = {}, deps = {}) {
 
     success(`${provider.label} connected using provider slug "${row.slug || provider.slug}".`);
     await showModels(apiBase, provider, fetchImpl);
+    await connectRuntime(apiBase, io, fetchImpl);
 
     await apiJson(apiBase, '/setup/onboarding/complete', { method: 'POST' }, fetchImpl).catch(error => {
       warn(`Provider connected, but full onboarding completion is not ready yet: ${error.message}`);
