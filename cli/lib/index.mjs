@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { localStart, localStop, localStatus, ensureBundledOpenClawPluginConfig } from './local.mjs';
-import { runInit } from './onboarding.mjs';
+import { cmdInit } from './init.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const COMPOSE_SOURCE = join(__dirname, '..', 'docker-compose.yml');
@@ -19,32 +19,42 @@ Usage:
   agent-hq <command> [options]
 
 Commands:
+  init      Plan or write first-install local configuration
   start     Start Agent HQ
   restart   Restart Agent HQ
   stop      Stop Agent HQ
   status    Show current runtime status
-  init      Guided first-time setup, including provider connection
   open      Open the Agent HQ UI in a browser
   help      Show this help message
 
 Options:
   --port-api <port>   Host port for the API  (default: 3501, env: AGENT_HQ_API_PORT)
   --port-ui  <port>   Host port for the UI   (default: 3500, env: AGENT_HQ_UI_PORT)
-  --api-url <url>     API base URL for init   (default: http://localhost:3501)
-  --skip-provider     Complete init without connecting a provider
   --docker            Run with Docker Compose
   --no-docker         Alias for local mode (kept for compatibility)
+
+Init options:
+  --level <level>        Setup level: minimal, starter, full (default: starter)
+  --yes, -y              Apply without confirmation
+  --template <name>      Workflow/project template to use
+  --non-interactive      Read setup input from --config
+  --config <path>        JSON setup input for --non-interactive
+  --dry-run              Print the setup plan without writing config
+  --repair               Merge with an existing local config
+  --skip-providers       Leave provider setup out of the plan
+  --skip-runtime         Leave runtime setup out of the plan
 
 Agent HQ defaults to local mode.
 Use --docker only when you explicitly want the Docker Compose stack.
 
 Examples:
+  agent-hq init --dry-run
+  agent-hq init --level minimal --yes
+  agent-hq init --non-interactive --config ./agenthq-init.json
   agent-hq start
   agent-hq restart
   agent-hq start --docker
   agent-hq start --port-ui 8080
-  agent-hq init
-  agent-hq init --skip-provider
   agent-hq status
   agent-hq stop
 `.trim();
@@ -331,6 +341,11 @@ export async function run(argv) {
   const flags = parseFlags(argv.slice(1));
 
   switch (command) {
+    case 'init': {
+      const code = await cmdInit(argv.slice(1));
+      if (code !== 0) process.exit(code);
+      break;
+    }
     case 'start':
       cmdStart(flags);
       break;
@@ -342,9 +357,6 @@ export async function run(argv) {
       break;
     case 'status':
       cmdStatus(flags);
-      break;
-    case 'init':
-      await runInit(flags, { openBrowser });
       break;
     case 'open':
       cmdOpen(flags);

@@ -5,7 +5,8 @@
   "description": "Agent HQ repository root — the published npm package lives in cli/",
   "license": "SEE LICENSE IN LICENSE",
   "bin": {
-    "agent-hq": "cli/bin/cli.js"
+    "agent-hq": "cli/bin/cli.js",
+    "agenthq": "cli/bin/cli.js"
   },
   "files": [
     "cli/",
@@ -13,6 +14,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "test:cli": "node --test cli/lib/*.test.mjs",
     "start": "node cli/bin/cli.js start",
     "stop": "node cli/bin/cli.js stop",
     "status": "node cli/bin/cli.js status",

@@ -4,7 +4,8 @@
   "description": "CLI launcher for Agent HQ — task management for AI agent teams",
   "license": "SEE LICENSE IN LICENSE",
   "bin": {
-    "agent-hq": "bin/cli.js"
+    "agent-hq": "bin/cli.js",
+    "agenthq": "bin/cli.js"
   },
   "type": "module",
   "engines": {
