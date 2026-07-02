@@ -7,6 +7,7 @@ import { closeDb, getDb } from '../db/client';
 import { initSchema } from '../db/schema';
 import { saveRuntimeConnectionConfig } from '../lib/runtimeOnboarding';
 import setupRouter from './setup';
+import sprintsRouter from './sprints';
 
 const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 let tempDir = '';
@@ -30,6 +31,7 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(express.json());
   app.use('/api/v1/setup', setupRouter);
+  app.use('/api/v1/sprints', sprintsRouter);
   const server = await new Promise<Server>((resolve) => {
     const bound = app.listen(0, '127.0.0.1', () => resolve(bound));
   });
@@ -236,6 +238,112 @@ describe('starter template setup API', () => {
         WHERE rr.sprint_id = ? AND rr.task_type = 'proposal' AND rr.status = 'human_approval'
       `).get(applied.workflow_ids['lead-generation']) as { name: string } | undefined;
       expect(leadRoute?.name).toBe('Approval Owner');
+
+      const opsTypeRes = await fetch(`${baseUrl}/api/v1/sprints/types/ops`);
+      expect(opsTypeRes.status).toBe(200);
+      const opsType = await opsTypeRes.json() as Record<string, any>;
+      expect(opsType.task_types.map((row: any) => row.task_type).sort()).toEqual(['adhoc', 'data', 'ops', 'pm_operational']);
+      expect(opsType.statuses.map((row: any) => row.name)).toEqual([
+        'todo',
+        'intake',
+        'triage',
+        'risk_review',
+        'impact_review',
+        'action_plan',
+        'stakeholder_update',
+        'human_approval',
+        'blocked',
+        'stalled',
+        'done',
+      ]);
+      expect(opsType.field_schemas[0].schema.fields.map((field: any) => field.key)).toEqual([
+        'affected_system_client',
+        'source',
+        'severity',
+        'compliance_risk_impact',
+        'cost_impact',
+        'schedule_impact',
+        'stakeholder_impact',
+        'approval_owner',
+        'supporting_docs',
+      ]);
+
+      const leadTypeRes = await fetch(`${baseUrl}/api/v1/sprints/types/lead_generation`);
+      expect(leadTypeRes.status).toBe(200);
+      const leadType = await leadTypeRes.json() as Record<string, any>;
+      expect(leadType.task_types.map((row: any) => row.task_type).sort()).toEqual(['follow_up', 'lead', 'outreach', 'proposal', 'research']);
+      expect(leadType.statuses.map((row: any) => row.name)).toEqual([
+        'intake',
+        'qualification',
+        'research',
+        'outreach_draft',
+        'human_approval',
+        'sent',
+        'follow_up',
+        'done',
+      ]);
+      expect(leadType.field_schemas[0].schema.fields.map((field: any) => field.key)).toEqual(expect.arrayContaining([
+        'prospect_company',
+        'fit_notes',
+        'research_notes',
+        'outreach_angle',
+        'approval_owner',
+        'follow_up_date',
+      ]));
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  it('reconciles stale system-owned ops registry rows when the ops template is applied', async () => {
+    seedCompatibility();
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO sprint_type_task_types (sprint_type_key, task_type, is_system)
+      VALUES ('ops', 'backend', 1), ('ops', 'qa', 1)
+    `).run();
+    db.prepare(`
+      INSERT INTO task_field_schemas (sprint_type_key, task_type, schema_json, is_system)
+      VALUES ('ops', NULL, ?, 1)
+    `).run(JSON.stringify({ fields: [
+      { key: 'environment', label: 'Environment', type: 'text', required: false },
+      { key: 'runbook_url', label: 'Runbook URL', type: 'url', required: false },
+    ] }));
+
+    const { server, baseUrl } = await startServer();
+    try {
+      const applyRes = await fetch(`${baseUrl}/api/v1/setup/starter-plan/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template_keys: ['ops'],
+          project_name: 'Ops Registry',
+          owners: {
+            pm: 'Ops PM',
+            ops: 'Ops Owner',
+            review: 'Risk Review',
+            approval: 'Approval Owner',
+          },
+        }),
+      });
+      expect(applyRes.status).toBe(201);
+
+      const opsTaskTypesRes = await fetch(`${baseUrl}/api/v1/sprints/types/ops/task-types`);
+      expect(opsTaskTypesRes.status).toBe(200);
+      const opsTaskTypes = await opsTaskTypesRes.json() as Record<string, any>;
+      expect(opsTaskTypes.task_types.map((row: any) => row.task_type).sort()).toEqual(['adhoc', 'data', 'ops', 'pm_operational']);
+
+      const opsFieldSchemasRes = await fetch(`${baseUrl}/api/v1/sprints/types/ops/field-schemas`);
+      expect(opsFieldSchemasRes.status).toBe(200);
+      const opsFieldSchemas = await opsFieldSchemasRes.json() as Record<string, any>;
+      expect(opsFieldSchemas.field_schemas[0].schema.fields.map((field: any) => field.key)).toEqual(expect.arrayContaining([
+        'affected_system_client',
+        'severity',
+        'compliance_risk_impact',
+        'stakeholder_impact',
+        'supporting_docs',
+      ]));
+      expect(opsFieldSchemas.field_schemas[0].schema.fields.map((field: any) => field.key)).not.toContain('runbook_url');
     } finally {
       await stopServer(server);
     }
