@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { localStart, localStop, localStatus, ensureBundledOpenClawPluginConfig } from './local.mjs';
 import { cmdInit } from './init.mjs';
-import { printRuntimeStatus } from './onboarding.mjs';
+import { printRuntimeStatus, runInit as runApiOnboarding } from './onboarding.mjs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const COMPOSE_SOURCE = join(__dirname, '..', 'docker-compose.yml');
@@ -21,6 +21,7 @@ Usage:
 
 Commands:
   init      Plan or write first-install local configuration
+  onboard   Configure providers, runtime, and starter Agent HQ records through the API
   start     Start Agent HQ
   restart   Restart Agent HQ
   stop      Stop Agent HQ
@@ -33,6 +34,9 @@ Options:
   --port-ui  <port>   Host port for the UI   (default: 3500, env: AGENT_HQ_UI_PORT)
   --docker            Run with Docker Compose
   --no-docker         Alias for local mode (kept for compatibility)
+  --api-url <url>     Agent HQ API base URL for API-backed onboarding/status
+  --skip-provider     Skip provider setup in API-backed onboarding
+  --skip-template     Skip starter project/workflow/agent setup in API-backed onboarding
 
 Init options:
   --level <level>        Setup level: minimal, starter, full (default: starter)
@@ -50,6 +54,7 @@ Use --docker only when you explicitly want the Docker Compose stack.
 
 Examples:
   agent-hq init --dry-run
+  agent-hq onboard --api-url http://localhost:3501 --template software-qa
   agent-hq init --level minimal --yes
   agent-hq init --non-interactive --config ./agenthq-init.json
   agent-hq start
@@ -165,6 +170,12 @@ function parseFlags(argv) {
       flags.apiUrl = argv[++i];
     } else if (argv[i] === '--skip-provider') {
       flags.skipProvider = true;
+    } else if (argv[i] === '--skip-template') {
+      flags.skipTemplate = true;
+    } else if (argv[i] === '--template' && argv[i + 1]) {
+      flags.template = argv[++i];
+    } else if (argv[i].startsWith('--template=')) {
+      flags.template = argv[i].slice('--template='.length);
     } else if (argv[i] === '--non-interactive') {
       flags.nonInteractive = true;
     } else if (argv[i] === '--docker') {
@@ -350,6 +361,9 @@ export async function run(argv) {
       if (code !== 0) process.exit(code);
       break;
     }
+    case 'onboard':
+      await runApiOnboarding(flags, { openBrowser });
+      break;
     case 'start':
       cmdStart(flags);
       break;

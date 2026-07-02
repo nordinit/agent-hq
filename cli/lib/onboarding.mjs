@@ -164,6 +164,14 @@ function printRuntimeMenu() {
   console.log('  s. Skip runtime setup');
 }
 
+function printTemplateMenu(templates) {
+  console.log('\nStarter templates');
+  templates.forEach((template, index) => {
+    const suffix = template.fully_implemented ? '' : ' (catalog preview)';
+    console.log(`  ${index + 1}. ${template.label} (${template.key})${suffix} - ${template.description}`);
+  });
+}
+
 async function chooseProvider(io) {
   while (true) {
     printProviderMenu();
@@ -329,6 +337,10 @@ async function fetchRuntimeStatus(apiBase, fetchImpl) {
   return apiJson(apiBase, '/setup/runtime/status', undefined, fetchImpl);
 }
 
+async function fetchStarterTemplates(apiBase, fetchImpl) {
+  return apiJson(apiBase, '/setup/templates', undefined, fetchImpl);
+}
+
 export async function printRuntimeStatus(apiUrl, fetchImpl = fetch) {
   const apiBase = normalizeApiBase(apiUrl);
   const status = await fetchRuntimeStatus(apiBase, fetchImpl);
@@ -375,6 +387,177 @@ async function connectRuntime(apiBase, io, fetchImpl) {
   return saved;
 }
 
+async function chooseStarterTemplate(apiBase, io, fetchImpl, preferredKey = '') {
+  const result = await fetchStarterTemplates(apiBase, fetchImpl);
+  const templates = Array.isArray(result.templates) ? result.templates : [];
+  if (templates.length === 0) throw new Error('No starter templates are available from the API.');
+  while (true) {
+    printTemplateMenu(templates);
+    const fallback = preferredKey || 'software-qa';
+    const answer = (await io.ask('Select starter template', fallback)).toLowerCase();
+    const index = Number(answer);
+    const selected = Number.isInteger(index) && index >= 1 && index <= templates.length
+      ? templates[index - 1]
+      : templates.find(template => template.key === answer);
+    if (selected) return selected;
+    warn('Choose a template number or key.');
+  }
+}
+
+async function collectTemplateOwners(template, io) {
+  const defaults = {
+    implementation: 'Developer Agent',
+    review: 'Review Agent',
+    release: 'Release Agent',
+    pm: 'PM Agent',
+  };
+  const labels = {
+    implementation: 'Who owns implementation work?',
+    review: 'Who owns review/QA?',
+    release: 'Who owns releases?',
+    pm: 'Who owns PM/triage?',
+  };
+  const owners = {};
+  for (const role of template.owner_roles || []) {
+    owners[role] = await io.ask(labels[role] || `Who owns ${role}?`, defaults[role] || `${role} Agent`);
+  }
+  return owners;
+}
+
+function printStarterPlan(plan) {
+  console.log('\nStarter setup review');
+  console.log(`  Project: ${plan.project.name}`);
+  console.log(`  Workflow: ${plan.workflow.name} (${plan.workflow.sprint_type})`);
+  console.log(`  Template: ${plan.template.label}`);
+  console.log('\nAgents:');
+  if (plan.agents.length === 0) {
+    console.log('  - none');
+  } else {
+    for (const agent of plan.agents) {
+      console.log(`  - ${agent.owner_role}: ${agent.name} (${agent.runtime_type}, ${agent.preferred_provider}${agent.model ? `, ${agent.model}` : ''})`);
+    }
+  }
+  console.log('\nRouting plan:');
+  if (plan.routes.length === 0) {
+    console.log('  - none');
+  } else {
+    for (const route of plan.routes) {
+      console.log(`  - ${route.enabled ? 'on ' : 'off'} ${route.key} -> ${route.owner_name} (${route.owner_role})`);
+    }
+  }
+  console.log('\nModel routing defaults:');
+  if (plan.model_routing.length === 0) {
+    console.log('  - none');
+  } else {
+    for (const rule of plan.model_routing) {
+      console.log(`  - ${rule.label}: <= ${rule.max_points} pts -> ${rule.provider}/${rule.model}`);
+    }
+  }
+  if (plan.compatibility.warnings.length) {
+    console.log('\nWarnings:');
+    for (const warning of plan.compatibility.warnings) console.log(`  - ${warning}`);
+  }
+  if (!plan.compatibility.ok) {
+    console.log('\nCannot apply yet:');
+    for (const error of plan.compatibility.errors) console.log(`  - ${error}`);
+  }
+  console.log(`\nAdvanced editing: ${plan.editable.advanced_path}`);
+}
+
+async function previewStarterPlan(apiBase, payload, fetchImpl) {
+  const result = await apiJson(apiBase, '/setup/starter-plan/preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, fetchImpl);
+  return result.plan;
+}
+
+async function editStarterPlanPayload(payload, plan, io) {
+  const routes = [...plan.routes];
+  while (await io.confirm('Edit routing plan?', false)) {
+    const action = (await io.ask('Edit action: owner, disable, add, advanced', 'owner')).toLowerCase();
+    if (action === 'advanced') {
+      info(`Open ${plan.editable.advanced_path} in the UI after setup for full YAML/table editing.`);
+      continue;
+    }
+    if (action === 'owner') {
+      const key = await io.ask('Route key to change', routes[0]?.key || '');
+      const route = routes.find(item => item.key === key);
+      if (!route) {
+        warn(`Route not found: ${key}`);
+        continue;
+      }
+      const ownerRole = (await io.ask('New owner role (implementation, review, release, pm)', route.owner_role)).toLowerCase();
+      const ownerName = await io.ask('New owner name', payload.owners?.[ownerRole] || route.owner_name);
+      route.owner_role = ownerRole;
+      route.owner_name = ownerName;
+      payload.owners = { ...(payload.owners || {}), [ownerRole]: ownerName };
+    } else if (action === 'disable') {
+      const key = await io.ask('Route key to disable', routes[0]?.key || '');
+      const route = routes.find(item => item.key === key);
+      if (!route) {
+        warn(`Route not found: ${key}`);
+        continue;
+      }
+      route.enabled = false;
+    } else if (action === 'add') {
+      const taskType = await io.ask('Task type', 'backend');
+      const status = await io.ask('Status', 'ready');
+      const ownerRole = (await io.ask('Owner role', 'implementation')).toLowerCase();
+      const ownerName = await io.ask('Owner name', payload.owners?.[ownerRole] || `${ownerRole} Agent`);
+      routes.push({
+        key: `${taskType}:${status}`,
+        task_type: taskType,
+        status,
+        owner_role: ownerRole,
+        owner_name: ownerName,
+        enabled: true,
+        priority: -100,
+      });
+      payload.owners = { ...(payload.owners || {}), [ownerRole]: ownerName };
+    } else {
+      warn('Choose owner, disable, add, or advanced.');
+    }
+  }
+  return { ...payload, routing_plan: routes };
+}
+
+async function runStarterTemplateSetup(apiBase, io, fetchImpl, flags = {}) {
+  if (flags.skipTemplate) return null;
+  const shouldConfigure = await io.confirm('Create a starter project, workflow, agents, and routing plan now?', true);
+  if (!shouldConfigure) return null;
+
+  const template = await chooseStarterTemplate(apiBase, io, fetchImpl, flags.template);
+  const projectName = await io.ask('Project name', 'Agent HQ Project');
+  const workflowName = await io.ask('Workflow name', 'Backlog');
+  const owners = await collectTemplateOwners(template, io);
+  let payload = {
+    template_key: template.key,
+    project_name: projectName,
+    workflow_name: workflowName,
+    owners,
+  };
+  let plan = await previewStarterPlan(apiBase, payload, fetchImpl);
+  printStarterPlan(plan);
+  payload = await editStarterPlanPayload(payload, plan, io);
+  plan = await previewStarterPlan(apiBase, payload, fetchImpl);
+  printStarterPlan(plan);
+  if (!plan.compatibility.ok) {
+    throw new Error(`Starter template is not ready to apply: ${plan.compatibility.errors.join('; ')}`);
+  }
+  const approved = await io.confirm('Apply this starter setup?', true);
+  if (!approved) {
+    warn('Starter setup skipped.');
+    return { skipped: true, plan };
+  }
+  const applied = await apiJson(apiBase, '/setup/starter-plan/apply', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, fetchImpl);
+  success(`Starter setup applied: project #${applied.project_id}, workflow #${applied.workflow_id}.`);
+  return applied;
+}
+
 export async function runInit(flags = {}, deps = {}) {
   const io = deps.io || createPromptIo();
   const fetchImpl = deps.fetch || fetch;
@@ -395,7 +578,10 @@ export async function runInit(flags = {}, deps = {}) {
     if (connected.length > 0) {
       success(`Provider already connected: ${connected.map(item => `${item.display_name || item.slug} (${item.slug})`).join(', ')}`);
       if (!deps.nonInteractive && !flags.nonInteractive) {
-        await connectRuntime(apiBase, io, fetchImpl);
+        const runtimeResult = await connectRuntime(apiBase, io, fetchImpl);
+        if (runtimeResult || flags.template) {
+          await runStarterTemplateSetup(apiBase, io, fetchImpl, flags);
+        }
       }
       await apiJson(apiBase, '/setup/onboarding/complete', { method: 'POST' }, fetchImpl).catch(error => {
         warn(`Provider gate passed, but full onboarding completion is not ready yet: ${error.message}`);
@@ -423,7 +609,10 @@ export async function runInit(flags = {}, deps = {}) {
 
     success(`${provider.label} connected using provider slug "${row.slug || provider.slug}".`);
     await showModels(apiBase, provider, fetchImpl);
-    await connectRuntime(apiBase, io, fetchImpl);
+    const runtimeResult = await connectRuntime(apiBase, io, fetchImpl);
+    if (runtimeResult || flags.template) {
+      await runStarterTemplateSetup(apiBase, io, fetchImpl, flags);
+    }
 
     await apiJson(apiBase, '/setup/onboarding/complete', { method: 'POST' }, fetchImpl).catch(error => {
       warn(`Provider connected, but full onboarding completion is not ready yet: ${error.message}`);

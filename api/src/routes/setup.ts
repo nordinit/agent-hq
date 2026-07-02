@@ -16,6 +16,12 @@ import {
   type RuntimeKind,
   type RuntimeConnectionConfig,
 } from '../lib/runtimeOnboarding';
+import {
+  applyStarterSetupPlan,
+  buildStarterSetupPlan,
+  listStarterTemplates,
+  type StarterPlanInput,
+} from '../lib/starterTemplates';
 
 const router = Router();
 
@@ -215,6 +221,44 @@ router.post('/runtime/config', async (req: Request, res: Response) => {
     res.status(201).json({ ok: true, configured: true, runtime: runtimeConfigResponse(config), status });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// ─── Starter template setup ──────────────────────────────────────────────────
+router.get('/templates', (_req: Request, res: Response) => {
+  res.json({ templates: listStarterTemplates() });
+});
+
+router.post('/starter-plan/preview', (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = resolveTenantIdFromRequest(db, req);
+    const plan = buildStarterSetupPlan(db, tenantId, (req.body ?? {}) as StarterPlanInput);
+    res.json({ ok: true, plan });
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status ?? 500;
+    res.status(status).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+router.post('/starter-plan/apply', (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = resolveTenantIdFromRequest(db, req);
+    const result = applyStarterSetupPlan(db, tenantId, (req.body ?? {}) as StarterPlanInput);
+    setSetting('onboarding_completed', 'true');
+    res.status(201).json(result);
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status ?? 500;
+    const body: Record<string, unknown> = {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+    const code = (err as Error & { code?: string }).code;
+    const compatibility = (err as Error & { compatibility?: unknown }).compatibility;
+    if (code) body.code = code;
+    if (compatibility) body.compatibility = compatibility;
+    res.status(status).json(body);
   }
 });
 
