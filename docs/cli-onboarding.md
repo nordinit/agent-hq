@@ -1,60 +1,59 @@
 # Agent HQ CLI Onboarding Contract
 
 This document defines the first-install onboarding experience for the Agent HQ
-CLI. It is a product and implementation contract for `agenthq init`; it does
+CLI. It is a product and implementation contract for `agent-hq init`; it does
 not require the implementation to exist yet.
 
-The onboarding goal is to get a software-delivery team from a fresh install to
-a runnable, reviewable Agent HQ instance without making them author raw
-assignment rules, transition requirements, or model routing records in the happy
-path.
+The onboarding goal is to get a team from a fresh install to a runnable,
+reviewable Agent HQ instance using one or more opinionated starter templates:
+Development, Ops, and Lead Generation. The happy path asks owner-mapping
+questions instead of raw assignment rules, transition requirements, or model
+routing records.
 
 ## Command Surface
 
 Primary command:
 
 ```bash
-agenthq init
+agent-hq init
 ```
 
-Compatibility aliases may be supported by the current package name:
+Package runners may also invoke the same binary:
 
 ```bash
-agent-hq init
 npx @nordinit/agent-hq init
 ```
 
-`agenthq init` is the guided setup entrypoint. `agenthq start` remains the
+`agent-hq init` is the guided setup entrypoint. `agent-hq start` remains the
 runtime launcher. The init command may offer to start the instance at the end,
 but it should not hide configuration generation behind `start`.
 
 ## Onboarding Modes
 
-The CLI supports four setup modes. The default is `starter`.
+The MVP CLI supports one guided starter experience, plus skip/manual fallback
+when a user intentionally bypasses starter setup.
 
-| Mode | Purpose | Prompt budget | Generated scope |
+| Path | Purpose | Prompt budget | Generated scope |
 |---|---|---:|---|
-| `minimal` | Run Agent HQ with the fewest choices. | 3-5 prompts | Instance, one provider, one local runtime, one project, one fullstack agent, simple ready/review/done workflow. |
-| `starter` | Recommended software-delivery MVP. | 8-12 prompts | Instance, providers, OpenClaw/Codex-capable runtime, software project, delivery workflow, PM/dev/QA/release agents, generated assignment rules, model defaults, verification. |
-| `full` | Production-minded local install. | 15-25 prompts | Everything in starter plus GitHub identity, branch/deploy policy, evidence gates, notifications, backups, and optional MCP/client integration. |
-| `advanced/manual` | Expert-controlled setup. | unbounded | Lets operators edit or import YAML/JSON, inspect generated rules, and opt into raw routing/model/workflow records. |
+| `starter` | Recommended first setup. | 8-14 prompts | Providers, OpenClaw runtime, one project, selected Development/Ops/Lead Generation workflows, starter agents/roles, owner-based routing, model defaults, verification preview. |
+| `manual/skip` | Bypass starter records. | 1 prompt | Marks onboarding complete for operators who will configure records later through supported APIs/UI. |
 
-Mode selection prompt:
+Template selection prompt:
 
 ```text
-Setup level? [starter]
-  minimal  - shortest path to a local demo
-  starter  - recommended software-delivery MVP
-  full     - production-minded local setup
-  advanced - review/edit raw config
+Select starter template(s) [development]
+  development      - software delivery with dev lifecycle and evidence gates
+  ops              - business ops issue/change-order flow
+  lead-generation  - prospect intake, research, outreach, approval, follow-up
+  blank            - manual shell
 ```
 
 Repair mode is not a separate setup level. It is entered automatically when
-`agenthq init` detects an existing partial or unhealthy setup, or explicitly
+`agent-hq init` detects an existing partial or unhealthy setup, or explicitly
 with:
 
 ```bash
-agenthq init --repair
+agent-hq init --repair
 ```
 
 ## Ordered Wizard Sections
@@ -96,8 +95,8 @@ Behavior:
 - Detect existing `~/.agent-hq/agent-hq.db`, `~/.agent-hq/local.json`, and port
   conflicts.
 - Reuse existing state only after showing what will be reused.
-- Prefer local mode for first install. Docker is an explicit full/advanced
-  choice.
+- Prefer local mode for first install. Docker is an explicit self-hosting
+  choice outside the starter prompts.
 - Generate an instance id or use the API-created id once the local API is
   available.
 
@@ -105,7 +104,7 @@ Behavior:
 
 Purpose: collect enough model-provider access for the generated agents to run.
 
-Prompts and defaults for the software-delivery MVP:
+Prompts and defaults for the starter experience:
 
 | Prompt | Starter default |
 |---|---|
@@ -149,68 +148,52 @@ Behavior:
 Purpose: define the first useful board without asking the user to design a
 schema from scratch.
 
-Prompts and defaults for software delivery:
+Prompts and defaults:
 
 | Prompt | Starter default |
 |---|---|
-| Work type | software delivery |
 | Project name | current directory name or `Agent HQ Project` |
 | Repository path | current directory if it is a Git repo, otherwise skip |
-| Workflow template | `software-delivery-mvp` |
-| Setup level for workflow | starter |
-| Include release lane? | yes |
-| Require QA before release? | yes |
+| Workflow templates | `development` |
+| Template choices | `development`, `ops`, `lead-generation`, `blank` |
 
-Generated software-delivery MVP:
+Generated starter template coverage:
 
 ```text
-Statuses:
-todo -> ready -> in_progress -> review -> ready_to_merge -> deployed -> done
+Development:
+  statuses: todo, ready, in_progress, dev_deploy_queued, dev_deploying,
+            review, qa_pass, ready_to_merge, deployed, done
+  task types: backend, frontend, fullstack, qa
+  evidence gates: review, QA, deploy, live verification
 
-Fallback / recovery status:
-blocked
+Ops:
+  statuses: todo, intake, triage, risk_review, impact_review, action_plan,
+            stakeholder_update, human_approval, blocked, stalled, done
+  task types: ops, data, pm_operational, adhoc
 
-Task types:
-frontend, backend, fullstack, qa, pm, ops, adhoc
+Lead Generation:
+  statuses: intake, qualification, research, outreach_draft, human_approval,
+            sent, follow_up, done
+  task types: lead, research, outreach, proposal, follow_up
 
-Outcomes:
-completed_for_review, qa_pass, qa_fail, deployed_live, live_verified, blocked,
-failed
-
-Evidence gates:
-completed_for_review requires review_branch, review_commit
-qa_pass requires qa_verified_commit, qa_tested_url
-deployed_live requires deployed_commit, deploy_target, deployed_at
-live_verified requires live_verified_by, live_verified_at
-```
-
-Minimal mode reduces the workflow to:
-
-```text
-todo -> ready -> in_progress -> review -> done
-```
-
-with task types:
-
-```text
-fullstack, adhoc
 ```
 
 ### 5. Agents
 
-Purpose: create role-based agents from templates.
+Purpose: create role-based agents from owner mappings.
 
 Prompts and defaults for starter:
 
 | Prompt | Starter default |
 |---|---|
-| Agent naming style | suggested names |
-| PM/planning agent | enabled |
-| Frontend agent | enabled |
-| Backend agent | enabled |
-| Fullstack agent | enabled |
-| QA agent | enabled |
-| Release/ops agent | enabled |
+| Implementation owner | Developer Agent |
+| Review/QA owner | Review Agent |
+| Release owner | Release Agent |
+| PM/triage owner | PM Agent |
+| Ops execution owner | Ops Agent |
+| Prospect research owner | Research Agent |
+| Outreach/proposal owner | Outreach Agent |
+| Human approval owner | Approval Owner |
 | Runtime per agent | selected local runtime |
 | Shared provider/model defaults | use generated model defaults |
 
@@ -218,59 +201,46 @@ Starter generated agents:
 
 | Role | Handles |
 |---|---|
-| PM | `pm`, `pm_analysis`, `pm_operational`, blocked triage |
-| Frontend | `frontend` implementation from `ready` |
-| Backend | `backend` implementation from `ready` |
-| Fullstack | `fullstack`, `adhoc` implementation from `ready` |
-| QA | `review` verification for implementation task types |
-| Release/Ops | `ready_to_merge`, deploy verification, operational tasks |
-
-Minimal mode creates one fullstack agent and one lightweight PM/operator owner.
-
-Full mode asks whether to split agents by repository, provider, runtime,
-environment, or project lane.
+| Developer | Development implementation tasks from `ready` |
+| Review | QA, risk review, and validation checkpoints |
+| Release | Development `ready_to_merge` and release handoff |
+| PM | Intake, qualification, triage, and ambiguous work |
+| Ops | Action plans and stakeholder updates |
+| Research | Prospect/account research |
+| Outreach | Outreach, proposal drafts, sent/follow-up |
+| Approval | Human approval checkpoints |
 
 ### 6. Generated Routing
 
 Purpose: show the rules the CLI will create without asking the user to write
 them.
 
-Starter generated assignment rules:
+Starter sample route checks:
 
 ```text
-frontend + ready -> frontend agent
-backend + ready -> backend agent
-fullstack + ready -> fullstack agent
-adhoc + ready -> fullstack agent
-pm + ready -> PM agent
-ops + ready -> release/ops agent
-
-frontend + review -> QA agent
-backend + review -> QA agent
-fullstack + review -> QA agent
-adhoc + review -> QA agent
-
-frontend + ready_to_merge -> release/ops agent
-backend + ready_to_merge -> release/ops agent
-fullstack + ready_to_merge -> release/ops agent
-adhoc + ready_to_merge -> release/ops agent
-
-any supported task type + blocked -> PM agent
+backend + ready -> implementation owner
+backend + review -> review owner
+backend + ready_to_merge -> release owner
+ops + triage -> PM owner
+ops + action_plan -> ops owner
+ops + human_approval -> approval owner
+research + research -> research owner
+proposal + human_approval -> approval owner
 ```
 
-Starter generated transitions and lifecycle moves:
+Starter generated transitions and lifecycle moves include:
 
 ```text
-ready + dispatch start -> in_progress
 in_progress + completed_for_review -> review
-in_progress + blocked -> blocked
-in_progress + failed -> blocked
 review + qa_pass -> ready_to_merge
 review + qa_fail -> ready
-review + blocked -> blocked
 ready_to_merge + deployed_live -> deployed
 deployed + live_verified -> done
-blocked + resolved -> ready
+action_plan + completed -> stakeholder_update
+stakeholder_update + completed -> human_approval
+human_approval + completed -> done
+outreach_draft + completed -> human_approval
+sent + completed -> follow_up
 ```
 
 Review screen:
@@ -278,19 +248,17 @@ Review screen:
 ```text
 Agent HQ will create:
 - 1 project
-- 1 software-delivery workflow
-- 6 agents
-- 14 assignment rules
-- 11 outcome transitions
-- 4 evidence gates
-- 3 model routing defaults
+- selected workflows
+- starter agents/roles for selected owner mappings
+- owner-based assignment rules
+- transitions and evidence gates
+- model routing defaults
 
 View details? [y/N]
 Apply this setup? [Y/n]
 ```
 
-Raw routing-rule editing is deferred to advanced/manual mode, the UI, or an
-explicit export/edit/import command.
+Raw routing-rule editing is deferred to the UI or future follow-up commands.
 
 ### 7. Model Defaults
 
@@ -356,8 +324,8 @@ Agent HQ is ready.
 UI:  http://localhost:3500
 API: http://localhost:3501
 Project: <project name>
-Workflow: Software Delivery MVP
-Next: agenthq open
+Workflows: Development, Ops, Lead Generation
+Next: agent-hq open
 ```
 
 If verification is incomplete, the CLI must state exactly which check failed
@@ -376,11 +344,9 @@ The CLI may write these files:
 | `~/.agent-hq/source/` | Cached source checkout for local mode. |
 | `~/.agent-hq/openclaw-plugin/` | Managed copy of the Agent HQ OpenClaw plugin when needed. |
 | `~/.openclaw/openclaw.json` | OpenClaw plugin and tool policy updates when approved. |
-| `.agent-hq/project.yaml` | Optional project-local declarative export in full/advanced mode. |
-
-The API/database remains the source of truth after apply. The optional
-project-local YAML is an export/import convenience, not a hidden second source
-of truth.
+The API/database remains the source of truth after apply. Reproducible
+onboarding plan export/import is a future follow-up, not a parallel MVP setup
+path.
 
 ## Secrets Policy
 
@@ -389,7 +355,7 @@ webhook signing secrets, and runtime credentials.
 
 Rules:
 
-- Never store secrets in `.agent-hq/project.yaml`, `init-plan.json`, terminal
+- Never store secrets in `init-plan.json`, terminal
   transcripts, task notes, or generated docs.
 - Prefer provider OAuth/device flows or existing runtime credential stores.
 - If a local secret file is unavoidable, write it under `~/.agent-hq/secrets/`
@@ -401,7 +367,7 @@ Rules:
   the selected credential store and the user approves it.
 - Repair mode must validate secret presence without printing secret values.
 
-## CLI vs UI vs YAML Boundaries
+## CLI vs UI Boundaries
 
 Keep in the CLI:
 
@@ -423,36 +389,28 @@ Defer to the UI:
 - provider rotation and disconnect flows after first setup
 - telemetry, run history, and audit review
 
-Defer to YAML/import-export:
+Defer to follow-up features after the starter experience is stable:
 
-- repeatable team templates
-- versioned workflow definitions
-- bulk project/agent/rule migration
-- reviewable changes in infrastructure repositories
-
-Defer to advanced/manual commands:
-
+- reproducible onboarding plan export/import
+- versioned workflow definitions and bulk migration
 - raw assignment-rule CRUD
 - raw model-routing CRUD
 - raw workflow transition/gate editing
 - database repair beyond guided checks
 - destructive reset or migration operations
 
-Suggested advanced commands:
+Possible future commands:
 
 ```bash
-agenthq init --advanced
-agenthq init --plan-only
-agenthq init --export .agent-hq/project.yaml
-agenthq init --from .agent-hq/project.yaml
-agenthq routing validate
-agenthq doctor
+agent-hq init --plan-only
+agent-hq routing validate
+agent-hq doctor
 ```
 
 ## Happy Path Transcript
 
 ```text
-$ agenthq init
+$ agent-hq init
 
 Agent HQ first-time setup
 
@@ -477,20 +435,23 @@ OpenClaw found.
 Enable Agent HQ capability tools plugin? [Y/n] y
 
 Workflow
-Template? [software-delivery-mvp]
-Require QA before release? [Y/n] y
-Include release lane? [Y/n] y
+Starter templates? [development] development,ops
 
 Agents
-Create PM, frontend, backend, fullstack, QA, and release/ops agents? [Y/n] y
+Who owns implementation work? [Developer Agent]
+Who owns review/QA? [Review Agent]
+Who owns releases? [Release Agent]
+Who owns PM/triage? [PM Agent]
+Who owns operations execution? [Ops Agent]
+Who gives human approval? [Approval Owner]
 Model policy? [balanced]
 
 Review plan
 Agent HQ will create:
 - project: acme-web
-- workflow: Software Delivery MVP
-- agents: PM, Frontend, Backend, Fullstack, QA, Release/Ops
-- assignment rules: implementation, review, release, and blocked triage lanes
+- workflows: Development, Ops
+- agents: Developer, Review, Release, PM, Ops, Approval
+- assignment rules: implementation, review, release, ops action, approval lanes
 - evidence gates: review, QA, deploy, live verification
 - model defaults: planning, implementation, QA/release
 
@@ -511,13 +472,13 @@ Applying setup...
 Agent HQ is ready.
 UI:  http://localhost:3500
 API: http://localhost:3501
-Next: agenthq open
+Next: agent-hq open
 ```
 
 ## Repair Mode Transcript
 
 ```text
-$ agenthq init --repair
+$ agent-hq init --repair
 
 Agent HQ repair
 
@@ -557,7 +518,7 @@ Verifying setup...
 
 Agent HQ is repaired.
 UI:  http://localhost:3500
-Next: agenthq open
+Next: agent-hq open
 ```
 
 ## Non-Goals For First Implementation
@@ -566,19 +527,20 @@ Next: agenthq open
 - Exposing every routing/model/workflow table field in the happy path.
 - Supporting every possible work domain in first-run prompts.
 - Migrating production self-hosted installs automatically without an explicit
-  repair or advanced mode.
-- Treating generated YAML as the runtime source of truth.
+  repair path.
+- Treating generated files as the runtime source of truth.
 
 ## Acceptance Checklist
 
-- `agenthq init` offers `minimal`, `starter`, `full`, and `advanced/manual`.
+- `agent-hq init` offers one starter flow with Development, Ops, Lead
+  Generation, and blank/manual fallback.
 - Wizard sections run in the required order: instance, providers, runtimes,
   project/workflow, agents, generated routing, model defaults, verification.
-- Starter defaults produce a software-delivery MVP without raw routing-rule
+- Starter defaults can create one or more workflows without raw routing-rule
   authoring.
 - Generated assignment rules, transitions, evidence gates, and model defaults
   are reviewed before apply.
 - Output artifacts and secrets handling are explicit.
-- The contract states what stays in CLI and what is deferred to UI, YAML, or
-  advanced commands.
+- The contract states what stays in CLI and what is deferred to UI or later
+  follow-up commands.
 - Happy path and repair mode terminal transcripts are included.

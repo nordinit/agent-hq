@@ -170,6 +170,7 @@ function printTemplateMenu(templates) {
     const suffix = template.fully_implemented ? '' : ' (catalog preview)';
     console.log(`  ${index + 1}. ${template.label} (${template.key})${suffix} - ${template.description}`);
   });
+  console.log('  Tip: choose multiple with commas, for example: development,ops');
 }
 
 async function chooseProvider(io) {
@@ -387,38 +388,55 @@ async function connectRuntime(apiBase, io, fetchImpl) {
   return saved;
 }
 
-async function chooseStarterTemplate(apiBase, io, fetchImpl, preferredKey = '') {
+async function chooseStarterTemplates(apiBase, io, fetchImpl, preferredKey = '') {
   const result = await fetchStarterTemplates(apiBase, fetchImpl);
   const templates = Array.isArray(result.templates) ? result.templates : [];
   if (templates.length === 0) throw new Error('No starter templates are available from the API.');
   while (true) {
     printTemplateMenu(templates);
-    const fallback = preferredKey || 'software-qa';
-    const answer = (await io.ask('Select starter template', fallback)).toLowerCase();
-    const index = Number(answer);
-    const selected = Number.isInteger(index) && index >= 1 && index <= templates.length
-      ? templates[index - 1]
-      : templates.find(template => template.key === answer);
-    if (selected) return selected;
-    warn('Choose a template number or key.');
+    const fallback = preferredKey || 'development';
+    const answers = (await io.ask('Select starter template(s)', fallback))
+      .toLowerCase()
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean);
+    const selected = [];
+    for (const answer of answers) {
+      const index = Number(answer);
+      const template = Number.isInteger(index) && index >= 1 && index <= templates.length
+        ? templates[index - 1]
+        : templates.find(item => item.key === answer || (answer === 'software-qa' && item.key === 'development'));
+      if (template && !selected.some(item => item.key === template.key)) selected.push(template);
+    }
+    if (selected.length > 0) return selected;
+    warn('Choose one or more template numbers or keys.');
   }
 }
 
-async function collectTemplateOwners(template, io) {
+async function collectTemplateOwners(templates, io) {
   const defaults = {
     implementation: 'Developer Agent',
     review: 'Review Agent',
     release: 'Release Agent',
     pm: 'PM Agent',
+    ops: 'Ops Agent',
+    research: 'Research Agent',
+    outreach: 'Outreach Agent',
+    approval: 'Approval Owner',
   };
   const labels = {
     implementation: 'Who owns implementation work?',
     review: 'Who owns review/QA?',
     release: 'Who owns releases?',
     pm: 'Who owns PM/triage?',
+    ops: 'Who owns operations execution?',
+    research: 'Who owns prospect research?',
+    outreach: 'Who owns outreach/proposal drafts?',
+    approval: 'Who gives human approval?',
   };
   const owners = {};
-  for (const role of template.owner_roles || []) {
+  const roles = [...new Set(templates.flatMap(template => template.owner_roles || []))];
+  for (const role of roles) {
     owners[role] = await io.ask(labels[role] || `Who owns ${role}?`, defaults[role] || `${role} Agent`);
   }
   return owners;
@@ -427,8 +445,20 @@ async function collectTemplateOwners(template, io) {
 function printStarterPlan(plan) {
   console.log('\nStarter setup review');
   console.log(`  Project: ${plan.project.name}`);
-  console.log(`  Workflow: ${plan.workflow.name} (${plan.workflow.sprint_type})`);
-  console.log(`  Template: ${plan.template.label}`);
+  console.log(`  Templates: ${(plan.templates || [plan.template]).map(template => template.label).join(', ')}`);
+  console.log('\nWorkflows:');
+  for (const workflow of plan.workflows || [{ workflow: plan.workflow, template: plan.template, statuses: [], task_types: [], fields: [], verification: { evidence_gates: [], sample_route_checks: [] } }]) {
+    console.log(`  - ${workflow.workflow.name} (${workflow.workflow.sprint_type}) from ${workflow.template.label}`);
+    if (workflow.statuses?.length) console.log(`    Statuses: ${workflow.statuses.join(', ')}`);
+    if (workflow.task_types?.length) console.log(`    Task types: ${workflow.task_types.join(', ')}`);
+    if (workflow.fields?.length) console.log(`    Fields: ${workflow.fields.map(field => field.key).join(', ')}`);
+    if (workflow.verification?.evidence_gates?.length) {
+      console.log(`    Verification: ${workflow.verification.evidence_gates.join('; ')}`);
+    }
+    if (workflow.verification?.sample_route_checks?.length) {
+      console.log(`    Sample route checks: ${workflow.verification.sample_route_checks.map(check => `${check.task_type}/${check.status}->${check.expected_owner_role}`).join(', ')}`);
+    }
+  }
   console.log('\nAgents:');
   if (plan.agents.length === 0) {
     console.log('  - none');
@@ -451,6 +481,12 @@ function printStarterPlan(plan) {
   } else {
     for (const rule of plan.model_routing) {
       console.log(`  - ${rule.label}: <= ${rule.max_points} pts -> ${rule.provider}/${rule.model}`);
+    }
+  }
+  if (plan.preview?.changes?.length) {
+    console.log('\nDry-run changes:');
+    for (const change of plan.preview.changes) {
+      console.log(`  - ${change.action} ${change.resource}: ${change.name} (${change.reason})`);
     }
   }
   if (plan.compatibility.warnings.length) {
@@ -477,7 +513,7 @@ async function editStarterPlanPayload(payload, plan, io) {
   while (await io.confirm('Edit routing plan?', false)) {
     const action = (await io.ask('Edit action: owner, disable, add, advanced', 'owner')).toLowerCase();
     if (action === 'advanced') {
-      info(`Open ${plan.editable.advanced_path} in the UI after setup for full YAML/table editing.`);
+      info(`Open ${plan.editable.advanced_path} in the UI after setup for full routing and workflow editing.`);
       continue;
     }
     if (action === 'owner') {
@@ -527,14 +563,15 @@ async function runStarterTemplateSetup(apiBase, io, fetchImpl, flags = {}) {
   const shouldConfigure = await io.confirm('Create a starter project, workflow, agents, and routing plan now?', true);
   if (!shouldConfigure) return null;
 
-  const template = await chooseStarterTemplate(apiBase, io, fetchImpl, flags.template);
+  const templates = await chooseStarterTemplates(apiBase, io, fetchImpl, flags.template);
   const projectName = await io.ask('Project name', 'Agent HQ Project');
-  const workflowName = await io.ask('Workflow name', 'Backlog');
-  const owners = await collectTemplateOwners(template, io);
+  const workflowName = templates.length === 1 ? await io.ask('Workflow name', templates[0].label || 'Backlog') : '';
+  const owners = await collectTemplateOwners(templates, io);
   let payload = {
-    template_key: template.key,
+    template_key: templates[0].key,
+    template_keys: templates.map(template => template.key),
     project_name: projectName,
-    workflow_name: workflowName,
+    ...(workflowName ? { workflow_name: workflowName } : {}),
     owners,
   };
   let plan = await previewStarterPlan(apiBase, payload, fetchImpl);

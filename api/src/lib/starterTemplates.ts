@@ -7,28 +7,38 @@ import {
 } from '../domains/agents/providerSelection';
 import { seedSprintTaskPolicy } from '../domains/routing/policy/seed';
 import { readRuntimeConnectionConfig } from './runtimeOnboarding';
+import {
+  STARTER_FIELD_SCHEMA_SEEDS,
+  getStarterTaskTypesForSprintType,
+  type StarterFieldDefinition,
+} from './starterCatalog';
 import { buildCanonicalAgentMainSessionKey, slugifySessionKeyPart } from './sessionKeys';
 
-export type StarterTemplateKey =
-  | 'software-simple'
-  | 'software-qa'
-  | 'software-qa-release'
-  | 'research'
-  | 'ops-incidents'
-  | 'blank';
+export type StarterTemplateKey = 'development' | 'ops' | 'lead-generation' | 'blank';
 
-export type StarterOwnerRole = 'implementation' | 'review' | 'release' | 'pm';
+export type StarterOwnerRole =
+  | 'implementation'
+  | 'review'
+  | 'release'
+  | 'pm'
+  | 'ops'
+  | 'research'
+  | 'outreach'
+  | 'approval';
 
 export type StarterPlanInput = {
   template_key?: string;
+  template_keys?: string[];
   project_name?: string;
   workflow_name?: string;
+  workflow_names?: Record<string, string>;
   owners?: Partial<Record<StarterOwnerRole, string>>;
   routing_plan?: StarterRoutePlanInput[];
 };
 
 export type StarterRoutePlanInput = {
   key?: string;
+  template_key?: string;
   task_type?: string;
   status?: string;
   owner_role?: StarterOwnerRole;
@@ -43,6 +53,7 @@ export type StarterTemplateCatalogEntry = {
   description: string;
   fully_implemented: boolean;
   owner_roles: StarterOwnerRole[];
+  workflow_type: 'dev' | 'ops' | 'lead_generation' | 'generic';
 };
 
 export type StarterAgentPlan = {
@@ -59,6 +70,7 @@ export type StarterAgentPlan = {
 
 export type StarterRoutePlan = {
   key: string;
+  template_key: StarterTemplateKey;
   task_type: string;
   status: string;
   owner_role: StarterOwnerRole;
@@ -77,10 +89,26 @@ export type StarterModelRoutingPlan = {
   enabled: boolean;
 };
 
+export type StarterWorkflowPlan = {
+  template: StarterTemplateCatalogEntry;
+  workflow: { name: string; sprint_type: string; goal: string };
+  statuses: string[];
+  task_types: string[];
+  fields: StarterFieldDefinition[];
+  routes: StarterRoutePlan[];
+  model_routing: StarterModelRoutingPlan[];
+  verification: {
+    evidence_gates: string[];
+    sample_route_checks: Array<{ task_type: string; status: string; expected_owner_role: StarterOwnerRole }>;
+  };
+};
+
 export type StarterSetupPlan = {
   template: StarterTemplateCatalogEntry;
+  templates: StarterTemplateCatalogEntry[];
   project: { name: string; description: string };
   workflow: { name: string; sprint_type: string; goal: string };
+  workflows: StarterWorkflowPlan[];
   agents: StarterAgentPlan[];
   routes: StarterRoutePlan[];
   model_routing: StarterModelRoutingPlan[];
@@ -90,6 +118,9 @@ export type StarterSetupPlan = {
     provider: string | null;
     errors: string[];
     warnings: string[];
+  };
+  preview: {
+    changes: Array<{ action: 'create' | 'update' | 'skip'; resource: string; name: string; reason: string }>;
   };
   editable: {
     can_change_owner: boolean;
@@ -101,46 +132,36 @@ export type StarterSetupPlan = {
 
 export const STARTER_TEMPLATE_CATALOG: StarterTemplateCatalogEntry[] = [
   {
-    key: 'software-simple',
-    label: 'Software: simple',
-    description: 'One implementation owner with PM triage for small software projects.',
-    fully_implemented: false,
-    owner_roles: ['implementation', 'pm'],
-  },
-  {
-    key: 'software-qa',
-    label: 'Software: implementation + QA',
-    description: 'MVP software delivery flow with implementation, review/QA, and PM triage owners.',
+    key: 'development',
+    label: 'Development',
+    description: 'Default software delivery setup with implementation, QA/review, release handoff, model defaults, and evidence gates.',
     fully_implemented: true,
-    owner_roles: ['implementation', 'review', 'pm'],
-  },
-  {
-    key: 'software-qa-release',
-    label: 'Software: implementation + QA + release',
-    description: 'Software delivery flow with explicit release ownership.',
-    fully_implemented: false,
     owner_roles: ['implementation', 'review', 'release', 'pm'],
+    workflow_type: 'dev',
   },
   {
-    key: 'research',
-    label: 'Research',
-    description: 'Research workflow starter for investigation, synthesis, and review.',
-    fully_implemented: false,
-    owner_roles: ['implementation', 'review', 'pm'],
+    key: 'ops',
+    label: 'Ops',
+    description: 'Business operations workflow generalized from Elevation Build issue/change-order intake, impact review, approvals, and stakeholder updates.',
+    fully_implemented: true,
+    owner_roles: ['ops', 'review', 'approval', 'pm'],
+    workflow_type: 'ops',
   },
   {
-    key: 'ops-incidents',
-    label: 'Ops / incidents',
-    description: 'Operations and incident response starter with triage and execution ownership.',
-    fully_implemented: false,
-    owner_roles: ['implementation', 'review', 'pm'],
+    key: 'lead-generation',
+    label: 'Lead Generation',
+    description: 'Prospect intake, qualification, research, outreach/proposal draft, human approval, sent/done, and follow-up.',
+    fully_implemented: true,
+    owner_roles: ['research', 'outreach', 'approval', 'pm'],
+    workflow_type: 'lead_generation',
   },
   {
     key: 'blank',
     label: 'Blank / manual',
     description: 'Create the project and workflow shell without starter agents or routes.',
-    fully_implemented: false,
+    fully_implemented: true,
     owner_roles: [],
+    workflow_type: 'generic',
   },
 ];
 
@@ -149,6 +170,10 @@ const DEFAULT_OWNER_NAMES: Record<StarterOwnerRole, string> = {
   review: 'Review Agent',
   release: 'Release Agent',
   pm: 'PM Agent',
+  ops: 'Ops Agent',
+  research: 'Research Agent',
+  outreach: 'Outreach Agent',
+  approval: 'Approval Owner',
 };
 
 const OWNER_AGENT_DETAILS: Record<StarterOwnerRole, Pick<StarterAgentPlan, 'job_title' | 'role' | 'skill_names'>> = {
@@ -159,7 +184,7 @@ const OWNER_AGENT_DETAILS: Record<StarterOwnerRole, Pick<StarterAgentPlan, 'job_
   },
   review: {
     job_title: 'Review Engineer',
-    role: 'Review, QA verification, and evidence-focused validation',
+    role: 'Review, QA verification, risk review, and evidence-focused validation',
     skill_names: [],
   },
   release: {
@@ -172,9 +197,27 @@ const OWNER_AGENT_DETAILS: Record<StarterOwnerRole, Pick<StarterAgentPlan, 'job_
     role: 'Project management, triage, planning, and operator handoff',
     skill_names: ['create-task', 'create-project'],
   },
+  ops: {
+    job_title: 'Operations Lead',
+    role: 'Business operations execution, action plans, and stakeholder updates',
+    skill_names: ['task-routing-rules'],
+  },
+  research: {
+    job_title: 'Research Lead',
+    role: 'Prospect and account research for qualification and outreach planning',
+    skill_names: ['create-task'],
+  },
+  outreach: {
+    job_title: 'Outreach Lead',
+    role: 'Drafts outreach, proposal notes, and follow-up plans for human approval',
+    skill_names: ['create-task'],
+  },
+  approval: {
+    job_title: 'Approval Owner',
+    role: 'Human approval checkpoint owner for sensitive operational and outreach work',
+    skill_names: [],
+  },
 };
-
-const SOFTWARE_QA_TASK_TYPES = ['backend', 'frontend', 'fullstack'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -189,7 +232,8 @@ function tableHasColumn(db: Database.Database, table: string, column: string): b
 }
 
 function normalizeTemplateKey(value: unknown): StarterTemplateKey {
-  const key = typeof value === 'string' && value.trim() ? value.trim() : 'software-qa';
+  const raw = typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : 'development';
+  const key = raw === 'software-qa' ? 'development' : raw;
   const template = STARTER_TEMPLATE_CATALOG.find((entry) => entry.key === key);
   if (!template) {
     throw Object.assign(new Error(`Unknown starter template: ${key}`), { status: 400 });
@@ -197,9 +241,22 @@ function normalizeTemplateKey(value: unknown): StarterTemplateKey {
   return template.key;
 }
 
+function normalizeTemplateKeys(input: StarterPlanInput): StarterTemplateKey[] {
+  const raw = Array.isArray(input.template_keys) && input.template_keys.length > 0
+    ? input.template_keys
+    : [input.template_key ?? 'development'];
+  const keys: StarterTemplateKey[] = [];
+  for (const value of raw) {
+    const key = normalizeTemplateKey(value);
+    if (!keys.includes(key)) keys.push(key);
+  }
+  return keys.includes('blank') && keys.length > 1 ? keys.filter((key) => key !== 'blank') : keys;
+}
+
 function normalizeOwnerRole(value: unknown): StarterOwnerRole {
-  if (value === 'implementation' || value === 'review' || value === 'release' || value === 'pm') return value;
-  throw Object.assign(new Error(`owner_role must be one of: implementation, review, release, pm`), { status: 400 });
+  const roles: StarterOwnerRole[] = ['implementation', 'review', 'release', 'pm', 'ops', 'research', 'outreach', 'approval'];
+  if (roles.includes(value as StarterOwnerRole)) return value as StarterOwnerRole;
+  throw Object.assign(new Error(`owner_role must be one of: ${roles.join(', ')}`), { status: 400 });
 }
 
 function normalizeNonEmptyText(value: unknown, fallback: string): string {
@@ -207,80 +264,102 @@ function normalizeNonEmptyText(value: unknown, fallback: string): string {
   return text || fallback;
 }
 
-function routeKey(taskType: string, status: string): string {
-  return `${taskType}:${status}`;
+function routeKey(templateKey: StarterTemplateKey, taskType: string, status: string): string {
+  return `${templateKey}:${taskType}:${status}`;
 }
 
-function defaultRoutesForSoftwareQa(owners: Record<StarterOwnerRole, string>): StarterRoutePlan[] {
-  const routes: StarterRoutePlan[] = [];
-  for (const taskType of SOFTWARE_QA_TASK_TYPES) {
-    routes.push({
-      key: routeKey(taskType, 'ready'),
-      task_type: taskType,
-      status: 'ready',
-      owner_role: 'implementation',
-      owner_name: owners.implementation,
-      enabled: true,
-      priority: -100,
-    });
-    routes.push({
-      key: routeKey(taskType, 'review'),
-      task_type: taskType,
-      status: 'review',
-      owner_role: 'review',
-      owner_name: owners.review,
-      enabled: true,
-      priority: -100,
-    });
+function ownerMap(input: StarterPlanInput): Record<StarterOwnerRole, string> {
+  const ownerInput = isRecord(input.owners) ? input.owners : {};
+  return {
+    implementation: normalizeNonEmptyText(ownerInput.implementation, DEFAULT_OWNER_NAMES.implementation),
+    review: normalizeNonEmptyText(ownerInput.review, DEFAULT_OWNER_NAMES.review),
+    release: normalizeNonEmptyText(ownerInput.release, DEFAULT_OWNER_NAMES.release),
+    pm: normalizeNonEmptyText(ownerInput.pm, DEFAULT_OWNER_NAMES.pm),
+    ops: normalizeNonEmptyText(ownerInput.ops, DEFAULT_OWNER_NAMES.ops),
+    research: normalizeNonEmptyText(ownerInput.research, DEFAULT_OWNER_NAMES.research),
+    outreach: normalizeNonEmptyText(ownerInput.outreach, DEFAULT_OWNER_NAMES.outreach),
+    approval: normalizeNonEmptyText(ownerInput.approval, DEFAULT_OWNER_NAMES.approval),
+  };
+}
+
+function workflowNameFor(template: StarterTemplateCatalogEntry, input: StarterPlanInput, selectedCount: number): string {
+  if (isRecord(input.workflow_names)) {
+    const configured = input.workflow_names[template.key];
+    if (typeof configured === 'string' && configured.trim()) return configured.trim();
   }
-  routes.push({
-    key: routeKey('qa', 'ready'),
-    task_type: 'qa',
-    status: 'ready',
-    owner_role: 'review',
-    owner_name: owners.review,
-    enabled: true,
-    priority: -100,
-  });
-  routes.push({
-    key: routeKey('adhoc', 'ready'),
-    task_type: 'adhoc',
-    status: 'ready',
-    owner_role: 'pm',
-    owner_name: owners.pm,
-    enabled: true,
-    priority: -100,
-  });
-  routes.push({
-    key: routeKey('other', 'ready'),
-    task_type: 'other',
-    status: 'ready',
-    owner_role: 'pm',
-    owner_name: owners.pm,
-    enabled: true,
-    priority: -100,
-  });
-  routes.push({
-    key: routeKey('fullstack', 'ready_to_merge'),
-    task_type: 'fullstack',
-    status: 'ready_to_merge',
-    owner_role: 'pm',
-    owner_name: owners.pm,
-    enabled: true,
-    priority: -100,
-  });
-  return routes;
+  if (selectedCount === 1) return normalizeNonEmptyText(input.workflow_name, template.key === 'blank' ? 'Manual Workflow' : template.label);
+  return template.label;
 }
 
-function normalizeRouteOverride(input: StarterRoutePlanInput, owners: Record<StarterOwnerRole, string>): StarterRoutePlan {
+function fieldsForSprintType(sprintType: string): StarterFieldDefinition[] {
+  return STARTER_FIELD_SCHEMA_SEEDS.find((entry) => entry.sprintType === sprintType)?.schema.fields.map((field) => ({ ...field, options: field.options ? [...field.options] : undefined })) ?? [];
+}
+
+function defaultRoutesForTemplate(template: StarterTemplateCatalogEntry, owners: Record<StarterOwnerRole, string>): StarterRoutePlan[] {
+  const make = (taskType: string, status: string, ownerRole: StarterOwnerRole, priority = -100): StarterRoutePlan => ({
+    key: routeKey(template.key, taskType, status),
+    template_key: template.key,
+    task_type: taskType,
+    status,
+    owner_role: ownerRole,
+    owner_name: owners[ownerRole],
+    enabled: true,
+    priority,
+  });
+
+  if (template.key === 'development') {
+    const routes: StarterRoutePlan[] = [];
+    for (const taskType of ['backend', 'frontend', 'fullstack']) {
+      routes.push(make(taskType, 'ready', 'implementation'));
+      routes.push(make(taskType, 'review', 'review'));
+      routes.push(make(taskType, 'ready_to_merge', 'release'));
+    }
+    routes.push(make('qa', 'ready', 'review'));
+    routes.push(make('adhoc', 'ready', 'pm'));
+    return routes;
+  }
+
+  if (template.key === 'ops') {
+    const routes: StarterRoutePlan[] = [];
+    for (const taskType of ['ops', 'data', 'pm_operational', 'adhoc']) {
+      routes.push(make(taskType, 'intake', 'pm'));
+      routes.push(make(taskType, 'triage', 'pm'));
+      routes.push(make(taskType, 'risk_review', 'review'));
+      routes.push(make(taskType, 'impact_review', 'review'));
+      routes.push(make(taskType, 'action_plan', 'ops'));
+      routes.push(make(taskType, 'stakeholder_update', 'ops'));
+      routes.push(make(taskType, 'human_approval', 'approval'));
+    }
+    return routes;
+  }
+
+  if (template.key === 'lead-generation') {
+    return [
+      make('lead', 'intake', 'pm'),
+      make('lead', 'qualification', 'pm'),
+      make('research', 'research', 'research'),
+      make('outreach', 'outreach_draft', 'outreach'),
+      make('proposal', 'outreach_draft', 'outreach'),
+      make('proposal', 'human_approval', 'approval'),
+      make('outreach', 'sent', 'outreach'),
+      make('follow_up', 'follow_up', 'outreach'),
+    ];
+  }
+
+  return [];
+}
+
+function normalizeRouteOverride(input: StarterRoutePlanInput, owners: Record<StarterOwnerRole, string>, fallbackTemplateKey: StarterTemplateKey): StarterRoutePlan {
   const taskType = normalizeNonEmptyText(input.task_type, '');
   const status = normalizeNonEmptyText(input.status, '');
   if (!taskType || !status) {
     throw Object.assign(new Error('Each routing_plan item requires task_type and status'), { status: 400 });
   }
   const ownerRole = normalizeOwnerRole(input.owner_role);
+  const templateKey = input.template_key ? normalizeTemplateKey(input.template_key) : fallbackTemplateKey;
   return {
-    key: normalizeNonEmptyText(input.key, routeKey(taskType, status)),
+    key: normalizeNonEmptyText(input.key, routeKey(templateKey, taskType, status)),
+    template_key: templateKey,
     task_type: taskType,
     status,
     owner_role: ownerRole,
@@ -290,23 +369,82 @@ function normalizeRouteOverride(input: StarterRoutePlanInput, owners: Record<Sta
   };
 }
 
-function mergeRouteOverrides(defaultRoutes: StarterRoutePlan[], overrides: unknown, owners: Record<StarterOwnerRole, string>): StarterRoutePlan[] {
+function mergeRouteOverrides(defaultRoutes: StarterRoutePlan[], overrides: unknown, owners: Record<StarterOwnerRole, string>, fallbackTemplateKey: StarterTemplateKey): StarterRoutePlan[] {
   if (!Array.isArray(overrides)) return defaultRoutes;
   const byKey = new Map(defaultRoutes.map((route) => [route.key, route]));
   for (const raw of overrides) {
     if (!isRecord(raw)) {
       throw Object.assign(new Error('routing_plan must contain objects'), { status: 400 });
     }
-    const normalized = normalizeRouteOverride(raw as StarterRoutePlanInput, owners);
+    const normalized = normalizeRouteOverride(raw as StarterRoutePlanInput, owners, fallbackTemplateKey);
     byKey.set(normalized.key, normalized);
   }
   return Array.from(byKey.values());
 }
 
-function connectedProviderForPlan(db: Database.Database, tenantId: number): string | null {
+function connectedProviderForPlan(tenantId: number): string | null {
   const connected = getConnectedProviderSlugs(tenantId);
   if (connected.length === 0) return null;
   return resolveSchemaSafePreferredProvider(connected);
+}
+
+function modelRoutingFor(provider: string | null, model: string | null, labelPrefix: string): StarterModelRoutingPlan[] {
+  if (!provider || !model) return [];
+  return [
+    {
+      label: `${labelPrefix} balanced`,
+      max_points: 3,
+      provider,
+      model,
+      thinking_level: 'medium',
+      fast_mode: null,
+      enabled: true,
+    },
+    {
+      label: `${labelPrefix} complex`,
+      max_points: 8,
+      provider,
+      model,
+      thinking_level: 'high',
+      fast_mode: null,
+      enabled: true,
+    },
+  ];
+}
+
+function verificationFor(template: StarterTemplateCatalogEntry): StarterWorkflowPlan['verification'] {
+  if (template.key === 'development') {
+    return {
+      evidence_gates: ['completed_for_review: review_branch, review_commit', 'qa_pass: qa_verified_commit matches review_commit', 'live_verified: deployed_commit, live_verified_by, live_verified_at'],
+      sample_route_checks: [
+        { task_type: 'backend', status: 'ready', expected_owner_role: 'implementation' },
+        { task_type: 'backend', status: 'review', expected_owner_role: 'review' },
+        { task_type: 'backend', status: 'ready_to_merge', expected_owner_role: 'release' },
+      ],
+    };
+  }
+  if (template.key === 'ops') {
+    return {
+      evidence_gates: ['approval_blocked routes approval waits to stalled', 'completed from human_approval routes to done'],
+      sample_route_checks: [
+        { task_type: 'ops', status: 'triage', expected_owner_role: 'pm' },
+        { task_type: 'ops', status: 'risk_review', expected_owner_role: 'review' },
+        { task_type: 'ops', status: 'action_plan', expected_owner_role: 'ops' },
+        { task_type: 'ops', status: 'human_approval', expected_owner_role: 'approval' },
+      ],
+    };
+  }
+  if (template.key === 'lead-generation') {
+    return {
+      evidence_gates: ['outreach/proposal drafts route through human_approval before sent/follow-up'],
+      sample_route_checks: [
+        { task_type: 'research', status: 'research', expected_owner_role: 'research' },
+        { task_type: 'outreach', status: 'outreach_draft', expected_owner_role: 'outreach' },
+        { task_type: 'proposal', status: 'human_approval', expected_owner_role: 'approval' },
+      ],
+    };
+  }
+  return { evidence_gates: [], sample_route_checks: [] };
 }
 
 export function listStarterTemplates(): StarterTemplateCatalogEntry[] {
@@ -314,29 +452,19 @@ export function listStarterTemplates(): StarterTemplateCatalogEntry[] {
 }
 
 export function buildStarterSetupPlan(db: Database.Database, tenantId: number, input: StarterPlanInput = {}): StarterSetupPlan {
-  const templateKey = normalizeTemplateKey(input.template_key);
-  const template = STARTER_TEMPLATE_CATALOG.find((entry) => entry.key === templateKey)!;
+  const templateKeys = normalizeTemplateKeys(input);
+  const templates = templateKeys.map((key) => STARTER_TEMPLATE_CATALOG.find((entry) => entry.key === key)!);
+  const primaryTemplate = templates[0];
   const projectName = normalizeNonEmptyText(input.project_name, 'Agent HQ Project');
-  const workflowName = normalizeNonEmptyText(input.workflow_name, templateKey === 'blank' ? 'Manual Workflow' : 'Backlog');
-  const ownerInput = isRecord(input.owners) ? input.owners : {};
-  const owners = {
-    implementation: normalizeNonEmptyText(ownerInput.implementation, DEFAULT_OWNER_NAMES.implementation),
-    review: normalizeNonEmptyText(ownerInput.review, DEFAULT_OWNER_NAMES.review),
-    release: normalizeNonEmptyText(ownerInput.release, DEFAULT_OWNER_NAMES.release),
-    pm: normalizeNonEmptyText(ownerInput.pm, DEFAULT_OWNER_NAMES.pm),
-  };
+  const owners = ownerMap(input);
 
   const runtime = readRuntimeConnectionConfig(db);
-  const provider = connectedProviderForPlan(db, tenantId);
+  const provider = connectedProviderForPlan(tenantId);
   const model = defaultAgentModelForProvider(provider);
+  const requiresAgents = templates.some((template) => template.key !== 'blank');
   const compatibilityErrors: string[] = [];
   const compatibilityWarnings: string[] = [];
 
-  if (!template.fully_implemented && template.key !== 'blank') {
-    compatibilityWarnings.push(`Template "${template.key}" is cataloged but not fully implemented; software-qa behavior is used only for the MVP template.`);
-  }
-
-  const requiresAgents = template.key !== 'blank';
   if (requiresAgents && runtime?.kind !== 'openclaw') {
     compatibilityErrors.push('Starter agents require a configured OpenClaw runtime. Configure runtime before applying this template.');
   }
@@ -348,12 +476,7 @@ export function buildStarterSetupPlan(db: Database.Database, tenantId: number, i
     if (providerError) compatibilityErrors.push(providerError);
   }
 
-  const ownerRoles = template.key === 'software-qa'
-    ? template.owner_roles
-    : template.key === 'blank'
-      ? []
-      : ['implementation', 'review', 'pm'] as StarterOwnerRole[];
-
+  const ownerRoles = Array.from(new Set(templates.flatMap((template) => template.owner_roles)));
   const agents = requiresAgents
     ? ownerRoles.map((ownerRole) => {
         const details = OWNER_AGENT_DETAILS[ownerRole];
@@ -371,43 +494,58 @@ export function buildStarterSetupPlan(db: Database.Database, tenantId: number, i
       })
     : [];
 
-  const defaultRoutes = template.key === 'software-qa' ? defaultRoutesForSoftwareQa(owners) : [];
-  const routes = mergeRouteOverrides(defaultRoutes, input.routing_plan, owners);
+  const workflows = templates.map((template) => {
+    const defaultRoutes = defaultRoutesForTemplate(template, owners);
+    const routes = mergeRouteOverrides(
+      defaultRoutes,
+      input.routing_plan,
+      owners,
+      template.key,
+    ).filter((route) => route.template_key === template.key || templateKeys.length === 1);
+    const modelRouting = modelRoutingFor(provider, model, template.label);
+    return {
+      template,
+      workflow: {
+        name: workflowNameFor(template, input, templates.length),
+        sprint_type: template.workflow_type,
+        goal: template.key === 'blank'
+          ? 'Manual setup workflow.'
+          : `Template-generated ${template.label.toLowerCase()} workflow.`,
+      },
+      statuses: template.key === 'blank'
+        ? ['todo', 'ready', 'in_progress', 'review', 'done']
+        : template.key === 'development'
+          ? ['todo', 'ready', 'in_progress', 'dev_deploy_queued', 'dev_deploying', 'review', 'qa_pass', 'ready_to_merge', 'deployed', 'done']
+          : template.key === 'ops'
+            ? ['todo', 'intake', 'triage', 'risk_review', 'impact_review', 'action_plan', 'stakeholder_update', 'human_approval', 'blocked', 'stalled', 'done']
+            : ['intake', 'qualification', 'research', 'outreach_draft', 'human_approval', 'sent', 'follow_up', 'done'],
+      task_types: getStarterTaskTypesForSprintType(template.workflow_type),
+      fields: fieldsForSprintType(template.workflow_type),
+      routes,
+      model_routing: template.key === 'blank' ? [] : modelRouting,
+      verification: verificationFor(template),
+    };
+  });
 
-  const modelRouting: StarterModelRoutingPlan[] = requiresAgents && provider && model
-    ? [
-        {
-          label: 'Starter balanced',
-          max_points: 3,
-          provider,
-          model,
-          thinking_level: 'medium',
-          fast_mode: null,
-          enabled: true,
-        },
-        {
-          label: 'Starter complex',
-          max_points: 8,
-          provider,
-          model,
-          thinking_level: 'high',
-          fast_mode: null,
-          enabled: true,
-        },
-      ]
-    : [];
+  const routes = workflows.flatMap((workflow) => workflow.routes);
+  const modelRouting = workflows.flatMap((workflow) => workflow.model_routing);
+  const changes: StarterSetupPlan['preview']['changes'] = [
+    { action: 'create', resource: 'project', name: projectName, reason: 'starter setup creates one project for the selected templates' },
+    ...workflows.map((workflow) => ({ action: 'create' as const, resource: 'workflow', name: workflow.workflow.name, reason: `${workflow.template.label} template selected` })),
+    ...agents.map((agent) => ({ action: 'create' as const, resource: 'agent', name: agent.name, reason: `${agent.owner_role} owner mapping` })),
+    ...(routes.length ? [{ action: 'create' as const, resource: 'routing', name: `${routes.length} route rules`, reason: 'owner answers converted into starter routing rules' }] : []),
+    ...(modelRouting.length ? [{ action: 'create' as const, resource: 'model_policy', name: `${modelRouting.length} model routing defaults`, reason: 'provider-compatible default model policy' }] : []),
+  ];
 
   return {
-    template,
+    template: primaryTemplate,
+    templates,
     project: {
       name: projectName,
-      description: `Created from starter template: ${template.label}`,
+      description: `Created from starter templates: ${templates.map((template) => template.label).join(', ')}`,
     },
-    workflow: {
-      name: workflowName,
-      sprint_type: template.key === 'blank' ? 'generic' : 'dev',
-      goal: template.key === 'blank' ? 'Manual setup workflow.' : 'Template-generated software delivery workflow.',
-    },
+    workflow: workflows[0].workflow,
+    workflows,
     agents,
     routes,
     model_routing: modelRouting,
@@ -418,6 +556,7 @@ export function buildStarterSetupPlan(db: Database.Database, tenantId: number, i
       errors: compatibilityErrors,
       warnings: compatibilityWarnings,
     },
+    preview: { changes },
     editable: {
       can_change_owner: true,
       can_disable_route: true,
@@ -435,11 +574,11 @@ function insertProject(db: Database.Database, tenantId: number, plan: StarterSet
   return Number(result.lastInsertRowid);
 }
 
-function insertWorkflow(db: Database.Database, tenantId: number, projectId: number, plan: StarterSetupPlan): number {
+function insertWorkflow(db: Database.Database, tenantId: number, projectId: number, workflow: StarterWorkflowPlan): number {
   const result = db.prepare(`
     INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, workflow_template_key, status, length_kind, length_value)
     VALUES (?, ?, ?, ?, ?, ?, 'active', 'time', 'ongoing')
-  `).run(tenantId, projectId, plan.workflow.name, plan.workflow.goal, plan.workflow.sprint_type, plan.template.key);
+  `).run(tenantId, projectId, workflow.workflow.name, workflow.workflow.goal, workflow.workflow.sprint_type, workflow.template.key);
   const sprintId = Number(result.lastInsertRowid);
   seedSprintTaskPolicy(db, sprintId);
   return sprintId;
@@ -518,6 +657,7 @@ export function applyStarterSetupPlan(db: Database.Database, tenantId: number, i
   plan: StarterSetupPlan;
   project_id: number;
   workflow_id: number;
+  workflow_ids: Record<string, number>;
   agent_ids: Record<string, number>;
   route_ids: number[];
   model_routing_ids: number[];
@@ -533,7 +673,7 @@ export function applyStarterSetupPlan(db: Database.Database, tenantId: number, i
 
   const tx = db.transaction(() => {
     const projectId = insertProject(db, tenantId, plan);
-    const workflowId = insertWorkflow(db, tenantId, projectId, plan);
+    const workflowIds: Record<string, number> = {};
     const agentIdsByOwner = new Map<string, number>();
     const agentIds: Record<string, number> = {};
 
@@ -545,19 +685,24 @@ export function applyStarterSetupPlan(db: Database.Database, tenantId: number, i
     }
 
     const routeIds: number[] = [];
-    for (const route of plan.routes) {
-      const agentId = agentIds[route.owner_role];
-      if (!agentId) continue;
-      routeIds.push(insertRoutingRule(db, workflowId, projectId, plan.workflow.sprint_type, route, agentId));
+    const modelRoutingIds: number[] = [];
+    for (const workflow of plan.workflows) {
+      const workflowId = insertWorkflow(db, tenantId, projectId, workflow);
+      workflowIds[workflow.template.key] = workflowId;
+      for (const route of workflow.routes) {
+        const agentId = agentIds[route.owner_role];
+        if (!agentId) continue;
+        routeIds.push(insertRoutingRule(db, workflowId, projectId, workflow.workflow.sprint_type, route, agentId));
+      }
+      modelRoutingIds.push(...workflow.model_routing.map((rule) => insertModelRouting(db, tenantId, projectId, workflowId, rule)));
     }
-
-    const modelRoutingIds = plan.model_routing.map((rule) => insertModelRouting(db, tenantId, projectId, workflowId, rule));
 
     return {
       ok: true as const,
       plan,
       project_id: projectId,
-      workflow_id: workflowId,
+      workflow_id: Object.values(workflowIds)[0] ?? 0,
+      workflow_ids: workflowIds,
       agent_ids: agentIds,
       route_ids: routeIds,
       model_routing_ids: modelRoutingIds,

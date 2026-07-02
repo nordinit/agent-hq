@@ -449,6 +449,7 @@ function ensureStarterWorkflows(db: Database.Database, tenantId: number, project
     generic: STARTER_BACKLOG_SPRINT_NAME,
     dev: 'Development',
     ops: 'Operations',
+    lead_generation: 'Lead Generation',
   };
   const workflows = new Map<StarterSprintTypeKey, number>();
   const insert = db.prepare(`

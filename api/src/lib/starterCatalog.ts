@@ -1,6 +1,6 @@
 import type { TaskType } from './taskTypes';
 
-export type StarterSprintTypeKey = 'generic' | 'dev' | 'ops';
+export type StarterSprintTypeKey = 'generic' | 'dev' | 'ops' | 'lead_generation';
 export type StarterFieldDefinition = {
   key: string;
   label: string;
@@ -41,6 +41,7 @@ export const STARTER_SPRINT_TYPE_SEEDS: Array<{ key: StarterSprintTypeKey; name:
   { key: 'generic', name: 'Generic', description: 'Catch-all sprint profile for mixed delivery work and backlog management.' },
   { key: 'dev', name: 'Development', description: 'Implementation-focused sprint profile for product and software delivery work.' },
   { key: 'ops', name: 'Operations', description: 'Operational sprint profile for release, support, maintenance, and infra work.' },
+  { key: 'lead_generation', name: 'Lead Generation', description: 'Prospect intake, qualification, research, outreach, approval, and follow-up workflow.' },
 ];
 
 export const DEV_LIFECYCLE_FIELD_DEFINITIONS: StarterFieldDefinition[] = [
@@ -96,10 +97,30 @@ export const STARTER_FIELD_SCHEMA_SEEDS: Array<{ sprintType: StarterSprintTypeKe
     sprintType: 'ops',
     schema: {
       fields: [
-        { key: 'environment', label: 'Environment', type: 'select', required: false, options: ['dev', 'staging', 'production'] },
-        { key: 'impact_level', label: 'Impact Level', type: 'select', required: false, options: ['low', 'medium', 'high'] },
-        { key: 'runbook_url', label: 'Runbook URL', type: 'url', required: false },
-        { key: 'rollback_notes', label: 'Rollback Notes', type: 'textarea', required: false },
+        { key: 'affected_system_client', label: 'Affected System/Client', type: 'text', required: false },
+        { key: 'source', label: 'Source', type: 'text', required: false },
+        { key: 'severity', label: 'Severity', type: 'select', required: false, options: ['low', 'medium', 'high', 'critical'] },
+        { key: 'compliance_risk_impact', label: 'Compliance/Risk Impact', type: 'textarea', required: false },
+        { key: 'cost_impact', label: 'Cost Impact', type: 'textarea', required: false },
+        { key: 'schedule_impact', label: 'Schedule Impact', type: 'textarea', required: false },
+        { key: 'stakeholder_impact', label: 'Stakeholder Impact', type: 'textarea', required: false },
+        { key: 'approval_owner', label: 'Approval Owner', type: 'text', required: false },
+        { key: 'supporting_docs', label: 'Supporting Docs', type: 'url', required: false },
+      ],
+    },
+  },
+  {
+    sprintType: 'lead_generation',
+    schema: {
+      fields: [
+        { key: 'prospect_company', label: 'Prospect Company', type: 'text', required: false },
+        { key: 'contact_name', label: 'Contact Name', type: 'text', required: false },
+        { key: 'contact_channel', label: 'Contact Channel', type: 'select', required: false, options: ['email', 'linkedin', 'phone', 'referral', 'other'] },
+        { key: 'fit_notes', label: 'Fit Notes', type: 'textarea', required: false },
+        { key: 'research_notes', label: 'Research Notes', type: 'textarea', required: false },
+        { key: 'outreach_angle', label: 'Outreach Angle', type: 'textarea', required: false },
+        { key: 'approval_owner', label: 'Approval Owner', type: 'text', required: false },
+        { key: 'follow_up_date', label: 'Follow-up Date', type: 'text', required: false },
       ],
     },
   },
@@ -108,7 +129,8 @@ export const STARTER_FIELD_SCHEMA_SEEDS: Array<{ sprintType: StarterSprintTypeKe
 export const STARTER_SPRINT_TYPE_TASK_TYPE_SEEDS: Array<{ sprintType: StarterSprintTypeKey; taskTypes: TaskType[] }> = [
   { sprintType: 'generic', taskTypes: ['adhoc', 'backend', 'frontend', 'fullstack', 'qa', 'other'] },
   { sprintType: 'dev', taskTypes: ['backend', 'frontend', 'fullstack', 'qa'] },
-  { sprintType: 'ops', taskTypes: ['ops', 'adhoc', 'qa', 'other'] },
+  { sprintType: 'ops', taskTypes: ['ops', 'data', 'pm_operational', 'adhoc'] },
+  { sprintType: 'lead_generation', taskTypes: ['lead', 'research', 'outreach', 'proposal', 'follow_up'] },
 ];
 
 const BASE_SCOPED_MCP_CAPABILITIES = [
@@ -181,9 +203,9 @@ export const STARTER_AGENT_DEFINITIONS: StarterAgentDefinition[] = [
     role: 'Project management, triage, planning, and operator handoff',
     jobTitle: 'Project Manager',
     systemRole: `${STARTER_AGENT_SYSTEM_ROLE_PREFIX}pm`,
-    workflowTypes: ['generic', 'dev', 'ops'],
-    taskTypes: ['adhoc', 'other', 'backend', 'frontend', 'fullstack', 'ops', 'qa'],
-    contractTypes: ['generic', 'dev', 'ops'],
+    workflowTypes: ['generic', 'dev', 'ops', 'lead_generation'],
+    taskTypes: ['adhoc', 'other', 'backend', 'frontend', 'fullstack', 'ops', 'qa', 'lead', 'research', 'outreach', 'proposal', 'follow_up'],
+    contractTypes: ['generic', 'dev', 'ops', 'lead_generation'],
     mcpCapabilities: BASE_SCOPED_MCP_CAPABILITIES,
     mcpServerSlugs: ['agent-hq'],
     toolSlugs: ['explore_codebase'],
@@ -210,9 +232,9 @@ export const STARTER_AGENT_DEFINITIONS: StarterAgentDefinition[] = [
     role: 'Review, QA verification, and evidence-focused validation',
     jobTitle: 'Review Engineer',
     systemRole: `${STARTER_AGENT_SYSTEM_ROLE_PREFIX}review`,
-    workflowTypes: ['dev', 'generic', 'ops'],
-    taskTypes: ['qa', 'backend', 'frontend', 'fullstack', 'ops', 'other'],
-    contractTypes: ['dev', 'generic', 'ops'],
+    workflowTypes: ['dev', 'generic', 'ops', 'lead_generation'],
+    taskTypes: ['qa', 'backend', 'frontend', 'fullstack', 'ops', 'other', 'proposal', 'outreach'],
+    contractTypes: ['dev', 'generic', 'ops', 'lead_generation'],
     mcpCapabilities: BASE_SCOPED_MCP_CAPABILITIES,
     mcpServerSlugs: ['agent-hq'],
     toolSlugs: ['explore_codebase'],
@@ -309,7 +331,7 @@ export const STARTER_RELATIONSHIP_TYPE_SEEDS: Array<{
   default_related_task_status: string | null;
 }> = [
   {
-    sprintTypes: ['generic', 'dev', 'ops'],
+    sprintTypes: ['generic', 'dev', 'ops', 'lead_generation'],
     key: 'blocked_by',
     label: 'Blocked by',
     inverse_label: 'Blocks',
@@ -434,17 +456,26 @@ export const STARTER_SPRINT_OUTCOME_SEEDS: Array<{
       { outcome_key: 'infra_failed', label: 'Infrastructure Failed', description: 'Operational work failed because infrastructure or platform dependencies are unavailable.', badge_variant: 'failed', stage_order: 5, metadata: { failure_like: true } },
     ],
   },
+  {
+    sprintType: 'lead_generation',
+    outcomes: [
+      { outcome_key: 'completed', label: 'Completed', description: 'Lead-generation work is complete.', badge_variant: 'done', stage_order: 0, metadata: {} },
+      { outcome_key: 'blocked', label: 'Blocked', description: 'Lead-generation work is blocked.', badge_variant: 'stalled', stage_order: 1, metadata: { blocked_like: true } },
+      { outcome_key: 'approval_blocked', label: 'Approval Blocked', description: 'Work is waiting on human approval before outreach can proceed.', badge_variant: 'stalled', stage_order: 2, metadata: { blocked_like: true } },
+      { outcome_key: 'failed', label: 'Failed', description: 'The lead-generation task failed and needs triage.', badge_variant: 'failed', stage_order: 3, metadata: { failure_like: true } },
+    ],
+  },
 ];
 
 export function isStarterSprintTypeKey(value: string | null | undefined): value is StarterSprintTypeKey {
-  return value === 'generic' || value === 'dev' || value === 'ops';
+  return value === 'generic' || value === 'dev' || value === 'ops' || value === 'lead_generation';
 }
 
 export function starterSprintTypeBaseKey(value: string | null | undefined): StarterSprintTypeKey | null {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
   if (isStarterSprintTypeKey(normalized)) return normalized;
-  const suffix = normalized.match(/__(generic|dev|ops)$/)?.[1];
+  const suffix = normalized.match(/__(generic|dev|ops|lead_generation)$/)?.[1];
   return isStarterSprintTypeKey(suffix) ? suffix : null;
 }
 

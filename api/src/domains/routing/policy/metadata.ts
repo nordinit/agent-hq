@@ -4,7 +4,8 @@ import type { PolicyRequirementSeed, PolicyTransitionSeed, SprintSeedRow, Starte
 
 const VISIBLE_WORKFLOW_STATUSES = [...RELEASE_TASK_STATUSES];
 const GENERIC_WORKFLOW_STATUSES = ['todo', 'ready', 'in_progress', 'review', 'done'] as const;
-const OPS_WORKFLOW_STATUSES = ['intake', 'ready', 'in_progress', 'review', 'done'] as const;
+const OPS_WORKFLOW_STATUSES = ['todo', 'intake', 'triage', 'risk_review', 'impact_review', 'action_plan', 'stakeholder_update', 'human_approval', 'blocked', 'stalled', 'done'] as const;
+const LEAD_GENERATION_WORKFLOW_STATUSES = ['intake', 'qualification', 'research', 'outreach_draft', 'human_approval', 'sent', 'follow_up', 'done'] as const;
 
 export const DEFAULT_TASK_STATUS_EMOJI: Record<string, string> = {
   todo: '📋',
@@ -23,6 +24,17 @@ export const DEFAULT_TASK_STATUS_EMOJI: Record<string, string> = {
   failed: '❌',
   blocked: '🧱',
   intake: '📥',
+  triage: '🧭',
+  risk_review: '⚖️',
+  impact_review: '📊',
+  action_plan: '📝',
+  stakeholder_update: '📣',
+  human_approval: '✋',
+  qualification: '🎯',
+  research: '🔎',
+  outreach_draft: '✉️',
+  sent: '📤',
+  follow_up: '🔁',
 };
 
 export function canonicalTaskStatusEmoji(status: string): string | null {
@@ -227,6 +239,7 @@ export function visibleWorkflowStatusesForSprintType(sprintType: string | null |
   const type = starterSprintType(sprintType);
   if (type === 'generic') return [...GENERIC_WORKFLOW_STATUSES];
   if (type === 'ops') return [...OPS_WORKFLOW_STATUSES];
+  if (type === 'lead_generation') return [...LEAD_GENERATION_WORKFLOW_STATUSES];
   return [...VISIBLE_WORKFLOW_STATUSES];
 }
 
@@ -259,7 +272,7 @@ export function normalizeSprintType(value: string | null | undefined): string | 
 
 export function starterSprintType(value: string | null | undefined): StarterSprintType | null {
   const normalized = normalizeSprintType(value);
-  return normalized === 'dev' || normalized === 'generic' || normalized === 'ops' ? normalized : null;
+  return normalized === 'dev' || normalized === 'generic' || normalized === 'ops' || normalized === 'lead_generation' ? normalized : null;
 }
 
 export function isStarterPolicySprintType(value: string | null | undefined): boolean {
@@ -285,18 +298,30 @@ export function genericWorkflowTransitions(): PolicyTransitionSeed[] {
 
 export function opsWorkflowTransitions(): PolicyTransitionSeed[] {
   return [
-    { task_type: null, from_status: 'in_progress', outcome: 'completed', to_status: 'review', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'in_progress', outcome: 'blocked', to_status: 'review', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'in_progress', outcome: 'env_blocked', to_status: 'review', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'in_progress', outcome: 'approval_blocked', to_status: 'review', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'in_progress', outcome: 'failed', to_status: 'review', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'in_progress', outcome: 'infra_failed', to_status: 'review', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'review', outcome: 'completed', to_status: 'done', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'review', outcome: 'blocked', to_status: 'ready', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'review', outcome: 'env_blocked', to_status: 'ready', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'review', outcome: 'approval_blocked', to_status: 'ready', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'review', outcome: 'failed', to_status: 'ready', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'review', outcome: 'infra_failed', to_status: 'ready', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'action_plan', outcome: 'completed', to_status: 'stakeholder_update', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'stakeholder_update', outcome: 'completed', to_status: 'human_approval', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'human_approval', outcome: 'completed', to_status: 'done', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'action_plan', outcome: 'blocked', to_status: 'blocked', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'stakeholder_update', outcome: 'blocked', to_status: 'blocked', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'human_approval', outcome: 'approval_blocked', to_status: 'stalled', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'blocked', outcome: 'completed', to_status: 'triage', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'stalled', outcome: 'completed', to_status: 'human_approval', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'action_plan', outcome: 'failed', to_status: 'stalled', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'stakeholder_update', outcome: 'failed', to_status: 'stalled', enabled: 1, priority: 0 },
+  ];
+}
+
+export function leadGenerationWorkflowTransitions(): PolicyTransitionSeed[] {
+  return [
+    { task_type: null, from_status: 'outreach_draft', outcome: 'completed', to_status: 'human_approval', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'human_approval', outcome: 'completed', to_status: 'sent', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'sent', outcome: 'completed', to_status: 'follow_up', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'follow_up', outcome: 'completed', to_status: 'done', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'research', outcome: 'blocked', to_status: 'qualification', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'outreach_draft', outcome: 'approval_blocked', to_status: 'human_approval', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'human_approval', outcome: 'approval_blocked', to_status: 'human_approval', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'research', outcome: 'failed', to_status: 'qualification', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'outreach_draft', outcome: 'failed', to_status: 'qualification', enabled: 1, priority: 0 },
   ];
 }
 
@@ -352,6 +377,7 @@ export function policyTransitionsForSprintType(sprintType: string | null | undef
   if (type === 'dev') return devWorkflowTransitions();
   if (type === 'generic') return genericWorkflowTransitions();
   if (type === 'ops') return opsWorkflowTransitions();
+  if (type === 'lead_generation') return leadGenerationWorkflowTransitions();
   return [];
 }
 

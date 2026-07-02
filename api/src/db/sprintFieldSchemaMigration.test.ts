@@ -290,7 +290,19 @@ describe('sprint field schema migration', () => {
       WHERE tenant_id = ? AND sprint_type_key = 'ops'
       ORDER BY stage_order ASC
     `).all(tenantId) as Array<{ status_key: string }>;
-    expect(opsStatuses.map(row => row.status_key)).toEqual(['intake', 'ready', 'in_progress', 'review', 'done']);
+    expect(opsStatuses.map(row => row.status_key)).toEqual([
+      'todo',
+      'intake',
+      'triage',
+      'risk_review',
+      'impact_review',
+      'action_plan',
+      'stakeholder_update',
+      'human_approval',
+      'blocked',
+      'stalled',
+      'done',
+    ]);
 
     db.prepare(`
       INSERT INTO projects (id, name, description, context_md, created_at)
@@ -303,7 +315,19 @@ describe('sprint field schema migration', () => {
     seedSprintTaskPolicy(db, 9201);
 
     const metadata = resolveWorkflowMetadata(db, { sprintId: 9201, taskType: 'ops' });
-    expect(metadata.statuses.map(status => status.name)).toEqual(['intake', 'ready', 'in_progress', 'review', 'done']);
+    expect(metadata.statuses.map(status => status.name)).toEqual([
+      'todo',
+      'intake',
+      'triage',
+      'risk_review',
+      'impact_review',
+      'action_plan',
+      'stakeholder_update',
+      'human_approval',
+      'blocked',
+      'stalled',
+      'done',
+    ]);
     expect(metadata.outcomes.map(outcome => outcome.outcome_key)).toEqual(expect.arrayContaining([
       'completed',
       'blocked',
@@ -320,10 +344,11 @@ describe('sprint field schema migration', () => {
       ORDER BY from_status ASC, outcome ASC
     `).all(9201) as Array<{ from_status: string; outcome: string; to_status: string }>;
     expect(transitions).toEqual(expect.arrayContaining([
-      { from_status: 'in_progress', outcome: 'completed', to_status: 'review' },
-      { from_status: 'review', outcome: 'completed', to_status: 'done' },
-      { from_status: 'in_progress', outcome: 'blocked', to_status: 'review' },
-      { from_status: 'review', outcome: 'failed', to_status: 'ready' },
+      { from_status: 'action_plan', outcome: 'completed', to_status: 'stakeholder_update' },
+      { from_status: 'stakeholder_update', outcome: 'completed', to_status: 'human_approval' },
+      { from_status: 'human_approval', outcome: 'completed', to_status: 'done' },
+      { from_status: 'action_plan', outcome: 'blocked', to_status: 'blocked' },
+      { from_status: 'human_approval', outcome: 'approval_blocked', to_status: 'stalled' },
     ]));
     expect(transitions).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ outcome: 'completed_for_review' }),

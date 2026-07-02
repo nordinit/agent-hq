@@ -160,7 +160,7 @@ describe('tenant workspace isolation', () => {
       expect((db.prepare(`SELECT COUNT(*) AS n FROM tenants WHERE slug = 'acme'`).get() as { n: number }).n).toBe(1);
       expect((db.prepare(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ?`).get(first.tenant.id) as { n: number }).n).toBe(1);
       expect((db.prepare(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ? AND name = ?`).get(first.tenant.id, DEFAULT_PROJECT_NAME) as { n: number }).n).toBe(1);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprints WHERE tenant_id = ?`).get(first.tenant.id) as { n: number }).n).toBe(3);
+      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprints WHERE tenant_id = ?`).get(first.tenant.id) as { n: number }).n).toBe(4);
       expect((db.prepare(`SELECT COUNT(*) AS n FROM agents WHERE tenant_id = ? AND system_role = ?`).get(first.tenant.id, ATLAS_SYSTEM_ROLE) as { n: number }).n).toBe(1);
       const atlasAgent = db.prepare(`
         SELECT id, workspace_path
@@ -292,8 +292,8 @@ describe('tenant workspace isolation', () => {
       `).get() as { n: number }).n).toBe(0);
       const starterSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(first.tenant.id) as { id: number };
       expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`).get(starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
-      const expectedRelationshipCounts: Record<string, number> = { dev: 5, generic: 1, ops: 1 };
-      for (const sprintType of ['dev', 'generic', 'ops']) {
+      const expectedRelationshipCounts: Record<string, number> = { dev: 5, generic: 1, ops: 1, lead_generation: 1 };
+      for (const sprintType of ['dev', 'generic', 'ops', 'lead_generation']) {
         const starterSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? AND sprint_type = ? LIMIT 1`).get(first.tenant.id, sprintType) as { id: number };
         expect(starterSprint).toBeTruthy();
         expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`).get(starterSprint.id) as { n: number }).n).toBeGreaterThan(0);

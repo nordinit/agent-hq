@@ -59,17 +59,30 @@ describe('starter template setup API', () => {
   beforeEach(resetDb);
   afterEach(cleanup);
 
-  it('previews software QA routes from ownership answers and applies consistent records', async () => {
+  it('lists only MVP starter templates', async () => {
+    const { server, baseUrl } = await startServer();
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/setup/templates`);
+      expect(res.status).toBe(200);
+      const body = await res.json() as Record<string, any>;
+      expect(body.templates.map((template: any) => template.key)).toEqual(['development', 'ops', 'lead-generation', 'blank']);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  it('previews development routes from ownership answers and applies consistent records', async () => {
     seedCompatibility();
     const { server, baseUrl } = await startServer();
     try {
       const payload = {
-        template_key: 'software-qa',
+        template_key: 'development',
         project_name: 'Acme App',
         workflow_name: 'Delivery',
         owners: {
           implementation: 'Cinder Dev',
           review: 'QA Desk',
+          release: 'Release Desk',
           pm: 'Atlas PM',
         },
         routing_plan: [
@@ -86,10 +99,11 @@ describe('starter template setup API', () => {
       expect(previewRes.status).toBe(200);
       const preview = await previewRes.json() as Record<string, any>;
       expect(preview.plan.compatibility.ok).toBe(true);
+      expect(preview.plan.workflows[0].verification.evidence_gates.join('\n')).toMatch(/review_branch/);
       expect(preview.plan.routes).toEqual(expect.arrayContaining([
-        expect.objectContaining({ key: 'backend:ready', owner_name: 'Cinder Dev' }),
-        expect.objectContaining({ key: 'frontend:ready', enabled: false }),
-        expect.objectContaining({ key: 'docs:ready', owner_role: 'pm' }),
+        expect.objectContaining({ key: 'development:backend:ready', owner_name: 'Cinder Dev' }),
+        expect.objectContaining({ key: 'development:frontend:ready', enabled: false }),
+        expect.objectContaining({ key: 'development:docs:ready', owner_role: 'pm' }),
       ]));
 
       const applyRes = await fetch(`${baseUrl}/api/v1/setup/starter-plan/apply`, {
@@ -103,11 +117,12 @@ describe('starter template setup API', () => {
       expect(applied.workflow_id).toBeGreaterThan(0);
       expect(applied.agent_ids.implementation).toBeGreaterThan(0);
       expect(applied.agent_ids.review).toBeGreaterThan(0);
+      expect(applied.agent_ids.release).toBeGreaterThan(0);
       expect(applied.agent_ids.pm).toBeGreaterThan(0);
 
       const db = getDb();
       const agentCount = (db.prepare(`SELECT COUNT(*) AS n FROM agents WHERE project_id = ?`).get(applied.project_id) as { n: number }).n;
-      expect(agentCount).toBe(3);
+      expect(agentCount).toBe(4);
       const disabledRoute = db.prepare(`
         SELECT enabled
         FROM sprint_task_routing_rules
@@ -132,7 +147,7 @@ describe('starter template setup API', () => {
       const applyRes = await fetch(`${baseUrl}/api/v1/setup/starter-plan/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ template_key: 'software-qa', project_name: 'Blocked' }),
+        body: JSON.stringify({ template_key: 'development', project_name: 'Blocked' }),
       });
       expect(applyRes.status).toBe(422);
       const body = await applyRes.json() as Record<string, any>;
@@ -142,6 +157,85 @@ describe('starter template setup API', () => {
       const db = getDb();
       const project = db.prepare(`SELECT id FROM projects WHERE name = 'Blocked'`).get();
       expect(project).toBeUndefined();
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  it('previews and applies selected development, ops, and lead generation workflows together', async () => {
+    seedCompatibility();
+    const { server, baseUrl } = await startServer();
+    try {
+      const payload = {
+        template_keys: ['development', 'ops', 'lead-generation'],
+        project_name: 'Growth Ops',
+        owners: {
+          implementation: 'Dev Owner',
+          review: 'Risk Review',
+          release: 'Release Owner',
+          pm: 'Ops PM',
+          ops: 'Ops Owner',
+          research: 'Research Owner',
+          outreach: 'Outreach Owner',
+          approval: 'Approval Owner',
+        },
+      };
+      const previewRes = await fetch(`${baseUrl}/api/v1/setup/starter-plan/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      expect(previewRes.status).toBe(200);
+      const preview = await previewRes.json() as Record<string, any>;
+      expect(preview.plan.workflows.map((workflow: any) => workflow.template.key)).toEqual(['development', 'ops', 'lead-generation']);
+      expect(preview.plan.workflows.find((workflow: any) => workflow.template.key === 'ops').fields.map((field: any) => field.key)).toEqual(expect.arrayContaining([
+        'affected_system_client',
+        'compliance_risk_impact',
+        'cost_impact',
+        'schedule_impact',
+        'stakeholder_impact',
+        'approval_owner',
+        'supporting_docs',
+      ]));
+      expect(preview.plan.workflows.find((workflow: any) => workflow.template.key === 'ops').statuses).toEqual(expect.arrayContaining([
+        'triage',
+        'risk_review',
+        'impact_review',
+        'action_plan',
+        'stakeholder_update',
+        'human_approval',
+      ]));
+      expect(preview.plan.workflows.find((workflow: any) => workflow.template.key === 'lead-generation').statuses).toEqual(expect.arrayContaining([
+        'qualification',
+        'research',
+        'outreach_draft',
+        'human_approval',
+        'sent',
+        'follow_up',
+      ]));
+
+      const applyRes = await fetch(`${baseUrl}/api/v1/setup/starter-plan/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      expect(applyRes.status).toBe(201);
+      const applied = await applyRes.json() as Record<string, any>;
+      expect(Object.keys(applied.workflow_ids).sort()).toEqual(['development', 'lead-generation', 'ops']);
+      const db = getDb();
+      const workflows = db.prepare(`SELECT sprint_type, workflow_template_key FROM sprints WHERE project_id = ? ORDER BY workflow_template_key`).all(applied.project_id) as Array<{ sprint_type: string; workflow_template_key: string }>;
+      expect(workflows).toEqual([
+        { sprint_type: 'development'.replace('development', 'dev'), workflow_template_key: 'development' },
+        { sprint_type: 'lead_generation', workflow_template_key: 'lead-generation' },
+        { sprint_type: 'ops', workflow_template_key: 'ops' },
+      ]);
+      const leadRoute = db.prepare(`
+        SELECT a.name
+        FROM sprint_task_routing_rules rr
+        JOIN agents a ON a.id = rr.agent_id
+        WHERE rr.sprint_id = ? AND rr.task_type = 'proposal' AND rr.status = 'human_approval'
+      `).get(applied.workflow_ids['lead-generation']) as { name: string } | undefined;
+      expect(leadRoute?.name).toBe('Approval Owner');
     } finally {
       await stopServer(server);
     }

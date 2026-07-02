@@ -38,7 +38,7 @@ task → route → agent run → evidence → outcome → transition → next st
 
 ## What you can build with Agent HQ
 
-Agent HQ is highly configurable, but it ships with a strong software-delivery workflow out of the box.
+Agent HQ is highly configurable, but it ships with opinionated Development, Ops, and Lead Generation starter workflows out of the box.
 
 Example:
 
@@ -125,8 +125,8 @@ agent-hq start --docker
 ```
 
 The planned first-install guided setup flow is defined in
-[`docs/cli-onboarding.md`](docs/cli-onboarding.md), including the `agenthq init`
-wizard contract, generated software-delivery defaults, artifact policy, and
+[`docs/cli-onboarding.md`](docs/cli-onboarding.md), including the `agent-hq init`
+wizard contract, generated starter workflow defaults, artifact policy, and
 repair mode behavior.
 
 ---
@@ -600,7 +600,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution guidelines.
 
 Agent HQ is actively evolving. Areas of interest include:
 
-- workflow template import/export
+- reproducible onboarding plan export/import
 - richer approval gates
 - workflow simulation
 - shadow mode

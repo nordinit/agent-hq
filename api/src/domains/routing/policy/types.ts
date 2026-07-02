@@ -64,7 +64,7 @@ export type SprintSeedRow = {
   task_policy_seeded_at?: string | null;
 };
 
-export type StarterSprintType = 'dev' | 'generic' | 'ops';
+export type StarterSprintType = 'dev' | 'generic' | 'ops' | 'lead_generation';
 
 export type PolicyTransitionSeed = {
   task_type: string | null;
