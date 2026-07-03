@@ -55,3 +55,8 @@ test('onboarding wizard renders API failure states for template, preview, and ap
   assert.match(wizardSource, /templateError &&/);
   assert.match(wizardSource, /agentError &&/);
 });
+
+test('onboarding wizard does not automatically refetch templates after catalog failure', () => {
+  assert.match(wizardSource, /templates\.length === 0 && !templatesLoading && !templateError/);
+  assert.match(wizardSource, /onClick=\{\(\) => void loadStarterTemplates\(\)\}/);
+});

@@ -526,10 +526,10 @@ export default function OnboardingWizard({ onClose }: Props) {
   }, [step, gatewayLoaded]);
 
   useEffect(() => {
-    if (step === 'project-setup' && templates.length === 0 && !templatesLoading) {
+    if (step === 'project-setup' && templates.length === 0 && !templatesLoading && !templateError) {
       void loadStarterTemplates();
     }
-  }, [loadStarterTemplates, step, templates.length, templatesLoading]);
+  }, [loadStarterTemplates, step, templateError, templates.length, templatesLoading]);
 
   useEffect(() => {
     setOwners(prev => {
@@ -735,8 +735,16 @@ export default function OnboardingWizard({ onClose }: Props) {
                 </div>
               )}
               {templateError && (
-                <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
-                  {templateError}
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+                  <span>{templateError}</span>
+                  <button
+                    type="button"
+                    onClick={() => void loadStarterTemplates()}
+                    disabled={templatesLoading}
+                    className="shrink-0 rounded-lg border border-red-400/40 px-3 py-1.5 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Retry
+                  </button>
                 </div>
               )}
               <div className="space-y-2">
