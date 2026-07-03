@@ -1,5 +1,5 @@
 import { apiFetch } from './http';
-import type { Agent, AgentDoc, AgentMcpAssignment, AgentMcpPermissionPolicy, AgentToolAssignment, ClaudeMdResult, DeleteAgentResponse, GatewayConfig, GatewayRestartResponse, GatewayRuntimeHint, GatewayStatus, GatewayPairResponse, McpCatalog, McpServer, ProvisionResult, ProvisionStatus, SetupStatus, SkillDetail, SkillEntry, Tool } from './types';
+import type { Agent, AgentDoc, AgentMcpAssignment, AgentMcpPermissionPolicy, AgentToolAssignment, ClaudeMdResult, DeleteAgentResponse, GatewayConfig, GatewayRestartResponse, GatewayRuntimeHint, GatewayStatus, GatewayPairResponse, McpCatalog, McpServer, ProvisionResult, ProvisionStatus, RuntimeConfigResponse, SetupStatus, SkillDetail, SkillEntry, StarterPlanApplyResponse, StarterPlanInput, StarterPlanPreviewResponse, StarterTemplateCatalogResponse, Tool } from './types';
 
 export const agentsClient = {
 // Agents
@@ -9,6 +9,13 @@ completeOnboarding: () =>
   apiFetch<{ ok: boolean; onboarding_completed: boolean; onboarding_provider_gate_passed: boolean }>('/api/v1/setup/onboarding/complete', { method: 'POST' }),
 skipOnboarding: () =>
   apiFetch<{ ok: boolean; onboarding_completed: boolean; atlas_created: boolean }>('/api/v1/setup/onboarding/skip', { method: 'POST' }),
+getStarterTemplates: () => apiFetch<StarterTemplateCatalogResponse>('/api/v1/setup/templates'),
+previewStarterPlan: (data: StarterPlanInput) =>
+  apiFetch<StarterPlanPreviewResponse>('/api/v1/setup/starter-plan/preview', { method: 'POST', body: JSON.stringify(data) }),
+applyStarterPlan: (data: StarterPlanInput) =>
+  apiFetch<StarterPlanApplyResponse>('/api/v1/setup/starter-plan/apply', { method: 'POST', body: JSON.stringify(data) }),
+configureRuntime: (data: { kind: 'openclaw' | 'hermes' | 'custom'; endpoint: string; auth_token?: string | null; label?: string | null }) =>
+  apiFetch<RuntimeConfigResponse>('/api/v1/setup/runtime/config', { method: 'POST', body: JSON.stringify(data) }),
 getAgent: (id: number) => apiFetch<Agent>(`/api/v1/agents/${id}`),
 createAgent: (data: Partial<Agent> & { provision_openclaw?: boolean }) =>
   apiFetch<Agent>('/api/v1/agents', { method: 'POST', body: JSON.stringify(data) }),

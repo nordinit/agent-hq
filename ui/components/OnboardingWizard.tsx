@@ -1,31 +1,23 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, Agent, GatewayRuntimeHint, GatewayStatus, ProviderSlug } from '@/lib/api';
-import { findAtlasAgent } from '@/lib/atlas';
+import { api, GatewayRuntimeHint, GatewayStatus, StarterOwnerRole, StarterPlanInput, StarterSetupPlan, StarterTemplateCatalogEntry, StarterTemplateKey } from '@/lib/api';
 import { beginGettingStartedGuide } from '@/lib/gettingStarted';
-import { getDefaultAgentModelForProvider } from '@/lib/providerOptions';
 import ProviderSetupStep from '@/components/ProviderSetupStep';
 import {
   Bot,
   CheckCircle2,
-  X,
   ArrowRight,
   ArrowLeft,
   Loader2,
   Sparkles,
   User,
   FolderOpen,
-  Users,
-  Github,
   Code2,
   FileText,
   Briefcase,
-  UserCircle2,
-  ShieldCheck,
   Rocket,
-  ServerCog,
   RefreshCw,
   Save,
   TerminalSquare,
@@ -55,24 +47,14 @@ export function getStoredUserName(): string {
 // provider step is inserted between project-setup and agent (per spec §2.1)
 type Step = 'personalize' | 'project-setup' | 'provider' | 'gateway' | 'agent' | 'done';
 const STEPS: Step[] = ['personalize', 'project-setup', 'provider', 'gateway', 'agent', 'done'];
-const STEP_LABELS = ['You', 'Project', 'Providers', 'Runtime', 'Agents', 'Done'];
+const STEP_LABELS = ['You', 'Templates', 'Providers', 'Runtime', 'Review', 'Done'];
 
-// ─── Project types ─────────────────────────────────────────────────────────────
-type ProjectType = 'software' | 'content' | 'business-ops';
-interface AgentRole {
-  id: string;
+interface TemplatePresentation {
   label: string;
   desc: string;
   icon: React.ComponentType<{ className?: string }>;
-  alwaysChecked: boolean;
-  checked: boolean;
-}
-
-interface AgentRolePreset {
-  label: string;
-  desc: string;
-  icon: React.ComponentType<{ className?: string }>;
-  checked: boolean;
+  iconColor: string;
+  iconBg: string;
 }
 
 function gatewayCommandBlock(): { title: string; lines: string[]; note: string } {
@@ -165,104 +147,43 @@ function gatewayStatusDetails(status: GatewayStatus | null, isRemoteGateway: boo
   return status.error;
 }
 
-function buildDefaultRoles(projectType: ProjectType, hasGithub: boolean): AgentRole[] {
-  const rolePresets: Record<Exclude<AgentRole['id'], 'atlas'>, AgentRolePreset> = projectType === 'content'
-    ? {
-        dev: {
-          label: 'Content Agent',
-          desc: 'Drafts articles, scripts, marketing copy, and creative deliverables.',
-          icon: FileText,
-          checked: true,
-        },
-        qa: {
-          label: 'Editorial Review Agent',
-          desc: 'Reviews tone, accuracy, structure, and consistency before anything ships.',
-          icon: ShieldCheck,
-          checked: true,
-        },
-        ops: {
-          label: 'Publishing Agent',
-          desc: 'Handles calendars, asset handoff, publishing steps, and channel-specific packaging.',
-          icon: Rocket,
-          checked: false,
-        },
-      }
-    : projectType === 'business-ops'
-      ? {
-          dev: {
-            label: 'Automation Agent',
-            desc: 'Builds workflows, automations, dashboards, and internal tooling.',
-            icon: Briefcase,
-            checked: true,
-          },
-          qa: {
-            label: 'Analysis Agent',
-            desc: 'Validates outputs, checks reporting quality, and catches process regressions.',
-            icon: ShieldCheck,
-            checked: true,
-          },
-          ops: {
-            label: 'Operations Agent',
-            desc: 'Owns rollouts, recurring processes, and operational follow-through across the business.',
-            icon: Rocket,
-            checked: true,
-          },
-        }
-      : {
-          dev: {
-            label: 'Development Agent',
-            desc: 'Builds features, fixes bugs, and handles implementation work.',
-            icon: Code2,
-            checked: true,
-          },
-          qa: {
-            label: 'QA Agent',
-            desc: 'Reviews work, runs tests, verifies quality.',
-            icon: ShieldCheck,
-          checked: hasGithub,
-          },
-          ops: {
-            label: 'Operations Agent',
-            desc: 'Handles releases, deployments, maintenance, and operational work.',
-            icon: Rocket,
-            checked: hasGithub,
-          },
-        };
+const OWNER_ROLE_LABELS: Record<StarterOwnerRole, string> = {
+  implementation: 'Who owns implementation work?',
+  review: 'Who owns review or QA?',
+  release: 'Who owns releases?',
+  pm: 'Who owns PM and triage?',
+  ops: 'Who owns operations execution?',
+  research: 'Who owns prospect research?',
+  outreach: 'Who owns outreach and proposal drafts?',
+  approval: 'Who gives human approval?',
+};
 
-  return [
-    {
-      id: 'atlas',
-      label: 'Atlas',
-      desc: 'Built-in assistant for chat, task routing, and coordination.',
-      icon: Sparkles,
-      alwaysChecked: true,
-      checked: true,
-    },
-    {
-      id: 'dev',
-      label: rolePresets.dev.label,
-      desc: rolePresets.dev.desc,
-      icon: rolePresets.dev.icon,
-      alwaysChecked: false,
-      checked: rolePresets.dev.checked,
-    },
-    {
-      id: 'qa',
-      label: rolePresets.qa.label,
-      desc: rolePresets.qa.desc,
-      icon: rolePresets.qa.icon,
-      alwaysChecked: false,
-      checked: rolePresets.qa.checked,
-    },
-    {
-      id: 'ops',
-      label: rolePresets.ops.label,
-      desc: rolePresets.ops.desc,
-      icon: rolePresets.ops.icon,
-      alwaysChecked: false,
-      checked: rolePresets.ops.checked,
-    },
-  ];
+const OWNER_ROLE_DEFAULTS: Record<StarterOwnerRole, string> = {
+  implementation: 'Developer Agent',
+  review: 'Review Agent',
+  release: 'Release Agent',
+  pm: 'PM Agent',
+  ops: 'Ops Agent',
+  research: 'Research Agent',
+  outreach: 'Outreach Agent',
+  approval: 'Approval Owner',
+};
+
+function templatePresentation(template: StarterTemplateCatalogEntry): TemplatePresentation {
+  if (template.key === 'development') {
+    return { label: template.label, desc: template.description, icon: Code2, iconColor: 'text-blue-400', iconBg: 'bg-blue-400/10' };
+  }
+  if (template.key === 'ops') {
+    return { label: template.label, desc: template.description, icon: Briefcase, iconColor: 'text-emerald-400', iconBg: 'bg-emerald-400/10' };
+  }
+  if (template.key === 'lead-generation') {
+    return { label: template.label, desc: template.description, icon: FileText, iconColor: 'text-purple-400', iconBg: 'bg-purple-400/10' };
+  }
+  return { label: template.label, desc: template.description, icon: Sparkles, iconColor: 'text-amber-400', iconBg: 'bg-amber-400/10' };
+}
+
+function uniqueOwnerRoles(templates: StarterTemplateCatalogEntry[]): StarterOwnerRole[] {
+  return Array.from(new Set(templates.flatMap(template => template.owner_roles)));
 }
 
 interface Props {
@@ -313,51 +234,6 @@ function StepDots({ current }: { current: Step }) {
   );
 }
 
-// ─── Selectable card ──────────────────────────────────────────────────────────
-function SelectCard<T extends string>({
-  value,
-  selected,
-  onSelect,
-  icon: Icon,
-  iconColor,
-  iconBg,
-  label,
-  desc,
-}: {
-  value: T;
-  selected: T | null | undefined;
-  onSelect: (v: T) => void;
-  icon: React.ComponentType<{ className?: string }>;
-  iconColor: string;
-  iconBg: string;
-  label: string;
-  desc: string;
-}) {
-  const isSelected = selected === value;
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(value)}
-      className={`w-full flex items-start gap-3 p-3.5 rounded-xl border text-left transition-all duration-150 ${
-        isSelected
-          ? 'border-amber-400 bg-amber-400/10 ring-1 ring-amber-400/30'
-          : 'border-slate-700 bg-slate-800/60 hover:border-slate-500'
-      }`}
-    >
-      <div className={`w-8 h-8 rounded-lg ${iconBg} flex items-center justify-center shrink-0 mt-0.5`}>
-        <Icon className={`w-4 h-4 ${iconColor}`} />
-      </div>
-      <div>
-        <p className={`text-sm font-semibold ${isSelected ? 'text-amber-300' : 'text-white'}`}>{label}</p>
-        <p className="text-xs text-slate-500 mt-0.5 leading-snug">{desc}</p>
-      </div>
-      {isSelected && (
-        <CheckCircle2 className="w-4 h-4 text-amber-400 ml-auto shrink-0 mt-0.5" />
-      )}
-    </button>
-  );
-}
-
 // ─── Main component ────────────────────────────────────────────────────────────
 export default function OnboardingWizard({ onClose }: Props) {
   const router = useRouter();
@@ -370,14 +246,14 @@ export default function OnboardingWizard({ onClose }: Props) {
   const [projectDesc, setProjectDesc] = useState('');
   const [personalizeError, setPersonalizeError] = useState<string | null>(null);
   const [personalizeLoading, setPersonalizeLoading] = useState(false);
-  const [createdProjectId, setCreatedProjectId] = useState<number | null>(null);
 
-  // Step 2 — project + team setup
-  const [projectType, setProjectType] = useState<ProjectType | null>(null);
-  const [hasGithub, setHasGithub] = useState<boolean | null>(null);
-  const teamMode: 'solo' | 'team' = hasGithub === true ? 'team' : 'solo';
+  // Step 2 — starter templates + owner mapping
+  const [templates, setTemplates] = useState<StarterTemplateCatalogEntry[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const [selectedTemplateKeys, setSelectedTemplateKeys] = useState<StarterTemplateKey[]>(['development']);
+  const [owners, setOwners] = useState<Partial<Record<StarterOwnerRole, string>>>({});
   const [projectSetupError, setProjectSetupError] = useState<string | null>(null);
-  const [agentRoles, setAgentRoles] = useState<AgentRole[]>([]);
   const [gatewayWsUrl, setGatewayWsUrl] = useState('wss://127.0.0.1:18789');
   const [gatewayRuntimeHint, setGatewayRuntimeHint] = useState<GatewayRuntimeHint>(getDefaultLocalRuntimeHint);
   const [lastLocalGatewayRuntimeHint, setLastLocalGatewayRuntimeHint] = useState<GatewayRuntimeHint>(getDefaultLocalRuntimeHint);
@@ -391,21 +267,23 @@ export default function OnboardingWizard({ onClose }: Props) {
   const [gatewayDetails, setGatewayDetails] = useState<string | null>(null);
   const [gatewayLoaded, setGatewayLoaded] = useState(false);
 
-  // Step 3 — agent provisioning
+  // Step 5 — starter plan preview/apply
   const [agentError, setAgentError] = useState<string | null>(null);
-  const [agentLoading, setAgentLoading] = useState(false);
-  const [provisionProgress, setProvisionProgress] = useState<
-    { roleId: string; label: string; status: 'pending' | 'creating' | 'provisioning' | 'done' | 'error'; error?: string }[]
-  >([]);
-  const [projectCreating, setProjectCreating] = useState(false);
-  const [projectCreated, setProjectCreated] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [starterPlan, setStarterPlan] = useState<StarterSetupPlan | null>(null);
+  const [appliedPlan, setAppliedPlan] = useState<StarterSetupPlan | null>(null);
   const [finishError, setFinishError] = useState<string | null>(null);
   const gatewayGuide = useMemo(() => gatewayCommandBlock(), []);
   const gatewayRemoteGuide = useMemo(() => gatewayRemotePairingBlock(), []);
   const isRemoteGateway = isRemoteGatewayRuntime(gatewayRuntimeHint);
   const gatewayTone = gatewayStatusTone(gatewayStatus, isRemoteGateway);
   const gatewayNeedsToken = isGatewayTokenMismatch(gatewayStatus?.error);
-  const gatewayRestartState: { phase: 'idle' | 'loading' | 'done' | 'error'; message?: string } = { phase: 'idle' };
+  const selectedTemplates = useMemo(
+    () => templates.filter(template => selectedTemplateKeys.includes(template.key)),
+    [templates, selectedTemplateKeys],
+  );
+  const selectedOwnerRoles = useMemo(() => uniqueOwnerRoles(selectedTemplates), [selectedTemplates]);
 
   // ── Manual setup: skip the guided wizard entirely ───────────────────────────
   // Creates an unprovisioned Atlas agent server-side and marks onboarding
@@ -439,11 +317,6 @@ export default function OnboardingWizard({ onClose }: Props) {
     setPersonalizeError(null);
     try {
       localStorage.setItem(USER_NAME_KEY, userName.trim());
-      const project = await api.createProject({
-        name: projectName.trim(),
-        description: projectDesc.trim(),
-      });
-      setCreatedProjectId(project.id);
       setStep('project-setup');
     } catch (e) {
       setPersonalizeError(String(e));
@@ -454,19 +327,79 @@ export default function OnboardingWizard({ onClose }: Props) {
 
   // ── Step 2: validate selections, then go to provider step ─────────────────
   function handleProjectSetupNext() {
-    if (!projectType) {
-      setProjectSetupError('Please select a project type.');
+    if (selectedTemplateKeys.length === 0) {
+      setProjectSetupError('Select at least one starter template, or choose Blank / manual.');
       return;
     }
-    if (hasGithub === null) {
-      setProjectSetupError('Please answer the GitHub question.');
+    const missingOwner = selectedOwnerRoles.find(role => !(owners[role] ?? '').trim());
+    if (missingOwner) {
+      setProjectSetupError(OWNER_ROLE_LABELS[missingOwner]);
       return;
     }
     setProjectSetupError(null);
-    const roles = buildDefaultRoles(projectType, hasGithub);
-    setAgentRoles(roles);
+    if (selectedTemplateKeys.length === 1 && selectedTemplateKeys[0] === 'blank') {
+      setStep('agent');
+      return;
+    }
     setStep('provider');
   }
+
+  const starterPlanPayload = useCallback((): StarterPlanInput => {
+    return {
+      template_key: selectedTemplateKeys[0],
+      template_keys: selectedTemplateKeys,
+      project_name: projectName.trim(),
+      owners,
+    };
+  }, [owners, projectName, selectedTemplateKeys]);
+
+  function toggleTemplate(key: StarterTemplateKey) {
+    setProjectSetupError(null);
+    setStarterPlan(null);
+    setSelectedTemplateKeys(prev => {
+      if (key === 'blank') return ['blank'];
+      const withoutBlank = prev.filter(item => item !== 'blank');
+      if (withoutBlank.includes(key)) {
+        const next = withoutBlank.filter(item => item !== key);
+        return next.length > 0 ? next : [key];
+      }
+      return [...withoutBlank, key];
+    });
+  }
+
+  const loadStarterTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    setTemplateError(null);
+    try {
+      const result = await api.getStarterTemplates();
+      const available = Array.isArray(result.templates) ? result.templates : [];
+      setTemplates(available);
+      if (!available.some(template => template.key === selectedTemplateKeys[0])) {
+        setSelectedTemplateKeys([available[0]?.key ?? 'blank']);
+      }
+    } catch (err) {
+      setTemplateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }, [selectedTemplateKeys]);
+
+  const previewStarterPlan = useCallback(async () => {
+    setPreviewLoading(true);
+    setAgentError(null);
+    try {
+      const result = await api.previewStarterPlan(starterPlanPayload());
+      setStarterPlan(result.plan);
+      return result.plan;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setAgentError(message);
+      setStarterPlan(null);
+      return null;
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [starterPlanPayload]);
 
   // ── Step 3: provider gate passed — advance to agents ──────────────────────
   async function loadGatewayStep(showSpinner = true) {
@@ -548,13 +481,29 @@ export default function OnboardingWizard({ onClose }: Props) {
     }
   }
 
-  function handleGatewayNext() {
+  async function handleGatewayNext() {
     if (gatewayStatus?.state !== 'ready') {
       setGatewayError(isRemoteGateway
         ? 'Approve the pending device request on the remote gateway, then re-check it here before continuing.'
         : 'Start OpenClaw and make sure the gateway shows Ready before continuing.');
       return;
     }
+    setGatewaySaving(true);
+    setGatewayError(null);
+    try {
+      const config = await persistGatewaySettings();
+      await api.configureRuntime({
+        kind: 'openclaw',
+        endpoint: config.ws_url,
+        auth_token: config.auth_token ?? (gatewayAuthToken || null),
+        label: isRemoteGatewayRuntime(config.runtime_hint) ? 'Remote OpenClaw Gateway' : 'Local OpenClaw Gateway',
+      });
+    } catch (err) {
+      setGatewayError(err instanceof Error ? err.message : String(err));
+      setGatewaySaving(false);
+      return;
+    }
+    setGatewaySaving(false);
     setStep('agent');
   }
 
@@ -574,141 +523,58 @@ export default function OnboardingWizard({ onClose }: Props) {
     if (step === 'gateway') {
       void loadGatewayStep(!gatewayLoaded);
     }
-  }, [step]);
+  }, [step, gatewayLoaded]);
 
-  function toggleRole(id: string) {
-    setAgentRoles(prev =>
-      prev.map(r => (r.id === id && !r.alwaysChecked ? { ...r, checked: !r.checked } : r))
-    );
-  }
-
-  // ── Step 3: create project + provision agents with progress ──────────────
-  async function handleCreateAgents() {
-    const selected = agentRoles
-      .filter(r => r.checked)
-      .sort((a, b) => (a.id === 'atlas' ? -1 : b.id === 'atlas' ? 1 : 0));
-    if (selected.length === 0) {
-      setAgentError('Select at least one agent role.');
-      return;
+  useEffect(() => {
+    if (step === 'project-setup' && templates.length === 0 && !templatesLoading) {
+      void loadStarterTemplates();
     }
-    setAgentLoading(true);
+  }, [loadStarterTemplates, step, templates.length, templatesLoading]);
+
+  useEffect(() => {
+    setOwners(prev => {
+      const next = { ...prev };
+      for (const role of selectedOwnerRoles) {
+        if (!next[role]) next[role] = OWNER_ROLE_DEFAULTS[role];
+      }
+      return next;
+    });
+  }, [selectedOwnerRoles]);
+
+  useEffect(() => {
+    if (step === 'agent') {
+      void previewStarterPlan();
+    }
+  }, [previewStarterPlan, step]);
+
+  async function handleApplyStarterPlan() {
+    setApplyLoading(true);
     setAgentError(null);
-    setProjectCreating(false);
-    setProjectCreated(false);
-
-    // Initialize progress state
-    setProvisionProgress(
-      selected.map(r => ({ roleId: r.id, label: r.label, status: 'pending' as const }))
-    );
-
+    setFinishError(null);
     try {
-      const providerResponse = await api.getProviders();
-      const connectedProviders = providerResponse.providers.filter((provider) => provider.status === 'connected');
-      const preferredProvider = (connectedProviders[0]?.slug ?? null) as ProviderSlug | null;
-      const preferredModel = getDefaultAgentModelForProvider(preferredProvider);
-      if (!preferredProvider) {
-        setAgentError('Connect at least one provider before creating agents.');
+      const plan = starterPlan ?? await previewStarterPlan();
+      if (!plan) return;
+      if (!plan.compatibility.ok) {
+        setAgentError(plan.compatibility.errors.join('; ') || 'Starter setup is not ready to apply.');
         return;
       }
-
-      const existingAgents = await api.getAgents();
-      const existingAtlas = findAtlasAgent(existingAgents);
-
-      // The project was already created in step 1; just mark it done visually
-      setProjectCreating(true);
-      // Small delay for visual feedback
-      await new Promise(r => setTimeout(r, 400));
-      setProjectCreated(true);
-
-      const successfulRoleIds = new Set<string>();
-
-      // Create + provision each agent sequentially with progress
-      for (let i = 0; i < selected.length; i++) {
-        const role = selected[i];
-        // Mark creating
-        setProvisionProgress(prev =>
-          prev.map(p => (p.roleId === role.id ? { ...p, status: 'creating' } : p))
-        );
-
-        try {
-          let agent: Agent;
-
-          if (role.id === 'atlas' && existingAtlas) {
-            agent = await api.updateAgent(existingAtlas.id, {
-              name: 'Atlas',
-              role: role.desc,
-              project_id: createdProjectId ?? undefined,
-              preferred_provider: preferredProvider,
-              model: preferredModel ?? undefined,
-              system_role: 'atlas',
-            });
-          } else {
-            agent = await api.createAgent({
-              name: role.label,
-              role: role.desc,
-              project_id: createdProjectId ?? undefined,
-              preferred_provider: preferredProvider,
-              model: preferredModel ?? undefined,
-              ...(role.id === 'atlas' ? { system_role: 'atlas' } : {}),
-            } as Partial<Agent>);
-          }
-
-          // Mark provisioning
-          setProvisionProgress(prev =>
-            prev.map(p => (p.roleId === role.id ? { ...p, status: 'provisioning' } : p))
-          );
-
-          // Provision the agent (creates workspace, identity files, job template)
-          try {
-            await api.provisionAgent(agent.id, { restart_gateway: false });
-          } catch (provisionError) {
-            if (role.id === 'atlas') {
-              throw provisionError;
-            }
-          }
-
-          // Mark done
-          setProvisionProgress(prev =>
-            prev.map(p => (p.roleId === role.id ? { ...p, status: 'done' } : p))
-          );
-          successfulRoleIds.add(role.id);
-        } catch (e) {
-          const errorMessage = e instanceof Error ? e.message : String(e);
-          setProvisionProgress(prev =>
-            prev.map(p => (p.roleId === role.id ? { ...p, status: 'error', error: errorMessage } : p))
-          );
-
-          if (role.id === 'atlas') {
-            setAgentError(`Atlas provisioning failed: ${errorMessage}`);
-            return;
-          }
-        }
+      const applied = await api.applyStarterPlan(starterPlanPayload());
+      setAppliedPlan(applied.plan);
+      try {
+        await api.completeOnboarding();
+        setFinishError(null);
+      } catch (err) {
+        setFinishError(err instanceof Error ? err.message : String(err));
       }
-
-      if (!successfulRoleIds.has('atlas')) {
-        setAgentError('Atlas must be provisioned before setup can continue.');
-        return;
-      }
-
-      // Brief pause to show completion
-      await new Promise(r => setTimeout(r, 600));
       setStep('done');
-    } catch (e) {
-      setAgentError(String(e));
+    } catch (err) {
+      setAgentError(err instanceof Error ? err.message : String(err));
     } finally {
-      setAgentLoading(false);
+      setApplyLoading(false);
     }
   }
 
   async function handleFinish() {
-    // Complete onboarding server-side (enforces provider gate)
-    try {
-      await api.completeOnboarding();
-      setFinishError(null);
-    } catch (err) {
-      setFinishError(err instanceof Error ? err.message : String(err));
-      return;
-    }
     markOnboarded();
     beginGettingStartedGuide(0);
     onClose();
@@ -854,126 +720,78 @@ export default function OnboardingWizard({ onClose }: Props) {
                 <span className="text-amber-400">{projectName || 'your project'}</span>
               </h2>
               <p className="text-slate-400 text-sm leading-relaxed">
-                A few quick answers let Atlas recommend the right agents for you.
+                Choose one or more starter templates. Atlas will generate the project, workflows, starter agents, routing, and model defaults from the shared setup catalog.
               </p>
             </div>
 
-            {/* Q1 — project type */}
             <div className="space-y-2">
               <p className="text-sm font-medium text-slate-300">
-                What kind of project is this?
+                Starter templates
               </p>
+              {templatesLoading && (
+                <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/40 p-4 text-sm text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Loading starter templates...
+                </div>
+              )}
+              {templateError && (
+                <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+                  {templateError}
+                </div>
+              )}
               <div className="space-y-2">
-                <SelectCard<ProjectType>
-                  value="software"
-                  selected={projectType}
-                  onSelect={setProjectType}
-                  icon={Code2}
-                  iconColor="text-blue-400"
-                  iconBg="bg-blue-400/10"
-                  label="Software / Product"
-                  desc="App, API, website, or technical system."
-                />
-                <SelectCard<ProjectType>
-                  value="content"
-                  selected={projectType}
-                  onSelect={setProjectType}
-                  icon={FileText}
-                  iconColor="text-purple-400"
-                  iconBg="bg-purple-400/10"
-                  label="Content / Creative"
-                  desc="Writing, marketing, media, or creative output."
-                />
-                <SelectCard<ProjectType>
-                  value="business-ops"
-                  selected={projectType}
-                  onSelect={setProjectType}
-                  icon={Briefcase}
-                  iconColor="text-emerald-400"
-                  iconBg="bg-emerald-400/10"
-                  label="Business Operations"
-                  desc="Workflows, automation, reporting, or internal tooling."
-                />
+                {templates.map(template => {
+                  const presentation = templatePresentation(template);
+                  const Icon = presentation.icon;
+                  const isSelected = selectedTemplateKeys.includes(template.key);
+                  return (
+                    <button
+                      key={template.key}
+                      type="button"
+                      onClick={() => toggleTemplate(template.key)}
+                      className={`w-full flex items-start gap-3 p-3.5 rounded-xl border text-left transition-all duration-150 ${
+                        isSelected
+                          ? 'border-amber-400 bg-amber-400/10 ring-1 ring-amber-400/30'
+                          : 'border-slate-700 bg-slate-800/60 hover:border-slate-500'
+                      }`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg ${presentation.iconBg} flex items-center justify-center shrink-0 mt-0.5`}>
+                        <Icon className={`w-4 h-4 ${presentation.iconColor}`} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className={`text-sm font-semibold ${isSelected ? 'text-amber-300' : 'text-white'}`}>{presentation.label}</p>
+                        <p className="text-xs text-slate-500 mt-0.5 leading-snug">{presentation.desc}</p>
+                      </div>
+                      {isSelected && <CheckCircle2 className="w-4 h-4 text-amber-400 ml-auto shrink-0 mt-0.5" />}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Q2 — solo or team */}
-            <div className="hidden">
-              <p className="text-sm font-medium text-slate-300">
-                Do you have a GitHub repo for this project?
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => undefined}
-                  className={`flex items-center gap-2.5 p-3 rounded-xl border text-left transition-all ${
-                    teamMode === 'solo'
-                      ? 'border-amber-400 bg-amber-400/10 ring-1 ring-amber-400/30'
-                      : 'border-slate-700 bg-slate-800/60 hover:border-slate-500'
-                  }`}
-                >
-                  <UserCircle2 className={`w-5 h-5 shrink-0 ${teamMode === 'solo' ? 'text-amber-400' : 'text-slate-500'}`} />
-                  <div>
-                    <p className={`text-sm font-semibold ${teamMode === 'solo' ? 'text-amber-300' : 'text-white'}`}>Solo</p>
-                    <p className="text-[11px] text-slate-500">Just me</p>
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => undefined}
-                  className={`flex items-center gap-2.5 p-3 rounded-xl border text-left transition-all ${
-                    teamMode === 'team'
-                      ? 'border-amber-400 bg-amber-400/10 ring-1 ring-amber-400/30'
-                      : 'border-slate-700 bg-slate-800/60 hover:border-slate-500'
-                  }`}
-                >
-                  <Users className={`w-5 h-5 shrink-0 ${teamMode === 'team' ? 'text-amber-400' : 'text-slate-500'}`} />
-                  <div>
-                    <p className={`text-sm font-semibold ${teamMode === 'team' ? 'text-amber-300' : 'text-white'}`}>Team</p>
-                    <p className="text-[11px] text-slate-500">Multiple people</p>
-                  </div>
-                </button>
+            {selectedOwnerRoles.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-slate-300">Owner mapping</p>
+                <div className="space-y-2">
+                  {selectedOwnerRoles.map(role => (
+                    <label key={role} className="block rounded-xl border border-slate-700 bg-slate-800/40 p-3">
+                      <span className="text-xs font-medium uppercase tracking-wide text-slate-500">{OWNER_ROLE_LABELS[role]}</span>
+                      <input
+                        value={owners[role] ?? OWNER_ROLE_DEFAULTS[role]}
+                        onChange={event => setOwners(prev => ({ ...prev, [role]: event.target.value }))}
+                        className="mt-2 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
+                      />
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Q3 — GitHub */}
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-slate-300">
-                Do you have a GitHub repo for this project?
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setHasGithub(true)}
-                  className={`flex items-center gap-2.5 p-3 rounded-xl border text-left transition-all ${
-                    hasGithub === true
-                      ? 'border-amber-400 bg-amber-400/10 ring-1 ring-amber-400/30'
-                      : 'border-slate-700 bg-slate-800/60 hover:border-slate-500'
-                  }`}
-                >
-                  <Github className={`w-5 h-5 shrink-0 ${hasGithub === true ? 'text-amber-400' : 'text-slate-500'}`} />
-                  <div>
-                    <p className={`text-sm font-semibold ${hasGithub === true ? 'text-amber-300' : 'text-white'}`}>Yes</p>
-                    <p className="text-[11px] text-slate-500">I have a repo</p>
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setHasGithub(false)}
-                  className={`flex items-center gap-2.5 p-3 rounded-xl border text-left transition-all ${
-                    hasGithub === false
-                      ? 'border-amber-400 bg-amber-400/10 ring-1 ring-amber-400/30'
-                      : 'border-slate-700 bg-slate-800/60 hover:border-slate-500'
-                  }`}
-                >
-                  <X className={`w-5 h-5 shrink-0 ${hasGithub === false ? 'text-amber-400' : 'text-slate-500'}`} />
-                  <div>
-                    <p className={`text-sm font-semibold ${hasGithub === false ? 'text-amber-300' : 'text-white'}`}>Not yet</p>
-                    <p className="text-[11px] text-slate-500">No repo / not sure</p>
-                  </div>
-                </button>
+            {selectedTemplateKeys.includes('blank') && (
+              <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4 text-sm leading-6 text-slate-400">
+                Blank / manual creates only the project and a manual workflow shell. It does not create starter agents, routing rules, or model defaults.
               </div>
-            </div>
+            )}
 
             {projectSetupError && (
               <p className="text-sm text-red-400">{projectSetupError}</p>
@@ -1199,193 +1017,138 @@ export default function OnboardingWizard({ onClose }: Props) {
         )}
 
         {/* ══════════════════════════════════════════════════════════════════════
-            STEP 4 — SUMMARY + AGENT PROVISIONING
+            STEP 5 — STARTER PLAN REVIEW + APPLY
         ══════════════════════════════════════════════════════════════════════ */}
         {step === 'agent' && (
           <div className="space-y-6">
-            {!agentLoading ? (
-              /* ── Pre-confirm: summary + role selection ─────────────────────── */
-              <>
-                <div>
-                  <h2 className="text-xl font-bold text-white mb-1">
-                    Ready to launch 🚀
-                  </h2>
-                  <p className="text-slate-400 text-sm leading-relaxed">
-                    Here&apos;s what we&apos;ll set up. Review and hit confirm to create everything.
-                  </p>
-                </div>
+            <div>
+              <h2 className="text-xl font-bold text-white mb-1">
+                Review starter setup
+              </h2>
+              <p className="text-slate-400 text-sm leading-relaxed">
+                This preview comes from the shared setup API. Nothing is created until you apply it.
+              </p>
+            </div>
 
-                {/* Summary card */}
+            {previewLoading && (
+              <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/40 p-4 text-sm text-slate-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Generating setup preview...
+              </div>
+            )}
+
+            {starterPlan && (
+              <div className="space-y-4">
                 <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4 space-y-3">
                   <div className="flex items-center gap-2">
                     <FolderOpen className="w-4 h-4 text-amber-400" />
-                    <span className="text-sm font-semibold text-white">{projectName || 'Untitled Project'}</span>
-                    <span className="text-[10px] bg-green-500/15 text-green-400 border border-green-500/20 rounded px-1.5 py-0.5">
-                      created
-                    </span>
+                    <span className="text-sm font-semibold text-white">{starterPlan.project.name}</span>
                   </div>
-                  <div className="hidden">
-                    <span className="text-slate-700">•</span>
-                    <span>{projectType === 'software' ? 'Software' : projectType === 'content' ? 'Content' : 'Business Ops'}</span>
-                    {hasGithub && (
-                      <>
-                        <span className="text-slate-700">•</span>
-                        <Github className="w-3 h-3" />
-                        <span>GitHub</span>
-                      </>
-                    )}
+                  <p className="text-xs leading-5 text-slate-500">{starterPlan.project.description}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {starterPlan.templates.map(template => (
+                      <span key={template.key} className="rounded-md border border-slate-600 bg-slate-900 px-2 py-1 text-xs text-slate-300">
+                        {template.label}
+                      </span>
+                    ))}
                   </div>
                 </div>
 
-                {/* Agent roles */}
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-slate-300">Agents to provision:</p>
-                  {agentRoles.map(role => {
-                    const Icon = role.icon;
-                    return (
-                      <label
-                        key={role.id}
-                        className={`flex items-start gap-3 p-3.5 rounded-xl border cursor-pointer transition-all ${
-                          role.checked
-                            ? 'border-slate-600 bg-slate-800/60'
-                            : 'border-slate-700/60 bg-slate-800/30 opacity-60'
-                        } ${role.alwaysChecked ? 'cursor-default' : 'hover:border-slate-500'}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={role.checked}
-                          disabled={role.alwaysChecked}
-                          onChange={() => toggleRole(role.id)}
-                          className="mt-0.5 w-4 h-4 rounded accent-amber-400 cursor-pointer disabled:cursor-default shrink-0"
-                        />
-                        <div className="w-8 h-8 rounded-lg bg-slate-700 flex items-center justify-center shrink-0">
-                          <Icon className="w-4 h-4 text-slate-300" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-white flex items-center gap-2">
-                            {role.label}
-                            {role.alwaysChecked && (
-                              <span className="text-[10px] font-medium text-amber-400/70 bg-amber-400/10 border border-amber-400/20 rounded px-1.5 py-0.5">
-                                required
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-xs text-slate-500 mt-0.5 leading-snug">{role.desc}</p>
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                {agentError && <p className="text-sm text-red-400">{agentError}</p>}
-
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setStep('gateway')}
-                    className="flex items-center gap-1.5 px-4 py-3 rounded-xl border border-slate-600 text-slate-300 hover:text-white hover:border-slate-500 text-sm font-medium transition-colors"
-                  >
-                    <ArrowLeft className="w-4 h-4" /> Back
-                  </button>
-                  <button
-                    onClick={handleCreateAgents}
-                    className="flex-1 flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-300 text-slate-900 font-semibold py-3 rounded-xl transition-colors"
-                  >
-                    <Rocket className="w-4 h-4" /> Confirm & set up
-                  </button>
-                </div>
-              </>
-            ) : (
-              /* ── Provisioning in progress ──────────────────────────────────── */
-              <>
-                <div>
-                  <h2 className="text-xl font-bold text-white mb-1">
-                    Setting things up…
-                  </h2>
-                  <p className="text-slate-400 text-sm leading-relaxed">
-                    Hang tight — Atlas is creating your project and provisioning agents.
-                  </p>
-                </div>
-
-                <div className="space-y-3">
-                  {/* Project row */}
-                  <div className="flex items-center gap-3 p-3 rounded-xl border border-slate-700 bg-slate-800/40">
-                    <div className="w-8 h-8 rounded-lg bg-amber-400/10 flex items-center justify-center shrink-0">
-                      <FolderOpen className="w-4 h-4 text-amber-400" />
+                <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+                  <p className="text-sm font-semibold text-white">Workflows</p>
+                  {starterPlan.workflows.map(workflow => (
+                    <div key={workflow.template.key} className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
+                      <p className="text-sm font-medium text-slate-200">{workflow.workflow.name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{workflow.template.label} · {workflow.workflow.sprint_type}</p>
+                      <p className="mt-2 text-xs leading-5 text-slate-400">
+                        {workflow.task_types.length} task types, {workflow.statuses.length} statuses, {workflow.routes.length} route rules
+                      </p>
                     </div>
-                    <span className="text-sm text-white font-medium flex-1">
-                      {projectName || 'Project'}
-                    </span>
-                    {projectCreated ? (
-                      <CheckCircle2 className="w-4 h-4 text-green-400" />
-                    ) : projectCreating ? (
-                      <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
-                    ) : (
-                      <div className="w-4 h-4 rounded-full border border-slate-600" />
-                    )}
-                  </div>
+                  ))}
+                </div>
 
-                  {/* Agent rows */}
-                  {provisionProgress.map(p => {
-                    const role = agentRoles.find(r => r.id === p.roleId);
-                    const Icon = role?.icon ?? Bot;
-                    return (
-                      <div
-                        key={p.roleId}
-                        className="flex items-center gap-3 p-3 rounded-xl border border-slate-700 bg-slate-800/40"
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-slate-700 flex items-center justify-center shrink-0">
-                          <Icon className="w-4 h-4 text-slate-300" />
+                <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+                  <p className="text-sm font-semibold text-white">Starter agents and owners</p>
+                  {starterPlan.agents.length === 0 ? (
+                    <p className="text-sm text-slate-500">No starter agents will be created.</p>
+                  ) : (
+                    starterPlan.agents.map(agent => (
+                      <div key={`${agent.owner_role}:${agent.name}`} className="flex items-start gap-3 rounded-lg border border-slate-700 bg-slate-900/70 p-3">
+                        <Bot className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-200">{agent.name}</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">{agent.job_title} · {agent.owner_role} · {agent.preferred_provider}{agent.model ? ` / ${agent.model}` : ''}</p>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-white font-medium">{p.label}</p>
-                          <p className="text-[11px] text-slate-500">
-                            {p.status === 'pending' && 'Waiting…'}
-                            {p.status === 'creating' && 'Creating agent…'}
-                            {p.status === 'provisioning' && 'Provisioning workspace…'}
-                            {p.status === 'done' && 'Ready'}
-                            {p.status === 'error' && (p.error || 'Failed')}
-                          </p>
-                        </div>
-                        {p.status === 'done' ? (
-                          <CheckCircle2 className="w-4 h-4 text-green-400" />
-                        ) : p.status === 'error' ? (
-                          <X className="w-4 h-4 text-red-400" />
-                        ) : p.status === 'creating' || p.status === 'provisioning' ? (
-                          <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
-                        ) : (
-                          <div className="w-4 h-4 rounded-full border border-slate-600" />
-                        )}
                       </div>
-                    );
-                  })}
+                    ))
+                  )}
+                </div>
 
-                  {gatewayRestartState.phase !== 'idle' && (
-                    <div className="flex items-center gap-3 p-3 rounded-xl border border-slate-700 bg-slate-800/40">
-                      <div className="w-8 h-8 rounded-lg bg-slate-700 flex items-center justify-center shrink-0">
-                        <ServerCog className="w-4 h-4 text-slate-300" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-white font-medium">OpenClaw Gateway</p>
-                        <p className="text-[11px] text-slate-500">
-                          {gatewayRestartState.phase === 'loading' && 'Restarting gateway once for all agents…'}
-                          {gatewayRestartState.phase === 'done' && 'Ready'}
-                          {gatewayRestartState.phase === 'error' && (gatewayRestartState.message || 'Restart failed')}
-                        </p>
-                      </div>
-                      {gatewayRestartState.phase === 'done' ? (
-                        <CheckCircle2 className="w-4 h-4 text-green-400" />
-                      ) : gatewayRestartState.phase === 'error' ? (
-                        <X className="w-4 h-4 text-red-400" />
-                      ) : (
-                        <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
+                <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+                  <p className="text-sm font-semibold text-white">Routing ownership</p>
+                  {starterPlan.routes.length === 0 ? (
+                    <p className="text-sm text-slate-500">No routing rules will be created.</p>
+                  ) : (
+                    <div className="grid gap-2">
+                      {starterPlan.routes.slice(0, 8).map(route => (
+                        <div key={route.key} className="flex items-center justify-between gap-3 rounded-lg border border-slate-700 bg-slate-900/70 p-2 text-xs">
+                          <span className="min-w-0 truncate text-slate-400">{route.task_type} / {route.status}</span>
+                          <span className="shrink-0 text-slate-200">{route.owner_name}</span>
+                        </div>
+                      ))}
+                      {starterPlan.routes.length > 8 && (
+                        <p className="text-xs text-slate-500">{starterPlan.routes.length - 8} more route rules will be created.</p>
                       )}
                     </div>
                   )}
                 </div>
 
-                {agentError && <p className="text-sm text-red-400 mt-2">{agentError}</p>}
-              </>
+                <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-4 space-y-3">
+                  <p className="text-sm font-semibold text-white">Create / update / skip behavior</p>
+                  {starterPlan.preview.changes.map((change, index) => (
+                    <div key={`${change.resource}:${change.name}:${index}`} className="flex items-start gap-2 text-sm">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-green-400" />
+                      <span className="text-slate-400">
+                        <span className="font-medium text-slate-200">{change.action}</span> {change.resource}: {change.name}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {(starterPlan.compatibility.errors.length > 0 || starterPlan.compatibility.warnings.length > 0) && (
+                  <div className={`rounded-xl border p-4 text-sm leading-6 ${
+                    starterPlan.compatibility.ok
+                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+                      : 'border-red-500/30 bg-red-500/10 text-red-200'
+                  }`}>
+                    <p className="font-semibold">{starterPlan.compatibility.ok ? 'Compatibility warnings' : 'Cannot apply yet'}</p>
+                    {[...starterPlan.compatibility.errors, ...starterPlan.compatibility.warnings].map(message => (
+                      <p key={message} className="mt-1">{message}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
+
+            {agentError && <p className="text-sm text-red-400">{agentError}</p>}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setStep('gateway')}
+                disabled={applyLoading}
+                className="flex items-center gap-1.5 px-4 py-3 rounded-xl border border-slate-600 text-slate-300 hover:text-white hover:border-slate-500 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ArrowLeft className="w-4 h-4" /> Back
+              </button>
+              <button
+                onClick={handleApplyStarterPlan}
+                disabled={applyLoading || previewLoading || !starterPlan || !starterPlan.compatibility.ok}
+                className="flex-1 flex items-center justify-center gap-2 bg-amber-400 hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-50 text-slate-900 font-semibold py-3 rounded-xl transition-colors"
+              >
+                {applyLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                Apply starter setup
+              </button>
+            </div>
           </div>
         )}
 
@@ -1407,11 +1170,10 @@ export default function OnboardingWizard({ onClose }: Props) {
             </div>
             <div>
               <h2 className="text-2xl font-bold text-white mb-2">
-                You&apos;re all set{userName.trim() ? `, ${userName.trim()}` : ''}! 🎉
+                You&apos;re all set{userName.trim() ? `, ${userName.trim()}` : ''}!
               </h2>
               <p className="text-slate-400 text-sm leading-relaxed max-w-sm mx-auto">
-                Your project is live and your agents are ready to work. Head to the
-                Task Board to create your first task and start dispatching.
+                Your starter setup has been applied. Head to the Task Board to create your first task and start dispatching.
               </p>
             </div>
 
@@ -1420,33 +1182,39 @@ export default function OnboardingWizard({ onClose }: Props) {
               <div className="flex items-center gap-2 text-sm">
                 <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
                 <span className="text-slate-300">
-                  Project <span className="text-white font-medium">{projectName}</span> created
+                  Project <span className="text-white font-medium">{appliedPlan?.project.name ?? projectName}</span> created
                 </span>
               </div>
-              {provisionProgress
-                .filter(progress => progress.status === 'done')
-                .map(progress => {
-                  const role = agentRoles.find(r => r.id === progress.roleId);
-                  if (!role) return null;
-                  return (
-                    <div key={role.id} className="flex items-center gap-2 text-sm">
-                      <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
-                      <span className="text-slate-300">
-                        <span className="text-white font-medium">{role.label}</span> provisioned
-                      </span>
-                    </div>
-                  );
-                })}
+              {(appliedPlan?.workflows ?? []).map(workflow => (
+                <div key={workflow.template.key} className="flex items-center gap-2 text-sm">
+                  <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
+                  <span className="text-slate-300">
+                    Workflow <span className="text-white font-medium">{workflow.workflow.name}</span> created
+                  </span>
+                </div>
+              ))}
+              {appliedPlan && appliedPlan.agents.length > 0 && (
+                <div className="flex items-center gap-2 text-sm">
+                  <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
+                  <span className="text-slate-300">
+                    <span className="text-white font-medium">{appliedPlan.agents.length}</span> starter agents created
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="rounded-xl border border-green-500/20 bg-green-500/10 p-4 text-left">
-              <p className="text-sm font-medium text-green-200">Your runtime is ready</p>
+              <p className="text-sm font-medium text-green-200">Onboarding is complete</p>
               <p className="mt-1 text-sm leading-relaxed text-green-100/90">
-                Your agents were provisioned and OpenClaw picked up the new configuration automatically.
+                Templates, workflows, routing ownership, and model defaults were created by the shared setup flow.
               </p>
             </div>
 
-            {finishError && <p className="text-sm text-red-400">{finishError}</p>}
+            {finishError && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-left text-sm leading-6 text-amber-100">
+                Starter setup was applied, but final onboarding completion is still waiting on a setup gate: {finishError}
+              </div>
+            )}
 
             <button
               onClick={handleFinish}

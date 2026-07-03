@@ -325,6 +325,143 @@ export interface GatewayPairResponse extends GatewayStatus {
   message: string | null;
 }
 
+export type StarterTemplateKey = 'development' | 'ops' | 'lead-generation' | 'blank';
+
+export type StarterOwnerRole =
+  | 'implementation'
+  | 'review'
+  | 'release'
+  | 'pm'
+  | 'ops'
+  | 'research'
+  | 'outreach'
+  | 'approval';
+
+export interface StarterTemplateCatalogEntry {
+  key: StarterTemplateKey;
+  label: string;
+  description: string;
+  fully_implemented: boolean;
+  owner_roles: StarterOwnerRole[];
+  workflow_type: 'dev' | 'ops' | 'lead_generation' | 'generic';
+}
+
+export interface StarterPlanInput {
+  template_key?: StarterTemplateKey;
+  template_keys?: StarterTemplateKey[];
+  project_name?: string;
+  workflow_name?: string;
+  workflow_names?: Record<string, string>;
+  owners?: Partial<Record<StarterOwnerRole, string>>;
+  routing_plan?: StarterRoutePlan[];
+}
+
+export interface StarterAgentPlan {
+  owner_role: StarterOwnerRole;
+  owner_name: string;
+  name: string;
+  job_title: string;
+  role: string;
+  runtime_type: 'openclaw';
+  preferred_provider: string;
+  model: string | null;
+  skill_names: string[];
+}
+
+export interface StarterRoutePlan {
+  key: string;
+  template_key: StarterTemplateKey;
+  task_type: string;
+  status: string;
+  owner_role: StarterOwnerRole;
+  owner_name: string;
+  enabled: boolean;
+  priority: number;
+}
+
+export interface StarterModelRoutingPlan {
+  label: string;
+  max_points: number;
+  provider: string;
+  model: string;
+  thinking_level: string | null;
+  fast_mode: boolean | null;
+  enabled: boolean;
+}
+
+export interface StarterWorkflowPlan {
+  template: StarterTemplateCatalogEntry;
+  workflow: { name: string; sprint_type: string; goal: string };
+  statuses: string[];
+  task_types: string[];
+  fields: Array<{ key: string; label?: string; type?: string; required?: boolean; options?: string[] }>;
+  routes: StarterRoutePlan[];
+  model_routing: StarterModelRoutingPlan[];
+  verification: {
+    evidence_gates: string[];
+    sample_route_checks: Array<{ task_type: string; status: string; expected_owner_role: StarterOwnerRole }>;
+  };
+}
+
+export interface StarterSetupPlan {
+  template: StarterTemplateCatalogEntry;
+  templates: StarterTemplateCatalogEntry[];
+  project: { name: string; description: string };
+  workflow: { name: string; sprint_type: string; goal: string };
+  workflows: StarterWorkflowPlan[];
+  agents: StarterAgentPlan[];
+  routes: StarterRoutePlan[];
+  model_routing: StarterModelRoutingPlan[];
+  compatibility: {
+    ok: boolean;
+    runtime: string | null;
+    provider: string | null;
+    errors: string[];
+    warnings: string[];
+  };
+  preview: {
+    changes: Array<{ action: 'create' | 'update' | 'skip'; resource: string; name: string; reason: string }>;
+  };
+  editable: {
+    can_change_owner: boolean;
+    can_disable_route: boolean;
+    can_add_task_type: boolean;
+    advanced_path: string;
+  };
+}
+
+export interface StarterTemplateCatalogResponse {
+  templates: StarterTemplateCatalogEntry[];
+}
+
+export interface StarterPlanPreviewResponse {
+  ok: true;
+  plan: StarterSetupPlan;
+}
+
+export interface StarterPlanApplyResponse {
+  ok: true;
+  plan: StarterSetupPlan;
+  project_id: number;
+  workflow_id: number;
+  workflow_ids: Record<string, number>;
+  agent_ids: Record<string, number>;
+  route_ids: number[];
+  model_routing_ids: number[];
+}
+
+export interface RuntimeConfigResponse {
+  ok: boolean;
+  configured: boolean;
+  runtime?: {
+    kind: 'openclaw' | 'hermes' | 'custom';
+    endpoint: string;
+    auth_present: boolean;
+    label: string | null;
+  };
+  status?: Record<string, unknown>;
+}
+
 export interface ClaudeMdResult {
   exists: boolean;
   content: string | null;
