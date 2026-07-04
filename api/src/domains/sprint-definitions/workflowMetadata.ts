@@ -184,6 +184,36 @@ function loadTransitions(db: Database.Database, sprintId: number | null): Workfl
   }));
 }
 
+function effectiveTransitionsForStatuses(
+  transitions: WorkflowTransitionMeta[],
+  statuses: WorkflowStatusMeta[],
+): WorkflowTransitionMeta[] {
+  const effectiveStatusNames = new Set(statuses.map(status => status.name));
+  return transitions.filter((transition) => {
+    if (transition.metadata.enabled === false) return false;
+    return effectiveStatusNames.has(transition.from_status) && effectiveStatusNames.has(transition.to_status);
+  });
+}
+
+function statusesWithEffectiveTransitions(
+  statuses: WorkflowStatusMeta[],
+  transitions: WorkflowTransitionMeta[],
+): WorkflowStatusMeta[] {
+  const effectiveStatusNames = new Set(statuses.map(status => status.name));
+  const allowedByStatus = new Map<string, Set<string>>();
+  for (const transition of transitions) {
+    if (!allowedByStatus.has(transition.from_status)) allowedByStatus.set(transition.from_status, new Set());
+    allowedByStatus.get(transition.from_status)!.add(transition.to_status);
+  }
+
+  return statuses.map(status => ({
+    ...status,
+    allowed_transitions: allowedByStatus.has(status.name)
+      ? [...allowedByStatus.get(status.name)!]
+      : status.allowed_transitions.filter(target => effectiveStatusNames.has(target)),
+  }));
+}
+
 function loadStatuses(db: Database.Database, sprintId: number | null, sprintType: string, transitions: WorkflowTransitionMeta[], tenantId?: number | null): WorkflowStatusMeta[] {
   const statuses = sprintId
     ? listSprintTaskStatuses(db, sprintId)
@@ -247,8 +277,10 @@ function loadRoutingWarnings(
   }
 
   const statusLabels = new Map(statuses.map((status) => [status.name, status.label || status.name]));
+  const effectiveStatusNames = new Set(statuses.map((status) => status.name));
   const routableByStatus = new Map<string, Array<{ id: number; task_type: string | null }>>();
   for (const rule of routingRules) {
+    if (!effectiveStatusNames.has(rule.status)) continue;
     if (!routableByStatus.has(rule.status)) routableByStatus.set(rule.status, []);
     routableByStatus.get(rule.status)!.push({ id: rule.id, task_type: rule.task_type });
   }
@@ -291,8 +323,10 @@ export function resolveWorkflowMetadata(
 ): ResolvedWorkflowMetadata {
   const context = resolveContext(db, input);
   const taskType = normalizeTaskType(input.taskType);
-  const transitions = loadTransitions(db, context.sprintId);
-  const statuses = loadStatuses(db, context.sprintId, context.sprintType, transitions, input.tenantId);
+  const rawTransitions = loadTransitions(db, context.sprintId);
+  const rawStatuses = loadStatuses(db, context.sprintId, context.sprintType, rawTransitions, input.tenantId);
+  const transitions = effectiveTransitionsForStatuses(rawTransitions, rawStatuses);
+  const statuses = statusesWithEffectiveTransitions(rawStatuses, transitions);
   const routingWarnings = loadRoutingWarnings(db, context.sprintId, context.sprintType, statuses);
   const outcomes = resolveSprintOutcomeVocabulary(db, {
     sprintId: context.sprintId,

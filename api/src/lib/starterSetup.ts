@@ -7,6 +7,7 @@ import {
   starterSprintTypeBaseKey,
 } from './starterCatalog';
 import { seedSprintTaskPolicy } from '../domains/routing/policy/seed';
+import { listSprintTaskStatuses } from '../domains/routing/policy/statuses';
 
 type SprintRow = {
   id: number;
@@ -140,13 +141,13 @@ function resolveReviewOwner(taskType: string, agents: RoutedAgentSet): number | 
   }
 }
 
-function buildStarterRoutingRules(sprintType: string, agents: RoutedAgentSet): StarterRoutingRule[] {
+function buildStarterRoutingRules(sprintType: string, agents: RoutedAgentSet, availableStatuses: Set<string>): StarterRoutingRule[] {
   const rules = new Map<string, StarterRoutingRule>();
   const taskTypes = getStarterTaskTypesForSprintType(sprintType);
 
   for (const taskType of taskTypes) {
     const readyOwner = resolveReadyOwner(taskType, agents);
-    if (readyOwner != null) {
+    if (readyOwner != null && availableStatuses.has('ready')) {
       rules.set(`${taskType}:ready`, {
         task_type: taskType,
         status: 'ready',
@@ -156,7 +157,7 @@ function buildStarterRoutingRules(sprintType: string, agents: RoutedAgentSet): S
     }
 
     const reviewOwner = resolveReviewOwner(taskType, agents);
-    if (reviewOwner != null) {
+    if (reviewOwner != null && availableStatuses.has('review')) {
       rules.set(`${taskType}:review`, {
         task_type: taskType,
         status: 'review',
@@ -166,7 +167,7 @@ function buildStarterRoutingRules(sprintType: string, agents: RoutedAgentSet): S
     }
 
     const mergeOwner = agents.atlasId ?? reviewOwner ?? readyOwner;
-    if (mergeOwner != null) {
+    if (mergeOwner != null && availableStatuses.has('ready_to_merge')) {
       rules.set(`${taskType}:ready_to_merge`, {
         task_type: taskType,
         status: 'ready_to_merge',
@@ -249,7 +250,8 @@ export function syncStarterRoutingForSprint(db: Database.Database, sprintId: num
   if (!starterSprintType) return;
 
   const agents = classifyProjectAgents(loadProjectAgents(db, sprint.project_id));
-  const rules = buildStarterRoutingRules(starterSprintType, agents);
+  const availableStatuses = new Set(listSprintTaskStatuses(db, sprintId).map(status => status.name));
+  const rules = buildStarterRoutingRules(starterSprintType, agents, availableStatuses);
   if (rules.length === 0) return;
 
   const insertRule = db.prepare(`

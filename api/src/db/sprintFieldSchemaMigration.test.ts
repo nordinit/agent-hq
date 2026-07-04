@@ -112,6 +112,62 @@ describe('sprint field schema migration', () => {
     expect(metadata.non_failure_outcomes).not.toContain('failed');
   });
 
+  it('filters stale starter transitions out of custom workflow metadata readbacks', () => {
+    initSchema();
+    const db = getDb();
+    const tenantId = defaultTenantId();
+
+    db.prepare(`
+      INSERT INTO projects (id, tenant_id, name, description, context_md, created_at)
+      VALUES (990, ?, 'Agency', '', '', datetime('now'))
+    `).run(tenantId);
+    db.prepare(`
+      INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, task_policy_seeded_at, length_kind, length_value, created_at)
+      VALUES (9901, ?, 990, 'Lead Generation', '', 'lead_generation', 'active', datetime('now'), 'time', 'ongoing', datetime('now'))
+    `).run(tenantId);
+    db.prepare(`
+      INSERT INTO sprint_task_statuses (
+        sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
+      ) VALUES
+        (9901, 'todo', 'To Do', 'slate', 0, 0, '["ready"]', 0, 1, '{}'),
+        (9901, 'ready', 'Ready', 'blue', 0, 0, '["in_progress"]', 1, 0, '{}'),
+        (9901, 'in_progress', 'In Progress', 'yellow', 0, 0, '["review"]', 2, 0, '{}'),
+        (9901, 'review', 'Review', 'purple', 0, 0, '["approved"]', 3, 0, '{}'),
+        (9901, 'approved', 'Approved', 'emerald', 0, 0, '["submitted"]', 4, 0, '{}'),
+        (9901, 'submitted', 'Submitted', 'cyan', 0, 0, '["closed"]', 5, 0, '{}'),
+        (9901, 'closed', 'Closed', 'green', 1, 0, '[]', 6, 0, '{}')
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_transitions (
+        tenant_id, sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
+      ) VALUES
+        (?, 9901, 990, 'lead_generation', NULL, 'in_progress', 'completed', 'review', 1, 20, 0, datetime('now'), datetime('now')),
+        (?, 9901, 990, 'lead_generation', NULL, 'review', 'approved', 'approved', 1, 19, 0, datetime('now'), datetime('now')),
+        (?, 9901, 990, 'lead_generation', NULL, 'review', 'qa_pass', 'qa_pass', 1, 18, 0, datetime('now'), datetime('now')),
+        (?, 9901, 990, 'lead_generation', NULL, 'ready_to_merge', 'deployed_live', 'deployed', 1, 17, 0, datetime('now'), datetime('now')),
+        (?, 9901, 990, 'lead_generation', NULL, 'submitted', 'disabled_close', 'closed', 0, 16, 0, datetime('now'), datetime('now'))
+    `).run(tenantId, tenantId, tenantId, tenantId, tenantId);
+
+    const metadata = resolveWorkflowMetadata(db, { sprintId: 9901, taskType: 'lead' });
+
+    expect(metadata.statuses.map(status => status.name)).toEqual([
+      'todo',
+      'ready',
+      'in_progress',
+      'review',
+      'approved',
+      'submitted',
+      'closed',
+    ]);
+    expect(metadata.transitions.map(transition => `${transition.from_status}:${transition.outcome}:${transition.to_status}`)).toEqual([
+      'in_progress:completed:review',
+      'review:approved:approved',
+    ]);
+    expect(metadata.statuses.find(status => status.name === 'review')?.allowed_transitions).toEqual(['approved']);
+    expect(metadata.transitions.map(transition => transition.to_status)).not.toEqual(expect.arrayContaining(['qa_pass', 'deployed']));
+    expect(metadata.transitions.map(transition => transition.from_status)).not.toContain('ready_to_merge');
+  });
+
   it('seeds only generic, dev, and ops sprint types', () => {
     initSchema();
     const db = getDb();
