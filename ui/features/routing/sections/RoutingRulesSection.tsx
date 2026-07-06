@@ -50,11 +50,14 @@ export default function RoutingRulesSection({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { metadata: workflowMetadata } = useWorkflowMetadata(sprintId ?? undefined);
+  const { metadata: workflowMetadata } = useWorkflowMetadata(sprintId ?? undefined, {
+    sprintType: sprintId ? null : sprintType,
+  });
 
-  const { options: sprintTaskTypeOptions } = useTaskTypes(sprintId);
-  const { options: globalTaskTypeOptions } = useTaskTypes();
-  const taskTypeOptions = useMemo(() => [{ value: '__all__', label: 'All task types' }, ...(sprintTaskTypeOptions.length > 0 ? sprintTaskTypeOptions : globalTaskTypeOptions)], [globalTaskTypeOptions, sprintTaskTypeOptions]);
+  const { options: sprintTaskTypeOptions } = useTaskTypes(sprintId, {
+    sprintType: sprintId ? null : sprintType,
+  });
+  const taskTypeOptions = useMemo(() => [{ value: '__all__', label: 'All task types' }, ...sprintTaskTypeOptions], [sprintTaskTypeOptions]);
 
   const TYPE_BADGE: Record<string, string> = {
     frontend: 'bg-blue-900/60 text-blue-300',

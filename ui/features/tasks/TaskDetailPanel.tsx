@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { api, Task, TaskHistory, TaskStatusMeta, ResolvedTaskFieldSchemaResponse, TaskRelationship, TaskRelationshipTaskRef, TaskRelationshipTypeConfig } from '@/lib/api';
 import { timeAgo, formatDateTime } from '@/lib/date';
 import { X, Pencil, AlertTriangle, ChevronDown, ExternalLink, StopCircle, Trash2, Activity, Cpu, PauseCircle, PlayCircle, Plus, Search } from 'lucide-react';
@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { getTaskStatusMaps } from '@/lib/taskStatuses';
 import { getRunLifecycle } from '@/lib/runLifecycle';
-import { useTaskTypes } from '@/lib/taskTypes';
+import { shouldClearInvalidTaskType, useTaskTypes } from '@/lib/taskTypes';
 import { formatSprintLabel } from '@/lib/sprintLabel';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
 import { TaskModal } from '@/features/tasks/TaskModal';
@@ -37,7 +37,7 @@ const {
 } = getTaskStatusMaps();
 
 interface ProjOpt { id: number; name: string; }
-interface SprintOpt { id: number; name: string; status?: string; }
+interface SprintOpt { id: number; name: string; status?: string; sprint_type?: string; }
 
 interface Props {
   task: Task;
@@ -423,8 +423,19 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
     form.project_id ?? localTask.project_id ?? null,
     form.sprint_id ?? localTask.sprint_id ?? null,
   );
-  const { options: taskTypeOptions } = useTaskTypes(form.sprint_id ?? localTask.sprint_id ?? null);
+  const selectedSprint = useMemo(
+    () => sprints.find(sprint => sprint.id === (form.sprint_id ?? localTask.sprint_id ?? null)) ?? null,
+    [form.sprint_id, localTask.sprint_id, sprints],
+  );
+  const taskTypeSprintId = form.sprint_id ?? localTask.sprint_id ?? null;
+  const taskTypeSprintType = taskTypeSprintId
+    ? selectedSprint?.sprint_type ?? localTask.resolved_sprint_type ?? null
+    : localTask.resolved_sprint_type ?? null;
+  const { options: taskTypeOptions, loading: taskTypesLoading, error: taskTypesError } = useTaskTypes(taskTypeSprintId, {
+    sprintType: taskTypeSprintId ? null : taskTypeSprintType,
+  });
   const { metadata: taskWorkflowMetadata, outcomeMap, nonFailureOutcomes } = useWorkflowMetadata(form.sprint_id ?? localTask.sprint_id ?? null, {
+    sprintType: (form.sprint_id ?? localTask.sprint_id ?? null) ? null : taskTypeSprintType,
     taskType: form.task_type ?? localTask.task_type ?? null,
   });
   const statusDefinitions = statuses && statuses.length > 0 ? statuses : taskWorkflowMetadata.statuses;
@@ -451,7 +462,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
         if (cancelled) return;
         setSprints(projectSprints);
         if (form.sprint_id != null && !projectSprints.some(sprint => sprint.id === form.sprint_id)) {
-          setForm(current => current.sprint_id == null ? current : ({ ...current, sprint_id: null, sprint_name: null }));
+          setForm(current => current.sprint_id == null ? current : ({ ...current, sprint_id: null, sprint_name: null, task_type: null }));
         }
       } catch {
         if (!cancelled) setSprints([]);
@@ -501,6 +512,12 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
       cancelled = true;
     };
   }, [form.sprint_id, form.task_type]);
+
+  useEffect(() => {
+    setForm(current => shouldClearInvalidTaskType(current.task_type ?? null, taskTypeOptions, taskTypesLoading)
+      ? { ...current, task_type: null }
+      : current);
+  }, [taskTypeOptions, taskTypesLoading]);
 
   // Close on Escape
   useEffect(() => {
@@ -1028,8 +1045,10 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                     className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8"
                     value={form.task_type ?? ''}
                     onChange={e => set('task_type', e.target.value || null)}
+                    disabled={taskTypesLoading || Boolean(taskTypesError) || taskTypeOptions.length === 0}
                   >
-                    <option value="">— None —</option>
+                    <option value="">{taskTypesLoading ? 'Loading task types...' : taskTypesError ? 'Task types unavailable' : taskTypeOptions.length === 0 ? 'No task types configured' : '— Select task type —'}</option>
+                    {form.task_type && !taskTypeOptions.some(taskType => taskType.value === form.task_type) && taskTypesLoading && <option value={form.task_type}>{form.task_type}</option>}
                     {taskTypeOptions.map(taskType => (
                       <option key={taskType.value} value={taskType.value}>{taskType.label}</option>
                     ))}
@@ -1177,6 +1196,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                         project_id: nextProjectId,
                         sprint_id: current.project_id === nextProjectId ? current.sprint_id : null,
                         sprint_name: current.project_id === nextProjectId ? current.sprint_name : null,
+                        task_type: current.project_id === nextProjectId ? current.task_type : null,
                       }));
                     }}
                   >
@@ -1199,6 +1219,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                       ...current,
                       sprint_id: e.target.value ? Number(e.target.value) : null,
                       sprint_name: e.target.value ? (sprints.find(sprint => sprint.id === Number(e.target.value))?.name ?? current.sprint_name ?? null) : null,
+                      task_type: null,
                     }))}
                     disabled={!form.project_id || loadingSprints}
                   >

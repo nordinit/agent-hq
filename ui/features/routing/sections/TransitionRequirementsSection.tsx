@@ -31,7 +31,9 @@ export default function TransitionRequirementsSection({
   const [reqs, setReqs] = useState<TransitionRequirement[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const { options: taskTypeOptions } = useTaskTypes();
+  const { options: taskTypeOptions } = useTaskTypes(sprintId, {
+    sprintType: sprintId ? null : sprintType,
+  });
   const [filterTypes, setFilterTypes] = useState<string[]>([]);
   const [filterScopes, setFilterScopes] = useState<string[]>([]);
   const [filterOutcomes, setFilterOutcomes] = useState<string[]>([]);

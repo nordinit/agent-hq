@@ -33,7 +33,9 @@ export default function TransitionsSection({
   const [statusCatalog, setStatusCatalog] = useState<TaskStatusMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const { taskTypes } = useTaskTypes();
+  const { taskTypes } = useTaskTypes(sprintId, {
+    sprintType: sprintId ? null : sprintType,
+  });
   const [filterTaskTypes, setFilterTaskTypes] = useState<string[]>([]);
   const [filterFromStatuses, setFilterFromStatuses] = useState<string[]>([]);
   const [filterOutcomes, setFilterOutcomes] = useState<string[]>([]);
@@ -55,7 +57,9 @@ export default function TransitionsSection({
     to_status: '',
     priority: 0,
   });
-  const { metadata: workflowMetadata } = useWorkflowMetadata(sprintId ?? undefined);
+  const { metadata: workflowMetadata } = useWorkflowMetadata(sprintId ?? undefined, {
+    sprintType: sprintId ? null : sprintType,
+  });
 
   const statusOptions = useMemo(() => Array.from(new Set([
     ...statusCatalog.map(status => status.name),

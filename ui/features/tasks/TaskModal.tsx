@@ -5,7 +5,7 @@ import { X, ChevronDown, Link2, Search, Plus, Trash2 } from 'lucide-react';
 import { api, type CustomFieldDefinition, type ResolvedTaskFieldSchemaResponse, type TaskRelationshipTypeConfig } from '@/lib/api';
 import { formatSprintLabel } from '@/lib/sprintLabel';
 import { getTaskStatusMaps } from '@/lib/taskStatuses';
-import { useTaskTypes } from '@/lib/taskTypes';
+import { shouldClearInvalidTaskType, useTaskTypes } from '@/lib/taskTypes';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
 import type { ModalForm, Project, Sprint, Task } from '@/features/tasks/useTasksPageState';
 
@@ -235,8 +235,18 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
   const [saveError, setSaveError] = useState<string | null>(null);
   const [resolvedFieldSchema, setResolvedFieldSchema] = useState<ResolvedTaskFieldSchemaResponse | null>(null);
 
-  const { options: taskTypeOptions } = useTaskTypes(form.sprint_id ?? null);
+  const selectedSprint = useMemo(
+    () => sprints.find(sprint => sprint.id === form.sprint_id) ?? null,
+    [form.sprint_id, sprints],
+  );
+  const taskTypeSprintType = form.sprint_id
+    ? selectedSprint?.sprint_type ?? task.resolved_sprint_type ?? null
+    : task.resolved_sprint_type ?? null;
+  const { options: taskTypeOptions, loading: taskTypesLoading, error: taskTypesError } = useTaskTypes(form.sprint_id ?? null, {
+    sprintType: form.sprint_id ? null : taskTypeSprintType,
+  });
   const { metadata: taskWorkflowMetadata } = useWorkflowMetadata(form.sprint_id ?? null, {
+    sprintType: form.sprint_id ? null : taskTypeSprintType,
     taskType: form.task_type ?? null,
   });
   const { definitions: taskStatuses } = getTaskStatusMaps(taskWorkflowMetadata.statuses);
@@ -266,6 +276,12 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
       return nextStatus ? { ...current, status: nextStatus } : current;
     });
   }, [taskStatuses]);
+
+  useEffect(() => {
+    setForm(current => shouldClearInvalidTaskType(current.task_type ?? null, taskTypeOptions, taskTypesLoading)
+      ? { ...current, task_type: null }
+      : current);
+  }, [taskTypeOptions, taskTypesLoading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -384,7 +400,7 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
             <div className="relative">
               <select className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8" value={form.project_id ?? ''} onChange={e => {
                 const nextProjectId = e.target.value ? Number(e.target.value) : null;
-                setForm(current => ({ ...current, project_id: nextProjectId, sprint_id: current.project_id === nextProjectId ? current.sprint_id : null, sprint_name: current.project_id === nextProjectId ? current.sprint_name : null }));
+                setForm(current => ({ ...current, project_id: nextProjectId, sprint_id: current.project_id === nextProjectId ? current.sprint_id : null, sprint_name: current.project_id === nextProjectId ? current.sprint_name : null, task_type: current.project_id === nextProjectId ? current.task_type : null }));
               }}>
                 <option value="">— No project —</option>
                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -396,7 +412,7 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
           <div>
             <label className="text-xs font-medium text-slate-400 uppercase tracking-wide block mb-1">Workflow</label>
             <div className="relative">
-              <select className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8 disabled:opacity-60" value={form.sprint_id ?? ''} onChange={e => setForm(current => ({ ...current, sprint_id: e.target.value ? Number(e.target.value) : null, sprint_name: e.target.value ? (sprints.find(sprint => sprint.id === Number(e.target.value))?.name ?? current.sprint_name ?? null) : null }))} disabled={!form.project_id || loadingSprints}>
+              <select className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8 disabled:opacity-60" value={form.sprint_id ?? ''} onChange={e => setForm(current => ({ ...current, sprint_id: e.target.value ? Number(e.target.value) : null, sprint_name: e.target.value ? (sprints.find(sprint => sprint.id === Number(e.target.value))?.name ?? current.sprint_name ?? null) : null, task_type: null }))} disabled={!form.project_id || loadingSprints}>
                 <option value="">{form.project_id ? '— No workflow —' : 'Select a project first'}</option>
                 {sprints.map(sprint => <option key={sprint.id} value={sprint.id}>{formatSprintLabel(sprint)}{sprint.status ? ` (${sprint.status})` : ''}</option>)}
               </select>
@@ -408,8 +424,9 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
           <div>
             <label className="text-xs font-medium text-slate-400 uppercase tracking-wide block mb-1">Task Type</label>
             <div className="relative">
-              <select className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8" value={form.task_type ?? ''} onChange={e => set('task_type', e.target.value || null)}>
-                <option value="">— None —</option>
+              <select className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8 disabled:opacity-60" value={form.task_type ?? ''} onChange={e => set('task_type', e.target.value || null)} disabled={taskTypesLoading || Boolean(taskTypesError) || taskTypeOptions.length === 0}>
+                <option value="">{taskTypesLoading ? 'Loading task types...' : taskTypesError ? 'Task types unavailable' : taskTypeOptions.length === 0 ? 'No task types configured' : '— Select task type —'}</option>
+                {form.task_type && !taskTypeOptions.some(taskType => taskType.value === form.task_type) && taskTypesLoading && <option value={form.task_type}>{form.task_type}</option>}
                 {taskTypeOptions.map(taskType => <option key={taskType.value} value={taskType.value}>{taskType.label}</option>)}
               </select>
               <ChevronDown className="absolute right-2 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />

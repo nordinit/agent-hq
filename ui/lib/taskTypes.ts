@@ -2,11 +2,8 @@
 
 import { useMemo } from 'react';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
-
-export interface TaskTypeOption {
-  value: string;
-  label: string;
-}
+import type { TaskTypeOption } from '@/lib/taskTypeSelection';
+export { shouldClearInvalidTaskType, type TaskTypeOption } from '@/lib/taskTypeSelection';
 
 export function useTaskTypes(
   sprintId?: number | null,
