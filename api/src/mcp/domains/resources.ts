@@ -15,7 +15,7 @@ export function registerResourcesTools(ctx: McpDomainContext) {
         default_statuses: VALID_TASK_STATUSES,
         statuses_source: 'workflow_metadata',
         metadata_tool: 'agent_hq_get_workflow_metadata',
-        pipeline: 'todo → ready → dispatched → in_progress → dev_deploy_queued → dev_deploying → review → qa_pass → ready_to_merge → deployed → done',
+        pipeline: 'todo → ready → dispatched → in_progress → dev_deploy_queued → dev_deploying → review → ready_to_merge → deployed → done',
         terminal: ['done', 'cancelled', 'failed'],
         other: ['stalled', 'blocked'],
       }),

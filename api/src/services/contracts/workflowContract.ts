@@ -139,7 +139,7 @@ function legacyResolveWorkflow(
   sprintType?: string | null,
 ): ResolvedWorkflow {
   const normalizedSprintType = normalizeSprintType(sprintType);
-  const isReviewLane = taskStatus === 'review' || taskStatus === 'qa_pass';
+  const isReviewLane = taskStatus === 'review';
   const isReleaseLane = taskStatus === 'ready_to_merge' || taskStatus === 'deployed';
 
   if (isReviewLane) {
@@ -201,7 +201,6 @@ function getSuggestedOutcome(
 ): string | null {
   const preferredByStatus: Record<string, string[]> = {
     review: ['completed', 'qa_pass', 'qa_fail', 'blocked', 'failed'],
-    qa_pass: ['qa_fail', 'failed'],
     ready_to_merge: ['deployed_live', 'qa_fail', 'failed'],
     deployed: ['live_verified', 'qa_fail', 'failed'],
     stalled: ['retry'],
@@ -221,7 +220,7 @@ function inferWorkflowPhase(
   _taskType: string | null | undefined,
   suggestedOutcome: string,
 ): WorkflowPhase {
-  if (taskStatus === 'review' || taskStatus === 'qa_pass') return 'review';
+  if (taskStatus === 'review') return 'review';
   if (taskStatus === 'ready_to_merge' || taskStatus === 'deployed') return 'release';
   if (suggestedOutcome === 'deployed_live' || suggestedOutcome === 'live_verified') return 'release';
   return 'implementation';
@@ -311,7 +310,7 @@ export function resolveWorkflow(
 export const PIPELINE_STAGES = [
   'todo', 'ready', 'in_progress', 'dev_deploy_queued',
   'dev_deploying', 'review',
-  'qa_pass', 'ready_to_merge', 'deployed', 'done',
+  'ready_to_merge', 'deployed', 'done',
 ] as const;
 
 // ── Evidence requirements (shared semantics) ─────────────────────────────────

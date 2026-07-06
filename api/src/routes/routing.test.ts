@@ -224,12 +224,11 @@ function resetDb(): void {
       ('dev_deploy_queued', 'Dev Deploy Queued', 'amber', 0, 1, '["dev_deploying","review","blocked","failed","cancelled"]'),
       ('dev_deploying', 'Dev Deploying', 'cyan', 0, 1, '["review","dev_deploy_queued","blocked","failed","cancelled"]'),
       ('blocked', 'Blocked', 'rose', 0, 1, '["ready","in_progress","dev_deploy_queued","review","cancelled","failed"]'),
-      ('review', 'Review', 'purple', 0, 1, '["qa_pass","ready","stalled","failed","cancelled"]'),
-      ('qa_pass', 'QA Pass', 'emerald', 0, 1, '["ready_to_merge","ready","failed"]'),
+      ('review', 'Review', 'purple', 0, 1, '["ready_to_merge","ready","stalled","failed","cancelled"]'),
       ('ready_to_merge', 'Ready to Merge', 'cyan', 0, 1, '["deployed","ready","failed"]'),
       ('deployed', 'Deployed', 'green', 0, 1, '["done","ready","failed"]'),
       ('stalled', 'Stalled', 'orange', 0, 1, '["ready","cancelled"]'),
-      ('needs_attention', 'Needs Attention', 'amber', 0, 1, '["todo","ready","in_progress","dev_deploy_queued","dev_deploying","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed","stalled","blocked"]'),
+      ('needs_attention', 'Needs Attention', 'amber', 0, 1, '["todo","ready","in_progress","dev_deploy_queued","dev_deploying","review","ready_to_merge","deployed","done","cancelled","failed","stalled","blocked"]'),
       ('done', 'Done', 'green', 1, 1, '["todo"]'),
       ('cancelled', 'Cancelled', 'red', 1, 1, '["todo"]'),
       ('failed', 'Failed', 'red', 1, 1, '["todo","ready"]')
@@ -1069,7 +1068,7 @@ describe('routing rules API', () => {
         INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
         VALUES
           (56, 'backend', 'ready', 'start_work', 'in_progress', 1, 100, 0),
-          (56, NULL, 'review', 'qa_pass', 'qa_pass', 1, 90, 0),
+          (56, NULL, 'review', 'qa_pass', 'ready_to_merge', 1, 90, 0),
           (57, 'backend', 'ready', 'start_work', 'blocked', 1, 80, 0),
           (65, NULL, 'review', 'ship_it', 'done', 1, 70, 0)
       `).run();

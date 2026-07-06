@@ -693,7 +693,7 @@ function deriveBlockerContext(task: RecordLike, meaningfulNotes: ClassifiedNote[
 function deriveLeaseContext(task: RecordLike, externalEvents: RecordLike[]): RecordLike | null {
   const latest = externalEvents[0] ? asRecord(externalEvents[0]) : null;
   const reviewUrl = asString(task.review_url) ?? asString(latest?.review_url);
-  const relevant = latest || reviewUrl || ['dev_deploy_queued', 'dev_deploying', 'review', 'qa_pass', 'ready_to_merge'].includes(asString(task.status) ?? '');
+  const relevant = latest || reviewUrl || ['dev_deploy_queued', 'dev_deploying', 'review', 'ready_to_merge'].includes(asString(task.status) ?? '');
   if (!relevant) return null;
 
   return {
@@ -787,7 +787,6 @@ function deriveNextAction(task: RecordLike, blockerContext: RecordLike | null, l
     const commit = shortSha(asString(task.review_commit));
     return `QA or review should validate the deployed review artifact${commit ? ` at commit ${commit}` : ''}.`;
   }
-  if (status === 'qa_pass') return 'Release or merge can proceed using the recorded QA evidence.';
   if (status === 'ready_to_merge') return 'Release ownership should pick up the task for deploy and live verification.';
   if (status === 'in_progress') {
     if (runState && asString(runState.current_stage)) {

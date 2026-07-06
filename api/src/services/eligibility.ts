@@ -67,7 +67,7 @@ export function runEligibilityPass(db: Database.Database, projectId?: number): E
   const projectFilter = projectId != null ? `AND t.project_id = ${projectId}` : '';
 
   // ── 1. Background eligibility never changes visible workflow status ───────
-  // No todo → ready, ready → dispatched, qa_pass → ready_to_merge, or any other
+  // No todo → ready, ready → dispatched, review → ready_to_merge, or any other
   // board-facing transition belongs here. Visible movement must happen through
   // explicit outcomes or workflow-event routing.
 

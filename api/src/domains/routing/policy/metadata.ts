@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { RELEASE_TASK_STATUSES, TERMINAL_TASK_STATUSES } from '../../../lib/taskStatuses';
 import type { PolicyRequirementSeed, PolicyTransitionSeed, SprintSeedRow, StarterSprintType } from './types';
 
-const VISIBLE_WORKFLOW_STATUSES = [...RELEASE_TASK_STATUSES];
+const DEV_WORKFLOW_STATUSES = RELEASE_TASK_STATUSES.filter(status => status !== 'qa_pass');
 const GENERIC_WORKFLOW_STATUSES = ['todo', 'ready', 'in_progress', 'review', 'done'] as const;
 const OPS_WORKFLOW_STATUSES = ['todo', 'intake', 'triage', 'risk_review', 'impact_review', 'action_plan', 'stakeholder_update', 'human_approval', 'blocked', 'stalled', 'done'] as const;
 const LEAD_GENERATION_WORKFLOW_STATUSES = ['intake', 'qualification', 'research', 'outreach_draft', 'human_approval', 'sent', 'follow_up', 'done'] as const;
@@ -86,12 +86,11 @@ export function ensureRoutingMetadata(db: Database.Database): void {
     { name: 'dev_deploy_queued', label: 'Dev Deploy Queued', color: 'amber', terminal: 0, is_system: 1, allowed_transitions: ['dev_deploying', 'review', 'blocked', 'failed', 'cancelled'] },
     { name: 'dev_deploying', label: 'Dev Deploying', color: 'cyan', terminal: 0, is_system: 1, allowed_transitions: ['review', 'dev_deploy_queued', 'blocked', 'failed', 'cancelled'] },
     { name: 'blocked', label: 'Blocked', color: 'rose', terminal: 0, is_system: 1, allowed_transitions: ['ready', 'in_progress', 'dev_deploy_queued', 'review', 'cancelled', 'failed'] },
-    { name: 'review', label: 'Review', color: 'purple', terminal: 0, is_system: 1, allowed_transitions: ['qa_pass', 'ready', 'stalled', 'failed', 'cancelled'] },
-    { name: 'qa_pass', label: 'QA Pass', color: 'emerald', terminal: 0, is_system: 1, allowed_transitions: ['ready_to_merge', 'ready', 'failed'] },
+    { name: 'review', label: 'Review', color: 'purple', terminal: 0, is_system: 1, allowed_transitions: ['ready_to_merge', 'ready', 'stalled', 'failed', 'cancelled'] },
     { name: 'ready_to_merge', label: 'Ready to Merge', color: 'cyan', terminal: 0, is_system: 1, allowed_transitions: ['deployed', 'ready', 'failed'] },
     { name: 'deployed', label: 'Deployed', color: 'green', terminal: 0, is_system: 1, allowed_transitions: ['done', 'ready', 'failed'] },
     { name: 'stalled', label: 'Stalled', color: 'orange', terminal: 0, is_system: 1, allowed_transitions: ['ready', 'cancelled'] },
-    { name: 'needs_attention', label: 'Needs Attention', color: 'amber', terminal: 0, is_system: 1, allowed_transitions: ['todo', 'ready', 'in_progress', 'dev_deploy_queued', 'dev_deploying', 'review', 'qa_pass', 'ready_to_merge', 'deployed', 'done', 'cancelled', 'failed', 'stalled', 'blocked'] },
+    { name: 'needs_attention', label: 'Needs Attention', color: 'amber', terminal: 0, is_system: 1, allowed_transitions: ['todo', 'ready', 'in_progress', 'dev_deploy_queued', 'dev_deploying', 'review', 'ready_to_merge', 'deployed', 'done', 'cancelled', 'failed', 'stalled', 'blocked'] },
     { name: 'done', label: 'Done', color: 'green', terminal: 1, is_system: 1, allowed_transitions: ['todo'] },
     { name: 'cancelled', label: 'Cancelled', color: 'red', terminal: 1, is_system: 1, allowed_transitions: ['todo'] },
     { name: 'failed', label: 'Failed', color: 'red', terminal: 1, is_system: 1, allowed_transitions: ['todo', 'ready'] },
@@ -119,6 +118,11 @@ export function ensureRoutingMetadata(db: Database.Database): void {
     }
 
     db.prepare(`
+      DELETE FROM task_statuses
+      WHERE name = 'qa_pass'
+    `).run();
+
+    db.prepare(`
       UPDATE routing_transitions
       SET enabled = 0
       WHERE project_id IS NULL
@@ -126,6 +130,8 @@ export function ensureRoutingMetadata(db: Database.Database): void {
   });
 
   seedTx();
+  removeQaPassFromDevelopmentStatusMetadata(db);
+  normalizeQaPassDevelopmentTransitions(db);
 
   try { db.exec(`ALTER TABLE routing_transitions ADD COLUMN task_type TEXT`); } catch { /* exists */ }
   try { db.exec(`ALTER TABLE routing_transitions ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`); } catch { /* exists */ }
@@ -240,7 +246,7 @@ export function visibleWorkflowStatusesForSprintType(sprintType: string | null |
   if (type === 'generic') return [...GENERIC_WORKFLOW_STATUSES];
   if (type === 'ops') return [...OPS_WORKFLOW_STATUSES];
   if (type === 'lead_generation') return [...LEAD_GENERATION_WORKFLOW_STATUSES];
-  return [...VISIBLE_WORKFLOW_STATUSES];
+  return [...DEV_WORKFLOW_STATUSES];
 }
 
 export function labelFromKey(value: string): string {
@@ -342,10 +348,8 @@ export function devWorkflowTransitions(): PolicyTransitionSeed[] {
     { task_type: null, from_status: 'dev_deploy_queued', outcome: 'completed_for_review', to_status: 'review', enabled: 1, priority: 0 },
     { task_type: null, from_status: 'dev_deploying', outcome: 'dev_deploy_queued', to_status: 'dev_deploying', enabled: 1, priority: 0 },
     { task_type: null, from_status: 'dev_deploying', outcome: 'completed_for_review', to_status: 'review', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'review', outcome: 'qa_pass', to_status: 'qa_pass', enabled: 1, priority: 0 },
+    { task_type: null, from_status: 'review', outcome: 'qa_pass', to_status: 'ready_to_merge', enabled: 1, priority: 0 },
     { task_type: null, from_status: 'review', outcome: 'qa_fail', to_status: 'ready', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'qa_pass', outcome: 'qa_fail', to_status: 'ready', enabled: 1, priority: 0 },
-    { task_type: null, from_status: 'qa_pass', outcome: 'release_failed', to_status: 'failed', enabled: 1, priority: 0 },
     { task_type: null, from_status: 'ready_to_merge', outcome: 'deployed_live', to_status: 'deployed', enabled: 1, priority: 0 },
     { task_type: null, from_status: 'ready_to_merge', outcome: 'qa_fail', to_status: 'ready', enabled: 1, priority: 0 },
     { task_type: null, from_status: 'ready_to_merge', outcome: 'release_failed', to_status: 'failed', enabled: 1, priority: 0 },
@@ -364,12 +368,124 @@ export function devWorkflowTransitions(): PolicyTransitionSeed[] {
       rows.push({ task_type: null, from_status: fromStatus, outcome, to_status: toStatus, enabled: 1, priority: 0 });
     }
   }
-  for (const fromStatus of ['qa_pass', 'ready_to_merge', 'deployed'] as const) {
+  for (const fromStatus of ['ready_to_merge', 'deployed'] as const) {
     for (const [outcome, toStatus] of failureOutcomes) {
       rows.push({ task_type: null, from_status: fromStatus, outcome, to_status: toStatus, enabled: 1, priority: 0 });
     }
   }
   return rows;
+}
+
+function removeQaPassFromDevelopmentStatusMetadata(db: Database.Database): void {
+  try {
+    if (tableExists(db, 'sprint_type_task_statuses')) {
+      db.prepare(`
+        DELETE FROM sprint_type_task_statuses
+        WHERE sprint_type_key = 'dev'
+          AND status_key = 'qa_pass'
+      `).run();
+      const rows = db.prepare(`
+        SELECT id, allowed_transitions_json
+        FROM sprint_type_task_statuses
+        WHERE sprint_type_key = 'dev'
+      `).all() as Array<{ id: number; allowed_transitions_json: string | null }>;
+      const update = db.prepare(`
+        UPDATE sprint_type_task_statuses
+        SET allowed_transitions_json = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `);
+      for (const row of rows) {
+        const next = parseJsonArray(row.allowed_transitions_json)
+          .map(status => status === 'qa_pass' ? 'ready_to_merge' : status);
+        update.run(JSON.stringify([...new Set(next)]), row.id);
+      }
+    }
+
+    if (tableExists(db, 'sprint_task_statuses') && tableExists(db, 'sprints')) {
+      db.prepare(`
+        DELETE FROM sprint_task_statuses
+        WHERE status_key = 'qa_pass'
+          AND sprint_id IN (SELECT id FROM sprints WHERE sprint_type = 'dev')
+      `).run();
+      const rows = db.prepare(`
+        SELECT sts.id, sts.allowed_transitions_json
+        FROM sprint_task_statuses sts
+        JOIN sprints s ON s.id = sts.sprint_id
+        WHERE s.sprint_type = 'dev'
+      `).all() as Array<{ id: number; allowed_transitions_json: string | null }>;
+      const update = db.prepare(`
+        UPDATE sprint_task_statuses
+        SET allowed_transitions_json = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `);
+      for (const row of rows) {
+        const next = parseJsonArray(row.allowed_transitions_json)
+          .map(status => status === 'qa_pass' ? 'ready_to_merge' : status)
+          .filter(status => status !== 'qa_pass');
+        update.run(JSON.stringify([...new Set(next)]), row.id);
+      }
+    }
+  } catch {
+    // Metadata cleanup is best-effort during startup across historical schemas.
+  }
+}
+
+function normalizeQaPassDevelopmentTransitions(db: Database.Database): void {
+  try {
+    if (tableExists(db, 'routing_config')) {
+      db.prepare(`
+        UPDATE routing_config
+        SET to_status = 'ready_to_merge'
+        WHERE from_status = 'review'
+          AND outcome = 'qa_pass'
+          AND to_status = 'qa_pass'
+      `).run();
+      db.prepare(`
+        UPDATE routing_config
+        SET enabled = 0
+        WHERE from_status = 'qa_pass'
+      `).run();
+    }
+    if (tableExists(db, 'lifecycle_rules')) {
+      db.prepare(`
+        UPDATE lifecycle_rules
+        SET to_status = 'ready_to_merge'
+        WHERE from_status = 'review'
+          AND outcome = 'qa_pass'
+          AND to_status = 'qa_pass'
+      `).run();
+      db.prepare(`
+        UPDATE lifecycle_rules
+        SET enabled = 0
+        WHERE from_status = 'qa_pass'
+      `).run();
+    }
+    if (tableExists(db, 'sprint_task_transitions')) {
+      const hasSprintType = tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
+      const hasSprintId = tableHasColumn(db, 'sprint_task_transitions', 'sprint_id');
+      const scopeSql = hasSprintType
+        ? `sprint_type = 'dev'`
+        : hasSprintId && tableExists(db, 'sprints')
+          ? `sprint_id IN (SELECT id FROM sprints WHERE sprint_type = 'dev')`
+          : `0`;
+      db.prepare(`
+        UPDATE sprint_task_transitions
+        SET to_status = 'ready_to_merge', updated_at = datetime('now')
+        WHERE from_status = 'review'
+          AND outcome = 'qa_pass'
+          AND to_status = 'qa_pass'
+          AND (${scopeSql})
+      `).run();
+      db.prepare(`
+        UPDATE sprint_task_transitions
+        SET enabled = 0, updated_at = datetime('now')
+        WHERE from_status = 'qa_pass'
+          AND (${scopeSql})
+      `).run();
+    }
+  } catch {
+    // Transition cleanup is best-effort during startup across historical schemas.
+  }
 }
 
 export function policyTransitionsForSprintType(sprintType: string | null | undefined): PolicyTransitionSeed[] {

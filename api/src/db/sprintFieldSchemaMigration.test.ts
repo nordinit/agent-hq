@@ -86,7 +86,6 @@ describe('sprint field schema migration', () => {
       'dev_deploy_queued',
       'dev_deploying',
       'review',
-      'qa_pass',
       'ready_to_merge',
       'deployed',
       'done',
@@ -108,6 +107,7 @@ describe('sprint field schema migration', () => {
       'failed',
       'retry',
     ]));
+    expect(metadata.statuses.map(status => status.name)).not.toContain('qa_pass');
     expect(metadata.non_failure_outcomes).toEqual(expect.arrayContaining(['qa_fail', 'blocked', 'live_verified']));
     expect(metadata.non_failure_outcomes).not.toContain('failed');
   });

@@ -172,7 +172,7 @@ function statusRequiresQaEvidence(
   task: ({ status?: string | null; task_type?: string | null; sprint_id?: number | null } & Partial<TaskReleaseEvidence>),
 ): boolean {
   const status = task.status ?? null;
-  if (status !== 'qa_pass' && status !== 'ready_to_merge') return false;
+  if (status !== 'ready_to_merge') return false;
   if (!db) return false;
 
   try {
@@ -215,20 +215,17 @@ export function evaluateTaskIntegrity(
     if (!liveOk) warnings.push('Done task is missing live verification evidence.');
   }
 
-  if (status === 'qa_pass' && !deployOk) {
-    warnings.push('QA passed, but not deployed yet.');
-  }
   if (status === 'ready_to_merge' && !deployOk) {
-    warnings.push('Ready to merge, but deploy evidence has not been recorded yet.');
+    warnings.push('Ready to merge after QA pass, but deploy evidence has not been recorded yet.');
   }
 
-  if ((status === 'review' || status === 'qa_pass' || status === 'ready_to_merge') && isMainlineBranch(task.review_branch)) {
+  if ((status === 'review' || status === 'ready_to_merge') && isMainlineBranch(task.review_branch)) {
     warnings.push('Review evidence references main/master. Agent HQ implementation work should use a feature branch/worktree, not main.');
   }
-  if ((status === 'review' || status === 'qa_pass' || status === 'ready_to_merge') && isProductionLikeUrl(task.review_url)) {
+  if ((status === 'review' || status === 'ready_to_merge') && isProductionLikeUrl(task.review_url)) {
     warnings.push('Review evidence points at a production-like URL. Use Dev evidence for implementation handoff and keep production for deployed/live verification.');
   }
-  if ((status === 'qa_pass' || status === 'ready_to_merge') && isProductionLikeUrl(task.qa_tested_url)) {
+  if (status === 'ready_to_merge' && isProductionLikeUrl(task.qa_tested_url)) {
     warnings.push('QA evidence points at a production-like URL. For Agent HQ internal tasks, use the Dev environment for QA proof and keep production for live verification.');
   }
 
@@ -238,9 +235,6 @@ export function evaluateTaskIntegrity(
   if (status === 'review') {
     release_state_badge = 'review build';
     release_state_label = 'Review build only';
-  } else if (status === 'qa_pass') {
-    release_state_badge = 'qa passed';
-    release_state_label = 'QA passed (not live)';
   } else if (status === 'ready_to_merge') {
     release_state_badge = 'ready to merge';
     release_state_label = 'Ready to merge';

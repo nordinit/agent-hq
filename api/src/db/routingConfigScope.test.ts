@@ -90,7 +90,7 @@ describe('routing_config scoped ownership schema migration', () => {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       INSERT INTO lifecycle_rules (task_type, from_status, outcome, to_status, lane, enabled, priority)
-      VALUES ('backend', 'review', 'qa_pass', 'qa_pass', 'review', 1, 5);
+      VALUES ('backend', 'review', 'qa_pass', 'ready_to_merge', 'review', 1, 5);
     `);
 
     initSchema();
@@ -120,7 +120,7 @@ describe('routing_config scoped ownership schema migration', () => {
       task_type: 'backend',
       from_status: 'review',
       outcome: 'qa_pass',
-      to_status: 'qa_pass',
+      to_status: 'ready_to_merge',
       enabled: 1,
       priority: 5,
     });

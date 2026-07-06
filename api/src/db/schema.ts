@@ -2994,7 +2994,7 @@ On FAIL:
 - add a precise task note with repro steps, expected vs actual, severity, tested URL, and verified branch/commit
 - use agent_hq_post_task_outcome with outcome=qa_fail (this is the ONE AND ONLY exit step — posting this outcome automatically closes the instance)
 
-Never mark a QA pass as done directly. Agent HQ now routes in_progress -> review -> qa_pass -> ready_to_merge -> deployed -> done. QA stops at qa_pass.
+Never mark a QA pass as done directly. Agent HQ routes in_progress -> review -> ready_to_merge -> deployed -> done. QA reports outcome=qa_pass from review, which advances the task directly to ready_to_merge.
 
 ## How to test
 - For Agent HQ internal tasks, prefer the Dev environment first.
@@ -4749,12 +4749,10 @@ export function ensureLifecycleRulesTable(): void {
         [null, 'dev_deploying', 'completed_for_review', 'review', 0],
         [null, 'dev_deploying', 'blocked', 'blocked', 0],
         [null, 'dev_deploying', 'failed', 'failed', 0],
-        [null, 'review', 'qa_pass', 'qa_pass', 0],
+        [null, 'review', 'qa_pass', 'ready_to_merge', 0],
         [null, 'review', 'qa_fail', 'ready', 0],
         [null, 'review', 'blocked', 'blocked', 0],
         [null, 'review', 'failed', 'failed', 0],
-        [null, 'qa_pass', 'qa_fail', 'ready', 0],
-        [null, 'qa_pass', 'failed', 'failed', 0],
         [null, 'ready_to_merge', 'deployed_live', 'deployed', 0],
         [null, 'ready_to_merge', 'qa_fail', 'ready', 0],
         [null, 'ready_to_merge', 'blocked', 'blocked', 0],
@@ -4773,6 +4771,25 @@ export function ensureLifecycleRulesTable(): void {
     });
     seedRulesTx();
     console.log('[schema] Seeded lifecycle_rules from canonicalOutcomeRoute defaults');
+  }
+  try {
+    const normalizedQaPassRules = db.prepare(`
+      UPDATE lifecycle_rules
+      SET to_status = 'ready_to_merge', updated_at = datetime('now')
+      WHERE from_status = 'review'
+        AND outcome = 'qa_pass'
+        AND to_status = 'qa_pass'
+    `).run();
+    const disabledQaPassStatusRules = db.prepare(`
+      UPDATE lifecycle_rules
+      SET enabled = 0, updated_at = datetime('now')
+      WHERE from_status = 'qa_pass'
+    `).run();
+    if (normalizedQaPassRules.changes > 0 || disabledQaPassStatusRules.changes > 0) {
+      console.log(`[schema] Normalized qa_pass status lifecycle rules (updated=${normalizedQaPassRules.changes}, disabled=${disabledQaPassStatusRules.changes})`);
+    }
+  } catch (err) {
+    console.error('[schema] Failed to normalize qa_pass lifecycle rules:', err);
   }
   try {
     const columns = db.prepare(`PRAGMA table_info(lifecycle_rules)`).all() as Array<{ name: string }>;

@@ -144,7 +144,7 @@ Post `blocked` or `failed` instead with a short explanation of what is missing.
 ---
 
 ## 2) Review / QA Rules
-Use this when the current task status is `review` or `qa_pass`, or when the valid outcomes include `qa_pass` or `qa_fail`.
+Use this when the current task status is `review`, or when the valid outcomes include `qa_pass` or `qa_fail`.
 
 ### Critical QA rule
 Do not pass work that you could not actually verify.

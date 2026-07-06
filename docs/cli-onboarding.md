@@ -162,7 +162,7 @@ Generated starter template coverage:
 ```text
 Development:
   statuses: todo, ready, in_progress, dev_deploy_queued, dev_deploying,
-            review, qa_pass, ready_to_merge, deployed, done
+            review, ready_to_merge, deployed, done
   task types: backend, frontend, fullstack, qa
   evidence gates: review, QA, deploy, live verification
 

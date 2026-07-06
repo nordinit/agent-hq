@@ -64,7 +64,7 @@ describe('taskRelease configurable outcome routing', () => {
     db.prepare(`DELETE FROM lifecycle_rules WHERE from_status = ? AND outcome = ?`).run('review', 'qa_pass');
     db.prepare(`
       INSERT INTO lifecycle_rules (task_type, from_status, outcome, to_status, enabled, priority)
-      VALUES ('backend', 'review', 'qa_pass', 'qa_pass', 1, 100)
+      VALUES ('backend', 'review', 'qa_pass', 'ready_to_merge', 1, 100)
     `).run();
 
     expect(canonicalOutcomeRoute(db, 'review', 'qa_pass', 'backend', 10, 'enhancements')).toBeNull();

@@ -601,7 +601,6 @@ function ensureRouting(db: Database.Database, tenantId: number, projectId: numbe
     for (const taskType of STARTER_SPRINT_TYPE_TASK_TYPE_SEEDS.find(seed => seed.sprintType === sprintType)?.taskTypes ?? []) {
       rules.push({ sprintType, taskType, status: 'review', agentId: review, priority: 100 });
       if (sprintType === 'dev') {
-        rules.push({ sprintType, taskType, status: 'qa_pass', agentId: ops, priority: 100 });
         rules.push({ sprintType, taskType, status: 'ready_to_merge', agentId: ops, priority: 100 });
       }
     }

@@ -517,7 +517,7 @@ export function buildStarterSetupPlan(db: Database.Database, tenantId: number, i
       statuses: template.key === 'blank'
         ? ['todo', 'ready', 'in_progress', 'review', 'done']
         : template.key === 'development'
-          ? ['todo', 'ready', 'in_progress', 'dev_deploy_queued', 'dev_deploying', 'review', 'qa_pass', 'ready_to_merge', 'deployed', 'done']
+          ? ['todo', 'ready', 'in_progress', 'dev_deploy_queued', 'dev_deploying', 'review', 'ready_to_merge', 'deployed', 'done']
           : template.key === 'ops'
             ? ['todo', 'intake', 'triage', 'risk_review', 'impact_review', 'action_plan', 'stakeholder_update', 'human_approval', 'blocked', 'stalled', 'done']
             : ['intake', 'qualification', 'research', 'outreach_draft', 'human_approval', 'sent', 'follow_up', 'done'],

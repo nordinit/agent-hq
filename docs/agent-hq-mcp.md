@@ -188,7 +188,7 @@ These values are tenant/workflow configurable and must be resolved from metadata
 - relationship type keys
 - custom task field schemas
 
-Do not treat a global task status enum as authoritative. A workflow record can still have a static lifecycle status such as `planning`, `active`, `paused`, `complete`, or `closed`, while tasks inside that workflow can use a configurable status set such as `todo`, `ready`, `in_progress`, `review`, `qa_pass`, `done`, or a tenant-defined alternative. Always resolve the task's workflow metadata first.
+Do not treat a global task status enum as authoritative. A workflow record can still have a static lifecycle status such as `planning`, `active`, `paused`, `complete`, or `closed`, while tasks inside that workflow can use a configurable status set such as `todo`, `ready`, `in_progress`, `review`, `ready_to_merge`, `done`, or a tenant-defined alternative. Always resolve the task's workflow metadata first.
 
 Super-admin MCP keys with `admin.cross_tenant` may pass `tenant_id` to workflow metadata/read helpers such as `agent_hq_get_workflow_metadata`, `agent_hq_list_workflow_type_statuses`, `agent_hq_list_workflow_type_outcomes`, `agent_hq_list_workflow_type_relationship_types`, and `agent_hq_list_workflow_type_field_schemas`. Tenant-bound MCP keys cannot pass explicit tenant selectors, even for their own tenant; the server returns an authorization error instead.
 

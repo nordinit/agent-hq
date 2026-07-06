@@ -267,6 +267,7 @@ function loadRoutingWarnings(
 
   const externalEventsByStatus = new Map<string, Set<string>>();
   for (const status of statuses) {
+    if (status.name === 'needs_attention') continue;
     for (const mapping of externalMappings) {
       const included = mapping.status_includes.length === 0 || mapping.status_includes.includes(status.name);
       if (!included) continue;
@@ -280,7 +281,7 @@ function loadRoutingWarnings(
   const effectiveStatusNames = new Set(statuses.map((status) => status.name));
   const routableByStatus = new Map<string, Array<{ id: number; task_type: string | null }>>();
   for (const rule of routingRules) {
-    if (!effectiveStatusNames.has(rule.status)) continue;
+    if (!effectiveStatusNames.has(rule.status) && rule.status !== 'needs_attention') continue;
     if (!routableByStatus.has(rule.status)) routableByStatus.set(rule.status, []);
     routableByStatus.get(rule.status)!.push({ id: rule.id, task_type: rule.task_type });
   }

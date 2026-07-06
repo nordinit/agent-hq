@@ -710,15 +710,15 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
     });
   }
 
-  if (nextStatus === 'qa_pass' && !finalTaskState.qa_verified_commit) {
+  if (effectiveOutcome === 'qa_pass' && !finalTaskState.qa_verified_commit) {
     emitIntegrityEvent(db, {
       taskId: input.taskId, anomalyType: 'missing_qa_evidence',
-      detail: `Task moved to qa_pass (outcome: ${effectiveOutcome}) with no qa_verified_commit`,
+      detail: `Task posted qa_pass (next status: ${nextStatus}) with no qa_verified_commit`,
       instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
     });
   }
 
-  if (nextStatus === 'qa_pass' && finalTaskState.review_commit && finalTaskState.qa_verified_commit
+  if (effectiveOutcome === 'qa_pass' && finalTaskState.review_commit && finalTaskState.qa_verified_commit
     && finalTaskState.review_commit !== finalTaskState.qa_verified_commit) {
     emitIntegrityEvent(db, {
       taskId: input.taskId, anomalyType: 'commit_mismatch',

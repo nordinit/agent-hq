@@ -101,7 +101,10 @@ describe('starter template setup API', () => {
       expect(previewRes.status).toBe(200);
       const preview = await previewRes.json() as Record<string, any>;
       expect(preview.plan.compatibility.ok).toBe(true);
+      expect(preview.plan.workflows[0].statuses).not.toContain('qa_pass');
+      expect(preview.plan.workflows[0].statuses).toEqual(expect.arrayContaining(['review', 'ready_to_merge']));
       expect(preview.plan.workflows[0].verification.evidence_gates.join('\n')).toMatch(/review_branch/);
+      expect(preview.plan.workflows[0].verification.evidence_gates.join('\n')).toMatch(/qa_pass/);
       expect(preview.plan.routes).toEqual(expect.arrayContaining([
         expect.objectContaining({ key: 'development:backend:ready', owner_name: 'Cinder Dev' }),
         expect.objectContaining({ key: 'development:frontend:ready', enabled: false }),
@@ -123,6 +126,24 @@ describe('starter template setup API', () => {
       expect(applied.agent_ids.pm).toBeGreaterThan(0);
 
       const db = getDb();
+      const workflowStatuses = db.prepare(`
+        SELECT status_key
+        FROM sprint_task_statuses
+        WHERE sprint_id = ?
+        ORDER BY stage_order ASC
+      `).all(applied.workflow_id) as Array<{ status_key: string }>;
+      expect(workflowStatuses.map(row => row.status_key)).not.toContain('qa_pass');
+      expect(workflowStatuses.map(row => row.status_key)).toEqual(expect.arrayContaining(['review', 'ready_to_merge']));
+      expect(db.prepare(`
+        SELECT to_status
+        FROM sprint_task_transitions
+        WHERE sprint_id = ? AND from_status = 'review' AND outcome = 'qa_pass'
+      `).get(applied.workflow_id)).toEqual({ to_status: 'ready_to_merge' });
+      expect(db.prepare(`
+        SELECT outcome_key
+        FROM sprint_type_outcomes
+        WHERE sprint_type_key = 'dev' AND outcome_key = 'qa_pass'
+      `).get()).toEqual({ outcome_key: 'qa_pass' });
       const agentCount = (db.prepare(`SELECT COUNT(*) AS n FROM agents WHERE project_id = ?`).get(applied.project_id) as { n: number }).n;
       expect(agentCount).toBe(4);
       const disabledRoute = db.prepare(`

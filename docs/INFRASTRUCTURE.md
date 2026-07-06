@@ -207,12 +207,12 @@ projects, sprints, sprint_job_schedules, sprint_job_assignments, task_notes, tas
 ## 9. Task lifecycle
 
 ### Statuses
-`todo → ready → dispatched → in_progress → review → qa_pass → ready_to_merge → deployed → done`
+`todo → ready → dispatched → in_progress → review → ready_to_merge → deployed → done`
 
 Also: `stalled`, `failed`, `cancelled`.
 
 ### Statuses, Outcomes, Workflow Phases
-Statuses are task board states. Outcomes are agent-reported transition requests such as `completed_for_review`, `qa_pass`, `approved_for_merge`, `deployed_live`, `live_verified`, `blocked`, or `failed`. Workflow phase is derived internally from status and outcome configuration for contract phrasing; it is not persisted on transition rows and does not control dispatch.
+Statuses are task board states. Outcomes are agent-reported transition requests such as `completed_for_review`, `qa_pass`, `approved_for_merge`, `deployed_live`, `live_verified`, `blocked`, or `failed`. `qa_pass` is a QA outcome, not a board status; the standard Development route moves `review + qa_pass` directly to `ready_to_merge`. Workflow phase is derived internally from status and outcome configuration for contract phrasing; it is not persisted on transition rows and does not control dispatch.
 
 The configured transition rows decide which outcomes are valid from each status and where they move the task next. The configured requirement rows decide which evidence fields block that outcome.
 

@@ -165,7 +165,7 @@ try {
       db.prepare(`
         INSERT INTO routing_configs (tenant_id, project_id, from_status, outcome, to_status, enabled) VALUES
           (?, ?, 'in_progress', 'completed_for_review', 'review', 1),
-          (?, ?, 'review', 'qa_pass', 'done', 1),
+          (?, ?, 'review', 'qa_pass', 'ready_to_merge', 1),
           (?, ?, 'review', 'qa_fail', 'in_progress', 1)
       `).run(defaultTenantId, agencyProject.id, defaultTenantId, agencyProject.id, defaultTenantId, agencyProject.id);
       console.log('[seed-dev] Seeded table: routing_configs');
