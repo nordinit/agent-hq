@@ -17,6 +17,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { notifyTaskStatusChange } from '../lib/taskNotifications';
+import { recordDispatchStartupFailureNotification } from '../lib/dispatchStartupFailureNotifications';
 import { recordSkillMaterializationIssues } from '../lib/skillMaterializationNotifications';
 import { resolveRepoConfig } from '../lib/repoConfig';
 import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/history';
@@ -550,6 +551,23 @@ function persistDispatchStartupFailure(
       `Next owner: ${classification.nextOwner}`,
     ].join('\n'),
   );
+
+  recordDispatchStartupFailureNotification(db, {
+    taskId: params.taskId,
+    tenantId: resolveRuntimeTenantId(db, { taskId: params.taskId }) ?? params.tenantId ?? null,
+    matchedAgentId: params.matchedAgentId,
+    matchedAgentLabel: params.matchedAgentLabel,
+    routingReason: params.routingReason,
+    failureCategory: classification.category,
+    failureMessage: params.reason,
+    mappingId: mapping?.id ?? null,
+    mappingActionKind: mapping?.action_kind ?? (hasWorkflowEventMappings ? null : 'legacy_safe_default'),
+    mappingActionTarget: mapping?.action_target ?? (hasWorkflowEventMappings ? null : nextStatus),
+    nextAction: classification.nextAction,
+    nextOwner: classification.nextOwner,
+    priorStatus: params.priorStatus,
+    resolvedStatus: nextStatus,
+  });
 
   if (nextStatus !== params.priorStatus) {
     writeTaskStatusChange(db, params.taskId, 'dispatcher', params.priorStatus, nextStatus, {

@@ -53,6 +53,9 @@ import type { AgentRuntime } from '../runtimes';
 import { dispatchInstance, resolveModelFromStoryPoints, runDispatcher } from './dispatcher';
 
 const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolveRuntime>;
+const mockedTaskNotifications = jest.requireMock('../lib/taskNotifications') as {
+  notifyTaskStatusChange: jest.Mock;
+};
 
 function mockRuntime(dispatch: jest.Mock): AgentRuntime {
   return {
@@ -542,6 +545,7 @@ describe('runDispatcher thinking-level routing', () => {
   it('makes task worktree authoritative for runtime cwd and repo-root metadata', async () => {
     const db = new Database(':memory:');
     db.exec(`
+      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         job_title TEXT NOT NULL,
@@ -970,6 +974,7 @@ describe('runDispatcher thinking-level routing', () => {
   it('normalizes dispatch path inputs before making the worktree authoritative', async () => {
     const db = new Database(':memory:');
     db.exec(`
+      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         job_title TEXT NOT NULL,
@@ -1150,6 +1155,7 @@ describe('runDispatcher thinking-level routing', () => {
 
     const db = new Database(':memory:');
     db.exec(`
+      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         job_title TEXT NOT NULL,
@@ -1223,6 +1229,7 @@ describe('runDispatcher thinking-level routing', () => {
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    db.prepare(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`).run();
 
     db.prepare(`
       INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
@@ -1282,7 +1289,192 @@ describe('runDispatcher thinking-level routing', () => {
       expect.objectContaining({ field: 'workflow_event_action_target', new_value: 'stalled' }),
     ]));
 
+    const notification = db.prepare(`
+      SELECT type, title, body, source, outlet, metadata_json
+      FROM notification_records
+      WHERE type = 'task_dispatch_startup_failed'
+    `).get() as { type: string; title: string; body: string; source: string; outlet: string; metadata_json: string };
+    expect(notification.title).toBe('Task #442 dispatch startup failed');
+    expect(notification.body).toContain('Task: #442 Surface dispatcher failure');
+    expect(notification.body).toContain('Project: unknown');
+    expect(notification.body).toContain('Workflow: Bugs');
+    expect(notification.body).toContain('Matched agent: Ember (#1)');
+    expect(notification.body).toContain('Routing reason: Priority: high | Created: 2026-05-06T18:00:00.000Z | Rule: Ember (agent #1)');
+    expect(notification.body).toContain('Failure category: repo setup / worktree creation');
+    expect(notification.body).toContain("Failure message: Worktree creation failed for task #442");
+    expect(notification.body).toContain('Mapping: #1; action=status -> stalled');
+    expect(notification.body).toContain('Status: ready -> stalled');
+    expect(notification.body).toContain('Next action: Fix the repo setup for the matched route, then redispatch the task.');
+    expect(notification.source).toBe('agent_hq_dispatcher');
+    expect(notification.outlet).toBe('agent_hq');
+    expect(JSON.parse(notification.metadata_json)).toEqual(expect.objectContaining({
+      taskId: 442,
+      matchedAgentId: 1,
+      matchedAgentLabel: 'Ember',
+      failureCategory: 'repo setup / worktree creation',
+      mappingActionKind: 'status',
+      mappingActionTarget: 'stalled',
+      priorStatus: 'ready',
+      resolvedStatus: 'stalled',
+    }));
+    expect(mockedTaskNotifications.notifyTaskStatusChange).toHaveBeenCalledWith(db, expect.objectContaining({
+      taskId: 442,
+      fromStatus: 'ready',
+      toStatus: 'stalled',
+      source: 'dispatcher',
+    }));
+
     expect(mockedResolveRuntime).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it('records a startup failure notification when workflow mapping ignores the event and status stays ready', () => {
+    jest.clearAllMocks();
+
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE agents (
+        id INTEGER PRIMARY KEY,
+        job_title TEXT NOT NULL,
+        project_id INTEGER,
+        job_instructions TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        timeout_seconds INTEGER NOT NULL,
+        model TEXT,
+        skill_names TEXT,
+        session_key TEXT NOT NULL,
+        name TEXT,
+        runtime_type TEXT,
+        runtime_config TEXT,
+        hooks_url TEXT,
+        hooks_auth_header TEXT,
+        workspace_path TEXT,
+        preferred_provider TEXT,
+        repo_path TEXT,
+        repo_url TEXT,
+        repo_access_mode TEXT,
+        os_user TEXT,
+        openclaw_agent_id TEXT,
+        sort_rules TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE TABLE tasks (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        agent_id INTEGER,
+        project_id INTEGER,
+        task_type TEXT,
+        sprint_id INTEGER,
+        created_at TEXT NOT NULL,
+        story_points INTEGER,
+        active_instance_id INTEGER,
+        paused_at TEXT,
+        dispatched_at TEXT,
+        claimed_at TEXT,
+        routing_reason TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        max_retries INTEGER NOT NULL DEFAULT 3,
+        failure_detail TEXT,
+        previous_status TEXT,
+        updated_at TEXT
+      );
+      CREATE TABLE sprints (id INTEGER PRIMARY KEY, name TEXT, sprint_type TEXT, status TEXT);
+      CREATE TABLE sprint_task_routing_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, sprint_id INTEGER NOT NULL, task_type TEXT, status TEXT NOT NULL, agent_id INTEGER NOT NULL, priority INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE job_instances (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id INTEGER, task_id INTEGER, status TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, payload_sent TEXT, worktree_path TEXT, session_key TEXT, dispatched_at TEXT, response TEXT, error TEXT, completed_at TEXT, effective_model TEXT, effective_thinking_level TEXT);
+      CREATE TABLE dispatch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, agent_id INTEGER, routing_reason TEXT, candidate_count INTEGER, candidates_skipped TEXT);
+      CREATE TABLE task_dependencies (id INTEGER PRIMARY KEY AUTOINCREMENT, blocker_id INTEGER, blocked_id INTEGER);
+      CREATE TABLE task_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, author TEXT, content TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+      CREATE TABLE task_history (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, changed_by TEXT, field TEXT, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+      CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, instance_id INTEGER, agent_id INTEGER, job_title TEXT, level TEXT, message TEXT);
+      CREATE TABLE external_event_mappings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER,
+        source TEXT,
+        event_name TEXT NOT NULL,
+        task_type TEXT,
+        status_includes_json TEXT NOT NULL DEFAULT '[]',
+        status_excludes_json TEXT NOT NULL DEFAULT '[]',
+        action_kind TEXT NOT NULL DEFAULT 'ignore',
+        action_target TEXT,
+        apply_review_evidence INTEGER NOT NULL DEFAULT 0,
+        apply_failure_detail INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        priority INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    db.prepare(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`).run();
+
+    db.prepare(`
+      INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
+      VALUES (1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:cinder:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
+    `).run();
+    db.prepare(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Enhancements', 'dev', 'active')`).run();
+    db.prepare(`
+      INSERT INTO tasks (id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
+      VALUES (932, 'Notify operators when dispatch startup fails without a status change', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-07-06T18:00:00.000Z', '2026-07-06T18:00:00.000Z')
+    `).run();
+    db.prepare(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'backend', 'ready', 1, 10)`).run();
+    db.prepare(`
+      INSERT INTO external_event_mappings (project_id, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
+      VALUES (86, 'agent_hq_dispatcher', 'dispatch_startup_failed', 'backend', 'ignore', NULL, 1, 1, 100)
+    `).run();
+
+    const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
+    createTaskWorktree.mockReturnValue({
+      created: false,
+      workspacePath: null,
+      branch: null,
+      error: "fatal: ambiguous argument 'origin/main': unknown revision",
+    });
+
+    const first = runDispatcher(db, 86);
+    db.prepare(`UPDATE tasks SET dispatched_at = NULL WHERE id = 932`).run();
+    const second = runDispatcher(db, 86);
+    expect(first.dispatched).toBe(0);
+    expect(first.skipped).toBe(1);
+    expect(second.dispatched).toBe(0);
+    expect(second.skipped).toBe(1);
+
+    const task = db.prepare(`SELECT status, failure_detail, previous_status FROM tasks WHERE id = 932`).get() as Record<string, unknown>;
+    expect(task.status).toBe('ready');
+    expect(task.previous_status).toBe('ready');
+    expect(String(task.failure_detail)).toContain('Action: ignore');
+    expect(String(task.failure_detail)).toContain("Message: Worktree creation failed for task #932");
+
+    const notifications = db.prepare(`
+      SELECT title, body, source, outlet, metadata_json
+      FROM notification_records
+      WHERE type = 'task_dispatch_startup_failed'
+      ORDER BY id
+    `).all() as Array<{ title: string; body: string; source: string; outlet: string; metadata_json: string }>;
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].title).toBe('Task #932 dispatch startup failed');
+    expect(notifications[0].body).toContain('Task: #932 Notify operators when dispatch startup fails without a status change');
+    expect(notifications[0].body).toContain('Workflow: Enhancements');
+    expect(notifications[0].body).toContain('Matched agent: Cinder (#1)');
+    expect(notifications[0].body).toContain('Failure category: repo setup / worktree creation');
+    expect(notifications[0].body).toContain("Failure message: Worktree creation failed for task #932");
+    expect(notifications[0].body).toContain('Mapping: #1; action=ignore');
+    expect(notifications[0].body).toContain('Status: ready (unchanged)');
+    expect(notifications[0].body).toContain('Next action: Fix the repo setup for the matched route, then redispatch the task.');
+    expect(notifications[0].source).toBe('agent_hq_dispatcher');
+    expect(notifications[0].outlet).toBe('agent_hq');
+    expect(JSON.parse(notifications[0].metadata_json)).toEqual(expect.objectContaining({
+      taskId: 932,
+      failureCategory: 'repo setup / worktree creation',
+      mappingActionKind: 'ignore',
+      mappingActionTarget: null,
+      priorStatus: 'ready',
+      resolvedStatus: 'ready',
+    }));
+    expect(mockedTaskNotifications.notifyTaskStatusChange).not.toHaveBeenCalled();
+    expect(mockedResolveRuntime).not.toHaveBeenCalled();
+
     db.close();
   });
 
@@ -1291,6 +1483,7 @@ describe('runDispatcher thinking-level routing', () => {
 
     const db = new Database(':memory:');
     db.exec(`
+      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         job_title TEXT NOT NULL,
@@ -1347,6 +1540,7 @@ describe('runDispatcher thinking-level routing', () => {
       CREATE TABLE task_history (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, changed_by TEXT, field TEXT, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
       CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, instance_id INTEGER, agent_id INTEGER, job_title TEXT, level TEXT, message TEXT);
     `);
+    db.prepare(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`).run();
 
     db.prepare(`
       INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
