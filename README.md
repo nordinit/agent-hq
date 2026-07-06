@@ -312,7 +312,6 @@ todo
   → ready
   → in_progress
   → review
-  → qa_pass
   → ready_to_merge
   → deployed
   → done
@@ -331,7 +330,7 @@ Example loop:
 9. The task moves to `review`.
 10. A QA agent receives the task.
 11. The QA agent posts `qa_pass` or `qa_fail`.
-12. `qa_pass` moves the task forward.
+12. `qa_pass` moves the task directly to `ready_to_merge`.
 13. `qa_fail` routes it back to development.
 14. Deploy events or release-agent outcomes move the task toward `done`.
 
