@@ -37,7 +37,7 @@ import {
 } from '../domains/agents/runtimeConfig';
 import { syncStarterRoutingForProject } from '../lib/starterSetup';
 import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization';
-import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
+import { cleanupOpenClawGlobalMcpForAgent, syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { resolveRuntime, type RuntimeAuthProfileSyncResult } from '../runtimes';
 import { isValidTaskType } from '../lib/taskTypes';
 import { ensureOpenClawGatewayAvailable, requireOpenClawOutput, runOpenClawSync } from '../lib/openclawCli';
@@ -183,6 +183,16 @@ function archiveAgentForDeletion(db: ReturnType<typeof getDb>, agent: Record<str
     .map((entry) => `${entry.label}: ${entry.count}`)
     .join(', ');
   console.log(`[agents] Archived agent #${agentId} instead of hard delete; preserved historical references${historicalSummary ? ` (${historicalSummary})` : ''}`);
+}
+
+function cleanupAgentGlobalMcpBeforeDeletion(db: ReturnType<typeof getDb>, agentId: number): void {
+  const result = cleanupOpenClawGlobalMcpForAgent({ db, agentId });
+  if (!result.ok) {
+    throw new Error(result.error ?? `OpenClaw MCP global cleanup failed for agent #${agentId}`);
+  }
+  if (result.path) {
+    console.log(`[agents] Cleaned Agent HQ-managed OpenClaw MCP entries for deleted agent #${agentId} in ${result.path}`);
+  }
 }
 
 function getProjectName(projectId: number | null | undefined): string | null {
@@ -2649,6 +2659,8 @@ router.delete('/:id', (req: Request, res: Response) => {
         error: `Cannot delete agent while status is "${agent.status}". Wait until agent is idle.`,
       });
     }
+
+    cleanupAgentGlobalMcpBeforeDeletion(db, id);
 
     // OpenClaw native cleanup (if provisioned)
     if (agent.openclaw_agent_id) {

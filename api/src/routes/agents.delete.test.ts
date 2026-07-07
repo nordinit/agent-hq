@@ -8,6 +8,7 @@ import agentsRouter from './agents';
 
 let tempDir: string;
 let dbPath: string;
+const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 
 function resetDb(): void {
   closeDb();
@@ -15,6 +16,7 @@ function resetDb(): void {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-delete-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
   process.env.AGENT_HQ_DB_PATH = dbPath;
+  process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, 'openclaw.json');
 
   const db = getDb();
   db.exec(`
@@ -118,6 +120,8 @@ describe('agents delete', () => {
   afterEach(() => {
     closeDb();
     delete process.env.AGENT_HQ_DB_PATH;
+    if (ORIGINAL_OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+    else process.env.OPENCLAW_CONFIG_PATH = ORIGINAL_OPENCLAW_CONFIG_PATH;
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -131,6 +135,31 @@ describe('agents delete', () => {
     db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (1849, 394, 98, 'done')`).run();
     db.prepare(`INSERT INTO dispatch_log (id, task_id, agent_id) VALUES (1, 394, 98)`).run();
     db.prepare(`INSERT INTO sprint_task_routing_rules (id, sprint_id, task_type, status, agent_id) VALUES (1, 1, 'backend', 'ready', 98)`).run();
+    db.prepare(`INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id) VALUES (1, 98, 30)`).run();
+    fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({
+      mcp: {
+        servers: {
+          'agent-hq__agent-98': {
+            command: 'node',
+            args: ['server.js'],
+            env: { AGENT_HQ_MCP_API_KEY: 'stale-archived-agent-key' },
+            codex: { agents: ['repo-mode-smoke'] },
+          },
+          'dev-environment-lease-manager__agent-98': {
+            command: 'lease-mcp',
+            env: { AGENT_HQ_MCP_API_KEY: 'stale-archived-agent-key' },
+            codex: { agents: ['repo-mode-smoke'] },
+          },
+          'agent-hq__agent-94': {
+            command: 'node',
+            args: ['server.js'],
+            env: { AGENT_HQ_MCP_API_KEY: 'other-agent-key' },
+            codex: { agents: ['cinder-backend'] },
+          },
+          operator: { command: 'node', args: ['operator.js'] },
+        },
+      },
+    }), 'utf8');
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -166,9 +195,16 @@ describe('agents delete', () => {
       const task = db.prepare(`SELECT agent_id FROM tasks WHERE id = 394`).get() as { agent_id: number };
       const instance = db.prepare(`SELECT agent_id FROM job_instances WHERE id = 1849`).get() as { agent_id: number };
       const routing = db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_routing_rules WHERE agent_id = 98`).get() as { n: number };
+      const mcpAssignments = db.prepare(`SELECT COUNT(*) AS n FROM agent_mcp_assignments WHERE agent_id = 98`).get() as { n: number };
+      const openClawConfig = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'));
       expect(task.agent_id).toBe(98);
       expect(instance.agent_id).toBe(98);
       expect(routing.n).toBe(0);
+      expect(mcpAssignments.n).toBe(0);
+      expect(openClawConfig.mcp.servers['agent-hq__agent-98']).toBeUndefined();
+      expect(openClawConfig.mcp.servers['dev-environment-lease-manager__agent-98']).toBeUndefined();
+      expect(openClawConfig.mcp.servers['agent-hq__agent-94']).toBeDefined();
+      expect(openClawConfig.mcp.servers.operator).toBeDefined();
 
       const listResponse = await fetch(`${baseUrl}/api/v1/agents`);
       const listBody = await listResponse.json() as Array<{ id: number }>;
@@ -184,6 +220,25 @@ describe('agents delete', () => {
       INSERT INTO agents (id, name, session_key, status, enabled)
       VALUES (99, 'Disposable Agent', 'agent:disposable:main', 'idle', 1)
     `).run();
+    db.prepare(`INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id) VALUES (1, 99, 30)`).run();
+    fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({
+      mcp: {
+        servers: {
+          'agent-hq__agent-99': {
+            command: 'node',
+            args: ['server.js'],
+            env: { AGENT_HQ_MCP_API_KEY: 'stale-hard-delete-key' },
+            codex: { agents: ['disposable'] },
+          },
+          'agent-hq__agent-94': {
+            command: 'node',
+            args: ['server.js'],
+            env: { AGENT_HQ_MCP_API_KEY: 'other-agent-key' },
+            codex: { agents: ['cinder-backend'] },
+          },
+        },
+      },
+    }), 'utf8');
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -200,6 +255,9 @@ describe('agents delete', () => {
 
       const row = db.prepare(`SELECT id FROM agents WHERE id = 99`).get();
       expect(row).toBeUndefined();
+      const openClawConfig = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'));
+      expect(openClawConfig.mcp.servers['agent-hq__agent-99']).toBeUndefined();
+      expect(openClawConfig.mcp.servers['agent-hq__agent-94']).toBeDefined();
     } finally {
       await stopTestServer(server);
     }

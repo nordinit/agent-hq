@@ -1450,6 +1450,52 @@ export function syncAssignedMcpForAgent(params: {
   };
 }
 
+export function cleanupOpenClawGlobalMcpForAgent(params: {
+  db: Database.Database;
+  agentId: number;
+}): {
+  ok: boolean;
+  agentId: number;
+  runtimeType: string;
+  count: number;
+  path?: string;
+  error?: string;
+  skipped?: string;
+} {
+  const agent = params.db.prepare(`
+    SELECT id, name, role, session_key, openclaw_agent_id, runtime_type, workspace_path
+    FROM agents
+    WHERE id = ?
+  `).get(params.agentId) as AgentWorkspaceRow | undefined;
+
+  if (!agent) {
+    return {
+      ok: false,
+      agentId: params.agentId,
+      runtimeType: 'unknown',
+      count: 0,
+      skipped: 'agent_not_found',
+      error: `Agent #${params.agentId} not found`,
+    };
+  }
+
+  const runtimeType = (agent.runtime_type ?? 'openclaw').trim() || 'openclaw';
+  const cleanup = materializeOpenClawGlobalMcpConfig({
+    agentId: agent.id,
+    agentSlug: resolveOpenClawAgentSlug(agent),
+    desiredServers: {},
+  });
+
+  return {
+    ok: cleanup.ok,
+    agentId: agent.id,
+    runtimeType,
+    count: 0,
+    path: cleanup.path,
+    ...(cleanup.error ? { error: cleanup.error } : {}),
+  };
+}
+
 export function syncAssignedMcpForServer(params: {
   db: Database.Database;
   mcpServerId: number;
