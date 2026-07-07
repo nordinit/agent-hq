@@ -310,6 +310,8 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     expect(syncAssignedMcpForAgent).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 1,
       workingDirectory: workspaceRoot,
+      activateOpenClawWorkspaceBundle: false,
+      refreshPluginRegistry: false,
     }));
 
     const instance = db.prepare(`SELECT payload_sent, worktree_path FROM job_instances WHERE task_id = 373`).get() as { payload_sent: string; worktree_path: string };

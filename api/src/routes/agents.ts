@@ -1765,16 +1765,20 @@ router.put('/:id', (req: Request, res: Response) => {
       });
     }
 
-    // Keep workspace .mcp.json in sync for OpenClaw agents when the workspace
-    // changes so direct chat and fresh sessions see assigned MCP servers
-    // without waiting for dispatcher materialization.
-    if ((updated.runtime_type as string | null) === 'openclaw' && workspace_path !== undefined) {
+    // Keep workspace/global MCP config in sync when OpenClaw routing identity
+    // changes so fresh sessions see assigned MCP servers without waiting for
+    // dispatcher materialization.
+    if (
+      ((agent.runtime_type as string | null) === 'openclaw' || (updated.runtime_type as string | null) === 'openclaw')
+      && (workspace_path !== undefined || session_key !== undefined || runtime_type !== undefined)
+    ) {
       setImmediate(() => {
         try {
           const result = syncAssignedMcpForAgent({
             db,
             agentId: Number(req.params.id),
             workingDirectory: (updated.workspace_path as string | null) ?? null,
+            materializeOpenClawGlobalConfig: true,
           });
           for (const warn of result.warnings) console.warn(`[agents.put] ${warn}`);
           if (result.skipped === 'missing_workspace') return;

@@ -72,6 +72,19 @@ import {
   getDispatchTaskNotesContext,
 } from './dispatch/prompt';
 
+function hasMaterializedAgentHqLifecycleMcp(bundlePath: string | undefined, agentId: number | null | undefined): boolean {
+  if (!bundlePath || agentId == null || !fs.existsSync(bundlePath)) return false;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(bundlePath, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const servers = (parsed as { mcpServers?: unknown }).mcpServers;
+    if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return false;
+    return Object.prototype.hasOwnProperty.call(servers, `agent-hq__agent-${agentId}`);
+  } catch {
+    return false;
+  }
+}
+
 // ── Dispatch failure backoff (task #355) ─────────────────────────────────────
 //
 // When a dispatch attempt fails (gateway down, Anthropic overloaded, etc.),
@@ -1422,6 +1435,8 @@ async function fireAgentRun(
           // The routed session key is `agent:<agentSlug>:run:*`, so OpenClaw
           // discovers the bundle in this slug's workspace — keep them aligned.
           dispatchAgentSlug: agentSlug,
+          activateOpenClawWorkspaceBundle: false,
+          refreshPluginRegistry: false,
         });
         for (const warn of mcpResult.warnings) {
           console.warn(`[dispatcher] ${warn}`);
@@ -1433,6 +1448,19 @@ async function fireAgentRun(
         } else if (mcpResult.count > 0) {
           console.log(
             `[dispatcher] MCP materialization: ${mcpResult.count} server(s) for instance #${instanceId}`,
+          );
+        }
+        if (
+          runtimeTypeForMcp === 'openclaw'
+          && taskId != null
+          && mcpResult.ok
+          && mcpResult.count > 0
+          && !hasMaterializedAgentHqLifecycleMcp(mcpResult.bundlePath, job.agent_id)
+        ) {
+          console.warn(
+            `[dispatcher] Agent HQ lifecycle MCP preflight warning for instance #${instanceId}: ` +
+            `bundle ${mcpResult.bundlePath ?? '(none)'} does not contain agent-hq__agent-${job.agent_id}; ` +
+            'Agent HQ lifecycle tools such as agent_hq_start_task_run and agent_hq_post_task_outcome may be absent from the OpenClaw session tool surface.',
           );
         }
       } catch (mcpErr) {

@@ -543,6 +543,38 @@ describe('materializeAgentMcpConfig', () => {
     }
   });
 
+  it('removes stale scoped global OpenClaw MCP entries when an agent no longer uses OpenClaw runtime', () => {
+    createRegistryTables();
+    const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      mcp: {
+        servers: {
+          'agent-hq__agent-1': { command: 'node', args: ['old.js'], env: { AGENT_HQ_MCP_API_KEY: 'old-key' } },
+          'dev-environment-lease-manager__agent-1': { command: 'lease-mcp', env: { AGENT_HQ_MCP_API_KEY: 'old-key' } },
+          'agent-hq__agent-2': { command: 'node', args: ['other.js'], env: { AGENT_HQ_MCP_API_KEY: 'other-key' } },
+        },
+      },
+    }), 'utf8');
+    const hermesHome = makeTempDir('agent-hq-hermes-cleanup-');
+    getDb().prepare(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'hermes', ?)`).run(hermesHome);
+    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
+    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+
+    const result = syncAssignedMcpForAgent({
+      db: getDb(),
+      agentId: 1,
+      materializeOpenClawGlobalConfig: true,
+    });
+    const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+    expect(result.ok).toBe(true);
+    expect(result.runtimeType).toBe('hermes');
+    expect(openClawConfig.mcp.servers['agent-hq__agent-1']).toBeUndefined();
+    expect(openClawConfig.mcp.servers['dev-environment-lease-manager__agent-1']).toBeUndefined();
+    expect(openClawConfig.mcp.servers['agent-hq__agent-2']).toMatchObject({ command: 'node', args: ['other.js'] });
+  });
+
   it('materializes assigned MCP servers into Hermes config.yaml while preserving external servers', () => {
     createRegistryTables();
     const hermesHome = makeTempDir('agent-hq-hermes-native-');
@@ -729,6 +761,78 @@ describe('materializeAgentMcpConfig', () => {
     expect(result.warnings).toEqual(expect.arrayContaining([
       expect.stringContaining('differs from the OpenClaw workspace'),
     ]));
+  });
+
+  it('reconciles scoped global MCP config for assigned OpenClaw agents outside dispatch', () => {
+    createRegistryTables();
+    const root = makeTempDir('agent-hq-openclaw-routed-bundle-');
+    const openClawWorkspace = path.join(root, 'ws-harlow');
+    const storedWorkspace = path.join(root, 'stored-harlow');
+    fs.mkdirSync(openClawWorkspace, { recursive: true });
+    fs.mkdirSync(storedWorkspace, { recursive: true });
+    const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: {
+        defaults: { workspace: path.join(root, 'ws-default') },
+        list: [
+          { id: 'main', default: true },
+          { id: 'agency-tooling-pm', workspace: openClawWorkspace },
+        ],
+      },
+      mcp: {
+        servers: {
+          'agent-hq__agent-94': {
+            command: 'node',
+            args: ['server.js'],
+            env: { AGENT_HQ_MCP_API_KEY: 'other-agent-key' },
+            codex: { agents: ['cinder-backend'] },
+          },
+        },
+      },
+    }), 'utf8');
+    getDb().prepare(
+      `INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
+       VALUES (99974444, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'openclaw', ?)`,
+    ).run(storedWorkspace);
+    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
+    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (99974444, 30)`).run();
+    const refreshOpenClawPluginRegistry = jest.fn(() => ({
+      ok: true,
+      command: 'openclaw',
+      args: ['plugins', 'registry', '--refresh'],
+      status: 0,
+    }));
+
+    const result = syncAssignedMcpForAgent({
+      db: getDb(),
+      agentId: 99974444,
+      materializeOpenClawGlobalConfig: true,
+      refreshOpenClawPluginRegistry,
+    });
+    const bundleConfig = JSON.parse(fs.readFileSync(path.join(openClawWorkspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
+    const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+
+    expect(result.ok).toBe(true);
+    expect(result.workingDirectory).toBe(openClawWorkspace);
+    expect(bundleConfig.mcpServers['agent-hq__agent-99974444'].env.AGENT_HQ_MCP_API_KEY).toMatch(/^ahq_mcp_/);
+    expect(fs.existsSync(path.join(storedWorkspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'))).toBe(false);
+    expect(openClawConfig.plugins.entries['agent-hq-mcp']).toEqual({ enabled: true });
+    expect(openClawConfig.mcp.servers['agent-hq__agent-99974444']).toMatchObject({
+      command: 'node',
+      args: ['server.js'],
+      codex: { agents: ['agency-tooling-pm'] },
+    });
+    expect(openClawConfig.mcp.servers['agent-hq__agent-99974444'].env.AGENT_HQ_MCP_API_KEY).toBe(
+      bundleConfig.mcpServers['agent-hq__agent-99974444'].env.AGENT_HQ_MCP_API_KEY,
+    );
+    expect(openClawConfig.mcp.servers['agent-hq__agent-94'].env.AGENT_HQ_MCP_API_KEY).toBe('other-agent-key');
+    expect(refreshOpenClawPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(refreshOpenClawPluginRegistry).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 99974444,
+      workingDirectory: openClawWorkspace,
+      materializedCount: 1,
+    }));
   });
 
   it('falls back to the session-key agent slug when openclaw_agent_id is not a configured OpenClaw agent', () => {

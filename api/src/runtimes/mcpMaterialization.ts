@@ -432,11 +432,11 @@ function buildOpenClawAgentSlugCandidates(
  * each agent workspace is only discovered once the plugin id is enabled in
  * the global OpenClaw config (`plugins.entries['agent-hq-mcp'].enabled`).
  *
- * Enabling the plugin rewrites the shared OpenClaw config and triggers a
+ * Enabling the plugin rewrites the shared OpenClaw config and can trigger a
  * plugin-registry refresh, so this only runs when a workspace bundle is
  * materialized (provisioning/MCP sync) — never at API boot, where it would
- * pre-seed an entry OpenClaw flags as stale before any bundle exists, and
- * never on the per-dispatch hot path. Idempotent: a no-op once enabled.
+ * pre-seed an entry OpenClaw flags as stale before any bundle exists.
+ * Idempotent: a no-op once enabled.
  */
 export function ensureOpenClawMcpWorkspaceBundleEnabled(configPath = resolveOpenClawConfigPath()): {
   ok: boolean;
@@ -1257,6 +1257,8 @@ export function syncAssignedMcpForAgent(params: {
   dispatchAgentSlug?: string | null;
   // Shared OpenClaw config writes can interrupt active sessions; dispatch uses workspace-only sync.
   materializeOpenClawGlobalConfig?: boolean;
+  // Dispatch can pre-materialize workspace files without mutating global plugin state.
+  activateOpenClawWorkspaceBundle?: boolean;
   refreshPluginRegistry?: boolean;
   refreshOpenClawPluginRegistry?: OpenClawPluginRegistryRefreshFn;
 }): AgentMcpSyncResult {
@@ -1313,6 +1315,25 @@ export function syncAssignedMcpForAgent(params: {
     ? openClawWorkspaceDirectory ?? agentWorkspaceDirectory ?? requestedWorkingDirectory
     : requestedWorkingDirectory ?? agentWorkspaceDirectory;
   const supportsRuntimeMcp = runtimeType === 'openclaw' || runtimeType === 'hermes';
+
+  if (runtimeType !== 'openclaw' && params.materializeOpenClawGlobalConfig === true) {
+    const cleanup = materializeOpenClawGlobalMcpConfig({
+      agentId: agent.id,
+      agentSlug: resolveOpenClawAgentSlug(agent),
+      desiredServers: {},
+    });
+    if (!cleanup.ok) {
+      return {
+        agentId: agent.id,
+        runtimeType,
+        workingDirectory,
+        ok: false,
+        count: 0,
+        warnings: [],
+        error: cleanup.error ?? `OpenClaw MCP config cleanup failed for agent #${agent.id}`,
+      };
+    }
+  }
 
   if (!supportsRuntimeMcp) {
     return {
@@ -1382,12 +1403,13 @@ export function syncAssignedMcpForAgent(params: {
     materializeOpenClawGlobalConfig: params.materializeOpenClawGlobalConfig,
   });
 
+  const shouldActivateOpenClawWorkspaceBundle = params.activateOpenClawWorkspaceBundle !== false;
   const shouldRefreshRegistry = runtimeType === 'openclaw'
-    && params.materializeOpenClawGlobalConfig === true
     && result.ok
     && result.count > 0
+    && shouldActivateOpenClawWorkspaceBundle
     && params.refreshPluginRegistry !== false;
-  if (runtimeType === 'openclaw' && params.materializeOpenClawGlobalConfig === true && result.ok) {
+  if (runtimeType === 'openclaw' && result.ok && result.count > 0 && shouldActivateOpenClawWorkspaceBundle) {
     const configResult = ensureOpenClawMcpWorkspaceBundleEnabled();
     if (!configResult.ok) {
       const message = `[mcp-materialization] could not reconcile OpenClaw global MCP config in ${configResult.path}: ${configResult.error ?? 'unknown error'}`;

@@ -23,6 +23,7 @@ function scheduleAgentMcpSync(agentId: number): void {
       const result = syncAssignedMcpForAgent({
         db: getDb(),
         agentId,
+        materializeOpenClawGlobalConfig: true,
       });
       for (const warn of result.warnings) {
         console.warn(`[mcp-servers] ${warn}`);
@@ -54,6 +55,7 @@ function scheduleServerMcpSync(mcpServerId: number): void {
       const results = syncAssignedMcpForServer({
         db: getDb(),
         mcpServerId,
+        materializeOpenClawGlobalConfig: true,
       });
       for (const result of results) {
         for (const warn of result.warnings) {
