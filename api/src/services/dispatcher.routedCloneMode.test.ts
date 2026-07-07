@@ -299,6 +299,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     expect(runtimeDispatch).toHaveBeenCalledTimes(1);
     const runtimeParams = runtimeDispatch.mock.calls[0][0];
     expect(runtimeParams.repoAccessMode).toBe('clone');
+    expect(runtimeParams.repoConfigSource).toBeUndefined();
     expect(runtimeParams.repoSource).toBe(`clone:${remotePath}`);
     expect(runtimeParams.repoWorkspacePath).toBe(path.join(workspaceRoot, 'task-373'));
     expect(runtimeParams.repoBranch).toBe('cinder-backend/task-373-agent-repo-source-modes');
@@ -320,9 +321,11 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       repoSource?: string;
       repoWorkspacePath?: string;
       repoBranch?: string;
+      repoConfigSource?: string | null;
       repoDependencySetup?: Array<{ strategy: string; status: string; reason?: string }>;
     };
     expect(payload.repoAccessMode).toBe('clone');
+    expect(payload.repoConfigSource).toBeNull();
     expect(payload.repoSource).toBe(`clone:${remotePath}`);
     expect(payload.repoWorkspacePath).toBe(path.join(workspaceRoot, 'task-373'));
     expect(payload.repoBranch).toBe('cinder-backend/task-373-agent-repo-source-modes');

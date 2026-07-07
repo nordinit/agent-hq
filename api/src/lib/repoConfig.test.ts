@@ -13,7 +13,29 @@ describe('repoConfig', () => {
     });
   });
 
-  it('prefers project config over legacy agent config', () => {
+  it('prefers workflow config over project and legacy agent config', () => {
+    expect(resolveRepoConfig({
+      workflow: {
+        repo_path: '/repos/workflow',
+        repo_access_mode: 'worktree',
+      },
+      project: {
+        repo_url: 'git@github.com:owner/project.git',
+        repo_access_mode: 'clone',
+      },
+      agent: {
+        repo_path: '/repos/legacy-agent',
+        repo_access_mode: 'worktree',
+      },
+    })).toEqual({
+      repo_path: '/repos/workflow',
+      repo_url: null,
+      repo_access_mode: 'worktree',
+      repo_config_source: 'workflow',
+    });
+  });
+
+  it('prefers project legacy config over legacy agent config', () => {
     expect(resolveRepoConfig({
       project: {
         repo_url: 'git@github.com:owner/project.git',
@@ -27,7 +49,7 @@ describe('repoConfig', () => {
       repo_path: null,
       repo_url: 'git@github.com:owner/project.git',
       repo_access_mode: 'clone',
-      repo_config_source: 'project',
+      repo_config_source: 'project_legacy',
     });
   });
 

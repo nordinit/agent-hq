@@ -1,5 +1,5 @@
 export type RepoAccessMode = 'worktree' | 'clone';
-export type RepoConfigSource = 'project' | 'agent_legacy' | null;
+export type RepoConfigSource = 'workflow' | 'project_legacy' | 'agent_legacy' | null;
 
 export interface RepoConfigRecord {
   repo_path?: unknown;
@@ -83,12 +83,18 @@ export function hasRepoConfig(config: RepoConfigRecord | null | undefined): bool
 }
 
 export function resolveRepoConfig(params: {
+  workflow?: RepoConfigRecord | null;
   project?: RepoConfigRecord | null;
   agent?: RepoConfigRecord | null;
 }): ResolvedRepoConfig {
+  const workflowConfig = normalizeRepoConfig(params.workflow);
+  if (workflowConfig.repo_access_mode) {
+    return { ...workflowConfig, repo_config_source: 'workflow' };
+  }
+
   const projectConfig = normalizeRepoConfig(params.project);
   if (projectConfig.repo_access_mode) {
-    return { ...projectConfig, repo_config_source: 'project' };
+    return { ...projectConfig, repo_config_source: 'project_legacy' };
   }
 
   const agentConfig = normalizeRepoConfig(params.agent);

@@ -11,6 +11,9 @@ export interface SprintRecord {
   length_value: string;
   started_at: string | null;
   ended_at: string | null;
+  repo_path: string | null;
+  repo_url: string | null;
+  repo_access_mode: 'worktree' | 'clone' | null;
   created_at: string;
 }
 

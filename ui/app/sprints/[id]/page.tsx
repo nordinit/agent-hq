@@ -249,6 +249,9 @@ function EditForm({ sprint, onSave, onCancel }: {
     length_kind: sprint.length_kind,
     length_value: sprint.length_value,
     started_at: sprint.started_at ?? '',
+    repo_access_mode: sprint.repo_access_mode ?? '',
+    repo_path: sprint.repo_path ?? '',
+    repo_url: sprint.repo_url ?? '',
   });
   const [saving, setSaving] = useState(false);
   const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
@@ -276,6 +279,9 @@ function EditForm({ sprint, onSave, onCancel }: {
         length_kind: form.length_kind as Sprint['length_kind'],
         length_value: form.length_value,
         started_at: form.started_at || null,
+        repo_access_mode: (form.repo_access_mode || null) as Sprint['repo_access_mode'],
+        repo_path: form.repo_access_mode === 'worktree' ? (form.repo_path.trim() || null) : null,
+        repo_url: form.repo_access_mode === 'clone' ? (form.repo_url.trim() || null) : null,
       });
     } finally { setSaving(false); }
   };
@@ -307,6 +313,30 @@ function EditForm({ sprint, onSave, onCancel }: {
             {selectedSprintType ? ` ${formatWorkflowTerminology(selectedSprintType.description)}` : ''}
           </p>
         </div>
+        <div>
+          <label className="text-xs text-slate-400 block mb-1">Repository Access Mode</label>
+          <select className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400"
+            value={form.repo_access_mode} onChange={e => set('repo_access_mode', e.target.value)}>
+            <option value="">Use project or agent fallback</option>
+            <option value="worktree">Worktree</option>
+            <option value="clone">Clone</option>
+          </select>
+          <p className="text-xs text-slate-500 mt-1">Workflow repository settings decide which codebase dispatched agents use.</p>
+        </div>
+        {form.repo_access_mode === 'worktree' && (
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Repo Path</label>
+            <input className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-amber-400"
+              value={form.repo_path} onChange={e => set('repo_path', e.target.value)} placeholder="/Users/nordini/agent-hq-public-prep" />
+          </div>
+        )}
+        {form.repo_access_mode === 'clone' && (
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Repo URL</label>
+            <input className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-amber-400"
+              value={form.repo_url} onChange={e => set('repo_url', e.target.value)} placeholder="git@github.com:owner/repo.git" />
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs text-slate-400 block mb-1">Status</label>
@@ -517,6 +547,12 @@ export default function SprintDetailPage() {
                 )}
                 {sprintTypeLabel && (
                   <span>Workflow Type: {sprintTypeLabel}</span>
+                )}
+                {sprint.repo_access_mode === 'worktree' && sprint.repo_path && (
+                  <span className="font-mono text-emerald-300 break-all">Repo: {sprint.repo_path}</span>
+                )}
+                {sprint.repo_access_mode === 'clone' && sprint.repo_url && (
+                  <span className="font-mono text-cyan-300 break-all">Repo: {sprint.repo_url}</span>
                 )}
                 <span>Status: {sprint.status}</span>
                 {sprint.length_value && (

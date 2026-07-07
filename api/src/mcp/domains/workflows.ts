@@ -56,6 +56,9 @@ export function registerWorkflowsTools(ctx: McpDomainContext) {
       length_value: z.string().optional().describe('Sprint length value'),
       started_at: z.string().nullable().optional().describe('Sprint start timestamp'),
       ended_at: z.string().nullable().optional().describe('Sprint end timestamp'),
+      repo_access_mode: z.enum(['worktree', 'clone']).nullable().optional().describe('Workflow repository access mode'),
+      repo_path: z.string().nullable().optional().describe('Workflow-owned local repo path for worktree mode'),
+      repo_url: z.string().nullable().optional().describe('Workflow-owned git URL for clone mode'),
     },
     ({ sprint_id, ...patch }) => wrap(() => api.updateSprint(sprint_id, patch))(),
     { domain: 'sprints', rest_paths: ['/api/v1/sprints/:id'] },
@@ -76,6 +79,9 @@ export function registerWorkflowsTools(ctx: McpDomainContext) {
       length_value: z.string().optional().describe('Workflow length value'),
       started_at: z.string().nullable().optional().describe('Workflow start timestamp'),
       ended_at: z.string().nullable().optional().describe('Workflow end timestamp'),
+      repo_access_mode: z.enum(['worktree', 'clone']).nullable().optional().describe('Workflow repository access mode'),
+      repo_path: z.string().nullable().optional().describe('Workflow-owned local repo path for worktree mode'),
+      repo_url: z.string().nullable().optional().describe('Workflow-owned git URL for clone mode'),
     },
     ({ workflow_id, workflow_type, ...patch }) => wrap(() => api.updateSprint(workflow_id, { ...patch, sprint_type: workflow_type ?? patch.sprint_type }))(),
     { domain: 'workflows', rest_paths: ['/api/v1/workflows/:id', '/api/v1/sprints/:id'] },
@@ -111,10 +117,13 @@ export function registerWorkflowsTools(ctx: McpDomainContext) {
       length_kind: z.enum(['time', 'runs']).optional().describe('Sprint length kind'),
       length_value: z.string().optional().describe('Sprint length value, e.g. 2w or 10'),
       started_at: z.string().nullable().optional().describe('Sprint start timestamp'),
+      repo_access_mode: z.enum(['worktree', 'clone']).nullable().optional().describe('Workflow repository access mode'),
+      repo_path: z.string().nullable().optional().describe('Workflow-owned local repo path for worktree mode'),
+      repo_url: z.string().nullable().optional().describe('Workflow-owned git URL for clone mode'),
       dry_run: z.boolean().optional().describe('Return a mutation preview without writing data'),
     },
-    ({ project_id, name, goal, sprint_type, source_sprint_id, status, length_kind, length_value, started_at, dry_run }) =>
-      wrap(() => api.createSprint({ project_id, name, goal, sprint_type, source_sprint_id, status, length_kind, length_value, started_at, dry_run }))(),
+    ({ project_id, name, goal, sprint_type, source_sprint_id, status, length_kind, length_value, started_at, repo_access_mode, repo_path, repo_url, dry_run }) =>
+      wrap(() => api.createSprint({ project_id, name, goal, sprint_type, source_sprint_id, status, length_kind, length_value, started_at, repo_access_mode, repo_path, repo_url, dry_run }))(),
     { domain: 'sprints', rest_paths: ['/api/v1/sprints'] },
   );
   
@@ -133,9 +142,12 @@ export function registerWorkflowsTools(ctx: McpDomainContext) {
       length_kind: z.enum(['time', 'runs']).optional().describe('Workflow length kind'),
       length_value: z.string().optional().describe('Workflow length value, e.g. 2w or 10'),
       started_at: z.string().nullable().optional().describe('Workflow start timestamp'),
+      repo_access_mode: z.enum(['worktree', 'clone']).nullable().optional().describe('Workflow repository access mode'),
+      repo_path: z.string().nullable().optional().describe('Workflow-owned local repo path for worktree mode'),
+      repo_url: z.string().nullable().optional().describe('Workflow-owned git URL for clone mode'),
       dry_run: z.boolean().optional().describe('Return a mutation preview without writing data'),
     },
-    ({ project_id, name, goal, workflow_type, sprint_type, source_workflow_id, source_sprint_id, status, length_kind, length_value, started_at, dry_run }) =>
+    ({ project_id, name, goal, workflow_type, sprint_type, source_workflow_id, source_sprint_id, status, length_kind, length_value, started_at, repo_access_mode, repo_path, repo_url, dry_run }) =>
       wrap(() => api.createSprint({
         project_id,
         name,
@@ -146,6 +158,9 @@ export function registerWorkflowsTools(ctx: McpDomainContext) {
         length_kind,
         length_value,
         started_at,
+        repo_access_mode,
+        repo_path,
+        repo_url,
         dry_run,
       }))(),
     { domain: 'workflows', rest_paths: ['/api/v1/workflows', '/api/v1/sprints'] },

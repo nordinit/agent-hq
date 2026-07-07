@@ -6,7 +6,7 @@ import { api, Project, ProjectImportPreview } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { AlertTriangle, FolderOpen, Plus, Trash2, Upload, X, Check, Briefcase, ChevronDown, Star } from 'lucide-react';
+import { AlertTriangle, FolderOpen, Plus, Trash2, Upload, X, Check, Briefcase, Star } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { DeleteProjectModal } from '@/components/DeleteProjectModal';
@@ -14,12 +14,9 @@ import { DeleteProjectModal } from '@/components/DeleteProjectModal';
 interface FormState {
   name: string;
   description: string;
-  repo_path: string;
-  repo_url: string;
-  repo_access_mode: 'worktree' | 'clone' | '';
 }
 
-const emptyForm: FormState = { name: '', description: '', repo_path: '', repo_url: '', repo_access_mode: '' };
+const emptyForm: FormState = { name: '', description: '' };
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -73,9 +70,6 @@ export default function ProjectsPage() {
       const created = await api.createProject({
         name: form.name.trim(),
         description: form.description.trim(),
-        repo_path: form.repo_access_mode === 'worktree' ? (form.repo_path.trim() || null) : null,
-        repo_url: form.repo_access_mode === 'clone' ? (form.repo_url.trim() || null) : null,
-        repo_access_mode: form.repo_access_mode || null,
       });
       setShowForm(false);
       setForm(emptyForm);
@@ -288,43 +282,6 @@ export default function ProjectsPage() {
                 placeholder="What is this project about?"
               />
             </label>
-            <label className="block">
-              <span className="text-slate-400 text-xs mb-1 block">Repository Access Mode</span>
-              <div className="relative">
-                <select
-                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none pr-8"
-                  value={form.repo_access_mode}
-                  onChange={e => setForm(f => ({ ...f, repo_access_mode: e.target.value as FormState['repo_access_mode'] }))}
-                >
-                  <option value="">None</option>
-                  <option value="worktree">Worktree</option>
-                  <option value="clone">Clone</option>
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-              </div>
-            </label>
-            {form.repo_access_mode === 'worktree' && (
-              <label className="block">
-                <span className="text-slate-400 text-xs mb-1 block">Repo Path</span>
-                <input
-                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 font-mono"
-                  value={form.repo_path}
-                  onChange={e => setForm(f => ({ ...f, repo_path: e.target.value }))}
-                  placeholder="/Users/nordini/agent-hq"
-                />
-              </label>
-            )}
-            {form.repo_access_mode === 'clone' && (
-              <label className="block">
-                <span className="text-slate-400 text-xs mb-1 block">Repo URL</span>
-                <input
-                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 font-mono"
-                  value={form.repo_url}
-                  onChange={e => setForm(f => ({ ...f, repo_url: e.target.value }))}
-                  placeholder="git@github.com:owner/repo.git"
-                />
-              </label>
-            )}
           </div>
           {formError && <p className="text-red-400 text-xs mt-2">{formError}</p>}
           <div className="flex gap-2 mt-4">
@@ -406,17 +363,6 @@ export default function ProjectsPage() {
                     {formatDate(project.created_at)}
                   </span>
                 </div>
-
-                {project.repo_access_mode === 'worktree' && project.repo_path && (
-                  <div className="mt-2">
-                    <Badge variant="workspace">🌿 {project.repo_path}</Badge>
-                  </div>
-                )}
-                {project.repo_access_mode === 'clone' && project.repo_url && (
-                  <div className="mt-2">
-                    <Badge variant="workspace">🔁 {project.repo_url}</Badge>
-                  </div>
-                )}
 
                 {project.context_md && (
                   <div className="mt-2">

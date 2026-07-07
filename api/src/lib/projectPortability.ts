@@ -167,6 +167,11 @@ function portableWorkflow(row: Row): ProjectManifest['workflows'][number] {
     status: String(row.status ?? 'planning'),
     length_kind: String(row.length_kind ?? 'time'),
     length_value: String(row.length_value ?? ''),
+    repo_config: {
+      mode: (row.repo_access_mode as 'worktree' | 'clone' | null) ?? null,
+      path: (row.repo_path as string | null) ?? null,
+      url: (row.repo_url as string | null) ?? null,
+    },
     field_schemas: [],
   };
 }
@@ -226,6 +231,7 @@ export interface ProjectManifest {
     status: string;
     length_kind: string;
     length_value: string;
+    repo_config?: { mode: 'worktree' | 'clone' | null; path: string | null; url: string | null };
     field_schemas: Array<{ sprint_type_key: string; task_type: string | null; schema: unknown; is_system: boolean }>;
   }>;
   routing: {
@@ -367,7 +373,18 @@ export function validateProjectManifest(db: Database.Database, input: unknown, o
     warnings.push({ code: 'missing_project', severity: 'error', message: 'Manifest project.name is required.' });
   }
   if (manifest.project?.repo_config?.mode === 'worktree' && manifest.project.repo_config.path) {
-    warnings.push({ code: 'local_repo_path', severity: 'warning', section: 'project', message: `Project uses local worktree path ${manifest.project.repo_config.path}; confirm this exists on the target host.` });
+    warnings.push({ code: 'local_repo_path', severity: 'warning', section: 'project', message: `Project legacy fallback uses local worktree path ${manifest.project.repo_config.path}; confirm this exists on the target host.` });
+  }
+  for (const workflow of manifest.workflows ?? []) {
+    if (workflow.repo_config?.mode === 'worktree' && workflow.repo_config.path) {
+      warnings.push({
+        code: 'local_workflow_repo_path',
+        severity: 'warning',
+        section: 'workflows',
+        ref: workflow.ref,
+        message: `Workflow ${workflow.name || workflow.ref} uses local worktree path ${workflow.repo_config.path}; confirm this exists on the target host.`,
+      });
+    }
   }
 
   const toolSlugs = new Set(tableExists(db, 'tools') ? (db.prepare('SELECT slug FROM tools').all() as Array<{ slug: string }>).map((row) => row.slug) : []);
@@ -448,6 +465,11 @@ export function importProjectManifest(
     });
 
     for (const workflow of manifest.workflows ?? []) {
+      const workflowRepoConfig = normalizeRepoConfig({
+        repo_access_mode: workflow.repo_config?.mode,
+        repo_path: workflow.repo_config?.mode === 'worktree' ? workflow.repo_config.path : null,
+        repo_url: workflow.repo_config?.mode === 'clone' ? workflow.repo_config.url : null,
+      });
       const workflowId = insertDynamic(db, 'sprints', {
         tenant_id: options.tenantId ?? null,
         project_id: projectId,
@@ -458,6 +480,9 @@ export function importProjectManifest(
         status: options.activateWorkflows ? (workflow.status || 'planning') : 'planning',
         length_kind: workflow.length_kind ?? 'time',
         length_value: workflow.length_value ?? '',
+        repo_path: workflowRepoConfig.repo_path,
+        repo_url: workflowRepoConfig.repo_url,
+        repo_access_mode: workflowRepoConfig.repo_access_mode,
       });
       workflowIdMap[workflow.ref] = workflowId;
       if (tableExists(db, 'task_field_schemas')) {

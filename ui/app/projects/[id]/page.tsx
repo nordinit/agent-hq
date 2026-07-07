@@ -299,7 +299,7 @@ export default function ProjectDetailPage() {
           </div>
 
           <div>
-            <label className="text-slate-400 text-xs mb-1 block">Repository Access Mode</label>
+            <label className="text-slate-400 text-xs mb-1 block">Legacy Repository Fallback</label>
             {editing ? (
               <div className="space-y-3">
                 <div className="relative max-w-sm">
@@ -333,7 +333,7 @@ export default function ProjectDetailPage() {
               </div>
             ) : (
               <div className="space-y-1 text-sm">
-                {!project.repo_access_mode && <span className="text-slate-500 italic">No repository configured</span>}
+                {!project.repo_access_mode && <span className="text-slate-500 italic">No legacy fallback configured</span>}
                 {project.repo_access_mode === 'worktree' && (
                   <span className="text-emerald-400 font-mono break-all">🌿 {project.repo_path}</span>
                 )}

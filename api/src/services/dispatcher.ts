@@ -247,7 +247,10 @@ interface JobRow {
   project_repo_path?: string | null;
   project_repo_url?: string | null;
   project_repo_access_mode?: RepoAccessMode | null;
-  repo_config_source?: 'project' | 'agent_legacy' | null;
+  workflow_repo_path?: string | null;
+  workflow_repo_url?: string | null;
+  workflow_repo_access_mode?: RepoAccessMode | null;
+  repo_config_source?: 'workflow' | 'project_legacy' | 'agent_legacy' | null;
   /** Dedicated macOS OS user for filesystem isolation (task #377). */
   os_user?: string | null;
 }
@@ -911,6 +914,7 @@ function getAllDispatchableTasks(db: Database.Database, projectId?: number | nul
 function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): RoutingRuleRow[] {
   const hasProjectsTable = tableHasColumn(db, 'projects', 'id');
   const hasProjectRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every((column) => tableHasColumn(db, 'projects', column));
+  const hasWorkflowRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every((column) => tableHasColumn(db, 'sprints', column));
   const hasScopedRoutingColumns = tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
     && tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
   const hasRoutingTenantColumn = tableHasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
@@ -919,7 +923,11 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
   const projectRepoSelect = hasProjectRepoColumns
     ? 'p.repo_path as project_repo_path, p.repo_url as project_repo_url, p.repo_access_mode as project_repo_access_mode,'
     : 'NULL as project_repo_path, NULL as project_repo_url, NULL as project_repo_access_mode,';
+  const workflowRepoSelect = hasWorkflowRepoColumns
+    ? 's.repo_path as workflow_repo_path, s.repo_url as workflow_repo_url, s.repo_access_mode as workflow_repo_access_mode,'
+    : 'NULL as workflow_repo_path, NULL as workflow_repo_url, NULL as workflow_repo_access_mode,';
   const projectJoin = hasProjectsTable ? 'LEFT JOIN projects p ON p.id = a.project_id' : '';
+  const workflowJoin = hasWorkflowRepoColumns ? 'LEFT JOIN sprints s ON s.id = COALESCE(rr.sprint_id, ?)' : '';
 
   const tenantCondition = [
     hasRoutingTenantColumn && task.tenant_id != null ? 'rr.tenant_id = ?' : null,
@@ -941,10 +949,12 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
              a.workspace_path, a.preferred_provider, a.repo_path, a.repo_url, a.repo_access_mode,
              ${hasAgentTenantColumn ? 'a.tenant_id' : 'NULL'} as tenant_id,
              ${projectRepoSelect}
+             ${workflowRepoSelect}
              a.os_user
       FROM sprint_task_routing_rules rr
       JOIN agents a ON a.id = rr.agent_id AND a.enabled = 1
       ${projectJoin}
+      ${workflowJoin}
       WHERE ${scopeCondition}
         ${tenantCondition ? `AND ${tenantCondition}` : ''}
         ${routingRuleEnabledCondition}
@@ -954,7 +964,7 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
                CASE WHEN rr.task_type = ? THEN 0 ELSE 1 END,
                rr.priority DESC,
                rr.id ASC
-    `).all(...params, ...tenantParams, status, task.task_type ?? null, task.sprint_id ?? null, task.task_type ?? null) as RoutingRuleRow[];
+    `).all(...(hasWorkflowRepoColumns ? [task.sprint_id ?? null] : []), ...params, ...tenantParams, status, task.task_type ?? null, task.sprint_id ?? null, task.task_type ?? null) as RoutingRuleRow[];
 
   const loadSprintScopedRules = (status: string): RoutingRuleRow[] => {
     if (!task.sprint_id) return [];
@@ -1676,7 +1686,11 @@ export function dispatchTaskToJob(
   }) ?? String(job.agent_id);
 
   const repoAccessMode: RepoAccessMode | null = job.repo_access_mode ?? (job.repo_path ? 'worktree' : null);
-  const repoOwnerLabel = job.repo_config_source === 'project' ? 'Project' : 'Legacy agent';
+  const repoOwnerLabel = job.repo_config_source === 'workflow'
+    ? 'Workflow'
+    : job.repo_config_source === 'project_legacy'
+      ? 'Project legacy fallback'
+      : 'Legacy agent fallback';
   let repoWorkspacePath: string | null = null;
   let repoBranch: string | null = null;
   let repoSourceDescriptor: string | null = null;
@@ -1776,9 +1790,10 @@ export function dispatchTaskToJob(
     mode: 'runtime-dispatch',
     transport: 'ws.send',
     agentSlug,
-    repoAccessMode,
-    repoSource: repoSourceDescriptor,
-    repoWorkspacePath,
+          repoAccessMode,
+          repoSource: repoSourceDescriptor,
+          repoConfigSource: job.repo_config_source ?? null,
+          repoWorkspacePath,
     repoBranch,
     repoDependencySetup,
   };
@@ -1972,6 +1987,11 @@ export function runDispatcher(db: Database.Database, projectId?: number): Dispat
         if (hasTaskLiveInstance(db, task.id)) break;
 
         const resolvedRepo = resolveRepoConfig({
+          workflow: {
+            repo_path: rule.workflow_repo_path ?? null,
+            repo_url: rule.workflow_repo_url ?? null,
+            repo_access_mode: rule.workflow_repo_access_mode ?? null,
+          },
           project: {
             repo_path: rule.project_repo_path ?? null,
             repo_url: rule.project_repo_url ?? null,
@@ -2010,6 +2030,9 @@ export function runDispatcher(db: Database.Database, projectId?: number): Dispat
           project_repo_path: rule.project_repo_path ?? null,
           project_repo_url: rule.project_repo_url ?? null,
           project_repo_access_mode: rule.project_repo_access_mode ?? null,
+          workflow_repo_path: rule.workflow_repo_path ?? null,
+          workflow_repo_url: rule.workflow_repo_url ?? null,
+          workflow_repo_access_mode: rule.workflow_repo_access_mode ?? null,
           repo_config_source: resolvedRepo.repo_config_source,
           os_user: rule.os_user ?? null,
         };

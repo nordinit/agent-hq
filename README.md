@@ -463,10 +463,10 @@ This is useful for:
 
 Current behavior:
 
-- `repo_path` points to a local canonical git checkout.
+- Workflows own repository configuration; `repo_path` points to a local canonical git checkout in worktree mode.
 - Agent HQ uses native `git worktree` operations.
 - New task worktrees prefer `origin/main` when available.
-- If no valid repo path is configured, Agent HQ falls back to the agent workspace root.
+- If no workflow repo is configured, Agent HQ temporarily falls back to legacy project/agent repo settings, then the agent workspace root.
 
 ---
 

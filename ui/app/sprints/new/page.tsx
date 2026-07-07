@@ -19,6 +19,9 @@ interface FormState {
   length_value: string;
   started_at: string;
   status: 'planning' | 'active';
+  repo_access_mode: '' | 'worktree' | 'clone';
+  repo_path: string;
+  repo_url: string;
 }
 
 const emptyForm: FormState = {
@@ -31,6 +34,9 @@ const emptyForm: FormState = {
   length_value: '2w',
   started_at: '',
   status: 'planning',
+  repo_access_mode: '',
+  repo_path: '',
+  repo_url: '',
 };
 
 export default function NewSprintPage() {
@@ -86,6 +92,9 @@ export default function NewSprintPage() {
         length_value: form.length_value.trim(),
         started_at: form.started_at || null,
         status: form.status,
+        repo_access_mode: form.repo_access_mode || null,
+        repo_path: form.repo_access_mode === 'worktree' ? (form.repo_path.trim() || null) : null,
+        repo_url: form.repo_access_mode === 'clone' ? (form.repo_url.trim() || null) : null,
       });
       router.push(`/workflows/${created.id}`);
     } catch (e) {
@@ -197,6 +206,47 @@ export default function NewSprintPage() {
               Clone workflow-scoped setup, assignment rules, and model routing from an existing workflow in this project. This copies configuration only, not tasks.
             </p>
           </div>
+
+          <div>
+            <label className="text-xs font-medium text-slate-400 uppercase tracking-wide block mb-1.5">Repository Access Mode</label>
+            <div className="relative">
+              <select
+                className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:border-amber-400 pr-8"
+                value={form.repo_access_mode}
+                onChange={e => setForm(f => ({ ...f, repo_access_mode: e.target.value as FormState['repo_access_mode'] }))}
+              >
+                <option value="">Use project or agent fallback</option>
+                <option value="worktree">Worktree</option>
+                <option value="clone">Clone</option>
+              </select>
+              <ChevronDown className="absolute right-2 top-3 w-4 h-4 text-slate-400 pointer-events-none" />
+            </div>
+            <p className="text-xs text-slate-500 mt-1">Workflow repository settings decide which codebase dispatched agents use.</p>
+          </div>
+
+          {form.repo_access_mode === 'worktree' && (
+            <div>
+              <label className="text-xs font-medium text-slate-400 uppercase tracking-wide block mb-1.5">Repo Path</label>
+              <input
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm font-mono focus:outline-none focus:border-amber-400"
+                value={form.repo_path}
+                onChange={e => set('repo_path', e.target.value)}
+                placeholder="/Users/nordini/agent-hq-public-prep"
+              />
+            </div>
+          )}
+
+          {form.repo_access_mode === 'clone' && (
+            <div>
+              <label className="text-xs font-medium text-slate-400 uppercase tracking-wide block mb-1.5">Repo URL</label>
+              <input
+                className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-white text-sm font-mono focus:outline-none focus:border-amber-400"
+                value={form.repo_url}
+                onChange={e => set('repo_url', e.target.value)}
+                placeholder="git@github.com:owner/repo.git"
+              />
+            </div>
+          )}
 
           {/* Length */}
           <div className="grid grid-cols-2 gap-4">

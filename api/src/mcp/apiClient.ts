@@ -900,6 +900,9 @@ export class AgentHqApiClient {
     length_kind?: 'time' | 'runs';
     length_value?: string;
     started_at?: string | null;
+    repo_access_mode?: 'worktree' | 'clone' | null;
+    repo_path?: string | null;
+    repo_url?: string | null;
     dry_run?: boolean;
   }) {
     if (data.dry_run) {
@@ -918,6 +921,9 @@ export class AgentHqApiClient {
             length_kind: data.length_kind ?? 'time',
             length_value: data.length_value ?? '',
             started_at: data.started_at ?? null,
+            repo_access_mode: data.repo_access_mode ?? null,
+            repo_path: data.repo_path ?? null,
+            repo_url: data.repo_url ?? null,
           },
         },
       });

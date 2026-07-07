@@ -65,6 +65,9 @@ function resetDb(): void {
       length_value TEXT NOT NULL DEFAULT '',
       started_at TEXT,
       ended_at TEXT,
+      repo_path TEXT,
+      repo_url TEXT,
+      repo_access_mode TEXT,
       task_policy_seeded_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -382,6 +385,57 @@ describe('sprints API create clone support', () => {
       const audit = db.prepare(`SELECT actor, changes FROM project_audit_log WHERE entity_type = 'sprint' AND entity_id = ?`).get(body.id) as { actor: string; changes: string };
       expect(audit.actor).toBe('test-suite');
       expect(JSON.parse(audit.changes)).toEqual(expect.objectContaining({ source_sprint_id: 10, cloned_setup: true, sprint_type: 'enhancements' }));
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('creates and updates workflow-owned repository config', async () => {
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const createResponse = await fetch(`${baseUrl}/api/v1/sprints`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-actor': 'test-suite' },
+        body: JSON.stringify({
+          project_id: 1,
+          name: 'Repo Workflow',
+          sprint_type: 'generic',
+          repo_access_mode: 'worktree',
+          repo_path: '  /repos/workflow-a  ',
+        }),
+      });
+      const created = await createResponse.json() as { id: number; repo_path: string | null; repo_url: string | null; repo_access_mode: string | null; error?: string };
+      expect(createResponse.status).toBe(201);
+      expect(created).toEqual(expect.objectContaining({
+        repo_path: '/repos/workflow-a',
+        repo_url: null,
+        repo_access_mode: 'worktree',
+      }));
+
+      const updateResponse = await fetch(`${baseUrl}/api/v1/sprints/${created.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-actor': 'test-suite' },
+        body: JSON.stringify({
+          repo_access_mode: 'clone',
+          repo_url: 'git@github.com:owner/workflow-b.git',
+        }),
+      });
+      const updated = await updateResponse.json() as { repo_path: string | null; repo_url: string | null; repo_access_mode: string | null };
+      expect(updateResponse.status).toBe(200);
+      expect(updated).toEqual(expect.objectContaining({
+        repo_path: null,
+        repo_url: 'git@github.com:owner/workflow-b.git',
+        repo_access_mode: 'clone',
+      }));
+
+      const invalidResponse = await fetch(`${baseUrl}/api/v1/sprints/${created.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-actor': 'test-suite' },
+        body: JSON.stringify({ repo_access_mode: 'worktree', repo_path: '' }),
+      });
+      const invalid = await invalidResponse.json() as { error: string };
+      expect(invalidResponse.status).toBe(400);
+      expect(invalid.error).toContain('repo_access_mode=worktree requires repo_path');
     } finally {
       await stopTestServer(server);
     }

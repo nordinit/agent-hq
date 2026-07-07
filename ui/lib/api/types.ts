@@ -1172,6 +1172,9 @@ export interface Sprint {
   length_value: string;
   started_at: string | null;
   ended_at: string | null;
+  repo_path: string | null;
+  repo_url: string | null;
+  repo_access_mode: 'worktree' | 'clone' | null;
   created_at: string;
   task_count?: number;
   tasks_done?: number;
@@ -1190,6 +1193,9 @@ export interface CreateSprintInput {
   length_kind?: Sprint['length_kind'];
   length_value?: string;
   started_at?: string | null;
+  repo_path?: string | null;
+  repo_url?: string | null;
+  repo_access_mode?: Sprint['repo_access_mode'];
 }
 
 export interface SprintAssignment extends Sprint {

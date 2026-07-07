@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { seedSprintTaskPolicy } from '../routing/policy/seed';
 import { writeProjectAudit, diffFields } from '../../lib/projectAudit';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
+import { normalizeRepoConfig, validateRepoConfig } from '../../lib/repoConfig';
 import {
   completeSprint,
   normalizeSprintStatus,
@@ -32,6 +33,9 @@ const ALLOWED_UPDATE_FIELDS = new Set([
   'length_value',
   'started_at',
   'ended_at',
+  'repo_access_mode',
+  'repo_path',
+  'repo_url',
 ]);
 
 function tableExists(db: Database.Database, table: string): boolean {
@@ -210,6 +214,9 @@ export function createSprint(
     length_kind = 'time',
     length_value = '',
     started_at,
+    repo_access_mode,
+    repo_path,
+    repo_url,
   } = body;
   const tenantId = Number.isFinite(Number(body.tenant_id)) ? Number(body.tenant_id) : null;
 
@@ -236,19 +243,24 @@ export function createSprint(
   }
 
   const normalizedStatus = normalizeSprintStatus(status);
+  const repoValidationError = validateRepoConfig({ repo_access_mode, repo_path, repo_url });
+  if (repoValidationError) {
+    throw Object.assign(new Error(repoValidationError), { status: 400 });
+  }
+  const repoConfig = normalizeRepoConfig({ repo_access_mode, repo_path, repo_url });
   let newId = 0;
 
   db.transaction(() => {
     const hasSprintTenantId = tableHasColumn(db, 'sprints', 'tenant_id');
     const result = hasSprintTenantId
       ? db.prepare(`
-          INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, started_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(project.tenant_id ?? tenantId, project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, started_at ?? null)
+          INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, started_at, repo_path, repo_url, repo_access_mode)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(project.tenant_id ?? tenantId, project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, started_at ?? null, repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode)
       : db.prepare(`
-          INSERT INTO sprints (project_id, name, goal, sprint_type, status, length_kind, length_value, started_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, started_at ?? null);
+          INSERT INTO sprints (project_id, name, goal, sprint_type, status, length_kind, length_value, started_at, repo_path, repo_url, repo_access_mode)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, started_at ?? null, repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode);
 
     newId = Number(result.lastInsertRowid);
 
@@ -266,6 +278,9 @@ export function createSprint(
     status: normalizedStatus,
     length_kind,
     length_value,
+    repo_access_mode: repoConfig.repo_access_mode,
+    repo_path: repoConfig.repo_path,
+    repo_url: repoConfig.repo_url,
   });
 
   return db.prepare(`
@@ -313,6 +328,9 @@ export function updateSprint(
     length_value,
     started_at,
     ended_at,
+    repo_access_mode,
+    repo_path,
+    repo_url,
   } = body as Partial<SprintRecord>;
 
   const resolvedSprintType = sprint_type !== undefined
@@ -336,6 +354,21 @@ export function updateSprint(
     throw Object.assign(new Error(`Project ${requestedProjectId} does not exist`), { status: 400 });
   }
 
+  const repoPatchProvided = repo_access_mode !== undefined || repo_path !== undefined || repo_url !== undefined;
+  const repoValidationError = repoPatchProvided
+    ? validateRepoConfig({ repo_access_mode, repo_path, repo_url })
+    : null;
+  if (repoValidationError) {
+    throw Object.assign(new Error(repoValidationError), { status: 400 });
+  }
+  const repoConfig = repoPatchProvided
+    ? normalizeRepoConfig({ repo_access_mode, repo_path, repo_url })
+    : {
+        repo_path: (existing as SprintRecord & { repo_path?: string | null }).repo_path ?? null,
+        repo_url: (existing as SprintRecord & { repo_url?: string | null }).repo_url ?? null,
+        repo_access_mode: (existing as SprintRecord & { repo_access_mode?: 'worktree' | 'clone' | null }).repo_access_mode ?? null,
+      };
+
   const newValues = {
     project_id: requestedProjectId,
     name: name ?? existing.name,
@@ -346,6 +379,9 @@ export function updateSprint(
     length_value: length_value !== undefined ? length_value : existing.length_value,
     started_at: started_at !== undefined ? started_at : existing.started_at,
     ended_at: ended_at !== undefined ? ended_at : existing.ended_at,
+    repo_path: repoConfig.repo_path,
+    repo_url: repoConfig.repo_url,
+    repo_access_mode: repoConfig.repo_access_mode,
   };
 
   db.prepare(`
@@ -358,7 +394,10 @@ export function updateSprint(
       length_kind = ?,
       length_value = ?,
       started_at = ?,
-      ended_at = ?
+      ended_at = ?,
+      repo_path = ?,
+      repo_url = ?,
+      repo_access_mode = ?
     WHERE id = ?
   `).run(
     newValues.project_id,
@@ -370,6 +409,9 @@ export function updateSprint(
     newValues.length_value,
     newValues.started_at,
     newValues.ended_at,
+    newValues.repo_path,
+    newValues.repo_url,
+    newValues.repo_access_mode,
     sprintId,
   );
 
@@ -384,6 +426,9 @@ export function updateSprint(
       length_kind: existing.length_kind,
       length_value: existing.length_value,
       project_id: existing.project_id,
+      repo_path: (existing as SprintRecord & { repo_path?: string | null }).repo_path ?? null,
+      repo_url: (existing as SprintRecord & { repo_url?: string | null }).repo_url ?? null,
+      repo_access_mode: (existing as SprintRecord & { repo_access_mode?: string | null }).repo_access_mode ?? null,
     },
     {
       name: newValues.name,
@@ -393,6 +438,9 @@ export function updateSprint(
       length_kind: newValues.length_kind,
       length_value: newValues.length_value,
       project_id: newValues.project_id,
+      repo_path: newValues.repo_path,
+      repo_url: newValues.repo_url,
+      repo_access_mode: newValues.repo_access_mode,
     },
   );
   if (Object.keys(changes).length > 0) {

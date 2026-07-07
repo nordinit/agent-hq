@@ -168,6 +168,8 @@ export function runWorktreePrunePass(db: Database.Database = getDb()): void {
   const hasAgentTenantId = tableHasColumn(db, 'agents', 'tenant_id');
   const hasAgentProjectId = tableHasColumn(db, 'agents', 'project_id');
   const hasProjectRepoColumns = hasAgentProjectId && ['repo_path', 'repo_url', 'repo_access_mode'].every((column) => tableHasColumn(db, 'projects', column));
+  const hasWorkflowRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every((column) => tableHasColumn(db, 'sprints', column));
+  const hasWorkflowRoutingColumns = ['agent_id', 'sprint_id', 'project_id', 'sprint_type'].every((column) => tableHasColumn(db, 'sprint_task_routing_rules', column));
   const hasProjectTenantId = hasAgentProjectId && tableHasColumn(db, 'projects', 'tenant_id');
 
   const agents = db.prepare(`
@@ -175,14 +177,27 @@ export function runWorktreePrunePass(db: Database.Database = getDb()): void {
            ${hasAgentTenantId ? 'a.tenant_id' : 'NULL'} AS tenant_id,
            ${hasAgentProjectId ? 'a.project_id' : 'NULL'} AS project_id,
            ${hasProjectTenantId ? 'p.tenant_id' : 'NULL'} AS project_tenant_id,
-           ${hasProjectRepoColumns ? 'p.repo_path AS project_repo_path, p.repo_url AS project_repo_url, p.repo_access_mode AS project_repo_access_mode' : 'NULL AS project_repo_path, NULL AS project_repo_url, NULL AS project_repo_access_mode'}
+           ${hasProjectRepoColumns ? 'p.repo_path AS project_repo_path, p.repo_url AS project_repo_url, p.repo_access_mode AS project_repo_access_mode' : 'NULL AS project_repo_path, NULL AS project_repo_url, NULL AS project_repo_access_mode'},
+           ${hasWorkflowRepoColumns && hasWorkflowRoutingColumns ? 's.repo_path AS workflow_repo_path, s.repo_url AS workflow_repo_url, s.repo_access_mode AS workflow_repo_access_mode' : 'NULL AS workflow_repo_path, NULL AS workflow_repo_url, NULL AS workflow_repo_access_mode'}
     FROM agents a
     ${hasAgentProjectId ? 'LEFT JOIN projects p ON p.id = a.project_id' : ''}
+    ${hasWorkflowRepoColumns && hasWorkflowRoutingColumns ? `LEFT JOIN (
+      SELECT rr.agent_id, MIN(COALESCE(rr.sprint_id, sp.id)) AS sprint_id
+      FROM sprint_task_routing_rules rr
+      LEFT JOIN sprints sp ON sp.project_id = rr.project_id AND sp.sprint_type = rr.sprint_type
+      GROUP BY rr.agent_id
+    ) wr ON wr.agent_id = a.id
+    LEFT JOIN sprints s ON s.id = wr.sprint_id` : ''}
     WHERE a.workspace_path IS NOT NULL AND a.workspace_path != ''
-  `).all() as Array<{ id: number; name: string | null; tenant_id: number | null; project_id: number | null; project_tenant_id: number | null; workspace_path: string; repo_path: string | null; repo_url: string | null; repo_access_mode: RepoAccessMode | null; os_user: string | null; project_repo_path: string | null; project_repo_url: string | null; project_repo_access_mode: RepoAccessMode | null }>;
+  `).all() as Array<{ id: number; name: string | null; tenant_id: number | null; project_id: number | null; project_tenant_id: number | null; workspace_path: string; repo_path: string | null; repo_url: string | null; repo_access_mode: RepoAccessMode | null; os_user: string | null; project_repo_path: string | null; project_repo_url: string | null; project_repo_access_mode: RepoAccessMode | null; workflow_repo_path: string | null; workflow_repo_url: string | null; workflow_repo_access_mode: RepoAccessMode | null }>;
 
   for (const agent of agents) {
     const effectiveRepo = resolveRepoConfig({
+      workflow: {
+        repo_path: agent.workflow_repo_path,
+        repo_url: agent.workflow_repo_url,
+        repo_access_mode: agent.workflow_repo_access_mode,
+      },
       project: {
         repo_path: agent.project_repo_path,
         repo_url: agent.project_repo_url,

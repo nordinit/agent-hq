@@ -503,6 +503,43 @@ function backfillProjectRepoConfigs(db: Database.Database): void {
   }
 }
 
+function backfillWorkflowRepoConfigs(db: Database.Database): void {
+  const sprintColumns = new Set(
+    (db.prepare(`PRAGMA table_info(sprints)`).all() as Array<{ name: string }>).map((col) => col.name),
+  );
+  const projectColumns = new Set(
+    (db.prepare(`PRAGMA table_info(projects)`).all() as Array<{ name: string }>).map((col) => col.name),
+  );
+
+  if (!sprintColumns.has('repo_path') || !sprintColumns.has('repo_url') || !sprintColumns.has('repo_access_mode')) return;
+  if (!projectColumns.has('repo_path') || !projectColumns.has('repo_url') || !projectColumns.has('repo_access_mode')) return;
+
+  const result = db.prepare(`
+    UPDATE sprints
+    SET repo_path = (
+          SELECT p.repo_path FROM projects p WHERE p.id = sprints.project_id
+        ),
+        repo_url = (
+          SELECT p.repo_url FROM projects p WHERE p.id = sprints.project_id
+        ),
+        repo_access_mode = (
+          SELECT p.repo_access_mode FROM projects p WHERE p.id = sprints.project_id
+        )
+    WHERE (repo_access_mode IS NULL OR repo_access_mode = '')
+      AND EXISTS (
+        SELECT 1
+        FROM projects p
+        WHERE p.id = sprints.project_id
+          AND p.repo_access_mode IS NOT NULL
+          AND p.repo_access_mode != ''
+      )
+  `).run();
+
+  if (result.changes > 0) {
+    console.log(`[schema] Backfilled ${result.changes} workflow repo config(s) from project legacy settings`);
+  }
+}
+
 export type InitSchemaOptions = {
   tenantMode?: 'repair' | 'verify';
 };
@@ -935,6 +972,9 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       goal         TEXT NOT NULL DEFAULT '',
       sprint_type  TEXT NOT NULL DEFAULT 'generic',
       workflow_template_key TEXT,
+      repo_path    TEXT,
+      repo_url     TEXT,
+      repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone')),
       status       TEXT NOT NULL DEFAULT 'planning' CHECK(status IN ('planning','active','paused','complete','closed')),
       length_kind  TEXT NOT NULL DEFAULT 'time' CHECK(length_kind IN ('time','runs')),
       length_value TEXT NOT NULL DEFAULT '',
@@ -966,6 +1006,9 @@ export function initSchema(options: InitSchemaOptions = {}): void {
             goal         TEXT NOT NULL DEFAULT '',
             sprint_type  TEXT NOT NULL DEFAULT 'generic',
             workflow_template_key TEXT,
+            repo_path    TEXT,
+            repo_url     TEXT,
+            repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone')),
             status       TEXT NOT NULL DEFAULT 'planning' CHECK(status IN ('planning','active','paused','complete','closed')),
             length_kind  TEXT NOT NULL DEFAULT 'time' CHECK(length_kind IN ('time','runs')),
             length_value TEXT NOT NULL DEFAULT '',
@@ -981,11 +1024,17 @@ export function initSchema(options: InitSchemaOptions = {}): void {
         const extraInsertCols = [
           ...(hasSprintType ? [] : ['sprint_type']),
           ...(hasWorkflowTemplateKey ? [] : ['workflow_template_key']),
+          ...(sprintCols.includes('repo_path') ? [] : ['repo_path']),
+          ...(sprintCols.includes('repo_url') ? [] : ['repo_url']),
+          ...(sprintCols.includes('repo_access_mode') ? [] : ['repo_access_mode']),
         ];
         const insertCols = extraInsertCols.length > 0 ? `${selectCols}, ${extraInsertCols.join(', ')}` : selectCols;
         const extraSelectExpr = [
           ...(hasSprintType ? [] : [`'generic' AS sprint_type`]),
           ...(hasWorkflowTemplateKey ? [] : ['NULL AS workflow_template_key']),
+          ...(sprintCols.includes('repo_path') ? [] : ['NULL AS repo_path']),
+          ...(sprintCols.includes('repo_url') ? [] : ['NULL AS repo_url']),
+          ...(sprintCols.includes('repo_access_mode') ? [] : ['NULL AS repo_access_mode']),
         ];
         const selectExpr = extraSelectExpr.length > 0 ? `${selectCols}, ${extraSelectExpr.join(', ')}` : selectCols;
 
@@ -2634,7 +2683,12 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     db.exec(`UPDATE agents SET repo_access_mode = 'worktree' WHERE repo_access_mode IS NULL AND repo_path IS NOT NULL AND repo_path != ''`);
   } catch (_) { /* ignore */ }
 
+  ensureTableColumn(db, 'sprints', 'repo_path', `repo_path TEXT`);
+  ensureTableColumn(db, 'sprints', 'repo_url', `repo_url TEXT`);
+  ensureTableColumn(db, 'sprints', 'repo_access_mode', `repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone'))`);
+
   backfillProjectRepoConfigs(db);
+  backfillWorkflowRepoConfigs(db);
 
   // Create story_point_model_routing table
   db.exec(`

@@ -272,7 +272,7 @@ export const STARTER_AGENT_DEFINITIONS: StarterAgentDefinition[] = [
     requirements: [
       'Needs a provisioned workspace and repository access before implementation dispatch.',
       'Can read active task/project context and write lifecycle evidence for assigned tasks.',
-      'Uses project-owned repository configuration rather than agent-local repo defaults.',
+      'Uses workflow-owned repository configuration, with project and agent repo settings only as migration fallbacks.',
     ],
     identityDocs: starterDocs({
       name: 'Developer Agent',
