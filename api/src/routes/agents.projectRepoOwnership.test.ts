@@ -21,16 +21,25 @@ function resetDb(): void {
   db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY,
+      tenant_id INTEGER DEFAULT 1,
       name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       context_md TEXT NOT NULL DEFAULT '',
       repo_path TEXT,
       repo_url TEXT,
-      repo_access_mode TEXT
+      repo_access_mode TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE sprints (
       id INTEGER PRIMARY KEY,
+      tenant_id INTEGER DEFAULT 1,
       project_id INTEGER NOT NULL,
       name TEXT NOT NULL,
       goal TEXT NOT NULL DEFAULT '',
@@ -42,6 +51,7 @@ function resetDb(): void {
 
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
+      tenant_id INTEGER DEFAULT 1,
       name TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT '',
       session_key TEXT NOT NULL UNIQUE,
@@ -125,6 +135,69 @@ describe('agent repo ownership enforcement', () => {
     resetDb();
   });
 
+  it('rejects project-level repo fields on project create', async () => {
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Agent HQ',
+          repo_access_mode: 'worktree',
+          repo_path: '/Users/nordini/agent-hq',
+        }),
+      });
+      const body = await response.json() as Record<string, unknown>;
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Project-level repository configuration is deprecated. Configure repository access on the workflow instead.');
+      expect(body.code).toBe('project_repo_fields_deprecated');
+      expect(body.rejected_fields).toEqual(['repo_path', 'repo_access_mode']);
+
+      const count = getDb().prepare(`SELECT COUNT(*) AS count FROM projects WHERE name = 'Agent HQ'`).get() as { count: number };
+      expect(count.count).toBe(0);
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('rejects project-level repo fields on project update and preserves legacy values', async () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
+      VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+    `).run();
+
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/projects/86`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Agent HQ Updated',
+          repo_access_mode: 'clone',
+          repo_url: 'git@github.com:test/test.git',
+        }),
+      });
+      const body = await response.json() as Record<string, unknown>;
+
+      expect(response.status).toBe(400);
+      expect(body.error).toBe('Project-level repository configuration is deprecated. Configure repository access on the workflow instead.');
+      expect(body.code).toBe('project_repo_fields_deprecated');
+      expect(body.rejected_fields).toEqual(['repo_url', 'repo_access_mode']);
+
+      const project = db.prepare(`SELECT name, repo_path, repo_url, repo_access_mode FROM projects WHERE id = 86`).get() as Record<string, unknown>;
+      expect(project).toEqual({
+        name: 'Agent HQ',
+        repo_path: '/Users/nordini/agent-hq',
+        repo_url: null,
+        repo_access_mode: 'worktree',
+      });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   afterEach(() => {
     closeDb();
     delete process.env.AGENT_HQ_DB_PATH;
@@ -156,7 +229,7 @@ describe('agent repo ownership enforcement', () => {
       const body = await response.json() as Record<string, unknown>;
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Repository configuration is project-owned. Agent create/update flows no longer accept repo_path, repo_url, or repo_access_mode. Update the project instead.');
+      expect(body.error).toBe('Repository configuration is workflow-owned. Agent create/update flows no longer accept repo_path, repo_url, or repo_access_mode. Update the workflow instead.');
       expect(body.code).toBe('agent_repo_fields_not_supported');
       expect(body.rejected_fields).toEqual(['repo_url', 'repo_access_mode']);
 
@@ -202,7 +275,7 @@ describe('agent repo ownership enforcement', () => {
       const body = await response.json() as Record<string, unknown>;
 
       expect(response.status).toBe(400);
-      expect(body.error).toBe('Repository configuration is project-owned. Agent create/update flows no longer accept repo_path, repo_url, or repo_access_mode. Update the project instead.');
+      expect(body.error).toBe('Repository configuration is workflow-owned. Agent create/update flows no longer accept repo_path, repo_url, or repo_access_mode. Update the workflow instead.');
       expect(body.code).toBe('agent_repo_fields_not_supported');
       expect(body.rejected_fields).toEqual(['repo_url', 'repo_access_mode']);
 
@@ -295,7 +368,7 @@ describe('agent repo ownership enforcement', () => {
     }
   });
 
-  it('reflects project repo edits immediately on agent reads while keeping legacy fallback metadata separate', async () => {
+  it('keeps project repo config read-only on agent reads while preserving legacy agent fallback metadata', async () => {
     const db = getDb();
     db.prepare(`
       INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
@@ -309,14 +382,16 @@ describe('agent repo ownership enforcement', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const initialAgent = await fetch(`${baseUrl}/api/v1/agents/94`).then(async (res) => res.json() as Promise<Record<string, unknown>>);
-      expect(initialAgent.repo_path).toBe('/Users/nordini/agent-hq');
-      expect(initialAgent.repo_url).toBeNull();
-      expect(initialAgent.repo_access_mode).toBe('worktree');
-      expect(initialAgent.repo_config_source).toBe('project');
+      expect(initialAgent.repo_path).toBeNull();
+      expect(initialAgent.repo_url).toBe('git@github.com:legacy/fallback.git');
+      expect(initialAgent.repo_access_mode).toBe('clone');
+      expect(initialAgent.repo_config_source).toBe('agent_legacy');
+      expect(initialAgent.project_repo_path).toBe('/Users/nordini/agent-hq');
+      expect(initialAgent.project_repo_url).toBeNull();
       expect(initialAgent.legacy_repo_url).toBe('git@github.com:legacy/fallback.git');
       expect(initialAgent.legacy_repo_access_mode).toBe('clone');
 
-      const switchToClone = await fetch(`${baseUrl}/api/v1/projects/86`, {
+      const rejectedProjectRepoEdit = await fetch(`${baseUrl}/api/v1/projects/86`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -325,38 +400,29 @@ describe('agent repo ownership enforcement', () => {
           repo_path: null,
         }),
       });
-      expect(switchToClone.status).toBe(200);
+      expect(rejectedProjectRepoEdit.status).toBe(400);
 
-      const cloneAgent = await fetch(`${baseUrl}/api/v1/agents/94`).then(async (res) => res.json() as Promise<Record<string, unknown>>);
-      expect(cloneAgent.repo_path).toBeNull();
-      expect(cloneAgent.repo_url).toBe('git@github.com:project/canonical.git');
-      expect(cloneAgent.repo_access_mode).toBe('clone');
-      expect(cloneAgent.repo_config_source).toBe('project');
-      expect(cloneAgent.project_repo_url).toBe('git@github.com:project/canonical.git');
-      expect(cloneAgent.legacy_repo_url).toBe('git@github.com:legacy/fallback.git');
-
-      const switchBackToWorktree = await fetch(`${baseUrl}/api/v1/projects/86`, {
+      const metadataEdit = await fetch(`${baseUrl}/api/v1/projects/86`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          repo_access_mode: 'worktree',
-          repo_path: '/Users/nordini/agent-hq',
-          repo_url: null,
+          name: 'Agent HQ Renamed',
         }),
       });
-      expect(switchBackToWorktree.status).toBe(200);
+      expect(metadataEdit.status).toBe(200);
 
       const finalProject = await fetch(`${baseUrl}/api/v1/projects/86`).then(async (res) => res.json() as Promise<Record<string, unknown>>);
       const finalAgent = await fetch(`${baseUrl}/api/v1/agents/94`).then(async (res) => res.json() as Promise<Record<string, unknown>>);
+      expect(finalProject.name).toBe('Agent HQ Renamed');
       expect(finalProject.repo_path).toBe('/Users/nordini/agent-hq');
       expect(finalProject.repo_url).toBeNull();
       expect(finalProject.repo_access_mode).toBe('worktree');
-      expect(finalAgent.repo_path).toBe('/Users/nordini/agent-hq');
-      expect(finalAgent.repo_url).toBeNull();
-      expect(finalAgent.repo_access_mode).toBe('worktree');
+      expect(finalAgent.repo_path).toBeNull();
+      expect(finalAgent.repo_url).toBe('git@github.com:legacy/fallback.git');
+      expect(finalAgent.repo_access_mode).toBe('clone');
       expect(finalAgent.project_repo_path).toBe('/Users/nordini/agent-hq');
       expect(finalAgent.project_repo_url).toBeNull();
-      expect(finalAgent.repo_config_source).toBe('project');
+      expect(finalAgent.repo_config_source).toBe('agent_legacy');
       expect(finalAgent.legacy_repo_url).toBe('git@github.com:legacy/fallback.git');
     } finally {
       await stopTestServer(server);

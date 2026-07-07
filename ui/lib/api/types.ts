@@ -34,7 +34,7 @@ export interface Agent {
   workspace_path: string;
   /**
    * repo_path — effective repository path resolved for this agent.
-   * Canonically sourced from the project when configured, with legacy agent fallback during migration.
+   * Workflow repo configuration is the dispatch source of truth; agent fields are legacy compatibility.
    */
   repo_path: string | null;
   /** repo_url — effective clone URL resolved for this agent. */
@@ -42,7 +42,7 @@ export interface Agent {
   /** repo_access_mode — effective repo source mode resolved for this agent. */
   repo_access_mode: 'worktree' | 'clone' | null;
   /** repo_config_source — canonical source of the effective repo config. */
-  repo_config_source?: 'project' | 'agent_legacy' | null;
+  repo_config_source?: 'workflow' | 'agent_legacy' | null;
   legacy_repo_path?: string | null;
   legacy_repo_url?: string | null;
   legacy_repo_access_mode?: 'worktree' | 'clone' | null;

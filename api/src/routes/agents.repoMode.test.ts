@@ -128,7 +128,7 @@ describe('agents repo source mode defaults', () => {
     expect(parsed.repo_access_mode).toBe('worktree');
   });
 
-  it('prefers project repo config over legacy agent repo config', async () => {
+  it('does not use project repo config as an effective agent repo source', async () => {
     const { parseAgentRuntimeConfig } = await import('./agents');
     const parsed = parseAgentRuntimeConfig({
       name: 'Project Repo Agent',
@@ -143,10 +143,10 @@ describe('agents repo source mode defaults', () => {
       project_repo_access_mode: 'clone',
     });
 
-    expect(parsed.repo_path).toBeNull();
-    expect(parsed.repo_url).toBe('git@github.com:owner/project.git');
-    expect(parsed.repo_access_mode).toBe('clone');
-    expect(parsed.repo_config_source).toBe('project');
+    expect(parsed.repo_path).toBe('/tmp/legacy-repo');
+    expect(parsed.repo_url).toBeNull();
+    expect(parsed.repo_access_mode).toBe('worktree');
+    expect(parsed.repo_config_source).toBe('agent_legacy');
     expect(parsed.legacy_repo_path).toBe('/tmp/legacy-repo');
     expect(parsed.legacy_repo_access_mode).toBe('worktree');
   });

@@ -212,7 +212,7 @@ function rejectAgentRepoPayload(body: Record<string, unknown>): { ok: true } | {
   return {
     ok: false,
     status: 400,
-    error: 'Repository configuration is project-owned. Agent create/update flows no longer accept repo_path, repo_url, or repo_access_mode. Update the project instead.',
+    error: 'Repository configuration is workflow-owned. Agent create/update flows no longer accept repo_path, repo_url, or repo_access_mode. Update the workflow instead.',
     code: 'agent_repo_fields_not_supported',
     rejected_fields: rejectedFields,
   };
@@ -2766,11 +2766,6 @@ export function parseAgentRuntimeConfig(agent: Record<string, unknown>): Record<
     repo_access_mode: agent.repo_access_mode,
   });
   const effectiveRepoConfig = resolveRepoConfig({
-    project: {
-      repo_path: agent.project_repo_path,
-      repo_url: agent.project_repo_url,
-      repo_access_mode: agent.project_repo_access_mode,
-    },
     agent: legacyRepoConfig,
   });
 

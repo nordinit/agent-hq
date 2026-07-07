@@ -373,7 +373,7 @@ export function validateProjectManifest(db: Database.Database, input: unknown, o
     warnings.push({ code: 'missing_project', severity: 'error', message: 'Manifest project.name is required.' });
   }
   if (manifest.project?.repo_config?.mode === 'worktree' && manifest.project.repo_config.path) {
-    warnings.push({ code: 'local_repo_path', severity: 'warning', section: 'project', message: `Project legacy fallback uses local worktree path ${manifest.project.repo_config.path}; confirm this exists on the target host.` });
+    warnings.push({ code: 'deprecated_project_repo_config', severity: 'warning', section: 'project', message: 'Project-level repository configuration is deprecated and will not be imported. Configure repository access on workflows.' });
   }
   for (const workflow of manifest.workflows ?? []) {
     if (workflow.repo_config?.mode === 'worktree' && workflow.repo_config.path) {
@@ -449,19 +449,11 @@ export function importProjectManifest(
   const projectName = preview.proposed_project_name;
 
   const tx = db.transaction(() => {
-    const repoConfig = normalizeRepoConfig({
-      repo_access_mode: manifest.project.repo_config.mode,
-      repo_path: manifest.project.repo_config.mode === 'worktree' ? manifest.project.repo_config.path : null,
-      repo_url: manifest.project.repo_config.mode === 'clone' ? manifest.project.repo_config.url : null,
-    });
     const projectId = insertDynamic(db, 'projects', {
       tenant_id: options.tenantId ?? null,
       name: projectName,
       description: manifest.project.description ?? '',
       context_md: manifest.project.context_md ?? '',
-      repo_path: repoConfig.repo_path,
-      repo_url: repoConfig.repo_url,
-      repo_access_mode: repoConfig.repo_access_mode,
     });
 
     for (const workflow of manifest.workflows ?? []) {

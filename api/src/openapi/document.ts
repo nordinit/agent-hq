@@ -417,13 +417,11 @@ export const openApiDocument: OpenApiDocument = {
       },
       post: {
         tags: ['Projects'],
-        summary: 'Create a project and starter backlog/routing.',
+        summary: 'Create a project and starter backlog/routing. Repository configuration is workflow-owned.',
         operationId: 'createProject',
         requestBody: requestBody(ref('ProjectCreateRequest'), {
           name: 'Agent HQ Docs Site',
           description: 'Documentation and SDK readiness work.',
-          repo_url: 'https://github.com/example/agent-hq-docs',
-          repo_access_mode: 'clone',
         }),
         responses: {
           '201': response('Created project.', ref('Project')),
@@ -457,12 +455,11 @@ export const openApiDocument: OpenApiDocument = {
       },
       put: {
         tags: ['Projects'],
-        summary: 'Update project metadata and repository configuration.',
+        summary: 'Update project metadata. Repository configuration is workflow-owned.',
         operationId: 'updateProject',
         parameters: [idParam('id', 'Project ID.')],
         requestBody: requestBody(ref('ProjectUpdateRequest'), {
           name: 'Agent HQ Docs Site',
-          repo_access_mode: 'worktree',
         }),
         responses: {
           '200': response('Updated project.', ref('Project')),
@@ -1720,9 +1717,9 @@ export const openApiDocument: OpenApiDocument = {
           name: { type: 'string' },
           description: { type: 'string', nullable: true },
           context_md: { type: 'string', nullable: true },
-          repo_path: { type: 'string', nullable: true, description: 'Self-hosted local path. Avoid exposing in public examples.' },
-          repo_url: { type: 'string', nullable: true },
-          repo_access_mode: { type: 'string', enum: ['worktree', 'clone'], nullable: true },
+          repo_path: { type: 'string', nullable: true, readOnly: true, deprecated: true, description: 'Legacy project-level repository path retained for migration compatibility. Configure repository access on workflows.' },
+          repo_url: { type: 'string', nullable: true, readOnly: true, deprecated: true, description: 'Legacy project-level repository URL retained for migration compatibility. Configure repository access on workflows.' },
+          repo_access_mode: { type: 'string', enum: ['worktree', 'clone'], nullable: true, readOnly: true, deprecated: true, description: 'Legacy project-level repository mode retained for migration compatibility. Configure repository access on workflows.' },
           is_default: { type: 'boolean' },
           created_at: { type: 'string', nullable: true },
           updated_at: { type: 'string', nullable: true },
@@ -1818,14 +1815,16 @@ export const openApiDocument: OpenApiDocument = {
           name: { type: 'string' },
           description: { type: 'string' },
           context_md: { type: 'string' },
-          repo_path: { type: 'string' },
-          repo_url: { type: 'string' },
-          repo_access_mode: { type: 'string', enum: ['worktree', 'clone'] },
         },
       },
       ProjectUpdateRequest: {
-        allOf: [ref('ProjectCreateRequest')],
-        description: 'Any subset of project create fields. Unsupported fields are rejected.',
+        type: 'object',
+        description: 'Any subset of project metadata fields. Repository fields are rejected; configure repository access on workflows.',
+        properties: {
+          name: { type: 'string' },
+          description: { type: 'string' },
+          context_md: { type: 'string' },
+        },
       },
       DefaultProjectResponse: {
         type: 'object',
@@ -1911,7 +1910,7 @@ export const openApiDocument: OpenApiDocument = {
           length_value: { type: 'integer', nullable: true },
           repo_path: { type: 'string', nullable: true, description: 'Workflow-owned local repository path for worktree mode.' },
           repo_url: { type: 'string', nullable: true, description: 'Workflow-owned git URL for clone mode.' },
-          repo_access_mode: { type: 'string', enum: ['worktree', 'clone'], nullable: true, description: 'Workflow-owned repository access mode. Project and agent repo fields are legacy fallbacks.' },
+          repo_access_mode: { type: 'string', enum: ['worktree', 'clone'], nullable: true, description: 'Workflow-owned repository access mode. Dev workflow dispatch requires this workflow-level repo config.' },
           created_at: { type: 'string', nullable: true },
           updated_at: { type: 'string', nullable: true },
         },
@@ -2232,7 +2231,7 @@ export const openApiDocument: OpenApiDocument = {
       },
       AgentUpdateRequest: {
         allOf: [ref('AgentCreateRequest')],
-        description: 'Any subset of mutable agent fields. Repository ownership fields are project-owned and rejected here.',
+        description: 'Any subset of mutable agent fields. Repository ownership fields are workflow-owned and rejected here.',
       },
       AgentSkillAssignRequest: {
         type: 'object',

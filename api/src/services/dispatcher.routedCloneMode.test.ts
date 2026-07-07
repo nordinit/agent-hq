@@ -177,6 +177,14 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
         name TEXT,
         context TEXT
       );
+      CREATE TABLE sprint_types (
+        key TEXT PRIMARY KEY,
+        repo_required INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE sprints (
+        id INTEGER PRIMARY KEY,
+        sprint_type TEXT
+      );
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY,
         max_points INTEGER,
@@ -190,6 +198,8 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     `);
 
     db.prepare(`INSERT INTO projects (id, name, context) VALUES (1, 'Agent HQ', 'Context')`).run();
+    db.prepare(`INSERT INTO sprint_types (key, repo_required) VALUES ('generic', 0), ('dev', 1)`).run();
+    db.prepare(`INSERT INTO sprints (id, sprint_type) VALUES (9, 'generic')`).run();
     db.prepare(`
       INSERT INTO agents (
         id, name, job_title, project_id, job_instructions, enabled, timeout_seconds, model,
@@ -335,6 +345,63 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       reason: 'no_supported_package_roots',
     })]);
     expect(instance.worktree_path).toBe(path.join(workspaceRoot, 'task-373'));
+  });
+
+  it('blocks repo-required workflows when only legacy agent repo config is available', async () => {
+    const { dispatchTaskToJob } = await import('./dispatcher');
+    db.prepare(`UPDATE sprints SET sprint_type = 'dev' WHERE id = 9`).run();
+
+    const job = db.prepare(`SELECT
+      id,
+      job_title as title,
+      id as agent_id,
+      project_id,
+      job_instructions,
+      enabled,
+      timeout_seconds,
+      session_key as agent_session_key,
+      name as agent_name,
+      model,
+      model as agent_model,
+      runtime_type,
+      runtime_config,
+      hooks_url as agent_hooks_url,
+      hooks_auth_header as agent_hooks_auth_header,
+      workspace_path,
+      skill_names,
+      preferred_provider,
+      repo_path,
+      repo_url,
+      repo_access_mode,
+      'agent_legacy' as repo_config_source,
+      os_user,
+      openclaw_agent_id
+    FROM agents WHERE id = 1`).get() as Record<string, unknown>;
+    const task = db.prepare(`SELECT
+      id,
+      title,
+      description,
+      status,
+      priority,
+      agent_id,
+      project_id,
+      task_type,
+      sprint_id,
+      NULL as sprint_name,
+      'dev' as sprint_type,
+      created_at,
+      0 as blocking_count,
+      NULL as story_points
+    FROM tasks WHERE id = 373`).get() as Record<string, unknown>;
+
+    const ok = dispatchTaskToJob(db, job as never, task as never, 1, 'Rule: Backend Engineer (agent #1)');
+
+    expect(ok).toBe(false);
+    expect(runtimeDispatch).not.toHaveBeenCalled();
+    const note = db.prepare(`SELECT content FROM task_notes WHERE task_id = 373 ORDER BY id DESC LIMIT 1`).get() as { content: string } | undefined;
+    expect(note?.content).toContain('Workflow-level repository configuration is required for repo-backed workflow dispatch');
+    const instanceCount = db.prepare(`SELECT COUNT(*) AS count FROM job_instances WHERE task_id = 373`).get() as { count: number };
+    expect(instanceCount.count).toBe(0);
   });
 
   it('dispatchInstance uses persisted repo workspace as runtime working directory', async () => {

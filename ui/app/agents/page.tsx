@@ -856,7 +856,7 @@ export default function AgentsPage() {
 
               {(form.runtime_type === 'openclaw' || form.runtime_type === 'claude-code' || form.runtime_type === 'hermes') && (
                 <div className="mt-4 rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
-                  Repository settings now live on the project. Create or assign the agent first, then configure repo access from the project page.
+                  Repository settings live on workflows. Create or assign the agent first, then configure repo access from the workflow page.
                 </div>
               )}
 

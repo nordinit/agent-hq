@@ -510,33 +510,113 @@ function backfillWorkflowRepoConfigs(db: Database.Database): void {
   const projectColumns = new Set(
     (db.prepare(`PRAGMA table_info(projects)`).all() as Array<{ name: string }>).map((col) => col.name),
   );
+  const sprintTypeColumns = tableExists(db, 'sprint_types')
+    ? new Set((db.prepare(`PRAGMA table_info(sprint_types)`).all() as Array<{ name: string }>).map((col) => col.name))
+    : new Set<string>();
 
   if (!sprintColumns.has('repo_path') || !sprintColumns.has('repo_url') || !sprintColumns.has('repo_access_mode')) return;
   if (!projectColumns.has('repo_path') || !projectColumns.has('repo_url') || !projectColumns.has('repo_access_mode')) return;
 
-  const result = db.prepare(`
-    UPDATE sprints
-    SET repo_path = (
-          SELECT p.repo_path FROM projects p WHERE p.id = sprints.project_id
-        ),
-        repo_url = (
-          SELECT p.repo_url FROM projects p WHERE p.id = sprints.project_id
-        ),
-        repo_access_mode = (
-          SELECT p.repo_access_mode FROM projects p WHERE p.id = sprints.project_id
-        )
-    WHERE (repo_access_mode IS NULL OR repo_access_mode = '')
-      AND EXISTS (
-        SELECT 1
-        FROM projects p
-        WHERE p.id = sprints.project_id
-          AND p.repo_access_mode IS NOT NULL
-          AND p.repo_access_mode != ''
-      )
-  `).run();
+  const canUseRepoRequiredMetadata = sprintTypeColumns.has('repo_required');
+  const canJoinSprintTypes = tableExists(db, 'sprint_types') && sprintTypeColumns.has('key');
+  const typeTenantJoin = canJoinSprintTypes && sprintTypeColumns.has('tenant_id') && sprintColumns.has('tenant_id')
+    ? 'AND (st.tenant_id IS NULL OR st.tenant_id = s.tenant_id)'
+    : '';
+  const typeTenantOrder = sprintTypeColumns.has('tenant_id') ? 'ORDER BY st.tenant_id IS NULL ASC' : '';
+  const repoRequiredSelect = canUseRepoRequiredMetadata
+    ? `COALESCE((
+        SELECT st.repo_required
+        FROM sprint_types st
+        WHERE st.key = s.sprint_type
+          ${typeTenantJoin}
+        ${typeTenantOrder}
+        LIMIT 1
+      ), 0) AS repo_required`
+    : `CASE WHEN s.sprint_type = 'dev' THEN 1 ELSE 0 END AS repo_required`;
 
-  if (result.changes > 0) {
-    console.log(`[schema] Backfilled ${result.changes} workflow repo config(s) from project legacy settings`);
+  const rows = db.prepare(`
+    SELECT s.id AS workflow_id,
+           s.name AS workflow_name,
+           s.sprint_type,
+           s.repo_path AS workflow_repo_path,
+           s.repo_url AS workflow_repo_url,
+           s.repo_access_mode AS workflow_repo_access_mode,
+           p.id AS project_id,
+           p.name AS project_name,
+           p.repo_path AS project_repo_path,
+           p.repo_url AS project_repo_url,
+           p.repo_access_mode AS project_repo_access_mode,
+           ${repoRequiredSelect}
+    FROM sprints s
+    LEFT JOIN projects p ON p.id = s.project_id
+    ORDER BY p.id ASC, s.id ASC
+  `).all() as Array<{
+    workflow_id: number;
+    workflow_name: string | null;
+    sprint_type: string | null;
+    workflow_repo_path: string | null;
+    workflow_repo_url: string | null;
+    workflow_repo_access_mode: string | null;
+    project_id: number | null;
+    project_name: string | null;
+    project_repo_path: string | null;
+    project_repo_url: string | null;
+    project_repo_access_mode: string | null;
+    repo_required: number | null;
+  }>;
+
+  const update = db.prepare(`
+    UPDATE sprints
+    SET repo_path = ?,
+        repo_url = ?,
+        repo_access_mode = ?
+    WHERE id = ?
+      AND (repo_access_mode IS NULL OR repo_access_mode = '')
+  `);
+
+  let backfilled = 0;
+  let skippedExplicit = 0;
+  let skippedNonDev = 0;
+  let manualConfigRequired = 0;
+
+  for (const row of rows) {
+    const workflowConfig = normalizeRepoConfig({
+      repo_path: row.workflow_repo_path,
+      repo_url: row.workflow_repo_url,
+      repo_access_mode: row.workflow_repo_access_mode,
+    });
+    if (workflowConfig.repo_access_mode) {
+      skippedExplicit++;
+      console.log(`[schema] Workflow repo backfill skipped explicit config: project #${row.project_id ?? 'none'} workflow #${row.workflow_id} (${row.workflow_name ?? 'unnamed'})`);
+      continue;
+    }
+
+    if (row.repo_required !== 1) {
+      skippedNonDev++;
+      console.log(`[schema] Workflow repo backfill skipped non-repo workflow: project #${row.project_id ?? 'none'} workflow #${row.workflow_id} type=${row.sprint_type ?? 'generic'}`);
+      continue;
+    }
+
+    const projectConfig = normalizeRepoConfig({
+      repo_path: row.project_repo_path,
+      repo_url: row.project_repo_url,
+      repo_access_mode: row.project_repo_access_mode,
+    });
+    if (!projectConfig.repo_access_mode) {
+      manualConfigRequired++;
+      console.warn(`[schema] Workflow repo backfill requires manual config: project #${row.project_id ?? 'none'} workflow #${row.workflow_id} (${row.workflow_name ?? 'unnamed'}) has repo_required type=${row.sprint_type ?? 'generic'} but no legacy project repo config`);
+      continue;
+    }
+
+    const result = update.run(projectConfig.repo_path, projectConfig.repo_url, projectConfig.repo_access_mode, row.workflow_id);
+    if (result.changes > 0) {
+      backfilled++;
+      console.log(`[schema] Workflow repo backfilled: project #${row.project_id ?? 'none'} workflow #${row.workflow_id} from legacy project repo config`);
+    }
+  }
+
+  if (backfilled > 0 || skippedExplicit > 0 || skippedNonDev > 0 || manualConfigRequired > 0) {
+    console.log(`[schema] Workflow repo backfill summary: backfilled=${backfilled} skipped_explicit=${skippedExplicit} skipped_non_repo=${skippedNonDev} manual_config_required=${manualConfigRequired}`);
   }
 }
 
@@ -1060,6 +1140,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       name        TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       is_system   INTEGER NOT NULL DEFAULT 1,
+      repo_required INTEGER NOT NULL DEFAULT 0,
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -1326,25 +1407,37 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     ? `AND (tenant_id IS NULL OR tenant_id = ${defaultTenantIdSql})`
     : '';
 
+  ensureColumn('sprint_types', 'repo_required', `repo_required INTEGER NOT NULL DEFAULT 0`);
+  const syncStarterRepoRequirement = db.prepare(`
+    UPDATE sprint_types
+    SET repo_required = ?, updated_at = datetime('now')
+    WHERE key = ?
+      AND COALESCE(is_system, 0) = 1
+      ${workflowConfigTenantPredicate('sprint_types')}
+  `);
+  for (const sprintType of STARTER_SPRINT_TYPE_SEEDS) {
+    syncStarterRepoRequirement.run(sprintType.repoRequired ? 1 : 0, sprintType.key);
+  }
+
   const updateStarterSprintType = db.prepare(`
     UPDATE sprint_types
-    SET name = ?, description = ?, is_system = 1, updated_at = datetime('now')
+    SET name = ?, description = ?, repo_required = ?, is_system = 1, updated_at = datetime('now')
     WHERE key = ?
       ${workflowConfigTenantPredicate('sprint_types')}
   `);
   const insertStarterSprintType = db.prepare(sprintTypesHasTenantId
     ? `
-      INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
-      VALUES (${defaultTenantIdSql}, ?, ?, ?, 1)
+      INSERT INTO sprint_types (tenant_id, key, name, description, repo_required, is_system)
+      VALUES (${defaultTenantIdSql}, ?, ?, ?, ?, 1)
     `
     : `
-      INSERT INTO sprint_types (key, name, description, is_system)
-      VALUES (?, ?, ?, 1)
+      INSERT INTO sprint_types (key, name, description, repo_required, is_system)
+      VALUES (?, ?, ?, ?, 1)
     `);
-  const upsertSprintType = (key: string, name: string, description: string): void => {
-    const result = updateStarterSprintType.run(name, description, key);
+  const upsertSprintType = (key: string, name: string, description: string, repoRequired = false): void => {
+    const result = updateStarterSprintType.run(name, description, repoRequired ? 1 : 0, key);
     if (result.changes === 0) {
-      insertStarterSprintType.run(key, name, description);
+      insertStarterSprintType.run(key, name, description, repoRequired ? 1 : 0);
     }
   };
 
@@ -1481,7 +1574,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   if (shouldSeedStarterSprintDefinitions) {
     const sprintTypeSeedTx = db.transaction(() => {
       for (const sprintType of sprintTypeSeeds) {
-        upsertSprintType(sprintType.key, sprintType.name, sprintType.description);
+        upsertSprintType(sprintType.key, sprintType.name, sprintType.description, sprintType.repoRequired);
       }
       for (const seed of sprintTypeTaskTypeSeeds) {
         for (const taskType of seed.taskTypes) {

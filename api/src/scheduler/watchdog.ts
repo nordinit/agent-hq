@@ -198,11 +198,6 @@ export function runWorktreePrunePass(db: Database.Database = getDb()): void {
         repo_url: agent.workflow_repo_url,
         repo_access_mode: agent.workflow_repo_access_mode,
       },
-      project: {
-        repo_path: agent.project_repo_path,
-        repo_url: agent.project_repo_url,
-        repo_access_mode: agent.project_repo_access_mode,
-      },
       agent: {
         repo_path: agent.repo_path,
         repo_url: agent.repo_url,

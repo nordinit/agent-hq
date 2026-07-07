@@ -13,15 +13,11 @@ describe('repoConfig', () => {
     });
   });
 
-  it('prefers workflow config over project and legacy agent config', () => {
+  it('prefers workflow config over legacy agent config', () => {
     expect(resolveRepoConfig({
       workflow: {
         repo_path: '/repos/workflow',
         repo_access_mode: 'worktree',
-      },
-      project: {
-        repo_url: 'git@github.com:owner/project.git',
-        repo_access_mode: 'clone',
       },
       agent: {
         repo_path: '/repos/legacy-agent',
@@ -35,27 +31,29 @@ describe('repoConfig', () => {
     });
   });
 
-  it('prefers project legacy config over legacy agent config', () => {
+  it('does not use project-level repo config as a fallback', () => {
     expect(resolveRepoConfig({
+      workflow: {
+        repo_path: null,
+        repo_url: null,
+        repo_access_mode: null,
+      },
+      // @ts-expect-error project is intentionally unsupported for normal resolution.
       project: {
         repo_url: 'git@github.com:owner/project.git',
         repo_access_mode: 'clone',
       },
-      agent: {
-        repo_path: '/repos/legacy-agent',
-        repo_access_mode: 'worktree',
-      },
     })).toEqual({
       repo_path: null,
-      repo_url: 'git@github.com:owner/project.git',
-      repo_access_mode: 'clone',
-      repo_config_source: 'project_legacy',
+      repo_url: null,
+      repo_access_mode: null,
+      repo_config_source: null,
     });
   });
 
-  it('falls back to legacy agent config when the project has no repo config', () => {
+  it('falls back to legacy agent config when the workflow has no repo config', () => {
     expect(resolveRepoConfig({
-      project: {
+      workflow: {
         repo_path: null,
         repo_url: null,
         repo_access_mode: null,

@@ -215,7 +215,7 @@ export default function NewSprintPage() {
                 value={form.repo_access_mode}
                 onChange={e => setForm(f => ({ ...f, repo_access_mode: e.target.value as FormState['repo_access_mode'] }))}
               >
-                <option value="">Use project or agent fallback</option>
+                <option value="">No workflow repo configured</option>
                 <option value="worktree">Worktree</option>
                 <option value="clone">Clone</option>
               </select>

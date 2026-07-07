@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { writeProjectAudit, diffFields, extractActor } from '../lib/projectAudit';
-import { normalizeRepoConfig, validateRepoConfig } from '../lib/repoConfig';
 import { ensureProjectBacklogSprint, syncStarterRoutingForProject } from '../lib/starterSetup';
 import { ensureDefaultProjectId, setDefaultProjectId } from '../lib/defaultProject';
 import {
@@ -21,6 +20,8 @@ import {
 } from '../lib/projectPortability';
 
 const router = Router();
+const PROJECT_REPO_FIELDS = ['repo_path', 'repo_url', 'repo_access_mode'] as const;
+const PROJECT_REPO_FIELDS_ERROR = 'Project-level repository configuration is deprecated. Configure repository access on the workflow instead.';
 
 function routeErrorStatus(err: unknown): number {
   const status = typeof err === 'object' && err && 'status' in err ? Number((err as { status?: number }).status) : 500;
@@ -42,6 +43,16 @@ function sendRouteError(res: Response, err: unknown): Response {
   return res.status(routeErrorStatus(err)).json({
     error: routeErrorMessage(err),
     ...(code ? { code } : {}),
+  });
+}
+
+function rejectProjectRepoFields(body: Record<string, unknown>, res: Response): Response | null {
+  const rejectedFields = PROJECT_REPO_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(body, field));
+  if (rejectedFields.length === 0) return null;
+  return res.status(400).json({
+    error: PROJECT_REPO_FIELDS_ERROR,
+    code: 'project_repo_fields_deprecated',
+    rejected_fields: rejectedFields,
   });
 }
 
@@ -109,17 +120,15 @@ router.post('/', (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = resolveTenantIdFromRequest(db, req);
-    const { name, description, context_md, repo_path, repo_url, repo_access_mode } = req.body as Partial<Project>;
+    const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
+    const repoRejection = rejectProjectRepoFields(body, res);
+    if (repoRejection) return repoRejection;
+
+    const { name, description, context_md } = body as Partial<Project>;
 
     if (!name) {
       return res.status(400).json({ error: 'name is required' });
     }
-
-    const repoError = validateRepoConfig({ repo_path, repo_url, repo_access_mode });
-    if (repoError) {
-      return res.status(400).json({ error: repoError });
-    }
-    const repoConfig = normalizeRepoConfig({ repo_path, repo_url, repo_access_mode });
 
     const result = runTenantScopedInsert(db, {
       table: 'projects',
@@ -128,9 +137,6 @@ router.post('/', (req: Request, res: Response) => {
         name,
         description: description ?? '',
         context_md: context_md ?? '',
-        repo_path: repoConfig.repo_path,
-        repo_url: repoConfig.repo_url,
-        repo_access_mode: repoConfig.repo_access_mode,
       },
     });
 
@@ -143,9 +149,6 @@ router.post('/', (req: Request, res: Response) => {
       name,
       description: description ?? '',
       context_md: context_md ?? '',
-      repo_path: repoConfig.repo_path,
-      repo_url: repoConfig.repo_url,
-      repo_access_mode: repoConfig.repo_access_mode,
     });
 
     const project = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(newId, tenantId);
@@ -281,7 +284,10 @@ router.put('/:id', (req: Request, res: Response) => {
     if (!existing) return res.status(404).json({ error: 'Project not found' });
 
     const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
-    const allowedFields = new Set(['name', 'description', 'context_md', 'repo_path', 'repo_url', 'repo_access_mode']);
+    const repoRejection = rejectProjectRepoFields(body, res);
+    if (repoRejection) return repoRejection;
+
+    const allowedFields = new Set(['name', 'description', 'context_md']);
     const unsupportedFields = Object.keys(body).filter((key) => !allowedFields.has(key));
     if (unsupportedFields.length > 0) {
       return res.status(400).json({
@@ -292,25 +298,12 @@ router.put('/:id', (req: Request, res: Response) => {
       });
     }
 
-    const { name, description, context_md, repo_path, repo_url, repo_access_mode } = body as Partial<Project>;
-
-    const repoConfig = normalizeRepoConfig({
-      repo_path: repo_path !== undefined ? repo_path : existing.repo_path,
-      repo_url: repo_url !== undefined ? repo_url : existing.repo_url,
-      repo_access_mode: repo_access_mode !== undefined ? repo_access_mode : existing.repo_access_mode,
-    });
-    const repoError = validateRepoConfig(repoConfig);
-    if (repoError) {
-      return res.status(400).json({ error: repoError });
-    }
+    const { name, description, context_md } = body as Partial<Project>;
 
     const newValues = {
       name: name ?? existing.name,
       description: description !== undefined ? description : existing.description,
       context_md: context_md !== undefined ? context_md : existing.context_md,
-      repo_path: repoConfig.repo_path,
-      repo_url: repoConfig.repo_url,
-      repo_access_mode: repoConfig.repo_access_mode,
     };
 
     runTenantScopedUpdate(db, {
@@ -325,9 +318,6 @@ router.put('/:id', (req: Request, res: Response) => {
         name: existing.name,
         description: existing.description,
         context_md: existing.context_md,
-        repo_path: existing.repo_path,
-        repo_url: existing.repo_url,
-        repo_access_mode: existing.repo_access_mode,
       },
       newValues,
     );

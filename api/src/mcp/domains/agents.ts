@@ -31,7 +31,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_create_agent', 'atlas_create_agent'],
-    'Create a new agent. Repository settings are project-owned and must be configured on the project, not the agent.',
+    'Create a new agent. Repository settings are workflow-owned and must be configured on workflows, not agents.',
     {
       name: z.string().min(1).describe('Agent name'),
       role: z.string().optional().describe('Role label'),
@@ -55,7 +55,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_provision_full_agent', 'atlas_provision_full_agent'],
-    'Atomically create and fully provision an OpenClaw agent, including workspace docs, OpenClaw registration, routing, and optional capability assignments. Repository settings are project-owned and must be configured on the project.',
+    'Atomically create and fully provision an OpenClaw agent, including workspace docs, OpenClaw registration, routing, and optional capability assignments. Repository settings are workflow-owned and must be configured on workflows.',
     {
       name: z.string().min(1).describe('Agent name'),
       role: z.string().nullable().optional().describe('Role label'),
@@ -97,7 +97,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_update_agent', 'atlas_update_agent'],
-    'Update an agent. Repository settings are project-owned, and repo_path/repo_url/repo_access_mode patches are rejected by the Agent HQ API.',
+    'Update an agent. Repository settings are workflow-owned, and repo_path/repo_url/repo_access_mode patches are rejected by the Agent HQ API.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
       patch: z.record(z.string(), z.unknown()).describe('Partial update payload'),

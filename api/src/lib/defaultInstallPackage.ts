@@ -239,34 +239,35 @@ function tenantArgs(db: Database.Database, table: string, tenantId: number): unk
 
 function ensureWorkflowTypes(db: Database.Database, tenantId: number, result: DefaultInstallPackageResult): void {
   const hasTenant = tableHasColumn(db, 'sprint_types', 'tenant_id');
+  const hasRepoRequired = tableHasColumn(db, 'sprint_types', 'repo_required');
   const select = db.prepare(`
-    SELECT id, name, description, is_system
+    SELECT id, name, description, is_system${hasRepoRequired ? ', repo_required' : ''}
     FROM sprint_types
     WHERE key = ?
       ${tenantPredicate(db, 'sprint_types')}
     LIMIT 1
   `);
   const insert = db.prepare(hasTenant
-    ? `INSERT INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, ?, ?, ?, 1, datetime('now'), datetime('now'))`
-    : `INSERT INTO sprint_types (key, name, description, is_system, created_at, updated_at) VALUES (?, ?, ?, 1, datetime('now'), datetime('now'))`);
+    ? `INSERT INTO sprint_types (tenant_id, key, name, description${hasRepoRequired ? ', repo_required' : ''}, is_system, created_at, updated_at) VALUES (?, ?, ?, ?${hasRepoRequired ? ', ?' : ''}, 1, datetime('now'), datetime('now'))`
+    : `INSERT INTO sprint_types (key, name, description${hasRepoRequired ? ', repo_required' : ''}, is_system, created_at, updated_at) VALUES (?, ?, ?${hasRepoRequired ? ', ?' : ''}, 1, datetime('now'), datetime('now'))`);
   const update = db.prepare(`
     UPDATE sprint_types
-    SET name = ?, description = ?, is_system = 1, updated_at = datetime('now')
+    SET name = ?, description = ?${hasRepoRequired ? ', repo_required = ?' : ''}, is_system = 1, updated_at = datetime('now')
     WHERE key = ?
       ${tenantPredicate(db, 'sprint_types')}
   `);
 
   for (const seed of STARTER_SPRINT_TYPE_SEEDS) {
-    const existing = select.get(seed.key, ...tenantArgs(db, 'sprint_types', tenantId)) as { id: number; name: string; description: string; is_system: number } | undefined;
+    const existing = select.get(seed.key, ...tenantArgs(db, 'sprint_types', tenantId)) as { id: number; name: string; description: string; is_system: number; repo_required?: number | null } | undefined;
     if (!existing) {
-      insert.run(...(hasTenant ? [tenantId] : []), seed.key, seed.name, seed.description);
+      insert.run(...(hasTenant ? [tenantId] : []), seed.key, seed.name, seed.description, ...(hasRepoRequired ? [seed.repoRequired ? 1 : 0] : []));
       addCount(result.created, 'workflow_types');
       continue;
     }
     if (existing.is_system === 1) {
-      update.run(seed.name, seed.description, seed.key, ...tenantArgs(db, 'sprint_types', tenantId));
+      update.run(seed.name, seed.description, ...(hasRepoRequired ? [seed.repoRequired ? 1 : 0] : []), seed.key, ...tenantArgs(db, 'sprint_types', tenantId));
       addCount(result.updated, 'workflow_types');
-    } else if (existing.name !== seed.name || existing.description !== seed.description) {
+    } else if (existing.name !== seed.name || existing.description !== seed.description || (hasRepoRequired && (existing.repo_required ?? 0) !== (seed.repoRequired ? 1 : 0))) {
       result.conflicts.push({ kind: 'workflow_type', key: seed.key, message: 'Tenant-authored workflow type differs from the default package; left unchanged.' });
     }
   }

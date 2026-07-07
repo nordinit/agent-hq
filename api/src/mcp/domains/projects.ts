@@ -27,11 +27,8 @@ export function registerProjectsTools(ctx: McpDomainContext) {
       name: z.string().min(1).describe('Project name'),
       description: z.string().optional().describe('Project description'),
       context_md: z.string().optional().describe('Project context markdown'),
-      repo_path: z.string().nullable().optional().describe('Project-owned local repo path for worktree mode'),
-      repo_url: z.string().nullable().optional().describe('Project-owned remote repo URL for clone mode'),
-      repo_access_mode: z.enum(['worktree', 'clone']).nullable().optional().describe('Project-owned repo source mode'),
     },
-    ({ name, description, context_md, repo_path, repo_url, repo_access_mode }) => wrap(() => api.createProject({ name, description, context_md, repo_path, repo_url, repo_access_mode }))(),
+    ({ name, description, context_md }) => wrap(() => api.createProject({ name, description, context_md }))(),
     { domain: 'projects', rest_paths: ['/api/v1/projects'] },
   );
   
@@ -43,11 +40,8 @@ export function registerProjectsTools(ctx: McpDomainContext) {
       name: z.string().min(1).optional().describe('Project name'),
       description: z.string().optional().describe('Project description'),
       context_md: z.string().optional().describe('Project context markdown'),
-      repo_path: z.string().nullable().optional().describe('Project-owned local repo path for worktree mode'),
-      repo_url: z.string().nullable().optional().describe('Project-owned remote repo URL for clone mode'),
-      repo_access_mode: z.enum(['worktree', 'clone']).nullable().optional().describe('Project-owned repo source mode'),
     },
-    ({ project_id, name, description, context_md, repo_path, repo_url, repo_access_mode }) => wrap(() => api.updateProject(project_id, { name, description, context_md, repo_path, repo_url, repo_access_mode }))(),
+    ({ project_id, name, description, context_md }) => wrap(() => api.updateProject(project_id, { name, description, context_md }))(),
     { domain: 'projects', rest_paths: ['/api/v1/projects/:id'] },
   );
   

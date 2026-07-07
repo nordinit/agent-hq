@@ -1444,7 +1444,7 @@ describe('runDispatcher thinking-level routing', () => {
     expect(task.status).toBe('ready');
     expect(task.previous_status).toBe('ready');
     expect(String(task.failure_detail)).toContain('Action: ignore');
-    expect(String(task.failure_detail)).toContain("Message: Worktree creation failed for task #932");
+    expect(String(task.failure_detail)).toContain('Message: Workflow-level repository configuration is required for repo-backed workflow dispatch');
 
     const notifications = db.prepare(`
       SELECT title, body, source, outlet, metadata_json
@@ -1458,7 +1458,7 @@ describe('runDispatcher thinking-level routing', () => {
     expect(notifications[0].body).toContain('Workflow: Enhancements');
     expect(notifications[0].body).toContain('Matched agent: Cinder (#1)');
     expect(notifications[0].body).toContain('Failure category: repo setup / worktree creation');
-    expect(notifications[0].body).toContain("Failure message: Worktree creation failed for task #932");
+    expect(notifications[0].body).toContain('Failure message: Workflow-level repository configuration is required for repo-backed workflow dispatch');
     expect(notifications[0].body).toContain('Mapping: #1; action=ignore');
     expect(notifications[0].body).toContain('Status: ready (unchanged)');
     expect(notifications[0].body).toContain('Next action: Fix the repo setup for the matched route, then redispatch the task.');

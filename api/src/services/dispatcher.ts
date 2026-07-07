@@ -250,7 +250,7 @@ interface JobRow {
   workflow_repo_path?: string | null;
   workflow_repo_url?: string | null;
   workflow_repo_access_mode?: RepoAccessMode | null;
-  repo_config_source?: 'workflow' | 'project_legacy' | 'agent_legacy' | null;
+  repo_config_source?: 'workflow' | 'agent_legacy' | null;
   /** Dedicated macOS OS user for filesystem isolation (task #377). */
   os_user?: string | null;
 }
@@ -997,6 +997,35 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
   return [];
 }
 
+function isWorkflowRepoRequiredForTask(db: Database.Database, task: CandidateTask): boolean {
+  if (!task.sprint_id) return false;
+  if (!tableHasColumn(db, 'sprint_types', 'repo_required')) {
+    return task.sprint_type === 'dev';
+  }
+
+  try {
+    const hasSprintTypesTenant = tableHasColumn(db, 'sprint_types', 'tenant_id');
+    const hasSprintsTenant = tableHasColumn(db, 'sprints', 'tenant_id');
+    const tenantJoin = hasSprintTypesTenant && hasSprintsTenant
+      ? 'AND (st.tenant_id IS NULL OR st.tenant_id = s.tenant_id)'
+      : '';
+    const tenantOrder = hasSprintTypesTenant ? 'ORDER BY st.tenant_id IS NULL ASC' : '';
+    const row = db.prepare(`
+      SELECT COALESCE(st.repo_required, 0) AS repo_required
+      FROM sprints s
+      LEFT JOIN sprint_types st
+        ON st.key = s.sprint_type
+        ${tenantJoin}
+      WHERE s.id = ?
+      ${tenantOrder}
+      LIMIT 1
+    `).get(task.sprint_id) as { repo_required?: number | null } | undefined;
+    return row?.repo_required === 1;
+  } catch {
+    return task.sprint_type === 'dev';
+  }
+}
+
 // ── Run context file ─────────────────────────────────────────────────────────
 
 /** Context filename written to agent workspaces before dispatch. */
@@ -1688,13 +1717,31 @@ export function dispatchTaskToJob(
   const repoAccessMode: RepoAccessMode | null = job.repo_access_mode ?? (job.repo_path ? 'worktree' : null);
   const repoOwnerLabel = job.repo_config_source === 'workflow'
     ? 'Workflow'
-    : job.repo_config_source === 'project_legacy'
-      ? 'Project legacy fallback'
-      : 'Legacy agent fallback';
+    : 'Legacy agent fallback';
   let repoWorkspacePath: string | null = null;
   let repoBranch: string | null = null;
   let repoSourceDescriptor: string | null = null;
   let repoDependencySetup: RepoWorkspaceDependencySetupResult[] = [];
+
+  const repoRequired = isWorkflowRepoRequiredForTask(db, task);
+  if (repoRequired && job.repo_config_source !== 'workflow') {
+    const reason = `Workflow-level repository configuration is required for repo-backed workflow dispatch (workflow_id=${task.sprint_id ?? 'none'}, workflow_type=${task.sprint_type ?? 'unknown'}). Configure repo_access_mode plus repo_path or repo_url on the workflow.`;
+    console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
+    persistDispatchStartupFailure(db, {
+      taskId: task.id,
+      matchedAgentId: job.agent_id,
+      matchedAgentLabel: job.agent_name ?? job.title,
+      routingReason,
+      priorStatus: task.status,
+      tenantId: task.tenant_id,
+      projectId: task.project_id,
+      sprintId: task.sprint_id,
+      sprintType: task.sprint_type,
+      taskType: task.task_type,
+      reason,
+    });
+    return false;
+  }
 
   if (repoAccessMode === 'worktree') {
     if (!job.workspace_path || !job.repo_path) {
@@ -1991,11 +2038,6 @@ export function runDispatcher(db: Database.Database, projectId?: number): Dispat
             repo_path: rule.workflow_repo_path ?? null,
             repo_url: rule.workflow_repo_url ?? null,
             repo_access_mode: rule.workflow_repo_access_mode ?? null,
-          },
-          project: {
-            repo_path: rule.project_repo_path ?? null,
-            repo_url: rule.project_repo_url ?? null,
-            repo_access_mode: rule.project_repo_access_mode ?? null,
           },
           agent: {
             repo_path: rule.repo_path ?? null,

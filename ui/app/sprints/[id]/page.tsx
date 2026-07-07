@@ -317,7 +317,7 @@ function EditForm({ sprint, onSave, onCancel }: {
           <label className="text-xs text-slate-400 block mb-1">Repository Access Mode</label>
           <select className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400"
             value={form.repo_access_mode} onChange={e => set('repo_access_mode', e.target.value)}>
-            <option value="">Use project or agent fallback</option>
+            <option value="">No workflow repo configured</option>
             <option value="worktree">Worktree</option>
             <option value="clone">Clone</option>
           </select>

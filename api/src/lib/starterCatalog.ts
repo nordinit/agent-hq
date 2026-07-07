@@ -37,11 +37,11 @@ export const DEFAULT_PROJECT_NAME = 'Default Project';
 export const LEGACY_STARTER_PROJECT_NAME = 'Agent HQ';
 export const STARTER_AGENT_SYSTEM_ROLE_PREFIX = 'default_package.starter_agent.';
 
-export const STARTER_SPRINT_TYPE_SEEDS: Array<{ key: StarterSprintTypeKey; name: string; description: string }> = [
-  { key: 'generic', name: 'Generic', description: 'Catch-all sprint profile for mixed delivery work and backlog management.' },
-  { key: 'dev', name: 'Development', description: 'Implementation-focused sprint profile for product and software delivery work.' },
-  { key: 'ops', name: 'Operations', description: 'Operational sprint profile for release, support, maintenance, and infra work.' },
-  { key: 'lead_generation', name: 'Lead Generation', description: 'Prospect intake, qualification, research, outreach, approval, and follow-up workflow.' },
+export const STARTER_SPRINT_TYPE_SEEDS: Array<{ key: StarterSprintTypeKey; name: string; description: string; repoRequired: boolean }> = [
+  { key: 'generic', name: 'Generic', description: 'Catch-all sprint profile for mixed delivery work and backlog management.', repoRequired: false },
+  { key: 'dev', name: 'Development', description: 'Implementation-focused sprint profile for product and software delivery work.', repoRequired: true },
+  { key: 'ops', name: 'Operations', description: 'Operational sprint profile for release, support, maintenance, and infra work.', repoRequired: false },
+  { key: 'lead_generation', name: 'Lead Generation', description: 'Prospect intake, qualification, research, outreach, approval, and follow-up workflow.', repoRequired: false },
 ];
 
 export const DEV_LIFECYCLE_FIELD_DEFINITIONS: StarterFieldDefinition[] = [
@@ -272,7 +272,7 @@ export const STARTER_AGENT_DEFINITIONS: StarterAgentDefinition[] = [
     requirements: [
       'Needs a provisioned workspace and repository access before implementation dispatch.',
       'Can read active task/project context and write lifecycle evidence for assigned tasks.',
-      'Uses workflow-owned repository configuration, with project and agent repo settings only as migration fallbacks.',
+      'Uses workflow-owned repository configuration; repo-backed workflow dispatch requires the workflow to define repo access.',
     ],
     identityDocs: starterDocs({
       name: 'Developer Agent',

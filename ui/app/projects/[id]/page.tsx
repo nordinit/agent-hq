@@ -12,7 +12,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   ArrowLeft, Save, Pencil, Trash2, Check, X,
-  ToggleLeft, ToggleRight, Plus, FolderOpen, PanelRightOpen, Paperclip, Rocket, Target, History, Bot, ChevronDown, Download
+  ToggleLeft, ToggleRight, Plus, FolderOpen, PanelRightOpen, Paperclip, Rocket, Target, History, Bot, Download
 } from 'lucide-react';
 import Link from 'next/link';
 // JobDetailPanel removed — agent details now live at /agents/:id (T#459)
@@ -48,9 +48,6 @@ export default function ProjectDetailPage() {
   const [editName, setEditName] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [editContext, setEditContext] = useState('');
-  const [editRepoPath, setEditRepoPath] = useState('');
-  const [editRepoUrl, setEditRepoUrl] = useState('');
-  const [editRepoAccessMode, setEditRepoAccessMode] = useState<'worktree' | 'clone' | ''>('');
   const [contextTab, setContextTab] = useState<TabMode>('edit');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -79,9 +76,6 @@ export default function ProjectDetailPage() {
         setEditName(p.name);
         setEditDesc(p.description);
         setEditContext(p.context_md);
-        setEditRepoPath(p.repo_path ?? '');
-        setEditRepoUrl(p.repo_url ?? '');
-        setEditRepoAccessMode(p.repo_access_mode ?? '');
         setProjectAgents(pAgents);
         setAllAgents(allAg);
         setSprints(sp);
@@ -100,9 +94,6 @@ export default function ProjectDetailPage() {
         name: editName.trim() || project!.name,
         description: editDesc,
         context_md: editContext,
-        repo_path: editRepoAccessMode === 'worktree' ? (editRepoPath.trim() || null) : null,
-        repo_url: editRepoAccessMode === 'clone' ? (editRepoUrl.trim() || null) : null,
-        repo_access_mode: editRepoAccessMode || null,
       });
       setProject(updated);
       setEditing(false);
@@ -118,9 +109,6 @@ export default function ProjectDetailPage() {
       setEditName(project.name);
       setEditDesc(project.description);
       setEditContext(project.context_md);
-      setEditRepoPath(project.repo_path ?? '');
-      setEditRepoUrl(project.repo_url ?? '');
-      setEditRepoAccessMode(project.repo_access_mode ?? '');
     }
     setEditing(false);
     setSaveError(null);
@@ -207,10 +195,7 @@ export default function ProjectDetailPage() {
   const hasUnsavedChanges = editing && (
     editName !== project.name ||
     editDesc !== project.description ||
-    editContext !== project.context_md ||
-    editRepoPath !== (project.repo_path ?? '') ||
-    editRepoUrl !== (project.repo_url ?? '') ||
-    editRepoAccessMode !== (project.repo_access_mode ?? '')
+    editContext !== project.context_md
   );
 
   return (
@@ -300,48 +285,16 @@ export default function ProjectDetailPage() {
 
           <div>
             <label className="text-slate-400 text-xs mb-1 block">Legacy Repository Fallback</label>
-            {editing ? (
-              <div className="space-y-3">
-                <div className="relative max-w-sm">
-                  <select
-                    className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none pr-8"
-                    value={editRepoAccessMode}
-                    onChange={e => setEditRepoAccessMode(e.target.value as 'worktree' | 'clone' | '')}
-                  >
-                    <option value="">None</option>
-                    <option value="worktree">Worktree</option>
-                    <option value="clone">Clone</option>
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                </div>
-                {editRepoAccessMode === 'worktree' && (
-                  <input
-                    className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-amber-500"
-                    value={editRepoPath}
-                    onChange={e => setEditRepoPath(e.target.value)}
-                    placeholder="/path/to/agent-hq"
-                  />
-                )}
-                {editRepoAccessMode === 'clone' && (
-                  <input
-                    className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-amber-500"
-                    value={editRepoUrl}
-                    onChange={e => setEditRepoUrl(e.target.value)}
-                    placeholder="git@github.com:owner/repo.git"
-                  />
-                )}
-              </div>
-            ) : (
-              <div className="space-y-1 text-sm">
-                {!project.repo_access_mode && <span className="text-slate-500 italic">No legacy fallback configured</span>}
-                {project.repo_access_mode === 'worktree' && (
-                  <span className="text-emerald-400 font-mono break-all">🌿 {project.repo_path}</span>
-                )}
-                {project.repo_access_mode === 'clone' && (
-                  <span className="text-cyan-300 font-mono break-all">🔁 {project.repo_url}</span>
-                )}
-              </div>
-            )}
+            <div className="space-y-1 text-sm">
+              {!project.repo_access_mode && <span className="text-slate-500 italic">No legacy fallback configured</span>}
+              {project.repo_access_mode === 'worktree' && (
+                <span className="text-emerald-400 font-mono break-all">Legacy worktree: {project.repo_path}</span>
+              )}
+              {project.repo_access_mode === 'clone' && (
+                <span className="text-cyan-300 font-mono break-all">Legacy clone: {project.repo_url}</span>
+              )}
+              <p className="text-xs text-slate-500">Repository settings are edited on workflows.</p>
+            </div>
           </div>
 
           {/* Context Markdown */}

@@ -160,7 +160,7 @@ it('previews missing dependencies and imports equivalent portable config with re
   });
   expect(warningPreview.warnings).toEqual(expect.arrayContaining([
     expect.objectContaining({ code: 'missing_tool' }),
-    expect.objectContaining({ code: 'local_repo_path' }),
+    expect.objectContaining({ code: 'deprecated_project_repo_config' }),
   ]));
 
   db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'EcoPool', 'ecopool', 0)`).run();
@@ -174,8 +174,8 @@ it('previews missing dependencies and imports equivalent portable config with re
   expect(importedProject).toMatchObject({
     name: 'Portable Copy',
     context_md: '# Context',
-    repo_access_mode: 'worktree',
-    repo_path: '/tmp/source-worktree',
+    repo_access_mode: null,
+    repo_path: null,
     tenant_id: 2,
   });
 

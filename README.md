@@ -356,7 +356,7 @@ Agent HQ includes an operator UI for configuring and monitoring agent workflows.
 | **Workspaces** | Browse and edit agent workspace artifacts. |
 | **Logs** | Inspect execution logs. |
 | **Telemetry** | Track cycle time, QA breakdown, model usage, and agent efficiency. |
-| **Projects** | Manage projects, repo configuration, context, and files. |
+| **Projects** | Manage project context and files; workflow records own repository configuration. |
 | **Settings** | Configure display, providers, gateway, GitHub, and API settings. |
 | **API Console** | Explore the local OpenAPI API console. |
 
@@ -466,7 +466,7 @@ Current behavior:
 - Workflows own repository configuration; `repo_path` points to a local canonical git checkout in worktree mode.
 - Agent HQ uses native `git worktree` operations.
 - New task worktrees prefer `origin/main` when available.
-- If no workflow repo is configured, Agent HQ temporarily falls back to legacy project/agent repo settings, then the agent workspace root.
+- Repo-backed workflows require workflow-level repo configuration; legacy project repo values are migrated forward and retained only as read-only compatibility data.
 
 ---
 
