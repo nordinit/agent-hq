@@ -23,6 +23,7 @@ import { resolveRepoConfig } from '../lib/repoConfig';
 import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/history';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
 import { resolveRuntime } from '../runtimes';
+import { resolveRuntimeProviderDispatchSelection } from '../domains/providers/runtimeAdapters';
 import { createTaskWorktree } from './worktreeManager';
 import { ensureTaskClone, type RepoAccessMode } from './repoWorkspaceManager';
 import type { RepoWorkspaceDependencySetupResult } from './repoWorkspaceDependencies';
@@ -237,6 +238,8 @@ interface JobRow {
   skill_names?: string | null;
   /** Preferred AI provider for model routing (e.g. 'anthropic', 'openai'). */
   preferred_provider?: string | null;
+  /** Runtime-owned provider connection selected for this agent. */
+  provider_connection_id?: number | null;
   /** Canonical local git repo path for worktree isolation. */
   repo_path?: string | null;
   /** Remote git URL for clone-backed task workspaces. */
@@ -266,6 +269,7 @@ async function prepareRuntimeAuthProfiles(runtime: AgentRuntime, params: Dispatc
   const result = await runtime.prepareAuthProfiles({
     agentSlug: params.agentSlug,
     preferredProvider: params.preferredProvider ?? null,
+    providerConnectionId: params.providerConnectionId ?? null,
     runtimeConfig: params.runtimeConfig,
   });
   if (result.ok) return;
@@ -920,6 +924,7 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
   const hasRoutingTenantColumn = tableHasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
   const routingRuleEnabledCondition = tableHasColumn(db, 'sprint_task_routing_rules', 'enabled') ? 'AND rr.enabled = 1' : '';
   const hasAgentTenantColumn = tableHasColumn(db, 'agents', 'tenant_id');
+  const hasProviderConnectionColumn = tableHasColumn(db, 'agents', 'provider_connection_id');
   const projectRepoSelect = hasProjectRepoColumns
     ? 'p.repo_path as project_repo_path, p.repo_url as project_repo_url, p.repo_access_mode as project_repo_access_mode,'
     : 'NULL as project_repo_path, NULL as project_repo_url, NULL as project_repo_access_mode,';
@@ -946,7 +951,7 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
              a.session_key as agent_session_key, a.name as agent_name, a.model as agent_model,
              a.openclaw_agent_id, a.runtime_type, a.runtime_config, a.hooks_url as agent_hooks_url,
              a.hooks_auth_header as agent_hooks_auth_header,
-             a.workspace_path, a.preferred_provider, a.repo_path, a.repo_url, a.repo_access_mode,
+             a.workspace_path, a.preferred_provider, ${hasProviderConnectionColumn ? 'a.provider_connection_id' : 'NULL'} as provider_connection_id, a.repo_path, a.repo_url, a.repo_access_mode,
              ${hasAgentTenantColumn ? 'a.tenant_id' : 'NULL'} as tenant_id,
              ${projectRepoSelect}
              ${workflowRepoSelect}
@@ -1550,6 +1555,15 @@ async function fireAgentRun(
       runtimeConfigOverride.workingDirectory = activeRepoRoot;
     }
     const dispatchRuntimeConfig = buildDispatchRuntimeConfig(job.runtime_config, runtimeConfigOverride);
+    const providerDispatch = resolveRuntimeProviderDispatchSelection({
+      db,
+      tenantId: Number(job.tenant_id ?? modelScope?.tenantId ?? 1),
+      runtimeType: job.runtime_type ?? 'openclaw',
+      providerConnectionId: job.provider_connection_id ?? null,
+      preferredProvider,
+      model,
+      runtimeConfig: dispatchRuntimeConfig,
+    });
 
     console.log(
       `[dispatcher] Instance #${instanceId} runtime config handoff: mode=${pathMode} workingDirectory=${typeof dispatchRuntimeConfig.workingDirectory === 'string' ? dispatchRuntimeConfig.workingDirectory : 'null'} activeRepoRoot=${activeRepoRoot ?? 'null'} workspaceRoot=${workspaceContainerRoot ?? 'null'} worktreePath=${worktreeRoot ?? 'null'} runtimeConfigWorkingDirectory=${runtimeConfigWorkingDirectory ?? 'null'} repoRootSource=${repoRootSource} workspaceRootSource=${workspaceContainerSource}`
@@ -1561,8 +1575,9 @@ async function fireAgentRun(
       sessionKey,
       timeoutSeconds: timeoutSec,
       name: `Agent HQ: ${job.title}`,
-      model,
-      preferredProvider,
+      model: providerDispatch.model,
+      preferredProvider: providerDispatch.provider || preferredProvider,
+      providerConnectionId: job.provider_connection_id ?? null,
       thinking,
       fastMode,
       // Extra context for runtimes that manage their own session lifecycle (e.g. ClaudeCodeRuntime)
@@ -1585,7 +1600,7 @@ async function fireAgentRun(
         worktreeRoot,
         runtimeConfigWorkingDirectory,
       },
-      runtimeConfig: dispatchRuntimeConfig,
+      runtimeConfig: providerDispatch.runtimeConfig,
       hooksUrl: job.agent_hooks_url ?? null,
       hooksAuthHeader: job.agent_hooks_auth_header ?? null,
     };
@@ -2158,6 +2173,7 @@ export interface DispatchInstanceParams {
   message: string;
   model?: string | null;
   preferredProvider?: string | null;
+  providerConnectionId?: number | null;
   timeoutSeconds?: number;
   hooksUrl?: string | null;
   hooksAuthHeader?: string | null;
@@ -2211,14 +2227,15 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
 
   // Model precedence: story_points → caller-provided → gateway default
   const preferredProvider = params.preferredProvider ?? null;
+  const tenantId = resolveRuntimeTenantId(db, {
+    instanceId: params.instanceId,
+    agentId: params.agentId,
+    projectId: params.projectId ?? null,
+  }) ?? 1;
   const spModel = resolveModelFromStoryPoints(db, params.storyPoints ?? null, preferredProvider, {
     projectId: params.projectId ?? null,
     sprintId: params.sprintId ?? null,
-    tenantId: resolveRuntimeTenantId(db, {
-      instanceId: params.instanceId,
-      agentId: params.agentId,
-      projectId: params.projectId ?? null,
-    }),
+    tenantId,
   });
   const effectiveModel = spModel?.model || params.model || null;
   const effectiveThinking = spModel?.thinking_level ?? null;
@@ -2288,6 +2305,18 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
     const baseRuntimeConfig = params.runtimeConfig && typeof params.runtimeConfig === 'object'
       ? params.runtimeConfig as Record<string, unknown>
       : {};
+    const dispatchRuntimeConfig = Object.keys(runtimeConfigOverride).length > 0
+      ? { ...baseRuntimeConfig, ...runtimeConfigOverride }
+      : baseRuntimeConfig;
+    const providerDispatch = resolveRuntimeProviderDispatchSelection({
+      db,
+      tenantId,
+      runtimeType: params.runtimeType ?? 'openclaw',
+      providerConnectionId: params.providerConnectionId ?? null,
+      preferredProvider,
+      model: effectiveModel,
+      runtimeConfig: dispatchRuntimeConfig,
+    });
 
     const runtimeParams = {
       message: params.message,
@@ -2295,8 +2324,9 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
       sessionKey: runSessionKey,
       timeoutSeconds: params.timeoutSeconds ?? 900,
       name: `Agent HQ: ${params.jobTitle}`,
-      model: effectiveModel,
-      preferredProvider: params.preferredProvider ?? null,
+      model: providerDispatch.model,
+      preferredProvider: providerDispatch.provider || preferredProvider,
+      providerConnectionId: params.providerConnectionId ?? null,
       thinking: effectiveThinking,
       fastMode: effectiveFastMode,
       instanceId: params.instanceId,
@@ -2308,9 +2338,7 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
       repoWorkspacePath,
       repoBranch,
       workspaceRoot: repoWorkspacePath,
-      runtimeConfig: Object.keys(runtimeConfigOverride).length > 0
-        ? { ...baseRuntimeConfig, ...runtimeConfigOverride }
-        : params.runtimeConfig,
+      runtimeConfig: providerDispatch.runtimeConfig,
       hooksUrl: params.hooksUrl,
       hooksAuthHeader: params.hooksAuthHeader,
     };

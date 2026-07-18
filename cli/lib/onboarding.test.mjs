@@ -66,6 +66,57 @@ test('init connects a selected provider and persists canonical slug', async () =
   assert.equal(requests.some(request => request.url.endsWith('/api/v1/setup/onboarding/complete')), true);
 });
 
+test('init connects an Anthropic subscription through a runtime-owned profile', async () => {
+  const requests = [];
+  const fetchImpl = async (url, init = {}) => {
+    requests.push({ url, init });
+    if (url.endsWith('/api/v1/providers') && !init.method) {
+      return jsonResponse(200, { providers: [], onboarding_provider_gate_passed: false, connected_count: 0 });
+    }
+    if (url.endsWith('/api/v1/provider-connections/auth-instructions')) {
+      return jsonResponse(200, { instructions: { command: 'openclaw', args: ['models', 'auth', 'login', '--provider', 'anthropic'], message: 'Authenticate with OpenClaw.' } });
+    }
+    if (url.endsWith('/api/v1/provider-connections/discover')) {
+      return jsonResponse(200, { connections: [{ externalRef: 'builder/anthropic:work', displayName: 'Claude Work', metadata: { profile_id: 'anthropic:work' } }] });
+    }
+    if (url.endsWith('/api/v1/provider-connections') && init.method === 'POST') {
+      const body = JSON.parse(init.body);
+      assert.deepEqual(body, {
+        provider_slug: 'anthropic',
+        auth_mode: 'subscription',
+        runtime_type: 'openclaw',
+        external_ref: 'builder/anthropic:work',
+        display_name: 'Claude Work',
+        metadata: { profile_id: 'anthropic:work' },
+        runtime_config: {},
+      });
+      return jsonResponse(201, { id: 41, display_name: 'Claude Work', status: 'connected' });
+    }
+    if (url.endsWith('/api/v1/providers/anthropic/models')) {
+      return jsonResponse(200, { source: 'static', models: [{ id: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6' }] });
+    }
+    if (url.endsWith('/api/v1/setup/runtime/detect')) return jsonResponse(200, { ok: true });
+    if (url.endsWith('/api/v1/setup/onboarding/complete')) return jsonResponse(200, { ok: true, onboarding_completed: true });
+    throw new Error(`Unexpected request: ${url}`);
+  };
+
+  const spawnCalls = [];
+  const result = await runInit(
+    { apiUrl: 'http://agent-hq.test' },
+    {
+      io: makeIo(['y', 'anthropic-subscription', 'openclaw', 'y', '1', 'n']),
+      fetch: fetchImpl,
+      spawnSync(command, args) { spawnCalls.push({ command, args }); return { status: 0 }; },
+      noExit: true,
+      openBrowser() {},
+    },
+  );
+
+  assert.equal(result.slug, 'anthropic');
+  assert.equal(result.provider_connection_id, 41);
+  assert.deepEqual(spawnCalls, [{ command: 'openclaw', args: ['models', 'auth', 'login', '--provider', 'anthropic'] }]);
+});
+
 test('init can skip provider setup and still complete minimal install', async () => {
   const requests = [];
   const fetchImpl = async (url, init = {}) => {

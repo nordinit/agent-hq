@@ -118,6 +118,7 @@ interface AgentRow {
   openclaw_agent_id: string | null;
   model: string | null;
   preferred_provider: string | null;
+  provider_connection_id: number | null;
   /** Remote Gateway URL — when set, dispatch routes to this remote gateway instead of the host gateway. */
   hooks_url: string | null;
   /** Remote Gateway Auth Header. */
@@ -477,6 +478,7 @@ export async function reconcileReviewQaRouting(
           message,
           model: effectiveModel,
           preferredProvider: agent.preferred_provider ?? null,
+          providerConnectionId: agent.provider_connection_id ?? null,
           timeoutSeconds: agent.timeout_seconds,
           hooksUrl: agent.hooks_url,
           hooksAuthHeader: agent.hooks_auth_header,

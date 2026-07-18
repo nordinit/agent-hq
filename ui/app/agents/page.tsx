@@ -3,7 +3,7 @@ import { formatDateTime } from '@/lib/date';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, Agent, AgentRuntimeType, Project, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, ProviderRecord, ProviderSlug } from '@/lib/api';
+import { api, Agent, AgentRuntimeType, Project, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, ProviderConnectionRecord, ProviderRecord, ProviderSlug } from '@/lib/api';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
 import { Card } from '@/components/ui/card';
 import { Badge, StatusDot } from '@/components/ui/badge';
@@ -41,6 +41,7 @@ interface FormState {
   status: 'idle' | 'running' | 'blocked';
   model: string;
   preferred_provider: string;
+  provider_connection_id: string;
   provision_openclaw: boolean;
   runtime_type: AgentRuntimeType;
   runtime_config: AgentRuntimeConfig | null;
@@ -119,6 +120,7 @@ const emptyForm: FormState = {
   status: 'idle',
   model: '',
   preferred_provider: '',
+  provider_connection_id: '',
   provision_openclaw: false,
   // Default to OpenClaw, but keep runtime_config aligned with the selected runtime.
   runtime_type: 'openclaw',
@@ -195,6 +197,7 @@ export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
+  const [providerConnections, setProviderConnections] = useState<ProviderConnectionRecord[]>([]);
   const validProjectIds = useMemo(() => projects.map(project => project.id), [projects]);
   const [filterProjectId, setFilterProjectId] = useProjectFilterPreference({ validProjectIds });
   const [loading, setLoading] = useState(true);
@@ -218,11 +221,13 @@ export default function AgentsPage() {
       api.getAgents(projectId),
       api.getProjects(),
       api.getProviders(),
+      api.getProviderConnections(),
     ])
-      .then(([a, p, providerResponse]) => {
+      .then(([a, p, providerResponse, connectionResponse]) => {
         setAgents(a);
         setProjects(p);
         setProviders(providerResponse.providers);
+        setProviderConnections(connectionResponse.connections);
       })
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false));
@@ -297,10 +302,13 @@ export default function AgentsPage() {
   };
 
   const openCreate = () => {
-    const providerOptions = getAgentProviderOptions(providers);
+    const providerOptions = allProviderOptions;
+    const firstProvider = providerOptions[0]?.value ?? '';
+    const firstConnection = providerConnections.find(connection => connection.runtime_type === 'openclaw' && connection.provider_slug === firstProvider && connection.status === 'connected');
     setForm({
       ...emptyForm,
-      preferred_provider: providerOptions[0]?.value ?? '',
+      preferred_provider: firstProvider,
+      provider_connection_id: firstConnection ? String(firstConnection.id) : '',
       runtime_type: 'openclaw',
       runtime_config: null,
       raw_json: '',
@@ -327,6 +335,7 @@ export default function AgentsPage() {
       status: form.status,
       model: form.model || null,
       preferred_provider: form.preferred_provider || null,
+      provider_connection_id: form.provider_connection_id ? Number(form.provider_connection_id) : null,
       runtime_type: form.runtime_type,
       runtime_config: null as AgentRuntimeConfig | null,
     };
@@ -390,7 +399,7 @@ export default function AgentsPage() {
         return;
       }
 
-      if (!form.preferred_provider || !isProviderConnected(providers, form.preferred_provider)) {
+      if (!form.preferred_provider || !isSelectedProviderConnected) {
         setFormError('Select a connected provider in Settings → Providers before saving this agent.');
         setSaving(false);
         return;
@@ -451,6 +460,7 @@ export default function AgentsPage() {
         const payload = {
           ...createData,
           model: createData.model || null,
+          provider_connection_id: createData.provider_connection_id ? Number(createData.provider_connection_id) : null,
           provision_openclaw: form.provision_openclaw,
           // Only attach runtime_config when relevant to the selected runtime
           runtime_config: (form.runtime_type === 'claude-code' || form.runtime_type === 'hermes') ? buildUpdatePayload().runtime_config : null,
@@ -510,7 +520,16 @@ export default function AgentsPage() {
     }
   };
 
-  const allProviderOptions = getAgentProviderOptions(providers);
+  const eligibleConnections = providerConnections.filter(connection => connection.runtime_type === form.runtime_type && connection.status === 'connected');
+  const configuredProviderOptions = getAgentProviderOptions(providers);
+  const allProviderOptions = [
+    ...configuredProviderOptions,
+    ...Array.from(new Set(eligibleConnections.map(connection => connection.provider_slug)))
+      .filter(slug => !configuredProviderOptions.some(option => option.value === slug))
+      .map(slug => ({ value: slug, label: PROVIDER_LABELS[slug as keyof typeof PROVIDER_LABELS] ?? slug })),
+  ];
+  const matchingConnections = eligibleConnections.filter(connection => connection.provider_slug === form.preferred_provider);
+  const isSelectedProviderConnected = isProviderConnected(providers, form.preferred_provider) || matchingConnections.length > 0;
   // Filter out OpenClaw-only providers (e.g. MiniMax) if the runtime is not OpenClaw
   const providerOptions = form.runtime_type === 'openclaw'
     ? allProviderOptions
@@ -676,6 +695,7 @@ export default function AgentsPage() {
                                 ? normalizeHermesRuntimeConfig(f.runtime_config)
                                 : null,
                             preferred_provider: nextProvider,
+                            provider_connection_id: '',
                             model: nextProvider !== f.preferred_provider ? '' : f.model,
                             // Reset openclaw-specific provision toggle if switching away
                             provision_openclaw: rt === 'openclaw' ? f.provision_openclaw : false,
@@ -705,7 +725,11 @@ export default function AgentsPage() {
                     <select
                       className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none pr-8"
                       value={form.preferred_provider}
-                      onChange={e => setForm(f => ({ ...f, preferred_provider: e.target.value, model: '' }))}
+                      onChange={e => {
+                        const provider = e.target.value;
+                        const connection = providerConnections.find(item => item.runtime_type === form.runtime_type && item.provider_slug === provider && item.status === 'connected');
+                        setForm(f => ({ ...f, preferred_provider: provider, provider_connection_id: connection ? String(connection.id) : '', model: '' }));
+                      }}
                       disabled={providerOptions.length === 0}
                     >
                       {providerOptions.length === 0 ? (
@@ -719,6 +743,24 @@ export default function AgentsPage() {
                     <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                   </div>
                 </label>
+
+                {matchingConnections.length > 0 && (
+                  <label className="block">
+                    <span className="text-slate-400 text-xs mb-1 block">Runtime Credential</span>
+                    <p className="text-slate-500 text-xs mb-1.5">Select a credential owned by {form.runtime_type}.</p>
+                    <div className="relative">
+                      <select
+                        className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none pr-8"
+                        value={form.provider_connection_id}
+                        onChange={e => setForm(f => ({ ...f, provider_connection_id: e.target.value }))}
+                      >
+                        {isProviderConnected(providers, form.preferred_provider) && <option value="">Provider default / API key</option>}
+                        {matchingConnections.map(connection => <option key={connection.id} value={connection.id}>{connection.display_name}</option>)}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                    </div>
+                  </label>
+                )}
 
                 {/* Model picker constrained by provider */}
                 <label className="block">

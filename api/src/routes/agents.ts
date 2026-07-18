@@ -27,6 +27,7 @@ import {
   getConnectedProviderSlugs,
   resolveSchemaSafePreferredProvider,
   shouldSkipProviderValidationForRuntime,
+  validateAgentProviderConnection,
   validateAgentProviderSelection,
 } from '../domains/agents/providerSelection';
 import {
@@ -305,6 +306,7 @@ interface ProvisionFullRequest {
   runtime_config?: AgentRuntimeConfigPayload;
   project_id?: number | null;
   preferred_provider?: string | null;
+  provider_connection_id?: number | null;
   model?: string | null;
   system_role?: string | null;
   hooks_url?: string | null;
@@ -356,6 +358,7 @@ interface AgentInsertParams {
   runtimeConfig: AgentRuntimeConfigPayload;
   projectId: number | null;
   preferredProvider: string;
+  providerConnectionId: number | null;
   model: string | null;
   systemRole: string | null;
   hooksUrl: string | null;
@@ -535,7 +538,7 @@ function insertProvisionedAgent(db: ReturnType<typeof getDb>, params: AgentInser
   const columns = [
     'tenant_id',
     'name', 'role', 'session_key', 'workspace_path', 'repo_path', 'repo_url', 'repo_access_mode', 'status', 'openclaw_agent_id',
-    'runtime_type', 'runtime_config', 'project_id', 'preferred_provider', 'model', 'system_role',
+    'runtime_type', 'runtime_config', 'project_id', 'preferred_provider', 'model', 'system_role', 'provider_connection_id',
     'hooks_url', 'hooks_auth_header', 'os_user', 'enabled', 'github_identity_id', 'job_title', 'schedule',
     'job_instructions', 'skill_names', 'timeout_seconds', 'startup_grace_seconds', 'heartbeat_stale_seconds',
     'stall_threshold_min', 'max_retries', 'sort_rules',
@@ -558,6 +561,7 @@ function insertProvisionedAgent(db: ReturnType<typeof getDb>, params: AgentInser
     params.preferredProvider,
     params.model,
     params.systemRole,
+    params.providerConnectionId,
     params.hooksUrl,
     params.hooksAuthHeader,
     params.osUser,
@@ -576,6 +580,14 @@ function insertProvisionedAgent(db: ReturnType<typeof getDb>, params: AgentInser
     params.maxRetries,
     JSON.stringify(params.sortRules),
   );
+
+  if (!tableHasColumn(db, 'agents', 'provider_connection_id')) {
+    const index = columns.indexOf('provider_connection_id');
+    if (index >= 0) {
+      columns.splice(index, 1);
+      values.splice(index, 1);
+    }
+  }
 
   const placeholders = columns.map(() => '?').join(', ');
   const result = db.prepare(`INSERT INTO agents (${columns.join(', ')}) VALUES (${placeholders})`).run(...values);
@@ -771,6 +783,18 @@ router.post('/provision-full', async (req: Request, res: Response) => {
         });
       }
     }
+    const connectionValidationError = validateAgentProviderConnection(
+      tenantId,
+      runtimeType,
+      preferredProvider,
+      body.provider_connection_id,
+    );
+    if (connectionValidationError) {
+      return res.status(400).json({
+        ok: false,
+        report: { validation: { ok: false, status: 'failed', error: connectionValidationError } },
+      });
+    }
 
     const duplicateName = db.prepare('SELECT id FROM agents WHERE lower(name) = lower(?) AND deleted_at IS NULL LIMIT 1').get(body.name) as { id: number } | undefined;
     if (duplicateName) {
@@ -875,6 +899,7 @@ router.post('/provision-full', async (req: Request, res: Response) => {
         runtimeConfig: body.runtime_config ?? null,
         projectId,
         preferredProvider,
+        providerConnectionId: body.provider_connection_id ?? null,
         model: resolvedModel,
         systemRole: resolvedSystemRole,
         hooksUrl: body.hooks_url ?? null,
@@ -1254,7 +1279,7 @@ router.post('/', (req: Request, res: Response) => {
     const requestedJobInstructions = getRequestedJobInstructions(rawBody) ?? '';
     const { 
       name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, provision_openclaw,
-      runtime_type, runtime_config, project_id, preferred_provider, model, system_role,
+      runtime_type, runtime_config, project_id, preferred_provider, provider_connection_id, model, system_role,
       hooks_url, hooks_auth_header, os_user, enabled, github_identity_id,
       schedule: _legacySchedule, skill_names, timeout_seconds,
       startup_grace_seconds, heartbeat_stale_seconds, stall_threshold_min, max_retries, sort_rules,
@@ -1272,6 +1297,7 @@ router.post('/', (req: Request, res: Response) => {
       runtime_config?: AgentRuntimeConfigPayload;
       project_id?: number | null;
       preferred_provider?: string | null;
+      provider_connection_id?: number | null;
       model?: string | null;
       system_role?: string | null;
       hooks_url?: string | null;
@@ -1327,6 +1353,15 @@ router.post('/', (req: Request, res: Response) => {
       if (providerValidationError) {
         return res.status(400).json({ error: providerValidationError });
       }
+    }
+    const connectionValidationError = validateAgentProviderConnection(
+      tenantId,
+      effectiveRuntimeTypeCreate,
+      resolvedPreferredProvider,
+      provider_connection_id,
+    );
+    if (connectionValidationError) {
+      return res.status(400).json({ error: connectionValidationError });
     }
 
     const resolvedSystemRole = system_role === ATLAS_SYSTEM_ROLE ? ATLAS_SYSTEM_ROLE : null;
@@ -1394,6 +1429,7 @@ router.post('/', (req: Request, res: Response) => {
       runtimeConfig: runtime_config ?? null,
       projectId: project_id ?? null,
       preferredProvider: resolvedPreferredProvider,
+      providerConnectionId: provider_connection_id ?? null,
       model: resolvedCreateModel,
       systemRole: resolvedSystemRole,
       hooksUrl: hooks_url ?? null,
@@ -1455,7 +1491,7 @@ router.put('/:id', (req: Request, res: Response) => {
     const {
       name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, model,
       runtime_type, runtime_config, hooks_url, hooks_auth_header,
-      preferred_provider, os_user, enabled, github_identity_id,
+      preferred_provider, provider_connection_id, os_user, enabled, github_identity_id,
       schedule: _legacySchedule, skill_names, timeout_seconds,
       // Watchdog per-agent timeout overrides (T#681)
       startup_grace_seconds, heartbeat_stale_seconds,
@@ -1493,6 +1529,7 @@ router.put('/:id', (req: Request, res: Response) => {
       hooks_auth_header?: string | null;
       /** preferred_provider — which AI provider to prefer for model routing (default: 'anthropic') */
       preferred_provider?: string | null;
+      provider_connection_id?: number | null;
       /** os_user — dedicated macOS OS user for filesystem isolation (e.g. "agent-forge"). Null = no isolation. */
       os_user?: string | null;
       /** enabled — whether this agent is eligible for routing (1 = enabled, 0 = disabled) */
@@ -1569,6 +1606,18 @@ router.put('/:id', (req: Request, res: Response) => {
         return res.status(400).json({ error: providerValidationError });
       }
     }
+    const resolvedProviderConnectionId = provider_connection_id !== undefined
+      ? provider_connection_id
+      : (agent.provider_connection_id as number | null | undefined) ?? null;
+    const connectionValidationError = validateAgentProviderConnection(
+      tenantId,
+      effectiveRuntimeType,
+      resolvedPreferredProvider,
+      resolvedProviderConnectionId,
+    );
+    if (connectionValidationError) {
+      return res.status(400).json({ error: connectionValidationError });
+    }
 
     const repoPayloadCheck = rejectAgentRepoPayload(rawBody);
     if (!repoPayloadCheck.ok) {
@@ -1610,6 +1659,7 @@ router.put('/:id', (req: Request, res: Response) => {
       'hooks_url = ?',
       'hooks_auth_header = ?',
       'preferred_provider = ?',
+      'provider_connection_id = ?',
       'os_user = ?',
       'enabled = ?',
       'github_identity_id = ?',
@@ -1640,6 +1690,7 @@ router.put('/:id', (req: Request, res: Response) => {
       hooks_url !== undefined ? hooks_url : agent.hooks_url,
       hooks_auth_header !== undefined ? hooks_auth_header : (agent.hooks_auth_header ?? null),
       resolvedPreferredProvider,
+      resolvedProviderConnectionId,
       os_user !== undefined ? os_user : (agent.os_user ?? null),
       enabled !== undefined ? (enabled ? 1 : 0) : agent.enabled,
       github_identity_id !== undefined ? github_identity_id : (agent.github_identity_id ?? null),
@@ -1655,6 +1706,13 @@ router.put('/:id', (req: Request, res: Response) => {
       resolvedProjectId,
       resolvedSystemRole,
     ];
+    if (!tableHasColumn(db, 'agents', 'provider_connection_id')) {
+      const index = updateClauses.indexOf('provider_connection_id = ?');
+      if (index >= 0) {
+        updateClauses.splice(index, 1);
+        updateValues.splice(index, 1);
+      }
+    }
     updateValues.push(req.params.id);
 
     db.prepare(`UPDATE agents SET ${updateClauses.join(', ')} WHERE id = ? AND tenant_id = ?`).run(...updateValues, tenantId);

@@ -3,7 +3,7 @@ import { formatDateTime, formatTime } from '@/lib/date';
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { api, Agent, AgentRuntimeType, JobInstance, LogEntry, AgentDoc, ProvisionStatus, ClaudeMdResult, Tool, AgentToolAssignment, AgentMcpAssignment, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, McpServer, ProviderRecord, AgentMcpPermissionPolicy, AgentMcpPermissionCapability, ProviderSlug } from '@/lib/api';
+import { api, Agent, AgentRuntimeType, JobInstance, LogEntry, AgentDoc, ProvisionStatus, ClaudeMdResult, Tool, AgentToolAssignment, AgentMcpAssignment, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, McpServer, ProviderConnectionRecord, ProviderRecord, AgentMcpPermissionPolicy, AgentMcpPermissionCapability, ProviderSlug } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Badge, StatusDot } from '@/components/ui/badge';
 import { getRunLifecycle, getRunStatusLabel } from '@/lib/runLifecycle';
@@ -49,6 +49,7 @@ interface EditFormState {
   status: 'idle' | 'running' | 'blocked';
   model: string;
   preferred_provider: string;
+  provider_connection_id: string;
   runtime_type: AgentRuntimeType;
   runtime_config: AgentRuntimeConfig;
   raw_json: string;
@@ -131,6 +132,7 @@ function agentToForm(agent: Agent, providers: ProviderRecord[] = []): EditFormSt
     status: agent.status,
     model,
     preferred_provider: preferredProvider,
+    provider_connection_id: agent.provider_connection_id ? String(agent.provider_connection_id) : '',
     runtime_type: runtimeType,
     runtime_config: {
       ...(runtimeType === 'hermes'
@@ -216,6 +218,7 @@ export default function AgentDetailPage() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [localMlxOnline, setLocalMlxOnline] = useState<boolean | null>(null);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
+  const [providerConnections, setProviderConnections] = useState<ProviderConnectionRecord[]>([]);
   const [dynamicModels, setDynamicModels] = useState<Array<{ id: string; label: string }>>([]);
   const [dynamicModelsLoading, setDynamicModelsLoading] = useState(false);
   const [dynamicModelsError, setDynamicModelsError] = useState<string | null>(null);
@@ -326,6 +329,7 @@ export default function AgentDetailPage() {
       status: form.status,
       model: form.model || null,
       preferred_provider: form.preferred_provider || null,
+      provider_connection_id: form.provider_connection_id ? Number(form.provider_connection_id) : null,
       runtime_type: form.runtime_type,
       runtime_config: null as AgentRuntimeConfig | null,
       job_instructions: form.job_instructions,
@@ -387,7 +391,13 @@ export default function AgentDetailPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      if (!editForm.preferred_provider || !isProviderConnected(providers, editForm.preferred_provider)) {
+      const connectionAvailable = providerConnections.some(connection =>
+        connection.id === Number(editForm.provider_connection_id)
+        && connection.runtime_type === editForm.runtime_type
+        && connection.provider_slug === editForm.preferred_provider
+        && connection.status === 'connected'
+      );
+      if (!editForm.preferred_provider || (!isProviderConnected(providers, editForm.preferred_provider) && !connectionAvailable)) {
         setSaveError('Select a connected provider in Settings → Providers before saving this agent.');
         setSaving(false);
         return;
@@ -570,9 +580,10 @@ export default function AgentDetailPage() {
       api.getTools().catch(() => [] as Tool[]),
       api.getMcpServers().catch(() => [] as McpServer[]),
       api.getProviders().catch(() => ({ providers: [] })),
+      api.getProviderConnections().catch(() => ({ connections: [] as ProviderConnectionRecord[] })),
       api.getSkills().catch(() => [] as import('@/lib/api').SkillEntry[]),
     ])
-      .then(([a, inst, lg, d, atools, amcp, permissionPolicy, tools, mcpServers, providerResponse, skills]) => {
+      .then(([a, inst, lg, d, atools, amcp, permissionPolicy, tools, mcpServers, providerResponse, connectionResponse, skills]) => {
         setAgent(a);
         setInstances(inst);
         setLogs(lg);
@@ -585,6 +596,7 @@ export default function AgentDetailPage() {
         setAllMcpServers(mcpServers);
         setAllSkills(skills);
         setProviders(providerResponse.providers);
+        setProviderConnections(connectionResponse.connections);
         const firstExisting = d.find((doc: AgentDoc) => doc.exists);
         if (firstExisting) setActiveDoc(firstExisting.filename);
         if (a.runtime_type === 'claude-code') loadClaudeMd('claude-code');
@@ -661,11 +673,19 @@ export default function AgentDetailPage() {
 
   if (editMode && editForm) {
     const setF = (patch: Partial<EditFormState>) => setEditForm(f => f ? { ...f, ...patch } : f);
-    const allProviderOptions = getAgentProviderOptions(providers);
+    const eligibleConnections = providerConnections.filter(connection => connection.runtime_type === editForm.runtime_type && connection.status === 'connected');
+    const configuredProviderOptions = getAgentProviderOptions(providers);
+    const allProviderOptions = [
+      ...configuredProviderOptions,
+      ...Array.from(new Set(eligibleConnections.map(connection => connection.provider_slug)))
+        .filter(slug => !configuredProviderOptions.some(option => option.value === slug))
+        .map(slug => ({ value: slug, label: PROVIDER_LABELS[slug as keyof typeof PROVIDER_LABELS] ?? slug })),
+    ];
     // Filter out OpenClaw-only providers (e.g. MiniMax) if the runtime is not OpenClaw
     const providerOptions = editForm.runtime_type === 'openclaw'
       ? allProviderOptions
       : allProviderOptions.filter(opt => !isOpenClawOnlyProvider(opt.value));
+    const matchingConnections = eligibleConnections.filter(connection => connection.provider_slug === editForm.preferred_provider);
     const modelOptions = getAgentModelOptionsForProvider(editForm.preferred_provider);
     const currentModelUnavailable = !!editForm.model && !isModelAllowedForProvider(editForm.model, editForm.preferred_provider);
 
@@ -752,7 +772,11 @@ export default function AgentDetailPage() {
                 <select
                   className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none pr-8"
                   value={editForm.preferred_provider}
-                  onChange={e => setF({ preferred_provider: e.target.value, model: '' })}
+                  onChange={e => {
+                    const provider = e.target.value;
+                    const connection = eligibleConnections.find(item => item.provider_slug === provider);
+                    setF({ preferred_provider: provider, provider_connection_id: connection ? String(connection.id) : '', model: '' });
+                  }}
                   disabled={providerOptions.length === 0}
                 >
                   {providerOptions.length === 0 ? (
@@ -766,6 +790,23 @@ export default function AgentDetailPage() {
                 <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
               </div>
             </label>
+            {matchingConnections.length > 0 && (
+              <label className="block">
+                <span className="text-slate-400 text-xs mb-1 block">Runtime Credential</span>
+                <p className="text-slate-500 text-xs mb-1.5">Select a credential owned by {editForm.runtime_type}.</p>
+                <div className="relative">
+                  <select
+                    className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none pr-8"
+                    value={editForm.provider_connection_id}
+                    onChange={e => setF({ provider_connection_id: e.target.value })}
+                  >
+                    {isProviderConnected(providers, editForm.preferred_provider) && <option value="">Provider default / API key</option>}
+                    {matchingConnections.map(connection => <option key={connection.id} value={connection.id}>{connection.display_name}</option>)}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                </div>
+              </label>
+            )}
             <label className="block">
               <span className="text-slate-400 text-xs mb-1 block">Model</span>
               {isLocalModelProvider(editForm.preferred_provider) ? (

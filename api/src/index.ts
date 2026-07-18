@@ -36,6 +36,7 @@ import tenantsRouter from './routes/tenants';
 import toolsRouter, { agentToolsRouter } from './routes/tools';
 import mcpServersRouter, { agentMcpServersRouter } from './routes/mcp-servers';
 import providersRouter from './routes/providers';
+import providerConnectionsRouter from './routes/provider-connections';
 import githubIdentitiesRouter from './routes/github-identities';
 import sessionsRouter from './routes/sessions';
 import recurringTaskSeriesRouter from './routes/recurring-task-series';
@@ -469,6 +470,7 @@ app.use('/api/v1/agents/:id/tools', agentToolsRouter);
 app.use('/api/v1/mcp-servers', mcpServersRouter);
 app.use('/api/v1/agents/:id/mcp-servers', agentMcpServersRouter);
 app.use('/api/v1/providers', providersRouter);
+app.use('/api/v1/provider-connections', providerConnectionsRouter);
 app.use('/api/v1/github-identities', githubIdentitiesRouter);
 app.use('/api/v1/sessions', sessionsRouter);
 

@@ -118,6 +118,7 @@ export function completeSprint(sprintId: number): void {
       message,
       model: sprintSummaryModel,
       preferredProvider: (job.preferred_provider as string | null | undefined) ?? null,
+      providerConnectionId: (job.provider_connection_id as number | null | undefined) ?? null,
       hooksUrl: (job.hooks_url as string | null | undefined) ?? null,
       hooksAuthHeader: (job.hooks_auth_header as string | null | undefined) ?? null,
       runtimeType: (job.runtime_type as string | null | undefined) ?? null,

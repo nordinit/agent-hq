@@ -59,7 +59,39 @@ const DEFAULT_SCHEMA_SAFE_AGENT_PROVIDER = 'anthropic';
 export function getConnectedProviderSlugs(tenantId: number): string[] {
   const db = getDb();
   const rows = db.prepare(`SELECT slug FROM provider_config WHERE tenant_id = ? AND status = 'connected'`).all(tenantId) as Array<{ slug: string }>;
-  return rows.map(row => row.slug);
+  const slugs = new Set(rows.map(row => row.slug));
+  try {
+    const connections = db.prepare(`SELECT provider_slug FROM provider_connections WHERE tenant_id = ? AND status = 'connected'`).all(tenantId) as Array<{ provider_slug: string }>;
+    connections.forEach(row => slugs.add(row.provider_slug));
+  } catch { /* schema bootstrap tests may not create provider_connections */ }
+  return Array.from(slugs);
+}
+
+export function validateAgentProviderConnection(
+  tenantId: number,
+  runtimeType: string,
+  preferredProvider: string | null | undefined,
+  providerConnectionId: number | null | undefined,
+): string | null {
+  if (providerConnectionId == null) return null;
+  const db = getDb();
+  let row: { provider_slug: string; runtime_type: string; status: string } | undefined;
+  try {
+    row = db.prepare(`
+      SELECT provider_slug, runtime_type, status
+      FROM provider_connections
+      WHERE id = ? AND tenant_id = ?
+    `).get(providerConnectionId, tenantId) as typeof row;
+  } catch {
+    return 'provider connections are not available in the current schema';
+  }
+  if (!row) return `provider_connection_id ${providerConnectionId} was not found`;
+  if (row.status !== 'connected') return `provider_connection_id ${providerConnectionId} is ${row.status}`;
+  if (row.runtime_type !== runtimeType) return `provider_connection_id ${providerConnectionId} belongs to runtime '${row.runtime_type}', not '${runtimeType}'`;
+  if (preferredProvider && row.provider_slug !== preferredProvider) {
+    return `provider_connection_id ${providerConnectionId} is for '${row.provider_slug}', not '${preferredProvider}'`;
+  }
+  return null;
 }
 
 export function validateAgentProviderSelection(tenantId: number, preferredProvider: string | null | undefined, model: string | null | undefined): string | null {

@@ -2641,6 +2641,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   ensureTaskRelationshipModel(db, { sprintTypesTenantScoped, rebuildWithoutSprintTypeKeyForeignKey });
   ensureToolRegistryTables();
   ensureProviderConfigTable();
+  ensureProviderConnectionsTable();
   ensureGitHubIdentitiesTable();
   ensureFailureDetailAndWorkflowColumns();
   seedInitialData();
@@ -5335,6 +5336,40 @@ function ensureProviderConfigTable(): void {
   } catch (err) {
     console.error('[schema] Failed to migrate provider_config slug constraint:', err);
   }
+}
+
+/**
+ * Runtime-owned provider credentials. Agent HQ stores only routing metadata and
+ * an opaque reference to the credential in the runtime's own auth store.
+ */
+function ensureProviderConnectionsTable(): void {
+  const db = getDb();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS provider_connections (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id         INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      provider_slug     TEXT NOT NULL,
+      auth_mode         TEXT NOT NULL,
+      runtime_type      TEXT NOT NULL,
+      external_ref      TEXT NOT NULL,
+      display_name      TEXT NOT NULL DEFAULT '',
+      status            TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','connected','failed')),
+      metadata          TEXT NOT NULL DEFAULT '{}',
+      last_validated_at TEXT,
+      validation_error  TEXT,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, runtime_type, provider_slug, auth_mode, external_ref)
+    );
+    CREATE INDEX IF NOT EXISTS idx_provider_connections_tenant ON provider_connections(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_provider_connections_lookup ON provider_connections(tenant_id, runtime_type, provider_slug, status);
+  `);
+
+  try {
+    db.exec(`ALTER TABLE agents ADD COLUMN provider_connection_id INTEGER REFERENCES provider_connections(id) ON DELETE SET NULL`);
+    console.log('[schema] Migrated: added agents.provider_connection_id');
+  } catch (_) { /* column already exists */ }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_provider_connection ON agents(provider_connection_id)`);
 }
 
 /**

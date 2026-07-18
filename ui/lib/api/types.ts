@@ -59,6 +59,7 @@ export interface Agent {
   runtime_type: AgentRuntimeType;
   runtime_config: AgentRuntimeConfig | null;
   preferred_provider: string | null;
+  provider_connection_id: number | null;
 
   project_id: number | null;
   project_name: string | null;
@@ -1469,6 +1470,36 @@ export interface ProviderListResponse {
   providers: ProviderRecord[];
   onboarding_provider_gate_passed: boolean;
   connected_count: number;
+}
+
+export interface ProviderConnectionRecord {
+  id: number;
+  provider_slug: string;
+  auth_mode: string;
+  runtime_type: string;
+  external_ref: string;
+  display_name: string;
+  status: 'pending' | 'connected' | 'failed';
+  metadata: Record<string, unknown>;
+  last_validated_at: string | null;
+  validation_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuntimeProviderCapability {
+  runtime: string;
+  provider: string;
+  authModes: string[];
+  supportsProfiles: boolean;
+  supportsInteractiveLogin: boolean;
+  supportsHeadlessLogin: boolean;
+}
+
+export interface DiscoveredProviderConnection {
+  externalRef: string;
+  displayName: string;
+  metadata: Record<string, unknown>;
 }
 
 export interface ProviderSaveResponse extends ProviderRecord {

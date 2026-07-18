@@ -204,8 +204,13 @@ export function isProviderGatePassed(): boolean {
 }
 
 function countConnectedProvidersForTenant(db: ReturnType<typeof getDb>, tenantId: number): number {
-  const row = db.prepare("SELECT COUNT(*) as n FROM provider_config WHERE tenant_id = ? AND status = 'connected'").get(tenantId) as { n: number };
-  return row.n;
+  const configured = db.prepare("SELECT COUNT(*) as n FROM provider_config WHERE tenant_id = ? AND status = 'connected'").get(tenantId) as { n: number };
+  let runtimeOwned = 0;
+  try {
+    const row = db.prepare("SELECT COUNT(*) as n FROM provider_connections WHERE tenant_id = ? AND status = 'connected'").get(tenantId) as { n: number };
+    runtimeOwned = row.n;
+  } catch { /* schema bootstrap tests may not create provider_connections */ }
+  return configured.n + runtimeOwned;
 }
 
 // ─── GET /api/v1/providers ───────────────────────────────────────────────────
@@ -227,8 +232,8 @@ router.get('/', (_req: Request, res: Response) => {
     }));
     res.json({
       providers,
-      onboarding_provider_gate_passed: providers.some(provider => provider.status === 'connected'),
-      connected_count: providers.filter(provider => provider.status === 'connected').length,
+      onboarding_provider_gate_passed: countConnectedProvidersForTenant(db, tenantId) >= 1,
+      connected_count: countConnectedProvidersForTenant(db, tenantId),
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });

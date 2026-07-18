@@ -21,6 +21,8 @@ export interface DispatchParams extends RuntimeEventCallbacks {
   model?: string | null;
   /** Auth/provider slug used to resolve runtime-specific credentials. */
   preferredProvider?: string | null;
+  /** Runtime-owned provider connection selected for this agent. */
+  providerConnectionId?: number | null;
   thinking?: string | null;
   /** Latency-vs-depth override. Null/undefined leaves the runtime default unchanged. */
   fastMode?: boolean | null;
@@ -91,6 +93,7 @@ export interface DispatchParams extends RuntimeEventCallbacks {
 export interface PrepareAuthProfilesParams {
   agentSlug: string;
   preferredProvider?: string | null;
+  providerConnectionId?: number | null;
   runtimeConfig?: unknown;
 }
 

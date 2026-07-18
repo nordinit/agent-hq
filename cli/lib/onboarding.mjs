@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { spawnSync } from 'node:child_process';
 
 export const PROVIDERS = [
   {
@@ -22,6 +23,14 @@ export const PROVIDERS = [
     auth: 'api_key',
     required: ['api_key'],
     description: 'Anthropic API key provider.',
+  },
+  {
+    slug: 'anthropic-subscription',
+    providerSlug: 'anthropic',
+    modelSlug: 'anthropic',
+    label: 'Anthropic Claude Subscription',
+    auth: 'runtime_subscription',
+    description: 'Runtime-owned Claude subscription auth for OpenClaw or Hermes.',
   },
   {
     slug: 'google',
@@ -302,6 +311,73 @@ async function connectConfigProvider(apiBase, provider, io, fetchImpl) {
     throw new Error(saved.validation_error || `${provider.label} did not reach connected state.`);
   }
   return saved;
+}
+
+async function connectRuntimeSubscriptionProvider(apiBase, provider, io, fetchImpl, spawnImpl = spawnSync) {
+  const runtime = (await io.ask('Runtime for this subscription [openclaw/hermes]', 'openclaw')).toLowerCase();
+  if (runtime !== 'openclaw' && runtime !== 'hermes') {
+    throw new Error('Anthropic subscription auth currently supports the openclaw and hermes runtimes.');
+  }
+  const runtimeConfig = runtime === 'hermes'
+    ? { profile: await io.ask('Hermes profile', 'default') }
+    : {};
+  const request = {
+    provider: provider.providerSlug,
+    runtime,
+    auth_mode: 'subscription',
+  };
+  const started = await apiJson(apiBase, '/provider-connections/auth-instructions', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  }, fetchImpl);
+  const instructions = started.instructions;
+  if (!instructions?.command || !Array.isArray(instructions.args)) {
+    throw new Error('Agent HQ did not return usable runtime authentication instructions.');
+  }
+  info(instructions.message || 'Authenticate in the selected runtime.');
+  console.log(`Command: ${[instructions.command, ...instructions.args].join(' ')}`);
+  const runNow = await io.confirm('Run this authentication command now?', true);
+  if (runNow) {
+    const result = spawnImpl(instructions.command, instructions.args, { stdio: 'inherit', shell: process.platform === 'win32' });
+    if (result.error) throw new Error(`Could not start ${instructions.command}: ${result.error.message}`);
+    if (result.status !== 0) throw new Error(`${instructions.command} authentication exited with status ${result.status}.`);
+  } else {
+    await io.ask('Run the command in another terminal, then press Enter', '');
+  }
+
+  const discovered = await apiJson(apiBase, '/provider-connections/discover', {
+    method: 'POST',
+    body: JSON.stringify({ ...request, runtime_config: runtimeConfig }),
+  }, fetchImpl);
+  const connections = Array.isArray(discovered.connections) ? discovered.connections : [];
+  if (connections.length === 0) {
+    throw new Error(`No Anthropic subscription credential was discovered in ${runtime}. Complete runtime authentication and retry.`);
+  }
+  console.log('Discovered connections:');
+  connections.forEach((connection, index) => console.log(`  ${index + 1}. ${connection.displayName} (${connection.externalRef})`));
+  const selectedIndex = Number(await io.ask('Select connection', '1')) - 1;
+  const selected = connections[selectedIndex];
+  if (!selected) throw new Error('Invalid provider connection selection.');
+
+  const saved = await apiJson(apiBase, '/provider-connections', {
+    method: 'POST',
+    body: JSON.stringify({
+      provider_slug: provider.providerSlug,
+      auth_mode: 'subscription',
+      runtime_type: runtime,
+      external_ref: selected.externalRef,
+      display_name: selected.displayName,
+      metadata: selected.metadata || {},
+      runtime_config: runtimeConfig,
+    }),
+  }, fetchImpl);
+  return {
+    slug: provider.providerSlug,
+    display_name: saved.display_name,
+    status: saved.status,
+    provider_connection_id: saved.id,
+    runtime_type: runtime,
+  };
 }
 
 async function skipOnboarding(apiBase, fetchImpl) {
@@ -642,10 +718,12 @@ export async function runInit(flags = {}, deps = {}) {
 
     const row = provider.auth === 'oauth'
       ? await connectOAuthProvider(apiBase, provider, io, openBrowser, fetchImpl)
-      : await connectConfigProvider(apiBase, provider, io, fetchImpl);
+      : provider.auth === 'runtime_subscription'
+        ? await connectRuntimeSubscriptionProvider(apiBase, provider, io, fetchImpl, deps.spawnSync || spawnSync)
+        : await connectConfigProvider(apiBase, provider, io, fetchImpl);
 
     success(`${provider.label} connected using provider slug "${row.slug || provider.slug}".`);
-    await showModels(apiBase, provider, fetchImpl);
+    await showModels(apiBase, { ...provider, slug: provider.modelSlug || provider.slug }, fetchImpl);
     const runtimeResult = await connectRuntime(apiBase, io, fetchImpl);
     if (runtimeResult || flags.template) {
       await runStarterTemplateSetup(apiBase, io, fetchImpl, flags);

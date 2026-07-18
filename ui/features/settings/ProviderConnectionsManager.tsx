@@ -20,6 +20,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { api, ProviderRecord, ProviderSlug } from '@/lib/api';
+import RuntimeProviderConnections from './RuntimeProviderConnections';
 
 interface ProviderMeta {
   slug: ProviderSlug;
@@ -706,6 +707,8 @@ export default function ProviderConnectionsManager({
 
         </div>
       </div>
+
+      <RuntimeProviderConnections onChanged={load} />
 
       {mode === 'onboarding' && (
         <>
