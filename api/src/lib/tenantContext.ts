@@ -1806,8 +1806,9 @@ function provisionTenantDefaultWorkspace(db: Database.Database, tenantId: number
 function canProvisionTenantDefaultWorkspace(db: Database.Database): boolean {
   return tableExists(db, 'projects')
     && tableExists(db, 'agents')
-    // applyDefaultInstallPackage provisions workflow types, statuses, routing,
-    // and field schemas — all of these must exist before it can run.
+    // applyDefaultInstallPackage provisions skills, workflow types, statuses,
+    // routing, and field schemas — all of these must exist before it can run.
+    && tableExists(db, 'skills')
     && tableExists(db, 'sprints')
     && tableExists(db, 'sprint_types')
     && tableExists(db, 'sprint_type_task_types')

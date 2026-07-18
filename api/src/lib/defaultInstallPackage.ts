@@ -20,7 +20,7 @@ import { ensureTenantAgentHqMcpServer, repairAgentMcpAssignmentsForTenant } from
 import { buildRuntimeConfigDefaults } from './runtimeOnboarding';
 
 export const DEFAULT_INSTALL_PACKAGE_KEY = 'agent-hq-default';
-export const DEFAULT_INSTALL_PACKAGE_VERSION = 1;
+export const DEFAULT_INSTALL_PACKAGE_VERSION = 2;
 export const DEFAULT_INSTALL_PROJECT_NAME = 'Default Project';
 export const DEFAULT_INSTALL_PROJECT_DESCRIPTION = 'Starter tenant project for Agent HQ workflows and agents.';
 
@@ -47,7 +47,17 @@ type StarterAgentSeed = {
   model: string | null;
   runtimeConfig: Record<string, unknown>;
   capabilityKeys: string[];
+  skillNames: string[];
 };
+
+type DefaultInstallSkillSeed = {
+  name: string;
+  relativePath: string;
+};
+
+export const DEFAULT_INSTALL_SKILL_SEEDS: DefaultInstallSkillSeed[] = [
+  { name: 'create-agent', relativePath: 'create-agent/SKILL.md' },
+];
 
 export const DEFAULT_INSTALL_AGENT_SEEDS: StarterAgentSeed[] = [
   {
@@ -72,6 +82,7 @@ export const DEFAULT_INSTALL_AGENT_SEEDS: StarterAgentSeed[] = [
       'sprints.read_active_sprint',
       'workflow.read_active_configuration',
     ],
+    skillNames: [],
   },
   {
     key: 'developer',
@@ -96,6 +107,7 @@ export const DEFAULT_INSTALL_AGENT_SEEDS: StarterAgentSeed[] = [
       'sprints.read_active_sprint',
       'workflow.read_active_configuration',
     ],
+    skillNames: ['create-agent'],
   },
   {
     key: 'review',
@@ -120,6 +132,7 @@ export const DEFAULT_INSTALL_AGENT_SEEDS: StarterAgentSeed[] = [
       'sprints.read_active_sprint',
       'workflow.read_active_configuration',
     ],
+    skillNames: [],
   },
   {
     key: 'ops',
@@ -145,6 +158,7 @@ export const DEFAULT_INSTALL_AGENT_SEEDS: StarterAgentSeed[] = [
       'workflow.read_active_configuration',
       'external.write_task_events',
     ],
+    skillNames: [],
   },
 ];
 
@@ -195,6 +209,83 @@ function tableHasColumn(db: Database.Database, table: string, column: string): b
 
 function addCount(target: Record<string, number>, key: string, amount = 1): void {
   target[key] = (target[key] ?? 0) + amount;
+}
+
+function packagedSkillsRoots(): string[] {
+  const configuredRoot = process.env.AGENT_HQ_DEFAULT_SKILLS_PATH?.trim();
+  return Array.from(new Set([
+    configuredRoot,
+    path.resolve(process.cwd(), 'skills'),
+    path.resolve(process.cwd(), '../skills'),
+    path.resolve(__dirname, '../../skills'),
+    path.resolve(__dirname, '../../../skills'),
+  ].filter((candidate): candidate is string => Boolean(candidate))));
+}
+
+function readPackagedSkill(seed: DefaultInstallSkillSeed): { content: string; description: string } {
+  const sourcePath = packagedSkillsRoots()
+    .map((root) => path.join(root, seed.relativePath))
+    .find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  if (!sourcePath) {
+    throw new Error(`Default package skill source not found: ${seed.relativePath}`);
+  }
+  const content = fs.readFileSync(sourcePath, 'utf8');
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] ?? '';
+  const description = frontmatter.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? '';
+  if (!description) {
+    throw new Error(`Default package skill is missing a frontmatter description: ${seed.relativePath}`);
+  }
+  return { content, description };
+}
+
+function ensureDefaultSkills(db: Database.Database, tenantId: number, result: DefaultInstallPackageResult): void {
+  if (!tableExists(db, 'skills')) {
+    throw new Error('Default package requires the tenant-owned skills table');
+  }
+  const select = db.prepare(`
+    SELECT id, description, content, source
+    FROM skills
+    WHERE tenant_id = ? AND name = ?
+    LIMIT 1
+  `);
+  const insert = db.prepare(`
+    INSERT INTO skills (tenant_id, name, description, content, source, fs_path, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'system', NULL, datetime('now'), datetime('now'))
+  `);
+  const update = db.prepare(`
+    UPDATE skills
+    SET description = ?, content = ?, fs_path = NULL, updated_at = datetime('now')
+    WHERE id = ?
+  `);
+
+  for (const seed of DEFAULT_INSTALL_SKILL_SEEDS) {
+    const packaged = readPackagedSkill(seed);
+    const existing = select.get(tenantId, seed.name) as {
+      id: number;
+      description: string;
+      content: string;
+      source: string;
+    } | undefined;
+    if (!existing) {
+      insert.run(tenantId, seed.name, packaged.description, packaged.content);
+      addCount(result.created, 'skills');
+      continue;
+    }
+    if (existing.source !== 'system') {
+      if (existing.description !== packaged.description || existing.content !== packaged.content) {
+        result.conflicts.push({
+          kind: 'skill',
+          key: seed.name,
+          message: `Preserved tenant-managed ${existing.source} skill instead of replacing it with the default package copy.`,
+        });
+      }
+      continue;
+    }
+    if (existing.description !== packaged.description || existing.content !== packaged.content) {
+      update.run(packaged.description, packaged.content, existing.id);
+      addCount(result.updated, 'skills');
+    }
+  }
 }
 
 function ensurePackageLedger(db: Database.Database): void {
@@ -504,6 +595,7 @@ function ensureAgent(db: Database.Database, tenantId: number, tenantSlug: string
     '',
     'Use the active task contract as the source of truth. Keep work tenant-scoped, record meaningful evidence, and do not assume host-specific paths or external integrations.',
   ].join('\n');
+  const skillNames = JSON.stringify(seed.skillNames);
   if (existing) {
     db.prepare(`
       UPDATE agents
@@ -518,14 +610,15 @@ function ensureAgent(db: Database.Database, tenantId: number, tenantSlug: string
           workspace_path = CASE WHEN workspace_path IS NULL OR trim(workspace_path) = '' THEN ? ELSE workspace_path END,
           preferred_provider = CASE WHEN preferred_provider IS NULL OR trim(preferred_provider) = '' THEN ? ELSE preferred_provider END,
           model = COALESCE(model, ?),
+          skill_names = CASE WHEN skill_names IS NULL OR trim(skill_names) = '' OR trim(skill_names) = '[]' THEN ? ELSE skill_names END,
           ${hasJobInstructions ? `job_instructions = CASE WHEN job_instructions IS NULL OR trim(job_instructions) = '' THEN ? ELSE job_instructions END,` : ''}
           enabled = COALESCE(enabled, 1),
           status = CASE WHEN status IS NULL OR trim(status) = '' THEN 'idle' ELSE status END,
           last_active = COALESCE(last_active, datetime('now'))
       WHERE id = ?
     `).run(...(hasJobInstructions
-      ? [projectId, seed.role, seed.jobTitle, seed.systemRole, JSON.stringify(runtimeConfig), runtimeSlug, sessionKey, workspacePath, seed.provider, seed.model, instructions, existing.id]
-      : [projectId, seed.role, seed.jobTitle, seed.systemRole, JSON.stringify(runtimeConfig), runtimeSlug, sessionKey, workspacePath, seed.provider, seed.model, existing.id]));
+      ? [projectId, seed.role, seed.jobTitle, seed.systemRole, JSON.stringify(runtimeConfig), runtimeSlug, sessionKey, workspacePath, seed.provider, seed.model, skillNames, instructions, existing.id]
+      : [projectId, seed.role, seed.jobTitle, seed.systemRole, JSON.stringify(runtimeConfig), runtimeSlug, sessionKey, workspacePath, seed.provider, seed.model, skillNames, existing.id]));
     addCount(result.restored, 'agents');
     return existing.id;
   }
@@ -538,7 +631,7 @@ function ensureAgent(db: Database.Database, tenantId: number, tenantSlug: string
   const values: unknown[] = [
     tenantId, projectId, seed.name, seed.role, seed.jobTitle, sessionKey, workspacePath, 'idle',
     runtimeSlug, 'openclaw', JSON.stringify(runtimeConfig), seed.provider, seed.model,
-    seed.systemRole, 1, 900, '[]', '[]',
+    seed.systemRole, 1, 900, skillNames, '[]',
   ];
   if (hasJobInstructions) {
     columns.push('job_instructions');
@@ -772,6 +865,7 @@ export function applyDefaultInstallPackage(
   if (!tenant) throw new Error(`Tenant ${tenantId} not found`);
 
   const tx = db.transaction(() => {
+    ensureDefaultSkills(db, tenantId, result);
     ensureWorkflowTypes(db, tenantId, result);
     ensureWorkflowDefinitionRows(db, tenantId, result);
     const projectId = ensureProject(db, tenantId, result);

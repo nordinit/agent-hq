@@ -7,7 +7,7 @@ description: Create and provision a durable Agent HQ agent, including its identi
 
 Create a durable role in Agent HQ and let Agent HQ provision the runtime-owned state.
 
-Read `references/checklist.md` before creating an agent. Use `references/templates.md` only when customizing the generated workspace documents.
+Follow the workflow in this file. When the bundled references are available, use `references/checklist.md` for execution detail and `references/templates.md` only when customizing generated workspace documents.
 
 ## Agent Design
 

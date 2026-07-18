@@ -51,6 +51,7 @@ WORKDIR /app
 COPY --from=builder /build/dist ./dist
 COPY --from=builder /build/node_modules ./node_modules
 COPY --from=builder /build/package.json ./
+COPY skills/create-agent/SKILL.md ./skills/create-agent/SKILL.md
 
 # Create the data directory and hand ownership to the runtime user.
 # This is the recommended mount point for the SQLite volume.
