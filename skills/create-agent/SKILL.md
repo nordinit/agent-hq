@@ -1,128 +1,94 @@
 ---
 name: create-agent
-description: Provision a fully-initialized OpenClaw agent with isolated workspace, identity documents, Agent HQ registration, and openclaw.json entry. Use when creating a new agent for any project — dev, QA, frontend, backend, PM, or any other role. Covers the complete setup checklist so nothing gets missed.
+description: Create and provision a durable Agent HQ agent, including its identity, role, runtime, provider/model selection, project association, instructions, capabilities, workspace documents, and assignment rules. Use when adding a recurring project role such as a project manager, engineer, QA reviewer, operator, or system administrator.
 ---
 
 # Create Agent
 
-Provision a complete, properly-isolated OpenClaw agent end-to-end.
+Create a durable role in Agent HQ and let Agent HQ provision the runtime-owned state.
 
-## Preferred Path
+Read `references/checklist.md` before creating an agent. Use `references/templates.md` only when customizing the generated workspace documents.
 
-**Use one atomic backend call when available.**
+## Agent Design
 
-Target design:
-- `POST /api/v1/agents/provision-full`
+### Name
 
-This endpoint should eventually own the full provisioning workflow:
-- create the agent DB row
-- create workspace + `memory/`
-- scaffold full identity/memory docs from canonical templates
-- create agentDir
-- copy `auth-profiles.json`
-- register the agent in `openclaw.json`
-- persist runtime/session/repo/timeouts/project fields
-- create instructions / job-template equivalent
-- create assignment rules
-- create weekly reflection job
-- optionally assign skills/tools
-- restart gateway
-- verify everything and return structured results
+Choose a short, distinctive, realistic name such as `Kepler`, `Atlas`, `Rook`, `Nova`, or `Cinder`.
 
-**Until that endpoint exists, use the checklist fallback flow in `references/checklist.md`.**
+- Check existing agents before choosing the name.
+- Use one memorable name, not a role label such as `Backend Bot` or a project-role identifier such as `acme-backend`.
+- Keep the name stable across projects, prompts, workspace documents, and audit records.
+- Let Agent HQ derive the runtime slug and session key unless a compatibility constraint requires explicit overrides.
 
-## Operating Principle
+### Role
 
-The skill should spend effort on the high-value creative parts of agent design:
-- role definition
-- name and identity
-- model/provider choice
-- project placement
-- routing intent
-- tool/skill selection
-- instruction quality
-- deciding what belongs in `job_instructions` vs `AGENTS.md` vs `TOOLS.md`
+Describe the durable job or function the agent fulfills.
 
-The platform should own the operational provisioning steps.
+- Broad roles are valid when the scope is broad: `Project Manager`, `Backend Engineer`, `QA Engineer`.
+- Specific roles are valid when the project needs a narrow owner: `XYZ System Administrator`, `Payments API Maintainer`, `Production Release Engineer`.
+- Avoid vague labels such as `Helper`, `Worker`, or `Agent` when a real function is known.
+- Put stable role behavior in `job_instructions`; put task-specific objectives and acceptance criteria in the task.
 
-## Context Layering Standard
+Create a new agent only for a recurring owner. Reuse an existing agent when the work is one-off or already fits an established role.
 
-Use this structure for all new agents:
+## Configuration Ownership
 
-- **`job_instructions`**
-  - role identity
-  - execution style
-  - quality bar
-  - critical behavioral constraints
-  - keep it short and role-focused
-
-- **`AGENTS.md`**
-  - startup flow
-  - workflow rules
-  - lane/process rules
-  - debugging heuristic
-  - memory discipline
-  - for implementation agents: explicit rule to work in their own workspace clone/worktree, never the canonical production repo checkout
-
-- **`TOOLS.md`**
-  - stable environment facts
-  - prod URLs, repo paths, machine-specific notes
-  - do not put task-specific dev ports here unless they are truly stable
-
-- **task dispatch prompt**
-  - task objective
-  - scope
-  - acceptance criteria
-  - task-specific verification commands, ports, URLs, or environment targets
-
-Default rule: if a fact is stable and environment-specific, put it in `TOOLS.md`, not `job_instructions`.
-
-## Current Reality
-
-Today the system is still split across:
-- `POST /api/v1/agents`
-- `POST /api/v1/agents/:id/provision`
-- manual/checklist filesystem scaffolding
-- direct DB patching in some cases
-- separate routing/instruction/reflection setup
-
-That split is temporary technical debt, not the desired long-term workflow.
-
-## Critical Rules (while fallback flow still exists)
-
-1. **Always check existing agent names before choosing one** — call `GET /api/v1/agents` first and pick a name not already in use. Every agent across all projects shares the same name pool. No two agents should have the same first name.
-
-2. **Always set `repo_path` when the agent works on a codebase** — omit only for operator/trader roles or inactive projects.
-
-3. **Implementation agents must work in their own workspace clone/worktree, never the canonical production repo checkout** — this rule should appear in their `AGENTS.md` by default.
-
-4. **Do NOT create a `HEARTBEAT.md` in agent workspaces** — only Atlas runs heartbeats unless Masiah explicitly asks otherwise.
-
-5. **If forced onto the fallback flow, treat the checklist as the source of truth** — do not improvise the operational steps from memory.
-
-6. **When the atomic endpoint lands, prefer it immediately** — this skill should become a thin orchestration/spec layer, not a long provisioning runbook.
-
-
-## Quick Reference
-
-| What | Where |
+| Concern | Owner |
 |---|---|
-| openclaw.json | `<openclaw-root>/openclaw.json` |
-| Workspaces | `<openclaw-root>/workspace-<id>/` |
-| Agent dirs | `<openclaw-root>/agents/<id>/agent/` |
-| Agent HQ API | `http://localhost:3501/api/v1` |
-| Agent HQ UI | `http://localhost:3500` |
+| Name, role, runtime, provider, model, project, timeout, instructions, skills, tools | Agent |
+| Repository access mode, local repo path, clone URL | Workflow |
+| Task type/status to agent mapping | Assignment Rules |
+| Objective, scope, acceptance criteria, verification | Task |
+| Scheduled work | Recurring Task Series |
 
-## Workflow
+Repository configuration is workflow-owned. Never send `repo_path`, `repo_url`, or `repo_access_mode` in an agent create, provision, or update payload; Agent HQ rejects those fields. For code-bearing work, configure each relevant workflow with:
 
-1. Read `references/checklist.md` — follow it top to bottom
-2. For workspace file content, use the templates in `references/templates.md`
-3. After finishing, verify: docs visible in UI → agent session active → job template linked to correct project
+- `repo_access_mode=worktree` plus `repo_path`, or
+- `repo_access_mode=clone` plus `repo_url`.
 
-## Naming Convention
+## Preferred Creation Path
 
-Current/legacy agent IDs often use `<project>-<role>` format (e.g., `fortified-dev`, `agency-qa`, `acme-pm`).
-Workspace is always `<openclaw-root>/workspace-<id>/`.
-agentDir is always `<openclaw-root>/agents/<id>/agent/`.
+Use Agent HQ MCP tools when available.
 
-Session key direction is moving toward richer canonical formats. Do not hardcode old session key patterns into identity docs or role templates unless the backend provisioning flow explicitly requires it.
+1. Read the current agents, projects, workflows, providers, and capabilities.
+2. Design the name, role, runtime, provider/model, instructions, and routing intent.
+3. For an OpenClaw agent, call `agent_hq_provision_full_agent` once. This is the MCP path over `POST /api/v1/agents/provision-full`.
+4. For a Hermes agent, use the same atomic REST endpoint when direct API access is appropriate; the current MCP provisioning schema is OpenClaw-only.
+5. For Claude Code, webhook, or custom runtimes, use `agent_hq_create_agent` with the runtime-specific configuration supported by Agent HQ.
+6. Configure workflow repository settings separately when needed.
+7. Create or verify Assignment Rules through Agent HQ MCP. Use the `task-routing-rules` skill for scoped defaults or workflow overrides.
+8. Verify the stored agent, workspace documents, capabilities, and effective routing.
+
+Do not recreate platform provisioning manually. Agent HQ owns workspace scaffolding, runtime registration, provider credential materialization, capability assignment, and generated runtime paths.
+
+## Instruction Layers
+
+- **`job_instructions`**: stable role identity, execution style, quality bar, and critical constraints. Keep it concise and role-focused.
+- **`SOUL.md` / `IDENTITY.md`**: persona, mandate, role, and project identity.
+- **`AGENTS.md`**: startup behavior, process rules, memory discipline, and durable operating constraints.
+- **`TOOLS.md`**: stable environment facts and tool notes. Do not use it as repository configuration.
+- **Task dispatch**: objective, scope, acceptance criteria, and task-specific verification details.
+
+For implementation agents, instruct them to use the task working directory supplied by dispatch. Repository isolation comes from the workflow's access mode; agents should not assume or modify a canonical production checkout.
+
+## Critical Rules
+
+1. Check existing agent names first and choose an unused short name.
+2. Make the role describe the actual recurring job.
+3. Associate project-specific agents with the correct `project_id`.
+4. Use only a connected provider and a model allowed for that provider.
+5. Keep repository fields off the agent payload and configure them on workflows.
+6. Prefer atomic provisioning for OpenClaw and Hermes agents.
+7. Use Assignment Rules, not direct database writes, for dispatch ownership.
+8. Verify the structured provisioning report and read back the created configuration before reporting success.
+
+## Verification Standard
+
+Provisioning is complete only when:
+
+- the response reports `ok: true` and successful validation/verification phases;
+- the agent readback has the intended name, normalized role, runtime, project, provider/model, instructions, and enabled state;
+- the generated workspace and required identity documents are present for provisioned local runtimes;
+- requested skills, tools, and MCP servers are assigned and materialized;
+- workflow repository configuration is correct for code-bearing work; and
+- Assignment Rules route the intended workflow statuses and task types to the new agent.

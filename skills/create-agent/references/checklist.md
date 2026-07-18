@@ -1,291 +1,166 @@
 # Agent Creation Checklist
 
-Follow top to bottom. Do not skip steps.
+Follow this checklist in order. Use Agent HQ MCP tools for Agent HQ state changes whenever the required tool exists.
 
----
+## 1. Confirm a New Agent Is Needed
 
-## Step 1 — Decide agent identity
+- List existing agents.
+- Reuse an existing agent when it already owns the recurring role.
+- Create a new agent only when the project or workflow needs a distinct durable owner.
+- Resolve the target project and the workflows the agent will serve.
 
-Before writing any files, decide:
-- **ID**: `<project>-<role>` (e.g., `agency-frontend`, `fortified-qa`)
-- **Name**: Human display name + role (e.g., `Pixel (Frontend)`)
-- **Role**: One-line role description (e.g., `Senior Frontend Engineer`)
-- **Model**: Default `anthropic/claude-sonnet-4-6` unless reason to change
-- **Timeout**: Default is 900s — override for roles that need longer runs:
-  - QA agents → 3600s (tasks can take up to an hour)
-  - Dev/Backend/Fullstack/Frontend agents → 3600s
-  - DevOps/Harbor agents → 3600s
-  - PM/Trader/Sales/Atlas → 900s (default is fine)
-- **Project ID**: Which Agent HQ project this agent belongs to (get from `GET /api/v1/projects`)
+## 2. Design the Identity
 
-⚠️ **Before finalizing the name:** call `GET /api/v1/agents` and check every existing agent name. All agents across all projects share a single name pool — no two agents should share the same first name. Pick a name not already in use anywhere in the system.
+Choose:
 
----
+- **Name:** short, distinctive, and realistic, such as `Kepler`, `Atlas`, `Rook`, `Nova`, or `Cinder`.
+- **Role:** the durable job or function, such as `Project Manager`, `Backend Engineer`, `QA Engineer`, or `XYZ System Administrator`.
+- **Project:** the Agent HQ `project_id`, unless the agent is intentionally project-independent.
 
-## Step 2 — Create directories
+Before finalizing the name, call `agent_hq_list_agents` and check for a case-insensitive conflict. Agent HQ also rejects duplicate names during creation.
 
-```bash
-mkdir -p ~/.openclaw/workspace-<id>
-mkdir -p ~/.openclaw/workspace-<id>/memory
-mkdir -p ~/.openclaw/agents/<id>/agent
-```
+Do not encode the project and role into the display name. Let Agent HQ derive the runtime slug, workspace path, and canonical session key unless an existing integration requires an override.
 
-Then **copy Nova's auth-profiles.json** — this is mandatory or the agent will fail to authenticate on first dispatch:
+## 3. Choose Runtime and Execution Settings
 
-```bash
-cp ~/.openclaw/agents/nova/agent/auth-profiles.json \
-   ~/.openclaw/agents/<id>/agent/auth-profiles.json
-```
+Resolve:
 
-⚠️ An empty `agentDir` = auth failure on first run. Always copy this file.
+- runtime type;
+- connected provider and compatible model;
+- provider connection when the runtime requires one;
+- run timeout;
+- enabled state;
+- stable `job_instructions`;
+- skills, tools, and MCP servers;
+- routing intent.
 
----
+Use the platform/provider defaults when the user has no model preference. Do not hardcode a provider or model without checking current Agent HQ configuration.
 
-## Step 3 — Write workspace files
+The default timeout is 900 seconds. Increase it deliberately for roles whose normal work can exceed that duration, such as long-running engineering, QA, or operations work.
 
-Write all 9 files to `~/.openclaw/workspace-<id>/`. See `references/templates.md` for content templates for each file.
+## 4. Configure Repository Access on Workflows
 
-Required files:
-- `SOUL.md` — persona, expertise, mandate, how-you-work, constraints
-- `IDENTITY.md` — name, role, emoji, agent ID, project, session key
-- `AGENTS.md` — operating manual: startup sequence, task workflow, API calls, **memory tiers, learning matrix**, escalation
-- `USER.md` — who the client/stakeholder is and what they expect
-- `TOOLS.md` — local notes: API URLs, SSH hosts, project IDs, any env-specific details
-- `BOOTSTRAP.md` — startup checklist (read SOUL → IDENTITY → AGENTS → check queue → begin)
-- `MEMORY.md` — long-term memory file (initialized with role-appropriate seed content)
-- `LESSONS.md` — domain-specific gotchas and hard-won knowledge (seeded with role-specific template)
+Do not include `repo_path`, `repo_url`, or `repo_access_mode` in any agent payload.
 
-**The `memory/` directory is already created in Step 2. All 4 memory-tier files must be present at provisioning time:**
-- `memory/` directory — for daily short-term logs (`memory/YYYY-MM-DD.md`)
-- `MEMORY.md` — long-term distilled knowledge
-- `LESSONS.md` — domain gotchas
-- Memory section in `AGENTS.md` — tiers, write-it-down rule, startup read sequence
+For every code-bearing workflow the agent will serve, read the workflow and configure one of:
 
-**AGENTS.md must include the full memory section:**
-```markdown
-## Memory
+- **Worktree mode:** `repo_access_mode=worktree` and an absolute `repo_path`.
+- **Clone mode:** `repo_access_mode=clone` and a reachable `repo_url`.
 
-You wake up fresh each session. These files are your continuity — read them, update them.
+Use `agent_hq_update_workflow` or `agent_hq_create_workflow` for this state. Read the workflow back after the change.
 
-**On session startup, always read:**
-- `memory/YYYY-MM-DD.md` for today and yesterday (if they exist)
-- `MEMORY.md` for long-term context
+Repository settings in workspace documents are informational only. The workflow record is authoritative for dispatch.
 
-**Write it down — no mental notes:**
-| Signal | Where it goes |
-|---|---|
-| Correction received | `AGENTS.md` (process rule) or `LESSONS.md` (domain gotcha) |
-| Process mistake | `AGENTS.md` — so you don't repeat it |
-| Project decision | `MEMORY.md` |
-| Domain gotcha discovered | `LESSONS.md` |
-| Today-only context | `memory/YYYY-MM-DD.md` |
+## 5. Write Stable Agent Instructions
 
-**Memory tiers:**
-- **Tier 1 — Session only:** intermediate reasoning — do not write down
-- **Tier 2 — Short-term:** `memory/YYYY-MM-DD.md` — what you worked on, decisions, blockers
-- **Tier 3 — Long-term:** `MEMORY.md` — patterns, project state, lessons across weeks
-- **Tier 4 — Permanent:** `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, `LESSONS.md`
+Keep `job_instructions` concise. Include:
 
-**Weekly reflection:**
-A reflection job runs Sunday and synthesizes recent memory into durable lessons. Promote recurring patterns immediately — don't wait for the weekly run.
-```
+- the agent's role and mandate;
+- what it owns and does not own;
+- its execution and communication style;
+- its quality and verification bar;
+- critical safety or escalation constraints.
 
-⚠️ **Do NOT create a `HEARTBEAT.md`** unless Masiah explicitly requests it. Only Atlas (the main session) runs heartbeats — agent workspaces must not have one.
+Do not include task-specific acceptance criteria, temporary URLs/ports, or a fixed repository path. Those belong to the task or workflow.
 
----
+## 6. Create the Agent
 
-## Step 4 — Add to openclaw.json
+### OpenClaw
 
-Edit your OpenClaw config file (typically `$HOME/.openclaw/openclaw.json`), append to `agents.list`:
+Use `agent_hq_provision_full_agent`. Supply only resolved fields, for example:
 
 ```json
 {
-  "id": "<id>",
-  "name": "<id>",
-  "workspace": "/absolute/path/to/.openclaw/workspace-<id>",
-  "agentDir": "/absolute/path/to/.openclaw/agents/<id>/agent",
-  "model": { "primary": "anthropic/claude-sonnet-4-6" }
+  "name": "Kepler",
+  "role": "Backend Engineer",
+  "project_id": 12,
+  "runtime_type": "openclaw",
+  "preferred_provider": "<connected-provider>",
+  "model": "<compatible-model>",
+  "job_instructions": "Own backend implementation for this project. Work from the assigned task and dispatch-provided working directory, keep changes scoped, verify behavior before handoff, and escalate blockers with evidence.",
+  "timeout_seconds": 3600,
+  "skill_names": ["<needed-skill>"]
 }
 ```
 
-Verify valid JSON before saving (run `python3 -m json.tool openclaw.json`).
+Omit optional fields that are not needed. In particular, omit repository fields and generated identity fields unless compatibility requires an override.
 
----
+The provisioning call owns the Agent HQ row, workspace scaffold, runtime registration, provider credential materialization, skill/MCP materialization, and verification report.
 
-## Step 5 — Register agent in Agent HQ
+### Hermes
 
-```bash
-curl -s -X POST http://localhost:3501/api/v1/agents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "<Display Name>",
-    "role": "<Role Description>",
-    "session_key": "agent:<id>:main",
-    "workspace_path": "/absolute/path/to/.openclaw/workspace-<id>",
-    "repo_path": "<repo path if applicable — see note below>"
-  }' | python3 -m json.tool
-```
+The REST endpoint `POST /api/v1/agents/provision-full` also supports `runtime_type=hermes`. Supply a valid Hermes `runtime_config`, including its required isolated `profile`. The endpoint scaffolds the workspace and materializes Hermes runtime credentials without registering the agent as an OpenClaw-native agent.
 
-⚠️ **`workspace_path` is mandatory** — without it, identity docs won't appear in the UI.
+The current `agent_hq_provision_full_agent` MCP schema accepts OpenClaw only. Use direct REST for atomic Hermes provisioning when permitted; otherwise use `agent_hq_create_agent` and verify the runtime-specific setup separately.
 
-⚠️ **`repo_path` should be set whenever applicable.** Use the primary repo the agent works in:
-- Pred Mkt Trader agents → `~/pred_mkt_trader2`
-- Fortified agents → `~/.openclaw/workspace-fortified-dev/fortified-backend`
-- Agency agents → `~/agent-hq`
-- Operator/trader roles with no code work (e.g. Rex) → omit `repo_path`
-- Politicai / Apex AG agents → omit until projects are active again
+### Other Runtimes
 
-Note the returned `id` — you'll need it for the job template.
+Use `agent_hq_create_agent` with the runtime-specific configuration supported by the selected adapter. Do not call the OpenClaw-only `POST /api/v1/agents/:id/provision` endpoint for non-OpenClaw runtimes. Verify any required working directory, endpoint, or credential connection for that runtime.
 
----
+## 7. Customize Workspace Documents When Needed
 
-## Step 6 — Create job template in Agent HQ
+For a provisioned local workspace, customize the documents Agent HQ generated rather than rebuilding the workspace. Use `references/templates.md` as a content guide.
 
-Use the **`create-job` skill** to build the `job_instructions` for the agent's role. Do not write job templates from scratch — the skill has role-specific templates (dev, QA, devops) with the correct git workflow, review evidence endpoints, and completion signaling already wired in.
+Keep these documents aligned:
 
-Key points enforced by the create-job skill:
-- Dispatcher-driven architecture (no queue scanning)
-- Dev agents: `git push origin <branch>` before recording review evidence
-- QA agents: `git fetch + checkout + verify HEAD matches review_commit`
-- DevOps agents: explicit git merge/push/deploy steps + build check before push
-- Review evidence via `PUT /tasks/:id/review-evidence` (NOT `PUT /tasks/:id`)
+- `SOUL.md`
+- `IDENTITY.md`
+- `USER.md`
+- `AGENTS.md`
+- `TOOLS.md`
+- `MEMORY.md`
+- `LESSONS.md`
 
-```bash
-curl -s -X POST http://localhost:3501/api/v1/jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "<Project> — <Role>",
-    "agent_id": <atlas_agent_id>,
-    "project_id": <project_id>,
-    "dispatch_mode": "agentTurn",
-    "enabled": 1,
-    "timeout_seconds": 3600,
-    "job_instructions": "<built from create-job skill template>"
-  }' | python3 -m json.tool
-```
+Preserve platform-generated identifiers or runtime details that remain accurate. Do not overwrite existing user-authored content blindly.
 
-Note the returned job `id` - used for task assignment and event triggers.
+## 8. Configure Assignment Rules
 
----
+Agents are project-scoped; Assignment Rules own workflow dispatch.
 
-## Step 6b - Wire assignment rules
+- Use the `task-routing-rules` skill and Agent HQ MCP CRUD.
+- Choose deliberately between a workflow-type default and a workflow-specific override.
+- Map valid workflow statuses and task types to the canonical `agent_id`.
+- Use higher numeric priority for the preferred agent.
+- Read back the exact rule scope and effective ordering.
 
-After the job template exists, insert assignment rule rows so the reconciler dispatches tasks to this agent.
+The atomic provisioning payload can create simple rules for current non-closed project workflows, but use dedicated Assignment Rule tools when scope or inheritance matters.
 
-**Pattern:** one row per task_type the agent handles at its lane.
+Never patch routing tables directly.
 
-```bash
-# For a QA agent (handles review lane for all task types):
-sqlite3 ~/agent-hq/agent-hq.db "
-INSERT INTO task_routing_rules (project_id, task_type, status, job_id, priority, agent_id) VALUES
-  (<project_id>, 'frontend',      'review', <job_id>, <priority>, <agent_db_id>),
-  (<project_id>, 'backend',       'review', <job_id>, <priority>, <agent_db_id>),
-  (<project_id>, 'fullstack',     'review', <job_id>, <priority>, <agent_db_id>),
-  (<project_id>, 'ops',           'review', <job_id>, <priority>, <agent_db_id>),
-  (<project_id>, 'adhoc',         'review', <job_id>, <priority>, <agent_db_id>),
-  (<project_id>, 'pm_operational','review', <job_id>, <priority>, <agent_db_id>);
-"
+## 9. Verify End to End
 
-# For a dev/backend agent (handles ready lane for its task type):
-sqlite3 ~/agent-hq/agent-hq.db "
-INSERT INTO task_routing_rules (project_id, task_type, status, job_id, priority, agent_id) VALUES
-  (<project_id>, 'backend', 'ready', <job_id>, <priority>, <agent_db_id>);
-"
-```
+Check the provisioning response and read back the state:
 
-**Priority guidance:**
-- Higher number = dispatched first when multiple agents can handle the same task
-- For additional QA agents: use lower negative priorities (e.g. first QA=0, second=-10, third=-20) so the reconciler round-robins through available agents
-- For additional dev agents: use lower priority than the primary (e.g. primary=120, secondary=100)
+1. `report.validation`, `report.agent`, and `report.verification` succeeded.
+2. `report.workspace`, `report.auth`, and `report.capabilities` match the selected runtime and requested assignments.
+3. `agent_hq_get_agent` returns the intended name, role, project, runtime, provider/model, instructions, timeout, and enabled state.
+4. `agent_hq_get_agent_docs` returns the expected workspace documents for a provisioned local runtime.
+5. Relevant workflows contain the intended repository configuration.
+6. Assignment Rules route the intended task types/statuses to the new agent.
 
-Also set `openclaw_agent_id` and `job_template_id` directly in the DB (they don't save via PUT endpoint):
-```bash
-sqlite3 ~/agent-hq/agent-hq.db \
-  "UPDATE agents SET openclaw_agent_id='<id>', job_template_id=<N> WHERE id=<agent_db_id>"
-```
+Restart the gateway through the provisioning option only when explicitly required. Do not add a separate manual restart step by default.
 
-Verify:
-```bash
-sqlite3 ~/agent-hq/agent-hq.db \
-  "SELECT id, task_type, status, job_id, priority FROM task_routing_rules WHERE agent_id=<agent_db_id>"
-```
+## 10. Report the Result
 
----
+Return:
 
-## Step 7 — Restart the gateway
+- agent name and `agent_id`;
+- role and project;
+- runtime, provider, and model;
+- workspace/runtime slug when provisioned;
+- assigned skills/tools/MCP servers;
+- Assignment Rules created or verified;
+- workflow repository configuration verified;
+- any remaining follow-up.
 
-```bash
-# Via Atlas (preferred):
-gateway restart
+## Common Failures
 
-# Or manually trigger SIGUSR1
-```
-
-Wait for the ping-back confirming restart. The new agent session (`agent:<id>:main`) won't exist until OpenClaw reloads the config.
-
----
-
-## Step 8 — Verify
-
-```bash
-# 1. Docs visible in UI
-curl -s http://localhost:3501/api/v1/agents/<atlas_id>/docs | python3 -c "
-import json,sys
-for d in json.load(sys.stdin):
-    print(d['filename'], '→', 'OK' if d['exists'] else 'MISSING')
-"
-
-# 2. Check openclaw.json agent is present
-python3 -c "
-import json, os
-d = json.load(open(os.path.expanduser('~/.openclaw/openclaw.json')))
-ids = [a['id'] for a in d['agents']['list']]
-print(ids)
-"
-```
-
-All 7 core docs (SOUL, AGENTS, USER, IDENTITY, TOOLS, MEMORY, LESSONS) should show OK or be present on disk. HEARTBEAT.md is intentionally excluded from agent workspaces.
-
-Also verify the memory system is properly scaffolded:
-- `memory/` directory exists (created in Step 2)
-- `MEMORY.md` has role-appropriate seed content (not empty)
-- `LESSONS.md` has role-appropriate seed content (not empty)
-- `AGENTS.md` contains the full memory section with tiers and write-it-down matrix (from Step 3)
-
----
-
-## Step 9 — Create weekly reflection cron
-
-Register a weekly reflection job in Agent HQ's internal scheduler so the agent synthesizes its memory once a week.
-
-**Implementation:** Hook-based isolated session (NOT a persistent main session — memory leak risk at scale).
-
-```bash
-# Create a reflection job template for this agent
-curl -s -X POST http://localhost:3501/api/v1/jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "<Project> — <Name> Weekly Reflection",
-    "agent_id": <atlas_agent_id>,
-    "project_id": <project_id>,
-    "schedule": "0 10 * * 0",
-    "dispatch_mode": "agentTurn",
-    "enabled": 1,
-    "timeout_seconds": 900,
-    "job_instructions": "You are <Name>. No task is assigned this session — this is your weekly memory synthesis run.\n\nSTARTUP:\n1. Read ~/.openclaw/workspace-<id>/SOUL.md\n2. Read ~/.openclaw/workspace-<id>/AGENTS.md\n\nMEMORY SYNTHESIS:\n1. Read all memory/*.md files from the past 7 days\n2. Find patterns: recurring issues, corrections, lessons\n3. Promote durable findings to MEMORY.md (append, do not overwrite)\n4. If you discovered a process rule, update AGENTS.md\n5. If you discovered a domain gotcha, update LESSONS.md\n6. Write a brief synthesis note to memory/YYYY-MM-DD.md\n\nWhen done, run: openclaw system event --text \"Reflection done: <Name>\" --mode now"
-  }' | python3 -m json.tool
-```
-
-This job fires every Sunday at 10am (stagger times across agents to avoid simultaneous runs).
-
----
-
-## Common Mistakes & Fixes
-
-| Mistake | Symptom | Fix |
+| Failure | Cause | Fix |
 |---|---|---|
-| Missing `workspace_path` in POST | "No identity documents found" in UI | `PUT /api/v1/agents/<id>` with `{"workspace_path": "..."}` |
-| Forgot to restart gateway | Agent session doesn't exist | Run gateway restart |
-| `agentDir` doesn't exist | Agent fails to initialize | `mkdir -p ~/.openclaw/agents/<id>/agent` |
-| Only killed `next start`, not `next dev` | CSS/JS missing after rebuild | `pkill -f "next dev" && pkill -f "next-server"` then rebuild |
-| Wrong `job_id` in task handoff | QA event trigger never fires | PUT task with correct `job_id` matching QA job template |
+| Agent create rejects repository fields | Repository configuration is workflow-owned | Remove the fields from the agent payload and update the workflow |
+| Duplicate-name conflict | The name is already registered | Choose another short, realistic name |
+| Provider/model validation fails | Provider is disconnected or the model does not belong to it | Read current provider configuration and select a compatible pair |
+| Agent exists but never receives work | Assignment Rules are missing, disabled, or scoped incorrectly | Create/read back the correct default or workflow override |
+| Code task cannot dispatch | Workflow repository configuration is missing or incomplete | Configure worktree path or clone URL on the workflow |
+| Instructions drift into task detail | Stable and task-specific context were mixed | Keep durable behavior on the agent and move task detail to dispatch |
+| Scheduled behavior does not run | Per-agent scheduling is deprecated | Create a Recurring Task Series when recurring work is explicitly required |
