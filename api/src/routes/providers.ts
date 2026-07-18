@@ -11,7 +11,7 @@ import {
   collectOAuthAuthProfilePaths,
   getOAuthProfileKey,
   oauthTokensToCredential,
-  syncOAuthCredentialToAllAuthProfiles,
+  syncOAuthCredentialToAllOpenClawStores,
 } from '../lib/openclawOAuthProfiles';
 import type { OAuthProviderSlug } from '../lib/openclawOAuthProfiles';
 import { reloadOpenClawSecretsRuntimeForAuthSync } from '../runtimes/OpenClawRuntime';
@@ -582,8 +582,8 @@ function extractAccountIdFromJwt(accessToken: string): string | null {
 function writeTokensToAuthProfiles(slug: string, tokens: OAuthTokenPayload): void {
   const credential = oauthTokensToCredential(slug as 'openai-codex', tokens);
   const authProfilePaths = collectOAuthAuthProfilePaths();
-  const updatedPaths = syncOAuthCredentialToAllAuthProfiles(slug as 'openai-codex', credential);
-  console.log(`[providers] Wrote ${slug} OAuth tokens to ${authProfilePaths.length} OpenClaw agent auth profile(s); updated ${updatedPaths.length}`);
+  const updatedPaths = syncOAuthCredentialToAllOpenClawStores(slug as 'openai-codex', credential);
+  console.log(`[providers] Wrote ${slug} OAuth tokens across ${authProfilePaths.length} OpenClaw agent credential set(s); updated ${updatedPaths.length} file(s)`);
 }
 
 async function reloadOpenClawSecretsAfterProviderCredentialWrite(slug: string): Promise<{ ok: boolean; message: string }> {
