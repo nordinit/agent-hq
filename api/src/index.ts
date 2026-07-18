@@ -28,6 +28,7 @@ import { startSprintScheduler } from './scheduler/sprintScheduler';
 import { startWatchdog } from './scheduler/watchdog';
 import { startReconciler } from './scheduler/reconciler';
 import projectFilesRouter from './routes/project-files';
+import workflowFilesRouter from './routes/workflow-files';
 import telemetryRouter from './routes/telemetry';
 import browserRouter from './routes/browser';
 import setupRouter from './routes/setup';
@@ -452,6 +453,7 @@ app.delete('/api/v1/assignment-rules/:id', (req, res, next) => {
   dispatchToRoutingRulesAlias(req, res, next, req.params.id);
 });
 app.use('/api/v1/projects/:id/files', projectFilesRouter);
+app.use('/api/v1/projects/:projectId/workflows/:workflowId/files', workflowFilesRouter);
 app.use('/api/v1/telemetry', telemetryRouter);
 app.use('/api/v1/routing', routingRouter);
 app.use('/api/v1/dispatch', dispatchRouter);

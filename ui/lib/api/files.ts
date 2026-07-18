@@ -1,5 +1,5 @@
 import { apiFetch, getApiBase } from './http';
-import type { ArtifactFile, ArtifactTree, ProjectFile, ProjectFileVersion, TaskAttachment } from './types';
+import type { ArtifactFile, ArtifactTree, ProjectFile, ProjectFileVersion, TaskAttachment, WorkflowFile, WorkflowFileVersion } from './types';
 
 export const filesClient = {
 // Artifacts / Workspaces
@@ -80,4 +80,45 @@ getProjectFileUrl: (projectId: number, fileId: number) =>
   `${getApiBase()}/api/v1/projects/${projectId}/files/${fileId}/download`,
 deleteProjectFile: (projectId: number, fileId: number) =>
   apiFetch<{ ok: boolean }>(`/api/v1/projects/${projectId}/files/${fileId}`, { method: 'DELETE' }),
+// Workflow Files
+getWorkflowFiles: (projectId: number, workflowId: number) =>
+  apiFetch<WorkflowFile[]>(`/api/v1/projects/${projectId}/workflows/${workflowId}/files`),
+getWorkflowFileVersions: (projectId: number, workflowId: number, fileId: number) =>
+  apiFetch<WorkflowFileVersion[]>(`/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}/versions`),
+uploadWorkflowFile: async (projectId: number, workflowId: number, file: File, uploadedBy?: string) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (uploadedBy) formData.append('uploaded_by', uploadedBy);
+  const res = await fetch(`${getApiBase()}/api/v1/projects/${projectId}/workflows/${workflowId}/files`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    let msg = `Upload failed: ${res.status}`;
+    try { msg = (JSON.parse(body) as { error?: string }).error ?? msg; } catch { /* */ }
+    throw new Error(msg);
+  }
+  return res.json() as Promise<WorkflowFile>;
+},
+replaceWorkflowFile: async (projectId: number, workflowId: number, fileId: number, file: File, uploadedBy?: string) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (uploadedBy) formData.append('uploaded_by', uploadedBy);
+  const res = await fetch(`${getApiBase()}/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}`, {
+    method: 'PUT',
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    let msg = `Replace failed: ${res.status}`;
+    try { msg = (JSON.parse(body) as { error?: string }).error ?? msg; } catch { /* */ }
+    throw new Error(msg);
+  }
+  return res.json() as Promise<WorkflowFile>;
+},
+getWorkflowFileUrl: (projectId: number, workflowId: number, fileId: number) =>
+  `${getApiBase()}/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}/download`,
+deleteWorkflowFile: (projectId: number, workflowId: number, fileId: number) =>
+  apiFetch<{ ok: boolean }>(`/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}`, { method: 'DELETE' }),
 };

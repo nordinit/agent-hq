@@ -167,6 +167,7 @@ Task cycle time, QA breakdown, model usage, agent efficiency, creation/outcome q
 | `tasks.ts` | `/api/v1/tasks` | Task CRUD + outcome + evidence + integrity + notes + blockers + attachments |
 | `telemetry.ts` | `/api/v1/telemetry` | Task/run analytics |
 | `tools.ts` | `/api/v1/tools` | Tool registry CRUD + agent assignments |
+| `workflow-files.ts` | `/api/v1/projects/:projectId/workflows/:workflowId/files` | Workflow-scoped file uploads and version history |
 
 ---
 

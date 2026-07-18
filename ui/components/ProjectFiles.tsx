@@ -17,6 +17,8 @@ import {
 
 interface Props {
   projectId: number;
+  workflowId?: number;
+  scope?: 'project' | 'workflow';
 }
 
 function getFileIcon(mimeType: string): React.ReactNode {
@@ -46,7 +48,7 @@ function isImage(mimeType: string, name: string): boolean {
   return mimeType.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext);
 }
 
-export default function ProjectFiles({ projectId }: Props) {
+export default function ProjectFiles({ projectId, workflowId, scope = workflowId ? 'workflow' : 'project' }: Props) {
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,17 +64,24 @@ export default function ProjectFiles({ projectId }: Props) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const isWorkflowScope = scope === 'workflow';
+  const fileScopeLabel = isWorkflowScope ? 'Workflow Files' : 'Project Files';
+  const emptyLabel = isWorkflowScope
+    ? 'No workflow files uploaded yet. Click "Add Workflow File" to upload one.'
+    : 'No project files uploaded yet. Click "Add Project File" to upload one.';
 
   const load = useCallback(async () => {
     try {
-      const data = await api.getProjectFiles(projectId);
+      const data = isWorkflowScope && workflowId
+        ? await api.getWorkflowFiles(projectId, workflowId)
+        : await api.getProjectFiles(projectId);
       setFiles(data);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [isWorkflowScope, projectId, workflowId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -82,7 +91,8 @@ export default function ProjectFiles({ projectId }: Props) {
     setUploading(true);
     setUploadProgress(`Uploading ${file.name}…`);
     try {
-      await api.uploadProjectFile(projectId, file);
+      if (isWorkflowScope && workflowId) await api.uploadWorkflowFile(projectId, workflowId, file);
+      else await api.uploadProjectFile(projectId, file);
       await load();
     } catch (err) {
       setError(String(err));
@@ -100,7 +110,8 @@ export default function ProjectFiles({ projectId }: Props) {
     setUploading(true);
     setUploadProgress(`Replacing with ${file.name}…`);
     try {
-      await api.replaceProjectFile(projectId, replaceFileId, file);
+      if (isWorkflowScope && workflowId) await api.replaceWorkflowFile(projectId, workflowId, replaceFileId, file);
+      else await api.replaceProjectFile(projectId, replaceFileId, file);
       await load();
     } catch (err) {
       setError(String(err));
@@ -117,7 +128,9 @@ export default function ProjectFiles({ projectId }: Props) {
     setVersions([]);
     setHistoryLoading(true);
     try {
-      const data = await api.getProjectFileVersions(projectId, file.id);
+      const data = isWorkflowScope && workflowId
+        ? await api.getWorkflowFileVersions(projectId, workflowId, file.id)
+        : await api.getProjectFileVersions(projectId, file.id);
       setVersions(data);
     } catch (e) {
       setError(String(e));
@@ -132,7 +145,9 @@ export default function ProjectFiles({ projectId }: Props) {
     setViewContent(null);
     setViewLoading(true);
     try {
-      const url = api.getProjectFileUrl(projectId, file.id);
+      const url = isWorkflowScope && workflowId
+        ? api.getWorkflowFileUrl(projectId, workflowId, file.id)
+        : api.getProjectFileUrl(projectId, file.id);
       const res = await fetch(url);
       if (!res.ok) throw new Error(`Failed to fetch file: ${res.status}`);
       const text = await res.text();
@@ -145,7 +160,9 @@ export default function ProjectFiles({ projectId }: Props) {
   };
 
   const handleDownload = (file: ProjectFile) => {
-    const url = api.getProjectFileUrl(projectId, file.id);
+    const url = isWorkflowScope && workflowId
+      ? api.getWorkflowFileUrl(projectId, workflowId, file.id)
+      : api.getProjectFileUrl(projectId, file.id);
     const a = document.createElement('a');
     a.href = url;
     a.download = file.original_name;
@@ -156,7 +173,8 @@ export default function ProjectFiles({ projectId }: Props) {
 
   const handleDelete = async (fileId: number) => {
     try {
-      await api.deleteProjectFile(projectId, fileId);
+      if (isWorkflowScope && workflowId) await api.deleteWorkflowFile(projectId, workflowId, fileId);
+      else await api.deleteProjectFile(projectId, fileId);
       setDeleteConfirm(null);
       await load();
     } catch (e) {
@@ -174,7 +192,7 @@ export default function ProjectFiles({ projectId }: Props) {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="font-semibold text-white">Project Files</h2>
+        <h2 className="font-semibold text-white">{fileScopeLabel}</h2>
         <div className="flex items-center gap-2">
           {uploadProgress && (
             <span className="text-xs text-amber-300 animate-pulse">{uploadProgress}</span>
@@ -199,7 +217,7 @@ export default function ProjectFiles({ projectId }: Props) {
             onClick={() => fileInputRef.current?.click()}
             loading={uploading}
           >
-            <Upload className="w-3.5 h-3.5" /> Add File
+            <Upload className="w-3.5 h-3.5" /> {isWorkflowScope ? 'Add Workflow File' : 'Add Project File'}
           </Button>
         </div>
       </div>
@@ -215,7 +233,7 @@ export default function ProjectFiles({ projectId }: Props) {
       {files.length === 0 ? (
         <Card>
           <div className="text-center py-8 text-slate-500 text-sm">
-            No files uploaded yet. Click &ldquo;Add File&rdquo; to upload one.
+            {emptyLabel}
           </div>
         </Card>
       ) : (
@@ -323,7 +341,7 @@ export default function ProjectFiles({ projectId }: Props) {
                 <div className="flex items-center justify-center">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={api.getProjectFileUrl(projectId, viewFile.id)}
+                    src={isWorkflowScope && workflowId ? api.getWorkflowFileUrl(projectId, workflowId, viewFile.id) : api.getProjectFileUrl(projectId, viewFile.id)}
                     alt={viewFile.original_name}
                     className="max-w-full max-h-[70vh] object-contain rounded-lg"
                   />

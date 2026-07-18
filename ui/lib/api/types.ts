@@ -608,6 +608,10 @@ export interface ProjectAuditEntry {
 
 export interface ProjectFile {
   id: number;
+  tenant_id?: number;
+  project_id?: number;
+  workflow_id?: number;
+  scope?: 'project' | 'workflow';
   filename: string;
   original_name: string;
   mime_type: string;
@@ -620,10 +624,19 @@ export interface ProjectFile {
   current_version_id: number | null;
 }
 
+export interface WorkflowFile extends ProjectFile {
+  tenant_id: number;
+  project_id: number;
+  workflow_id: number;
+  scope: 'workflow';
+}
+
 export interface ProjectFileVersion {
   id: number;
   tenant_id: number;
   project_id: number;
+  workflow_id?: number;
+  scope?: 'project' | 'workflow';
   file_id: number;
   version_number: number;
   filename: string;
@@ -633,6 +646,11 @@ export interface ProjectFileVersion {
   created_by: string;
   created_at: string;
   change_source: string;
+}
+
+export interface WorkflowFileVersion extends ProjectFileVersion {
+  workflow_id: number;
+  scope: 'workflow';
 }
 
 export interface ArtifactTreeNode {

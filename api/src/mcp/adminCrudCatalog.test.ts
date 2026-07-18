@@ -33,6 +33,13 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       'agent_hq_upload_project_file',
       'agent_hq_delete_project_file',
       'agent_hq_replace_project_file',
+      'agent_hq_list_workflow_files',
+      'agent_hq_get_workflow_file',
+      'agent_hq_list_workflow_file_versions',
+      'agent_hq_download_workflow_file',
+      'agent_hq_upload_workflow_file',
+      'agent_hq_delete_workflow_file',
+      'agent_hq_replace_workflow_file',
       'agent_hq_list_workflow_event_mappings',
       'agent_hq_get_workflow_event_mapping',
       'agent_hq_create_workflow_event_mapping',
@@ -73,7 +80,9 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
 
     expect(byName.get('agent_hq_list_workflows')?.domain).toBe('workflows');
     expect(byName.get('agent_hq_upload_project_file')?.domain).toBe('project_files');
+    expect(byName.get('agent_hq_upload_workflow_file')?.domain).toBe('workflow_files');
     expect(byName.get('agent_hq_replace_project_file')?.description).toContain('version-history');
+    expect(byName.get('agent_hq_replace_workflow_file')?.description).toContain('version-history');
     expect(byName.get('agent_hq_get_sprints')?.description).toContain('Legacy alias');
 
     const assignmentRules = byName.get('agent_hq_list_routing_rules');

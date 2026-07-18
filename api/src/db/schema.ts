@@ -1802,6 +1802,47 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     CREATE INDEX IF NOT EXISTS idx_project_file_versions_tenant_project ON project_file_versions(tenant_id, project_id, file_id);
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workflow_files (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id    INTEGER NOT NULL,
+      project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      workflow_id  INTEGER NOT NULL REFERENCES sprints(id) ON DELETE CASCADE,
+      filename     TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      mime_type    TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size_bytes   INTEGER NOT NULL DEFAULT 0,
+      file_path    TEXT NOT NULL,
+      uploaded_by  TEXT NOT NULL DEFAULT 'manual',
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by   TEXT NOT NULL DEFAULT 'manual',
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      current_version INTEGER NOT NULL DEFAULT 1,
+      current_version_id INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflow_files_workflow ON workflow_files(tenant_id, project_id, workflow_id);
+
+    CREATE TABLE IF NOT EXISTS workflow_file_versions (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id    INTEGER NOT NULL,
+      project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      workflow_id  INTEGER NOT NULL REFERENCES sprints(id) ON DELETE CASCADE,
+      file_id      INTEGER NOT NULL REFERENCES workflow_files(id) ON DELETE CASCADE,
+      version_number INTEGER NOT NULL,
+      filename     TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      mime_type    TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size_bytes   INTEGER NOT NULL DEFAULT 0,
+      file_path    TEXT NOT NULL,
+      created_by   TEXT NOT NULL DEFAULT 'manual',
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      change_source TEXT NOT NULL DEFAULT 'api',
+      UNIQUE(file_id, version_number)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflow_file_versions_file ON workflow_file_versions(file_id, version_number DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_file_versions_scope ON workflow_file_versions(tenant_id, project_id, workflow_id, file_id);
+  `);
+
   const projectFileColumns: Array<{ name: string; sql: string; log: string }> = [
     { name: 'updated_by', sql: `ALTER TABLE project_files ADD COLUMN updated_by TEXT NOT NULL DEFAULT 'manual'`, log: 'updated_by' },
     { name: 'updated_at', sql: `ALTER TABLE project_files ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`, log: 'updated_at' },

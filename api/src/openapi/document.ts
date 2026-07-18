@@ -113,6 +113,7 @@ export const openApiDocument: OpenApiDocument = {
     { name: 'Tenants', description: 'Tenant isolation context. Tenant endpoints are canonical; company endpoints remain deprecated compatibility aliases.' },
     { name: 'Projects', description: 'Project configuration and project metrics.' },
     { name: 'Project Files', description: 'Project-scoped file metadata and uploads.' },
+    { name: 'Workflow Files', description: 'Workflow-scoped file metadata, uploads, and version history.' },
     { name: 'Workflows', description: 'Workflow lifecycle and workflow metadata. These are the preferred endpoints for boards and operating cycles.' },
     { name: 'Sprints', description: 'Legacy aliases for workflow lifecycle and metadata endpoints. Existing sprint clients remain supported.' },
     { name: 'Workflow Definitions', description: 'Workflow type, status, field schema, relationship, and outcome definitions. Sprint type routes remain legacy aliases during compatibility.' },
@@ -633,6 +634,157 @@ export const openApiDocument: OpenApiDocument = {
         responses: {
           '200': {
             description: 'Project file bytes.',
+            content: {
+              'application/octet-stream': {
+                schema: { type: 'string', format: 'binary' },
+              },
+            },
+          },
+          '404': notFoundResponseRef,
+          default: errorResponseRef,
+        },
+      },
+    },
+    '/projects/{projectId}/workflows/{workflowId}/files': {
+      get: {
+        tags: ['Workflow Files'],
+        summary: 'List uploaded workflow files.',
+        operationId: 'listWorkflowFiles',
+        parameters: [
+          idParam('projectId', 'Project ID that owns the workflow.'),
+          idParam('workflowId', 'Workflow ID.'),
+        ],
+        responses: {
+          '200': response('Workflow files.', arrayOf(ref('WorkflowFile'))),
+          '404': notFoundResponseRef,
+          default: errorResponseRef,
+        },
+      },
+      post: {
+        tags: ['Workflow Files'],
+        summary: 'Upload a workflow-scoped file.',
+        operationId: 'uploadWorkflowFile',
+        parameters: [
+          idParam('projectId', 'Project ID that owns the workflow.'),
+          idParam('workflowId', 'Workflow ID.'),
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['file'],
+                properties: {
+                  file: { type: 'string', format: 'binary' },
+                  uploaded_by: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '201': response('Uploaded workflow file metadata.', ref('WorkflowFile')),
+          '400': errorResponseRef,
+          '404': notFoundResponseRef,
+          default: errorResponseRef,
+        },
+      },
+    },
+    '/projects/{projectId}/workflows/{workflowId}/files/{fileId}': {
+      get: {
+        tags: ['Workflow Files'],
+        summary: 'Read uploaded workflow file metadata.',
+        operationId: 'getWorkflowFile',
+        parameters: [
+          idParam('projectId', 'Project ID that owns the workflow.'),
+          idParam('workflowId', 'Workflow ID.'),
+          idParam('fileId', 'Workflow file ID.'),
+        ],
+        responses: {
+          '200': response('Workflow file metadata.', ref('WorkflowFile')),
+          '404': notFoundResponseRef,
+          default: errorResponseRef,
+        },
+      },
+      put: {
+        tags: ['Workflow Files'],
+        summary: 'Replace the current workflow file content and record a new version.',
+        operationId: 'replaceWorkflowFile',
+        parameters: [
+          idParam('projectId', 'Project ID that owns the workflow.'),
+          idParam('workflowId', 'Workflow ID.'),
+          idParam('fileId', 'Workflow file ID.'),
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['file'],
+                properties: {
+                  file: { type: 'string', format: 'binary' },
+                  uploaded_by: { type: 'string' },
+                  updated_by: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': response('Updated workflow file metadata.', ref('WorkflowFile')),
+          '400': errorResponseRef,
+          '404': notFoundResponseRef,
+          default: errorResponseRef,
+        },
+      },
+      delete: {
+        tags: ['Workflow Files'],
+        summary: 'Delete an uploaded workflow file.',
+        operationId: 'deleteWorkflowFile',
+        parameters: [
+          idParam('projectId', 'Project ID that owns the workflow.'),
+          idParam('workflowId', 'Workflow ID.'),
+          idParam('fileId', 'Workflow file ID.'),
+        ],
+        responses: {
+          '200': okResponse,
+          '404': notFoundResponseRef,
+          default: errorResponseRef,
+        },
+      },
+    },
+    '/projects/{projectId}/workflows/{workflowId}/files/{fileId}/versions': {
+      get: {
+        tags: ['Workflow Files'],
+        summary: 'List workflow file version history.',
+        operationId: 'listWorkflowFileVersions',
+        parameters: [
+          idParam('projectId', 'Project ID that owns the workflow.'),
+          idParam('workflowId', 'Workflow ID.'),
+          idParam('fileId', 'Workflow file ID.'),
+        ],
+        responses: {
+          '200': response('Workflow file versions.', arrayOf(ref('WorkflowFileVersion'))),
+          '404': notFoundResponseRef,
+          default: errorResponseRef,
+        },
+      },
+    },
+    '/projects/{projectId}/workflows/{workflowId}/files/{fileId}/download': {
+      get: {
+        tags: ['Workflow Files'],
+        summary: 'Download uploaded workflow file content.',
+        operationId: 'downloadWorkflowFile',
+        parameters: [
+          idParam('projectId', 'Project ID that owns the workflow.'),
+          idParam('workflowId', 'Workflow ID.'),
+          idParam('fileId', 'Workflow file ID.'),
+        ],
+        responses: {
+          '200': {
+            description: 'Workflow file bytes.',
             content: {
               'application/octet-stream': {
                 schema: { type: 'string', format: 'binary' },
@@ -1882,6 +2034,49 @@ export const openApiDocument: OpenApiDocument = {
           id: { type: 'integer' },
           tenant_id: { type: 'integer' },
           project_id: { type: 'integer' },
+          file_id: { type: 'integer' },
+          version_number: { type: 'integer' },
+          filename: { type: 'string' },
+          original_name: { type: 'string', nullable: true },
+          mime_type: { type: 'string', nullable: true },
+          size_bytes: { type: 'integer', nullable: true },
+          created_by: { type: 'string', nullable: true },
+          created_at: { type: 'string', nullable: true },
+          change_source: { type: 'string', nullable: true },
+        },
+        additionalProperties: true,
+      },
+      WorkflowFile: {
+        type: 'object',
+        required: ['id', 'tenant_id', 'project_id', 'workflow_id', 'filename', 'scope'],
+        properties: {
+          id: { type: 'integer' },
+          tenant_id: { type: 'integer' },
+          project_id: { type: 'integer' },
+          workflow_id: { type: 'integer' },
+          scope: { type: 'string', enum: ['workflow'] },
+          filename: { type: 'string' },
+          original_name: { type: 'string', nullable: true },
+          mime_type: { type: 'string', nullable: true },
+          size_bytes: { type: 'integer', nullable: true },
+          created_at: { type: 'string', nullable: true },
+          uploaded_by: { type: 'string', nullable: true },
+          updated_at: { type: 'string', nullable: true },
+          updated_by: { type: 'string', nullable: true },
+          current_version: { type: 'integer', nullable: true },
+          current_version_id: { type: 'integer', nullable: true },
+        },
+        additionalProperties: true,
+      },
+      WorkflowFileVersion: {
+        type: 'object',
+        required: ['id', 'tenant_id', 'project_id', 'workflow_id', 'file_id', 'version_number', 'scope'],
+        properties: {
+          id: { type: 'integer' },
+          tenant_id: { type: 'integer' },
+          project_id: { type: 'integer' },
+          workflow_id: { type: 'integer' },
+          scope: { type: 'string', enum: ['workflow'] },
           file_id: { type: 'integer' },
           version_number: { type: 'integer' },
           filename: { type: 'string' },

@@ -245,7 +245,16 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
       'POST /api/v1/projects/:id/files',
       'GET /api/v1/projects/:id/files/:fileId',
       'GET /api/v1/projects/:id/files/:fileId/download',
+      'GET /api/v1/projects/:id/files/:fileId/versions',
+      'PUT /api/v1/projects/:id/files/:fileId',
       'DELETE /api/v1/projects/:id/files/:fileId',
+      'GET /api/v1/projects/:projectId/workflows/:workflowId/files',
+      'POST /api/v1/projects/:projectId/workflows/:workflowId/files',
+      'GET /api/v1/projects/:projectId/workflows/:workflowId/files/:fileId',
+      'GET /api/v1/projects/:projectId/workflows/:workflowId/files/:fileId/download',
+      'GET /api/v1/projects/:projectId/workflows/:workflowId/files/:fileId/versions',
+      'PUT /api/v1/projects/:projectId/workflows/:workflowId/files/:fileId',
+      'DELETE /api/v1/projects/:projectId/workflows/:workflowId/files/:fileId',
     ],
     defaultEnabled: {
       scoped_runtime: true,
@@ -1202,6 +1211,22 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     return deny({
       reason: `Normal Agent HQ MCP keys can only manage files for the project attached to their active dispatched task.`,
       requiredCapability: 'projects.manage_active_files',
+    });
+  }
+
+  const workflowFileMatch = requestPath.match(/^\/projects\/(\d+)\/workflows\/(\d+)\/files(?:\/(\d+)(?:\/(?:download|versions))?)?$/);
+  if (workflowFileMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
+    const projectId = Number(workflowFileMatch[1]);
+    const sprintId = Number(workflowFileMatch[2]);
+    if (!requireCapability(
+      'projects.manage_active_files',
+      `Workflow file access is disabled for ${identity.agentSlug}.`,
+    )) return;
+    if (scopedProjectIds.has(projectId) && scopedSprintIds.has(sprintId)) return next();
+    return deny({
+      reason: `Normal Agent HQ MCP keys can only manage workflow files for the project and workflow attached to their active dispatched task.`,
+      requiredCapability: 'projects.manage_active_files',
+      taskId: scopedTaskIds.values().next().value ?? null,
     });
   }
 

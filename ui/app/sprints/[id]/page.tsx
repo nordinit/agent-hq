@@ -14,14 +14,15 @@ import { Button } from '@/components/ui/button';
 import {
   Rocket, Target, Calendar, CheckCircle2, ArrowLeft, Edit2, PauseCircle, PlayCircle,
   X, Check, ChevronDown, Trash2, Archive,
-  BarChart3, ClipboardList, Activity,
+  BarChart3, ClipboardList, Activity, Files,
 } from 'lucide-react';
 import Link from 'next/link';
 import { getApiBase } from '@/lib/api';
 import { TaskDetailPanel } from '@/features/tasks/TaskDetailPanel';
 import { useTaskStatuses } from '@/lib/useTaskStatuses';
+import ProjectFiles from '@/components/ProjectFiles';
 
-type Tab = 'overview' | 'tasks' | 'metrics';
+type Tab = 'overview' | 'tasks' | 'files' | 'metrics';
 
 const STATUS_BADGE: Record<Sprint['status'], string> = {
   planning: 'bg-slate-700 text-slate-300',
@@ -495,6 +496,7 @@ export default function SprintDetailPage() {
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: 'overview', label: 'Overview', icon: <Activity className="w-4 h-4" /> },
     { key: 'tasks', label: `Tasks (${tasks.length})`, icon: <ClipboardList className="w-4 h-4" /> },
+    { key: 'files', label: 'Files', icon: <Files className="w-4 h-4" /> },
     { key: 'metrics', label: 'Metrics', icon: <BarChart3 className="w-4 h-4" /> },
   ];
 
@@ -643,6 +645,7 @@ export default function SprintDetailPage() {
       <div className={tab === 'tasks' ? 'md:flex-1 md:min-h-0 flex flex-col md:overflow-hidden' : ''}>
         {tab === 'overview' && <OverviewTab sprint={sprint} metrics={metrics} />}
         {tab === 'tasks' && <TasksTab sprint={sprint} tasks={tasks} onRefresh={load} />}
+        {tab === 'files' && <ProjectFiles projectId={sprint.project_id} workflowId={sprint.id} scope="workflow" />}
         {tab === 'metrics' && <MetricsTab metrics={metrics} />}
       </div>
     </div>

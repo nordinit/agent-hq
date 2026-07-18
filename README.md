@@ -356,7 +356,8 @@ Agent HQ includes an operator UI for configuring and monitoring agent workflows.
 | **Workspaces** | Browse and edit agent workspace artifacts. |
 | **Logs** | Inspect execution logs. |
 | **Telemetry** | Track cycle time, QA breakdown, model usage, and agent efficiency. |
-| **Projects** | Manage project context and files; workflow records own repository configuration. |
+| **Projects** | Manage project context and reusable project-wide files. |
+| **Workflow Files** | Upload, version, read, replace, and delete files scoped to a specific workflow. |
 | **Settings** | Configure display, providers, gateway, GitHub, and API settings. |
 | **API Console** | Explore the local OpenAPI API console. |
 

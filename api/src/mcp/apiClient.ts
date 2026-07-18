@@ -53,6 +53,13 @@ export interface AgentHqProjectFile {
   file_path?: string | null;
 }
 
+export interface AgentHqWorkflowFile extends AgentHqProjectFile {
+  tenant_id: number;
+  project_id: number;
+  workflow_id: number;
+  scope: 'workflow';
+}
+
 export interface AgentHqProjectFileVersion {
   id: number;
   tenant_id: number;
@@ -68,8 +75,20 @@ export interface AgentHqProjectFileVersion {
   change_source: string | null;
 }
 
+export interface AgentHqWorkflowFileVersion extends AgentHqProjectFileVersion {
+  workflow_id: number;
+  scope: 'workflow';
+}
+
 export interface AgentHqProjectFileDownload {
   metadata: AgentHqProjectFile;
+  content_base64: string;
+  encoding: 'base64';
+  text: string | null;
+}
+
+export interface AgentHqWorkflowFileDownload {
+  metadata: AgentHqWorkflowFile;
   content_base64: string;
   encoding: 'base64';
   text: string | null;
@@ -283,6 +302,26 @@ export function shapeProjectFileVersion(value: unknown): AgentHqProjectFileVersi
     created_by: asString(row.created_by),
     created_at: asString(row.created_at),
     change_source: asString(row.change_source),
+  };
+}
+
+export function shapeWorkflowFile(value: unknown): AgentHqWorkflowFile {
+  const row = asRecord(value);
+  return {
+    ...shapeProjectFile(row),
+    tenant_id: asNumber(row.tenant_id) ?? 0,
+    project_id: asNumber(row.project_id) ?? 0,
+    workflow_id: asNumber(row.workflow_id) ?? 0,
+    scope: 'workflow',
+  };
+}
+
+export function shapeWorkflowFileVersion(value: unknown): AgentHqWorkflowFileVersion {
+  const row = asRecord(value);
+  return {
+    ...shapeProjectFileVersion(row),
+    workflow_id: asNumber(row.workflow_id) ?? 0,
+    scope: 'workflow',
   };
 }
 
@@ -576,6 +615,60 @@ export class AgentHqApiClient {
 
   deleteProjectFile(projectId: number, fileId: number) {
     return this.request<unknown>('DELETE', `/api/v1/projects/${projectId}/files/${fileId}`);
+  }
+
+  listWorkflowFiles(projectId: number, workflowId: number) {
+    return this.request<unknown[]>('GET', `/api/v1/projects/${projectId}/workflows/${workflowId}/files`).then((rows) => rows.map(shapeWorkflowFile));
+  }
+
+  getWorkflowFile(projectId: number, workflowId: number, fileId: number) {
+    return this.request<unknown>('GET', `/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}`).then(shapeWorkflowFile);
+  }
+
+  listWorkflowFileVersions(projectId: number, workflowId: number, fileId: number) {
+    return this.request<unknown[]>('GET', `/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}/versions`).then((rows) => rows.map(shapeWorkflowFileVersion));
+  }
+
+  async downloadWorkflowFile(projectId: number, workflowId: number, fileId: number, includeText = true): Promise<AgentHqWorkflowFileDownload> {
+    const metadata = await this.getWorkflowFile(projectId, workflowId, fileId);
+    const { bytes, contentType } = await this.requestArrayBuffer(`/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}/download`);
+    const mimeType = metadata.mime_type || contentType;
+    return {
+      metadata,
+      content_base64: bytes.toString('base64'),
+      encoding: 'base64',
+      text: includeText && isTextMimeType(mimeType) ? bytes.toString('utf8') : null,
+    };
+  }
+
+  uploadWorkflowFile(projectId: number, workflowId: number, data: {
+    filename: string;
+    content_base64: string;
+    mime_type?: string;
+    uploaded_by?: string;
+  }) {
+    const form = new FormData();
+    const bytes = Uint8Array.from(Buffer.from(data.content_base64, 'base64'));
+    form.append('file', new Blob([bytes], { type: data.mime_type ?? 'application/octet-stream' }), data.filename);
+    if (data.uploaded_by) form.append('uploaded_by', data.uploaded_by);
+    return this.requestMultipart<unknown>('POST', `/api/v1/projects/${projectId}/workflows/${workflowId}/files`, form).then(shapeWorkflowFile);
+  }
+
+  replaceWorkflowFile(projectId: number, workflowId: number, fileId: number, data: {
+    filename: string;
+    content_base64: string;
+    mime_type?: string;
+    uploaded_by?: string;
+  }) {
+    const form = new FormData();
+    const bytes = Uint8Array.from(Buffer.from(data.content_base64, 'base64'));
+    form.append('file', new Blob([bytes], { type: data.mime_type ?? 'application/octet-stream' }), data.filename);
+    if (data.uploaded_by) form.append('uploaded_by', data.uploaded_by);
+    return this.requestMultipart<unknown>('PUT', `/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}`, form).then(shapeWorkflowFile);
+  }
+
+  deleteWorkflowFile(projectId: number, workflowId: number, fileId: number) {
+    return this.request<unknown>('DELETE', `/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}`);
   }
 
   listSprints(params: { project_id?: number; include_closed?: boolean } = {}) {

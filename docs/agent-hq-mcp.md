@@ -53,7 +53,9 @@ Once connected, you can ask things like:
 | Resource | Read | Write | Notes |
 |---|---|---|---|
 | Projects | Yes | Yes | Full CRUD via typed MCP tools |
+| Project Files | Yes | Yes | Use for reusable project-wide reference material |
 | Workflows / Boards | Yes | Yes | Full CRUD via workflow tools; sprint-named tools remain legacy aliases |
+| Workflow Files | Yes | Yes | Use for specs and artifacts owned by one workflow |
 | Tasks | Yes | Yes | Create, update, move status, delete |
 | Task Notes | Yes | Yes | Add notes/comments |
 | Task Lifecycle Writes | Yes | Yes | Scoped start/check-in/blocker, evidence, and outcome tools |
@@ -72,7 +74,7 @@ Once connected, you can ask things like:
 
 - raw database access
 - arbitrary instance control beyond the scoped lifecycle write surfaces
-- attachments and file upload workflows
+- raw attachment internals outside the typed project-file and workflow-file tools
 - browser pool or other internal runtime concerns
 
 ---
@@ -87,8 +89,15 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 |---|---|
 | `agent_hq_list_projects` | List all projects |
 | `agent_hq_get_project` | Get a project by ID |
+| `agent_hq_list_project_files` | List reusable project-scoped files |
+| `agent_hq_get_project_file` | Read project-file metadata |
+| `agent_hq_download_project_file` | Download project-file content as base64 and optional text |
 | `agent_hq_list_workflows` | List workflows, optionally filtered by project |
 | `agent_hq_get_workflow` | Get workflow detail and metrics |
+| `agent_hq_list_workflow_files` | List files scoped to one workflow |
+| `agent_hq_get_workflow_file` | Read workflow-file metadata |
+| `agent_hq_list_workflow_file_versions` | List version history for a workflow file |
+| `agent_hq_download_workflow_file` | Download workflow-file content as base64 and optional text |
 | `agent_hq_list_sprints` | Legacy alias for listing workflows |
 | `agent_hq_get_sprint` | Legacy alias for workflow detail |
 | `agent_hq_list_tasks` | List tasks with filters |
@@ -113,9 +122,15 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 | `agent_hq_create_project` | Create a project |
 | `agent_hq_update_project` | Update a project |
 | `agent_hq_delete_project` | Delete a project |
+| `agent_hq_upload_project_file` | Upload a reusable project-scoped file |
+| `agent_hq_replace_project_file` | Replace a project file in place while preserving version history |
+| `agent_hq_delete_project_file` | Delete a project-scoped file |
 | `agent_hq_create_workflow` | Create a workflow |
 | `agent_hq_update_workflow` | Update a workflow |
 | `agent_hq_delete_workflow` | Delete a workflow |
+| `agent_hq_upload_workflow_file` | Upload a file scoped to one workflow |
+| `agent_hq_replace_workflow_file` | Replace a workflow file in place while preserving its canonical file ID and version history |
+| `agent_hq_delete_workflow_file` | Delete a workflow-scoped file |
 | `agent_hq_create_sprint` | Legacy alias for workflow creation |
 | `agent_hq_update_sprint` | Legacy alias for workflow updates |
 | `agent_hq_delete_sprint` | Legacy alias for workflow deletion |
@@ -191,6 +206,21 @@ These values are tenant/workflow configurable and must be resolved from metadata
 Do not treat a global task status enum as authoritative. A workflow record can still have a static lifecycle status such as `planning`, `active`, `paused`, `complete`, or `closed`, while tasks inside that workflow can use a configurable status set such as `todo`, `ready`, `in_progress`, `review`, `ready_to_merge`, `done`, or a tenant-defined alternative. Always resolve the task's workflow metadata first.
 
 Super-admin MCP keys with `admin.cross_tenant` may pass `tenant_id` to workflow metadata/read helpers such as `agent_hq_get_workflow_metadata`, `agent_hq_list_workflow_type_statuses`, `agent_hq_list_workflow_type_outcomes`, `agent_hq_list_workflow_type_relationship_types`, and `agent_hq_list_workflow_type_field_schemas`. Tenant-bound MCP keys cannot pass explicit tenant selectors, even for their own tenant; the server returns an authorization error instead.
+
+---
+
+## File Scopes
+
+Use project files for material that applies across the whole project: product context, shared research, API references, brand assets, and reusable runbooks. Use workflow files for material owned by a single workflow: implementation specs, QA artifacts, handoff packages, and temporary working documents that should not clutter the broader project library.
+
+Workflow-file handoff path for agents:
+1. Resolve project and workflow context from `agent_hq_get_task`, `agent_hq_get_task_context`, or `agent_hq_get_workflow`. Tool schemas use `workflow_id`; legacy task fields may still call this `sprint_id`.
+2. Upload with `agent_hq_upload_workflow_file` using `project_id`, `workflow_id`, `filename`, `content_base64`, and optional `mime_type` / `uploaded_by`.
+3. Reference files in notes or instructions by both workflow ID and file ID or filename, for example: `workflow_id=42 file_id=9 spec.md`.
+4. Update an existing artifact with `agent_hq_replace_workflow_file`; this keeps the same workflow file ID and records a new version.
+5. Read current content with `agent_hq_download_workflow_file`; inspect history with `agent_hq_list_workflow_file_versions`.
+
+Workflow-file API and MCP responses include `scope: "workflow"`, `tenant_id`, `project_id`, `workflow_id`, filename, MIME type, size, current version, and timestamps so callers can distinguish them from project files.
 
 ---
 
