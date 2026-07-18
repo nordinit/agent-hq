@@ -207,6 +207,8 @@ export default function ProviderConnectionsManager({
   });
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [gatePassed, setGatePassed] = useState(false);
+  const [connectedCount, setConnectedCount] = useState(0);
+  const [anthropicSubscriptionConnected, setAnthropicSubscriptionConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
 
@@ -214,9 +216,18 @@ export default function ProviderConnectionsManager({
     if (showSpinner) setLoading(true);
     setPageError(null);
     try {
-      const response = await api.getProviders();
+      const [response, providerConnections] = await Promise.all([
+        api.getProviders(),
+        api.getProviderConnections(),
+      ]);
       setProviders(response.providers);
       setGatePassed(response.onboarding_provider_gate_passed);
+      setConnectedCount(response.connected_count);
+      setAnthropicSubscriptionConnected(providerConnections.connections.some(
+        connection => connection.provider_slug === 'anthropic'
+          && connection.auth_mode === 'subscription'
+          && connection.status === 'connected'
+      ));
       setCards(prev => {
         const next = {} as Record<ProviderSlug, CardState>;
         for (const meta of PROVIDERS) {
@@ -268,10 +279,9 @@ export default function ProviderConnectionsManager({
     return () => window.clearInterval(timer);
   }, [hasPendingOAuth, load]);
 
-  const connectedCount = useMemo(
-    () => providers.filter(provider => provider.status === 'connected').length,
-    [providers]
-  );
+  const handleAnthropicSubscriptionState = useCallback((connected: boolean) => {
+    setAnthropicSubscriptionConnected(connected);
+  }, []);
 
   function setCard(slug: ProviderSlug, patch: Partial<CardState>) {
     setCards(prev => ({ ...prev, [slug]: { ...prev[slug], ...patch } }));
@@ -431,8 +441,9 @@ export default function ProviderConnectionsManager({
             const subOAuthProvider = subOAuthSlug ? providers.find(item => item.slug === subOAuthSlug) : undefined;
             // Sub-OAuth (Codex) derived state
             const subOAuthConnected = subOAuthCard?.status === 'connected';
+            const hasAnthropicSubscription = meta.slug === 'anthropic' && anthropicSubscriptionConnected;
             const isExpanded = card.expanded || card.status === 'failed' || subOAuthCard?.status === 'failed';
-            const isConnected = card.status === 'connected' || (!!subOAuthSlug && subOAuthConnected);
+            const isConnected = card.status === 'connected' || (!!subOAuthSlug && subOAuthConnected) || hasAnthropicSubscription;
             const isFailed = card.status === 'failed';
             const busy = card.loading || card.status === 'connecting';
             const subOAuthFailed = subOAuthCard?.status === 'failed';
@@ -472,7 +483,11 @@ export default function ProviderConnectionsManager({
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-slate-500 mt-0.5">{meta.tagline}{subOAuthConnected ? ' · Codex OAuth connected' : ''}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {meta.tagline}
+                      {subOAuthConnected ? ' · Codex OAuth connected' : ''}
+                      {hasAnthropicSubscription ? ' · Claude subscription connected' : ''}
+                    </p>
                     {provider?.last_validated_at && (
                       <p className="text-xs text-slate-500 mt-1">Last validated: {provider.last_validated_at}</p>
                     )}
@@ -540,6 +555,13 @@ export default function ProviderConnectionsManager({
                         <WifiOff className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                         <span>{card.error}</span>
                       </div>
+                    )}
+
+                    {meta.slug === 'anthropic' && (
+                      <RuntimeProviderConnections
+                        onChanged={() => load(false)}
+                        onConnectionStateChange={handleAnthropicSubscriptionState}
+                      />
                     )}
 
                     {/* Embedded Codex OAuth sub-section */}
@@ -707,8 +729,6 @@ export default function ProviderConnectionsManager({
 
         </div>
       </div>
-
-      <RuntimeProviderConnections onChanged={load} />
 
       {mode === 'onboarding' && (
         <>

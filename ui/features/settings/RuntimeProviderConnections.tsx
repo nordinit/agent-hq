@@ -1,43 +1,109 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Copy, Loader2, RefreshCw, Shield, Trash2 } from 'lucide-react';
 import { api, type DiscoveredProviderConnection, type ProviderConnectionRecord } from '@/lib/api';
 
 const RUNTIMES = [
   { key: 'openclaw', label: 'OpenClaw', note: 'Uses OpenClaw per-agent auth profiles.' },
-  { key: 'hermes', label: 'Hermes', note: 'Requires Claude Max with extra usage credits.' },
+  { key: 'hermes', label: 'Hermes', note: 'Requires Claude Max with extra usage credits enabled.' },
 ] as const;
 
-export default function RuntimeProviderConnections({ onChanged }: { onChanged?: () => void | Promise<void> }) {
+type RuntimeKey = (typeof RUNTIMES)[number]['key'];
+
+interface RuntimeProviderConnectionsProps {
+  onChanged?: () => void | Promise<void>;
+  onConnectionStateChange?: (connected: boolean) => void;
+}
+
+export default function RuntimeProviderConnections({
+  onChanged,
+  onConnectionStateChange,
+}: RuntimeProviderConnectionsProps) {
   const [connections, setConnections] = useState<ProviderConnectionRecord[]>([]);
   const [discovered, setDiscovered] = useState<Record<string, DiscoveredProviderConnection[]>>({});
   const [commands, setCommands] = useState<Record<string, string>>({});
+  const [messages, setMessages] = useState<Record<string, string>>({});
+  const [selectedRuntime, setSelectedRuntime] = useState<RuntimeKey>('openclaw');
+  const [selectedProfile, setSelectedProfile] = useState('');
+  const [refreshed, setRefreshed] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [instructionsLoading, setInstructionsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const result = await api.getProviderConnections();
-      setConnections(result.connections.filter(item => item.provider_slug === 'anthropic' && item.auth_mode === 'subscription'));
+      const subscriptionConnections = result.connections.filter(
+        item => item.provider_slug === 'anthropic' && item.auth_mode === 'subscription'
+      );
+      setConnections(subscriptionConnections);
+      onConnectionStateChange?.(subscriptionConnections.some(item => item.status === 'connected'));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [onConnectionStateChange]);
+
+  const loadInstructions = useCallback(async (runtime: RuntimeKey) => {
+    setInstructionsLoading(true);
+    setError(null);
+    try {
+      const result = await api.getProviderAuthInstructions({
+        provider: 'anthropic',
+        runtime,
+        auth_mode: 'subscription',
+      });
+      setCommands(current => ({
+        ...current,
+        [runtime]: [result.instructions.command, ...result.instructions.args].join(' '),
+      }));
+      setMessages(current => ({ ...current, [runtime]: result.instructions.message }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInstructionsLoading(false);
     }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void loadInstructions(selectedRuntime); }, [loadInstructions, selectedRuntime]);
 
-  async function inspect(runtime: string) {
-    setBusy(runtime);
+  const runtimeConnections = useMemo(
+    () => connections.filter(item => item.runtime_type === selectedRuntime),
+    [connections, selectedRuntime]
+  );
+  const availableProfiles = useMemo(
+    () => (discovered[selectedRuntime] ?? []).filter(
+      option => !runtimeConnections.some(connection => connection.external_ref === option.externalRef)
+    ),
+    [discovered, runtimeConnections, selectedRuntime]
+  );
+  const selectedConnection = availableProfiles.find(option => option.externalRef === selectedProfile);
+  const runtime = RUNTIMES.find(item => item.key === selectedRuntime) ?? RUNTIMES[0];
+  const command = commands[selectedRuntime];
+
+  async function refreshProfiles() {
+    setBusy(`refresh:${selectedRuntime}`);
     setError(null);
     try {
-      const request = { provider: 'anthropic', runtime, auth_mode: 'subscription' };
+      const request = { provider: 'anthropic', runtime: selectedRuntime, auth_mode: 'subscription' };
       const [instructions, found] = await Promise.all([
         api.getProviderAuthInstructions(request),
-        api.discoverProviderConnections({ ...request, runtime_config: runtime === 'hermes' ? { profile: 'default' } : {} }),
+        api.discoverProviderConnections({
+          ...request,
+          runtime_config: selectedRuntime === 'hermes' ? { profile: 'default' } : {},
+        }),
       ]);
-      setCommands(current => ({ ...current, [runtime]: [instructions.instructions.command, ...instructions.instructions.args].join(' ') }));
-      setDiscovered(current => ({ ...current, [runtime]: found.connections }));
+      const nextCommand = [instructions.instructions.command, ...instructions.instructions.args].join(' ');
+      const nextConnections = found.connections;
+      setCommands(current => ({ ...current, [selectedRuntime]: nextCommand }));
+      setMessages(current => ({ ...current, [selectedRuntime]: instructions.instructions.message }));
+      setDiscovered(current => ({ ...current, [selectedRuntime]: nextConnections }));
+      setRefreshed(current => ({ ...current, [selectedRuntime]: true }));
+      const firstAvailable = nextConnections.find(
+        option => !runtimeConnections.some(connection => connection.external_ref === option.externalRef)
+      );
+      setSelectedProfile(firstAvailable?.externalRef ?? '');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -45,19 +111,20 @@ export default function RuntimeProviderConnections({ onChanged }: { onChanged?: 
     }
   }
 
-  async function connect(runtime: string, connection: DiscoveredProviderConnection) {
-    setBusy(`${runtime}:${connection.externalRef}`);
+  async function connect(connection: DiscoveredProviderConnection) {
+    setBusy(`connect:${connection.externalRef}`);
     setError(null);
     try {
       await api.createProviderConnection({
         provider_slug: 'anthropic',
         auth_mode: 'subscription',
-        runtime_type: runtime,
+        runtime_type: selectedRuntime,
         external_ref: connection.externalRef,
         display_name: connection.displayName,
         metadata: connection.metadata,
-        runtime_config: runtime === 'hermes' ? { profile: 'default' } : {},
+        runtime_config: selectedRuntime === 'hermes' ? { profile: 'default' } : {},
       });
+      setSelectedProfile('');
       await load();
       await onChanged?.();
     } catch (err) {
@@ -69,6 +136,7 @@ export default function RuntimeProviderConnections({ onChanged }: { onChanged?: 
 
   async function remove(id: number) {
     setBusy(`delete:${id}`);
+    setError(null);
     try {
       await api.deleteProviderConnection(id);
       await load();
@@ -81,57 +149,122 @@ export default function RuntimeProviderConnections({ onChanged }: { onChanged?: 
   }
 
   return (
-    <section className="space-y-3">
+    <section className="mt-4 pt-4 border-t border-slate-700/60 space-y-3" aria-label="Claude subscription authentication">
+      <div className="flex items-start gap-2">
+        <Shield className="w-4 h-4 text-amber-400 mt-0.5" />
+        <div>
+          <h3 className="text-sm font-semibold text-slate-100">Claude Subscription (OAuth)</h3>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Use a Claude subscription instead of an API key. The runtime keeps the credential; Agent HQ stores only the selected profile reference.
+          </p>
+        </div>
+      </div>
+
       <div>
-        <h2 className="text-lg font-semibold text-white">Claude Subscription</h2>
-        <p className="text-sm text-slate-400 mt-1">Credentials remain in the selected runtime. Agent HQ stores only the profile reference used for routing.</p>
+        <label htmlFor="anthropic-subscription-runtime" className="block text-xs text-slate-300 mb-1.5">Runtime</label>
+        <select
+          id="anthropic-subscription-runtime"
+          value={selectedRuntime}
+          onChange={event => {
+            setSelectedRuntime(event.target.value as RuntimeKey);
+            setSelectedProfile('');
+            setError(null);
+          }}
+          disabled={busy !== null}
+          className="w-full bg-slate-900 border border-slate-600 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-400"
+        >
+          {RUNTIMES.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
+        </select>
+        <p className="text-xs text-slate-500 mt-1">{runtime.note}</p>
       </div>
-      {error && <div className="text-sm text-red-300 border border-red-500/30 bg-red-500/10 rounded-lg p-3">{error}</div>}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        {RUNTIMES.map(runtime => {
-          const runtimeConnections = connections.filter(item => item.runtime_type === runtime.key);
-          const options = discovered[runtime.key] ?? [];
-          const command = commands[runtime.key];
-          return (
-            <div key={runtime.key} className="border border-slate-700 bg-slate-800/40 rounded-lg p-4 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-amber-400" />
-                  <div>
-                    <h3 className="text-sm font-semibold text-white">{runtime.label}</h3>
-                    <p className="text-xs text-slate-500">{runtime.note}</p>
-                  </div>
-                </div>
-                <button type="button" title="Refresh runtime profiles" onClick={() => void inspect(runtime.key)} disabled={busy !== null} className="p-2 text-slate-300 hover:text-white disabled:opacity-50">
-                  {busy === runtime.key ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                </button>
-              </div>
 
-              {command && (
-                <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 rounded-md p-2">
-                  <code className="text-xs text-slate-300 flex-1 overflow-x-auto">{command}</code>
-                  <button type="button" title="Copy authentication command" onClick={() => void navigator.clipboard.writeText(command)} className="p-1.5 text-slate-400 hover:text-white"><Copy className="w-3.5 h-3.5" /></button>
-                </div>
-              )}
-
-              {runtimeConnections.map(connection => (
-                <div key={connection.id} className="flex items-center gap-2 text-xs border border-emerald-500/20 bg-emerald-500/5 rounded-md p-2.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span className="text-slate-200 flex-1 truncate">{connection.display_name}</span>
-                  <button type="button" title="Disconnect profile" onClick={() => void remove(connection.id)} disabled={busy !== null} className="p-1 text-red-300 hover:text-red-200"><Trash2 className="w-3.5 h-3.5" /></button>
-                </div>
-              ))}
-
-              {options.filter(option => !runtimeConnections.some(connection => connection.external_ref === option.externalRef)).map(option => (
-                <button key={option.externalRef} type="button" onClick={() => void connect(runtime.key, option)} disabled={busy !== null} className="w-full text-left border border-slate-600 hover:border-amber-400 rounded-md p-2.5 text-xs text-slate-200 disabled:opacity-50">
-                  Connect {option.displayName}
-                </button>
-              ))}
-              {command && options.length === 0 && <p className="text-xs text-slate-500">Run the command in a terminal, then refresh profiles.</p>}
-            </div>
-          );
-        })}
+      <div className="space-y-2 text-xs text-slate-300">
+        <p><span className="font-semibold text-slate-100">1. Run this command in a terminal.</span></p>
+        <div className="flex items-center gap-2 bg-slate-950 border border-slate-700 rounded-md p-2">
+          {instructionsLoading && !command ? (
+            <span className="flex-1 text-slate-500">Loading authentication command...</span>
+          ) : (
+            <code className="text-xs text-slate-300 flex-1 overflow-x-auto">{command}</code>
+          )}
+          <button
+            type="button"
+            title="Copy authentication command"
+            aria-label="Copy authentication command"
+            onClick={() => command && void navigator.clipboard.writeText(command)}
+            disabled={!command}
+            className="p-1.5 text-slate-400 hover:text-white disabled:opacity-40"
+          >
+            <Copy className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        {messages[selectedRuntime] && <p className="text-slate-500">{messages[selectedRuntime]}</p>}
+        <p><span className="font-semibold text-slate-100">2. Complete the Anthropic sign-in prompts in that terminal.</span> Enter the authorization code there if prompted.</p>
+        <p><span className="font-semibold text-slate-100">3. Return here and refresh profiles.</span> Select the authenticated profile, then connect it.</p>
       </div>
+
+      <button
+        type="button"
+        onClick={() => void refreshProfiles()}
+        disabled={busy !== null || instructionsLoading}
+        className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-slate-600 text-slate-200 hover:border-slate-500 text-xs font-medium disabled:opacity-50"
+      >
+        {busy === `refresh:${selectedRuntime}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+        Refresh profiles
+      </button>
+
+      {runtimeConnections.map(connection => (
+        <div key={connection.id} className="flex items-center gap-2 text-xs border-l-2 border-emerald-500 bg-emerald-500/5 px-3 py-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          <div className="flex-1 min-w-0">
+            <p className="text-slate-200 truncate">{connection.display_name}</p>
+            <p className="text-slate-500">Connected through {runtime.label}</p>
+          </div>
+          <button
+            type="button"
+            title="Disconnect subscription profile"
+            aria-label={`Disconnect ${connection.display_name}`}
+            onClick={() => void remove(connection.id)}
+            disabled={busy !== null}
+            className="p-1.5 text-red-300 hover:text-red-200 disabled:opacity-50"
+          >
+            {busy === `delete:${connection.id}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      ))}
+
+      {availableProfiles.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-2 items-end">
+          <div>
+            <label htmlFor="anthropic-subscription-profile" className="block text-xs text-slate-300 mb-1.5">Authenticated profile</label>
+            <select
+              id="anthropic-subscription-profile"
+              value={selectedProfile}
+              onChange={event => setSelectedProfile(event.target.value)}
+              disabled={busy !== null}
+              className="w-full bg-slate-900 border border-slate-600 rounded-md px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-400"
+            >
+              {availableProfiles.map(option => <option key={option.externalRef} value={option.externalRef}>{option.displayName}</option>)}
+            </select>
+          </div>
+          <button
+            type="button"
+            onClick={() => selectedConnection && void connect(selectedConnection)}
+            disabled={!selectedConnection || busy !== null}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-md bg-amber-400 hover:bg-amber-300 text-slate-900 text-sm font-medium disabled:opacity-50"
+          >
+            {busy?.startsWith('connect:') ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+            Connect profile
+          </button>
+        </div>
+      )}
+
+      {refreshed[selectedRuntime] && availableProfiles.length === 0 && runtimeConnections.length === 0 && (
+        <p className="text-xs text-slate-500">No authenticated profiles found. Finish the terminal sign-in, then select Refresh profiles again.</p>
+      )}
+
+      {error && (
+        <div className="text-xs text-red-300 border border-red-500/30 bg-red-500/10 rounded-md p-2.5">{error}</div>
+      )}
     </section>
   );
 }
