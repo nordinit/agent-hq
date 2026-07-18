@@ -475,6 +475,7 @@ export async function reconcileReviewQaRouting(
           agentId: agent.id,
           jobTitle: agentLabel,
           sessionKey: agent.session_key,
+          openclawAgentId: agent.openclaw_agent_id,
           message,
           model: effectiveModel,
           preferredProvider: agent.preferred_provider ?? null,

@@ -621,6 +621,34 @@ function tableExists(db: Database.Database, tableName: string): boolean {
   }
 }
 
+function resolveDispatchAgentSlug(
+  db: Database.Database,
+  params: {
+    agentId: number;
+    openclawAgentId?: string | null;
+    sessionKey?: string | null;
+    name?: string | null;
+  },
+): string | null {
+  let openclawAgentId = params.openclawAgentId ?? null;
+
+  // The stable runtime ID is authoritative. Read it from the agent record as a
+  // fallback so canonical Agent HQ session keys never become OpenClaw agent IDs
+  // when a dispatch caller omits the field.
+  if (!openclawAgentId && tableHasColumn(db, 'agents', 'openclaw_agent_id')) {
+    const row = db.prepare(`SELECT openclaw_agent_id FROM agents WHERE id = ?`).get(params.agentId) as {
+      openclaw_agent_id?: string | null;
+    } | undefined;
+    openclawAgentId = row?.openclaw_agent_id ?? null;
+  }
+
+  return resolveRuntimeAgentSlug({
+    openclaw_agent_id: openclawAgentId,
+    session_key: params.sessionKey,
+    name: params.name,
+  });
+}
+
 function parseStatusList(raw: unknown): string[] {
   if (typeof raw !== 'string' || raw.trim().length === 0) return [];
   try {
@@ -1723,9 +1751,10 @@ export function dispatchTaskToJob(
     ruleLabel ?? `Selected from ${candidateCount} candidate(s)`,
   ].filter(Boolean).join(' | ');
 
-  const agentSlug = resolveRuntimeAgentSlug({
-    openclaw_agent_id: job.openclaw_agent_id ?? null,
-    session_key: job.agent_session_key,
+  const agentSlug = resolveDispatchAgentSlug(db, {
+    agentId: job.agent_id,
+    openclawAgentId: job.openclaw_agent_id ?? null,
+    sessionKey: job.agent_session_key,
     name: job.agent_name ?? null,
   }) ?? String(job.agent_id);
 
@@ -2072,6 +2101,7 @@ export function runDispatcher(db: Database.Database, projectId?: number): Dispat
           timeout_seconds: rule.timeout_seconds,
           agent_session_key: rule.agent_session_key,
           agent_name: rule.agent_name,
+          openclaw_agent_id: rule.openclaw_agent_id ?? null,
           model: rule.model,
           agent_model: rule.agent_model,
           runtime_type: rule.runtime_type,
@@ -2169,6 +2199,8 @@ export interface DispatchInstanceParams {
   jobTitle: string;
   /** Agent's main session key (used for slug resolution). */
   sessionKey: string;
+  /** Stable OpenClaw runtime ID. Canonical Agent HQ session keys are not runtime IDs. */
+  openclawAgentId?: string | null;
   /** Pre-built message (caller assembles via buildDispatchMessage + contract). */
   message: string;
   model?: string | null;
@@ -2220,8 +2252,10 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
 
   const durableRunId = ensureJobInstanceDurableRunId(db, params.instanceId);
   const runSessionKey = buildSessionKey(params.instanceId, durableRunId);
-  const agentSlug = resolveRuntimeAgentSlug({
-    session_key: params.sessionKey,
+  const agentSlug = resolveDispatchAgentSlug(db, {
+    agentId: params.agentId,
+    openclawAgentId: params.openclawAgentId ?? null,
+    sessionKey: params.sessionKey,
     name: params.jobTitle,
   }) ?? params.sessionKey.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
 

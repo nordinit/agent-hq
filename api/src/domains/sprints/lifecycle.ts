@@ -115,6 +115,7 @@ export function completeSprint(sprintId: number): void {
       agentId: job.id as number,
       jobTitle: `Sprint Review: ${sprint.name}`,
       sessionKey,
+      openclawAgentId: (job.openclaw_agent_id as string | null | undefined) ?? null,
       message,
       model: sprintSummaryModel,
       preferredProvider: (job.preferred_provider as string | null | undefined) ?? null,

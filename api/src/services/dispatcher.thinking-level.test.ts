@@ -1544,7 +1544,7 @@ describe('runDispatcher thinking-level routing', () => {
 
     db.prepare(`
       INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
-      VALUES (1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:cinder:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
+      VALUES (1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:agent-hq:cinder-platform-engineer:backend-engineer:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
     `).run();
     db.prepare(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Bugs', 'generic', 'active')`).run();
     db.prepare(`
@@ -1561,7 +1561,8 @@ describe('runDispatcher thinking-level routing', () => {
       error: null,
     });
 
-    mockedResolveRuntime.mockReturnValue(mockRuntime(jest.fn().mockRejectedValue(new Error('Gateway connect timeout'))));
+    const dispatchMock = jest.fn().mockRejectedValue(new Error('Gateway connect timeout'));
+    mockedResolveRuntime.mockReturnValue(mockRuntime(dispatchMock));
 
     const result = runDispatcher(db, 86);
     expect(result.dispatched).toBe(1);
@@ -1577,6 +1578,9 @@ describe('runDispatcher thinking-level routing', () => {
     expect(String(task.failure_detail)).toContain('runtime infrastructure');
     expect(String(task.routing_reason)).toContain('Rule: Cinder (agent #1)');
     expect(task.previous_status).toBe('ready');
+    expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
+      agentSlug: 'cinder-backend',
+    }));
 
     const note = db.prepare(`SELECT content FROM task_notes WHERE task_id = 444 ORDER BY id DESC LIMIT 1`).get() as { content: string };
     expect(note.content).toContain('Summary: Dispatch startup failed after routing matched Cinder (attempt 1/3)');

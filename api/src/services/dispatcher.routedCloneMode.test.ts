@@ -423,13 +423,16 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     );
 
     const getDbSpy = jest.spyOn(require('../db/client'), 'getDb').mockReturnValue(db);
+    db.prepare(`UPDATE agents SET session_key = ? WHERE id = 1`).run(
+      'agent:agent-hq:cinder-platform-engineer:backend-engineer:main',
+    );
     try {
       const { dispatchInstance } = await import('./dispatcher');
       await dispatchInstance({
         instanceId: 900,
         agentId: 1,
         jobTitle: 'Backend Engineer',
-        sessionKey: 'agent:cinder-backend:main',
+        sessionKey: 'agent:agent-hq:cinder-platform-engineer:backend-engineer:main',
         message: 'Run the task',
         storyPoints: null,
         runtimeType: 'claude-code',
@@ -441,6 +444,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
 
     expect(runtimeDispatch).toHaveBeenCalledTimes(1);
     const runtimeParams = runtimeDispatch.mock.calls[0][0];
+    expect(runtimeParams.agentSlug).toBe('cinder-backend');
     expect(runtimeParams.repoAccessMode).toBe('clone');
     expect(runtimeParams.repoSource).toBe(`clone:${remotePath}`);
     expect(runtimeParams.repoWorkspacePath).toBe(repoWorkspacePath);
