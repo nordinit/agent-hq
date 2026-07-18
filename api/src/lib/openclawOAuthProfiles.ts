@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import Database from 'better-sqlite3';
 import { getDb } from '../db/client';
 import { OPENCLAW_CONFIG_PATH } from '../config';
 import { ATLAS_AGENT_SLUG } from './atlasAgent';
@@ -23,6 +24,8 @@ export interface OpenClawOAuthCredential {
   accountId?: string;
   email?: string;
   displayName?: string;
+  chatgptPlanType?: string;
+  idToken?: string;
 }
 
 export interface OAuthProfileSyncResult {
@@ -67,6 +70,10 @@ const OPENAI_CODEX_OAUTH = {
   tokenUrl: 'https://auth.openai.com/oauth/token',
 };
 
+const OPENCLAW_RUNTIME_PROVIDER = 'openai';
+const OPENCLAW_RUNTIME_PROFILE_KEY = 'openai:default';
+const OPENCLAW_AUTH_STORE_FILENAME = 'openclaw-agent.sqlite';
+
 const DEFAULT_MIN_TTL_MS = 5 * 60 * 1000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -83,6 +90,10 @@ export function getOAuthProfileKey(slug: OAuthProviderSlug): string {
 
 export function buildAgentAuthProfilesPath(agentId: string): string {
   return path.join(openClawHome(), 'agents', agentId, 'agent', 'auth-profiles.json');
+}
+
+export function buildAgentAuthStorePath(agentId: string): string {
+  return path.join(openClawHome(), 'agents', agentId, 'agent', OPENCLAW_AUTH_STORE_FILENAME);
 }
 
 function createEmptyAuthProfilesDocument(): Record<string, unknown> {
@@ -141,6 +152,12 @@ function normalizeOAuthCredential(
   if (typeof value.displayName === 'string' && value.displayName.trim()) {
     credential.displayName = value.displayName.trim();
   }
+  if (typeof value.chatgptPlanType === 'string' && value.chatgptPlanType.trim()) {
+    credential.chatgptPlanType = value.chatgptPlanType.trim();
+  }
+  if (typeof value.idToken === 'string' && value.idToken.trim()) {
+    credential.idToken = value.idToken.trim();
+  }
 
   return credential;
 }
@@ -173,6 +190,8 @@ export function upsertOAuthProfile(
     ...(credential.accountId ? { accountId: credential.accountId } : {}),
     ...(credential.email ? { email: credential.email } : {}),
     ...(credential.displayName ? { displayName: credential.displayName } : {}),
+    ...(credential.chatgptPlanType ? { chatgptPlanType: credential.chatgptPlanType } : {}),
+    ...(credential.idToken ? { idToken: credential.idToken } : {}),
   };
 
   const unchanged =
@@ -181,7 +200,9 @@ export function upsertOAuthProfile(
     existing.expires === nextProfile.expires &&
     existing.accountId === nextProfile.accountId &&
     existing.email === nextProfile.email &&
-    existing.displayName === nextProfile.displayName;
+    existing.displayName === nextProfile.displayName &&
+    existing.chatgptPlanType === nextProfile.chatgptPlanType &&
+    existing.idToken === nextProfile.idToken;
 
   if (unchanged) return false;
 
@@ -237,6 +258,12 @@ export function collectOAuthAuthProfilePaths(): string[] {
   return Array.from(agentIds).sort().map(buildAgentAuthProfilesPath);
 }
 
+export function collectOAuthAuthStorePaths(): string[] {
+  const agentIds = new Set<string>();
+  addKnownAgentIds(agentIds);
+  return Array.from(agentIds).sort().map(buildAgentAuthStorePath);
+}
+
 function parseProviderConfigCredential(
   row: ProviderConfigRow,
   provider: OAuthProviderSlug,
@@ -264,6 +291,9 @@ function parseProviderConfigCredential(
     : typeof tokens.account_id === 'string' && tokens.account_id.trim()
       ? tokens.account_id.trim()
       : undefined;
+  const idToken = typeof tokens.id_token === 'string' && tokens.id_token.trim()
+    ? tokens.id_token.trim()
+    : undefined;
 
   return {
     type: 'oauth',
@@ -272,6 +302,7 @@ function parseProviderConfigCredential(
     refresh,
     expires,
     ...(accountId ? { accountId } : {}),
+    ...(idToken ? { idToken } : {}),
   };
 }
 
@@ -293,12 +324,66 @@ function providerConfigCandidate(provider: OAuthProviderSlug): OAuthCandidate | 
   }
 }
 
+function profileFromAuthStore(filePath: string, provider: OAuthProviderSlug): OpenClawOAuthCredential | null {
+  if (provider !== 'openai-codex' || !fs.existsSync(filePath)) return null;
+
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(filePath, { readonly: true, fileMustExist: true });
+    const row = db.prepare(`
+      SELECT store_json
+      FROM auth_profile_store
+      WHERE store_key = 'primary'
+      LIMIT 1
+    `).get() as { store_json: string } | undefined;
+    if (!row) return null;
+
+    const document = JSON.parse(row.store_json);
+    if (!isRecord(document) || !isRecord(document.profiles)) return null;
+    const value = document.profiles[OPENCLAW_RUNTIME_PROFILE_KEY];
+    if (!isRecord(value) || value.type !== 'oauth' || value.provider !== OPENCLAW_RUNTIME_PROVIDER) {
+      return null;
+    }
+
+    const access = typeof value.access === 'string' ? value.access.trim() : '';
+    const refresh = typeof value.refresh === 'string' ? value.refresh.trim() : '';
+    const expires = typeof value.expires === 'number' && Number.isFinite(value.expires)
+      ? value.expires
+      : 0;
+    if (!access && !refresh) return null;
+
+    return {
+      type: 'oauth',
+      provider,
+      access,
+      refresh,
+      expires,
+      ...(typeof value.accountId === 'string' && value.accountId.trim() ? { accountId: value.accountId.trim() } : {}),
+      ...(typeof value.email === 'string' && value.email.trim() ? { email: value.email.trim() } : {}),
+      ...(typeof value.displayName === 'string' && value.displayName.trim() ? { displayName: value.displayName.trim() } : {}),
+      ...(typeof value.chatgptPlanType === 'string' && value.chatgptPlanType.trim() ? { chatgptPlanType: value.chatgptPlanType.trim() } : {}),
+      ...(typeof value.idToken === 'string' && value.idToken.trim() ? { idToken: value.idToken.trim() } : {}),
+    };
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
 function collectOAuthCandidates(provider: OAuthProviderSlug): OAuthCandidate[] {
   const candidates: OAuthCandidate[] = [];
 
   for (const filePath of collectOAuthAuthProfilePaths()) {
     if (!fs.existsSync(filePath)) continue;
     const credential = profileFromAuthFile(filePath, provider);
+    if (credential) {
+      candidates.push({ credential, source: 'auth-profile', path: filePath });
+    }
+  }
+
+  for (const filePath of collectOAuthAuthStorePaths()) {
+    const credential = profileFromAuthStore(filePath, provider);
     if (credential) {
       candidates.push({ credential, source: 'auth-profile', path: filePath });
     }
@@ -329,31 +414,60 @@ function chooseFreshCandidate(candidates: OAuthCandidate[], minTtlMs: number): O
   return chooseBestCandidate(candidates.filter(candidate => isFreshCredential(candidate.credential, minTtlMs)));
 }
 
-function extractAccountIdFromJwt(accessToken: string): string | null {
+interface OpenAICodexIdentity {
+  accountId?: string;
+  email?: string;
+  chatgptPlanType?: string;
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
-    const payload = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64').toString()) as Record<string, unknown>;
-    const auth = isRecord(payload['https://api.openai.com/auth'])
-      ? payload['https://api.openai.com/auth'] as Record<string, unknown>
-      : {};
-    const accountId = auth.chatgpt_account_id;
-    return typeof accountId === 'string' && accountId.trim() ? accountId.trim() : null;
+    const encoded = token.split('.')[1];
+    if (!encoded) return null;
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf-8'));
+    return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function extractOpenAICodexIdentity(accessToken: string): OpenAICodexIdentity {
+  const payload = decodeJwtPayload(accessToken) ?? {};
+  const auth = isRecord(payload['https://api.openai.com/auth'])
+    ? payload['https://api.openai.com/auth'] as Record<string, unknown>
+    : {};
+  const profile = isRecord(payload['https://api.openai.com/profile'])
+    ? payload['https://api.openai.com/profile'] as Record<string, unknown>
+    : {};
+  const accountId = typeof auth.chatgpt_account_id === 'string' && auth.chatgpt_account_id.trim()
+    ? auth.chatgpt_account_id.trim()
+    : undefined;
+  const email = typeof profile.email === 'string' && profile.email.trim()
+    ? profile.email.trim()
+    : undefined;
+  const chatgptPlanType = typeof auth.chatgpt_plan_type === 'string' && auth.chatgpt_plan_type.trim()
+    ? auth.chatgpt_plan_type.trim()
+    : undefined;
+  return {
+    ...(accountId ? { accountId } : {}),
+    ...(email ? { email } : {}),
+    ...(chatgptPlanType ? { chatgptPlanType } : {}),
+  };
 }
 
 export function oauthTokensToCredential(
   provider: OAuthProviderSlug,
   tokens: OAuthTokenPayload,
 ): OpenClawOAuthCredential {
-  const accountId = extractAccountIdFromJwt(tokens.access_token);
+  const identity = extractOpenAICodexIdentity(tokens.access_token);
   return {
     type: 'oauth',
     provider,
     access: tokens.access_token,
     refresh: tokens.refresh_token,
     expires: Date.now() + tokens.expires_in * 1000,
-    ...(accountId ? { accountId } : {}),
+    ...identity,
+    ...(tokens.id_token ? { idToken: tokens.id_token } : {}),
   };
 }
 
@@ -373,6 +487,7 @@ function credentialToStoredOAuthConfig(
       access_token: credential.access,
       refresh_token: credential.refresh,
       ...(credential.accountId ? { account_id: credential.accountId } : {}),
+      ...(credential.idToken ? { id_token: credential.idToken } : {}),
     },
   };
 }
@@ -453,19 +568,171 @@ export function syncOAuthCredentialToAllAuthProfiles(
   return syncOAuthCredentialToAuthProfiles(provider, credential, collectOAuthAuthProfilePaths());
 }
 
+function buildRuntimeOAuthProfile(
+  credential: OpenClawOAuthCredential,
+  existing: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const identity = extractOpenAICodexIdentity(credential.access);
+  return {
+    ...(existing ?? {}),
+    type: 'oauth',
+    provider: OPENCLAW_RUNTIME_PROVIDER,
+    access: credential.access,
+    refresh: credential.refresh,
+    expires: credential.expires,
+    ...(credential.accountId || identity.accountId
+      ? { accountId: credential.accountId ?? identity.accountId }
+      : {}),
+    ...(credential.email || identity.email
+      ? { email: credential.email ?? identity.email }
+      : {}),
+    ...(credential.displayName ? { displayName: credential.displayName } : {}),
+    ...(credential.chatgptPlanType || identity.chatgptPlanType
+      ? { chatgptPlanType: credential.chatgptPlanType ?? identity.chatgptPlanType }
+      : {}),
+    ...(credential.idToken ? { idToken: credential.idToken } : {}),
+  };
+}
+
+export function upsertOAuthProfileStore(
+  filePath: string,
+  provider: OAuthProviderSlug,
+  credential: OpenClawOAuthCredential,
+): boolean {
+  if (provider !== 'openai-codex' || !fs.existsSync(filePath)) return false;
+
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(filePath, { fileMustExist: true });
+    db.pragma('busy_timeout = 5000');
+    const table = db.prepare(`
+      SELECT 1 AS present
+      FROM sqlite_master
+      WHERE type = 'table' AND name = 'auth_profile_store'
+      LIMIT 1
+    `).get() as { present: number } | undefined;
+    if (!table) return false;
+
+    return db.transaction(() => {
+      const row = db!.prepare(`
+        SELECT store_json
+        FROM auth_profile_store
+        WHERE store_key = 'primary'
+        LIMIT 1
+      `).get() as { store_json: string } | undefined;
+      const document = row
+        ? JSON.parse(row.store_json)
+        : { version: 1, profiles: {} };
+      if (!isRecord(document)) return false;
+
+      const profiles = isRecord(document.profiles) ? document.profiles : {};
+      const existing = isRecord(profiles[OPENCLAW_RUNTIME_PROFILE_KEY])
+        ? profiles[OPENCLAW_RUNTIME_PROFILE_KEY] as Record<string, unknown>
+        : null;
+      const nextProfile = buildRuntimeOAuthProfile(credential, existing);
+      if (existing && JSON.stringify(existing) === JSON.stringify(nextProfile)) return false;
+
+      profiles[OPENCLAW_RUNTIME_PROFILE_KEY] = nextProfile;
+      document.version = typeof document.version === 'number' ? document.version : 1;
+      document.profiles = profiles;
+      const now = Date.now();
+      if (row) {
+        db!.prepare(`
+          UPDATE auth_profile_store
+          SET store_json = ?, updated_at = ?
+          WHERE store_key = 'primary'
+        `).run(JSON.stringify(document), now);
+      } else {
+        db!.prepare(`
+          INSERT INTO auth_profile_store (store_key, store_json, updated_at)
+          VALUES ('primary', ?, ?)
+        `).run(JSON.stringify(document), now);
+      }
+      return true;
+    })();
+  } catch {
+    return false;
+  } finally {
+    db?.close();
+  }
+}
+
+export function syncOAuthCredentialToAuthStores(
+  provider: OAuthProviderSlug,
+  credential: OpenClawOAuthCredential,
+  paths: string[],
+): string[] {
+  const updated: string[] = [];
+  for (const filePath of Array.from(new Set(paths))) {
+    if (upsertOAuthProfileStore(filePath, provider, credential)) {
+      updated.push(filePath);
+    }
+  }
+  return updated;
+}
+
+export function ensureOpenClawOAuthConfigMapping(
+  configPath = process.env.OPENCLAW_CONFIG_PATH ?? OPENCLAW_CONFIG_PATH,
+): boolean {
+  if (!fs.existsSync(configPath)) return false;
+  const config = readJsonFile(configPath);
+  if (!config) return false;
+
+  const before = JSON.stringify(config);
+  const auth = isRecord(config.auth) ? config.auth : {};
+  const profiles = isRecord(auth.profiles) ? auth.profiles : {};
+  const existing = isRecord(profiles[OPENCLAW_RUNTIME_PROFILE_KEY])
+    ? profiles[OPENCLAW_RUNTIME_PROFILE_KEY] as Record<string, unknown>
+    : {};
+  profiles[OPENCLAW_RUNTIME_PROFILE_KEY] = {
+    ...existing,
+    provider: OPENCLAW_RUNTIME_PROVIDER,
+    mode: 'oauth',
+  };
+  auth.profiles = profiles;
+
+  const order = isRecord(auth.order) ? auth.order : {};
+  const existingOrder = Array.isArray(order[OPENCLAW_RUNTIME_PROVIDER])
+    ? order[OPENCLAW_RUNTIME_PROVIDER].filter((value): value is string => typeof value === 'string')
+    : [];
+  order[OPENCLAW_RUNTIME_PROVIDER] = [
+    OPENCLAW_RUNTIME_PROFILE_KEY,
+    ...existingOrder.filter(profileId => profileId !== OPENCLAW_RUNTIME_PROFILE_KEY),
+  ];
+  auth.order = order;
+  config.auth = auth;
+
+  if (before === JSON.stringify(config)) return false;
+  writeJsonFileAtomic(configPath, config);
+  return true;
+}
+
+export function syncOAuthCredentialToAllOpenClawStores(
+  provider: OAuthProviderSlug,
+  credential: OpenClawOAuthCredential,
+): string[] {
+  const updated = [
+    ...syncOAuthCredentialToAllAuthProfiles(provider, credential),
+    ...syncOAuthCredentialToAuthStores(provider, credential, collectOAuthAuthStorePaths()),
+  ];
+  const configPath = process.env.OPENCLAW_CONFIG_PATH ?? OPENCLAW_CONFIG_PATH;
+  if (ensureOpenClawOAuthConfigMapping(configPath)) updated.push(configPath);
+  return Array.from(new Set(updated));
+}
+
 export function syncAvailableOAuthProfilesToAuthFile(agentDirPath: string): string[] {
   const synced: string[] = [];
   const authFilePath = path.join(agentDirPath, 'auth-profiles.json');
+  const authStorePath = path.join(agentDirPath, OPENCLAW_AUTH_STORE_FILENAME);
   const provider: OAuthProviderSlug = 'openai-codex';
   const candidate = chooseFreshCandidate(collectOAuthCandidates(provider), 0)
     ?? chooseBestCandidate(collectOAuthCandidates(provider));
   if (!candidate) return synced;
 
-  if (upsertOAuthProfile(authFilePath, provider, candidate.credential)) {
-    synced.push(provider);
-  } else {
-    synced.push(provider);
-  }
+  upsertOAuthProfile(authFilePath, provider, candidate.credential);
+  upsertOAuthProfileStore(authStorePath, provider, candidate.credential);
+  ensureOpenClawOAuthConfigMapping();
+  synced.push(provider);
   return synced;
 }
 
@@ -563,7 +830,15 @@ export async function syncOAuthProviderForOpenClawAgent(params: {
 
   const credential = resolved.credential;
   const paths = params.syncAll ? collectOAuthAuthProfilePaths() : [targetPath];
-  const updatedPaths = syncOAuthCredentialToAuthProfiles(provider, credential, paths);
+  const storePaths = params.syncAll
+    ? collectOAuthAuthStorePaths()
+    : [buildAgentAuthStorePath(params.agentSlug)];
+  const updatedPaths = [
+    ...syncOAuthCredentialToAuthProfiles(provider, credential, paths),
+    ...syncOAuthCredentialToAuthStores(provider, credential, storePaths),
+  ];
+  const configPath = process.env.OPENCLAW_CONFIG_PATH ?? OPENCLAW_CONFIG_PATH;
+  if (ensureOpenClawOAuthConfigMapping(configPath)) updatedPaths.push(configPath);
 
   return {
     ok: true,
@@ -571,7 +846,7 @@ export async function syncOAuthProviderForOpenClawAgent(params: {
     profileKey,
     source: resolved.source,
     refreshed: resolved.refreshed,
-    updatedPaths,
+    updatedPaths: Array.from(new Set(updatedPaths)),
     targetPath,
     expiresAt: credential.expires,
   };

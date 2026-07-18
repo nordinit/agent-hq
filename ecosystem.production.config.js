@@ -30,13 +30,19 @@ const env = { ...rootEnv, ...process.env };
 const dataDir = env.AGENT_HQ_DATA_DIR || path.join(os.homedir(), '.agent-hq');
 const apiPort = env.PORT || env.AGENT_HQ_API_PORT || '3501';
 const uiPort = env.UI_PORT || env.AGENT_HQ_UI_PORT || '3500';
+const nodeBin = [
+  env.AGENT_HQ_NODE_BIN,
+  '/opt/homebrew/opt/node@24/bin/node',
+  '/usr/local/opt/node@24/bin/node',
+  process.execPath,
+].find(candidate => candidate && fs.existsSync(candidate)) || 'node';
 
 module.exports = {
   apps: [
     {
       name: env.AGENT_HQ_API_PROCESS_NAME || 'agent-hq-api',
       cwd: path.join(repoRoot, 'api'),
-      script: 'node',
+      script: nodeBin,
       args: 'dist/index.js',
       env: {
         NODE_ENV: env.NODE_ENV || 'production',
