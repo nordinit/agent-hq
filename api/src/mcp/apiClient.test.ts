@@ -177,6 +177,53 @@ describe('AgentHqApiClient.createTask', () => {
   });
 });
 
+describe('AgentHqApiClient task context read helpers', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+  });
+
+  it('reads task instances and active-owner context from the task endpoints', async () => {
+    const calls: Array<{ method: string; url: string }> = [];
+    const fetchMock = jest.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = String(init?.method ?? 'GET');
+      calls.push({ method, url });
+
+      if (method === 'GET' && url === 'http://agent-hq.test/api/v1/tasks/451/instances') {
+        return jsonResponse([{ id: 9001, task_id: 451, status: 'running' }]);
+      }
+      if (method === 'GET' && url === 'http://agent-hq.test/api/v1/tasks/451/active-owner') {
+        return jsonResponse({ ok: true, task_id: 451, active_owner: false });
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        json: async () => ({ error: `Unexpected request: ${method} ${url}` }),
+        text: async () => JSON.stringify({ error: `Unexpected request: ${method} ${url}` }),
+      } as Response;
+    });
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+    const client = new AgentHqApiClient('http://agent-hq.test');
+
+    await expect(client.getTaskInstances(451)).resolves.toEqual([
+      { id: 9001, task_id: 451, status: 'running' },
+    ]);
+    await expect(client.getTaskActiveOwner(451)).resolves.toEqual({
+      ok: true,
+      task_id: 451,
+      active_owner: false,
+    });
+    expect(calls).toEqual([
+      { method: 'GET', url: 'http://agent-hq.test/api/v1/tasks/451/instances' },
+      { method: 'GET', url: 'http://agent-hq.test/api/v1/tasks/451/active-owner' },
+    ]);
+  });
+});
+
 describe('AgentHqApiClient.moveTask configured outcomes', () => {
   const originalFetch = global.fetch;
 

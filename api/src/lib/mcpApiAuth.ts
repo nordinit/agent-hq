@@ -191,6 +191,26 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'tasks.read_any_context',
+    group: 'Task lifecycle',
+    label: 'Read any task context',
+    description: 'Allows read-only access to task detail, canonical context, notes, history, run state, active-owner context, relationships, and relationship types for any task in the agent\'s tenant. Does not allow task writes, relationship mutation, admin routes, or cross-tenant access.',
+    endpoints: [
+      'GET /api/v1/tasks/:id',
+      'GET /api/v1/tasks/:id/context',
+      'GET /api/v1/tasks/:id/notes',
+      'GET /api/v1/tasks/:id/history',
+      'GET /api/v1/tasks/:id/instances',
+      'GET /api/v1/tasks/:id/relationships',
+      'GET /api/v1/tasks/:id/relationship-types',
+      'GET /api/v1/tasks/:id/active-owner',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'tasks.write_active_lifecycle',
     group: 'Task lifecycle',
     label: 'Write active task lifecycle',
@@ -922,6 +942,11 @@ function getScopedInstanceContexts(db: Database.Database, identity: McpApiIdenti
   }));
 }
 
+function taskBelongsToIdentityTenant(db: Database.Database, identity: McpApiIdentity, taskId: number): boolean {
+  const row = db.prepare(`SELECT tenant_id FROM tasks WHERE id = ? LIMIT 1`).get(taskId) as { tenant_id: number | null } | undefined;
+  return parsePositiveInt(row?.tenant_id) === identity.tenantId;
+}
+
 function taskIdForInstance(db: Database.Database, instanceId: number): number | null {
   const row = db.prepare(`SELECT task_id FROM job_instances WHERE id = ?`).get(instanceId) as { task_id: number | null } | undefined;
   return row?.task_id ?? null;
@@ -1114,11 +1139,22 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
   const activeOwnerMatch = requestPath.match(/^\/tasks\/(\d+)\/active-owner$/);
   if (activeOwnerMatch && method === 'GET') {
     const taskId = Number(activeOwnerMatch[1]);
-    if (!requireCapability(
-      'tasks.read_active_context',
-      `${identity.agentSlug} is not allowed to read active task MCP routes.`,
-      { taskId },
-    )) return;
+    const hasActiveRead = permissionState.enabledCapabilities.has('tasks.read_active_context');
+    const hasAnyRead = permissionState.enabledCapabilities.has('tasks.read_any_context');
+    if (!hasActiveRead && !hasAnyRead) {
+      return deny({
+        reason: `${identity.agentSlug} is not allowed to read task MCP routes.`,
+        requiredCapability: 'tasks.read_any_context',
+        taskId,
+      });
+    }
+    if (!taskBelongsToIdentityTenant(db, identity, taskId)) {
+      return deny({
+        reason: `Task #${taskId} is outside the MCP key tenant for ${identity.agentSlug}.`,
+        requiredCapability: hasAnyRead ? 'tasks.read_any_context' : 'tasks.read_active_context',
+        taskId,
+      });
+    }
     return next();
   }
 
@@ -1135,8 +1171,11 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       || (suffix === 'live-verification' && method === 'PUT')
       || (suffix === 'outcome' && method === 'POST')
     );
+    const hasAnyTaskRead = permissionState.enabledCapabilities.has('tasks.read_any_context');
     const requiredCapability: AgentMcpCapabilityKey | null = readAllowed
-      ? 'tasks.read_active_context'
+      ? hasAnyTaskRead
+        ? 'tasks.read_any_context'
+        : 'tasks.read_active_context'
       : writeAllowed
         ? 'tasks.write_active_lifecycle'
         : null;
@@ -1151,6 +1190,17 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
 
     if (!requireCapability(requiredCapability, `${identity.agentSlug} is not allowed to ${readAllowed ? 'read' : 'write'} active task MCP routes.`, { taskId })) {
       return;
+    }
+
+    if (readAllowed && hasAnyTaskRead) {
+      if (!taskBelongsToIdentityTenant(db, identity, taskId)) {
+        return deny({
+          reason: `Task #${taskId} is outside the MCP key tenant for ${identity.agentSlug}.`,
+          requiredCapability,
+          taskId,
+        });
+      }
+      return next();
     }
 
     if (!scopedTaskIds.has(taskId)) {

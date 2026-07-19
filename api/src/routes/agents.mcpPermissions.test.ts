@@ -90,6 +90,23 @@ describe('agent MCP permissions routes', () => {
           'GET /api/v1/tasks/:id/relationship-types',
         ]),
       });
+      expect(body.capabilities.find((capability) => capability.key === 'tasks.read_any_context')).toMatchObject({
+        group: 'Task lifecycle',
+        label: 'Read any task context',
+        enabled: false,
+        explicit_enabled: null,
+        description: expect.stringContaining('any task in the agent\'s tenant'),
+        endpoints: expect.arrayContaining([
+          'GET /api/v1/tasks/:id',
+          'GET /api/v1/tasks/:id/context',
+          'GET /api/v1/tasks/:id/notes',
+          'GET /api/v1/tasks/:id/history',
+          'GET /api/v1/tasks/:id/instances',
+          'GET /api/v1/tasks/:id/relationships',
+          'GET /api/v1/tasks/:id/relationship-types',
+          'GET /api/v1/tasks/:id/active-owner',
+        ]),
+      });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
         group: 'Task lifecycle',
         label: 'Create Tasks',
@@ -133,6 +150,10 @@ describe('agent MCP permissions routes', () => {
         explicit_enabled: false,
       });
       expect(updated.capabilities.find((capability) => capability.key === 'tasks.read_active_context')).toMatchObject({
+        enabled: false,
+        explicit_enabled: false,
+      });
+      expect(updated.capabilities.find((capability) => capability.key === 'tasks.read_any_context')).toMatchObject({
         enabled: false,
         explicit_enabled: false,
       });
@@ -190,6 +211,9 @@ describe('agent MCP permissions routes', () => {
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
+        enabled: true,
+      });
+      expect(body.capabilities.find((capability) => capability.key === 'tasks.read_any_context')).toMatchObject({
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'admin.cross_tenant')).toMatchObject({

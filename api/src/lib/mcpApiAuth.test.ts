@@ -147,8 +147,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       .run(42, 1, 86, 'Enhancements', 43, 2, 99, 'EcoPool Sprint');
     db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`)
       .run(2551, 448, 7, 'running', 2552, 449, 9, 'running', 2553, 450, 10, 'running');
-    db.prepare(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`)
-      .run(448, 1, 86, 42, 7, 9, 2551, 449, 2, 99, 43, 9, 9, 2552, 450, 2, 99, 43, 10, 10, 2553);
+    db.prepare(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`)
+      .run(448, 1, 86, 42, 7, 9, 2551, 449, 2, 99, 43, 9, 9, 2552, 450, 2, 99, 43, 10, 10, 2553, 451, 1, 86, 42, null, null, null);
 
     normalKey = issueMcpApiKeyForAgent(db, 7).apiKey;
     adminKey = issueMcpApiKeyForAgent(db, 8).apiKey;
@@ -162,6 +162,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
     app.get('/api/v1/tasks/:id', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), tenant_id: resolveTenantIdFromRequest(getDb(), req) }));
     app.get('/api/v1/tasks/:id/context', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), mode: req.query.mode ?? 'summary' }));
+    app.get('/api/v1/tasks/:id/notes', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), notes: [] }));
+    app.get('/api/v1/tasks/:id/history', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), history: [] }));
     app.get('/api/v1/tasks/:id/instances', (req, res) => res.json({ ok: true, task_id: Number(req.params.id) }));
     app.get('/api/v1/tasks/:id/relationships', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationships: [] }));
     app.get('/api/v1/tasks/:id/relationship-types', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationship_types: [] }));
@@ -276,12 +278,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
   });
 
-  it('allows active-owner checks for unscoped tasks without granting normal task reads', async () => {
-    const activeOwnerRes = await fetch(`${baseUrl}/api/v1/tasks/449/active-owner`, { headers: authHeaders(normalKey) });
+  it('allows active-owner checks for tenant-local unscoped tasks without granting normal task reads', async () => {
+    const activeOwnerRes = await fetch(`${baseUrl}/api/v1/tasks/451/active-owner`, { headers: authHeaders(normalKey) });
     expect(activeOwnerRes.status).toBe(200);
 
-    const otherTaskRes = await fetch(`${baseUrl}/api/v1/tasks/449`, { headers: authHeaders(normalKey) });
+    const otherTaskRes = await fetch(`${baseUrl}/api/v1/tasks/451`, { headers: authHeaders(normalKey) });
     expect(otherTaskRes.status).toBe(403);
+
+    const crossTenantActiveOwnerRes = await fetch(`${baseUrl}/api/v1/tasks/449/active-owner`, { headers: authHeaders(normalKey) });
+    expect(crossTenantActiveOwnerRes.status).toBe(403);
   });
 
   it('persists explicit per-agent MCP capability policy snapshots', () => {
@@ -439,6 +444,70 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
     expect(createTaskRes.status).toBe(201);
     await expect(createTaskRes.json()).resolves.toMatchObject({ ok: true });
+  });
+
+  it('allows read-only access to any tenant-local task context when Read any task context is enabled', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'tasks.read_any_context',
+      'tasks.create',
+    ]);
+
+    for (const suffix of ['', '/context', '/notes', '/history', '/instances', '/relationships', '/relationship-types', '/active-owner']) {
+      const response = await fetch(`${baseUrl}/api/v1/tasks/451${suffix}`, { headers: authHeaders(normalKey) });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ ok: true, task_id: 451 });
+    }
+
+    const createdTaskRes = await fetch(`${baseUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        title: 'Agency defect follow-up',
+        project_id: 86,
+        sprint_id: 42,
+        task_type: 'dev',
+      }),
+    });
+    expect(createdTaskRes.status).toBe(201);
+
+    const crossTenantTaskRes = await fetch(`${baseUrl}/api/v1/tasks/449`, { headers: authHeaders(normalKey) });
+    expect(crossTenantTaskRes.status).toBe(403);
+    await expect(crossTenantTaskRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tasks.read_any_context',
+        task_id: 449,
+      },
+    });
+
+    const noteWriteRes = await fetch(`${baseUrl}/api/v1/tasks/451/notes`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ content: 'Should not be allowed by read_any_context' }),
+    });
+    expect(noteWriteRes.status).toBe(403);
+    await expect(noteWriteRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tasks.write_active_lifecycle',
+        task_id: 451,
+      },
+    });
+
+    const createRelationshipRes = await fetch(`${baseUrl}/api/v1/tasks/451/relationships`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ target_task_id: 448, relationship_type_key: 'relates_to' }),
+    });
+    expect(createRelationshipRes.status).toBe(403);
+    await expect(createRelationshipRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'admin.full_access',
+        task_id: 451,
+      },
+    });
   });
 
   it('enforces explicit capability denies even for otherwise scoped routes', async () => {

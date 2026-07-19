@@ -770,6 +770,14 @@ export class AgentHqApiClient {
     return this.request<unknown[]>('GET', `/api/v1/tasks/${id}/history`).then((rows) => rows.map(shapeTaskHistoryEntry));
   }
 
+  getTaskInstances(id: number) {
+    return this.request<unknown[]>('GET', `/api/v1/tasks/${id}/instances`);
+  }
+
+  getTaskActiveOwner(id: number) {
+    return this.request<unknown>('GET', `/api/v1/tasks/${id}/active-owner`);
+  }
+
   getTaskRelationshipTypes(id: number) {
     return this.request<unknown>('GET', `/api/v1/tasks/${id}/relationship-types`);
   }

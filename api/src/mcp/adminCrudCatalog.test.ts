@@ -49,6 +49,8 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       'agent_hq_update_agent_dispatch_contract',
       'agent_hq_get_workflow_config',
       'agent_hq_get_workflow_metadata',
+      'agent_hq_get_task_instances',
+      'agent_hq_get_task_active_owner',
       'agent_hq_list_transition_requirement_fields',
       'agent_hq_list_sprint_type_statuses',
       'agent_hq_get_resolved_sprint_type_statuses',
@@ -84,6 +86,10 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(byName.get('agent_hq_replace_project_file')?.description).toContain('version-history');
     expect(byName.get('agent_hq_replace_workflow_file')?.description).toContain('version-history');
     expect(byName.get('agent_hq_get_sprints')?.description).toContain('Legacy alias');
+    expect(byName.get('agent_hq_get_task_instances')?.rest_paths).toEqual(['/api/v1/tasks/:id/instances']);
+    expect(byName.get('agent_hq_get_task_instances')?.description).toContain('Read any task context');
+    expect(byName.get('agent_hq_get_task_active_owner')?.rest_paths).toEqual(['/api/v1/tasks/:id/active-owner']);
+    expect(byName.get('agent_hq_get_task_active_owner')?.description).toContain('Read any task context');
 
     const assignmentRules = byName.get('agent_hq_list_routing_rules');
     expect(assignmentRules?.domain).toBe('assignment_rules');
