@@ -14,8 +14,10 @@ const OPENCLAW_MCP_BUNDLE_DIR = path.join('.openclaw', 'extensions', OPENCLAW_MC
 const OPENCLAW_MCP_BUNDLE_MANIFEST_PATH = path.join('.claude-plugin', 'plugin.json');
 const OPENCLAW_AGENT_SCOPED_SERVER_SEPARATOR = '__agent-';
 const AGENT_HQ_API_KEY_SERVER_SLUGS = new Set(['agent-hq', 'dev-environment-lease-manager']);
+const FAIL_CLOSED_MCP_TOOL_INCLUDE = '__agent_hq_no_allowed_mcp_tools__';
 
 interface AgentMcpRow {
+  assignment_id: number;
   slug: string;
   command: string | null;
   args: string | null;
@@ -109,6 +111,101 @@ function parseJsonRecord(value: string | null | undefined): Record<string, unkno
   } catch {
     return {};
   }
+}
+
+function parseStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const normalized = value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+  return normalized.length === value.length ? normalized : null;
+}
+
+const ASSIGNMENT_TOOL_ALLOWLIST_FIELDS = [
+  'allowed_tools',
+  'allowedTools',
+  'allowed_tool_names',
+  'allowedToolNames',
+  'tool_allowlist',
+  'toolAllowlist',
+  'mcp_tool_allowlist',
+  'mcpToolAllowlist',
+  'include_tools',
+  'includeTools',
+];
+
+interface AssignmentToolAllowlist {
+  configured: boolean;
+  tools: string[];
+  malformed: boolean;
+}
+
+function readAssignmentToolAllowlist(overrides: Record<string, unknown>): AssignmentToolAllowlist {
+  for (const field of ASSIGNMENT_TOOL_ALLOWLIST_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(overrides, field)) continue;
+    const parsed = parseStringArray(overrides[field]);
+    return {
+      configured: true,
+      tools: parsed ?? [],
+      malformed: parsed === null,
+    };
+  }
+
+  if (isRecord(overrides.toolFilter) && Object.prototype.hasOwnProperty.call(overrides.toolFilter, 'include')) {
+    const parsed = parseStringArray(overrides.toolFilter.include);
+    return {
+      configured: true,
+      tools: parsed ?? [],
+      malformed: parsed === null,
+    };
+  }
+
+  return { configured: false, tools: [], malformed: false };
+}
+
+function stripAssignmentToolAllowlistOverrides(overrides: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...overrides };
+  for (const field of ASSIGNMENT_TOOL_ALLOWLIST_FIELDS) delete next[field];
+  if (isRecord(next.toolFilter)) {
+    const { include: _include, ...rest } = next.toolFilter;
+    if (Object.keys(rest).length > 0) next.toolFilter = rest;
+    else delete next.toolFilter;
+  }
+  return next;
+}
+
+function shouldFailClosedWithoutAssignmentToolAllowlist(row: AgentMcpRow): boolean {
+  return !AGENT_HQ_API_KEY_SERVER_SLUGS.has(row.slug);
+}
+
+function applyAssignmentToolAllowlist(
+  merged: Record<string, unknown>,
+  row: AgentMcpRow,
+  allowlist: AssignmentToolAllowlist,
+): Record<string, unknown> {
+  if (!allowlist.configured && !shouldFailClosedWithoutAssignmentToolAllowlist(row)) return merged;
+
+  const existingToolFilter = isRecord(merged.toolFilter) ? merged.toolFilter : {};
+  const allowedTools = allowlist.configured && !allowlist.malformed ? Array.from(new Set(allowlist.tools)).sort() : [];
+  const include = allowedTools.length > 0 ? allowedTools : [FAIL_CLOSED_MCP_TOOL_INCLUDE];
+  return {
+    ...merged,
+    toolFilter: {
+      ...existingToolFilter,
+      include,
+    },
+    agentHqAssignment: {
+      id: row.assignment_id,
+      mcpServerSlug: row.slug,
+      toolAllowlist: {
+        source: allowlist.configured ? 'assignment_override' : 'missing_assignment_override',
+        malformed: allowlist.malformed,
+        count: allowedTools.length,
+        tools: allowedTools,
+      },
+    },
+  };
 }
 
 function parseJsonStringArray(value: string | null | undefined): string[] | undefined {
@@ -522,7 +619,9 @@ function buildDesiredServerConfig(
 
   if (row.cwd && row.cwd.trim()) baseConfig.cwd = row.cwd.trim();
 
-  const overrides = parseJsonRecord(row.overrides);
+  const rawOverrides = parseJsonRecord(row.overrides);
+  const allowlist = readAssignmentToolAllowlist(rawOverrides);
+  const overrides = stripAssignmentToolAllowlistOverrides(rawOverrides);
   const merged = { ...baseConfig, ...overrides };
 
   const baseEnv = isRecord(baseConfig.env) ? baseConfig.env as Record<string, string> : {};
@@ -555,7 +654,7 @@ function buildDesiredServerConfig(
     );
   }
 
-  return merged;
+  return applyAssignmentToolAllowlist(merged, row, allowlist);
 }
 
 export function fetchAssignedMcpServers(
@@ -565,7 +664,7 @@ export function fetchAssignedMcpServers(
 ): Record<string, Record<string, unknown>> {
   const enforceTenantScope = tableHasColumn(db, 'agents', 'tenant_id') && tableHasColumn(db, 'mcp_servers', 'tenant_id');
   const rows = db.prepare(`
-    SELECT s.slug, s.command, s.args, s.env, s.cwd, ama.overrides
+    SELECT ama.id as assignment_id, s.slug, s.command, s.args, s.env, s.cwd, ama.overrides
     FROM agent_mcp_assignments ama
     JOIN mcp_servers s ON s.id = ama.mcp_server_id
     ${enforceTenantScope ? 'JOIN agents a ON a.id = ama.agent_id AND a.tenant_id = s.tenant_id' : ''}

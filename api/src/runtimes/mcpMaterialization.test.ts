@@ -169,6 +169,163 @@ describe('materializeAgentMcpConfig', () => {
     expect(openClawConfig.mcp?.servers['custom__agent-1']).toBeDefined();
   });
 
+  it('applies CRM MCP assignment override allowlists exactly for each role', () => {
+    createRegistryTables();
+    const crmToolsByRole = {
+      salesAgent: [
+        'crm_search_accounts',
+        'crm_get_account',
+        'crm_search_leads',
+        'crm_get_lead',
+        'crm_list_opportunities',
+        'crm_get_opportunity',
+        'crm_add_note',
+        'crm_schedule_follow_up',
+        'crm_update_lead_status',
+        'crm_log_activity',
+      ],
+      salesLead: [
+        'crm_search_accounts',
+        'crm_get_account',
+        'crm_list_opportunities',
+        'crm_get_opportunity',
+      ],
+      salesOps: [
+        'crm_search_accounts',
+        'crm_get_account',
+        'crm_search_leads',
+        'crm_get_lead',
+        'crm_list_opportunities',
+        'crm_get_opportunity',
+        'crm_add_note',
+        'crm_schedule_follow_up',
+        'crm_update_lead_status',
+        'crm_log_activity',
+        'crm_submit_proposal_to_platform',
+        'crm_submit_freelancer_bid',
+      ],
+      developmentQa: [
+        'crm_search_accounts',
+        'crm_get_account',
+        'crm_search_leads',
+        'crm_get_lead',
+        'crm_list_opportunities',
+        'crm_get_opportunity',
+        'crm_add_note',
+        'crm_schedule_follow_up',
+        'crm_log_activity',
+      ],
+    };
+    const agents = [
+      { id: 101, name: 'Sales Agent', assignmentId: 79886, tools: crmToolsByRole.salesAgent },
+      { id: 102, name: 'Sales Lead', assignmentId: 79887, tools: crmToolsByRole.salesLead },
+      { id: 103, name: 'Sales Ops', assignmentId: 79888, tools: crmToolsByRole.salesOps },
+      { id: 104, name: 'Development QA', assignmentId: 79889, tools: crmToolsByRole.developmentQa },
+    ];
+    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]')`).run();
+    const effectiveToolsByRole = new Map<string, string[]>();
+
+    for (const agent of agents) {
+      getDb().prepare(`INSERT INTO agents (id, name) VALUES (?, ?)`).run(agent.id, agent.name);
+      getDb().prepare(`
+        INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id, overrides)
+        VALUES (?, ?, 40, ?)
+      `).run(agent.assignmentId, agent.id, JSON.stringify({ allowed_tools: agent.tools }));
+      const workingDirectory = makeTempDir(`agent-hq-crm-${agent.id}-`);
+
+      const result = materializeAgentMcpConfig({
+        db: getDb(),
+        agentId: agent.id,
+        workingDirectory,
+      });
+      const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
+      const server = config.mcpServers[`agency-crm__agent-${agent.id}`];
+      effectiveToolsByRole.set(agent.name, server.toolFilter.include);
+
+      expect(result.ok).toBe(true);
+      expect(server.toolFilter.include).toEqual([...agent.tools].sort());
+      expect(server.toolFilter.include).toHaveLength(agent.tools.length);
+      expect(server.agentHqAssignment).toMatchObject({
+        id: agent.assignmentId,
+        mcpServerSlug: 'agency-crm',
+        toolAllowlist: {
+          source: 'assignment_override',
+          malformed: false,
+          count: agent.tools.length,
+          tools: [...agent.tools].sort(),
+        },
+      });
+    }
+
+    expect(effectiveToolsByRole.get('Sales Agent')).toHaveLength(10);
+    expect(effectiveToolsByRole.get('Sales Lead')).toHaveLength(4);
+    expect(effectiveToolsByRole.get('Sales Ops')).toHaveLength(12);
+    expect(effectiveToolsByRole.get('Development QA')).toHaveLength(9);
+    expect(effectiveToolsByRole.get('Sales Ops')).toEqual(expect.arrayContaining([
+      'crm_submit_proposal_to_platform',
+      'crm_submit_freelancer_bid',
+    ]));
+    expect(effectiveToolsByRole.get('Development QA')).not.toEqual(expect.arrayContaining([
+      'crm_upsert_lead',
+      'crm_record_approval',
+      'crm_submit_proposal_to_platform',
+      'crm_submit_freelancer_bid',
+    ]));
+  });
+
+  it('fails closed for non-Agent-HQ MCP assignments with missing or malformed tool allowlists', () => {
+    createRegistryTables();
+    getDb().prepare(`INSERT INTO agents (id, name) VALUES (1, 'Missing'), (2, 'Malformed')`).run();
+    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]')`).run();
+    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (1, 40, '{}')`).run();
+    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (2, 40, '{"allowed_tools":"crm_search_leads"}')`).run();
+
+    for (const agentId of [1, 2]) {
+      const workingDirectory = makeTempDir(`agent-hq-crm-fail-closed-${agentId}-`);
+      const result = materializeAgentMcpConfig({
+        db: getDb(),
+        agentId,
+        workingDirectory,
+      });
+      const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
+      const server = config.mcpServers[`agency-crm__agent-${agentId}`];
+
+      expect(result.ok).toBe(true);
+      expect(server.toolFilter.include).toEqual(['__agent_hq_no_allowed_mcp_tools__']);
+      expect(server.agentHqAssignment.toolAllowlist.count).toBe(0);
+      expect(server.agentHqAssignment.toolAllowlist.tools).toEqual([]);
+      expect(server.agentHqAssignment.toolAllowlist).toMatchObject(
+        agentId === 1
+          ? { source: 'missing_assignment_override', malformed: false }
+          : { source: 'assignment_override', malformed: true },
+      );
+    }
+  });
+
+  it('does not materialize disabled MCP assignments or disabled MCP servers', () => {
+    createRegistryTables();
+    getDb().prepare(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`).run();
+    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args, enabled) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]', 1)`).run();
+    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args, enabled) VALUES (41, 'disabled-crm', 'node', '["crm-mcp.js"]', 0)`).run();
+    getDb().prepare(`
+      INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
+      VALUES
+        (1, 40, '{"allowed_tools":["crm_search_leads"]}', 0),
+        (1, 41, '{"allowed_tools":["crm_search_leads"]}', 1)
+    `).run();
+    const workingDirectory = makeTempDir('agent-hq-crm-disabled-');
+
+    const result = materializeAgentMcpConfig({
+      db: getDb(),
+      agentId: 1,
+      workingDirectory,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.count).toBe(0);
+    expect(fs.existsSync(path.join(workingDirectory, '.mcp.json'))).toBe(false);
+  });
+
   it('reuses an existing valid materialized Agent HQ MCP key for the same agent', () => {
     createRegistryTables();
     getDb().prepare(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`).run();
