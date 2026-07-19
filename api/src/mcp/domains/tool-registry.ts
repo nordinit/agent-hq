@@ -19,6 +19,14 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
     ({ tool_id }) => wrap(() => api.getTool(tool_id))(),
     { domain: 'tools', rest_paths: ['/api/v1/tools/:id'] },
   );
+
+  registerTool(
+    ['agent_hq_audit_duplicate_tools', 'atlas_audit_duplicate_tools'],
+    'Read duplicate tool-slug audit results for the tenant-local Agent HQ tool registry.',
+    {},
+    () => wrap(() => api.auditDuplicateTools())(),
+    { domain: 'tools', rest_paths: ['/api/v1/tools/audit/duplicates'] },
+  );
   
   registerTool(
     ['agent_hq_create_tool', 'atlas_create_tool'],

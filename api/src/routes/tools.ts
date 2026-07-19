@@ -85,6 +85,45 @@ router.get('/materialized/agents/:openclawAgentId', (req: Request, res: Response
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/v1/tools/audit/duplicates — read-only duplicate slug audit
+// ---------------------------------------------------------------------------
+router.get('/audit/duplicates', (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = resolveTenantIdFromRequest(db, req);
+    const rows = db.prepare(`
+      SELECT lower(slug) AS slug_key,
+             slug,
+             COUNT(*) AS count,
+             GROUP_CONCAT(id) AS tool_ids,
+             GROUP_CONCAT(name) AS tool_names
+      FROM tools
+      WHERE tenant_id = ?
+      GROUP BY lower(slug)
+      HAVING COUNT(*) > 1
+      ORDER BY lower(slug) ASC
+    `).all(tenantId) as Array<{
+      slug_key: string;
+      slug: string;
+      count: number;
+      tool_ids: string | null;
+      tool_names: string | null;
+    }>;
+
+    return res.json({
+      duplicates: rows.map((row) => ({
+        slug: row.slug_key || row.slug,
+        count: Number(row.count),
+        tool_ids: String(row.tool_ids ?? '').split(',').filter(Boolean).map((value) => Number(value)),
+        tool_names: String(row.tool_names ?? '').split(',').filter(Boolean),
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/v1/tools/:id — get tool detail
 // ---------------------------------------------------------------------------
 router.get('/:id', (req: Request, res: Response) => {

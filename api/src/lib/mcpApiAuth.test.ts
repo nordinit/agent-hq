@@ -185,6 +185,21 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.put('/api/v1/routing/transition-requirements/:id', (req, res) => res.json({ ok: true, requirement_id: Number(req.params.id), body: req.body }));
     app.post('/api/v1/external/task-events', (_req, res) => res.status(202).json({ ok: true }));
     app.post('/api/v1/tasks', (_req, res) => res.status(201).json({ ok: true }));
+    app.get('/api/v1/mcp-servers', (_req, res) => res.json([{ id: 30, name: 'Agent HQ MCP' }]));
+    app.get('/api/v1/mcp-servers/:id', (req, res) => res.json({ id: Number(req.params.id), name: 'Agent HQ MCP' }));
+    app.post('/api/v1/mcp-servers', (_req, res) => res.status(201).json({ ok: true }));
+    app.get('/api/v1/agents', (_req, res) => res.json([{ id: 7, name: 'Cinder' }]));
+    app.get('/api/v1/agents/:id', (req, res) => res.json({ id: Number(req.params.id), name: 'Cinder' }));
+    app.get('/api/v1/agents/:id/mcp-permissions', (req, res) => res.json({ agent_id: Number(req.params.id), capabilities: [] }));
+    app.put('/api/v1/agents/:id/mcp-permissions', (_req, res) => res.json({ ok: true }));
+    app.get('/api/v1/agents/:id/mcp-servers', (req, res) => res.json([{ agent_id: Number(req.params.id), mcp_server_id: 30 }]));
+    app.post('/api/v1/agents/:id/mcp-servers', (_req, res) => res.status(201).json({ ok: true }));
+    app.get('/api/v1/tools', (_req, res) => res.json([{ id: 20, name: 'Repo Search' }]));
+    app.get('/api/v1/tools/audit/duplicates', (_req, res) => res.json({ duplicates: [] }));
+    app.get('/api/v1/tools/:id', (req, res) => res.json({ id: Number(req.params.id), name: 'Repo Search' }));
+    app.post('/api/v1/tools', (_req, res) => res.status(201).json({ ok: true }));
+    app.get('/api/v1/agents/:id/tools', (req, res) => res.json([{ agent_id: Number(req.params.id), tool_id: 20 }]));
+    app.post('/api/v1/agents/:id/tools', (_req, res) => res.status(201).json({ ok: true }));
 
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
@@ -289,6 +304,27 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.full_access')?.enabled).toBe(false);
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.cross_tenant')?.enabled).toBe(false);
+    expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'mcp_servers.read')).toMatchObject({
+      group: 'Administration',
+      label: 'Read MCP server registry',
+      enabled: false,
+      default_enabled: false,
+      explicit_enabled: null,
+    });
+    expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'agents.read')).toMatchObject({
+      group: 'Administration',
+      label: 'Read agent registry',
+      enabled: false,
+      default_enabled: false,
+      explicit_enabled: null,
+    });
+    expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'tools.read')).toMatchObject({
+      group: 'Administration',
+      label: 'Read tool registry',
+      enabled: false,
+      default_enabled: false,
+      explicit_enabled: null,
+    });
 
     const explicitSnapshot = replaceAgentMcpPermissionPolicy(db, 7, [
       'discovery.read_catalog',
@@ -302,6 +338,112 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const resetSnapshot = resetAgentMcpPermissionPolicy(db, 7);
     expect(resetSnapshot.policy_mode).toBe('default');
     expect(resetSnapshot.capabilities.find((capability) => capability.key === 'tasks.write_active_lifecycle')?.enabled).toBe(true);
+  });
+
+  it('allows registry and assignment audit reads with the dedicated read scopes', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'mcp_servers.read',
+      'agents.read',
+      'tools.read',
+    ]);
+
+    for (const path of [
+      '/api/v1/mcp-servers',
+      '/api/v1/mcp-servers/30',
+      '/api/v1/agents',
+      '/api/v1/agents/7',
+      '/api/v1/agents/7/mcp-permissions',
+      '/api/v1/agents/7/mcp-servers',
+      '/api/v1/tools',
+      '/api/v1/tools/audit/duplicates',
+      '/api/v1/tools/20',
+      '/api/v1/agents/7/tools',
+    ]) {
+      const response = await fetch(`${baseUrl}${path}`, { headers: authHeaders(normalKey) });
+      expect(response.status).toBe(200);
+    }
+  });
+
+  it('denies matching registry reads when a dedicated read scope is missing', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'mcp_servers.read',
+      'agents.read',
+    ]);
+
+    const toolsRes = await fetch(`${baseUrl}/api/v1/tools`, { headers: authHeaders(normalKey) });
+    expect(toolsRes.status).toBe(403);
+    await expect(toolsRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tools.read',
+        policy_mode: 'explicit',
+      },
+    });
+
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'agents.read',
+      'tools.read',
+    ]);
+
+    const mcpServersRes = await fetch(`${baseUrl}/api/v1/mcp-servers`, { headers: authHeaders(normalKey) });
+    expect(mcpServersRes.status).toBe(403);
+    await expect(mcpServersRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'mcp_servers.read',
+        policy_mode: 'explicit',
+      },
+    });
+
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'mcp_servers.read',
+      'tools.read',
+    ]);
+
+    const agentsRes = await fetch(`${baseUrl}/api/v1/agents`, { headers: authHeaders(normalKey) });
+    expect(agentsRes.status).toBe(403);
+    await expect(agentsRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'agents.read',
+        policy_mode: 'explicit',
+      },
+    });
+  });
+
+  it('keeps registry and assignment mutations denied for read-scoped credentials', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'mcp_servers.read',
+      'agents.read',
+      'tools.read',
+    ]);
+
+    for (const path of [
+      '/api/v1/mcp-servers',
+      '/api/v1/agents/7/mcp-servers',
+      '/api/v1/tools',
+      '/api/v1/agents/7/tools',
+    ]) {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ name: 'Denied' }),
+      });
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: {
+          required_capability: 'admin.full_access',
+        },
+      });
+    }
+
+    const permissionMutation = await fetch(`${baseUrl}/api/v1/agents/7/mcp-permissions`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ enabled_capabilities: ['admin.full_access'] }),
+    });
+    expect(permissionMutation.status).toBe(403);
   });
 
   it('refuses unrelated task access and admin-style writes for normal task-agent keys', async () => {

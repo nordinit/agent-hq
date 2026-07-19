@@ -302,6 +302,52 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'mcp_servers.read',
+    group: 'Administration',
+    label: 'Read MCP server registry',
+    description: 'Allows tenant-local MCP server inventory, detail, and per-agent MCP assignment readback without exposing MCP environment values or allowing assignment changes.',
+    endpoints: [
+      'GET /api/v1/mcp-servers',
+      'GET /api/v1/mcp-servers/:id',
+      'GET /api/v1/agents/:id/mcp-servers',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
+    key: 'agents.read',
+    group: 'Administration',
+    label: 'Read agent registry',
+    description: 'Allows tenant-local agent inventory, detail, and Agent HQ MCP capability-assignment readback without allowing agent or assignment mutation.',
+    endpoints: [
+      'GET /api/v1/agents',
+      'GET /api/v1/agents/:id',
+      'GET /api/v1/agents/:id/mcp-permissions',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
+    key: 'tools.read',
+    group: 'Administration',
+    label: 'Read tool registry',
+    description: 'Allows tenant-local tool registry inventory, detail, duplicate-tool audit readback, and per-agent tool assignment readback without allowing tool or assignment mutation.',
+    endpoints: [
+      'GET /api/v1/tools',
+      'GET /api/v1/tools/:id',
+      'GET /api/v1/tools/audit/duplicates',
+      'GET /api/v1/agents/:id/tools',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'admin.full_access',
     group: 'Administration',
     label: 'Full Agent HQ MCP access',
@@ -567,6 +613,23 @@ function resolveEffectiveAgentMcpPermissionState(db: Database.Database, identity
         .map((capability) => capability.key as AgentMcpCapabilityKey),
     ),
   };
+}
+
+export function mcpIdentityHasCapability(
+  db: Database.Database,
+  identity: McpApiIdentity,
+  capability: AgentMcpCapabilityKey,
+): boolean {
+  return resolveEffectiveAgentMcpPermissionState(db, identity).enabledCapabilities.has(capability);
+}
+
+export function mcpRequestHasCapability(
+  req: Request,
+  capability: AgentMcpCapabilityKey,
+  db: Database.Database = getDb(),
+): boolean {
+  const identity = getMcpIdentityFromRequest(req);
+  return Boolean(identity && mcpIdentityHasCapability(db, identity, capability));
 }
 
 function shapeIdentity(db: Database.Database, row: Record<string, unknown>): McpApiIdentity {
@@ -1260,6 +1323,40 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       reason: `Normal Agent HQ MCP keys can only read workflow configuration scoped to the active task's sprint and project.`,
       requiredCapability: 'workflow.read_active_configuration',
     });
+  }
+
+  const mcpServerReadMatch = requestPath === '/mcp-servers'
+    || /^\/mcp-servers\/\d+$/.test(requestPath)
+    || /^\/agents\/\d+\/mcp-servers$/.test(requestPath);
+  if (mcpServerReadMatch && method === 'GET') {
+    if (!requireCapability(
+      'mcp_servers.read',
+      `MCP server registry reads are disabled for ${identity.agentSlug}.`,
+    )) return;
+    return next();
+  }
+
+  const agentReadMatch = requestPath === '/agents'
+    || /^\/agents\/\d+$/.test(requestPath)
+    || /^\/agents\/\d+\/mcp-permissions$/.test(requestPath);
+  if (agentReadMatch && method === 'GET') {
+    if (!requireCapability(
+      'agents.read',
+      `Agent registry reads are disabled for ${identity.agentSlug}.`,
+    )) return;
+    return next();
+  }
+
+  const toolReadMatch = requestPath === '/tools'
+    || requestPath === '/tools/audit/duplicates'
+    || /^\/tools\/\d+$/.test(requestPath)
+    || /^\/agents\/\d+\/tools$/.test(requestPath);
+  if (toolReadMatch && method === 'GET') {
+    if (!requireCapability(
+      'tools.read',
+      `Tool registry reads are disabled for ${identity.agentSlug}.`,
+    )) return;
+    return next();
   }
 
   return deny({

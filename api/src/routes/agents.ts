@@ -45,6 +45,7 @@ import { ensureOpenClawGatewayAvailable, requireOpenClawOutput, runOpenClawSync 
 import { syncAvailableOAuthProfilesToAuthFile } from '../lib/openclawOAuthProfiles';
 import {
   getAgentMcpPermissionPolicy,
+  mcpRequestHasCapability,
   replaceAgentMcpPermissionPolicy,
   resetAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
@@ -242,6 +243,18 @@ function selectAgentWithProjectForTenant(db: ReturnType<typeof getDb>, id: numbe
 
 function requireAgentVisibleForTenant(db: ReturnType<typeof getDb>, agentId: number | string, tenantId: number): boolean {
   return Boolean(db.prepare(`SELECT id FROM agents WHERE id = ? AND tenant_id = ?`).get(agentId, tenantId));
+}
+
+function redactAgentCredentialFieldsForRequest(req: Request, agent: Record<string, unknown>): Record<string, unknown> {
+  if (!req.mcpIdentity || mcpRequestHasCapability(req, 'admin.full_access')) return agent;
+  return {
+    ...agent,
+    hooks_auth_header: agent.hooks_auth_header ? '[redacted]' : agent.hooks_auth_header,
+  };
+}
+
+function redactAgentsCredentialFieldsForRequest(req: Request, agents: Record<string, unknown>[]): Record<string, unknown>[] {
+  return agents.map((agent) => redactAgentCredentialFieldsForRequest(req, agent));
 }
 
 function buildDefaultAgentSessionKey(params: {
@@ -646,7 +659,7 @@ router.get('/', (req: Request, res: Response) => {
       agents = db.prepare(`${baseQuery} WHERE ${whereClause} ORDER BY a.created_at ASC`).all(tenantId);
     }
 
-    res.json(parseAgents(agents));
+    res.json(redactAgentsCredentialFieldsForRequest(req, parseAgents(agents)));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -1215,6 +1228,7 @@ router.put('/:id/mcp-permissions', (req: Request, res: Response) => {
     if (!Number.isInteger(agentId) || agentId <= 0) {
       return res.status(400).json({ error: 'Invalid agent id' });
     }
+    if (!requireAgentVisibleForTenant(db, agentId, tenantId)) return res.status(404).json({ error: 'Agent not found' });
 
     const body = req.body as { enabled_capabilities?: unknown };
     if (!Array.isArray(body.enabled_capabilities) || !body.enabled_capabilities.every((value) => typeof value === 'string')) {
@@ -1260,7 +1274,7 @@ router.get('/:id', (req: Request, res: Response) => {
       req.query.include_deleted === '1' || req.query.include_deleted === 'true',
     );
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    return res.json(parseAgentRuntimeConfig(agent));
+    return res.json(redactAgentCredentialFieldsForRequest(req, parseAgentRuntimeConfig(agent)));
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }

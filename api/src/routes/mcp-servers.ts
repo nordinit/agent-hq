@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { syncAssignedMcpForAgent, syncAssignedMcpForServer } from '../runtimes/mcpMaterialization';
+import { mcpRequestHasCapability } from '../lib/mcpApiAuth';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 
 const router = Router();
@@ -15,6 +16,32 @@ function normalizeJsonText(value: unknown, fallback: string): string {
   }
   if (value == null) return fallback;
   return JSON.stringify(value);
+}
+
+function redactMcpEnvValues(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) return '{}';
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '{}';
+    return JSON.stringify(Object.fromEntries(
+      Object.keys(parsed as Record<string, unknown>).map((key) => [key, '[redacted]']),
+    ));
+  } catch {
+    return '{}';
+  }
+}
+
+function shapeMcpServerForRequest(req: Request, row: unknown): unknown {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+  if (!req.mcpIdentity || mcpRequestHasCapability(req, 'admin.full_access')) return row;
+  return {
+    ...(row as Record<string, unknown>),
+    env: redactMcpEnvValues((row as Record<string, unknown>).env),
+  };
+}
+
+function shapeMcpServersForRequest(req: Request, rows: unknown[]): unknown[] {
+  return rows.map((row) => shapeMcpServerForRequest(req, row));
 }
 
 function scheduleAgentMcpSync(agentId: number): void {
@@ -92,7 +119,7 @@ router.get('/', (req: Request, res: Response) => {
       WHERE tenant_id = ?
       ORDER BY name ASC
     `).all(tenantId);
-    return res.json(rows);
+    return res.json(shapeMcpServersForRequest(req, rows));
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
@@ -104,7 +131,7 @@ router.get('/:id', (req: Request, res: Response) => {
     const tenantId = resolveTenantIdFromRequest(db, req);
     const row = db.prepare('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId);
     if (!row) return res.status(404).json({ error: 'MCP server not found' });
-    return res.json(row);
+    return res.json(shapeMcpServerForRequest(req, row));
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
@@ -249,7 +276,7 @@ agentMcpServersRouter.get('/', (req: Request, res: Response) => {
       WHERE ama.agent_id = ? AND s.tenant_id = ?
       ORDER BY s.name ASC
     `).all(agentId, tenantId);
-    return res.json(rows);
+    return res.json(shapeMcpServersForRequest(req, rows));
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }

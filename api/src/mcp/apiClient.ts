@@ -1187,6 +1187,10 @@ export class AgentHqApiClient {
     return this.request<unknown>('GET', `/api/v1/tools/${id}`);
   }
 
+  auditDuplicateTools() {
+    return this.request<unknown>('GET', '/api/v1/tools/audit/duplicates');
+  }
+
   createTool(data: Record<string, unknown>) {
     return this.request<unknown>('POST', '/api/v1/tools', data);
   }

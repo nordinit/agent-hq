@@ -547,6 +547,18 @@ Example invalid transition error:
 - broad admin or setup actions are denied for normal task-agent MCP keys even if a typed tool exists
 - lifecycle writes are exposed through typed MCP tools and enforced server-side against the active dispatched task and instance scope
 
+### Configurable MCP read scopes
+
+Agent HQ MCP credentials can be configured from the agent detail MCP access panel. The default runtime policy remains least-privilege task context access, while trusted admin agents keep backward-compatible full access. Administrators can grant these additional read-only scopes without granting `admin.full_access`:
+
+| Scope key | UI label | Grants |
+|---|---|---|
+| `mcp_servers.read` | Read MCP server registry | `GET /api/v1/mcp-servers`, `GET /api/v1/mcp-servers/:id`, and `GET /api/v1/agents/:id/mcp-servers` for the key tenant. MCP server `env` values are redacted for non-`admin.full_access` MCP callers. |
+| `agents.read` | Read agent registry | `GET /api/v1/agents`, `GET /api/v1/agents/:id`, and `GET /api/v1/agents/:id/mcp-permissions` for the key tenant. Credential material such as remote gateway auth headers is redacted for non-`admin.full_access` MCP callers. |
+| `tools.read` | Read tool registry | `GET /api/v1/tools`, `GET /api/v1/tools/:id`, `GET /api/v1/tools/audit/duplicates`, and `GET /api/v1/agents/:id/tools` for the key tenant, including readback needed for duplicate-tool and assignment audits. |
+
+Turning off a scope returns `403` with `code: "mcp_scope_denied"` and `details.required_capability` naming the missing scope. These scopes never authorize create, update, delete, assignment mutation, credential disclosure, secret/environment value disclosure, or cross-tenant access. Cross-tenant selectors still require `admin.cross_tenant`; broad tenant-local mutation still requires `admin.full_access`.
+
 ### Write guardrails
 
 - MCP API keys are stored server-side as hashes and map to exactly one Agent HQ agent
@@ -795,6 +807,15 @@ Supported high-blast-radius writes accept `dry_run: true` for read-only preview.
 | `agent_hq_create_sprint` | POST | `/api/v1/sprints` legacy alias |
 | `agent_hq_update_sprint` | PUT | `/api/v1/sprints/:id` legacy alias |
 | `agent_hq_delete_sprint` | DELETE | `/api/v1/sprints/:id` legacy alias |
+| `agent_hq_list_agents` | GET | `/api/v1/agents` |
+| `agent_hq_get_agent` | GET | `/api/v1/agents/:id` |
+| `agent_hq_list_mcp_servers` | GET | `/api/v1/mcp-servers` |
+| `agent_hq_get_mcp_server` | GET | `/api/v1/mcp-servers/:id` |
+| `agent_hq_list_agent_mcp_servers` | GET | `/api/v1/agents/:id/mcp-servers` |
+| `agent_hq_list_tools` | GET | `/api/v1/tools` |
+| `agent_hq_get_tool` | GET | `/api/v1/tools/:id` |
+| `agent_hq_audit_duplicate_tools` | GET | `/api/v1/tools/audit/duplicates` |
+| `agent_hq_list_agent_tools` | GET | `/api/v1/agents/:id/tools` |
 | `agent_hq_list_assignment_rules` | GET | `/api/v1/routing/assignment-rules?sprint_id=:sprintId` |
 | `agent_hq_get_assignment_rule` | GET | `/api/v1/routing/assignment-rules/:id?sprint_id=:sprintId` |
 | `agent_hq_create_assignment_rule` | POST | `/api/v1/routing/assignment-rules` |

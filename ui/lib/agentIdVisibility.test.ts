@@ -17,3 +17,12 @@ test('agent detail header renders the canonical agent id', () => {
 
   assert.match(detailPage, /Agent #\{agent\.id\}/);
 });
+
+test('agent detail MCP access panel renders catalog-driven capability checkboxes', () => {
+  const detailPage = readFileSync(join(here, '../app/agents/[id]/page.tsx'), 'utf8');
+  const agentTypes = readFileSync(join(here, './api/types.ts'), 'utf8');
+
+  assert.match(detailPage, /Agent HQ MCP Access/);
+  assert.match(detailPage, /type="checkbox"/);
+  assert.match(agentTypes, /AgentMcpPermissionCapability/);
+});
