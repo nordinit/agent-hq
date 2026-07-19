@@ -174,13 +174,15 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'tasks.read_active_context',
     group: 'Task lifecycle',
     label: 'Read active task context',
-    description: 'Allows reads for the agent\'s currently dispatched task, including context, notes, history, and instance linkage.',
+    description: 'Allows reads for the agent\'s currently dispatched task, including context, notes, history, relationship inspection, and instance linkage.',
     endpoints: [
       'GET /api/v1/tasks/:id',
       'GET /api/v1/tasks/:id/context',
       'GET /api/v1/tasks/:id/notes',
       'GET /api/v1/tasks/:id/history',
       'GET /api/v1/tasks/:id/instances',
+      'GET /api/v1/tasks/:id/relationships',
+      'GET /api/v1/tasks/:id/relationship-types',
       'GET /api/v1/tasks/:id/active-owner',
     ],
     defaultEnabled: {
@@ -1120,11 +1122,11 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     return next();
   }
 
-  const taskMatch = requestPath.match(/^\/tasks\/(\d+)(?:\/(context|notes|history|instances|review-evidence|qa-evidence|deploy-evidence|live-verification|outcome))?$/);
+  const taskMatch = requestPath.match(/^\/tasks\/(\d+)(?:\/(context|notes|history|instances|relationships|relationship-types|review-evidence|qa-evidence|deploy-evidence|live-verification|outcome))?$/);
   if (taskMatch) {
     const taskId = Number(taskMatch[1]);
     const suffix = taskMatch[2] ?? '';
-    const readAllowed = method === 'GET' && (suffix === '' || suffix === 'context' || suffix === 'notes' || suffix === 'history' || suffix === 'instances');
+    const readAllowed = method === 'GET' && (suffix === '' || suffix === 'context' || suffix === 'notes' || suffix === 'history' || suffix === 'instances' || suffix === 'relationships' || suffix === 'relationship-types');
     const writeAllowed = (
       (suffix === 'notes' && method === 'POST')
       || (suffix === 'review-evidence' && method === 'PUT')

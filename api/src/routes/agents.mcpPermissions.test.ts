@@ -75,7 +75,7 @@ describe('agent MCP permissions routes', () => {
       const body = await response.json() as {
         policy_mode: string;
         default_policy: string;
-        capabilities: Array<{ key: string; enabled: boolean; explicit_enabled: boolean | null }>;
+        capabilities: Array<{ key: string; enabled: boolean; explicit_enabled: boolean | null; description: string; endpoints: string[] }>;
       };
 
       expect(response.status).toBe(200);
@@ -84,6 +84,11 @@ describe('agent MCP permissions routes', () => {
       expect(body.capabilities.find((capability) => capability.key === 'tasks.read_active_context')).toMatchObject({
         enabled: true,
         explicit_enabled: null,
+        description: expect.stringContaining('relationship inspection'),
+        endpoints: expect.arrayContaining([
+          'GET /api/v1/tasks/:id/relationships',
+          'GET /api/v1/tasks/:id/relationship-types',
+        ]),
       });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
         group: 'Task lifecycle',

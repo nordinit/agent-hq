@@ -163,7 +163,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.get('/api/v1/tasks/:id', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), tenant_id: resolveTenantIdFromRequest(getDb(), req) }));
     app.get('/api/v1/tasks/:id/context', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), mode: req.query.mode ?? 'summary' }));
     app.get('/api/v1/tasks/:id/instances', (req, res) => res.json({ ok: true, task_id: Number(req.params.id) }));
+    app.get('/api/v1/tasks/:id/relationships', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationships: [] }));
+    app.get('/api/v1/tasks/:id/relationship-types', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationship_types: [] }));
     app.get('/api/v1/tasks/:id/active-owner', (req, res) => res.json({ ok: true, task_id: Number(req.params.id) }));
+    app.post('/api/v1/tasks/:id/relationships', (req, res) => res.status(201).json({ ok: true, task_id: Number(req.params.id), body: req.body }));
+    app.delete('/api/v1/tasks/:id/relationships/:relationshipId', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationship_id: Number(req.params.relationshipId) }));
     app.post('/api/v1/tasks/:id/notes', (req, res) => res.status(201).json({ ok: true, task_id: Number(req.params.id), body: req.body }));
     app.post('/api/v1/tasks/:id/outcome', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), body: req.body }));
     app.put('/api/v1/instances/:id/start', (req, res) => res.json({ ok: true, instance_id: Number(req.params.id), body: req.body }));
@@ -224,6 +228,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
     const instancesRes = await fetch(`${baseUrl}/api/v1/tasks/448/instances`, { headers: authHeaders(normalKey) });
     expect(instancesRes.status).toBe(200);
+
+    const relationshipsRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationships`, { headers: authHeaders(normalKey) });
+    expect(relationshipsRes.status).toBe(200);
+
+    const relationshipTypesRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationship-types`, { headers: authHeaders(normalKey) });
+    expect(relationshipTypesRes.status).toBe(200);
 
     const noteRes = await fetch(`${baseUrl}/api/v1/tasks/448/notes`, {
       method: 'POST',
@@ -351,6 +361,52 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(updateWorkflowRes.status).toBe(403);
 
+    const otherTaskRelationshipsRes = await fetch(`${baseUrl}/api/v1/tasks/449/relationships`, { headers: authHeaders(normalKey) });
+    expect(otherTaskRelationshipsRes.status).toBe(403);
+    await expect(otherTaskRelationshipsRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tasks.read_active_context',
+        task_id: 449,
+      },
+    });
+
+    const otherTaskRelationshipTypesRes = await fetch(`${baseUrl}/api/v1/tasks/449/relationship-types`, { headers: authHeaders(normalKey) });
+    expect(otherTaskRelationshipTypesRes.status).toBe(403);
+    await expect(otherTaskRelationshipTypesRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tasks.read_active_context',
+        task_id: 449,
+      },
+    });
+
+    const createRelationshipRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationships`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ target_task_id: 449, relationship_type_key: 'relates_to' }),
+    });
+    expect(createRelationshipRes.status).toBe(403);
+    await expect(createRelationshipRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'admin.full_access',
+        task_id: 448,
+      },
+    });
+
+    const deleteRelationshipRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationships/12`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(deleteRelationshipRes.status).toBe(403);
+    await expect(deleteRelationshipRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'admin.full_access',
+      },
+    });
+
     const db = getDb();
     const deniedNote = db.prepare(`SELECT author, content FROM task_notes WHERE task_id = ? ORDER BY id DESC LIMIT 1`).get(449) as {
       author: string;
@@ -411,6 +467,37 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       code: 'mcp_scope_denied',
       details: {
         required_capability: 'projects.manage_active_files',
+        policy_mode: 'explicit',
+      },
+    });
+
+    const relationshipsRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationships`, { headers: authHeaders(normalKey) });
+    expect(relationshipsRes.status).toBe(200);
+
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'tasks.write_active_lifecycle',
+      'sprints.read_active_sprint',
+      'workflow.read_active_configuration',
+      'external.write_task_events',
+    ]);
+
+    const disabledRelationshipsRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationships`, { headers: authHeaders(normalKey) });
+    expect(disabledRelationshipsRes.status).toBe(403);
+    await expect(disabledRelationshipsRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tasks.read_active_context',
+        policy_mode: 'explicit',
+      },
+    });
+
+    const disabledRelationshipTypesRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationship-types`, { headers: authHeaders(normalKey) });
+    expect(disabledRelationshipTypesRes.status).toBe(403);
+    await expect(disabledRelationshipTypesRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tasks.read_active_context',
         policy_mode: 'explicit',
       },
     });
