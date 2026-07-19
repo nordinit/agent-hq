@@ -90,12 +90,12 @@ describe('agent MCP permissions routes', () => {
           'GET /api/v1/tasks/:id/relationship-types',
         ]),
       });
-      expect(body.capabilities.find((capability) => capability.key === 'tasks.read_any_context')).toMatchObject({
+      expect(body.capabilities.find((capability) => capability.key === 'tasks.read_project_context')).toMatchObject({
         group: 'Task lifecycle',
-        label: 'Read any task context',
+        label: 'Read project task context',
         enabled: false,
         explicit_enabled: null,
-        description: expect.stringContaining('any task in the agent\'s tenant'),
+        description: expect.stringContaining('tasks in the agent\'s assigned project'),
         endpoints: expect.arrayContaining([
           'GET /api/v1/tasks/:id',
           'GET /api/v1/tasks/:id/context',
@@ -153,7 +153,7 @@ describe('agent MCP permissions routes', () => {
         enabled: false,
         explicit_enabled: false,
       });
-      expect(updated.capabilities.find((capability) => capability.key === 'tasks.read_any_context')).toMatchObject({
+      expect(updated.capabilities.find((capability) => capability.key === 'tasks.read_project_context')).toMatchObject({
         enabled: false,
         explicit_enabled: false,
       });
@@ -213,7 +213,7 @@ describe('agent MCP permissions routes', () => {
       expect(body.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
         enabled: true,
       });
-      expect(body.capabilities.find((capability) => capability.key === 'tasks.read_any_context')).toMatchObject({
+      expect(body.capabilities.find((capability) => capability.key === 'tasks.read_project_context')).toMatchObject({
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'admin.cross_tenant')).toMatchObject({

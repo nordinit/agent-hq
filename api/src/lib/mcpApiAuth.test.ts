@@ -40,6 +40,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   let normalKey = '';
   let adminKey = '';
   let ecoKey = '';
+  let noProjectKey = '';
 
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-api-auth-'));
@@ -64,6 +65,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         tenant_id INTEGER,
+        project_id INTEGER,
         name TEXT NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
         system_role TEXT,
@@ -139,20 +141,21 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`)
       .run(1, 'Default Tenant', 'default', 1, 2, 'EcoPool', 'ecopool', 0);
     db.prepare(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`).run();
-    db.prepare(`INSERT INTO agents (id, tenant_id, name, enabled, system_role) VALUES (?, ?, ?, 1, NULL), (?, ?, ?, 1, 'admin'), (?, ?, ?, 1, NULL), (?, ?, ?, 1, NULL)`)
-      .run(7, 1, 'Cinder', 8, 1, 'Atlas', 9, 1, 'QA', 10, 2, 'EcoPool Worker');
-    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?)`)
-      .run(86, 1, 'Agent HQ', 99, 2, 'EcoPool Project');
-    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`)
-      .run(42, 1, 86, 'Enhancements', 43, 2, 99, 'EcoPool Sprint');
+    db.prepare(`INSERT INTO agents (id, tenant_id, project_id, name, enabled, system_role) VALUES (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, 'admin'), (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, NULL)`)
+      .run(7, 1, 86, 'Cinder', 8, 1, 86, 'Atlas', 9, 1, 86, 'QA', 10, 2, 99, 'EcoPool Worker', 11, 1, null, 'No Project Agent');
+    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`)
+      .run(86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project');
+    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`)
+      .run(42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint');
     db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`)
       .run(2551, 448, 7, 'running', 2552, 449, 9, 'running', 2553, 450, 10, 'running');
-    db.prepare(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`)
-      .run(448, 1, 86, 42, 7, 9, 2551, 449, 2, 99, 43, 9, 9, 2552, 450, 2, 99, 43, 10, 10, 2553, 451, 1, 86, 42, null, null, null);
+    db.prepare(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`)
+      .run(448, 1, 86, 42, 7, 9, 2551, 449, 2, 99, 43, 9, 9, 2552, 450, 2, 99, 43, 10, 10, 2553, 451, 1, 86, 42, null, null, null, 452, 1, 87, 44, null, null, null);
 
     normalKey = issueMcpApiKeyForAgent(db, 7).apiKey;
     adminKey = issueMcpApiKeyForAgent(db, 8).apiKey;
     ecoKey = issueMcpApiKeyForAgent(db, 10).apiKey;
+    noProjectKey = issueMcpApiKeyForAgent(db, 11).apiKey;
 
     const app = express();
     app.use(express.json());
@@ -278,15 +281,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
   });
 
-  it('allows active-owner checks for tenant-local unscoped tasks without granting normal task reads', async () => {
-    const activeOwnerRes = await fetch(`${baseUrl}/api/v1/tasks/451/active-owner`, { headers: authHeaders(normalKey) });
+  it('allows active-owner checks for active tasks without granting normal unrelated task reads', async () => {
+    const activeOwnerRes = await fetch(`${baseUrl}/api/v1/tasks/448/active-owner`, { headers: authHeaders(normalKey) });
     expect(activeOwnerRes.status).toBe(200);
 
     const otherTaskRes = await fetch(`${baseUrl}/api/v1/tasks/451`, { headers: authHeaders(normalKey) });
     expect(otherTaskRes.status).toBe(403);
 
-    const crossTenantActiveOwnerRes = await fetch(`${baseUrl}/api/v1/tasks/449/active-owner`, { headers: authHeaders(normalKey) });
-    expect(crossTenantActiveOwnerRes.status).toBe(403);
+    const unscopedSameProjectActiveOwnerRes = await fetch(`${baseUrl}/api/v1/tasks/451/active-owner`, { headers: authHeaders(normalKey) });
+    expect(unscopedSameProjectActiveOwnerRes.status).toBe(403);
   });
 
   it('persists explicit per-agent MCP capability policy snapshots', () => {
@@ -446,10 +449,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await expect(createTaskRes.json()).resolves.toMatchObject({ ok: true });
   });
 
-  it('allows read-only access to any tenant-local task context when Read any task context is enabled', async () => {
+  it('allows read-only access to project task context when Read project task context is enabled', async () => {
     replaceAgentMcpPermissionPolicy(getDb(), 7, [
       'discovery.read_catalog',
-      'tasks.read_any_context',
+      'tasks.read_project_context',
       'tasks.create',
     ]);
 
@@ -471,12 +474,22 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(createdTaskRes.status).toBe(201);
 
+    const sameTenantOtherProjectTaskRes = await fetch(`${baseUrl}/api/v1/tasks/452`, { headers: authHeaders(normalKey) });
+    expect(sameTenantOtherProjectTaskRes.status).toBe(403);
+    await expect(sameTenantOtherProjectTaskRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tasks.read_project_context',
+        task_id: 452,
+      },
+    });
+
     const crossTenantTaskRes = await fetch(`${baseUrl}/api/v1/tasks/449`, { headers: authHeaders(normalKey) });
     expect(crossTenantTaskRes.status).toBe(403);
     await expect(crossTenantTaskRes.json()).resolves.toMatchObject({
       code: 'mcp_scope_denied',
       details: {
-        required_capability: 'tasks.read_any_context',
+        required_capability: 'tasks.read_project_context',
         task_id: 449,
       },
     });
@@ -505,6 +518,49 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       code: 'mcp_scope_denied',
       details: {
         required_capability: 'admin.full_access',
+        task_id: 451,
+      },
+    });
+  });
+
+  it('fails closed for project task context reads when the agent has no canonical project', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 11, [
+      'discovery.read_catalog',
+      'tasks.read_project_context',
+    ]);
+
+    const response = await fetch(`${baseUrl}/api/v1/tasks/451`, { headers: authHeaders(noProjectKey) });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tasks.read_project_context',
+        task_id: 451,
+      },
+    });
+  });
+
+  it('invalidates legacy tenant-wide read_any_context assignments', async () => {
+    getAgentMcpPermissionPolicy(getDb(), 7);
+    getDb().prepare(`
+      INSERT INTO agent_mcp_capability_policies (agent_id, capability_key, enabled)
+      VALUES (?, ?, ?)
+    `).run(7, 'tasks.read_any_context', 1);
+
+    const snapshot = getAgentMcpPermissionPolicy(getDb(), 7);
+    expect(snapshot.policy_mode).toBe('explicit');
+    expect(snapshot.capabilities.some((capability) => capability.key === 'tasks.read_any_context')).toBe(false);
+    expect(snapshot.capabilities.find((capability) => capability.key === 'tasks.read_project_context')).toMatchObject({
+      enabled: false,
+      explicit_enabled: null,
+    });
+
+    const response = await fetch(`${baseUrl}/api/v1/tasks/451`, { headers: authHeaders(normalKey) });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: {
+        required_capability: 'tasks.read_active_context',
         task_id: 451,
       },
     });

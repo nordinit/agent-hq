@@ -202,7 +202,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_get_task_instances', 'atlas_get_task_instances'],
-    'Get job instances and run state for a task. Requires active-task read scope or Read any task context for tenant-local tasks.',
+    'Get job instances and run state for a task. Requires active-task read scope or Read project task context for tasks in the agent assigned project.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTaskInstances(task_id))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id/instances'] },
@@ -210,7 +210,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_get_task_active_owner', 'atlas_get_task_active_owner'],
-    'Check the active-owner context for a task, including whether the authenticated MCP agent owns the active run. Requires active-task read scope or Read any task context for tenant-local tasks.',
+    'Check the active-owner context for a task, including whether the authenticated MCP agent owns the active run. Requires active-task read scope or Read project task context for tasks in the agent assigned project.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTaskActiveOwner(task_id))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id/active-owner'] },

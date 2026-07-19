@@ -191,10 +191,10 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
-    key: 'tasks.read_any_context',
+    key: 'tasks.read_project_context',
     group: 'Task lifecycle',
-    label: 'Read any task context',
-    description: 'Allows read-only access to task detail, canonical context, notes, history, run state, active-owner context, relationships, and relationship types for any task in the agent\'s tenant. Does not allow task writes, relationship mutation, admin routes, or cross-tenant access.',
+    label: 'Read project task context',
+    description: 'Allows read-only access to task detail, canonical context, notes, history, run state, active-owner context, relationships, and relationship types for tasks in the agent\'s assigned project. The project scope comes from the agent identity, not caller-supplied parameters. Does not allow task writes, relationship mutation, admin routes, tenant-wide reads, or cross-tenant access.',
     endpoints: [
       'GET /api/v1/tasks/:id',
       'GET /api/v1/tasks/:id/context',
@@ -372,6 +372,7 @@ export interface AgentMcpPermissionPolicySnapshot {
 const AGENT_MCP_CAPABILITY_KEYS = new Set<AgentMcpCapabilityKey>(
   AGENT_MCP_CAPABILITY_CATALOG.map((capability) => capability.key),
 );
+const LEGACY_AGENT_MCP_CAPABILITY_KEYS = new Set(['tasks.read_any_context']);
 
 function ensureAgentMcpCapabilityPolicyTable(db: Database.Database): void {
   db.exec(`
@@ -541,6 +542,9 @@ export function replaceAgentMcpPermissionPolicy(
 
   for (const rawKey of enabledCapabilityKeys) {
     if (!AGENT_MCP_CAPABILITY_KEYS.has(rawKey as AgentMcpCapabilityKey)) {
+      if (LEGACY_AGENT_MCP_CAPABILITY_KEYS.has(rawKey)) {
+        throw new Error(`Unknown Agent HQ MCP capability: ${rawKey} has been removed; use tasks.read_project_context for project-scoped task context reads`);
+      }
       throw new Error(`Unknown Agent HQ MCP capability: ${rawKey}`);
     }
     normalized.add(rawKey as AgentMcpCapabilityKey);
@@ -942,9 +946,15 @@ function getScopedInstanceContexts(db: Database.Database, identity: McpApiIdenti
   }));
 }
 
-function taskBelongsToIdentityTenant(db: Database.Database, identity: McpApiIdentity, taskId: number): boolean {
-  const row = db.prepare(`SELECT tenant_id FROM tasks WHERE id = ? LIMIT 1`).get(taskId) as { tenant_id: number | null } | undefined;
-  return parsePositiveInt(row?.tenant_id) === identity.tenantId;
+function getCanonicalAgentProjectId(db: Database.Database, identity: McpApiIdentity): number | null {
+  if (!hasColumn(db, 'agents', 'project_id')) return null;
+  const row = db.prepare(`SELECT project_id FROM agents WHERE id = ? AND tenant_id = ? LIMIT 1`).get(identity.agentId, identity.tenantId) as { project_id: number | null } | undefined;
+  return parsePositiveInt(row?.project_id);
+}
+
+function taskBelongsToProject(db: Database.Database, identity: McpApiIdentity, taskId: number, projectId: number): boolean {
+  const row = db.prepare(`SELECT tenant_id, project_id FROM tasks WHERE id = ? LIMIT 1`).get(taskId) as { tenant_id: number | null; project_id: number | null } | undefined;
+  return parsePositiveInt(row?.tenant_id) === identity.tenantId && parsePositiveInt(row?.project_id) === projectId;
 }
 
 function taskIdForInstance(db: Database.Database, instanceId: number): number | null {
@@ -1071,6 +1081,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
   const scopedProjectIds = new Set(taskScopes.map((row) => row.projectId).filter((value): value is number => value != null));
   const scopedSprintIds = new Set(taskScopes.map((row) => row.sprintId).filter((value): value is number => value != null));
   const scopedInstanceIds = new Set(instanceScopes.map((row) => row.instanceId));
+  const canonicalAgentProjectId = getCanonicalAgentProjectId(db, identity);
 
   if (permissionState.enabledCapabilities.has('admin.full_access')) return next();
 
@@ -1140,22 +1151,32 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
   if (activeOwnerMatch && method === 'GET') {
     const taskId = Number(activeOwnerMatch[1]);
     const hasActiveRead = permissionState.enabledCapabilities.has('tasks.read_active_context');
-    const hasAnyRead = permissionState.enabledCapabilities.has('tasks.read_any_context');
-    if (!hasActiveRead && !hasAnyRead) {
+    const hasProjectRead = permissionState.enabledCapabilities.has('tasks.read_project_context');
+    if (!hasActiveRead && !hasProjectRead) {
       return deny({
         reason: `${identity.agentSlug} is not allowed to read task MCP routes.`,
-        requiredCapability: 'tasks.read_any_context',
+        requiredCapability: 'tasks.read_project_context',
         taskId,
       });
     }
-    if (!taskBelongsToIdentityTenant(db, identity, taskId)) {
+    if (hasActiveRead && scopedTaskIds.has(taskId)) return next();
+    if (hasProjectRead && canonicalAgentProjectId != null && taskBelongsToProject(db, identity, taskId, canonicalAgentProjectId)) {
+      return next();
+    }
+    if (hasProjectRead && canonicalAgentProjectId == null) {
       return deny({
-        reason: `Task #${taskId} is outside the MCP key tenant for ${identity.agentSlug}.`,
-        requiredCapability: hasAnyRead ? 'tasks.read_any_context' : 'tasks.read_active_context',
+        reason: `${identity.agentSlug} does not have an assigned project for project task context reads.`,
+        requiredCapability: 'tasks.read_project_context',
         taskId,
       });
     }
-    return next();
+    return deny({
+      reason: hasProjectRead
+        ? `Task #${taskId} is outside the assigned project for ${identity.agentSlug}.`
+        : `Normal Agent HQ MCP keys can only access the active dispatched task for ${identity.agentSlug}.`,
+      requiredCapability: hasProjectRead ? 'tasks.read_project_context' : 'tasks.read_active_context',
+      taskId,
+    });
   }
 
   const taskMatch = requestPath.match(/^\/tasks\/(\d+)(?:\/(context|notes|history|instances|relationships|relationship-types|review-evidence|qa-evidence|deploy-evidence|live-verification|outcome))?$/);
@@ -1171,10 +1192,10 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       || (suffix === 'live-verification' && method === 'PUT')
       || (suffix === 'outcome' && method === 'POST')
     );
-    const hasAnyTaskRead = permissionState.enabledCapabilities.has('tasks.read_any_context');
+    const hasProjectTaskRead = permissionState.enabledCapabilities.has('tasks.read_project_context');
     const requiredCapability: AgentMcpCapabilityKey | null = readAllowed
-      ? hasAnyTaskRead
-        ? 'tasks.read_any_context'
+      ? hasProjectTaskRead
+        ? 'tasks.read_project_context'
         : 'tasks.read_active_context'
       : writeAllowed
         ? 'tasks.write_active_lifecycle'
@@ -1192,10 +1213,17 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       return;
     }
 
-    if (readAllowed && hasAnyTaskRead) {
-      if (!taskBelongsToIdentityTenant(db, identity, taskId)) {
+    if (readAllowed && hasProjectTaskRead) {
+      if (canonicalAgentProjectId == null) {
         return deny({
-          reason: `Task #${taskId} is outside the MCP key tenant for ${identity.agentSlug}.`,
+          reason: `${identity.agentSlug} does not have an assigned project for project task context reads.`,
+          requiredCapability,
+          taskId,
+        });
+      }
+      if (!taskBelongsToProject(db, identity, taskId, canonicalAgentProjectId)) {
+        return deny({
+          reason: `Task #${taskId} is outside the assigned project for ${identity.agentSlug}.`,
           requiredCapability,
           taskId,
         });
