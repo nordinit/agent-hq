@@ -11,6 +11,7 @@ const mockDropBeforeResponseCounts = new Map<string, number>();
 const mockNeverRespondMethods = new Set<string>();
 const mockResponseDelays = new Map<string, number>();
 const mockToolsEffectivePayloads: Array<Record<string, unknown>> = [];
+const mockSpawnSync = jest.fn();
 
 const mockSyncOAuthProviderForOpenClawAgent = jest.fn();
 const ORIGINAL_MCP_READINESS_TIMEOUT_MS = process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS;
@@ -125,6 +126,10 @@ jest.mock('ws', () => {
   return { WebSocket: MockWebSocket };
 });
 
+jest.mock('child_process', () => ({
+  spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
+}));
+
 jest.mock('../lib/openclawOAuthProfiles', () => ({
   syncOAuthProviderForOpenClawAgent: (...args: unknown[]) => mockSyncOAuthProviderForOpenClawAgent(...args),
 }));
@@ -170,6 +175,8 @@ describe('OpenClawRuntime gateway dispatch', () => {
     mockNeverRespondMethods.clear();
     mockResponseDelays.clear();
     mockToolsEffectivePayloads.length = 0;
+    mockSpawnSync.mockReset();
+    mockSpawnSync.mockReturnValue({ status: 0, signal: null, stdout: '', stderr: '' });
     process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS = '20';
     process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_POLL_MS = '1';
     mockSyncOAuthProviderForOpenClawAgent.mockResolvedValue({
@@ -277,6 +284,88 @@ describe('OpenClawRuntime gateway dispatch', () => {
     expect(patch?.params).toEqual({
       key: 'agent:cinder-backend:hook:atlas:jobrun:383',
     });
+  });
+
+  it('accepts a cold tools.effective catalog after connecting assigned MCP servers with probe', async () => {
+    mockSpawnSync
+      .mockReturnValueOnce({ status: 0, signal: null, stdout: 'reloaded', stderr: '' })
+      .mockReturnValueOnce({
+        status: 0,
+        signal: null,
+        stdout: JSON.stringify({
+          servers: {
+            'dev-environment-lease-manager__agent-94': { tools: 24 },
+          },
+          tools: [
+            'dev-environment-lease-manager___dev_env_deploy_worktree',
+          ],
+        }),
+        stderr: '',
+      });
+    mockToolsEffectivePayloads.push({
+      groups: [
+        { id: 'core', tools: [{ id: 'exec_command' }] },
+      ],
+      notices: [
+        { id: 'mcp-not-yet-connected', severity: 'info', message: 'cold session' },
+      ],
+    });
+    const runtime = new OpenClawRuntime();
+
+    const result = await runtime.dispatch(dispatchParams({
+      openClawMcpReadiness: {
+        serverNames: ['dev-environment-lease-manager__agent-94'],
+        requiredToolNames: ['dev_env_deploy_worktree'],
+        requiredToolsByServerName: {
+          'dev-environment-lease-manager__agent-94': ['dev_env_deploy_worktree'],
+        },
+        materializedCount: 1,
+        bundlePath: '/workspace/.openclaw/extensions/agent-hq-mcp/.mcp.json',
+        workingDirectory: '/workspace',
+      },
+    }));
+
+    expect(result.runId).toBe('run-123');
+    expect(mockSpawnSync).toHaveBeenNthCalledWith(1, 'openclaw', ['mcp', 'reload'], expect.objectContaining({
+      cwd: '/workspace',
+    }));
+    expect(mockSpawnSync).toHaveBeenNthCalledWith(2, 'openclaw', ['mcp', 'probe', 'dev-environment-lease-manager__agent-94', '--json'], expect.objectContaining({
+      cwd: '/workspace',
+    }));
+    expect(mockSentRequests.map((request) => request.method)).toEqual([
+      'connect',
+      'sessions.patch',
+      'tools.effective',
+      'chat.send',
+    ]);
+  });
+
+  it('fails before chat.send when an assigned MCP server probe lacks a required tool', async () => {
+    mockSpawnSync
+      .mockReturnValueOnce({ status: 0, signal: null, stdout: 'reloaded', stderr: '' })
+      .mockReturnValueOnce({
+        status: 0,
+        signal: null,
+        stdout: JSON.stringify({
+          tools: ['dev-environment-lease-manager___dev_env_status'],
+        }),
+        stderr: '',
+      });
+    const runtime = new OpenClawRuntime();
+
+    await expect(runtime.dispatch(dispatchParams({
+      openClawMcpReadiness: {
+        serverNames: ['dev-environment-lease-manager__agent-94'],
+        requiredToolNames: ['dev_env_deploy_worktree'],
+        requiredToolsByServerName: {
+          'dev-environment-lease-manager__agent-94': ['dev_env_deploy_worktree'],
+        },
+        materializedCount: 1,
+        workingDirectory: '/workspace',
+      },
+    }))).rejects.toThrow('initialized without required tool');
+
+    expect(mockSentRequests.some((request) => request.method === 'chat.send')).toBe(false);
   });
 
   it('fails before chat.send when required assigned MCP tools stay absent', async () => {

@@ -88,8 +88,10 @@ export interface DispatchParams extends RuntimeEventCallbacks {
   openClawMcpReadiness?: {
     serverNames: string[];
     requiredToolNames: string[];
+    requiredToolsByServerName?: Record<string, string[]>;
     materializedCount: number;
     bundlePath?: string | null;
+    workingDirectory?: string | null;
   } | null;
   /**
    * Legacy container hook metadata.

@@ -6,6 +6,7 @@
  * The dispatcher now calls this via the AgentRuntime interface.
  */
 
+import { spawnSync } from 'child_process';
 import type {
   AgentRuntime,
   DispatchParams,
@@ -94,8 +95,116 @@ function sleep(ms: number): Promise<void> {
 }
 
 function missingRequiredTools(actual: string[], required: string[]): string[] {
-  const actualSet = new Set(actual);
-  return required.filter((name) => !actualSet.has(name));
+  return required.filter((name) => !actual.some((actualName) => openClawToolNameMatches(actualName, name)));
+}
+
+function openClawToolNameMatches(actualName: string, requiredName: string): boolean {
+  if (actualName === requiredName) return true;
+  return actualName.endsWith(`___${requiredName}`) || actualName.endsWith(`__${requiredName}`);
+}
+
+function extractJsonObject(raw: string): unknown {
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end < start) throw new Error('command output did not contain a JSON object');
+  return JSON.parse(raw.slice(start, end + 1));
+}
+
+function collectStringValues(value: unknown, keys: Set<string>, out = new Set<string>()): string[] {
+  if (!value || typeof value !== 'object') return Array.from(out).sort();
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === 'string') out.add(item);
+      else collectStringValues(item, keys, out);
+    }
+    return Array.from(out).sort();
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(record)) {
+    if (keys.has(key)) {
+      if (typeof child === 'string') out.add(child);
+      else if (Array.isArray(child)) {
+        for (const item of child) {
+          if (typeof item === 'string') out.add(item);
+          else collectStringValues(item, keys, out);
+        }
+      }
+    } else {
+      collectStringValues(child, keys, out);
+    }
+  }
+  return Array.from(out).sort();
+}
+
+function formatCommandFailure(command: string, args: string[], status: number | null, signal: NodeJS.Signals | null, output: string): string {
+  const detail = output.trim().split('\n').slice(-6).join('\n').trim();
+  return `${[command, ...args].join(' ')} failed` +
+    (status !== null ? ` with status ${status}` : '') +
+    (signal ? ` signal ${signal}` : '') +
+    (detail ? `: ${detail}` : '');
+}
+
+function reloadOpenClawMcpRuntimeCache(workingDirectory: string): void {
+  const command = process.env.OPENCLAW_BIN?.trim() || 'openclaw';
+  const args = ['mcp', 'reload'];
+  const result = spawnSync(command, args, {
+    cwd: workingDirectory,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  const output = [result.stderr, result.stdout].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('\n');
+  if (result.error) {
+    throw new Error(`OpenClaw MCP runtime cache reload failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`OpenClaw MCP runtime cache reload failed: ${formatCommandFailure(command, args, result.status, result.signal, output)}`);
+  }
+  console.log(`[OpenClawRuntime] MCP runtime cache reload complete: cwd=${workingDirectory}`);
+}
+
+function probeOpenClawMcpServer(params: {
+  serverName: string;
+  workingDirectory: string;
+  requiredToolNames: string[];
+}): void {
+  const command = process.env.OPENCLAW_BIN?.trim() || 'openclaw';
+  const args = ['mcp', 'probe', params.serverName, '--json'];
+  const result = spawnSync(command, args, {
+    cwd: params.workingDirectory,
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  const output = [result.stderr, result.stdout].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('\n');
+  if (result.error) {
+    throw new Error(`OpenClaw MCP server "${params.serverName}" startup probe failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`OpenClaw MCP server "${params.serverName}" startup probe failed: ${formatCommandFailure(command, args, result.status, result.signal, output)}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = extractJsonObject(output);
+  } catch (err) {
+    throw new Error(
+      `OpenClaw MCP server "${params.serverName}" startup probe returned unreadable JSON: ` +
+      (err instanceof Error ? err.message : String(err)),
+    );
+  }
+
+  const toolNames = collectStringValues(parsed, new Set(['tools']));
+  const missing = missingRequiredTools(toolNames, params.requiredToolNames);
+  console.log(
+    `[OpenClawRuntime] MCP server initialization probe complete: server=${params.serverName} ` +
+    `toolCount=${toolNames.length} requiredTools=${params.requiredToolNames.join(', ') || '(none)'} ` +
+    `missing=${missing.join(', ') || '(none)'}`,
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `OpenClaw MCP server "${params.serverName}" initialized without required tool(s): ` +
+      `${missing.join(', ')}; discoveredToolCount=${toolNames.length}`,
+    );
+  }
 }
 
 async function waitForOpenClawMcpReadiness(params: {
@@ -114,6 +223,20 @@ async function waitForOpenClawMcpReadiness(params: {
   const pollMs = Number.isFinite(configuredPollMs) && configuredPollMs > 0
     ? configuredPollMs
     : 500;
+
+  const workingDirectory = params.readiness.workingDirectory?.trim();
+  if (workingDirectory) {
+    reloadOpenClawMcpRuntimeCache(workingDirectory);
+    const requiredByServer = params.readiness.requiredToolsByServerName ?? {};
+    for (const serverName of params.readiness.serverNames) {
+      probeOpenClawMcpServer({
+        serverName,
+        workingDirectory,
+        requiredToolNames: requiredByServer[serverName] ?? [],
+      });
+    }
+  }
+
   const startedAt = Date.now();
   let lastError: string | null = null;
   let lastToolNames: string[] = [];
@@ -137,6 +260,15 @@ async function waitForOpenClawMcpReadiness(params: {
         `[OpenClawRuntime] MCP readiness poll: sessionKey=${params.sessionKey} servers=${params.readiness.serverNames.join(', ') || '(none)'} effectiveToolCount=${effective.toolNames.length} requiredTools=${requiredToolNames.join(', ')} missing=${missing.join(', ') || '(none)'} notices=${effective.noticeIds.join(', ') || '(none)'}`,
       );
       if (missing.length === 0 && staleNotices.length === 0) return;
+      if (workingDirectory && staleNotices.length > 0 && staleNotices.every((id) => id === 'mcp-not-yet-connected')) {
+        console.log(
+          `[OpenClawRuntime] MCP readiness continuing after cold-session catalog notice: ` +
+          `sessionKey=${params.sessionKey} notices=${staleNotices.join(', ')} ` +
+          `effectiveMissing=${missing.join(', ') || '(none)'} ` +
+          `probeVerifiedServers=${params.readiness.serverNames.join(', ') || '(none)'}`,
+        );
+        return;
+      }
     }
     await sleep(pollMs);
   }

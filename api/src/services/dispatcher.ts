@@ -102,6 +102,16 @@ function requiredOpenClawMcpToolsForServerNames(serverNames: string[]): string[]
   return Array.from(tools).sort();
 }
 
+function requiredOpenClawMcpToolsByServerName(serverNames: string[]): Record<string, string[]> {
+  const entries = serverNames
+    .map((serverName) => {
+      const slug = serverName.replace(/__agent-\d+$/, '');
+      return [serverName, REQUIRED_OPENCLAW_MCP_TOOLS_BY_SERVER_SLUG[slug] ?? []] as const;
+    })
+    .filter(([, tools]) => tools.length > 0);
+  return Object.fromEntries(entries);
+}
+
 // ── Dispatch failure backoff (task #355) ─────────────────────────────────────
 //
 // When a dispatch attempt fails (gateway down, Anthropic overloaded, etc.),
@@ -1545,8 +1555,10 @@ async function fireAgentRun(
           openClawMcpReadiness = {
             serverNames: mcpResult.serverNames,
             requiredToolNames: requiredOpenClawMcpToolsForServerNames(mcpResult.serverNames),
+            requiredToolsByServerName: requiredOpenClawMcpToolsByServerName(mcpResult.serverNames),
             materializedCount: mcpResult.count,
             bundlePath: mcpResult.bundlePath ?? null,
+            workingDirectory: mcpResult.workingDirectory ?? null,
           };
           console.log(
             `[dispatcher] MCP registry refresh complete for instance #${instanceId}; requiredTools=${openClawMcpReadiness.requiredToolNames.join(', ') || '(none)'}`,
