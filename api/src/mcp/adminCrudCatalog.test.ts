@@ -225,6 +225,29 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     }
   });
 
+  it('advertises optional workflow-resolved status on task create schema', () => {
+    const schemas = new Map<string, Record<string, ZodTypeAny>>();
+
+    registerTasksTools({
+      api: {} as never,
+      registerTool(names, _description, schema) {
+        schemas.set(names[0], schema);
+      },
+      registerResource: jest.fn(),
+      wrap: (fn) => async () => ({ content: [{ type: 'text', text: JSON.stringify(await fn()) }] }),
+    });
+
+    const statusSchema = schemas.get('agent_hq_create_task')?.status;
+    const jsonSchema = toJSONSchema(statusSchema!) as Record<string, unknown>;
+
+    expect(jsonSchema).toMatchObject({ type: 'string', minLength: 1 });
+    expect(jsonSchema).not.toHaveProperty('enum');
+    expect(statusSchema?.safeParse(undefined).success).toBe(true);
+    expect(statusSchema?.safeParse('ready').success).toBe(true);
+    expect(statusSchema?.safeParse('field_reported').success).toBe(true);
+    expect(statusSchema?.safeParse('').success).toBe(false);
+  });
+
   it('serializes argument docs with required flags, descriptions, and enum choices', () => {
     const catalog = getMcpCatalog();
     const byName = new Map(catalog.tools.map(tool => [tool.canonical_name, tool]));

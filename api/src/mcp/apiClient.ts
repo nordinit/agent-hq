@@ -801,6 +801,7 @@ export class AgentHqApiClient {
     project_id: number;
     description?: string;
     sprint_id: number;
+    status?: string;
     priority?: string;
     task_type?: string;
     story_points?: number | null;
@@ -821,6 +822,7 @@ export class AgentHqApiClient {
             project_id: data.project_id,
             description: data.description ?? '',
             sprint_id: data.sprint_id,
+            ...(data.status === undefined ? {} : { status: data.status }),
             priority: data.priority ?? 'medium',
             task_type: data.task_type ?? 'backend',
             story_points: data.story_points ?? null,
@@ -837,6 +839,7 @@ export class AgentHqApiClient {
       project_id: data.project_id,
       description: data.description,
       sprint_id: data.sprint_id,
+      status: data.status,
       priority: data.priority,
       task_type: data.task_type,
       story_points: data.story_points,

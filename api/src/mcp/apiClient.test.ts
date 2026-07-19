@@ -84,6 +84,99 @@ function installMoveTaskFetchMock() {
   return { fetchMock, postedBodies };
 }
 
+describe('AgentHqApiClient.createTask', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+  });
+
+  it('omits status from create requests when no initial status is supplied', async () => {
+    const postedBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = jest.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+
+      if (method === 'POST' && url === 'http://agent-hq.test/api/v1/tasks') {
+        postedBodies.push(JSON.parse(String(init?.body ?? '{}')));
+        return jsonResponse({ id: 10, status: 'todo' });
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        text: async () => JSON.stringify({ error: `Unexpected request: ${method} ${url}` }),
+      } as Response;
+    });
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+    const client = new AgentHqApiClient('http://agent-hq.test');
+    await client.createTask({
+      title: 'Omitted status task',
+      project_id: 1,
+      sprint_id: 10,
+      task_type: 'backend',
+    });
+
+    expect(postedBodies).toEqual([
+      expect.not.objectContaining({ status: expect.anything() }),
+    ]);
+  });
+
+  it('passes explicit initial status through create requests', async () => {
+    const postedBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = jest.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+
+      if (method === 'POST' && url === 'http://agent-hq.test/api/v1/tasks') {
+        postedBodies.push(JSON.parse(String(init?.body ?? '{}')));
+        return jsonResponse({ id: 11, status: 'ready' });
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        text: async () => JSON.stringify({ error: `Unexpected request: ${method} ${url}` }),
+      } as Response;
+    });
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+    const client = new AgentHqApiClient('http://agent-hq.test');
+    await client.createTask({
+      title: 'Ready task',
+      project_id: 1,
+      sprint_id: 10,
+      status: 'ready',
+      task_type: 'backend',
+    });
+
+    expect(postedBodies).toEqual([
+      expect.objectContaining({ status: 'ready' }),
+    ]);
+  });
+
+  it('includes explicit initial status in dry-run previews', async () => {
+    const client = new AgentHqApiClient('http://agent-hq.test');
+
+    await expect(client.createTask({
+      title: 'Preview ready task',
+      project_id: 1,
+      sprint_id: 10,
+      status: 'ready',
+      task_type: 'backend',
+      dry_run: true,
+    })).resolves.toEqual({
+      dry_run: true,
+      preview: {
+        method: 'POST',
+        path: '/api/v1/tasks',
+        body: expect.objectContaining({ status: 'ready' }),
+      },
+    });
+  });
+});
+
 describe('AgentHqApiClient.moveTask configured outcomes', () => {
   const originalFetch = global.fetch;
 

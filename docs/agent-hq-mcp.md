@@ -270,6 +270,7 @@ Typical writable fields:
 - `project_id` (required)
 - `description`
 - `workflow_id` in new workflow-facing docs/tools; `sprint_id` remains the compatibility field currently used by routing/task APIs
+- `status` (optional initial workflow status; omit to use the workflow/default creation status)
 - `priority`
 - `task_type`
 - `story_points`
@@ -342,6 +343,7 @@ Then pass only fields accepted by the resolved task field schema:
     "title": "Implement API retry policy",
     "project_id": 86,
     "sprint_id": 42,
+    "status": "ready",
     "task_type": "backend",
     "custom_fields": {
       "target_surface": "api",

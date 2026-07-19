@@ -72,6 +72,24 @@ function seedCustomFieldWorkflow(): { projectId: number; sprintId: number } {
   return { projectId: 9201, sprintId: 9202 };
 }
 
+function seedCustomStatusWorkflow(): { projectId: number; sprintId: number } {
+  const db = getDb();
+  db.prepare(`INSERT INTO projects (id, name, description, context_md) VALUES (9301, 'Custom Status Workflow Test', '', '')`).run();
+  db.prepare(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'custom_status_mcp', 'Custom Status MCP', '')`).run();
+  db.prepare(`
+    INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, stage_order, is_default_entry)
+    VALUES
+      (1, 'custom_status_mcp', 'todo', 'To Do', 0, 1),
+      (1, 'custom_status_mcp', 'ready', 'Ready', 1, 0),
+      (1, 'custom_status_mcp', 'field_reported', 'Field Reported', 2, 0)
+  `).run();
+  db.prepare(`
+    INSERT INTO sprints (id, project_id, name, goal, sprint_type, status)
+    VALUES (9302, 9301, 'Custom Status Workflow', '', 'custom_status_mcp', 'active')
+  `).run();
+  return { projectId: 9301, sprintId: 9302 };
+}
+
 describe('Agent HQ MCP API identity propagation', () => {
   beforeEach(() => {
     closeDb();
@@ -234,6 +252,95 @@ describe('Agent HQ MCP API identity propagation', () => {
         title: 'Default workflow compatible task',
         custom_fields: {},
       });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('creates tasks with omitted, todo, ready, and custom initial statuses through the MCP API client', async () => {
+    const { agentId } = seedAtlasTask();
+    const { projectId, sprintId } = seedCustomStatusWorkflow();
+    const { apiKey } = issueMcpApiKeyForAgent(getDb(), agentId, 'initial status create key');
+    const { server, baseUrl } = await startTestServer();
+
+    try {
+      const client = new AgentHqApiClient(baseUrl, apiKey);
+      const omitted = await client.createTask({
+        title: 'Omitted initial status',
+        project_id: projectId,
+        sprint_id: sprintId,
+        task_type: 'backend',
+      }) as { id: number; status: string };
+      const todo = await client.createTask({
+        title: 'Explicit todo initial status',
+        project_id: projectId,
+        sprint_id: sprintId,
+        task_type: 'backend',
+        status: 'todo',
+      }) as { id: number; status: string };
+      const ready = await client.createTask({
+        title: 'Explicit ready initial status',
+        project_id: projectId,
+        sprint_id: sprintId,
+        task_type: 'backend',
+        status: 'ready',
+      }) as { id: number; status: string };
+      const custom = await client.createTask({
+        title: 'Custom initial status',
+        project_id: projectId,
+        sprint_id: sprintId,
+        task_type: 'backend',
+        status: 'field_reported',
+      }) as { id: number; status: string };
+
+      expect(omitted.status).toBe('todo');
+      expect(todo.status).toBe('todo');
+      expect(ready.status).toBe('ready');
+      expect(custom.status).toBe('field_reported');
+
+      const stored = getDb().prepare(`
+        SELECT title, status
+        FROM tasks
+        WHERE id IN (?, ?, ?, ?)
+        ORDER BY id
+      `).all(omitted.id, todo.id, ready.id, custom.id);
+      expect(stored).toEqual([
+        { title: 'Omitted initial status', status: 'todo' },
+        { title: 'Explicit todo initial status', status: 'todo' },
+        { title: 'Explicit ready initial status', status: 'ready' },
+        { title: 'Custom initial status', status: 'field_reported' },
+      ]);
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('rejects invalid initial statuses without creating a partial task through the MCP API client', async () => {
+    const { agentId } = seedAtlasTask();
+    const { projectId, sprintId } = seedCustomStatusWorkflow();
+    const { apiKey } = issueMcpApiKeyForAgent(getDb(), agentId, 'invalid initial status key');
+    const { server, baseUrl } = await startTestServer();
+
+    try {
+      const client = new AgentHqApiClient(baseUrl, apiKey);
+      await expect(client.createTask({
+        title: 'Invalid initial status',
+        project_id: projectId,
+        sprint_id: sprintId,
+        task_type: 'backend',
+        status: 'not_in_workflow',
+      })).rejects.toMatchObject({
+        status: 400,
+        body: {
+          code: 'task_status_not_allowed_for_workflow',
+          field: 'status',
+          attempted_value: 'not_in_workflow',
+          allowed_values: expect.arrayContaining(['todo', 'ready', 'field_reported']),
+        },
+      });
+
+      const created = getDb().prepare(`SELECT id FROM tasks WHERE title = 'Invalid initial status'`).get();
+      expect(created).toBeUndefined();
     } finally {
       await stopTestServer(server);
     }

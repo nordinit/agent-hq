@@ -27,12 +27,13 @@ export function registerTasksTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_create_task', 'atlas_create_task'],
-    'Create a new task in Agent HQ in a required workflow, with optional assignment and dry-run preview. Legacy compatibility: blockers is deprecated for one release; prefer relationship-first tools for dispatch dependencies.',
+    'Create a new task in Agent HQ in a required workflow, with optional initial workflow status, assignment, and dry-run preview. Legacy compatibility: blockers is deprecated for one release; prefer relationship-first tools for dispatch dependencies.',
     {
       title: z.string().min(1).describe('Task title (required)'),
       project_id: z.number().int().positive().describe('Project ID (required)'),
       description: z.string().optional().describe('Task description (markdown supported)'),
       sprint_id: z.number().int().positive().describe('Sprint/workflow ID to place the task in (required)'),
+      status: z.string().min(1).optional().describe('Initial workflow status. When omitted, task creation uses the workflow/default creation status. Status values are resolved from the selected workflow; call agent_hq_get_workflow_metadata for allowed values.'),
       priority: z.enum(VALID_TASK_PRIORITIES).optional().describe('Priority (default: medium)'),
       task_type: taskTypeSchema.optional().describe('Task type (default: backend)'),
       story_points: storyPointsSchema.describe('Story points: 1, 2, 3, 5, 8, 13, or 21'),
@@ -41,13 +42,14 @@ export function registerTasksTools(ctx: McpDomainContext) {
       blockers: z.array(z.number().int().positive()).optional().describe('Legacy compatibility only. Task IDs that block this task when the workflow still defines blocked_by as a dispatch-blocking relationship. Prefer agent_hq_get_task_relationship_types and agent_hq_create_task_relationship.'),
       dry_run: z.boolean().optional().describe('Return a mutation preview without writing data'),
     },
-    ({ title, project_id, description, sprint_id, priority, task_type, story_points, custom_fields, agent_id, blockers, dry_run }) =>
+    ({ title, project_id, description, sprint_id, status, priority, task_type, story_points, custom_fields, agent_id, blockers, dry_run }) =>
       wrap(() =>
         api.createTask({
           title,
           project_id,
           description,
           sprint_id,
+          status,
           priority,
           task_type,
           story_points,
