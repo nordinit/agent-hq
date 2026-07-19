@@ -12,6 +12,7 @@ export {
   gatewayFetch,
   gatewayGetHistory,
   gatewayRpcCall,
+  gatewayWsGetEffectiveTools,
   gatewayWsPatchSession,
   gatewayWsSend,
   getGatewayAuthToken,

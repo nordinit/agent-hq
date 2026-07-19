@@ -81,6 +81,17 @@ export interface DispatchParams extends RuntimeEventCallbacks {
     runtimeConfigWorkingDirectory?: string | null;
   } | null;
   /**
+   * OpenClaw MCP readiness contract produced by dispatch-time materialization.
+   * OpenClawRuntime uses this to verify assigned MCP tools have reached the
+   * session-effective catalog before it sends the first agent turn.
+   */
+  openClawMcpReadiness?: {
+    serverNames: string[];
+    requiredToolNames: string[];
+    materializedCount: number;
+    bundlePath?: string | null;
+  } | null;
+  /**
    * Legacy container hook metadata.
    * OpenClawRuntime ignores hook transport and dispatches via the runtime WS path.
    * Kept here for compatibility with existing dispatcher/job records.

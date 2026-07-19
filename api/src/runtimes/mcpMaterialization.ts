@@ -53,6 +53,7 @@ export interface McpMaterializationResult {
   path: string;
   bundlePath: string;
   openClawConfigPath: string;
+  serverNames: string[];
   warnings: string[];
   error?: string;
 }
@@ -72,6 +73,7 @@ export interface AgentMcpSyncResult {
   workingDirectory: string | null;
   ok: boolean;
   count: number;
+  serverNames: string[];
   warnings: string[];
   path?: string;
   bundlePath?: string;
@@ -1226,6 +1228,7 @@ export function materializeAgentMcpConfig(params: {
     path: path.join(params.workingDirectory, '.mcp.json'),
     bundlePath: path.join(params.workingDirectory, OPENCLAW_MCP_BUNDLE_DIR, '.mcp.json'),
     openClawConfigPath: resolveOpenClawConfigPath(),
+    serverNames: [],
     warnings: [],
   };
 
@@ -1276,6 +1279,7 @@ export function materializeAgentMcpConfig(params: {
   }
   const desiredServers = fetchAssignedMcpServers(params.db, params.agentId, existingServers);
   const desiredKeys = Object.keys(desiredServers);
+  result.serverNames = desiredKeys;
   const preservedTopLevel: Record<string, unknown> = {};
   if (isRecord(existingRecord.mcpServers) || isRecord(existingRecord.servers)) {
     for (const [key, value] of Object.entries(existingRecord)) {
@@ -1374,6 +1378,7 @@ export function syncAssignedMcpForAgent(params: {
       workingDirectory: params.workingDirectory ?? null,
       ok: false,
       count: 0,
+      serverNames: [],
       warnings: [],
       skipped: 'agent_not_found',
       error: `Agent #${params.agentId} not found`,
@@ -1428,6 +1433,7 @@ export function syncAssignedMcpForAgent(params: {
         workingDirectory,
         ok: false,
         count: 0,
+        serverNames: [],
         warnings: [],
         error: cleanup.error ?? `OpenClaw MCP config cleanup failed for agent #${agent.id}`,
       };
@@ -1441,6 +1447,7 @@ export function syncAssignedMcpForAgent(params: {
       workingDirectory,
       ok: true,
       count: 0,
+      serverNames: [],
       warnings: [],
       skipped: 'unsupported_runtime',
     };
@@ -1453,6 +1460,7 @@ export function syncAssignedMcpForAgent(params: {
       workingDirectory: null,
       ok: false,
       count: 0,
+      serverNames: [],
       warnings: [],
       skipped: 'missing_workspace',
       error: `Agent #${agent.id} has no workspace_path`,
@@ -1488,6 +1496,7 @@ export function syncAssignedMcpForAgent(params: {
         workingDirectory,
         ok: false,
         count: 0,
+        serverNames: [],
         warnings: [...syncWarnings, message],
         skipped: 'shared_workspace',
         error: message,
@@ -1541,6 +1550,7 @@ export function syncAssignedMcpForAgent(params: {
     workingDirectory,
     ok: result.ok,
     count: result.count,
+    serverNames: result.serverNames,
     warnings: [...syncWarnings, ...result.warnings],
     path: result.path,
     bundlePath: result.bundlePath,

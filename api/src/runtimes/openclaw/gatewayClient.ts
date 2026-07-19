@@ -422,11 +422,12 @@ export async function gatewayWsPatchSession(params: {
   thinking?: string | null;
   fastMode?: boolean | null;
   timeoutMs?: number;
+  force?: boolean;
 }): Promise<{ ok: boolean; error?: string; skipped?: boolean }> {
   const model = normalizeOpenClawModel(params.model);
   const thinkingLevel = normalizeOpenClawThinkingLevel(params.thinking);
   const fastMode = normalizeOpenClawFastMode(params.fastMode);
-  if (!model && !thinkingLevel && fastMode === null) {
+  if (!params.force && !model && !thinkingLevel && fastMode === null) {
     return { ok: true, skipped: true };
   }
 
@@ -446,6 +447,83 @@ export async function gatewayWsPatchSession(params: {
     return { ok: false, error: result.error ?? 'sessions.patch failed' };
   }
   return { ok: true };
+}
+
+function collectEffectiveToolNames(payload: unknown): string[] {
+  const names = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    const hasChildTools = Array.isArray(record.tools);
+    const hasChildGroups = Array.isArray(record.groups);
+    if (!hasChildTools && !hasChildGroups) {
+      const id = typeof record.id === 'string' ? record.id.trim() : '';
+      const name = typeof record.name === 'string' ? record.name.trim() : '';
+      if (id) names.add(id);
+      if (name) names.add(name);
+    }
+    if (hasChildTools) visit(record.tools);
+    if (hasChildGroups) visit(record.groups);
+  };
+  visit(payload);
+  return Array.from(names).sort();
+}
+
+function collectEffectiveToolNoticeIds(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const record = payload as Record<string, unknown>;
+  const notices = Array.isArray(record.notices) ? record.notices : [];
+  return notices
+    .map((notice) => (
+      notice && typeof notice === 'object' && typeof (notice as Record<string, unknown>).id === 'string'
+        ? String((notice as Record<string, unknown>).id)
+        : ''
+    ))
+    .filter(Boolean)
+    .sort();
+}
+
+export async function gatewayWsGetEffectiveTools(params: {
+  sessionKey: string;
+  agentId?: string | null;
+  timeoutMs?: number;
+}): Promise<{
+  ok: boolean;
+  toolNames: string[];
+  noticeIds: string[];
+  raw?: unknown;
+  error?: string;
+}> {
+  const result = await gatewayRpcCall({
+    method: 'tools.effective',
+    rpcParams: {
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    },
+    timeoutMs: params.timeoutMs ?? 20_000,
+    displayName: 'Agent HQ MCP Readiness',
+  });
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      toolNames: [],
+      noticeIds: [],
+      error: result.error ?? 'tools.effective failed',
+    };
+  }
+
+  const payload = result.payload ?? result.result;
+  return {
+    ok: true,
+    toolNames: collectEffectiveToolNames(payload),
+    noticeIds: collectEffectiveToolNoticeIds(payload),
+    raw: payload,
+  };
 }
 
 /**

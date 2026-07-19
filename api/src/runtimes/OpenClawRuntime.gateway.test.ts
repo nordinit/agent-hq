@@ -10,8 +10,11 @@ const mockSocketInstances: Array<{ close: () => void; emitClose: () => void }> =
 const mockDropBeforeResponseCounts = new Map<string, number>();
 const mockNeverRespondMethods = new Set<string>();
 const mockResponseDelays = new Map<string, number>();
+const mockToolsEffectivePayloads: Array<Record<string, unknown>> = [];
 
 const mockSyncOAuthProviderForOpenClawAgent = jest.fn();
+const ORIGINAL_MCP_READINESS_TIMEOUT_MS = process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS;
+const ORIGINAL_MCP_READINESS_POLL_MS = process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_POLL_MS;
 
 jest.mock('ws', () => {
   class MockWebSocket {
@@ -70,6 +73,14 @@ jest.mock('ws', () => {
             { role: 'assistant', content: 'hello', timestamp: '2026-06-04T12:00:00.000Z' },
           ],
         };
+      } else if (frame.method === 'tools.effective') {
+        response.payload = mockToolsEffectivePayloads.length > 0
+          ? mockToolsEffectivePayloads.shift()
+          : {
+              groups: [
+                { id: 'core', tools: [{ id: 'exec_command' }] },
+              ],
+            };
       } else if (frame.method === 'secrets.reload') {
         response.payload = { warningCount: 2 };
       }
@@ -121,6 +132,7 @@ jest.mock('../lib/openclawOAuthProfiles', () => ({
 import {
   __resetGatewayConnectionPoolForTests,
   OpenClawRuntime,
+  gatewayWsGetEffectiveTools,
   gatewayGetHistory,
   gatewayWsPatchSession,
   gatewayWsSend,
@@ -157,6 +169,9 @@ describe('OpenClawRuntime gateway dispatch', () => {
     mockDropBeforeResponseCounts.clear();
     mockNeverRespondMethods.clear();
     mockResponseDelays.clear();
+    mockToolsEffectivePayloads.length = 0;
+    process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS = '20';
+    process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_POLL_MS = '1';
     mockSyncOAuthProviderForOpenClawAgent.mockResolvedValue({
       ok: true,
       provider: 'openai-codex',
@@ -171,6 +186,10 @@ describe('OpenClawRuntime gateway dispatch', () => {
     logSpy.mockRestore();
     jest.restoreAllMocks();
     jest.useRealTimers();
+    if (ORIGINAL_MCP_READINESS_TIMEOUT_MS === undefined) delete process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS;
+    else process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS = ORIGINAL_MCP_READINESS_TIMEOUT_MS;
+    if (ORIGINAL_MCP_READINESS_POLL_MS === undefined) delete process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_POLL_MS;
+    else process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_POLL_MS = ORIGINAL_MCP_READINESS_POLL_MS;
   });
 
   it('applies model, thinking, and fast mode through sessions.patch before chat.send', async () => {
@@ -210,6 +229,70 @@ describe('OpenClawRuntime gateway dispatch', () => {
     expect(send?.params).not.toHaveProperty('thinkingLevel');
     expect(send?.params).not.toHaveProperty('cwd');
     expect(send?.params).not.toHaveProperty('metadata');
+  });
+
+  it('waits for required assigned MCP tools to appear before the first chat.send', async () => {
+    mockToolsEffectivePayloads.push(
+      {
+        groups: [
+          { id: 'core', tools: [{ id: 'exec_command' }] },
+        ],
+        notices: [
+          { id: 'mcp-stale-catalog', severity: 'info', message: 'stale' },
+        ],
+      },
+      {
+        groups: [
+          { id: 'core', tools: [{ id: 'exec_command' }] },
+          { id: 'mcp', tools: [{ id: 'dev_env_deploy_worktree', source: 'mcp' }] },
+        ],
+      },
+    );
+    const runtime = new OpenClawRuntime();
+
+    const result = await runtime.dispatch(dispatchParams({
+      openClawMcpReadiness: {
+        serverNames: ['dev-environment-lease-manager__agent-94'],
+        requiredToolNames: ['dev_env_deploy_worktree'],
+        materializedCount: 1,
+        bundlePath: '/workspace/.openclaw/extensions/agent-hq-mcp/.mcp.json',
+      },
+    }));
+
+    expect(result.runId).toBe('run-123');
+    expect(mockSentRequests.map((request) => request.method)).toEqual([
+      'connect',
+      'sessions.patch',
+      'tools.effective',
+      'tools.effective',
+      'chat.send',
+    ]);
+    const effectiveCalls = mockSentRequests.filter((request) => request.method === 'tools.effective');
+    expect(effectiveCalls).toHaveLength(2);
+    expect(effectiveCalls[0].params).toEqual({
+      sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
+      agentId: 'cinder-backend',
+    });
+    const patch = mockSentRequests.find((request) => request.method === 'sessions.patch');
+    expect(patch?.params).toEqual({
+      key: 'agent:cinder-backend:hook:atlas:jobrun:383',
+    });
+  });
+
+  it('fails before chat.send when required assigned MCP tools stay absent', async () => {
+    const runtime = new OpenClawRuntime();
+
+    await expect(runtime.dispatch(dispatchParams({
+      openClawMcpReadiness: {
+        serverNames: ['dev-environment-lease-manager__agent-94'],
+        requiredToolNames: ['dev_env_deploy_worktree'],
+        materializedCount: 1,
+        bundlePath: '/workspace/.openclaw/extensions/agent-hq-mcp/.mcp.json',
+      },
+    }))).rejects.toThrow('OpenClaw MCP readiness timed out before dispatch');
+
+    expect(mockSentRequests.map((request) => request.method)).toContain('tools.effective');
+    expect(mockSentRequests.some((request) => request.method === 'chat.send')).toBe(false);
   });
 
   it('syncs Agent HQ-managed Codex OAuth in prepareAuthProfiles before gateway dispatch', async () => {
@@ -295,6 +378,26 @@ describe('OpenClawRuntime gateway dispatch', () => {
       ok: false,
       error: 'sessions.patch failed: {"code":"INVALID_REQUEST","message":"bad runtime config"}',
     });
+  });
+
+  it('normalizes tools.effective payloads through the extracted gateway client', async () => {
+    mockToolsEffectivePayloads.push({
+      groups: [
+        { id: 'mcp', tools: [{ id: 'dev_env_deploy_worktree' }] },
+      ],
+      notices: [{ id: 'mcp-stale-catalog' }],
+    });
+
+    const result = await gatewayWsGetEffectiveTools({
+      sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
+      agentId: 'cinder-backend',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: true,
+      toolNames: ['dev_env_deploy_worktree'],
+      noticeIds: ['mcp-stale-catalog'],
+    }));
   });
 
   it('normalizes chat.history payloads through the extracted gateway client', async () => {

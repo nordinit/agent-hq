@@ -86,6 +86,22 @@ function hasMaterializedAgentHqLifecycleMcp(bundlePath: string | undefined, agen
   }
 }
 
+const REQUIRED_OPENCLAW_MCP_TOOLS_BY_SERVER_SLUG: Record<string, string[]> = {
+  'agent-hq': ['agent_hq_start_task_run'],
+  'dev-environment-lease-manager': ['dev_env_deploy_worktree'],
+};
+
+function requiredOpenClawMcpToolsForServerNames(serverNames: string[]): string[] {
+  const tools = new Set<string>();
+  for (const serverName of serverNames) {
+    const slug = serverName.replace(/__agent-\d+$/, '');
+    for (const toolName of REQUIRED_OPENCLAW_MCP_TOOLS_BY_SERVER_SLUG[slug] ?? []) {
+      tools.add(toolName);
+    }
+  }
+  return Array.from(tools).sort();
+}
+
 // ── Dispatch failure backoff (task #355) ─────────────────────────────────────
 //
 // When a dispatch attempt fails (gateway down, Anthropic overloaded, etc.),
@@ -1496,6 +1512,8 @@ async function fireAgentRun(
   // servers from their prepared runtime cwd/profile context so lifecycle writes
   // happen through Agent HQ MCP callbacks instead of proxy-parsed stdout blocks.
   const runtimeTypeForMcp = job.runtime_type ?? 'openclaw';
+  let openClawMcpReadiness: DispatchParams['openClawMcpReadiness'] = null;
+  let mcpStartupError: Error | null = null;
   if (runtimeTypeForMcp === 'openclaw' || runtimeTypeForMcp === 'hermes') {
     const effectiveMcpDir: string | null = runtimeTypeForMcp === 'openclaw' ? workspaceContainerRoot : activeRepoRoot;
     if (effectiveMcpDir) {
@@ -1507,8 +1525,8 @@ async function fireAgentRun(
           // The routed session key is `agent:<agentSlug>:run:*`, so OpenClaw
           // discovers the bundle in this slug's workspace — keep them aligned.
           dispatchAgentSlug: agentSlug,
-          activateOpenClawWorkspaceBundle: false,
-          refreshPluginRegistry: false,
+          activateOpenClawWorkspaceBundle: runtimeTypeForMcp === 'openclaw',
+          refreshPluginRegistry: runtimeTypeForMcp === 'openclaw',
         });
         for (const warn of mcpResult.warnings) {
           console.warn(`[dispatcher] ${warn}`);
@@ -1517,9 +1535,21 @@ async function fireAgentRun(
           console.warn(
             `[dispatcher] MCP materialization error for instance #${instanceId}: ${mcpResult.error}`,
           );
+          mcpStartupError = new Error(`MCP materialization failed before dispatch for instance #${instanceId}: ${mcpResult.error}`);
         } else if (mcpResult.count > 0) {
           console.log(
-            `[dispatcher] MCP materialization: ${mcpResult.count} server(s) for instance #${instanceId}`,
+            `[dispatcher] MCP materialization complete: ${mcpResult.count} server(s) for instance #${instanceId}; servers=${mcpResult.serverNames.join(', ') || '(none)'}; bundle=${mcpResult.bundlePath ?? '(none)'}`,
+          );
+        }
+        if (runtimeTypeForMcp === 'openclaw' && mcpResult.ok && mcpResult.count > 0) {
+          openClawMcpReadiness = {
+            serverNames: mcpResult.serverNames,
+            requiredToolNames: requiredOpenClawMcpToolsForServerNames(mcpResult.serverNames),
+            materializedCount: mcpResult.count,
+            bundlePath: mcpResult.bundlePath ?? null,
+          };
+          console.log(
+            `[dispatcher] MCP registry refresh complete for instance #${instanceId}; requiredTools=${openClawMcpReadiness.requiredToolNames.join(', ') || '(none)'}`,
           );
         }
         if (
@@ -1537,6 +1567,7 @@ async function fireAgentRun(
         }
       } catch (mcpErr) {
         console.warn(`[dispatcher] MCP materialization failed for instance #${instanceId}:`, mcpErr);
+        mcpStartupError = mcpErr instanceof Error ? mcpErr : new Error(String(mcpErr));
       }
     }
   }
@@ -1568,6 +1599,7 @@ async function fireAgentRun(
   try {
     // Dispatching should be a function of the runtime interface.
     // Do not bypass AgentRuntime with direct /hooks/agent calls here.
+    if (mcpStartupError) throw mcpStartupError;
 
     // Build runtimeConfig override from story-point rule (max_turns / max_budget_usd)
     // and resolved repo-root path. The active repo root must remain authoritative
@@ -1629,6 +1661,7 @@ async function fireAgentRun(
         runtimeConfigWorkingDirectory,
       },
       runtimeConfig: providerDispatch.runtimeConfig,
+      openClawMcpReadiness,
       hooksUrl: job.agent_hooks_url ?? null,
       hooksAuthHeader: job.agent_hooks_auth_header ?? null,
     };

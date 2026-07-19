@@ -20,6 +20,7 @@ import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { syncOAuthProviderForOpenClawAgent } from '../../lib/openclawOAuthProfiles';
 import { abortChatRunBySessionKey } from './abort';
 import {
+  gatewayWsGetEffectiveTools,
   gatewayWsPatchSession,
   gatewayWsSend,
   reloadOpenClawSecretsRuntimeForAuthSync,
@@ -84,6 +85,73 @@ function appendOpenClawRepoContext(message: string, repoContextSection: string |
   if (!repoContextSection) return message;
   if (message.includes('## Active Repo Context')) return message;
   return `${message.trimEnd()}\n\n${repoContextSection}`;
+}
+
+const MCP_STALE_NOTICE_IDS = new Set(['mcp-stale-catalog', 'mcp-not-yet-listed', 'mcp-not-yet-connected']);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function missingRequiredTools(actual: string[], required: string[]): string[] {
+  const actualSet = new Set(actual);
+  return required.filter((name) => !actualSet.has(name));
+}
+
+async function waitForOpenClawMcpReadiness(params: {
+  sessionKey: string;
+  agentSlug: string;
+  readiness: NonNullable<DispatchParams['openClawMcpReadiness']>;
+}): Promise<void> {
+  const requiredToolNames = Array.from(new Set(params.readiness.requiredToolNames)).sort();
+  if (params.readiness.materializedCount <= 0 || requiredToolNames.length === 0) return;
+
+  const configuredTimeoutMs = Number(process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS ?? 15_000);
+  const configuredPollMs = Number(process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_POLL_MS ?? 500);
+  const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+    ? configuredTimeoutMs
+    : 15_000;
+  const pollMs = Number.isFinite(configuredPollMs) && configuredPollMs > 0
+    ? configuredPollMs
+    : 500;
+  const startedAt = Date.now();
+  let lastError: string | null = null;
+  let lastToolNames: string[] = [];
+  let lastNoticeIds: string[] = [];
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    const effective = await gatewayWsGetEffectiveTools({
+      sessionKey: params.sessionKey,
+      agentId: params.agentSlug,
+      timeoutMs: Math.min(10_000, timeoutMs),
+    });
+    if (!effective.ok) {
+      lastError = effective.error ?? 'tools.effective failed';
+    } else {
+      lastError = null;
+      lastToolNames = effective.toolNames;
+      lastNoticeIds = effective.noticeIds;
+      const missing = missingRequiredTools(effective.toolNames, requiredToolNames);
+      const staleNotices = effective.noticeIds.filter((id) => MCP_STALE_NOTICE_IDS.has(id));
+      console.log(
+        `[OpenClawRuntime] MCP readiness poll: sessionKey=${params.sessionKey} servers=${params.readiness.serverNames.join(', ') || '(none)'} effectiveToolCount=${effective.toolNames.length} requiredTools=${requiredToolNames.join(', ')} missing=${missing.join(', ') || '(none)'} notices=${effective.noticeIds.join(', ') || '(none)'}`,
+      );
+      if (missing.length === 0 && staleNotices.length === 0) return;
+    }
+    await sleep(pollMs);
+  }
+
+  const missing = missingRequiredTools(lastToolNames, requiredToolNames);
+  throw new Error(
+    `OpenClaw MCP readiness timed out before dispatch for session "${params.sessionKey}": ` +
+    `servers=${params.readiness.serverNames.join(', ') || '(none)'} ` +
+    `requiredTools=${requiredToolNames.join(', ') || '(none)'} ` +
+    `missing=${missing.join(', ') || '(none)'} ` +
+    `effectiveToolCount=${lastToolNames.length} ` +
+    `notices=${lastNoticeIds.join(', ') || '(none)'} ` +
+    `bundle=${params.readiness.bundlePath ?? '(none)'}` +
+    (lastError ? ` lastError=${lastError}` : ''),
+  );
 }
 
 // ── OpenClawRuntime ───────────────────────────────────────────────────────────
@@ -167,6 +235,7 @@ export class OpenClawRuntime implements AgentRuntime {
       model: params.model ?? null,
       thinking: params.thinking ?? null,
       fastMode: params.fastMode ?? null,
+      force: Boolean(params.openClawMcpReadiness?.materializedCount),
     });
     if (!patchResult.ok) {
       const message = `Failed to apply runtime routing overrides for session "${routedSessionKey}": ${patchResult.error ?? 'unknown error'}`;
@@ -176,6 +245,14 @@ export class OpenClawRuntime implements AgentRuntime {
       console.warn(
         `[OpenClawRuntime] ${message}; dispatching with existing OpenClaw session settings`,
       );
+    }
+
+    if (params.openClawMcpReadiness) {
+      await waitForOpenClawMcpReadiness({
+        sessionKey: routedSessionKey,
+        agentSlug: params.agentSlug,
+        readiness: params.openClawMcpReadiness,
+      });
     }
 
     const activeRepoRoot = params.activeRepoRoot ?? null;
