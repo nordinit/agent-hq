@@ -329,6 +329,29 @@ describe('dispatcher relationship-driven eligibility', () => {
     db.close();
   });
 
+  it('keeps workflow-specific terminal statuses non-dispatchable before non-terminal fallbacks', async () => {
+    const db = setupDb();
+    const { runDispatcher } = await import('./dispatcher');
+    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 0)`).run();
+    db.prepare(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 0)`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+      VALUES (10, 'failed', 'Failed', 1, 80)
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
+    `).run();
+    insertTask(db, 806, 'failed');
+
+    const result = runDispatcher(db, 86);
+
+    expect(result.dispatched).toBe(0);
+    const task = db.prepare(`SELECT active_instance_id FROM tasks WHERE id = 806`).get() as { active_instance_id: number | null };
+    expect(task.active_instance_id).toBeNull();
+    db.close();
+  });
+
   it('dispatches configured non-terminal failed tasks on legacy task schemas without dispatch metadata columns', async () => {
     const db = setupDb({ includeTaskDispatchMetadataColumns: false });
     const { runDispatcher } = await import('./dispatcher');

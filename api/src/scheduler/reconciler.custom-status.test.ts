@@ -212,6 +212,24 @@ describe('reconciler workflow-defined status routing', () => {
     db.close();
   });
 
+  it('keeps workflow-specific terminal failed from reconciling before non-terminal fallbacks', async () => {
+    const db = setupDb();
+    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 0)`).run();
+    db.prepare(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 0)`).run();
+    db.prepare(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 1)`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
+    `).run();
+    insertTask(db, 804, 'failed');
+
+    await reconcileReviewQaRouting({ dispatchInstance: jest.fn(async () => undefined) }, db);
+
+    const task = db.prepare(`SELECT assigned_agent_id FROM tasks WHERE id = 804`).get() as { assigned_agent_id: number };
+    expect(task.assigned_agent_id).toBe(1);
+    db.close();
+  });
+
   it('uses tenant-specific sprint-type terminality before default sprint-type fallback', async () => {
     const db = setupDb();
     db.prepare(`

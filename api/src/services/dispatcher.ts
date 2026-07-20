@@ -835,15 +835,17 @@ export const DISPATCHABLE_ROUTED_STATUSES = TASK_STATUSES.filter(
   (status): status is typeof TASK_STATUSES[number] => !(TERMINAL_TASK_STATUSES as readonly string[]).includes(status),
 );
 
-export function getNonDispatchableTaskStatusPredicate(
+function buildResolvedTaskTerminalityExpression(
   db: Database.Database,
-  taskAlias = 't',
-  sprintAlias: string | null = 's',
+  taskAlias: string,
+  sprintAlias: string | null,
 ): { sql: string; params: unknown[] } {
-  const terminalPlaceholders = TERMINAL_TASK_STATUSES.map(() => '?').join(', ');
-  const workflowStatusOrder = tableHasColumn(db, 'sprint_task_statuses', 'id') ? 'ORDER BY sprint_status.id DESC' : '';
-  const workflowStatusSource = tableExists(db, 'sprint_task_statuses') && tableHasColumn(db, 'sprint_task_statuses', 'terminal')
-    ? `
+  const sources: string[] = [];
+  const params: unknown[] = [];
+
+  if (tableExists(db, 'sprint_task_statuses') && tableHasColumn(db, 'sprint_task_statuses', 'terminal')) {
+    const workflowStatusOrder = tableHasColumn(db, 'sprint_task_statuses', 'id') ? 'ORDER BY sprint_status.id DESC' : '';
+    sources.push(`
       (
         SELECT sprint_status.terminal
         FROM sprint_task_statuses sprint_status
@@ -852,22 +854,8 @@ export function getNonDispatchableTaskStatusPredicate(
         ${workflowStatusOrder}
         LIMIT 1
       )
-    `
-    : null;
-  let workflowTypeStatusSource: string | null = null;
-  const globalStatusOrder = tableHasColumn(db, 'task_statuses', 'id') ? 'ORDER BY global_status.id DESC' : '';
-  const globalStatusSource = tableExists(db, 'task_statuses') && tableHasColumn(db, 'task_statuses', 'terminal')
-    ? `
-      (
-        SELECT global_status.terminal
-        FROM task_statuses global_status
-        WHERE global_status.name = ${taskAlias}.status
-        ${globalStatusOrder}
-        LIMIT 1
-      )
-    `
-    : null;
-  const params: unknown[] = [];
+    `);
+  }
 
   if (
     sprintAlias
@@ -877,7 +865,7 @@ export function getNonDispatchableTaskStatusPredicate(
     const hasTaskTenant = tableHasColumn(db, 'tasks', 'tenant_id');
     const hasSprintTypeTenant = tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
     const sprintTypeStatusOrder = tableHasColumn(db, 'sprint_type_task_statuses', 'id') ? 'ORDER BY sprint_type_status.id DESC' : '';
-    workflowTypeStatusSource = hasTaskTenant && hasSprintTypeTenant
+    sources.push(hasTaskTenant && hasSprintTypeTenant
       ? `
         COALESCE(
           (
@@ -909,20 +897,40 @@ export function getNonDispatchableTaskStatusPredicate(
           ${sprintTypeStatusOrder}
           LIMIT 1
         )
-      `;
+      `);
   }
 
-  const legacyFallback = `(CASE WHEN ${taskAlias}.status IN (${terminalPlaceholders}) THEN 1 ELSE 0 END)`;
-  params.push(...TERMINAL_TASK_STATUSES);
-  const resolvedTerminalSources = [
-    workflowStatusSource,
-    workflowTypeStatusSource,
-    globalStatusSource,
-    legacyFallback,
-  ].filter((source): source is string => Boolean(source));
-  const resolvedTerminalSql = `COALESCE(${resolvedTerminalSources.join(',\n        ')})`;
+  if (tableExists(db, 'task_statuses') && tableHasColumn(db, 'task_statuses', 'terminal')) {
+    const statusKeyColumn = tableHasColumn(db, 'task_statuses', 'name') ? 'name' : 'status_key';
+    const globalStatusOrder = tableHasColumn(db, 'task_statuses', 'id') ? 'ORDER BY global_status.id DESC' : '';
+    sources.push(`
+      (
+        SELECT global_status.terminal
+        FROM task_statuses global_status
+        WHERE global_status.${statusKeyColumn} = ${taskAlias}.status
+        ${globalStatusOrder}
+        LIMIT 1
+      )
+    `);
+  }
 
-  return { sql: `(${resolvedTerminalSql} = 0)`, params };
+  const fallbackPlaceholders = TERMINAL_TASK_STATUSES.map(() => '?').join(', ');
+  params.push(...TERMINAL_TASK_STATUSES);
+  sources.push(`CASE WHEN ${taskAlias}.status IN (${fallbackPlaceholders}) THEN 1 ELSE 0 END`);
+
+  return { sql: `COALESCE(${sources.join(', ')})`, params };
+}
+
+export function getNonDispatchableTaskStatusPredicate(
+  db: Database.Database,
+  taskAlias = 't',
+  sprintAlias: string | null = 's',
+): { sql: string; params: unknown[] } {
+  const resolvedTerminality = buildResolvedTaskTerminalityExpression(db, taskAlias, sprintAlias);
+  return {
+    sql: `(${resolvedTerminality.sql}) = 0`,
+    params: resolvedTerminality.params,
+  };
 }
 
 /**
