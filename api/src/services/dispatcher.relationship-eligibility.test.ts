@@ -114,8 +114,7 @@ function setupDb(): Database.Database {
       metadata_json TEXT NOT NULL DEFAULT '{}'
     );
     CREATE TABLE task_statuses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
+      name TEXT PRIMARY KEY,
       label TEXT NOT NULL,
       color TEXT NOT NULL DEFAULT 'slate',
       terminal INTEGER NOT NULL DEFAULT 0,

@@ -840,6 +840,7 @@ export function getNonDispatchableTaskStatusPredicate(
   sprintAlias: string | null = 's',
 ): { sql: string; params: unknown[] } {
   const terminalPlaceholders = TERMINAL_TASK_STATUSES.map(() => '?').join(', ');
+  const workflowStatusOrder = tableHasColumn(db, 'sprint_task_statuses', 'id') ? 'ORDER BY sprint_status.id DESC' : '';
   const workflowStatusSource = tableExists(db, 'sprint_task_statuses') && tableHasColumn(db, 'sprint_task_statuses', 'terminal')
     ? `
       (
@@ -847,19 +848,20 @@ export function getNonDispatchableTaskStatusPredicate(
         FROM sprint_task_statuses sprint_status
         WHERE sprint_status.sprint_id = ${taskAlias}.sprint_id
           AND sprint_status.status_key = ${taskAlias}.status
-        ORDER BY sprint_status.id DESC
+        ${workflowStatusOrder}
         LIMIT 1
       )
     `
     : null;
   let workflowTypeStatusSource: string | null = null;
+  const globalStatusOrder = tableHasColumn(db, 'task_statuses', 'id') ? 'ORDER BY global_status.id DESC' : '';
   const globalStatusSource = tableExists(db, 'task_statuses') && tableHasColumn(db, 'task_statuses', 'terminal')
     ? `
       (
         SELECT global_status.terminal
         FROM task_statuses global_status
         WHERE global_status.name = ${taskAlias}.status
-        ORDER BY global_status.id DESC
+        ${globalStatusOrder}
         LIMIT 1
       )
     `
@@ -873,6 +875,7 @@ export function getNonDispatchableTaskStatusPredicate(
   ) {
     const hasTaskTenant = tableHasColumn(db, 'tasks', 'tenant_id');
     const hasSprintTypeTenant = tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
+    const sprintTypeStatusOrder = tableHasColumn(db, 'sprint_type_task_statuses', 'id') ? 'ORDER BY sprint_type_status.id DESC' : '';
     workflowTypeStatusSource = hasTaskTenant && hasSprintTypeTenant
       ? `
         COALESCE(
@@ -882,7 +885,7 @@ export function getNonDispatchableTaskStatusPredicate(
             WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
               AND sprint_type_status.status_key = ${taskAlias}.status
               AND sprint_type_status.tenant_id = ${taskAlias}.tenant_id
-            ORDER BY sprint_type_status.id DESC
+            ${sprintTypeStatusOrder}
             LIMIT 1
           ),
           (
@@ -891,7 +894,7 @@ export function getNonDispatchableTaskStatusPredicate(
             WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
               AND sprint_type_status.status_key = ${taskAlias}.status
               AND sprint_type_status.tenant_id IS NULL
-            ORDER BY sprint_type_status.id DESC
+            ${sprintTypeStatusOrder}
             LIMIT 1
           )
         )
@@ -902,7 +905,7 @@ export function getNonDispatchableTaskStatusPredicate(
           FROM sprint_type_task_statuses sprint_type_status
           WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
             AND sprint_type_status.status_key = ${taskAlias}.status
-          ORDER BY sprint_type_status.id DESC
+          ${sprintTypeStatusOrder}
           LIMIT 1
         )
       `;

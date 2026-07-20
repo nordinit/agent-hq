@@ -100,8 +100,7 @@ function setupDb(): Database.Database {
       terminal INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE task_statuses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
+      name TEXT PRIMARY KEY,
       label TEXT NOT NULL,
       terminal INTEGER NOT NULL DEFAULT 0
     );
