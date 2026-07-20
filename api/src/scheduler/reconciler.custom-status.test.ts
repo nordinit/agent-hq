@@ -90,6 +90,19 @@ function setupDb(): Database.Database {
       label TEXT NOT NULL,
       terminal INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE sprint_type_task_statuses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sprint_type_key TEXT NOT NULL,
+      status_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      terminal INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE task_statuses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      label TEXT NOT NULL,
+      terminal INTEGER NOT NULL DEFAULT 0
+    );
     CREATE TABLE job_instances (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id INTEGER,
@@ -161,6 +174,66 @@ describe('reconciler workflow-defined status routing', () => {
 
     const task = db.prepare(`SELECT assigned_agent_id FROM tasks WHERE id = 798`).get() as { assigned_agent_id: number };
     expect(task.assigned_agent_id).toBe(1);
+    db.close();
+  });
+
+  it('reconciles ownership for legacy failed when workflow configuration marks it non-terminal', async () => {
+    const db = setupDb();
+    db.prepare(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
+    `).run();
+    insertTask(db, 799, 'failed');
+
+    await reconcileReviewQaRouting({ dispatchInstance: jest.fn(async () => undefined) }, db);
+
+    const task = db.prepare(`SELECT assigned_agent_id FROM tasks WHERE id = 799`).get() as { assigned_agent_id: number };
+    expect(task.assigned_agent_id).toBe(2);
+    db.close();
+  });
+
+  it('uses workflow-specific terminality before sprint-type and global fallbacks', async () => {
+    const db = setupDb();
+    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`).run();
+    db.prepare(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 1)`).run();
+    db.prepare(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
+    `).run();
+    insertTask(db, 800, 'failed');
+
+    await reconcileReviewQaRouting({ dispatchInstance: jest.fn(async () => undefined) }, db);
+
+    const task = db.prepare(`SELECT assigned_agent_id FROM tasks WHERE id = 800`).get() as { assigned_agent_id: number };
+    expect(task.assigned_agent_id).toBe(2);
+    db.close();
+  });
+
+  it('keeps configured terminal and legacy fallback terminal statuses out of ownership reconciliation', async () => {
+    const db = setupDb();
+    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('done', 'Done', 1)`).run();
+    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('cancelled', 'Cancelled', 1)`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES
+        (10, 86, 'dev', 'backend', 'done', 2, 10),
+        (10, 86, 'dev', 'backend', 'cancelled', 2, 10),
+        (10, 86, 'dev', 'backend', 'failed', 2, 10)
+    `).run();
+    insertTask(db, 801, 'done');
+    insertTask(db, 802, 'cancelled');
+    insertTask(db, 803, 'failed');
+
+    await reconcileReviewQaRouting({ dispatchInstance: jest.fn(async () => undefined) }, db);
+
+    const tasks = db.prepare(`SELECT id, assigned_agent_id FROM tasks WHERE id IN (801, 802, 803) ORDER BY id`).all() as Array<{ id: number; assigned_agent_id: number }>;
+    expect(tasks).toEqual([
+      { id: 801, assigned_agent_id: 1 },
+      { id: 802, assigned_agent_id: 1 },
+      { id: 803, assigned_agent_id: 1 },
+    ]);
     db.close();
   });
 });

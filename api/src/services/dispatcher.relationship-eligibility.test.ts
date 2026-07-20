@@ -74,6 +74,7 @@ function setupDb(): Database.Database {
       updated_at TEXT
     );
     CREATE TABLE sprints (id INTEGER PRIMARY KEY, project_id INTEGER, name TEXT, sprint_type TEXT, status TEXT);
+    CREATE TABLE sprint_types (key TEXT PRIMARY KEY, repo_required INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE sprint_task_routing_rules (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       sprint_id INTEGER,
@@ -96,6 +97,28 @@ function setupDb(): Database.Database {
       stage_order INTEGER NOT NULL DEFAULT 0,
       is_default_entry INTEGER NOT NULL DEFAULT 0,
       metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE sprint_type_task_statuses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sprint_type_key TEXT NOT NULL,
+      status_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT 'slate',
+      terminal INTEGER NOT NULL DEFAULT 0,
+      is_system INTEGER NOT NULL DEFAULT 0,
+      allowed_transitions_json TEXT NOT NULL DEFAULT '[]',
+      stage_order INTEGER NOT NULL DEFAULT 0,
+      is_default_entry INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE task_statuses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      label TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT 'slate',
+      terminal INTEGER NOT NULL DEFAULT 0,
+      is_system INTEGER NOT NULL DEFAULT 0,
+      allowed_transitions TEXT NOT NULL DEFAULT '[]'
     );
     CREATE TABLE job_instances (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id INTEGER, task_id INTEGER, status TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, payload_sent TEXT, worktree_path TEXT, session_key TEXT, dispatched_at TEXT, run_id TEXT, response TEXT, error TEXT, completed_at TEXT, effective_model TEXT, effective_thinking_level TEXT);
     CREATE TABLE dispatch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, agent_id INTEGER, routing_reason TEXT, candidate_count INTEGER, candidates_skipped TEXT);
@@ -140,6 +163,7 @@ function setupDb(): Database.Database {
     INSERT INTO agents (id, name, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, runtime_type, sort_rules)
     VALUES (1, 'Cinder', 'Backend Engineer', 86, 'Do the task', 1, 900, 'agent:cinder:main', 'openclaw', '[]')
   `).run();
+  db.prepare(`INSERT INTO sprint_types (key, repo_required) VALUES ('dev', 0)`).run();
   db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type, status) VALUES (10, 86, 'Enhancements', 'dev', 'active')`).run();
   db.prepare(`INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (10, 86, 'dev', 'backend', 'ready', 1, 10)`).run();
   db.prepare(`
@@ -254,6 +278,80 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect(result.dispatched).toBe(0);
     const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 799`).get() as { status: string; active_instance_id: number | null };
     expect(task).toEqual({ status: 'archived', active_instance_id: null });
+    db.close();
+  });
+
+  it('dispatches legacy failed when workflow configuration marks it non-terminal', async () => {
+    const db = setupDb();
+    const { runDispatcher } = await import('./dispatcher');
+    db.prepare(`
+      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+      VALUES (10, 'failed', 'Failed', 0, 80)
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
+    `).run();
+    insertTask(db, 800, 'failed');
+
+    const result = runDispatcher(db, 86);
+
+    expect(result.dispatched).toBe(1);
+    const task = db.prepare(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 800`).get() as { status: string; agent_id: number | null; active_instance_id: number | null };
+    expect(task).toEqual({ status: 'failed', agent_id: 1, active_instance_id: 1 });
+    await new Promise(resolve => setImmediate(resolve));
+    db.close();
+  });
+
+  it('uses workflow-specific terminality before sprint-type and global fallbacks', async () => {
+    const db = setupDb();
+    const { runDispatcher } = await import('./dispatcher');
+    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`).run();
+    db.prepare(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 1)`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+      VALUES (10, 'failed', 'Failed', 0, 80)
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
+    `).run();
+    insertTask(db, 801, 'failed');
+
+    const result = runDispatcher(db, 86);
+
+    expect(result.dispatched).toBe(1);
+    const task = db.prepare(`SELECT active_instance_id FROM tasks WHERE id = 801`).get() as { active_instance_id: number | null };
+    expect(task.active_instance_id).toBe(1);
+    await new Promise(resolve => setImmediate(resolve));
+    db.close();
+  });
+
+  it('keeps globally configured terminal statuses and legacy terminal fallback non-dispatchable', async () => {
+    const db = setupDb();
+    const { runDispatcher } = await import('./dispatcher');
+    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('done', 'Done', 1)`).run();
+    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('cancelled', 'Cancelled', 1)`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES
+        (10, 86, 'dev', 'backend', 'done', 1, 10),
+        (10, 86, 'dev', 'backend', 'cancelled', 1, 10),
+        (10, 86, 'dev', 'backend', 'failed', 1, 10)
+    `).run();
+    insertTask(db, 802, 'done');
+    insertTask(db, 803, 'cancelled');
+    insertTask(db, 804, 'failed');
+
+    const result = runDispatcher(db, 86);
+
+    expect(result.dispatched).toBe(0);
+    const tasks = db.prepare(`SELECT id, active_instance_id FROM tasks WHERE id IN (802, 803, 804) ORDER BY id`).all() as Array<{ id: number; active_instance_id: number | null }>;
+    expect(tasks).toEqual([
+      { id: 802, active_instance_id: null },
+      { id: 803, active_instance_id: null },
+      { id: 804, active_instance_id: null },
+    ]);
     db.close();
   });
 

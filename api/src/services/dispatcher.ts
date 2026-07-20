@@ -840,31 +840,31 @@ export function getNonDispatchableTaskStatusPredicate(
   sprintAlias: string | null = 's',
 ): { sql: string; params: unknown[] } {
   const terminalPlaceholders = TERMINAL_TASK_STATUSES.map(() => '?').join(', ');
-  const clauses = [`${taskAlias}.status NOT IN (${terminalPlaceholders})`];
-  const params: unknown[] = [...TERMINAL_TASK_STATUSES];
-
-  if (tableExists(db, 'task_statuses') && tableHasColumn(db, 'task_statuses', 'terminal')) {
-    clauses.push(`
-      NOT EXISTS (
-        SELECT 1
-        FROM task_statuses global_status
-        WHERE global_status.name = ${taskAlias}.status
-          AND global_status.terminal = 1
-      )
-    `);
-  }
-
-  if (tableExists(db, 'sprint_task_statuses') && tableHasColumn(db, 'sprint_task_statuses', 'terminal')) {
-    clauses.push(`
-      NOT EXISTS (
-        SELECT 1
+  const workflowStatusSource = tableExists(db, 'sprint_task_statuses') && tableHasColumn(db, 'sprint_task_statuses', 'terminal')
+    ? `
+      (
+        SELECT sprint_status.terminal
         FROM sprint_task_statuses sprint_status
         WHERE sprint_status.sprint_id = ${taskAlias}.sprint_id
           AND sprint_status.status_key = ${taskAlias}.status
-          AND sprint_status.terminal = 1
+        ORDER BY sprint_status.id DESC
+        LIMIT 1
       )
-    `);
-  }
+    `
+    : null;
+  let workflowTypeStatusSource: string | null = null;
+  const globalStatusSource = tableExists(db, 'task_statuses') && tableHasColumn(db, 'task_statuses', 'terminal')
+    ? `
+      (
+        SELECT global_status.terminal
+        FROM task_statuses global_status
+        WHERE global_status.name = ${taskAlias}.status
+        ORDER BY global_status.id DESC
+        LIMIT 1
+      )
+    `
+    : null;
+  const params: unknown[] = [];
 
   if (
     sprintAlias
@@ -873,19 +873,36 @@ export function getNonDispatchableTaskStatusPredicate(
   ) {
     const hasTaskTenant = tableHasColumn(db, 'tasks', 'tenant_id');
     const hasSprintTypeTenant = tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
-    clauses.push(`
-      NOT EXISTS (
-        SELECT 1
+    const tenantFilter = hasTaskTenant && hasSprintTypeTenant
+      ? `AND (sprint_type_status.tenant_id = ${taskAlias}.tenant_id OR sprint_type_status.tenant_id IS NULL)`
+      : '';
+    const tenantOrder = hasTaskTenant && hasSprintTypeTenant
+      ? `CASE WHEN sprint_type_status.tenant_id = ${taskAlias}.tenant_id THEN 0 ELSE 1 END ASC,`
+      : '';
+    workflowTypeStatusSource = `
+      (
+        SELECT sprint_type_status.terminal
         FROM sprint_type_task_statuses sprint_type_status
         WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
           AND sprint_type_status.status_key = ${taskAlias}.status
-          ${hasTaskTenant && hasSprintTypeTenant ? `AND (sprint_type_status.tenant_id = ${taskAlias}.tenant_id OR sprint_type_status.tenant_id IS NULL)` : ''}
-          AND sprint_type_status.terminal = 1
+          ${tenantFilter}
+        ORDER BY ${tenantOrder} sprint_type_status.id DESC
+        LIMIT 1
       )
-    `);
+    `;
   }
 
-  return { sql: clauses.map(clause => `(${clause})`).join('\n      AND '), params };
+  const legacyFallback = `(CASE WHEN ${taskAlias}.status IN (${terminalPlaceholders}) THEN 1 ELSE 0 END)`;
+  params.push(...TERMINAL_TASK_STATUSES);
+  const resolvedTerminalSources = [
+    workflowStatusSource,
+    workflowTypeStatusSource,
+    globalStatusSource,
+    legacyFallback,
+  ].filter((source): source is string => Boolean(source));
+  const resolvedTerminalSql = `COALESCE(${resolvedTerminalSources.join(',\n        ')})`;
+
+  return { sql: `(${resolvedTerminalSql} = 0)`, params };
 }
 
 /**
