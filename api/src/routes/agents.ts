@@ -51,9 +51,25 @@ import {
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 
 const router = Router();
+const MAX_AGENT_MODEL_LENGTH = 200;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeAgentModelInput(value: unknown, field = 'model'): { ok: true; value: string | null | undefined } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== 'string') return { ok: false, error: `${field} must be a string or null` };
+  const model = value.trim();
+  if (!model) return { ok: false, error: `${field} must not be empty` };
+  if (model.length > MAX_AGENT_MODEL_LENGTH) {
+    return { ok: false, error: `${field} must be ${MAX_AGENT_MODEL_LENGTH} characters or fewer` };
+  }
+  if (/[\u0000-\u001F\u007F]/.test(model)) {
+    return { ok: false, error: `${field} must not contain control characters` };
+  }
+  return { ok: true, value: model };
 }
 
 function ensureOpenClawCodexRuntime(entry: Record<string, unknown>, model: string | null | undefined, provider: string | null | undefined): void {
@@ -766,12 +782,21 @@ router.post('/provision-full', async (req: Request, res: Response) => {
     }
     const schedule = '';
     const connectedProviders = getConnectedProviderSlugs(tenantId);
+    const modelInput = normalizeAgentModelInput(body.model);
+    if (!modelInput.ok) {
+      return res.status(400).json({
+        ok: false,
+        report: {
+          validation: { ok: false, status: 'failed', error: modelInput.error },
+        },
+      });
+    }
     const preferredProvider = runtimeType === 'hermes'
       ? (body.preferred_provider ?? resolveSchemaSafePreferredProvider(connectedProviders))
       : (body.preferred_provider ?? (connectedProviders.includes('openai') ? 'openai' : connectedProviders[0] ?? 'openai'));
     const resolvedModel = runtimeType === 'hermes'
-      ? (body.model ?? null)
-      : (body.model ?? defaultAgentModelForProvider(preferredProvider));
+      ? (modelInput.value ?? null)
+      : (modelInput.value ?? defaultAgentModelForProvider(preferredProvider));
     if (!shouldSkipProviderValidationForRuntime(runtimeType, body.preferred_provider)) {
       const providerValidationError = validateAgentProviderSelection(tenantId, preferredProvider, resolvedModel);
       if (providerValidationError) {
@@ -946,7 +971,7 @@ router.post('/provision-full', async (req: Request, res: Response) => {
         openclawResult = ensureOpenClawRegistration({
           slug: runtimeSlug,
           workspacePath,
-          model: body.model ?? null,
+          model: resolvedModel,
           restartGateway: body.restart_gateway === true,
         });
         report.openclaw = {
@@ -1338,6 +1363,10 @@ router.post('/', (req: Request, res: Response) => {
     }
 
     const schemaSafePreferredProvider = resolveSchemaSafePreferredProvider(connectedProviders);
+    const modelInput = normalizeAgentModelInput(model);
+    if (!modelInput.ok) {
+      return res.status(400).json({ error: modelInput.error });
+    }
     // agents.preferred_provider is NOT NULL in the live schema. Hermes agents
     // carry their runtime-specific provider/model inside runtime_config, so when
     // the top-level preferred_provider is omitted keep CRUD schema-safe without
@@ -1346,8 +1375,8 @@ router.post('/', (req: Request, res: Response) => {
       ?? schemaSafePreferredProvider;
 
     const resolvedCreateModel = effectiveRuntimeTypeCreate === 'hermes'
-      ? (model ?? null)
-      : (model ?? defaultAgentModelForProvider(resolvedPreferredProvider));
+      ? (modelInput.value ?? null)
+      : (modelInput.value ?? defaultAgentModelForProvider(resolvedPreferredProvider));
     if (!shouldSkipProviderValidationForRuntime(effectiveRuntimeTypeCreate, preferred_provider)) {
       const providerValidationError = validateAgentProviderSelection(tenantId, resolvedPreferredProvider, resolvedCreateModel);
       if (providerValidationError) {
@@ -1596,7 +1625,11 @@ router.put('/:id', (req: Request, res: Response) => {
     const resolvedPreferredProvider = preferred_provider !== undefined
       ? (preferred_provider ?? existingPreferredProvider ?? schemaSafePreferredProvider)
       : (existingPreferredProvider ?? schemaSafePreferredProvider);
-    const resolvedModelInput = model !== undefined ? model : (agent.model as string | null | undefined);
+    const modelInput = normalizeAgentModelInput(model);
+    if (!modelInput.ok) {
+      return res.status(400).json({ error: modelInput.error });
+    }
+    const resolvedModelInput = model !== undefined ? modelInput.value : (agent.model as string | null | undefined);
     const resolvedModel = effectiveRuntimeType === 'hermes'
       ? (resolvedModelInput ?? null)
       : (resolvedModelInput ?? defaultAgentModelForProvider(resolvedPreferredProvider));

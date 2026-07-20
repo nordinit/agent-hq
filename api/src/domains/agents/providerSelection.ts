@@ -103,20 +103,6 @@ export function validateAgentProviderSelection(tenantId: number, preferredProvid
   if (!connectedProviders.includes(preferredProvider)) {
     return `preferred_provider '${preferredProvider}' is not currently connected`;
   }
-  if (model) {
-    const source = PROVIDER_MODEL_SOURCES[preferredProvider as ConnectableProviderSlug];
-    if (source.type === 'freeform') return null;
-    if (!source.models.some(option => option.id === model)) {
-      const matchingProviders = CONNECTABLE_PROVIDER_SLUGS.filter(slug => {
-        const candidate = PROVIDER_MODEL_SOURCES[slug];
-        return candidate.type !== 'freeform' && candidate.models.some(option => option.id === model);
-      });
-      if (matchingProviders.length > 0) {
-        return `model '${model}' does not belong to preferred_provider '${preferredProvider}'`;
-      }
-      return `model '${model}' is not allowed for agent preferences`;
-    }
-  }
   return null;
 }
 
