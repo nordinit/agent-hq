@@ -536,12 +536,13 @@ function persistDispatchStartupFailure(
   writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_action_target', null, mapping?.action_target ?? (hasWorkflowEventMappings ? null : nextStatus), false);
 
   const hasAssignedAgentColumn = tableHasColumn(db, 'tasks', 'assigned_agent_id');
+  const hasClaimedAtColumn = tableHasColumn(db, 'tasks', 'claimed_at');
   const assignments = [
     'status = ?',
     hasAssignedAgentColumn ? 'assigned_agent_id = ?' : 'agent_id = ?',
     ...(hasAssignedAgentColumn ? ['agent_id = NULL'] : []),
     'active_instance_id = NULL',
-    'claimed_at = NULL',
+    ...(hasClaimedAtColumn ? ['claimed_at = NULL'] : []),
     "dispatched_at = datetime('now')",
     "updated_at = datetime('now')",
   ];
@@ -1752,8 +1753,11 @@ async function fireAgentRun(
     //  - Otherwise → reset to fallback status AND set dispatched_at = now so the
     //    dispatcher's eligibility gate (dispatched_at + backoff check) prevents
     //    immediate re-dispatch on the next reconciler tick.
+    const taskRoutingReasonSelect = tableHasColumn(db, 'tasks', 'routing_reason')
+      ? 'routing_reason'
+      : 'NULL AS routing_reason';
     const taskRow = db.prepare(
-      `SELECT id, retry_count, max_retries, routing_reason,
+      `SELECT id, retry_count, max_retries, ${taskRoutingReasonSelect},
               ${tableHasColumn(db, 'tasks', 'tenant_id') ? 'tenant_id' : 'NULL'} AS tenant_id,
               project_id, task_type
        FROM tasks
@@ -1995,6 +1999,8 @@ export function dispatchTaskToJob(
   const nextTaskStatus = deriveDispatchTaskStatus(task.status);
   const hasFirstDispatchedAt = tableHasColumn(db, 'tasks', 'first_dispatched_at');
   const hasTotalDispatchCount = tableHasColumn(db, 'tasks', 'total_dispatch_count');
+  const hasClaimedAtColumn = tableHasColumn(db, 'tasks', 'claimed_at');
+  const hasRoutingReasonColumn = tableHasColumn(db, 'tasks', 'routing_reason');
 
   const firstDispatchClause = hasFirstDispatchedAt
     ? "first_dispatched_at = COALESCE(first_dispatched_at, datetime('now')),"
@@ -2005,7 +2011,10 @@ export function dispatchTaskToJob(
   const clearFailureDetailClause = tableHasColumn(db, 'tasks', 'failure_detail') ? 'failure_detail = NULL,' : '';
   const clearPreviousStatusClause = tableHasColumn(db, 'tasks', 'previous_status') ? 'previous_status = NULL,' : '';
   const assignedAgentClause = tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id = ?,' : '';
+  const claimedAtClause = hasClaimedAtColumn ? 'claimed_at = NULL,' : '';
+  const routingReasonClause = hasRoutingReasonColumn ? 'routing_reason = ?,' : '';
   const assignedAgentValues = assignedAgentClause ? [job.agent_id] : [];
+  const routingReasonValues = routingReasonClause ? [routingReason] : [];
 
   db.prepare(`
     UPDATE tasks
@@ -2013,16 +2022,16 @@ export function dispatchTaskToJob(
         ${assignedAgentClause}
         agent_id = ?,
         dispatched_at = datetime('now'),
-        claimed_at = NULL,
+        ${claimedAtClause}
         active_instance_id = ?,
-        routing_reason = ?,
+        ${routingReasonClause}
         ${clearFailureDetailClause}
         ${clearPreviousStatusClause}
         ${firstDispatchClause}
         ${dispatchCountClause}
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(nextTaskStatus, ...assignedAgentValues, job.agent_id, instanceId, routingReason, task.id);
+  `).run(nextTaskStatus, ...assignedAgentValues, job.agent_id, instanceId, ...routingReasonValues, task.id);
   syncTaskActiveAgentFromInstance(db, task.id);
 
   if (nextTaskStatus !== task.status) {

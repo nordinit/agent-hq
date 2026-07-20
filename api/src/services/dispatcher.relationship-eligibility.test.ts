@@ -27,7 +27,8 @@ jest.mock('../lib/githubIdentity', () => ({
 
 const { resolveRuntime } = jest.requireMock('../runtimes') as { resolveRuntime: jest.Mock };
 
-function setupDb(): Database.Database {
+function setupDb(options: { includeTaskDispatchMetadataColumns?: boolean } = {}): Database.Database {
+  const includeTaskDispatchMetadataColumns = options.includeTaskDispatchMetadataColumns ?? true;
   const db = new Database(':memory:');
   db.exec(`
     CREATE TABLE agents (
@@ -70,8 +71,8 @@ function setupDb(): Database.Database {
       active_instance_id INTEGER,
       paused_at TEXT,
       dispatched_at TEXT,
-      claimed_at TEXT,
-      routing_reason TEXT,
+      ${includeTaskDispatchMetadataColumns ? 'claimed_at TEXT,' : ''}
+      ${includeTaskDispatchMetadataColumns ? 'routing_reason TEXT,' : ''}
       updated_at TEXT
     );
     CREATE TABLE sprints (id INTEGER PRIMARY KEY, project_id INTEGER, name TEXT, sprint_type TEXT, status TEXT);
@@ -324,6 +325,40 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect(result.dispatched).toBe(1);
     const task = db.prepare(`SELECT active_instance_id FROM tasks WHERE id = 801`).get() as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
+    await new Promise(resolve => setImmediate(resolve));
+    db.close();
+  });
+
+  it('dispatches configured non-terminal failed tasks on legacy task schemas without dispatch metadata columns', async () => {
+    const db = setupDb({ includeTaskDispatchMetadataColumns: false });
+    const { runDispatcher } = await import('./dispatcher');
+    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`).run();
+    db.prepare(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 1)`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+      VALUES (10, 'failed', 'Failed', 0, 80)
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
+    `).run();
+    insertTask(db, 805, 'failed');
+
+    const result = runDispatcher(db, 86);
+
+    expect(result).toEqual({ dispatched: 1, skipped: 0, errors: [] });
+    const task = db.prepare(`SELECT status, agent_id, active_instance_id, dispatched_at FROM tasks WHERE id = 805`).get() as {
+      status: string;
+      agent_id: number | null;
+      active_instance_id: number | null;
+      dispatched_at: string | null;
+    };
+    expect(task.status).toBe('failed');
+    expect(task.agent_id).toBe(1);
+    expect(task.active_instance_id).toBe(1);
+    expect(task.dispatched_at).toBeTruthy();
+    const instance = db.prepare(`SELECT task_id, status FROM job_instances WHERE id = ?`).get(task.active_instance_id) as { task_id: number; status: string };
+    expect(instance).toEqual({ task_id: 805, status: 'dispatched' });
     await new Promise(resolve => setImmediate(resolve));
     db.close();
   });
