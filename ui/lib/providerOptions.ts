@@ -109,13 +109,7 @@ export function isProviderConnected(providers: ProviderRecord[], provider: strin
 
 export function isModelAllowedForProvider(model: string | null | undefined, provider: string | null | undefined) {
   if (!model) return true;
-  const source = provider ? PROVIDER_MODEL_SOURCES[provider as ProviderSlug] : null;
-  if (!source) return false;
-  if (source.type === 'freeform') return true;
-  if (source.type === 'dynamic') {
-    return MINIMAX_AGENT_MODELS.some(option => option.value === model);
-  }
-  return source.models.some(option => option.value === model);
+  return !!provider && !!PROVIDER_MODEL_SOURCES[provider as ProviderSlug];
 }
 
 /** Returns true for providers that accept freeform model name entry (no fixed model list) */

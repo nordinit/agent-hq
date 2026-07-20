@@ -15,10 +15,8 @@ import {
   getAgentModelLabel,
   getAgentModelOptionsForProvider,
   getAgentProviderOptions,
-  isLocalModelProvider,
   isDynamicModelProvider,
   isOpenClawOnlyProvider,
-  isModelAllowedForProvider,
   isProviderConnected,
   PROVIDER_LABELS,
 } from '@/lib/providerOptions';
@@ -267,13 +265,6 @@ export default function AgentsPage() {
     }
   }, [form.runtime_config, form.runtime_type]);
 
-  useEffect(() => {
-    if (!form.preferred_provider) return;
-    if (form.model && !isModelAllowedForProvider(form.model, form.preferred_provider)) {
-      setForm(f => ({ ...f, model: '' }));
-    }
-  }, [form.preferred_provider, form.model]);
-
   // Fetch dynamic models when a dynamic-model provider is selected
   useEffect(() => {
     if (!isDynamicModelProvider(form.preferred_provider)) {
@@ -333,7 +324,7 @@ export default function AgentsPage() {
       session_key: form.session_key,
       workspace_path: form.workspace_path,
       status: form.status,
-      model: form.model || null,
+      model: form.model.trim() || null,
       preferred_provider: form.preferred_provider || null,
       provider_connection_id: form.provider_connection_id ? Number(form.provider_connection_id) : null,
       runtime_type: form.runtime_type,
@@ -401,12 +392,6 @@ export default function AgentsPage() {
 
       if (!form.preferred_provider || !isSelectedProviderConnected) {
         setFormError('Select a connected provider in Settings → Providers before saving this agent.');
-        setSaving(false);
-        return;
-      }
-
-      if (form.model && !isModelAllowedForProvider(form.model, form.preferred_provider)) {
-        setFormError('Selected model is not available for the chosen connected provider.');
         setSaving(false);
         return;
       }
@@ -537,7 +522,9 @@ export default function AgentsPage() {
   const claudeRuntimeConfig = normalizeClaudeRuntimeConfig(form.runtime_config);
   const hermesRuntimeConfig = normalizeHermesRuntimeConfig(form.runtime_config);
   const modelOptions = getAgentModelOptionsForProvider(form.preferred_provider);
-  const currentModelUnavailable = !!form.model && !isModelAllowedForProvider(form.model, form.preferred_provider);
+  const modelSuggestions = isDynamicModelProvider(form.preferred_provider)
+    ? dynamicModels.map(model => ({ value: model.id, label: model.label }))
+    : modelOptions;
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -762,63 +749,31 @@ export default function AgentsPage() {
                   </label>
                 )}
 
-                {/* Model picker constrained by provider */}
+                {/* Model identifier */}
                 <label className="block">
                   <span className="text-slate-400 text-xs mb-1 block">Model</span>
-                  {isLocalModelProvider(form.preferred_provider) ? (
-                    <input
-                      type="text"
-                      value={form.model}
-                      onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
-                      placeholder="e.g. llama3.2 or mlx-community/Mistral-7B"
-                      className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-amber-500"
-                    />
-                  ) : isDynamicModelProvider(form.preferred_provider) ? (
-                    <div className="relative">
-                      {dynamicModelsLoading ? (
-                        <div className="flex items-center gap-2 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-400 text-sm">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Fetching models…
-                        </div>
-                      ) : dynamicModelsError ? (
-                        <div className="px-3 py-2 bg-red-900/20 border border-red-600/40 rounded-lg text-red-300 text-xs">
-                          {dynamicModelsError}
-                        </div>
-                      ) : (
-                        <>
-                          <select
-                            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none pr-8"
-                            value={form.model}
-                            onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
-                            disabled={dynamicModels.length === 0}
-                          >
-                            <option value="">Default (inherit)</option>
-                            {dynamicModels.map(m => (
-                              <option key={m.id} value={m.id}>{m.label}</option>
-                            ))}
-                          </select>
-                          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                        </>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="relative">
-                      <select
-                        className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 appearance-none pr-8"
-                        value={currentModelUnavailable ? '' : form.model}
-                        onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
-                        disabled={!form.preferred_provider || modelOptions.length === 0}
-                      >
-                        <option value="">Default (inherit)</option>
-                        {modelOptions.map(option => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                    </div>
+                  <input
+                    type="text"
+                    value={form.model}
+                    onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
+                    placeholder="e.g. openai-codex/gpt-5.4"
+                    list="agent-model-suggestions"
+                    className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-amber-500"
+                  />
+                  <datalist id="agent-model-suggestions">
+                    {modelSuggestions.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </datalist>
+                  {isDynamicModelProvider(form.preferred_provider) && dynamicModelsLoading && (
+                    <p className="text-slate-500 text-xs mt-1.5 flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Fetching model suggestions…
+                    </p>
                   )}
-                  {currentModelUnavailable && (
-                    <p className="text-amber-400 text-xs mt-1.5">Current saved model is no longer available for the selected connected provider. Pick a new one or use Default.</p>
+                  {isDynamicModelProvider(form.preferred_provider) && dynamicModelsError && (
+                    <p className="text-amber-400 text-xs mt-1.5">{dynamicModelsError}</p>
                   )}
+                  <p className="text-slate-500 text-xs mt-1.5">Enter any provider-supported model identifier. Suggestions are optional.</p>
                 </label>
 
                 <label className="block">

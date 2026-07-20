@@ -25,35 +25,35 @@ function provider(overrides: Partial<ProviderRecord>): ProviderRecord {
   };
 }
 
-test('OpenAI API-key providers expose OpenAI models without Claude options', () => {
+test('OpenAI API-key providers expose model suggestions without gating custom values', () => {
   const options = getAgentModelOptionsForProvider('openai');
 
   assert.equal(getDefaultAgentModelForProvider('openai'), 'openai/gpt-5.5');
   assert.deepEqual(options.map(option => option.value), ['openai/gpt-5.5', 'openai/gpt-5.4']);
   assert.equal(isModelAllowedForProvider('openai/gpt-5.5', 'openai'), true);
-  assert.equal(isModelAllowedForProvider('anthropic/claude-sonnet-4-6', 'openai'), false);
+  assert.equal(isModelAllowedForProvider('openai-codex/gpt-5.4', 'openai'), true);
 });
 
-test('Google has a catalog-backed model path', () => {
+test('Google has suggested models and accepts custom model identifiers', () => {
   assert.equal(getDefaultAgentModelForProvider('google'), 'google/gemini-2.5-pro');
   assert.equal(isModelAllowedForProvider('google/gemini-2.5-flash', 'google'), true);
-  assert.equal(isModelAllowedForProvider('openai/gpt-5.5', 'google'), false);
+  assert.equal(isModelAllowedForProvider('google/gemini-experimental-custom', 'google'), true);
 });
 
-test('OpenRouter is a canonical provider slug with model options', () => {
+test('OpenRouter is a canonical provider slug with optional model suggestions', () => {
   assert.equal(getDefaultAgentModelForProvider('openrouter'), 'openrouter/auto');
   assert.equal(isModelAllowedForProvider('openrouter/auto', 'openrouter'), true);
-  assert.equal(isModelAllowedForProvider('google/gemini-2.5-pro', 'openrouter'), false);
+  assert.equal(isModelAllowedForProvider('custom/provider-model', 'openrouter'), true);
 });
 
-test('local providers are freeform while dynamic providers are catalog-constrained', () => {
+test('local and dynamic providers both allow free-form model text', () => {
   assert.equal(isLocalModelProvider('ollama'), true);
   assert.equal(isLocalModelProvider('mlx-studio'), true);
   assert.equal(isModelAllowedForProvider('llama3.2:latest', 'ollama'), true);
 
   assert.equal(isDynamicModelProvider('minimax'), true);
   assert.equal(isModelAllowedForProvider('MiniMax-M2.7', 'minimax'), true);
-  assert.equal(isModelAllowedForProvider('openai/gpt-5.5', 'minimax'), false);
+  assert.equal(isModelAllowedForProvider('MiniMax-custom-preview', 'minimax'), true);
 });
 
 test('provider dropdown options include only connected configured providers', () => {

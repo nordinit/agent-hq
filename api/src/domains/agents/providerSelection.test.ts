@@ -39,13 +39,12 @@ describe('agent provider/model selection', () => {
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('allows OpenAI API-key providers to use OpenAI agent models', () => {
+  it('allows OpenAI API-key providers to use arbitrary model identifiers', () => {
     connectProvider('openai');
 
     expect(defaultAgentModelForProvider('openai')).toBe('openai/gpt-5.5');
     expect(validateAgentProviderSelection(1, 'openai', 'openai/gpt-5.5')).toBeNull();
-    expect(validateAgentProviderSelection(1, 'openai', 'anthropic/claude-sonnet-4-6'))
-      .toBe("model 'anthropic/claude-sonnet-4-6' does not belong to preferred_provider 'openai'");
+    expect(validateAgentProviderSelection(1, 'openai', 'openai/custom-provider-preview')).toBeNull();
   });
 
   it('keeps OpenAI Codex provider validation separate from connected OpenAI API keys', () => {
@@ -55,13 +54,12 @@ describe('agent provider/model selection', () => {
       .toBe("preferred_provider 'openai-codex' is not currently connected");
   });
 
-  it('provides a catalog-backed Google model path', () => {
+  it('keeps provider validation but does not catalog-gate Google models', () => {
     connectProvider('google');
 
     expect(defaultAgentModelForProvider('google')).toBe('google/gemini-2.5-pro');
     expect(validateAgentProviderSelection(1, 'google', 'google/gemini-2.5-flash')).toBeNull();
-    expect(validateAgentProviderSelection(1, 'google', 'openai/gpt-5.5'))
-      .toBe("model 'openai/gpt-5.5' does not belong to preferred_provider 'google'");
+    expect(validateAgentProviderSelection(1, 'google', 'google/gemini-experimental-custom')).toBeNull();
   });
 
   it('accepts OpenRouter as a canonical provider slug with catalog-backed defaults', () => {
@@ -73,13 +71,12 @@ describe('agent provider/model selection', () => {
       .toBe('preferred_provider must be one of: anthropic, openai, openai-codex, google, openrouter, ollama, mlx-studio, minimax');
   });
 
-  it('allows freeform local model providers and constrains dynamic catalogs', () => {
+  it('allows freeform local and dynamic provider model identifiers', () => {
     connectProvider('ollama');
     connectProvider('minimax');
 
     expect(validateAgentProviderSelection(1, 'ollama', 'llama3.2:latest')).toBeNull();
     expect(validateAgentProviderSelection(1, 'minimax', 'MiniMax-M2.7')).toBeNull();
-    expect(validateAgentProviderSelection(1, 'minimax', 'openai/gpt-5.5'))
-      .toBe("model 'openai/gpt-5.5' does not belong to preferred_provider 'minimax'");
+    expect(validateAgentProviderSelection(1, 'minimax', 'MiniMax-custom-preview')).toBeNull();
   });
 });
