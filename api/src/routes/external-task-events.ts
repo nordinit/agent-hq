@@ -41,6 +41,9 @@ type TaskRow = {
   sprint_type: string | null;
   agent_id: number | null;
   active_instance_id: number | null;
+  review_branch: string | null;
+  review_commit: string | null;
+  review_url: string | null;
 };
 
 type ReceiptProcessingState = 'received' | 'processed' | 'rejected' | 'duplicate';
@@ -346,13 +349,57 @@ function loadTask(taskId: number): TaskRow {
            tasks.sprint_id,
            s.sprint_type,
            tasks.agent_id,
-           tasks.active_instance_id
+           tasks.active_instance_id,
+           tasks.review_branch,
+           tasks.review_commit,
+           tasks.review_url
     FROM tasks
     LEFT JOIN sprints s ON s.id = tasks.sprint_id
     WHERE tasks.id = ?
   `).get(taskId) as TaskRow | undefined;
   if (!task) throw new Error('Task not found');
   return task;
+}
+
+function recoverCorrectedReviewEvidence(
+  event: NormalizedExternalTaskEvent,
+  task: TaskRow,
+): { event: NormalizedExternalTaskEvent; recovered: boolean } {
+  if (event.event !== 'deployed_for_qa' || !event.commitSha || task.review_commit !== event.commitSha) {
+    return { event, recovered: false };
+  }
+
+  const corrected = {
+    review_branch: task.review_branch,
+    review_commit: task.review_commit,
+    review_url: task.review_url ?? event.reviewUrl,
+  };
+  const correctedBranch = corrected.review_branch?.trim().toLowerCase();
+  if (
+    !validateReviewEvidence(corrected).valid
+    || correctedBranch === 'main'
+    || correctedBranch === 'master'
+  ) return { event, recovered: false };
+
+  const incoming = validateReviewEvidence({
+    review_branch: event.branch,
+    review_commit: event.commitSha,
+    review_url: event.reviewUrl,
+  });
+  const incomingBranch = event.branch?.trim().toLowerCase();
+  if (incoming.valid && incomingBranch !== 'main' && incomingBranch !== 'master') {
+    return { event, recovered: false };
+  }
+
+  return {
+    event: {
+      ...event,
+      branch: corrected.review_branch,
+      commitSha: corrected.review_commit,
+      reviewUrl: corrected.review_url,
+    },
+    recovered: true,
+  };
 }
 
 function writeWorkflowEventHistory(taskId: number, changedBy: string, event: NormalizedExternalTaskEvent, mapping: WorkflowEventMapping | null): void {
@@ -468,37 +515,52 @@ function validateReviewEvidenceForMapping(event: NormalizedExternalTaskEvent): v
 router.post('/task-events', async (req: Request, res: Response) => {
   try {
     const identity = getMcpIdentityFromRequest(req);
-    const normalized = normalizeExternalTaskEvent((req.body ?? {}) as Record<string, unknown>);
-    assertTrustedExternalSource(identity, normalized.source);
+    const receivedEvent = normalizeExternalTaskEvent((req.body ?? {}) as Record<string, unknown>);
+    assertTrustedExternalSource(identity, receivedEvent.source);
 
     const changedBy = identity.auditActor;
-    const fingerprint = buildFingerprint(normalized);
+    const fingerprint = buildFingerprint(receivedEvent);
     const db = getDb();
-    const task = loadTask(normalized.taskId);
+    const task = loadTask(receivedEvent.taskId);
+    const recovery = recoverCorrectedReviewEvidence(receivedEvent, task);
+    const normalized = recovery.event;
     let receiptId: number;
+    let replayedRejectedReceipt = false;
     try {
-      receiptId = insertReceipt(db, normalized, fingerprint, changedBy, buildRequestMetadata(req));
+      receiptId = insertReceipt(db, receivedEvent, fingerprint, changedBy, buildRequestMetadata(req));
     } catch (error) {
       if (isUniqueConstraintError(error, 'external_task_event_receipts', 'fingerprint')) {
         const existing = db.prepare(`
-          SELECT id
+          SELECT id, processing_state
           FROM external_task_event_receipts
           WHERE fingerprint = ?
           LIMIT 1
-        `).get(fingerprint) as { id: number } | undefined;
-        return res.json({
-          ok: true,
-          duplicate: true,
-          receipt_id: existing?.id ?? null,
-          fingerprint,
-          task_id: normalized.taskId,
-          source: normalized.source,
-          event: normalized.event,
-          receipt_accepted: true,
-          processing_state: 'duplicate',
-        });
+        `).get(fingerprint) as { id: number; processing_state: string | null } | undefined;
+        if (existing?.processing_state !== 'rejected') {
+          return res.json({
+            ok: true,
+            duplicate: true,
+            receipt_id: existing?.id ?? null,
+            fingerprint,
+            task_id: normalized.taskId,
+            source: normalized.source,
+            event: normalized.event,
+            receipt_accepted: true,
+            processing_state: 'duplicate',
+          });
+        }
+        receiptId = existing.id;
+        replayedRejectedReceipt = true;
+        db.prepare(`
+          UPDATE external_task_event_receipts
+          SET processing_state = 'received',
+              processing_error = NULL,
+              processed_at = NULL
+          WHERE id = ?
+        `).run(receiptId);
+      } else {
+        throw error;
       }
-      throw error;
     }
 
     let mapping: WorkflowEventMapping | null = null;
@@ -586,6 +648,8 @@ router.post('/task-events', async (req: Request, res: Response) => {
         task_id: normalized.taskId,
         receipt_accepted: true,
         processing_state: 'processed',
+        replayed_rejected_receipt: replayedRejectedReceipt,
+        recovered_review_evidence: recovery.recovered,
         event_model: 'workflow_event',
         source: normalized.source,
         event: normalized.event,

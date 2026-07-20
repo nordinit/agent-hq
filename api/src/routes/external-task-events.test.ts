@@ -1062,6 +1062,107 @@ describe('external task events route', () => {
     }
   });
 
+  it('recovers a rejected deployed_for_qa replay after dev_deploying cleared the active instance', async () => {
+    const db = getDb();
+    const apiKey = issueLeaseManagerApiKey();
+    const { server, baseUrl } = await startTestServer();
+    const deployment = {
+      source: DEV_ENV_LEASE_MANAGER_SOURCE,
+      task_id: 449,
+      environment_id: 'agent-hq-dev',
+      queue_id: 'lease-recovery',
+      lease_id: 'lease-recovery',
+      branch: 'main',
+      commit_sha: 'f88738e5ccf93742d6a3fe824f28492b2c093dc6',
+      review_url: 'http://127.0.0.1:3510',
+    };
+
+    try {
+      const deploying = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify({
+          ...deployment,
+          event: 'dev_deploying',
+          message: 'Exact commit is deploying.',
+        }),
+      });
+      expect(deploying.status).toBe(200);
+
+      // Model the lifecycle cleanup that follows the status callback in the
+      // production sequence: the completion callback must not require a live run.
+      db.prepare(`UPDATE tasks SET active_instance_id = NULL, agent_id = NULL WHERE id = 449`).run();
+
+      const completionPayload = {
+        ...deployment,
+        event: 'deployed_for_qa',
+        message: 'Exact commit is deployed and ready for QA.',
+      };
+      const rejected = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify(completionPayload),
+      });
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toMatchObject({
+        code: 'external_task_event_validation_failed',
+        processing_state: 'rejected',
+      });
+
+      db.prepare(`
+        UPDATE tasks
+        SET review_branch = ?, review_commit = ?, review_url = ?
+        WHERE id = 449
+      `).run(
+        'agency-fullstack-tools/task-970-show-crm-api-created-leads-consistently-',
+        deployment.commit_sha,
+        deployment.review_url,
+      );
+
+      const replay = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify(completionPayload),
+      });
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toMatchObject({
+        ok: true,
+        duplicate: false,
+        recovered_review_evidence: true,
+        outcome: 'completed_for_review',
+        next_status: 'review',
+      });
+
+      expect(db.prepare(`
+        SELECT status, active_instance_id, review_branch, review_commit, review_url
+        FROM tasks WHERE id = 449
+      `).get()).toMatchObject({
+        status: 'review',
+        active_instance_id: null,
+        review_branch: 'agency-fullstack-tools/task-970-show-crm-api-created-leads-consistently-',
+        review_commit: deployment.commit_sha,
+        review_url: deployment.review_url,
+      });
+
+      const receipt = db.prepare(`
+        SELECT COUNT(*) AS count, processing_state, processing_error
+        FROM external_task_event_receipts
+        WHERE event = 'deployed_for_qa' AND lease_id = 'lease-recovery'
+      `).get() as { count: number; processing_state: string; processing_error: string | null };
+      expect(receipt).toMatchObject({ count: 1, processing_state: 'processed', processing_error: null });
+
+      const idempotent = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify(completionPayload),
+      });
+      expect(idempotent.status).toBe(200);
+      expect(await idempotent.json()).toMatchObject({ duplicate: true, processing_state: 'duplicate' });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   it('deduplicates identical accepted events without repeating notes or history', async () => {
     const apiKey = issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
