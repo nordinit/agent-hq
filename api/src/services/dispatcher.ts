@@ -873,23 +873,39 @@ export function getNonDispatchableTaskStatusPredicate(
   ) {
     const hasTaskTenant = tableHasColumn(db, 'tasks', 'tenant_id');
     const hasSprintTypeTenant = tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
-    const tenantFilter = hasTaskTenant && hasSprintTypeTenant
-      ? `AND (sprint_type_status.tenant_id = ${taskAlias}.tenant_id OR sprint_type_status.tenant_id IS NULL)`
-      : '';
-    const tenantOrder = hasTaskTenant && hasSprintTypeTenant
-      ? `CASE WHEN sprint_type_status.tenant_id = ${taskAlias}.tenant_id THEN 0 ELSE 1 END ASC,`
-      : '';
-    workflowTypeStatusSource = `
-      (
-        SELECT sprint_type_status.terminal
-        FROM sprint_type_task_statuses sprint_type_status
-        WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
-          AND sprint_type_status.status_key = ${taskAlias}.status
-          ${tenantFilter}
-        ORDER BY ${tenantOrder} sprint_type_status.id DESC
-        LIMIT 1
-      )
-    `;
+    workflowTypeStatusSource = hasTaskTenant && hasSprintTypeTenant
+      ? `
+        COALESCE(
+          (
+            SELECT sprint_type_status.terminal
+            FROM sprint_type_task_statuses sprint_type_status
+            WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
+              AND sprint_type_status.status_key = ${taskAlias}.status
+              AND sprint_type_status.tenant_id = ${taskAlias}.tenant_id
+            ORDER BY sprint_type_status.id DESC
+            LIMIT 1
+          ),
+          (
+            SELECT sprint_type_status.terminal
+            FROM sprint_type_task_statuses sprint_type_status
+            WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
+              AND sprint_type_status.status_key = ${taskAlias}.status
+              AND sprint_type_status.tenant_id IS NULL
+            ORDER BY sprint_type_status.id DESC
+            LIMIT 1
+          )
+        )
+      `
+      : `
+        (
+          SELECT sprint_type_status.terminal
+          FROM sprint_type_task_statuses sprint_type_status
+          WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
+            AND sprint_type_status.status_key = ${taskAlias}.status
+          ORDER BY sprint_type_status.id DESC
+          LIMIT 1
+        )
+      `;
   }
 
   const legacyFallback = `(CASE WHEN ${taskAlias}.status IN (${terminalPlaceholders}) THEN 1 ELSE 0 END)`;

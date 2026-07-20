@@ -62,6 +62,7 @@ function setupDb(): Database.Database {
       priority TEXT NOT NULL,
       agent_id INTEGER,
       project_id INTEGER,
+      tenant_id INTEGER DEFAULT 1,
       task_type TEXT,
       sprint_id INTEGER,
       created_at TEXT NOT NULL,
@@ -103,6 +104,7 @@ function setupDb(): Database.Database {
       sprint_type_key TEXT NOT NULL,
       status_key TEXT NOT NULL,
       label TEXT NOT NULL,
+      tenant_id INTEGER,
       color TEXT NOT NULL DEFAULT 'slate',
       terminal INTEGER NOT NULL DEFAULT 0,
       is_system INTEGER NOT NULL DEFAULT 0,
@@ -178,8 +180,8 @@ function setupDb(): Database.Database {
 
 function insertTask(db: Database.Database, id: number, status = 'ready', taskType = 'backend'): void {
   db.prepare(`
-    INSERT INTO tasks (id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
-    VALUES (?, ?, 'Task', ?, 'high', 86, ?, 10, '2026-05-20T12:00:00.000Z', '2026-05-20T12:00:00.000Z')
+    INSERT INTO tasks (id, title, description, status, priority, project_id, tenant_id, task_type, sprint_id, created_at, updated_at)
+    VALUES (?, ?, 'Task', ?, 'high', 86, 1, ?, 10, '2026-05-20T12:00:00.000Z', '2026-05-20T12:00:00.000Z')
   `).run(id, `Task ${id}`, status, taskType);
 }
 
@@ -322,6 +324,30 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     expect(result.dispatched).toBe(1);
     const task = db.prepare(`SELECT active_instance_id FROM tasks WHERE id = 801`).get() as { active_instance_id: number | null };
+    expect(task.active_instance_id).toBe(1);
+    await new Promise(resolve => setImmediate(resolve));
+    db.close();
+  });
+
+  it('uses tenant-specific sprint-type terminality before default sprint-type fallback', async () => {
+    const db = setupDb();
+    const { runDispatcher } = await import('./dispatcher');
+    db.prepare(`
+      INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, tenant_id, terminal)
+      VALUES
+        ('dev', 'failed', 'Failed', NULL, 1),
+        ('dev', 'failed', 'Failed', 1, 0)
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
+    `).run();
+    insertTask(db, 802, 'failed');
+
+    const result = runDispatcher(db, 86);
+
+    expect(result.dispatched).toBe(1);
+    const task = db.prepare(`SELECT active_instance_id FROM tasks WHERE id = 802`).get() as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
     db.close();

@@ -58,6 +58,7 @@ function setupDb(): Database.Database {
       review_owner_agent_id INTEGER,
       active_instance_id INTEGER,
       project_id INTEGER,
+      tenant_id INTEGER DEFAULT 1,
       sprint_id INTEGER,
       task_type TEXT,
       story_points INTEGER,
@@ -95,6 +96,7 @@ function setupDb(): Database.Database {
       sprint_type_key TEXT NOT NULL,
       status_key TEXT NOT NULL,
       label TEXT NOT NULL,
+      tenant_id INTEGER,
       terminal INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE task_statuses (
@@ -139,9 +141,9 @@ function insertTask(db: Database.Database, id: number, status: string): void {
   db.prepare(`
     INSERT INTO tasks (
       id, title, description, status, priority, agent_id, assigned_agent_id,
-      review_owner_agent_id, active_instance_id, project_id, sprint_id, task_type,
+      review_owner_agent_id, active_instance_id, project_id, tenant_id, sprint_id, task_type,
       updated_at
-    ) VALUES (?, ?, 'Task', ?, 'high', 1, 1, NULL, NULL, 86, 10, 'backend', '2026-06-04T12:00:00.000Z')
+    ) VALUES (?, ?, 'Task', ?, 'high', 1, 1, NULL, NULL, 86, 1, 10, 'backend', '2026-06-04T12:00:00.000Z')
   `).run(id, `Task ${id}`, status);
 }
 
@@ -207,6 +209,27 @@ describe('reconciler workflow-defined status routing', () => {
     await reconcileReviewQaRouting({ dispatchInstance: jest.fn(async () => undefined) }, db);
 
     const task = db.prepare(`SELECT assigned_agent_id FROM tasks WHERE id = 800`).get() as { assigned_agent_id: number };
+    expect(task.assigned_agent_id).toBe(2);
+    db.close();
+  });
+
+  it('uses tenant-specific sprint-type terminality before default sprint-type fallback', async () => {
+    const db = setupDb();
+    db.prepare(`
+      INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, tenant_id, terminal)
+      VALUES
+        ('dev', 'failed', 'Failed', NULL, 1),
+        ('dev', 'failed', 'Failed', 1, 0)
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
+    `).run();
+    insertTask(db, 801, 'failed');
+
+    await reconcileReviewQaRouting({ dispatchInstance: jest.fn(async () => undefined) }, db);
+
+    const task = db.prepare(`SELECT assigned_agent_id FROM tasks WHERE id = 801`).get() as { assigned_agent_id: number };
     expect(task.assigned_agent_id).toBe(2);
     db.close();
   });
