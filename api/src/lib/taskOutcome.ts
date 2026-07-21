@@ -657,7 +657,6 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
   }
 
   cleanupTaskExecutionLinkageForStatus(db, input.taskId, nextStatus, {
-    deferEndedActiveInstanceCleanup: true,
     authoritativeInstanceId: input.instanceId ?? reloadedExisting.active_instance_id,
     changedBy: 'task_outcome',
   });

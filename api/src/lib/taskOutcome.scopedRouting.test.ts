@@ -772,8 +772,9 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     expect(task.status).toBe('review');
   });
 
-  it('defers ended-run unlink cleanup when a terminal outcome is posted for the authoritative active run', async () => {
+  it('clears active ownership immediately when a terminal outcome is accepted for the authoritative active run', async () => {
     db = createDb();
+    (cleanupTaskExecutionLinkageForStatus as jest.Mock).mockClear();
     db.prepare(`UPDATE tasks SET status = 'in_progress', active_instance_id = 93, agent_id = 7 WHERE id = 417`).run();
     db.prepare(`
       INSERT INTO job_instances (id, task_id, agent_id, status, session_key)
@@ -803,11 +804,18 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       417,
       'review',
       expect.objectContaining({
-        deferEndedActiveInstanceCleanup: true,
         authoritativeInstanceId: 93,
         changedBy: 'task_outcome',
       }),
     );
+    expect((cleanupTaskExecutionLinkageForStatus as jest.Mock).mock.calls[0][3]).not.toHaveProperty('deferEndedActiveInstanceCleanup');
+
+    const task = db.prepare(`SELECT active_instance_id, agent_id FROM tasks WHERE id = 417`).get() as {
+      active_instance_id: number | null;
+      agent_id: number | null;
+    };
+    expect(task.active_instance_id).toBeNull();
+    expect(task.agent_id).toBeNull();
   });
 
   it('writes accepted lifecycle outcome bookkeeping with the task tenant and closes the active tenant-owned instance', async () => {

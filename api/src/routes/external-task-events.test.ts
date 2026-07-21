@@ -28,6 +28,7 @@ import { closeDb, getDb } from '../db/client';
 import externalTaskEventsRouter, { DEV_ENV_LEASE_MANAGER_SOURCE } from './external-task-events';
 import { authenticateMcpApiKeyIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 import { DEV_ENV_DEPLOY_FAILURE_EVENTS, seedDefaultExternalEventMappings } from '../domains/routing/externalEventMappings';
+import { cleanupTaskExecutionLinkageForStatus } from '../lib/taskLifecycle';
 
 let tempDir: string;
 let dbPath: string;
@@ -782,6 +783,7 @@ describe('external task events route', () => {
 
   it('reprocesses a rejected deployed_for_qa receipt after missing configuration evidence is recorded', async () => {
     const db = getDb();
+    (cleanupTaskExecutionLinkageForStatus as jest.Mock).mockClear();
     db.prepare(`
       INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, message)
       VALUES (10, 'backend', 'completed_for_review', 'configuration_resource', 'configuration_resource required')
@@ -837,6 +839,7 @@ describe('external task events route', () => {
       expect(task.active_instance_id).toBe(1784);
       expect(task.review_branch).toBeNull();
       expect(task.review_commit).toBeNull();
+      expect(cleanupTaskExecutionLinkageForStatus).not.toHaveBeenCalled();
 
       db.prepare(`
         UPDATE tasks
@@ -868,25 +871,34 @@ describe('external task events route', () => {
       });
 
       const recoveredTask = db.prepare(`
-        SELECT status, active_instance_id, review_branch, review_commit, review_url, custom_fields_json
+        SELECT status, review_branch, review_commit, review_url, custom_fields_json
         FROM tasks
         WHERE id = 449
       `).get() as {
         status: string;
-        active_instance_id: number | null;
         review_branch: string | null;
         review_commit: string | null;
         review_url: string | null;
         custom_fields_json: string | null;
       };
       expect(recoveredTask.status).toBe('review');
-      expect(recoveredTask.active_instance_id).toBe(1784);
       expect(recoveredTask.review_branch).toBe('cinder-backend/task-980-preserve-lifecycle-recovery-after-deploy');
       expect(recoveredTask.review_commit).toBe('5414a60758c163677f05d7f1faea3897c47be042');
       expect(recoveredTask.review_url).toBe('http://127.0.0.1:3510');
       expect(JSON.parse(recoveredTask.custom_fields_json ?? '{}')).toMatchObject({
         configuration_resource: 'dev-environment-lease-manager:lease-config-retry/configuration',
       });
+      expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledTimes(1);
+      expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledWith(
+        db,
+        449,
+        'review',
+        expect.objectContaining({
+          authoritativeInstanceId: 1784,
+          changedBy: 'task_outcome',
+        }),
+      );
+      expect((cleanupTaskExecutionLinkageForStatus as jest.Mock).mock.calls[0][3]).not.toHaveProperty('deferEndedActiveInstanceCleanup');
 
       const third = await fetch(`${baseUrl}/api/v1/external/task-events`, {
         method: 'POST',
@@ -902,6 +914,7 @@ describe('external task events route', () => {
         duplicate: true,
         processing_state: 'duplicate',
       });
+      expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledTimes(1);
 
       const receipt = db.prepare(`
         SELECT COUNT(*) AS count, processing_state, processing_error, mapping_action_target
