@@ -267,6 +267,8 @@ Preferred task lifecycle transition path:
 
 `agent_hq_move_task` remains a compatibility helper for direct status moves and older callers. New configurable workflow clients should prefer `agent_hq_post_task_outcome` because outcomes encode the configured transition route, gate evidence, and lifecycle semantics.
 
+Outcome payload evidence is scoped to the requested outcome. `agent_hq_post_task_outcome.payload` may include built-in lifecycle evidence fields such as `review_branch` or `qa_verified_commit`, and it may include workflow-declared gate fields either directly or under `payload.custom_fields`. The server persists those accepted evidence fields before evaluating the outcome gates, then applies the outcome in the same transaction. Payload keys that are not control fields or effective gate fields for the requested outcome are rejected; use `dry_run: true` first to preview missing fields, match failures, and unknown payload keys without writing task state or consuming the active run.
+
 ---
 
 ## Task Write Behavior

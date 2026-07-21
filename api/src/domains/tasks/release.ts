@@ -9,6 +9,7 @@ import {
   validateDeployEvidence,
   type GateRequirement,
 } from '../../lib/evidenceValidation';
+import { INLINE_EVIDENCE_FIELD_KEYS } from '../../lib/starterCatalog';
 import { loadSprintTaskTransitionRequirements } from '../routing/policy/statuses';
 import type { McpApiIdentity } from '../../lib/mcpApiAuth';
 import { parseCustomFields } from './fields';
@@ -45,8 +46,12 @@ function normalizeOutcomeBody(body: Record<string, unknown>): Record<string, unk
   const payload = body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload)
     ? body.payload as Record<string, unknown>
     : {};
+  const payloadCustomFields = payload.custom_fields && typeof payload.custom_fields === 'object' && !Array.isArray(payload.custom_fields)
+    ? payload.custom_fields as Record<string, unknown>
+    : {};
+  const { custom_fields: _customFields, ...payloadFields } = payload;
   const { payload: _payload, ...topLevel } = body;
-  return { ...payload, ...topLevel };
+  return { ...payloadCustomFields, ...payloadFields, ...topLevel };
 }
 
 function errorWithBody(status: number, body: Record<string, unknown>): Error & { status?: number; body?: Record<string, unknown> } {
@@ -59,30 +64,49 @@ function errorWithBody(status: number, body: Record<string, unknown>): Error & {
   return error;
 }
 
+function tableColumnExists(db: Database.Database, table: string, column: string): boolean {
+  try {
+    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+  } catch {
+    return false;
+  }
+}
+
 function resolveMcpActiveOutcomeInstance(
   db: Database.Database,
   taskId: number,
   identity: McpApiIdentity,
 ): number {
+  const taskTenantSelect = tableColumnExists(db, 'tasks', 'tenant_id') ? 't.tenant_id AS task_tenant_id,' : 'NULL AS task_tenant_id,';
+  const instanceTenantSelect = tableColumnExists(db, 'job_instances', 'tenant_id') ? 'ji.tenant_id AS instance_tenant_id,' : 'NULL AS instance_tenant_id,';
   const row = db.prepare(`
     SELECT
       t.id AS task_id,
+      ${taskTenantSelect}
       t.active_instance_id,
       ji.id AS instance_id,
+      ${instanceTenantSelect}
       ji.task_id AS instance_task_id,
-      ji.agent_id AS instance_agent_id
+      ji.agent_id AS instance_agent_id,
+      ji.status AS instance_status
     FROM tasks t
     LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
     WHERE t.id = ?
   `).get(taskId) as {
     task_id: number;
+    task_tenant_id: number | null;
     active_instance_id: number | null;
     instance_id: number | null;
+    instance_tenant_id: number | null;
     instance_task_id: number | null;
     instance_agent_id: number | null;
+    instance_status: string | null;
   } | undefined;
 
   if (!row) throw errorWithBody(404, { error: 'Task not found' });
+  if (row.task_tenant_id != null && row.task_tenant_id !== identity.tenantId) {
+    throw errorWithBody(404, { error: 'Task not found' });
+  }
   if (row.active_instance_id == null) {
     throw errorWithBody(409, {
       error: 'Task outcome rejected: task has no active instance',
@@ -91,12 +115,31 @@ function resolveMcpActiveOutcomeInstance(
       authenticated_agent_id: identity.agentId,
     });
   }
+  if (row.instance_tenant_id != null && row.instance_tenant_id !== identity.tenantId) {
+    throw errorWithBody(403, {
+      error: 'Task outcome rejected: active instance belongs to a different tenant',
+      reason: 'active_instance_tenant_mismatch',
+      task_id: taskId,
+      active_instance_id: row.active_instance_id,
+      authenticated_tenant_id: identity.tenantId,
+    });
+  }
   if (row.instance_id == null || row.instance_task_id !== taskId) {
     throw errorWithBody(409, {
       error: 'Task outcome rejected: active instance is missing or not linked to this task',
       reason: 'active_instance_not_authoritative',
       task_id: taskId,
       active_instance_id: row.active_instance_id,
+      authenticated_agent_id: identity.agentId,
+    });
+  }
+  if (row.instance_status && !['running', 'started', 'in_progress'].includes(row.instance_status)) {
+    throw errorWithBody(409, {
+      error: 'Task outcome rejected: active instance is not running',
+      reason: 'active_instance_not_running',
+      task_id: taskId,
+      active_instance_id: row.active_instance_id,
+      active_instance_status: row.instance_status,
       authenticated_agent_id: identity.agentId,
     });
   }
@@ -112,6 +155,134 @@ function resolveMcpActiveOutcomeInstance(
   }
 
   return row.active_instance_id;
+}
+
+function parseRequirementFieldExpression(fieldName: string): string[] {
+  return fieldName
+    .split('|')
+    .map(field => field.trim())
+    .filter(Boolean);
+}
+
+const OUTCOME_PAYLOAD_CONTROL_FIELDS = new Set([
+  'outcome',
+  'summary',
+  'failure_detail',
+  'blocker_reason',
+  'instance_id',
+  'instanceId',
+  'dry_run',
+  'dryRun',
+  'changed_by',
+]);
+
+function buildAllowedInlineEvidenceFields(requirements: GateRequirement[]): Set<string> {
+  const allowed = new Set<string>(INLINE_EVIDENCE_FIELD_KEYS);
+  for (const requirement of requirements) {
+    for (const field of parseRequirementFieldExpression(requirement.field_name)) {
+      allowed.add(field);
+    }
+  }
+  return allowed;
+}
+
+function validateOutcomePayloadFields(
+  body: Record<string, unknown>,
+  allowedEvidenceFields: Set<string>,
+): string[] {
+  const payload = body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload)
+    ? body.payload as Record<string, unknown>
+    : null;
+  if (!payload) return [];
+
+  const errors: string[] = [];
+  for (const key of Object.keys(payload)) {
+    if (key === 'custom_fields') {
+      const customFields = payload.custom_fields;
+      if (customFields == null || (typeof customFields === 'object' && !Array.isArray(customFields))) {
+        continue;
+      }
+      errors.push('payload.custom_fields must be an object when provided');
+      continue;
+    }
+    if (!OUTCOME_PAYLOAD_CONTROL_FIELDS.has(key) && !allowedEvidenceFields.has(key)) {
+      errors.push(`payload field "${key}" is not declared as an evidence gate for this outcome`);
+    }
+  }
+
+  const customFields = payload.custom_fields;
+  if (customFields && typeof customFields === 'object' && !Array.isArray(customFields)) {
+    for (const key of Object.keys(customFields as Record<string, unknown>)) {
+      if (!allowedEvidenceFields.has(key)) {
+        errors.push(`payload.custom_fields field "${key}" is not declared as an evidence gate for this outcome`);
+      }
+    }
+  }
+
+  return errors;
+}
+
+function resolveMcpDuplicateSuccessfulOutcome(
+  db: Database.Database,
+  taskId: number,
+  outcome: string,
+  identity: McpApiIdentity,
+): { instance_id: number; status: string } | null {
+  const taskTenantSelect = tableColumnExists(db, 'tasks', 'tenant_id') ? 't.tenant_id AS task_tenant_id,' : 'NULL AS task_tenant_id,';
+  const instanceTenantSelect = tableColumnExists(db, 'job_instances', 'tenant_id') ? 'ji.tenant_id AS instance_tenant_id,' : 'NULL AS instance_tenant_id,';
+  const row = db.prepare(`
+    SELECT
+      t.active_instance_id,
+      ${taskTenantSelect}
+      ji.id AS instance_id,
+      ${instanceTenantSelect}
+      ji.agent_id AS instance_agent_id,
+      ji.task_id AS instance_task_id,
+      ji.status AS instance_status,
+      ji.task_outcome,
+      ji.lifecycle_outcome_posted_at
+    FROM tasks t
+    LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
+    WHERE t.id = ?
+  `).get(taskId) as {
+    active_instance_id: number | null;
+    task_tenant_id: number | null;
+    instance_id: number | null;
+    instance_tenant_id: number | null;
+    instance_agent_id: number | null;
+    instance_task_id: number | null;
+    instance_status: string | null;
+    task_outcome: string | null;
+    lifecycle_outcome_posted_at: string | null;
+  } | undefined;
+
+  if (!row) return null;
+  if (row.task_tenant_id != null && row.task_tenant_id !== identity.tenantId) return null;
+  if (row.instance_tenant_id != null && row.instance_tenant_id !== identity.tenantId) return null;
+  if (row.active_instance_id == null || row.instance_id == null) return null;
+  if (row.instance_task_id !== taskId || row.instance_agent_id !== identity.agentId) return null;
+  if (row.task_outcome !== outcome || !row.lifecycle_outcome_posted_at) return null;
+  if (row.instance_status !== 'done') return null;
+  return { instance_id: row.instance_id, status: row.instance_status };
+}
+
+function formatEvidenceNoteFields(inlineEvidence: Record<string, unknown>): string[] {
+  const labels: Record<string, string> = {
+    review_branch: 'Branch',
+    review_commit: 'Commit',
+    review_url: 'URL',
+    qa_verified_commit: 'QA commit',
+    qa_tested_url: 'QA URL',
+    merged_commit: 'Merged',
+    deployed_commit: 'Deployed',
+    deploy_target: 'Target',
+    deployed_at: 'At',
+    live_verified_by: 'Verified by',
+    live_verified_at: 'Verified at',
+  };
+  return Object.entries(inlineEvidence)
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim().length > 0)
+    .map(([field, value]) => `${labels[field] ?? field}: ${String(value)}`);
 }
 
 export async function postTaskOutcome(
@@ -165,8 +336,6 @@ export async function postTaskOutcome(
     throw error;
   }
 
-  const inlineEvidence = extractInlineEvidence(normalizedBody);
-  const hasInline = hasAnyEvidence(inlineEvidence);
   const transitionRequirements = loadSprintTaskTransitionRequirements(db, existing.sprint_id ?? null, outcome, existing.task_type ?? null)
     .map((row): GateRequirement => ({
       field_name: row.field_name,
@@ -175,6 +344,38 @@ export async function postTaskOutcome(
       severity: row.severity,
       message: row.message,
     }));
+  const allowedEvidenceFields = buildAllowedInlineEvidenceFields(transitionRequirements);
+  const payloadFieldErrors = validateOutcomePayloadFields(body, allowedEvidenceFields);
+  if (payloadFieldErrors.length > 0) {
+    if (dryRun) {
+      return {
+        ok: false,
+        dry_run: true,
+        applied: false,
+        outcome,
+        prior_status: existing.status,
+        next_status: existing.status,
+        evidence_written: false,
+        validation_errors: payloadFieldErrors,
+        missing_evidence_requirements: transitionRequirements,
+        proposed_changes: {
+          task_id: taskId,
+          status: { from: existing.status, to: existing.status },
+          evidence: {},
+        },
+      };
+    }
+    const error = new Error('Evidence validation failed') as Error & {
+      status?: number;
+      validation_errors?: string[];
+    };
+    error.status = 400;
+    error.validation_errors = payloadFieldErrors;
+    throw error;
+  }
+
+  const inlineEvidence = extractInlineEvidence(normalizedBody, allowedEvidenceFields);
+  const hasInline = hasAnyEvidence(inlineEvidence);
 
   const existingCustomFields = parseCustomFields(existing.custom_fields_json);
   const evidenceValidation = validateInlineEvidenceForOutcome(outcome, inlineEvidence, {
@@ -192,6 +393,27 @@ export async function postTaskOutcome(
     live_verified_at: existing.live_verified_at,
     ...existingCustomFields,
   }, transitionRequirements);
+
+  if (options.mcpIdentity && !dryRun) {
+    const duplicate = resolveMcpDuplicateSuccessfulOutcome(db, taskId, outcome, options.mcpIdentity);
+    if (duplicate) {
+      const task = requireTask(taskId, db);
+      return {
+        ok: true,
+        applied: false,
+        ignored: true,
+        reason: 'duplicate_success',
+        prior_status: existing.status,
+        next_status: existing.status,
+        outcome,
+        instance_closed: true,
+        evidence_written: false,
+        auto_recovered: false,
+        recovery_description: null,
+        task: enrichTask(task),
+      };
+    }
+  }
 
   const authoritativeInstanceId = options.mcpIdentity
     ? resolveMcpActiveOutcomeInstance(db, taskId, options.mcpIdentity)
@@ -261,7 +483,7 @@ export async function postTaskOutcome(
     await db.exec('BEGIN');
     try {
       if (hasInline) {
-        updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>);
+        updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>, { db });
       }
       const result = await applyTaskOutcome(db, {
         taskId,
@@ -331,21 +553,11 @@ export async function postTaskOutcome(
   let result;
   try {
     if (hasInline) {
-      updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>);
+      updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>, { db });
 
-      const evFields: string[] = [];
-      if (inlineEvidence.review_branch) evFields.push(`Branch: ${inlineEvidence.review_branch}`);
-      if (inlineEvidence.review_commit) evFields.push(`Commit: ${inlineEvidence.review_commit}`);
-      if (inlineEvidence.review_url) evFields.push(`URL: ${inlineEvidence.review_url}`);
-      if (inlineEvidence.qa_verified_commit) evFields.push(`QA commit: ${inlineEvidence.qa_verified_commit}`);
-      if (inlineEvidence.qa_tested_url) evFields.push(`QA URL: ${inlineEvidence.qa_tested_url}`);
-      if (inlineEvidence.merged_commit) evFields.push(`Merged: ${inlineEvidence.merged_commit}`);
-      if (inlineEvidence.deployed_commit) evFields.push(`Deployed: ${inlineEvidence.deployed_commit}`);
-      if (inlineEvidence.deploy_target) evFields.push(`Target: ${inlineEvidence.deploy_target}`);
-      if (inlineEvidence.deployed_at) evFields.push(`At: ${inlineEvidence.deployed_at}`);
-      if (inlineEvidence.live_verified_by) evFields.push(`Verified by: ${inlineEvidence.live_verified_by}`);
+      const evFields = formatEvidenceNoteFields(inlineEvidence as Record<string, unknown>);
       if (evFields.length > 0) {
-        addTaskNote(taskId, changedBy, `Atomic evidence (with ${outcome})\n${evFields.join('\n')}`);
+        addTaskNote(taskId, changedBy, `Atomic evidence (with ${outcome})\n${evFields.join('\n')}`, db);
       }
     }
 

@@ -24,16 +24,17 @@ export function logHistory(
   field: string,
   oldValue: unknown,
   newValue: unknown,
+  dbOverride?: Database.Database,
 ): void {
-  writeTaskHistory(getDb(), taskId, changedBy, field, oldValue, newValue, false);
+  writeTaskHistory(dbOverride ?? getDb(), taskId, changedBy, field, oldValue, newValue, false);
 }
 
 export function taskTableHasColumn(db: Database.Database, column: string): boolean {
   return (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((col) => col.name === column);
 }
 
-export function addTaskNote(taskId: number, author: string, content: string): void {
-  const db = getDb();
+export function addTaskNote(taskId: number, author: string, content: string, dbOverride?: Database.Database): void {
+  const db = dbOverride ?? getDb();
   const tenantId = resolveRuntimeTenantId(db, { taskId });
   const tenant = tenantInsertColumns(db, 'task_notes', tenantId);
   db.prepare(`
@@ -46,9 +47,9 @@ export function updateTaskEvidence(
   taskId: number,
   changedBy: string,
   updates: Record<string, unknown>,
-  options?: { explicitClears?: Set<string> },
+  options?: { explicitClears?: Set<string>; db?: Database.Database },
 ): void {
-  const db = getDb();
+  const db = options?.db ?? getDb();
   const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown> | undefined;
   if (!existing) throw new Error('Task not found');
   const taskColumns = new Set((db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map((col) => col.name));
@@ -84,7 +85,7 @@ export function updateTaskEvidence(
       : existing[key];
     const newValue = updates[key];
     if (String(oldValue ?? '') !== String(newValue ?? '')) {
-      logHistory(taskId, changedBy, key, oldValue, newValue);
+      logHistory(taskId, changedBy, key, oldValue, newValue, db);
     }
   }
 

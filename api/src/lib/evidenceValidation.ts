@@ -34,7 +34,9 @@ export interface LiveVerificationEvidence {
   deployed_commit?: string | null;
 }
 
-export interface InlineEvidence extends ReviewEvidence, QaEvidence, DeployEvidence, LiveVerificationEvidence {}
+export interface InlineEvidence extends ReviewEvidence, QaEvidence, DeployEvidence, LiveVerificationEvidence {
+  [key: string]: unknown;
+}
 
 export interface ValidationResult {
   valid: boolean;
@@ -300,9 +302,9 @@ function validateEvidenceField(fieldName: string, value: unknown, errors: string
  * Extract evidence fields from a request body, returning only the fields
  * that are explicitly provided (not undefined).
  */
-export function extractInlineEvidence(body: Record<string, unknown>): InlineEvidence {
+export function extractInlineEvidence(body: Record<string, unknown>, allowedFields: Iterable<string> = INLINE_EVIDENCE_FIELD_KEYS): InlineEvidence {
   const result: InlineEvidence = {};
-  for (const field of INLINE_EVIDENCE_FIELD_KEYS) {
+  for (const field of allowedFields) {
     if (field in body) {
       (result as Record<string, unknown>)[field] = body[field] as string | null;
     }

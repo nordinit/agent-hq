@@ -996,4 +996,256 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     });
     expect(instance.task_outcome).toBe('failed');
   });
+
+  it('allows MCP-owned QA runs to persist configured gate evidence atomically before qa_pass gates run', async () => {
+    db = createDb();
+    const configurationHash = '294d2ab73e1b402174880f2abe067057d64b69380ac490258fb8ace22e7cfabf';
+    db.prepare(`
+      UPDATE tasks
+      SET status = 'review',
+          active_instance_id = 97,
+          agent_id = 7,
+          custom_fields_json = ?
+      WHERE id = 417
+    `).run(JSON.stringify({ configuration_review_hash: configurationHash }));
+    db.prepare(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status) VALUES (97, 1, 417, 7, 'running')`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (10, 'backend', 'review', 'qa_pass', 'ready_to_merge', 1)
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, priority)
+      VALUES
+        (10, 'backend', 'qa_pass', 'configuration_qa_hash', 'required', NULL, 'block', 'qa_pass requires configuration_qa_hash', 100),
+        (10, 'backend', 'qa_pass', 'configuration_qa_receipt', 'required', NULL, 'block', 'qa_pass requires configuration_qa_receipt', 90),
+        (10, 'backend', 'qa_pass', 'configuration_qa_hash', 'match', 'configuration_review_hash', 'block', 'configuration QA hash must match configuration review hash', 80)
+    `).run();
+
+    const result = await postTaskOutcome(db, 417, {
+      outcome: 'qa_pass',
+      summary: 'Configuration QA passed through scoped MCP payload evidence',
+      payload: {
+        configuration_qa_hash: configurationHash,
+        custom_fields: {
+          configuration_qa_receipt: 'Task #978 note #127305; independent QA verified generated configuration.',
+        },
+      },
+    }, 'agent-7', { mcpIdentity: mcpIdentity(7) });
+
+    expect(result).toMatchObject({
+      ok: true,
+      applied: true,
+      prior_status: 'review',
+      next_status: 'ready_to_merge',
+      outcome: 'qa_pass',
+      evidence_written: true,
+      instance_closed: true,
+    });
+
+    const task = db.prepare(`SELECT status, custom_fields_json FROM tasks WHERE id = 417`).get() as {
+      status: string;
+      custom_fields_json: string;
+    };
+    expect(task.status).toBe('ready_to_merge');
+    expect(JSON.parse(task.custom_fields_json)).toMatchObject({
+      configuration_review_hash: configurationHash,
+      configuration_qa_hash: configurationHash,
+      configuration_qa_receipt: 'Task #978 note #127305; independent QA verified generated configuration.',
+    });
+
+    const history = db.prepare(`
+      SELECT field, old_value, new_value
+      FROM task_history
+      WHERE task_id = 417 AND field IN ('configuration_qa_hash', 'configuration_qa_receipt')
+      ORDER BY id ASC
+    `).all();
+    expect(history).toEqual([
+      { field: 'configuration_qa_hash', old_value: null, new_value: configurationHash },
+      { field: 'configuration_qa_receipt', old_value: null, new_value: 'Task #978 note #127305; independent QA verified generated configuration.' },
+    ]);
+
+    const duplicateResult = await postTaskOutcome(db, 417, {
+      outcome: 'qa_pass',
+      summary: 'Duplicate delivery retry after successful qa_pass',
+      payload: {
+        configuration_qa_hash: configurationHash,
+        custom_fields: {
+          configuration_qa_receipt: 'Task #978 note #127305; independent QA verified generated configuration.',
+        },
+      },
+    }, 'agent-7', { mcpIdentity: mcpIdentity(7) });
+
+    expect(duplicateResult).toMatchObject({
+      ok: true,
+      applied: false,
+      ignored: true,
+      reason: 'duplicate_success',
+      prior_status: 'ready_to_merge',
+      next_status: 'ready_to_merge',
+      outcome: 'qa_pass',
+      instance_closed: true,
+    });
+
+    const historyCount = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM task_history
+      WHERE task_id = 417 AND field IN ('configuration_qa_hash', 'configuration_qa_receipt')
+    `).get() as { count: number };
+    expect(historyCount.count).toBe(2);
+  });
+
+  it('rejects mismatched configured QA hashes without consuming the active instance and allows a corrected retry', async () => {
+    db = createDb();
+    const configurationHash = '294d2ab73e1b402174880f2abe067057d64b69380ac490258fb8ace22e7cfabf';
+    db.prepare(`
+      UPDATE tasks
+      SET status = 'review',
+          active_instance_id = 98,
+          agent_id = 7,
+          custom_fields_json = ?
+      WHERE id = 417
+    `).run(JSON.stringify({ configuration_review_hash: configurationHash }));
+    db.prepare(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status) VALUES (98, 1, 417, 7, 'running')`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (10, 'backend', 'review', 'qa_pass', 'ready_to_merge', 1)
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, priority)
+      VALUES
+        (10, 'backend', 'qa_pass', 'configuration_qa_hash', 'required', NULL, 'block', 'qa_pass requires configuration_qa_hash', 100),
+        (10, 'backend', 'qa_pass', 'configuration_qa_receipt', 'required', NULL, 'block', 'qa_pass requires configuration_qa_receipt', 90),
+        (10, 'backend', 'qa_pass', 'configuration_qa_hash', 'match', 'configuration_review_hash', 'block', 'configuration QA hash must match configuration review hash', 80)
+    `).run();
+
+    await expect(postTaskOutcome(db, 417, {
+      outcome: 'qa_pass',
+      summary: 'Mismatched hash should be rejected',
+      payload: {
+        configuration_qa_hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        configuration_qa_receipt: 'QA receipt exists but hash is wrong',
+      },
+    }, 'agent-7', { mcpIdentity: mcpIdentity(7) })).rejects.toMatchObject({
+      status: 400,
+      validation_errors: expect.arrayContaining(['configuration QA hash must match configuration review hash']),
+    });
+
+    const rejectedTask = db.prepare(`SELECT status, active_instance_id, custom_fields_json FROM tasks WHERE id = 417`).get() as {
+      status: string;
+      active_instance_id: number | null;
+      custom_fields_json: string;
+    };
+    expect(rejectedTask.status).toBe('review');
+    expect(rejectedTask.active_instance_id).toBe(98);
+    expect(JSON.parse(rejectedTask.custom_fields_json)).toEqual({ configuration_review_hash: configurationHash });
+
+    await postTaskOutcome(db, 417, {
+      outcome: 'qa_pass',
+      summary: 'Corrected configuration QA evidence',
+      payload: {
+        configuration_qa_hash: configurationHash,
+        configuration_qa_receipt: 'Corrected QA receipt',
+      },
+    }, 'agent-7', { mcpIdentity: mcpIdentity(7) });
+
+    const correctedTask = db.prepare(`SELECT status, custom_fields_json FROM tasks WHERE id = 417`).get() as {
+      status: string;
+      custom_fields_json: string;
+    };
+    expect(correctedTask.status).toBe('ready_to_merge');
+    expect(JSON.parse(correctedTask.custom_fields_json)).toMatchObject({
+      configuration_qa_hash: configurationHash,
+      configuration_qa_receipt: 'Corrected QA receipt',
+    });
+  });
+
+  it('rejects missing and non-gate configured evidence fields in MCP outcome payloads', async () => {
+    db = createDb();
+    const configurationHash = '294d2ab73e1b402174880f2abe067057d64b69380ac490258fb8ace22e7cfabf';
+    db.prepare(`
+      UPDATE tasks
+      SET status = 'review',
+          active_instance_id = 99,
+          agent_id = 7,
+          custom_fields_json = ?
+      WHERE id = 417
+    `).run(JSON.stringify({ configuration_review_hash: configurationHash }));
+    db.prepare(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status) VALUES (99, 1, 417, 7, 'running')`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (10, 'backend', 'review', 'qa_pass', 'ready_to_merge', 1)
+    `).run();
+    db.prepare(`
+      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, priority)
+      VALUES
+        (10, 'backend', 'qa_pass', 'configuration_qa_hash', 'required', NULL, 'block', 'qa_pass requires configuration_qa_hash', 100),
+        (10, 'backend', 'qa_pass', 'configuration_qa_receipt', 'required', NULL, 'block', 'qa_pass requires configuration_qa_receipt', 90)
+    `).run();
+
+    await expect(postTaskOutcome(db, 417, {
+      outcome: 'qa_pass',
+      summary: 'Receipt is missing',
+      payload: {
+        configuration_qa_hash: configurationHash,
+      },
+    }, 'agent-7', { mcpIdentity: mcpIdentity(7) })).rejects.toMatchObject({
+      status: 400,
+      validation_errors: expect.arrayContaining(['qa_pass requires configuration_qa_receipt']),
+    });
+
+    await expect(postTaskOutcome(db, 417, {
+      outcome: 'qa_pass',
+      summary: 'Unknown custom evidence should be rejected',
+      payload: {
+        configuration_qa_hash: configurationHash,
+        configuration_qa_receipt: 'QA receipt',
+        custom_fields: {
+          arbitrary_operator_override: 'not allowed',
+        },
+      },
+    }, 'agent-7', { mcpIdentity: mcpIdentity(7) })).rejects.toMatchObject({
+      status: 400,
+      validation_errors: expect.arrayContaining(['payload.custom_fields field "arbitrary_operator_override" is not declared as an evidence gate for this outcome']),
+    });
+
+    const task = db.prepare(`SELECT status, active_instance_id, custom_fields_json FROM tasks WHERE id = 417`).get() as {
+      status: string;
+      active_instance_id: number | null;
+      custom_fields_json: string;
+    };
+    expect(task.status).toBe('review');
+    expect(task.active_instance_id).toBe(99);
+    expect(JSON.parse(task.custom_fields_json)).toEqual({ configuration_review_hash: configurationHash });
+  });
+
+  it('rejects MCP outcome writes for cross-tenant and inactive active instances', async () => {
+    db = createDb();
+    db.prepare(`UPDATE tasks SET tenant_id = 4, status = 'review', active_instance_id = 100, agent_id = 7 WHERE id = 417`).run();
+    db.prepare(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status) VALUES (100, 4, 417, 7, 'running')`).run();
+    db.prepare(`
+      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (10, 'backend', 'review', 'qa_pass', 'ready_to_merge', 1)
+    `).run();
+
+    await expect(postTaskOutcome(db, 417, {
+      outcome: 'qa_pass',
+      summary: 'Wrong tenant must not advance',
+    }, 'agent-7', { mcpIdentity: mcpIdentity(7) })).rejects.toMatchObject({
+      status: 404,
+    });
+
+    db.prepare(`UPDATE tasks SET tenant_id = 1 WHERE id = 417`).run();
+    db.prepare(`UPDATE job_instances SET tenant_id = 1, status = 'done' WHERE id = 100`).run();
+
+    await expect(postTaskOutcome(db, 417, {
+      outcome: 'qa_pass',
+      summary: 'Inactive instance must not advance',
+    }, 'agent-7', { mcpIdentity: mcpIdentity(7) })).rejects.toMatchObject({
+      status: 409,
+      body: expect.objectContaining({
+        reason: 'active_instance_not_running',
+        active_instance_status: 'done',
+      }),
+    });
+  });
 });
