@@ -1,5 +1,6 @@
 import { getDb } from '../../db/client';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
+import { TERMINAL_TASK_STATUSES } from '../../lib/taskStatuses';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
 import { getTaskRelationshipsForEnrichment } from './relationships';
 
@@ -249,6 +250,204 @@ export function searchTasks(
     ORDER BY t.id DESC
     LIMIT ?
   `).all(...params) as Array<{ id: number; title: string; status: string }>;
+}
+
+const PROJECT_TASK_SEARCH_MAX_LIMIT = 50;
+const PROJECT_TASK_SEARCH_DEFAULT_LIMIT = 20;
+const CUSTOM_FIELD_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+
+export interface ProjectTaskSearchInput {
+  tenant_id: number;
+  project_id: number;
+  sprint_id?: unknown;
+  workflow_id?: unknown;
+  statuses?: unknown;
+  status?: unknown;
+  active_only?: unknown;
+  nonterminal_only?: unknown;
+  task_type?: unknown;
+  custom_fields?: unknown;
+  limit?: unknown;
+  offset?: unknown;
+}
+
+export interface ProjectTaskSearchResult {
+  tasks: Array<{
+    id: number;
+    title: string;
+    status: string | null;
+    task_type: string | null;
+    project_id: number;
+    sprint_id: number | null;
+    sprint_name: string | null;
+    agent_id: number | null;
+    agent_name: string | null;
+    active_instance_id: number | null;
+    updated_at: string | null;
+    matched_custom_fields: Record<string, unknown>;
+  }>;
+  total: number;
+  hasMore: boolean;
+  limit: number;
+  offset: number;
+  project_id: number;
+}
+
+function parseBoundedPositiveInt(value: unknown, fallback: number, max: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(1, Math.trunc(parsed)), max);
+}
+
+function parseBoundedOffset(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.trunc(parsed));
+}
+
+function parseStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  if (typeof value === 'string') {
+    return value.split(',').map((entry) => entry.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function parseBooleanFlag(value: unknown): boolean {
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
+function parseExactCustomFieldMatches(value: unknown): Record<string, unknown> {
+  if (value == null || value === '') return {};
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('custom_fields must be an object of exact field matches');
+  }
+  const matches = parsed as Record<string, unknown>;
+  for (const [key, matchValue] of Object.entries(matches)) {
+    if (!CUSTOM_FIELD_KEY_PATTERN.test(key)) {
+      throw new Error(`Invalid custom field key "${key}"`);
+    }
+    if (
+      matchValue !== null
+      && typeof matchValue !== 'string'
+      && typeof matchValue !== 'number'
+      && typeof matchValue !== 'boolean'
+    ) {
+      throw new Error(`custom_fields.${key} must be a string, number, boolean, or null exact match`);
+    }
+  }
+  return matches;
+}
+
+function customFieldMatchesSqlPath(key: string): string {
+  return `$."${key.replace(/"/g, '\\"')}"`;
+}
+
+function normalizeCustomFieldSqlValue(value: unknown): unknown {
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  return value;
+}
+
+export function searchProjectTasks(
+  db: ReturnType<typeof getDb>,
+  input: ProjectTaskSearchInput,
+): ProjectTaskSearchResult {
+  const tenantId = Number(input.tenant_id);
+  const projectId = Number(input.project_id);
+  if (!Number.isInteger(tenantId) || tenantId <= 0) throw new Error('tenant_id is required');
+  if (!Number.isInteger(projectId) || projectId <= 0) throw new Error('project_id is required');
+
+  const limit = parseBoundedPositiveInt(input.limit, PROJECT_TASK_SEARCH_DEFAULT_LIMIT, PROJECT_TASK_SEARCH_MAX_LIMIT);
+  const offset = parseBoundedOffset(input.offset);
+  const parsedSprintId = Number(input.workflow_id ?? input.sprint_id);
+  const sprintId = Number.isInteger(parsedSprintId) && parsedSprintId > 0 ? parsedSprintId : null;
+  const statuses = parseStringList(input.statuses ?? input.status);
+  const taskType = typeof input.task_type === 'string' && input.task_type.trim() ? input.task_type.trim() : null;
+  const customFieldMatches = parseExactCustomFieldMatches(input.custom_fields);
+
+  const conditions = ['t.tenant_id = ?', 't.project_id = ?'];
+  const params: unknown[] = [tenantId, projectId];
+
+  if (sprintId !== null) {
+    conditions.push('t.sprint_id = ?');
+    params.push(sprintId);
+  }
+  if (statuses.length === 1) {
+    conditions.push('t.status = ?');
+    params.push(statuses[0]);
+  } else if (statuses.length > 1) {
+    conditions.push(`t.status IN (${statuses.map(() => '?').join(',')})`);
+    params.push(...statuses);
+  }
+  if (parseBooleanFlag(input.active_only) || parseBooleanFlag(input.nonterminal_only)) {
+    conditions.push(`(t.status IS NULL OR t.status NOT IN (${TERMINAL_TASK_STATUSES.map(() => '?').join(',')}))`);
+    params.push(...TERMINAL_TASK_STATUSES);
+  }
+  if (taskType) {
+    conditions.push('t.task_type = ?');
+    params.push(taskType);
+  }
+  for (const [key, value] of Object.entries(customFieldMatches)) {
+    conditions.push('json_extract(t.custom_fields_json, ?) IS ?');
+    params.push(customFieldMatchesSqlPath(key), normalizeCustomFieldSqlValue(value));
+  }
+
+  const whereSql = conditions.join(' AND ');
+  const total = (db.prepare(`SELECT COUNT(*) AS total FROM tasks t WHERE ${whereSql}`).get(...params) as { total: number }).total;
+  const rows = db.prepare(`
+    SELECT
+      t.id,
+      t.title,
+      t.status,
+      t.task_type,
+      t.project_id,
+      t.sprint_id,
+      s.name AS sprint_name,
+      t.agent_id,
+      a.name AS agent_name,
+      t.active_instance_id,
+      t.updated_at,
+      t.custom_fields_json
+    FROM tasks t
+    LEFT JOIN sprints s ON s.id = t.sprint_id AND s.tenant_id = t.tenant_id
+    LEFT JOIN agents a ON a.id = t.agent_id AND a.tenant_id = t.tenant_id
+    WHERE ${whereSql}
+    ORDER BY t.updated_at DESC, t.id DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset) as Array<Record<string, unknown>>;
+
+  const customFieldKeys = Object.keys(customFieldMatches);
+  return {
+    tasks: rows.map((row) => {
+      const customFields = parseCustomFields(row.custom_fields_json);
+      const matchedCustomFields: Record<string, unknown> = {};
+      for (const key of customFieldKeys) {
+        matchedCustomFields[key] = customFields[key] ?? null;
+      }
+      return {
+        id: Number(row.id),
+        title: String(row.title ?? ''),
+        status: typeof row.status === 'string' ? row.status : null,
+        task_type: typeof row.task_type === 'string' ? row.task_type : null,
+        project_id: Number(row.project_id),
+        sprint_id: typeof row.sprint_id === 'number' ? row.sprint_id : null,
+        sprint_name: typeof row.sprint_name === 'string' ? row.sprint_name : null,
+        agent_id: typeof row.agent_id === 'number' ? row.agent_id : null,
+        agent_name: typeof row.agent_name === 'string' ? row.agent_name : null,
+        active_instance_id: typeof row.active_instance_id === 'number' ? row.active_instance_id : null,
+        updated_at: typeof row.updated_at === 'string' ? row.updated_at : null,
+        matched_custom_fields: matchedCustomFields,
+      };
+    }),
+    total,
+    hasMore: offset + limit < total,
+    limit,
+    offset,
+    project_id: projectId,
+  };
 }
 
 export function listRecentlyCompletedTasks(

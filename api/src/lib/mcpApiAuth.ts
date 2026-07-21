@@ -211,6 +211,19 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'tasks.search_project_tasks',
+    group: 'Task lifecycle',
+    label: 'Search project tasks',
+    description: 'Allows bounded read-only task search for exact deduplication within the agent\'s assigned project. The project scope is derived from the MCP agent identity, not caller-supplied parameters. Results are minimal summaries and do not allow task mutation, lifecycle writes, relationship mutation, tenant-wide listing, or cross-project discovery.',
+    endpoints: [
+      'POST /api/v1/tasks/project-search',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'tasks.write_active_lifecycle',
     group: 'Task lifecycle',
     label: 'Write active task lifecycle',
@@ -1144,6 +1157,20 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       'tasks.create',
       `Task creation is disabled for ${identity.agentSlug}.`,
     )) return;
+    return next();
+  }
+
+  if (requestPath === '/tasks/project-search' && method === 'POST') {
+    if (!requireCapability(
+      'tasks.search_project_tasks',
+      `Project task search is disabled for ${identity.agentSlug}.`,
+    )) return;
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for project task search.`,
+        requiredCapability: 'tasks.search_project_tasks',
+      });
+    }
     return next();
   }
 

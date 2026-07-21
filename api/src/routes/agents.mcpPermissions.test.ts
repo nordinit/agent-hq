@@ -107,6 +107,14 @@ describe('agent MCP permissions routes', () => {
           'GET /api/v1/tasks/:id/active-owner',
         ]),
       });
+      expect(body.capabilities.find((capability) => capability.key === 'tasks.search_project_tasks')).toMatchObject({
+        group: 'Task lifecycle',
+        label: 'Search project tasks',
+        enabled: false,
+        explicit_enabled: null,
+        description: expect.stringContaining('bounded read-only task search'),
+        endpoints: ['POST /api/v1/tasks/project-search'],
+      });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
         group: 'Task lifecycle',
         label: 'Create Tasks',
@@ -154,6 +162,10 @@ describe('agent MCP permissions routes', () => {
         explicit_enabled: false,
       });
       expect(updated.capabilities.find((capability) => capability.key === 'tasks.read_project_context')).toMatchObject({
+        enabled: false,
+        explicit_enabled: false,
+      });
+      expect(updated.capabilities.find((capability) => capability.key === 'tasks.search_project_tasks')).toMatchObject({
         enabled: false,
         explicit_enabled: false,
       });
@@ -214,6 +226,9 @@ describe('agent MCP permissions routes', () => {
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.read_project_context')).toMatchObject({
+        enabled: true,
+      });
+      expect(body.capabilities.find((capability) => capability.key === 'tasks.search_project_tasks')).toMatchObject({
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'admin.cross_tenant')).toMatchObject({

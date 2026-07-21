@@ -140,6 +140,25 @@ export function registerTasksTools(ctx: McpDomainContext) {
       wrap(() => api.listTasks({ project_id, sprint_id, status, limit, offset }))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks'] },
   );
+
+  registerTool(
+    ['agent_hq_search_project_tasks', 'atlas_search_project_tasks'],
+    'Search the authenticated agent\'s assigned project for existing tasks using bounded exact-match filters for safe follow-up deduplication. The project scope is derived from the MCP agent identity; caller-supplied project IDs are not accepted. Returns minimal task summaries only and does not allow task mutation or broad listing.',
+    {
+      workflow_id: z.number().int().positive().optional().describe('Optional workflow/sprint ID filter. Must belong to the authenticated agent\'s assigned project to match anything.'),
+      sprint_id: z.number().int().positive().optional().describe('Legacy alias for workflow_id.'),
+      statuses: z.array(z.string().min(1)).max(20).optional().describe('Optional status filters. Use nonterminal_only for active/nonterminal dedupe searches.'),
+      active_only: z.boolean().optional().describe('Alias for nonterminal_only; excludes terminal tasks such as done, cancelled, and failed.'),
+      nonterminal_only: z.boolean().optional().describe('When true, excludes terminal tasks such as done, cancelled, and failed.'),
+      task_type: taskTypeSchema.optional().describe('Optional exact task type filter.'),
+      custom_fields: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional().describe('Exact custom-field matches for dedupe, such as { "crm_lead_id": "..." } or { "external_project_id": "..." }. Field names and values are parameterized server-side.'),
+      limit: z.number().int().min(1).max(50).optional().describe('Max results (default 20, max 50).'),
+      offset: z.number().int().min(0).optional().describe('Pagination offset (default 0).'),
+    },
+    ({ workflow_id, sprint_id, statuses, active_only, nonterminal_only, task_type, custom_fields, limit, offset }) =>
+      wrap(() => api.searchProjectTasks({ workflow_id, sprint_id, statuses, active_only, nonterminal_only, task_type, custom_fields, limit, offset }))(),
+    { domain: 'tasks', rest_paths: ['/api/v1/tasks/project-search'] },
+  );
   
   registerTool(
     ['agent_hq_get_task_detail', 'atlas_get_task_detail', 'agent_hq_get_task', 'atlas_get_task'],
