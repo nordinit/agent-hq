@@ -215,6 +215,17 @@ describe('task lifecycle worktree cleanup', () => {
     expect(mockedRemoveTaskWorktree).not.toHaveBeenCalled();
   });
 
+  it.each(['dev_deploy_queued', 'dev_deploying'])('preserves active instance linkage while task is %s', (status) => {
+    seedLinkedTask(db, { taskStatus: status, instanceStatus: 'running' });
+
+    const cleared = cleanupTaskExecutionLinkageForStatus(db, 1, status);
+
+    const task = db.prepare(`SELECT active_instance_id FROM tasks WHERE id = 1`).get() as { active_instance_id: number | null };
+    expect(cleared).toBe(false);
+    expect(task.active_instance_id).toBe(10);
+    expect(mockedSpawn).not.toHaveBeenCalled();
+  });
+
   it('keeps the worktree during qa_pass handoff even when execution linkage is cleared', () => {
     seedLinkedTask(db, { instanceStatus: 'done' });
 

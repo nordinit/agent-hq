@@ -73,6 +73,7 @@ function resetDb(): void {
       live_verified_by TEXT,
       live_verified_at TEXT,
       evidence_json TEXT,
+      custom_fields_json TEXT,
       previous_status TEXT,
       failure_detail TEXT,
       updated_at TEXT,
@@ -774,6 +775,169 @@ describe('external task events route', () => {
         status: 'review',
         review_commit: '1234567890abcdef1234567890abcdef12345678',
       });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('reprocesses a rejected deployed_for_qa receipt after missing configuration evidence is recorded', async () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, message)
+      VALUES (10, 'backend', 'completed_for_review', 'configuration_resource', 'configuration_resource required')
+    `).run();
+    db.prepare(`UPDATE tasks SET status = 'dev_deploying' WHERE id = 449`).run();
+
+    const apiKey = issueLeaseManagerApiKey();
+    const { server, baseUrl } = await startTestServer();
+    const payload = {
+      source: DEV_ENV_LEASE_MANAGER_SOURCE,
+      event: 'deployed_for_qa',
+      task_id: 449,
+      environment_id: 'agent-hq-dev',
+      queue_id: 'queue-config-retry',
+      lease_id: 'lease-config-retry',
+      branch: 'cinder-backend/task-980-preserve-lifecycle-recovery-after-deploy',
+      commit_sha: '5414a60758c163677f05d7f1faea3897c47be042',
+      review_url: 'http://127.0.0.1:3510',
+      message: 'Deploy completed before configuration evidence was recorded.',
+    };
+
+    try {
+      const rejected = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      expect(rejected.status).toBe(409);
+      expect(await rejected.json()).toMatchObject({
+        ok: false,
+        code: 'external_task_event_transition_refused',
+        receipt_accepted: true,
+        processing_state: 'rejected',
+        action_target: 'completed_for_review',
+      });
+
+      let task = db.prepare(`
+        SELECT status, active_instance_id, review_branch, review_commit, custom_fields_json
+        FROM tasks
+        WHERE id = 449
+      `).get() as {
+        status: string;
+        active_instance_id: number | null;
+        review_branch: string | null;
+        review_commit: string | null;
+        custom_fields_json: string | null;
+      };
+      expect(task.status).toBe('dev_deploying');
+      expect(task.active_instance_id).toBe(1784);
+      expect(task.review_branch).toBeNull();
+      expect(task.review_commit).toBeNull();
+
+      db.prepare(`
+        UPDATE tasks
+        SET custom_fields_json = ?
+        WHERE id = 449
+      `).run(JSON.stringify({
+        configuration_resource: 'dev-environment-lease-manager:lease-config-retry/configuration',
+        configuration_review_hash: 'config-hash-980',
+        configuration_review_receipt: 'receipt-config-980',
+      }));
+
+      const recovered = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      expect(recovered.status).toBe(200);
+      expect(await recovered.json()).toMatchObject({
+        ok: true,
+        duplicate: false,
+        reprocessed: true,
+        outcome: 'completed_for_review',
+        outcome_applied: true,
+        next_status: 'review',
+      });
+
+      const recoveredTask = db.prepare(`
+        SELECT status, active_instance_id, review_branch, review_commit, review_url, custom_fields_json
+        FROM tasks
+        WHERE id = 449
+      `).get() as {
+        status: string;
+        active_instance_id: number | null;
+        review_branch: string | null;
+        review_commit: string | null;
+        review_url: string | null;
+        custom_fields_json: string | null;
+      };
+      expect(recoveredTask.status).toBe('review');
+      expect(recoveredTask.active_instance_id).toBe(1784);
+      expect(recoveredTask.review_branch).toBe('cinder-backend/task-980-preserve-lifecycle-recovery-after-deploy');
+      expect(recoveredTask.review_commit).toBe('5414a60758c163677f05d7f1faea3897c47be042');
+      expect(recoveredTask.review_url).toBe('http://127.0.0.1:3510');
+      expect(JSON.parse(recoveredTask.custom_fields_json ?? '{}')).toMatchObject({
+        configuration_resource: 'dev-environment-lease-manager:lease-config-retry/configuration',
+      });
+
+      const third = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify(payload),
+      });
+      expect(third.status).toBe(200);
+      expect(await third.json()).toMatchObject({
+        ok: true,
+        duplicate: true,
+        processing_state: 'duplicate',
+      });
+
+      const receipt = db.prepare(`
+        SELECT COUNT(*) AS count, processing_state, processing_error, mapping_action_target
+        FROM external_task_event_receipts
+        WHERE queue_id = 'queue-config-retry'
+      `).get() as {
+        count: number;
+        processing_state: string;
+        processing_error: string | null;
+        mapping_action_target: string;
+      };
+      expect(receipt).toMatchObject({
+        count: 1,
+        processing_state: 'processed',
+        processing_error: null,
+        mapping_action_target: 'completed_for_review',
+      });
+
+      const outcomeNotes = db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM task_notes
+        WHERE task_id = 449 AND content LIKE 'Outcome: completed_for_review%'
+      `).get() as { count: number };
+      const workflowNotes = db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM task_notes
+        WHERE task_id = 449 AND content LIKE 'Workflow event received%'
+      `).get() as { count: number };
+      const transitions = db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM task_events
+        WHERE task_id = 449 AND from_status = 'dev_deploying' AND to_status = 'review'
+      `).get() as { count: number };
+      expect(outcomeNotes.count).toBe(1);
+      expect(workflowNotes.count).toBe(1);
+      expect(transitions.count).toBe(1);
     } finally {
       await stopTestServer(server);
     }

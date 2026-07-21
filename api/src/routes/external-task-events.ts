@@ -45,6 +45,11 @@ type TaskRow = {
 
 type ReceiptProcessingState = 'received' | 'processed' | 'rejected' | 'duplicate';
 
+type ExistingReceiptRow = {
+  id: number;
+  processing_state: string | null;
+};
+
 function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
   try {
     return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
@@ -234,6 +239,38 @@ function insertReceipt(
     VALUES (${placeholders})
   `).run(...values);
   return Number(insertResult.lastInsertRowid);
+}
+
+function loadReceiptByFingerprint(db: Database.Database, fingerprint: string): ExistingReceiptRow | null {
+  const processingStateSelect = tableHasColumn(db, 'external_task_event_receipts', 'processing_state')
+    ? 'processing_state'
+    : 'NULL AS processing_state';
+  return db.prepare(`
+    SELECT id, ${processingStateSelect}
+    FROM external_task_event_receipts
+    WHERE fingerprint = ?
+    LIMIT 1
+  `).get(fingerprint) as ExistingReceiptRow | undefined ?? null;
+}
+
+function markReceiptRetrying(db: Database.Database, receiptId: number): void {
+  const assignments: string[] = [];
+  if (tableHasColumn(db, 'external_task_event_receipts', 'processing_state')) {
+    assignments.push(`processing_state = 'received'`);
+  }
+  if (tableHasColumn(db, 'external_task_event_receipts', 'processing_error')) {
+    assignments.push(`processing_error = NULL`);
+  }
+  if (tableHasColumn(db, 'external_task_event_receipts', 'processed_at')) {
+    assignments.push(`processed_at = NULL`);
+  }
+  if (assignments.length === 0) return;
+
+  db.prepare(`
+    UPDATE external_task_event_receipts
+    SET ${assignments.join(', ')}
+    WHERE id = ?
+  `).run(receiptId);
 }
 
 function markReceiptProcessed(
@@ -475,30 +512,32 @@ router.post('/task-events', async (req: Request, res: Response) => {
     const fingerprint = buildFingerprint(normalized);
     const db = getDb();
     const task = loadTask(normalized.taskId);
-    let receiptId: number;
+    let receiptId = 0;
+    let reprocessingRejectedReceipt = false;
     try {
       receiptId = insertReceipt(db, normalized, fingerprint, changedBy, buildRequestMetadata(req));
     } catch (error) {
       if (isUniqueConstraintError(error, 'external_task_event_receipts', 'fingerprint')) {
-        const existing = db.prepare(`
-          SELECT id
-          FROM external_task_event_receipts
-          WHERE fingerprint = ?
-          LIMIT 1
-        `).get(fingerprint) as { id: number } | undefined;
-        return res.json({
-          ok: true,
-          duplicate: true,
-          receipt_id: existing?.id ?? null,
-          fingerprint,
-          task_id: normalized.taskId,
-          source: normalized.source,
-          event: normalized.event,
-          receipt_accepted: true,
-          processing_state: 'duplicate',
-        });
+        const existing = loadReceiptByFingerprint(db, fingerprint);
+        if (existing?.processing_state === 'rejected') {
+          receiptId = existing.id;
+          reprocessingRejectedReceipt = true;
+          markReceiptRetrying(db, receiptId);
+        } else {
+          return res.json({
+            ok: true,
+            duplicate: true,
+            receipt_id: existing?.id ?? null,
+            fingerprint,
+            task_id: normalized.taskId,
+            source: normalized.source,
+            event: normalized.event,
+            receipt_accepted: true,
+            processing_state: 'duplicate',
+          });
+        }
       }
-      throw error;
+      if (!reprocessingRejectedReceipt) throw error;
     }
 
     let mapping: WorkflowEventMapping | null = null;
@@ -581,6 +620,7 @@ router.post('/task-events', async (req: Request, res: Response) => {
       return res.json({
         ok: true,
         duplicate: false,
+        reprocessed: reprocessingRejectedReceipt,
         receipt_id: receiptId,
         fingerprint,
         task_id: normalized.taskId,

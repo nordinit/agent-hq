@@ -8,11 +8,11 @@ import { removeTaskClone } from '../services/repoWorkspaceManager';
 import { writeTaskHistory } from '../domains/tasks/history';
 import { taskTableHasColumn } from '../domains/tasks/ownership';
 
-const LIVE_TASK_STATUSES = ['in_progress', 'stalled'] as const;
+const LIVE_TASK_STATUSES = ['in_progress', 'dev_deploy_queued', 'dev_deploying', 'stalled'] as const;
 const LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
 // Dispatch attaches an instance before the visible agent_started mapping moves
 // the task out of ready, so retain live ownership during that handoff window.
-const ACTIVE_LINKAGE_RETAIN_STATUSES = ['ready', 'dispatched', 'in_progress', 'stalled', 'review', 'ready_to_merge', 'deployed', 'blocked'] as const;
+const ACTIVE_LINKAGE_RETAIN_STATUSES = ['ready', 'dispatched', 'in_progress', 'dev_deploy_queued', 'dev_deploying', 'stalled', 'review', 'ready_to_merge', 'deployed', 'blocked'] as const;
 export const ACTIVE_INSTANCE_END_GRACE_MS: number = (() => {
   const v = parseInt(process.env.ACTIVE_INSTANCE_END_GRACE_MS ?? '', 10);
   return Number.isFinite(v) && v >= 0 ? v : 10_000;
