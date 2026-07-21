@@ -121,6 +121,26 @@ describe('agent MCP permissions routes', () => {
         enabled: false,
         explicit_enabled: null,
       });
+      expect(body.capabilities.find((capability) => capability.key === 'mcp_capability_policies.read')).toMatchObject({
+        group: 'MCP capability policy',
+        label: 'Read MCP capability policy',
+        enabled: false,
+        explicit_enabled: null,
+        description: expect.stringContaining('assigned project'),
+        endpoints: ['GET /api/v1/agents/:id/mcp-permissions'],
+      });
+      expect(body.capabilities.find((capability) => capability.key === 'mcp_capability_policies.write')).toMatchObject({
+        group: 'MCP capability policy',
+        label: 'Edit MCP capability policy',
+        enabled: false,
+        explicit_enabled: null,
+        description: expect.stringContaining('Self-edits'),
+        endpoints: expect.arrayContaining([
+          'POST /api/v1/agents/:id/mcp-permissions',
+          'PUT /api/v1/agents/:id/mcp-permissions',
+          'DELETE /api/v1/agents/:id/mcp-permissions',
+        ]),
+      });
       expect(body.capabilities.find((capability) => capability.key === 'admin.full_access')).toMatchObject({
         enabled: false,
         explicit_enabled: null,
@@ -137,10 +157,17 @@ describe('agent MCP permissions routes', () => {
   it('persists and resets explicit capability selections', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
+      const createResponse = await fetch(`${baseUrl}/api/v1/agents/7/mcp-permissions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled_capabilities: ['discovery.read_catalog', 'admin.full_access'] }),
+      });
+      expect(createResponse.status).toBe(200);
+
       const updateResponse = await fetch(`${baseUrl}/api/v1/agents/7/mcp-permissions`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled_capabilities: ['discovery.read_catalog', 'admin.full_access'] }),
+        body: JSON.stringify({ enabled_capabilities: ['discovery.read_catalog', 'admin.full_access', 'mcp_capability_policies.read'] }),
       });
       const updated = await updateResponse.json() as {
         policy_mode: string;
@@ -166,6 +193,14 @@ describe('agent MCP permissions routes', () => {
         explicit_enabled: false,
       });
       expect(updated.capabilities.find((capability) => capability.key === 'tasks.search_project_tasks')).toMatchObject({
+        enabled: false,
+        explicit_enabled: false,
+      });
+      expect(updated.capabilities.find((capability) => capability.key === 'mcp_capability_policies.read')).toMatchObject({
+        enabled: true,
+        explicit_enabled: true,
+      });
+      expect(updated.capabilities.find((capability) => capability.key === 'mcp_capability_policies.write')).toMatchObject({
         enabled: false,
         explicit_enabled: false,
       });
@@ -229,6 +264,12 @@ describe('agent MCP permissions routes', () => {
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.search_project_tasks')).toMatchObject({
+        enabled: true,
+      });
+      expect(body.capabilities.find((capability) => capability.key === 'mcp_capability_policies.read')).toMatchObject({
+        enabled: true,
+      });
+      expect(body.capabilities.find((capability) => capability.key === 'mcp_capability_policies.write')).toMatchObject({
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'admin.cross_tenant')).toMatchObject({

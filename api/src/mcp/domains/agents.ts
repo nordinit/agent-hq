@@ -113,6 +113,44 @@ export function registerAgentsTools(ctx: McpDomainContext) {
     ({ agent_id }) => wrap(() => api.deleteAgent(agent_id))(),
     { domain: 'agents', rest_paths: ['/api/v1/agents/:id'] },
   );
+
+  registerTool(
+    ['agent_hq_get_agent_mcp_capability_policy', 'atlas_get_agent_mcp_capability_policy'],
+    'Read the effective MCP capability policy snapshot for an agent. Scoped MCP keys require MCP capability policy read access and can only read agents in their assigned project.',
+    { agent_id: z.number().int().positive().describe('Agent ID') },
+    ({ agent_id }) => wrap(() => api.getAgentMcpCapabilityPolicy(agent_id))(),
+    { domain: 'agents', rest_paths: ['/api/v1/agents/:id/mcp-permissions'] },
+  );
+
+  registerTool(
+    ['agent_hq_create_agent_mcp_capability_policy', 'atlas_create_agent_mcp_capability_policy'],
+    'Create an explicit MCP capability policy for another agent in the caller agent\'s assigned project. Scoped MCP keys can only set safe non-admin capability keys and cannot edit their own policy.',
+    {
+      agent_id: z.number().int().positive().describe('Agent ID'),
+      enabled_capabilities: z.array(z.string().min(1)).describe('Capability keys to enable in the explicit policy'),
+    },
+    ({ agent_id, enabled_capabilities }) => wrap(() => api.createAgentMcpCapabilityPolicy(agent_id, enabled_capabilities))(),
+    { domain: 'agents', rest_paths: ['/api/v1/agents/:id/mcp-permissions'] },
+  );
+
+  registerTool(
+    ['agent_hq_update_agent_mcp_capability_policy', 'atlas_update_agent_mcp_capability_policy'],
+    'Replace an explicit MCP capability policy for another agent in the caller agent\'s assigned project. Scoped MCP keys can only set safe non-admin capability keys and cannot edit their own policy.',
+    {
+      agent_id: z.number().int().positive().describe('Agent ID'),
+      enabled_capabilities: z.array(z.string().min(1)).describe('Capability keys to enable in the explicit policy'),
+    },
+    ({ agent_id, enabled_capabilities }) => wrap(() => api.updateAgentMcpCapabilityPolicy(agent_id, enabled_capabilities))(),
+    { domain: 'agents', rest_paths: ['/api/v1/agents/:id/mcp-permissions'] },
+  );
+
+  registerTool(
+    ['agent_hq_delete_agent_mcp_capability_policy', 'atlas_delete_agent_mcp_capability_policy'],
+    'Delete an explicit MCP capability policy and return the target agent to defaults. Scoped MCP keys require MCP capability policy write access, can only reset other agents in their assigned project, and cannot edit their own policy.',
+    { agent_id: z.number().int().positive().describe('Agent ID') },
+    ({ agent_id }) => wrap(() => api.deleteAgentMcpCapabilityPolicy(agent_id))(),
+    { domain: 'agents', rest_paths: ['/api/v1/agents/:id/mcp-permissions'] },
+  );
   
   registerTool(
     ['agent_hq_get_agent_docs', 'atlas_get_agent_docs'],

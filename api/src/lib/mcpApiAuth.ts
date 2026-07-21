@@ -337,6 +337,34 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'mcp_capability_policies.read',
+    group: 'MCP capability policy',
+    label: 'Read MCP capability policy',
+    description: 'Allows reading effective Agent HQ MCP capability policy snapshots for agents in the caller agent\'s assigned project. Does not allow cross-project, cross-tenant, credential, secret, or policy mutation access.',
+    endpoints: [
+      'GET /api/v1/agents/:id/mcp-permissions',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
+    key: 'mcp_capability_policies.write',
+    group: 'MCP capability policy',
+    label: 'Edit MCP capability policy',
+    description: 'Allows creating, replacing, and deleting explicit MCP capability policies for other agents in the caller agent\'s assigned project, limited to safe non-admin capabilities. Self-edits, admin escalation, policy-editor delegation, cross-project, cross-tenant, credential, secret, and unrelated admin mutation paths remain denied.',
+    endpoints: [
+      'POST /api/v1/agents/:id/mcp-permissions',
+      'PUT /api/v1/agents/:id/mcp-permissions',
+      'DELETE /api/v1/agents/:id/mcp-permissions',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'admin.full_access',
     group: 'Administration',
     label: 'Full Agent HQ MCP access',
@@ -386,6 +414,20 @@ const AGENT_MCP_CAPABILITY_KEYS = new Set<AgentMcpCapabilityKey>(
   AGENT_MCP_CAPABILITY_CATALOG.map((capability) => capability.key),
 );
 const LEGACY_AGENT_MCP_CAPABILITY_KEYS = new Set(['tasks.read_any_context']);
+const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
+  'discovery.read_catalog',
+  'tasks.read_active_context',
+  'tasks.read_project_context',
+  'tasks.search_project_tasks',
+  'tasks.write_active_lifecycle',
+  'tasks.create',
+  'projects.read_active_project',
+  'projects.manage_active_files',
+  'sprints.read_active_sprint',
+  'workflow.read_active_configuration',
+  'external.write_task_events',
+  'mcp_capability_policies.read',
+]);
 
 function ensureAgentMcpCapabilityPolicyTable(db: Database.Database): void {
   db.exec(`
@@ -965,9 +1007,24 @@ function getCanonicalAgentProjectId(db: Database.Database, identity: McpApiIdent
   return parsePositiveInt(row?.project_id);
 }
 
+function getTenantAgentProjectId(db: Database.Database, identity: McpApiIdentity, agentId: number): number | null | undefined {
+  if (!hasColumn(db, 'agents', 'tenant_id') || !hasColumn(db, 'agents', 'project_id')) return undefined;
+  const row = db.prepare(`SELECT project_id FROM agents WHERE id = ? AND tenant_id = ? LIMIT 1`).get(agentId, identity.tenantId) as { project_id: number | null } | undefined;
+  if (!row) return undefined;
+  return parsePositiveInt(row.project_id);
+}
+
 function taskBelongsToProject(db: Database.Database, identity: McpApiIdentity, taskId: number, projectId: number): boolean {
   const row = db.prepare(`SELECT tenant_id, project_id FROM tasks WHERE id = ? LIMIT 1`).get(taskId) as { tenant_id: number | null; project_id: number | null } | undefined;
   return parsePositiveInt(row?.tenant_id) === identity.tenantId && parsePositiveInt(row?.project_id) === projectId;
+}
+
+function extractRequestedMcpPolicyCapabilities(body: unknown): string[] | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const value = (body as { enabled_capabilities?: unknown }).enabled_capabilities;
+  if (!Array.isArray(value)) return null;
+  if (!value.every((item) => typeof item === 'string')) return null;
+  return value;
 }
 
 function taskIdForInstance(db: Database.Database, instanceId: number): number | null {
@@ -1157,6 +1214,73 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       'tasks.create',
       `Task creation is disabled for ${identity.agentSlug}.`,
     )) return;
+    return next();
+  }
+
+  const agentMcpPolicyMatch = requestPath.match(/^\/agents\/(\d+)\/mcp-permissions$/);
+  if (agentMcpPolicyMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
+    const targetAgentId = Number(agentMcpPolicyMatch[1]);
+    const isWrite = method !== 'GET';
+    const requiredCapability: AgentMcpCapabilityKey = isWrite
+      ? 'mcp_capability_policies.write'
+      : permissionState.enabledCapabilities.has('mcp_capability_policies.read')
+        ? 'mcp_capability_policies.read'
+        : 'mcp_capability_policies.write';
+
+    if (!requireCapability(
+      requiredCapability,
+      `MCP capability policy ${isWrite ? 'mutation' : 'readback'} is disabled for ${identity.agentSlug}.`,
+    )) return;
+
+    const targetProjectId = getTenantAgentProjectId(db, identity, targetAgentId);
+    if (targetProjectId === undefined) {
+      return deny({
+        reason: `Agent #${targetAgentId} is outside the MCP key tenant or does not exist.`,
+        requiredCapability,
+      });
+    }
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for MCP capability policy access.`,
+        requiredCapability,
+      });
+    }
+    if (targetProjectId !== canonicalAgentProjectId) {
+      return deny({
+        reason: `Agent #${targetAgentId} is outside the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    if (!isWrite) return next();
+
+    if (targetAgentId === identity.agentId) {
+      return deny({
+        reason: `${identity.agentSlug} cannot edit its own MCP capability policy.`,
+        requiredCapability: 'mcp_capability_policies.write',
+      });
+    }
+
+    if (method !== 'DELETE') {
+      const requestedCapabilities = extractRequestedMcpPolicyCapabilities(req.body);
+      if (!requestedCapabilities) {
+        return deny({
+          reason: 'MCP capability policy mutation requires enabled_capabilities as an array of capability keys.',
+          requiredCapability: 'mcp_capability_policies.write',
+        });
+      }
+      const unsafeCapability = requestedCapabilities.find((key) => (
+        !AGENT_MCP_CAPABILITY_KEYS.has(key as AgentMcpCapabilityKey)
+        || !SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES.has(key as AgentMcpCapabilityKey)
+      ));
+      if (unsafeCapability) {
+        return deny({
+          reason: `Scoped MCP policy editors cannot grant or set capability "${unsafeCapability}".`,
+          requiredCapability: 'mcp_capability_policies.write',
+        });
+      }
+    }
+
     return next();
   }
 

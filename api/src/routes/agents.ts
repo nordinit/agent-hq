@@ -1232,7 +1232,7 @@ router.get('/:id/mcp-permissions', (req: Request, res: Response) => {
   }
 });
 
-router.put('/:id/mcp-permissions', (req: Request, res: Response) => {
+function replaceAgentMcpPermissionsHandler(req: Request, res: Response) {
   try {
     const db = getDb();
     const tenantId = resolveTenantIdFromRequest(db, req);
@@ -1240,6 +1240,7 @@ router.put('/:id/mcp-permissions', (req: Request, res: Response) => {
     if (!Number.isInteger(agentId) || agentId <= 0) {
       return res.status(400).json({ error: 'Invalid agent id' });
     }
+    if (!requireAgentVisibleForTenant(db, agentId, tenantId)) return res.status(404).json({ error: 'Agent not found' });
 
     const body = req.body as { enabled_capabilities?: unknown };
     if (!Array.isArray(body.enabled_capabilities) || !body.enabled_capabilities.every((value) => typeof value === 'string')) {
@@ -1253,7 +1254,10 @@ router.put('/:id/mcp-permissions', (req: Request, res: Response) => {
     if (message.includes('Unknown Agent HQ MCP capability')) return res.status(400).json({ error: message });
     return res.status(500).json({ error: message });
   }
-});
+}
+
+router.post('/:id/mcp-permissions', replaceAgentMcpPermissionsHandler);
+router.put('/:id/mcp-permissions', replaceAgentMcpPermissionsHandler);
 
 router.delete('/:id/mcp-permissions', (req: Request, res: Response) => {
   try {

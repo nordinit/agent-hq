@@ -69,6 +69,10 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       'agent_hq_create_sprint_type_relationship_type',
       'agent_hq_update_sprint_type_relationship_type',
       'agent_hq_delete_sprint_type_relationship_type',
+      'agent_hq_get_agent_mcp_capability_policy',
+      'agent_hq_create_agent_mcp_capability_policy',
+      'agent_hq_update_agent_mcp_capability_policy',
+      'agent_hq_delete_agent_mcp_capability_policy',
     ];
 
     for (const toolName of expectedTools) {
@@ -90,6 +94,10 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(byName.get('agent_hq_get_task_instances')?.description).toContain('Read project task context');
     expect(byName.get('agent_hq_get_task_active_owner')?.rest_paths).toEqual(['/api/v1/tasks/:id/active-owner']);
     expect(byName.get('agent_hq_get_task_active_owner')?.description).toContain('Read project task context');
+    expect(byName.get('agent_hq_get_agent_mcp_capability_policy')?.description).toContain('MCP capability policy read access');
+    expect(byName.get('agent_hq_create_agent_mcp_capability_policy')?.description).toContain('safe non-admin capability keys');
+    expect(byName.get('agent_hq_update_agent_mcp_capability_policy')?.args.map(arg => arg.name).sort()).toEqual(['agent_id', 'enabled_capabilities']);
+    expect(byName.get('agent_hq_delete_agent_mcp_capability_policy')?.rest_paths).toEqual(['/api/v1/agents/:id/mcp-permissions']);
 
     const assignmentRules = byName.get('agent_hq_list_routing_rules');
     expect(assignmentRules?.domain).toBe('assignment_rules');
