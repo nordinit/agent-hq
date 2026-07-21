@@ -62,11 +62,6 @@ export function hasLiveVerification(task: Partial<TaskReleaseEvidence>): boolean
   return Boolean(task.deployed_commit && task.live_verified_by && task.live_verified_at);
 }
 
-function isMainlineBranch(branch: string | null | undefined): boolean {
-  const normalized = String(branch ?? '').trim().toLowerCase();
-  return normalized === 'main' || normalized === 'master' || normalized === 'origin/main' || normalized === 'origin/master';
-}
-
 function isProductionLikeUrl(url: string | null | undefined): boolean {
   const value = String(url ?? '').trim().toLowerCase();
   if (!value) return false;
@@ -104,6 +99,39 @@ function isValidIsoTimestamp(value: unknown): boolean {
   const normalized = normalizedString(value);
   if (!normalized) return false;
   return !Number.isNaN(new Date(normalized).getTime());
+}
+
+function parseConfiguredValues(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed.map(value => String(value).trim()).filter(Boolean);
+    }
+  } catch {
+    // Fall back to a comma/newline list below.
+  }
+  return trimmed
+    .split(/[,\n]/)
+    .map(value => value.trim())
+    .filter(Boolean);
+}
+
+function valueMatchesConfiguredValue(value: unknown, configured: string): boolean {
+  const normalized = normalizedString(value)?.toLowerCase();
+  return Boolean(normalized && normalized === configured.trim().toLowerCase());
+}
+
+function valueMatchesConfiguredPattern(value: unknown, pattern: string | null | undefined): boolean {
+  const normalized = normalizedString(value);
+  if (!normalized || !pattern?.trim()) return false;
+  try {
+    return new RegExp(pattern.trim()).test(normalized);
+  } catch {
+    return false;
+  }
 }
 
 type TransitionRequirementRow = {
@@ -219,9 +247,6 @@ export function evaluateTaskIntegrity(
     warnings.push('Ready to merge after QA pass, but deploy evidence has not been recorded yet.');
   }
 
-  if ((status === 'review' || status === 'ready_to_merge') && isMainlineBranch(task.review_branch)) {
-    warnings.push('Review evidence references main/master. Agent HQ implementation work should use a feature branch/worktree, not main.');
-  }
   if ((status === 'review' || status === 'ready_to_merge') && isProductionLikeUrl(task.review_url)) {
     warnings.push('Review evidence points at a production-like URL. Use Dev evidence for implementation handoff and keep production for deployed/live verification.');
   }
@@ -311,6 +336,18 @@ export function requireReleaseGate(
       failed = !fieldValue || !matchValue || fieldValue !== matchValue;
     } else if (req.requirement_type === 'from_status') {
       failed = task.status !== req.match_field;
+    } else if (req.requirement_type === 'forbidden_values') {
+      const configuredValues = parseConfiguredValues(req.match_field);
+      failed = fields.some(field => configuredValues.some(configured => valueMatchesConfiguredValue(taskRecord[field], configured)));
+    } else if (req.requirement_type === 'allowed_values') {
+      const configuredValues = parseConfiguredValues(req.match_field);
+      failed = configuredValues.length === 0
+        || fields.every(field => !configuredValues.some(configured => valueMatchesConfiguredValue(taskRecord[field], configured)));
+    } else if (req.requirement_type === 'forbidden_pattern') {
+      failed = fields.some(field => valueMatchesConfiguredPattern(taskRecord[field], req.match_field));
+    } else if (req.requirement_type === 'allowed_pattern') {
+      failed = !req.match_field
+        || fields.every(field => !valueMatchesConfiguredPattern(taskRecord[field], req.match_field));
     }
 
     if (failed) {
@@ -346,11 +383,6 @@ function validateEvidenceField(fieldName: string, value: unknown, errors: string
 
   if (isPlaceholderValue(value)) {
     errors.push(`${fieldName} cannot be a blank placeholder value`);
-    return;
-  }
-
-  if (fieldName === 'review_branch' && isMainlineBranch(value as string)) {
-    errors.push('review_branch must be a feature branch, not main/master');
     return;
   }
 

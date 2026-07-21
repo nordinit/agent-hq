@@ -601,6 +601,107 @@ describe('external task events route', () => {
     }
   });
 
+  it('accepts deployed_for_qa on main when no branch-value gate is configured', async () => {
+    const apiKey = issueLeaseManagerApiKey();
+    const { server, baseUrl } = await startTestServer();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          source: DEV_ENV_LEASE_MANAGER_SOURCE,
+          event: 'deployed_for_qa',
+          task_id: 449,
+          environment_id: 'agent-hq-dev',
+          queue_id: 'queue-mainline',
+          lease_id: 'lease-mainline',
+          branch: 'main',
+          commit_sha: 'abcdef1234567890abcdef1234567890abcdef12',
+          review_url: 'http://127.0.0.1:3510',
+          message: 'Lease-backed mainline deploy completed and is ready for QA.',
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json() as { ok: boolean; outcome?: string | null; next_status?: string };
+      expect(body).toMatchObject({
+        ok: true,
+        outcome: 'completed_for_review',
+        next_status: 'review',
+      });
+
+      const task = getDb().prepare(`
+        SELECT status, review_branch, review_commit
+        FROM tasks WHERE id = 449
+      `).get() as {
+        status: string;
+        review_branch: string | null;
+        review_commit: string | null;
+      };
+      expect(task).toMatchObject({
+        status: 'review',
+        review_branch: 'main',
+        review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+      });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('rejects deployed_for_qa on main through the configured feature-branch-only gate', async () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message)
+      VALUES (10, 'backend', 'completed_for_review', 'review_branch', 'forbidden_values', ?, 'block', 'Configured workflow requires a feature branch')
+    `).run(JSON.stringify(['main', 'master']));
+
+    const apiKey = issueLeaseManagerApiKey();
+    const { server, baseUrl } = await startTestServer();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          source: DEV_ENV_LEASE_MANAGER_SOURCE,
+          event: 'deployed_for_qa',
+          task_id: 449,
+          environment_id: 'agent-hq-dev',
+          queue_id: 'queue-feature-only',
+          lease_id: 'lease-feature-only',
+          branch: 'main',
+          commit_sha: 'abcdef1234567890abcdef1234567890abcdef12',
+          review_url: 'http://127.0.0.1:3510',
+          message: 'Lease-backed deploy completed but workflow requires feature branches.',
+        }),
+      });
+
+      expect(response.status).toBe(409);
+      const body = await response.json() as { error?: string; processing_state?: string };
+      expect(body.error).toBe('Configured workflow requires a feature branch');
+      expect(body.processing_state).toBe('rejected');
+
+      const task = getDb().prepare(`
+        SELECT status, review_branch, review_commit
+        FROM tasks WHERE id = 449
+      `).get() as {
+        status: string;
+        review_branch: string | null;
+        review_commit: string | null;
+      };
+      expect(task).toMatchObject({ status: 'in_progress', review_branch: null, review_commit: null });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   it('accepts queued and deploying events as workflow status updates without blocking the task', async () => {
     const apiKey = issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();

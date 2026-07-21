@@ -237,6 +237,8 @@ Use this recipe before creating, updating, linking, or moving tasks in configura
 7. Use `dry_run: true` on supported writes to preview validation and transition behavior. Supported preview surfaces include `agent_hq_create_task`, `agent_hq_update_task`, `agent_hq_move_task`, `agent_hq_post_task_outcome`, routing rules, routing transitions, transition requirements, and workflow/external event mappings.
 8. Submit the real write only after the metadata, schema, relationship, and gate requirements match the intended workflow.
 
+Branch-name policy is a transition requirement, not a universal validator. Workflows that allow mainline review evidence should omit branch value gates. Workflows that require feature branches can add a `forbidden_values` requirement on `review_branch` with `match_field` set to `["main","master"]` and a workflow-specific blocking message. Value-policy requirement types are `forbidden_values`, `allowed_values`, `forbidden_pattern`, and `allowed_pattern`; values use `match_field` as a JSON array or comma/newline list, and patterns use `match_field` as a regular expression.
+
 Preferred task lifecycle transition path:
 
 ```json

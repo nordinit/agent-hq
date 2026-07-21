@@ -918,7 +918,7 @@ function buildResolvedTaskTerminalityExpression(
   params.push(...TERMINAL_TASK_STATUSES);
   sources.push(`CASE WHEN ${taskAlias}.status IN (${fallbackPlaceholders}) THEN 1 ELSE 0 END`);
 
-  return { sql: `COALESCE(${sources.join(', ')})`, params };
+  return { sql: sources.length === 1 ? sources[0] : `COALESCE(${sources.join(', ')})`, params };
 }
 
 export function getNonDispatchableTaskStatusPredicate(

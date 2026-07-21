@@ -49,6 +49,7 @@ const ATLAS_MIGRATION_SETTING_KEY = 'migration.task25.atlas_cutover.completed';
 let activeTenantMode: 'repair' | 'verify' = 'repair';
 
 const TASKS_STATUS_CHECK_RE = /\s+CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i;
+const TRANSITION_REQUIREMENT_TYPE_CHECK_SQL = "'required','match','from_status','forbidden_values','allowed_values','forbidden_pattern','allowed_pattern'";
 
 function tableExists(db: Database.Database, table: string): boolean {
   return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(table) as { name?: string } | undefined)?.name);
@@ -58,6 +59,58 @@ function ensureTableColumn(db: Database.Database, table: string, column: string,
   if (tableHasColumn(db, table, column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   console.log(`[schema] Migrated: added ${table}.${column}`);
+}
+
+function ensureTransitionRequirementTypeCheck(db: Database.Database, table: string): void {
+  if (!tableExists(db, table)) return;
+  const ddl = (db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name = ?`).get(table) as { sql?: string } | undefined)?.sql ?? '';
+  if (ddl.includes('forbidden_values') && ddl.includes('allowed_pattern')) return;
+
+  const columns = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(col => col.name));
+  const hasScopedColumns = columns.has('project_id') && columns.has('sprint_type');
+  const hasTenant = columns.has('tenant_id');
+  const tenantColumn = hasTenant ? 'tenant_id       INTEGER REFERENCES tenants(id) ON DELETE CASCADE,' : '';
+  const tenantSelect = hasTenant ? 'tenant_id, ' : '';
+  const scopedColumns = hasScopedColumns
+    ? `
+      project_id       INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+      sprint_type      TEXT,`
+    : '';
+  const scopedSelect = hasScopedColumns ? 'project_id, sprint_type, ' : '';
+  const sprintIdDdl = table === 'sprint_task_transition_requirements'
+    ? 'sprint_id        INTEGER REFERENCES sprints(id) ON DELETE CASCADE,'
+    : '';
+  const sprintIdSelect = table === 'sprint_task_transition_requirements' ? 'sprint_id, ' : '';
+
+  db.exec(`
+    BEGIN TRANSACTION;
+    CREATE TABLE ${table}__new (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      ${tenantColumn}
+      ${sprintIdDdl}
+      ${scopedColumns}
+      task_type        TEXT,
+      outcome          TEXT NOT NULL,
+      field_name       TEXT NOT NULL,
+      requirement_type TEXT NOT NULL DEFAULT 'required'
+                       CHECK(requirement_type IN (${TRANSITION_REQUIREMENT_TYPE_CHECK_SQL})),
+      match_field      TEXT,
+      severity         TEXT NOT NULL DEFAULT 'block'
+                       CHECK(severity IN ('block','warn')),
+      message          TEXT NOT NULL DEFAULT '',
+      enabled          INTEGER NOT NULL DEFAULT 1,
+      priority         INTEGER NOT NULL DEFAULT 0,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO ${table}__new (${tenantSelect}${sprintIdSelect}${scopedSelect}id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at)
+    SELECT ${tenantSelect}${sprintIdSelect}${scopedSelect}id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
+    FROM ${table};
+    DROP TABLE ${table};
+    ALTER TABLE ${table}__new RENAME TO ${table};
+    COMMIT;
+  `);
+  console.log(`[schema] Migrated: expanded ${table}.requirement_type value policy checks`);
 }
 
 function ensureTasksRequireWorkflow(db: Database.Database): void {
@@ -2347,7 +2400,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       outcome          TEXT NOT NULL,
       field_name       TEXT NOT NULL,
       requirement_type TEXT NOT NULL DEFAULT 'required'
-                       CHECK(requirement_type IN ('required','match','from_status')),
+                       CHECK(requirement_type IN ('required','match','from_status','forbidden_values','allowed_values','forbidden_pattern','allowed_pattern')),
       match_field      TEXT,
       severity         TEXT NOT NULL DEFAULT 'block'
                        CHECK(severity IN ('block','warn')),
@@ -2476,7 +2529,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
         outcome          TEXT NOT NULL,
         field_name       TEXT NOT NULL,
         requirement_type TEXT NOT NULL DEFAULT 'required'
-                         CHECK(requirement_type IN ('required','match','from_status')),
+                         CHECK(requirement_type IN ('required','match','from_status','forbidden_values','allowed_values','forbidden_pattern','allowed_pattern')),
         match_field      TEXT,
         severity         TEXT NOT NULL DEFAULT 'block'
                          CHECK(severity IN ('block','warn')),
@@ -2495,6 +2548,13 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     `);
     console.log('[schema] Migrated: sprint_task_transition_requirements.sprint_id now allows NULL for sprint-type defaults');
   }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sprint_task_transition_requirements_lookup
+      ON sprint_task_transition_requirements(sprint_id, outcome, task_type);
+    CREATE INDEX IF NOT EXISTS idx_sprint_task_transition_requirements_scope_lookup
+      ON sprint_task_transition_requirements(project_id, sprint_type, sprint_id, outcome, task_type);
+  `);
+  ensureTransitionRequirementTypeCheck(db, 'sprint_task_transition_requirements');
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sprint_task_transition_requirements_lookup
       ON sprint_task_transition_requirements(sprint_id, outcome, task_type);
@@ -4901,7 +4961,7 @@ export function ensureLifecycleRulesTable(): void {
       outcome          TEXT NOT NULL,
       field_name       TEXT NOT NULL,
       requirement_type TEXT NOT NULL DEFAULT 'required'
-                       CHECK(requirement_type IN ('required','match','from_status')),
+                       CHECK(requirement_type IN ('required','match','from_status','forbidden_values','allowed_values','forbidden_pattern','allowed_pattern')),
       match_field      TEXT,
       severity         TEXT NOT NULL DEFAULT 'block'
                        CHECK(severity IN ('block','warn')),
@@ -4911,6 +4971,13 @@ export function ensureLifecycleRulesTable(): void {
       created_at       TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE INDEX IF NOT EXISTS idx_transition_req_lookup
+      ON transition_requirements(task_type, outcome);
+    CREATE INDEX IF NOT EXISTS idx_transition_req_type
+      ON transition_requirements(task_type);
+  `);
+  ensureTransitionRequirementTypeCheck(db, 'transition_requirements');
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_transition_req_lookup
       ON transition_requirements(task_type, outcome);
     CREATE INDEX IF NOT EXISTS idx_transition_req_type

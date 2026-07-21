@@ -83,11 +83,6 @@ function isPlaceholderValue(value: unknown): boolean {
   return normalized.length === 0 || PLACEHOLDER_VALUES.has(normalized);
 }
 
-function isMainlineBranch(branch: string | null | undefined): boolean {
-  const normalized = normalizedString(branch).toLowerCase();
-  return normalized === 'main' || normalized === 'master';
-}
-
 function isProductionLikeUrl(url: string | null | undefined): boolean {
   const normalized = normalizedString(url).toLowerCase();
   if (!normalized) return false;
@@ -97,6 +92,39 @@ function isProductionLikeUrl(url: string | null | undefined): boolean {
     || normalized.includes('www.')
     || normalized.includes('://app.')
     || normalized.includes('://www.');
+}
+
+function parseConfiguredValues(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed.map(value => String(value).trim()).filter(Boolean);
+    }
+  } catch {
+    // Fall back to a comma/newline list below.
+  }
+  return trimmed
+    .split(/[,\n]/)
+    .map(value => value.trim())
+    .filter(Boolean);
+}
+
+function valueMatchesConfiguredValue(value: unknown, configured: string): boolean {
+  const normalized = normalizedString(value).toLowerCase();
+  return normalized.length > 0 && normalized === configured.trim().toLowerCase();
+}
+
+function valueMatchesConfiguredPattern(value: unknown, pattern: string | null | undefined): boolean {
+  const normalized = normalizedString(value);
+  if (!normalized || !pattern?.trim()) return false;
+  try {
+    return new RegExp(pattern.trim()).test(normalized);
+  } catch {
+    return false;
+  }
 }
 
 // ── Review evidence validation ───────────────────────────────────────────────
@@ -234,6 +262,18 @@ export function validateInlineEvidenceForOutcome(
       failed = !isNonEmpty(fieldValue) || !isNonEmpty(matchValue) || fieldValue.trim() !== matchValue.trim();
     } else if (requirement.requirement_type === 'from_status') {
       failed = !requirement.match_field || effectiveRecord[requirement.field_name] !== requirement.match_field;
+    } else if (requirement.requirement_type === 'forbidden_values') {
+      const configuredValues = parseConfiguredValues(requirement.match_field);
+      failed = fields.some(field => configuredValues.some(configured => valueMatchesConfiguredValue(effectiveRecord[field], configured)));
+    } else if (requirement.requirement_type === 'allowed_values') {
+      const configuredValues = parseConfiguredValues(requirement.match_field);
+      failed = configuredValues.length === 0
+        || fields.every(field => !configuredValues.some(configured => valueMatchesConfiguredValue(effectiveRecord[field], configured)));
+    } else if (requirement.requirement_type === 'forbidden_pattern') {
+      failed = fields.some(field => valueMatchesConfiguredPattern(effectiveRecord[field], requirement.match_field));
+    } else if (requirement.requirement_type === 'allowed_pattern') {
+      failed = !requirement.match_field
+        || fields.every(field => !valueMatchesConfiguredPattern(effectiveRecord[field], requirement.match_field));
     }
 
     if (failed) {
@@ -268,11 +308,6 @@ function validateEvidenceField(fieldName: string, value: unknown, errors: string
 
   if (isPlaceholderValue(value)) {
     errors.push(`${fieldName} cannot be a blank placeholder value`);
-    return;
-  }
-
-  if (fieldName === 'review_branch' && isMainlineBranch(value)) {
-    errors.push('review_branch must be a feature branch, not main/master');
     return;
   }
 

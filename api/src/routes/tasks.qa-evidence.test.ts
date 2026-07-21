@@ -576,6 +576,99 @@ describe('tasks qa-evidence aliases', () => {
     }
   });
 
+  it('accepts direct completed_for_review outcome evidence on main when no branch-value gate is configured', async () => {
+    const db = getDb();
+    db.exec(`
+      ALTER TABLE tasks ADD COLUMN review_branch TEXT;
+      ALTER TABLE tasks ADD COLUMN review_url TEXT;
+      ALTER TABLE tasks ADD COLUMN review_owner_agent_id INTEGER;
+      ALTER TABLE tasks ADD COLUMN previous_status TEXT;
+      ALTER TABLE tasks ADD COLUMN merged_commit TEXT;
+      ALTER TABLE tasks ADD COLUMN deployed_commit TEXT;
+      ALTER TABLE tasks ADD COLUMN deployed_at TEXT;
+      ALTER TABLE tasks ADD COLUMN live_verified_at TEXT;
+      ALTER TABLE tasks ADD COLUMN live_verified_by TEXT;
+      ALTER TABLE tasks ADD COLUMN deploy_target TEXT;
+      ALTER TABLE tasks ADD COLUMN evidence_json TEXT;
+      ALTER TABLE tasks ADD COLUMN failure_detail TEXT;
+      ALTER TABLE job_instances ADD COLUMN failure_stage TEXT;
+      CREATE TABLE logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id INTEGER,
+        job_title TEXT,
+        level TEXT,
+        message TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE routing_config (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_status TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        to_status TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        project_id INTEGER
+      );
+      CREATE TABLE integrity_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        project_id INTEGER,
+        agent_id INTEGER,
+        instance_id INTEGER,
+        anomaly_type TEXT,
+        detail TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE task_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        project_id INTEGER,
+        agent_id INTEGER,
+        from_status TEXT,
+        to_status TEXT,
+        moved_by TEXT,
+        move_type TEXT,
+        instance_id INTEGER,
+        reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    db.prepare(`UPDATE tasks SET status = ? WHERE id = ?`).run('in_progress', 383);
+    db.prepare(`INSERT INTO routing_config (from_status, outcome, to_status, enabled, project_id) VALUES (?, ?, ?, 1, ?)`).run(
+      'in_progress',
+      'completed_for_review',
+      'review',
+      1,
+    );
+
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/tasks/383/outcome`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          outcome: 'completed_for_review',
+          summary: 'Mainline handoff for configured mainline workflow.',
+          changed_by: 'cinder-backend',
+          instance_id: 1784,
+          review_branch: 'main',
+          review_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          review_url: 'http://localhost:3510/review/task-383-mainline',
+        }),
+      });
+      const body = await response.json() as { task?: { status?: string; review_branch?: string | null; review_commit?: string | null }; error?: string };
+
+      expect(response.status).toBe(200);
+      expect(body.task).toMatchObject({
+        status: 'review',
+        review_branch: 'main',
+        review_commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   it('allows qa_pass release-gate validation for the localhost:3501 review artifact URL', () => {
     const db = getDb();
     db.prepare(`UPDATE tasks SET qa_verified_commit = ?, qa_tested_url = ? WHERE id = ?`).run(
@@ -631,6 +724,57 @@ describe('tasks qa-evidence aliases', () => {
     expect(result.errors).toEqual(['custom gate requires review_commit']);
   });
 
+  it('allows review_branch main when no configured value gate forbids it', () => {
+    const result = validateInlineEvidenceForOutcome(
+      'completed_for_review',
+      {
+        review_branch: 'main',
+        review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+      },
+      {},
+      [
+        {
+          field_name: 'review_branch',
+          requirement_type: 'required',
+          match_field: null,
+          severity: 'block',
+          message: 'completed_for_review requires review_branch',
+        },
+        {
+          field_name: 'review_commit',
+          requirement_type: 'required',
+          match_field: null,
+          severity: 'block',
+          message: 'completed_for_review requires review_commit',
+        },
+      ],
+    );
+
+    expect(result.errors).toEqual([]);
+  });
+
+  it('rejects main and master only when a configured forbidden-values gate requires feature branches', () => {
+    const result = validateInlineEvidenceForOutcome(
+      'completed_for_review',
+      {
+        review_branch: 'main',
+        review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+      },
+      {},
+      [
+        {
+          field_name: 'review_branch',
+          requirement_type: 'forbidden_values',
+          match_field: JSON.stringify(['main', 'master']),
+          severity: 'block',
+          message: 'Feature-branch workflow requires review_branch to avoid main/master',
+        },
+      ],
+    );
+
+    expect(result.errors).toEqual(['Feature-branch workflow requires review_branch to avoid main/master']);
+  });
+
   it('supports configured OR field expressions for release gates', () => {
     const db = getDb();
     db.prepare(`
@@ -647,6 +791,35 @@ describe('tasks qa-evidence aliases', () => {
     }, 'deployed_live', 'backend');
 
     expect(result.errors).toEqual([]);
+  });
+
+  it('uses configured value gates during release preflight without a hard-coded main/master ban', () => {
+    const db = getDb();
+    const mainlineAllowed = requireReleaseGate(db, {
+      id: 383,
+      status: 'review',
+      task_type: 'backend',
+      sprint_id: 10,
+      review_branch: 'main',
+      review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+    }, 'completed_for_review', 'backend');
+    expect(mainlineAllowed.errors).toEqual([]);
+
+    db.prepare(`
+      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message)
+      VALUES (10, NULL, 'completed_for_review', 'review_branch', 'forbidden_values', ?, 'block', 'Feature branches only')
+    `).run(JSON.stringify(['main', 'master']));
+
+    const featureOnly = requireReleaseGate(db, {
+      id: 383,
+      status: 'review',
+      task_type: 'backend',
+      sprint_id: 10,
+      review_branch: 'main',
+      review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+    }, 'completed_for_review', 'backend');
+
+    expect(featureOnly.errors).toEqual(['Feature branches only']);
   });
 
   it('rejects premature or malformed live_verified release-gate validation when the workflow config requires it', () => {

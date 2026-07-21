@@ -17,6 +17,8 @@ import {
 } from './scope';
 import { requireTransitionRequirementFieldsForScope, requireTransitionRequirementFieldsForSprint } from './validation';
 
+const TRANSITION_REQUIREMENT_TYPES = ['required', 'match', 'from_status', 'forbidden_values', 'allowed_values', 'forbidden_pattern', 'allowed_pattern'];
+
 export function listTransitionRequirementFields(
   db: Database.Database,
   input: { sprint_id?: unknown; sprint_type?: unknown; task_type?: unknown; tenant_id?: unknown },
@@ -105,8 +107,8 @@ export function createTransitionRequirement(db: Database.Database, input: Record
     throw withStatus(`Invalid task_type "${task_type}". Task type keys must use lowercase letters, numbers, underscores, or hyphens.`, 400);
   }
 
-  if (!['required', 'match', 'from_status'].includes(String(requirement_type))) {
-    throw withStatus('requirement_type must be required, match, or from_status', 400);
+  if (!TRANSITION_REQUIREMENT_TYPES.includes(String(requirement_type))) {
+    throw withStatus(`requirement_type must be one of: ${TRANSITION_REQUIREMENT_TYPES.join(', ')}`, 400);
   }
 
   if (!['block', 'warn'].includes(String(severity))) {
@@ -234,8 +236,8 @@ function updateScopedTransitionRequirementRow(
   if (task_type !== undefined && task_type !== null && !isValidTaskType(task_type)) {
     throw withStatus(`Invalid task_type "${task_type}". Task type keys must use lowercase letters, numbers, underscores, or hyphens.`, 400);
   }
-  if (requirement_type !== undefined && !['required', 'match', 'from_status'].includes(String(requirement_type))) {
-    throw withStatus('requirement_type must be required, match, or from_status', 400);
+  if (requirement_type !== undefined && !TRANSITION_REQUIREMENT_TYPES.includes(String(requirement_type))) {
+    throw withStatus(`requirement_type must be one of: ${TRANSITION_REQUIREMENT_TYPES.join(', ')}`, 400);
   }
   if (severity !== undefined && !['block', 'warn'].includes(String(severity))) {
     throw withStatus('severity must be block or warn', 400);

@@ -93,7 +93,7 @@ Accepted workflow events are translated into canonical writes:
 - persist an idempotency receipt
 - resolve a workflow-event mapping by source, event, project, task type, and current status
 
-`deployed_for_qa` writes review evidence and uses canonical outcome semantics to post `completed_for_review` when valid. `deploy_failed` and structured deployment failures use canonical outcome semantics to post `env_blocked` and record failure detail. `agent_started` is an internal `agent_hq_runtime` workflow event that can move a dispatched task to `in_progress`.
+`deployed_for_qa` writes review evidence and uses canonical outcome semantics to post `completed_for_review` when valid. Review branch value policy, including feature-branch-only rules, is enforced only by configured transition requirements for the resolved workflow/task type/outcome. `deploy_failed` and structured deployment failures use canonical outcome semantics to post `env_blocked` and record failure detail. `agent_started` is an internal `agent_hq_runtime` workflow event that can move a dispatched task to `in_progress`.
 
 ## Idempotency
 
