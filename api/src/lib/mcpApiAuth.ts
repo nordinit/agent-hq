@@ -258,6 +258,38 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'routing_rules.manage_project_scope',
+    group: 'Workflow',
+    label: 'Manage project assignment rules',
+    description: 'Allows reading, creating, updating, and deleting task assignment/routing rules only inside the MCP agent\'s assigned project and tenant. Does not allow all-project defaults, cross-project edits, cross-tenant edits, workflow transition changes, or unrelated admin routes.',
+    endpoints: [
+      'GET /api/v1/routing/rules',
+      'GET /api/v1/routing/rules/:id',
+      'POST /api/v1/routing/rules',
+      'PUT /api/v1/routing/rules/:id',
+      'DELETE /api/v1/routing/rules/:id',
+      'GET /api/v1/routing/assignment-rules',
+      'GET /api/v1/routing/assignment-rules/:id',
+      'POST /api/v1/routing/assignment-rules',
+      'PUT /api/v1/routing/assignment-rules/:id',
+      'DELETE /api/v1/routing/assignment-rules/:id',
+      'GET /api/v1/routing-rules',
+      'GET /api/v1/routing-rules/:id',
+      'POST /api/v1/routing-rules',
+      'PUT /api/v1/routing-rules/:id',
+      'DELETE /api/v1/routing-rules/:id',
+      'GET /api/v1/assignment-rules',
+      'GET /api/v1/assignment-rules/:id',
+      'POST /api/v1/assignment-rules',
+      'PUT /api/v1/assignment-rules/:id',
+      'DELETE /api/v1/assignment-rules/:id',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'projects.read_active_project',
     group: 'Context',
     label: 'Read active project',
@@ -975,6 +1007,100 @@ function taskIdForInstance(db: Database.Database, instanceId: number): number | 
   return row?.task_id ?? null;
 }
 
+type RoutingRuleScopeContext = {
+  projectId: number | null;
+  sprintId: number | null;
+  sprintType: string | null;
+  source: 'request' | 'existing_rule';
+};
+
+function normalizeScopeString(value: unknown): string | null {
+  if (Array.isArray(value)) return normalizeScopeString(value[0]);
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function firstPresent(...values: unknown[]): unknown {
+  return values.find((value) => value !== undefined && value !== null && value !== '');
+}
+
+function getRoutingRuleScopeFromRuleId(
+  db: Database.Database,
+  ruleId: number,
+  tenantId: number,
+): RoutingRuleScopeContext | null {
+  if (!hasTable(db, 'sprint_task_routing_rules')) return null;
+  const hasRoutingProject = hasColumn(db, 'sprint_task_routing_rules', 'project_id');
+  const hasRoutingSprintType = hasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
+  const hasRoutingTenant = hasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
+  const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
+  const row = db.prepare(`
+    SELECT
+      trr.id,
+      ${hasRoutingProject ? 'trr.project_id' : 'NULL'} AS routing_project_id,
+      trr.sprint_id AS routing_sprint_id,
+      ${hasRoutingSprintType ? 'trr.sprint_type' : 'NULL'} AS routing_sprint_type,
+      s.project_id AS sprint_project_id,
+      s.sprint_type AS sprint_type
+    FROM sprint_task_routing_rules trr
+    LEFT JOIN sprints s ON s.id = trr.sprint_id
+    WHERE trr.id = ?
+      ${hasRoutingTenant ? 'AND trr.tenant_id = ?' : ''}
+      ${!hasRoutingTenant && hasSprintTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
+    LIMIT 1
+  `).get(ruleId, ...((hasRoutingTenant || (!hasRoutingTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    projectId: parsePositiveInt(row.routing_project_id) ?? parsePositiveInt(row.sprint_project_id),
+    sprintId: parsePositiveInt(row.routing_sprint_id),
+    sprintType: normalizeScopeString(row.routing_sprint_type) ?? normalizeScopeString(row.sprint_type),
+    source: 'existing_rule',
+  };
+}
+
+function getRoutingRuleScopeFromRequest(
+  db: Database.Database,
+  input: Record<string, unknown>,
+  tenantId: number,
+): RoutingRuleScopeContext | null {
+  const sprintId = parsePositiveInt(firstPresent(input.sprint_id, input.workflow_id));
+  const requestedProjectId = parsePositiveInt(input.project_id);
+  const requestedSprintType = normalizeScopeString(firstPresent(input.sprint_type, input.workflow_type));
+
+  if (sprintId != null) {
+    if (!hasTable(db, 'sprints')) return { projectId: requestedProjectId, sprintId, sprintType: requestedSprintType, source: 'request' };
+    const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
+    const sprint = db.prepare(`
+      SELECT id, project_id, sprint_type
+      FROM sprints
+      WHERE id = ?
+        ${hasSprintTenant ? 'AND tenant_id = ?' : ''}
+      LIMIT 1
+    `).get(sprintId, ...(hasSprintTenant ? [tenantId] : [])) as { id: number; project_id: number | null; sprint_type: string | null } | undefined;
+    if (!sprint) return { projectId: null, sprintId, sprintType: requestedSprintType, source: 'request' };
+    return {
+      projectId: parsePositiveInt(sprint.project_id),
+      sprintId,
+      sprintType: normalizeScopeString(sprint.sprint_type) ?? requestedSprintType,
+      source: 'request',
+    };
+  }
+
+  return {
+    projectId: requestedProjectId,
+    sprintId: null,
+    sprintType: requestedSprintType,
+    source: 'request',
+  };
+}
+
+function routingRuleScopeMatchesAssignedProject(scope: RoutingRuleScopeContext | null, canonicalAgentProjectId: number | null): boolean {
+  return canonicalAgentProjectId != null
+    && scope?.projectId != null
+    && scope.projectId === canonicalAgentProjectId;
+}
+
 function insertMcpScopeDeniedNote(db: Database.Database, params: {
   taskId: number | null;
   identity: McpApiIdentity;
@@ -1349,6 +1475,71 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       reason: `Normal Agent HQ MCP keys can only read the sprint attached to their active dispatched task.`,
       requiredCapability: 'sprints.read_active_sprint',
     });
+  }
+
+  const routingRuleMatch = requestPath.match(/^\/(?:routing\/(?:rules|assignment-rules)|routing-rules|assignment-rules)(?:\/(\d+))?$/);
+  if (routingRuleMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
+    const requiredCapability: AgentMcpCapabilityKey = 'routing_rules.manage_project_scope';
+    if (!requireCapability(
+      requiredCapability,
+      `Assignment rule management is disabled for ${identity.agentSlug}.`,
+    )) return;
+
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for assignment rule management.`,
+        requiredCapability,
+      });
+    }
+
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as Record<string, unknown>
+      : {};
+    const requestInput = { ...req.query, ...body } as Record<string, unknown>;
+    const ruleId = parsePositiveInt(routingRuleMatch[1]);
+    const existingScope = ruleId != null ? getRoutingRuleScopeFromRuleId(db, ruleId, identity.tenantId) : null;
+    const requestHasScope = firstPresent(
+      requestInput.project_id,
+      requestInput.sprint_id,
+      requestInput.workflow_id,
+      requestInput.sprint_type,
+      requestInput.workflow_type,
+    ) !== undefined;
+    const requestedScope = requestHasScope ? getRoutingRuleScopeFromRequest(db, requestInput, identity.tenantId) : null;
+    const scopesToAuthorize = [
+      ...(existingScope ? [existingScope] : []),
+      ...(requestedScope ? [requestedScope] : []),
+    ];
+
+    if (ruleId != null && existingScope == null) {
+      return deny({
+        reason: `Assignment rule #${ruleId} is outside the MCP key tenant or does not exist.`,
+        requiredCapability,
+      });
+    }
+
+    if (method === 'POST' && requestedScope == null) {
+      return deny({
+        reason: `Assignment rule creation requires project_id or sprint_id within the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    if (method === 'GET' && ruleId == null && requestedScope == null) {
+      return deny({
+        reason: `Assignment rule listing requires project_id or sprint_id within the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    if (scopesToAuthorize.length === 0 || scopesToAuthorize.some((scope) => !routingRuleScopeMatchesAssignedProject(scope, canonicalAgentProjectId))) {
+      return deny({
+        reason: `Normal Agent HQ MCP keys can only manage assignment rules inside the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    return next();
   }
 
   if ((requestPath === '/routing/transitions' || requestPath === '/routing/transition-requirements') && method === 'GET') {

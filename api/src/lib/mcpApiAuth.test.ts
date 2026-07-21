@@ -80,7 +80,20 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         id INTEGER PRIMARY KEY,
         tenant_id INTEGER,
         project_id INTEGER,
-        name TEXT NOT NULL
+        name TEXT NOT NULL,
+        sprint_type TEXT
+      );
+      CREATE TABLE sprint_task_routing_rules (
+        id INTEGER PRIMARY KEY,
+        tenant_id INTEGER,
+        project_id INTEGER,
+        sprint_id INTEGER,
+        sprint_type TEXT,
+        task_type TEXT,
+        status TEXT,
+        agent_id INTEGER,
+        priority INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1
       );
       CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,
@@ -147,6 +160,18 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       .run(86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project');
     db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`)
       .run(42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint');
+    db.prepare(`UPDATE sprints SET sprint_type = ? WHERE id = ?`).run('dev', 42);
+    db.prepare(`UPDATE sprints SET sprint_type = ? WHERE id = ?`).run('dev', 44);
+    db.prepare(`UPDATE sprints SET sprint_type = ? WHERE id = ?`).run('dev', 43);
+    db.prepare(`
+      INSERT INTO sprint_task_routing_rules (id, tenant_id, project_id, sprint_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      501, 1, 86, null, 'dev', 'backend', 'ready', 7, 10,
+      502, 1, 86, 42, 'dev', 'qa', 'review', 9, 20,
+      503, 1, 87, null, 'dev', 'backend', 'ready', 9, 10,
+      504, 2, 99, null, 'dev', 'backend', 'ready', 10, 10,
+    );
     db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`)
       .run(2551, 448, 7, 'running', 2552, 449, 9, 'running', 2553, 450, 10, 'running');
     db.prepare(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`)
@@ -191,6 +216,18 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       relationship_types: [],
     }));
     app.get('/api/v1/sprints/:id', (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id) }));
+    const listAssignmentRules = (req: express.Request, res: express.Response) => res.json({ ok: true, query: req.query });
+    const createAssignmentRule = (req: express.Request, res: express.Response) => res.status(201).json({ ok: true, body: req.body });
+    const getAssignmentRule = (req: express.Request, res: express.Response) => res.json({ ok: true, rule_id: Number(req.params.id), query: req.query });
+    const updateAssignmentRule = (req: express.Request, res: express.Response) => res.json({ ok: true, rule_id: Number(req.params.id), body: req.body });
+    const deleteAssignmentRule = (req: express.Request, res: express.Response) => res.json({ ok: true, rule_id: Number(req.params.id), query: req.query });
+    for (const prefix of ['/api/v1/routing/rules', '/api/v1/routing/assignment-rules', '/api/v1/routing-rules', '/api/v1/assignment-rules']) {
+      app.get(prefix, listAssignmentRules);
+      app.post(prefix, createAssignmentRule);
+      app.get(`${prefix}/:id`, getAssignmentRule);
+      app.put(`${prefix}/:id`, updateAssignmentRule);
+      app.delete(`${prefix}/:id`, deleteAssignmentRule);
+    }
     app.get('/api/v1/routing/transitions', (req, res) => res.json({ ok: true, query: req.query }));
     app.put('/api/v1/routing/transition-requirements/:id', (req, res) => res.json({ ok: true, requirement_id: Number(req.params.id), body: req.body }));
     app.post('/api/v1/external/task-events', (_req, res) => res.status(202).json({ ok: true }));
@@ -306,6 +343,13 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       default_enabled: false,
       explicit_enabled: null,
     });
+    expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')).toMatchObject({
+      group: 'Workflow',
+      label: 'Manage project assignment rules',
+      enabled: false,
+      default_enabled: false,
+      explicit_enabled: null,
+    });
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.full_access')?.enabled).toBe(false);
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.cross_tenant')?.enabled).toBe(false);
 
@@ -316,6 +360,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(explicitSnapshot.policy_mode).toBe('explicit');
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.read_active_context')?.enabled).toBe(true);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.create')?.enabled).toBe(false);
+    expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')?.enabled).toBe(false);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.write_active_lifecycle')?.enabled).toBe(false);
 
     const resetSnapshot = resetAgentMcpPermissionPolicy(db, 7);
@@ -473,6 +518,146 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       body: JSON.stringify({ custom_fields: { crm_lead_id: 'lead-123' }, nonterminal_only: true }),
     });
     expect(allowed.status).toBe(200);
+  });
+
+  it('allows scoped routing rule read/create/update/delete when the assigned-project capability is enabled', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'routing_rules.manage_project_scope',
+    ]);
+
+    const listResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&sprint_type=dev`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(listResponse.status).toBe(200);
+
+    const getResponse = await fetch(`${baseUrl}/api/v1/routing/rules/501`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(getResponse.status).toBe(200);
+
+    const createResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        project_id: 86,
+        sprint_type: 'dev',
+        task_type: 'backend',
+        status: 'ready',
+        agent_id: 7,
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const sprintCreateResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        project_id: 86,
+        sprint_id: 42,
+        task_type: 'qa',
+        status: 'review',
+        agent_id: 9,
+      }),
+    });
+    expect(sprintCreateResponse.status).toBe(201);
+
+    const updateResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/501`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 86, sprint_type: 'dev', enabled: false }),
+    });
+    expect(updateResponse.status).toBe(200);
+
+    const deleteResponse = await fetch(`${baseUrl}/api/v1/routing-rules/501`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(deleteResponse.status).toBe(200);
+  });
+
+  it('denies routing rule edits without capability and outside the assigned project scope', async () => {
+    const missingCapability = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&sprint_type=dev`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(missingCapability.status).toBe(403);
+    await expect(missingCapability.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'routing_rules.manage_project_scope' },
+    });
+
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'routing_rules.manage_project_scope',
+    ]);
+
+    const unscopedList = await fetch(`${baseUrl}/api/v1/routing/assignment-rules`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(unscopedList.status).toBe(403);
+    await expect(unscopedList.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'routing_rules.manage_project_scope' },
+    });
+
+    const allProjectDefault = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?sprint_type=dev`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(allProjectDefault.status).toBe(403);
+
+    const otherProjectRule = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/503`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(otherProjectRule.status).toBe(403);
+    await expect(otherProjectRule.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'routing_rules.manage_project_scope' },
+    });
+
+    const moveOutOfScope = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/501`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 87, sprint_type: 'dev' }),
+    });
+    expect(moveOutOfScope.status).toBe(403);
+
+    const crossTenantByBody = await fetch(`${baseUrl}/api/v1/routing/assignment-rules`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 99, sprint_type: 'dev', task_type: 'backend', status: 'ready', agent_id: 10 }),
+    });
+    expect(crossTenantByBody.status).toBe(403);
+    await expect(crossTenantByBody.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'routing_rules.manage_project_scope' },
+    });
+
+    const crossTenantSelector = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?tenant_id=2&project_id=99&sprint_type=dev`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(crossTenantSelector.status).toBe(403);
+    await expect(crossTenantSelector.json()).resolves.toMatchObject({
+      code: 'mcp_tenant_scope_denied',
+      details: { required_capability: 'admin.cross_tenant' },
+    });
+  });
+
+  it('fails closed for routing rule management when the agent has no canonical project', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 11, [
+      'discovery.read_catalog',
+      'routing_rules.manage_project_scope',
+    ]);
+
+    const response = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&sprint_type=dev`, {
+      headers: authHeaders(noProjectKey),
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'routing_rules.manage_project_scope' },
+    });
   });
 
   it('allows read-only access to project task context when Read project task context is enabled', async () => {
@@ -830,6 +1015,13 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       body: JSON.stringify({ field_name: 'review_commit' }),
     });
     expect(updateWorkflowRes.status).toBe(200);
+
+    const updateRoutingRuleRes = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/503`, {
+      method: 'PUT',
+      headers: authHeaders(adminKey),
+      body: JSON.stringify({ project_id: 87, sprint_type: 'dev', enabled: false }),
+    });
+    expect(updateRoutingRuleRes.status).toBe(200);
   });
 
   it('passes external task events through to route-level source validation', async () => {

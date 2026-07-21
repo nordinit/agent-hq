@@ -94,6 +94,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     const assignmentRules = byName.get('agent_hq_list_routing_rules');
     expect(assignmentRules?.domain).toBe('assignment_rules');
     expect(assignmentRules?.description).toContain('assignment rules');
+    expect(assignmentRules?.description).toContain('routing_rules.manage_project_scope');
     expect(assignmentRules?.aliases).toEqual(expect.arrayContaining([
       'agent_hq_list_assignment_rules',
       'atlas_list_assignment_rules',

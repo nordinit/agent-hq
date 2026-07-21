@@ -115,6 +115,19 @@ describe('agent MCP permissions routes', () => {
         description: expect.stringContaining('bounded read-only task search'),
         endpoints: ['POST /api/v1/tasks/project-search'],
       });
+      expect(body.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')).toMatchObject({
+        group: 'Workflow',
+        label: 'Manage project assignment rules',
+        enabled: false,
+        explicit_enabled: null,
+        description: expect.stringContaining('inside the MCP agent\'s assigned project'),
+        endpoints: expect.arrayContaining([
+          'GET /api/v1/routing/assignment-rules',
+          'POST /api/v1/routing/assignment-rules',
+          'PUT /api/v1/routing/assignment-rules/:id',
+          'DELETE /api/v1/routing/assignment-rules/:id',
+        ]),
+      });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
         group: 'Task lifecycle',
         label: 'Create Tasks',
@@ -166,6 +179,10 @@ describe('agent MCP permissions routes', () => {
         explicit_enabled: false,
       });
       expect(updated.capabilities.find((capability) => capability.key === 'tasks.search_project_tasks')).toMatchObject({
+        enabled: false,
+        explicit_enabled: false,
+      });
+      expect(updated.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')).toMatchObject({
         enabled: false,
         explicit_enabled: false,
       });
@@ -229,6 +246,9 @@ describe('agent MCP permissions routes', () => {
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.search_project_tasks')).toMatchObject({
+        enabled: true,
+      });
+      expect(body.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')).toMatchObject({
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'admin.cross_tenant')).toMatchObject({
