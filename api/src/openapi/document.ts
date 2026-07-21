@@ -1127,6 +1127,28 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
+    '/tasks/project-search': {
+      post: {
+        tags: ['Tasks'],
+        summary: 'Search tasks in the authenticated MCP agent project.',
+        description: 'Read-only MCP endpoint for safe follow-up deduplication. The project scope is resolved from the authenticated agent identity; caller-supplied project scope is not accepted.',
+        operationId: 'searchProjectTasks',
+        requestBody: requestBody(ref('ProjectTaskSearchRequest'), {
+          workflow_id: 501,
+          nonterminal_only: true,
+          task_type: 'lead_generation',
+          custom_fields: { crm_lead_id: 'crm-123' },
+          limit: 10,
+        }),
+        responses: {
+          '200': response('Project-scoped task search results.', ref('ProjectTaskSearchResponse')),
+          '400': errorResponseRef,
+          '401': errorResponseRef,
+          '403': errorResponseRef,
+          default: errorResponseRef,
+        },
+      },
+    },
     '/tasks/completed-recent': {
       get: {
         tags: ['Tasks'],
@@ -2292,6 +2314,62 @@ export const openApiDocument: OpenApiDocument = {
           id: { type: 'integer' },
           title: { type: 'string' },
           status: { type: 'string' },
+        },
+      },
+      ProjectTaskSearchRequest: {
+        type: 'object',
+        properties: {
+          workflow_id: { type: 'integer', description: 'Optional workflow/sprint ID filter.' },
+          sprint_id: { type: 'integer', description: 'Legacy alias for workflow_id.' },
+          statuses: { type: 'array', items: { type: 'string' } },
+          active_only: { type: 'boolean', description: 'Alias for nonterminal_only.' },
+          nonterminal_only: { type: 'boolean', description: 'Exclude terminal tasks such as done, cancelled, and failed.' },
+          task_type: { type: 'string' },
+          custom_fields: {
+            type: 'object',
+            additionalProperties: {
+              oneOf: [
+                { type: 'string' },
+                { type: 'number' },
+                { type: 'boolean' },
+              ],
+            },
+            description: 'Exact custom-field matches such as crm_lead_id or external_project_id.',
+          },
+          limit: { type: 'integer', minimum: 1, maximum: 50 },
+          offset: { type: 'integer', minimum: 0 },
+        },
+        additionalProperties: false,
+      },
+      ProjectTaskSearchSummary: {
+        type: 'object',
+        required: ['id', 'title', 'project_id', 'matched_custom_fields'],
+        properties: {
+          id: { type: 'integer' },
+          title: { type: 'string' },
+          status: { type: 'string', nullable: true },
+          task_type: { type: 'string', nullable: true },
+          project_id: { type: 'integer' },
+          sprint_id: { type: 'integer', nullable: true },
+          sprint_name: { type: 'string', nullable: true },
+          agent_id: { type: 'integer', nullable: true },
+          agent_name: { type: 'string', nullable: true },
+          active_instance_id: { type: 'integer', nullable: true },
+          updated_at: { type: 'string', nullable: true },
+          matched_custom_fields: { type: 'object', additionalProperties: true },
+        },
+        additionalProperties: false,
+      },
+      ProjectTaskSearchResponse: {
+        type: 'object',
+        required: ['tasks', 'total', 'hasMore', 'limit', 'offset', 'project_id'],
+        properties: {
+          tasks: arrayOf(ref('ProjectTaskSearchSummary')),
+          total: { type: 'integer' },
+          hasMore: { type: 'boolean' },
+          limit: { type: 'integer' },
+          offset: { type: 'integer' },
+          project_id: { type: 'integer' },
         },
       },
       ResolvedTaskFieldSchema: {

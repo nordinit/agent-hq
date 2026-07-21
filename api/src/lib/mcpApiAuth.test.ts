@@ -171,6 +171,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.get('/api/v1/tasks/:id/relationships', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationships: [] }));
     app.get('/api/v1/tasks/:id/relationship-types', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationship_types: [] }));
     app.get('/api/v1/tasks/:id/active-owner', (req, res) => res.json({ ok: true, task_id: Number(req.params.id) }));
+    app.post('/api/v1/tasks/project-search', (_req, res) => res.json({ ok: true, tasks: [] }));
     app.post('/api/v1/tasks/:id/relationships', (req, res) => res.status(201).json({ ok: true, task_id: Number(req.params.id), body: req.body }));
     app.delete('/api/v1/tasks/:id/relationships/:relationshipId', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationship_id: Number(req.params.relationshipId) }));
     app.post('/api/v1/tasks/:id/notes', (req, res) => res.status(201).json({ ok: true, task_id: Number(req.params.id), body: req.body }));
@@ -449,6 +450,31 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await expect(createTaskRes.json()).resolves.toMatchObject({ ok: true });
   });
 
+  it('requires explicit project task search capability for scoped runtime agents', async () => {
+    const denied = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ custom_fields: { crm_lead_id: 'lead-123' }, nonterminal_only: true }),
+    });
+    expect(denied.status).toBe(403);
+    await expect(denied.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'tasks.search_project_tasks' },
+    });
+
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'tasks.search_project_tasks',
+    ]);
+
+    const allowed = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ custom_fields: { crm_lead_id: 'lead-123' }, nonterminal_only: true }),
+    });
+    expect(allowed.status).toBe(200);
+  });
+
   it('allows read-only access to project task context when Read project task context is enabled', async () => {
     replaceAgentMcpPermissionPolicy(getDb(), 7, [
       'discovery.read_catalog',
@@ -537,6 +563,24 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         required_capability: 'tasks.read_project_context',
         task_id: 451,
       },
+    });
+  });
+
+  it('fails closed for project task search when the agent has no canonical project', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 11, [
+      'discovery.read_catalog',
+      'tasks.search_project_tasks',
+    ]);
+
+    const response = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
+      method: 'POST',
+      headers: authHeaders(noProjectKey),
+      body: JSON.stringify({ custom_fields: { external_project_id: 'ext-1' } }),
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'tasks.search_project_tasks' },
     });
   });
 

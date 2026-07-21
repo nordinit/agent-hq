@@ -42,6 +42,7 @@ import {
   listTaskInstances,
   listTaskNotes,
   listTasks,
+  searchProjectTasks,
   searchTasks,
 } from '../domains/tasks/readModel';
 import { resolveRequestActor } from '../domains/tasks/requestActor';
@@ -138,6 +139,59 @@ router.get('/', (req: Request, res: Response) => {
     res.json(listTasks(db, { ...req.query, tenant_id: tenantId }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── POST /api/v1/tasks/project-search ───────────────────────────────────────
+// Read-only MCP search for exact follow-up dedupe inside the authenticated
+// agent's assigned project. Caller-supplied project scope is intentionally
+// ignored; MCP auth also requires tasks.search_project_tasks for this route.
+
+router.post('/project-search', (req: Request, res: Response) => {
+  try {
+    const identity = getMcpIdentityFromRequest(req);
+    if (!identity) {
+      return res.status(401).json({
+        ok: false,
+        code: 'mcp_api_key_missing',
+        error: 'MCP API key is required',
+      });
+    }
+
+    const db = getDb();
+    const tenantId = resolveTenantIdFromRequest(db, req);
+    const agent = db.prepare(`
+      SELECT project_id
+      FROM agents
+      WHERE id = ? AND tenant_id = ?
+      LIMIT 1
+    `).get(identity.agentId, tenantId) as { project_id: number | null } | undefined;
+    const projectId = Number(agent?.project_id);
+    if (!Number.isInteger(projectId) || projectId <= 0) {
+      return res.status(403).json({
+        ok: false,
+        code: 'mcp_scope_denied',
+        error: `${identity.agentSlug} does not have an assigned project for project task search.`,
+        details: {
+          agent_id: identity.agentId,
+          agent_slug: identity.agentSlug,
+          required_capability: 'tasks.search_project_tasks',
+        },
+      });
+    }
+
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as Record<string, unknown> : {};
+    res.json(searchProjectTasks(db, {
+      ...body,
+      tenant_id: tenantId,
+      project_id: projectId,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('custom_fields') || message.includes('custom field')) {
+      return res.status(400).json({ error: message, code: 'invalid_project_task_search_filter' });
+    }
+    res.status(500).json({ error: message });
   }
 });
 

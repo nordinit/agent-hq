@@ -101,6 +101,7 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 | `agent_hq_list_sprints` | Legacy alias for listing workflows |
 | `agent_hq_get_sprint` | Legacy alias for workflow detail |
 | `agent_hq_list_tasks` | List tasks with filters |
+| `agent_hq_search_project_tasks` | Search only the authenticated agent's assigned project for bounded exact-match task dedupe |
 | `agent_hq_get_task` | Get full task detail |
 | `agent_hq_get_task_notes` | Get notes for a task |
 | `agent_hq_get_task_history` | Get task history |
@@ -206,6 +207,15 @@ These values are tenant/workflow configurable and must be resolved from metadata
 Do not treat a global task status enum as authoritative. A workflow record can still have a static lifecycle status such as `planning`, `active`, `paused`, `complete`, or `closed`, while tasks inside that workflow can use a configurable status set such as `todo`, `ready`, `in_progress`, `review`, `ready_to_merge`, `done`, or a tenant-defined alternative. Always resolve the task's workflow metadata first.
 
 Super-admin MCP keys with `admin.cross_tenant` may pass `tenant_id` to workflow metadata/read helpers such as `agent_hq_get_workflow_metadata`, `agent_hq_list_workflow_type_statuses`, `agent_hq_list_workflow_type_outcomes`, `agent_hq_list_workflow_type_relationship_types`, and `agent_hq_list_workflow_type_field_schemas`. Tenant-bound MCP keys cannot pass explicit tenant selectors, even for their own tenant; the server returns an authorization error instead.
+
+### Project-scoped task search for dedupe
+
+Use `agent_hq_search_project_tasks` when a runtime agent must reuse an existing follow-up task before creating another one. The tool requires the explicit `tasks.search_project_tasks` capability, which is disabled by default for scoped runtime agents. The server resolves `project_id` from the authenticated MCP agent identity; the tool does not accept a caller-supplied project scope and cannot mutate tasks, relationships, lifecycle state, notes, evidence, proposals, or messages.
+
+Safe replay pattern for recurring task #959:
+1. Call `agent_hq_search_project_tasks` with `workflow_id`, `task_type`, `nonterminal_only: true`, and `custom_fields` containing an exact `crm_lead_id` or `external_project_id`.
+2. If a result is returned, reuse the returned task ID and do not create a duplicate follow-up.
+3. If no result is returned, create the follow-up with the typed task creation tool. Do not take external bid, proposal, or message actions as part of this dedupe check.
 
 ---
 

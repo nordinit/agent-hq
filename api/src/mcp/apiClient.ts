@@ -129,6 +129,30 @@ export interface AgentHqTaskSummary {
   blocking: Array<{ id: number; title: string; status: string | null }>;
 }
 
+export interface AgentHqProjectTaskSearchSummary {
+  id: number;
+  title: string;
+  status: string | null;
+  task_type: string | null;
+  project_id: number | null;
+  sprint_id: number | null;
+  sprint_name: string | null;
+  agent_id: number | null;
+  agent_name: string | null;
+  active_instance_id: number | null;
+  updated_at: string | null;
+  matched_custom_fields: Record<string, unknown>;
+}
+
+export interface AgentHqProjectTaskSearchResponse {
+  tasks: AgentHqProjectTaskSearchSummary[];
+  total: number | null;
+  hasMore: boolean | null;
+  limit: number | null;
+  offset: number | null;
+  project_id: number | null;
+}
+
 export interface AgentHqTaskDetail extends AgentHqTaskSummary {
   description: string | null;
   review_branch: string | null;
@@ -363,6 +387,36 @@ export function shapeTaskSummary(value: unknown): AgentHqTaskSummary {
     updated_at: asString(row.updated_at),
     blockers: asArray(row.blockers).map(shapeTaskRef).filter((item): item is NonNullable<typeof item> => item !== null),
     blocking: asArray(row.blocking).map(shapeTaskRef).filter((item): item is NonNullable<typeof item> => item !== null),
+  };
+}
+
+export function shapeProjectTaskSearchSummary(value: unknown): AgentHqProjectTaskSearchSummary {
+  const row = asRecord(value);
+  return {
+    id: asNumber(row.id) ?? 0,
+    title: asString(row.title) ?? 'Untitled task',
+    status: asString(row.status),
+    task_type: asString(row.task_type),
+    project_id: asNumber(row.project_id),
+    sprint_id: asNumber(row.sprint_id),
+    sprint_name: asString(row.sprint_name),
+    agent_id: asNumber(row.agent_id),
+    agent_name: asString(row.agent_name),
+    active_instance_id: asNumber(row.active_instance_id),
+    updated_at: asString(row.updated_at),
+    matched_custom_fields: asRecord(row.matched_custom_fields),
+  };
+}
+
+function shapeProjectTaskSearchResponse(value: unknown): AgentHqProjectTaskSearchResponse {
+  const body = asRecord(value);
+  return {
+    tasks: asArray(body.tasks).map(shapeProjectTaskSearchSummary),
+    total: asNumber(body.total),
+    hasMore: typeof body.hasMore === 'boolean' ? body.hasMore : null,
+    limit: asNumber(body.limit),
+    offset: asNumber(body.offset),
+    project_id: asNumber(body.project_id),
   };
 }
 
@@ -715,6 +769,21 @@ export class AgentHqApiClient {
         offset: asNumber(body.offset),
       };
     });
+  }
+
+  searchProjectTasks(params: {
+    workflow_id?: number;
+    sprint_id?: number;
+    statuses?: string[];
+    status?: string;
+    active_only?: boolean;
+    nonterminal_only?: boolean;
+    task_type?: string;
+    custom_fields?: Record<string, unknown>;
+    limit?: number;
+    offset?: number;
+  } = {}) {
+    return this.request<unknown>('POST', '/api/v1/tasks/project-search', params).then(shapeProjectTaskSearchResponse);
   }
 
   getTask(id: number) {
