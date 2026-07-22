@@ -100,6 +100,22 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         priority INTEGER NOT NULL DEFAULT 0,
         enabled INTEGER NOT NULL DEFAULT 1
       );
+      CREATE TABLE sprint_task_transition_requirements (
+        id INTEGER PRIMARY KEY,
+        tenant_id INTEGER,
+        sprint_id INTEGER,
+        project_id INTEGER,
+        sprint_type TEXT,
+        task_type TEXT,
+        outcome TEXT NOT NULL,
+        field_name TEXT NOT NULL,
+        requirement_type TEXT NOT NULL DEFAULT 'required',
+        match_field TEXT,
+        severity TEXT NOT NULL DEFAULT 'block',
+        message TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        priority INTEGER NOT NULL DEFAULT 0
+      );
       CREATE TABLE sprint_types (
         key TEXT PRIMARY KEY,
         tenant_id INTEGER,
@@ -188,6 +204,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       504, 2, 99, null, 'dev', 'backend', 'ready', 10, 10,
     );
     db.prepare(`
+      INSERT INTO sprint_task_transition_requirements (id, tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      601, 1, null, 86, 'dev', null, 'completed_for_review', 'review_commit', 'required', null, 'block', 'Review commit is required', 1, 10,
+      602, 1, 42, 86, 'dev', 'backend', 'completed_for_review', 'review_branch', 'required', null, 'block', 'Review branch is required', 1, 20,
+      603, 1, null, 87, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Other project row', 1, 10,
+      604, 2, null, 99, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Cross tenant row', 1, 10,
+    );
+    db.prepare(`
       INSERT INTO sprint_types (key, tenant_id, project_id, name, description, is_system)
       VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)
     `).run(
@@ -257,7 +282,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       app.delete(`${prefix}/:id`, deleteAssignmentRule);
     }
     app.get('/api/v1/routing/transitions', (req, res) => res.json({ ok: true, query: req.query }));
+    app.get('/api/v1/routing/transition-requirements', (req, res) => res.json({ ok: true, query: req.query }));
+    app.post('/api/v1/routing/transition-requirements', (req, res) => res.status(201).json({ ok: true, body: req.body }));
     app.put('/api/v1/routing/transition-requirements/:id', (req, res) => res.json({ ok: true, requirement_id: Number(req.params.id), body: req.body }));
+    app.delete('/api/v1/routing/transition-requirements/:id', (req, res) => res.json({ ok: true, requirement_id: Number(req.params.id), query: req.query }));
     app.get('/api/v1/sprints/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
     app.get('/api/v1/sprints/types/list', (req, res) => res.json({ ok: true, query: req.query }));
     app.get('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
@@ -373,7 +401,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const routingRes = await fetch(`${baseUrl}/api/v1/routing/transitions?sprint_id=42&project_id=86`, {
       headers: authHeaders(normalKey),
     });
-    expect(routingRes.status).toBe(200);
+    expect(routingRes.status).toBe(403);
+    await expect(routingRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'routing_transitions.manage_project_scope' },
+    });
   });
 
   it('defaults MCP requests to the key tenant instead of the UI active tenant', async () => {
@@ -441,6 +473,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       default_enabled: false,
       explicit_enabled: null,
     });
+    expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'transition_requirements.manage_project_scope')).toMatchObject({
+      group: 'Workflow',
+      label: 'Project transition requirement CRUD',
+      enabled: false,
+      default_enabled: false,
+      explicit_enabled: null,
+      description: expect.stringContaining('assigned project'),
+    });
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.full_access')?.enabled).toBe(false);
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.cross_tenant')?.enabled).toBe(false);
 
@@ -453,6 +493,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.create')?.enabled).toBe(false);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.manage_project_tasks')?.enabled).toBe(false);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')?.enabled).toBe(false);
+    expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'transition_requirements.manage_project_scope')?.enabled).toBe(false);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.write_active_lifecycle')?.enabled).toBe(false);
 
     const resetSnapshot = resetAgentMcpPermissionPolicy(db, 7);
@@ -1338,6 +1379,159 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await expect(response.json()).resolves.toMatchObject({
       code: 'mcp_scope_denied',
       details: { required_capability: 'routing_rules.manage_project_scope' },
+    });
+  });
+
+  it('allows scoped transition requirement CRUD for project defaults and workflow overrides', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'transition_requirements.manage_project_scope',
+    ]);
+
+    const listDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&sprint_type=dev`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(listDefault.status).toBe(200);
+
+    const listOverride = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?sprint_id=42`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(listOverride.status).toBe(200);
+
+    const createDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        project_id: 86,
+        sprint_type: 'dev',
+        outcome: 'completed_for_review',
+        field_name: 'review_commit',
+      }),
+    });
+    expect(createDefault.status).toBe(201);
+
+    const createOverride = await fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        sprint_id: 42,
+        outcome: 'qa_pass',
+        field_name: 'qa_verified_commit',
+      }),
+    });
+    expect(createOverride.status).toBe(201);
+
+    const updateDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/601`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        project_id: 86,
+        sprint_type: 'dev',
+        message: 'Updated scoped default',
+      }),
+    });
+    expect(updateDefault.status).toBe(200);
+
+    const updateOverride = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/602`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        sprint_id: 42,
+        message: 'Updated scoped override',
+      }),
+    });
+    expect(updateOverride.status).toBe(200);
+
+    const deleteDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/601?project_id=86&sprint_type=dev`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(deleteDefault.status).toBe(200);
+
+    const deleteOverride = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/602?sprint_id=42`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(deleteOverride.status).toBe(200);
+  });
+
+  it('denies scoped transition requirement CRUD without capability or outside assigned project scope', async () => {
+    const missingCapability = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&sprint_type=dev`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(missingCapability.status).toBe(403);
+    await expect(missingCapability.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow.read_active_configuration' },
+    });
+
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'transition_requirements.manage_project_scope',
+    ]);
+
+    const unscopedList = await fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(unscopedList.status).toBe(403);
+    await expect(unscopedList.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'transition_requirements.manage_project_scope' },
+    });
+
+    const allProjectDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?sprint_type=dev`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(allProjectDefault.status).toBe(403);
+
+    const otherProjectRow = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/603`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 87, sprint_type: 'dev', message: 'Nope' }),
+    });
+    expect(otherProjectRow.status).toBe(403);
+    await expect(otherProjectRow.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'transition_requirements.manage_project_scope' },
+    });
+
+    const moveOutOfScope = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/601`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 87, sprint_type: 'dev' }),
+    });
+    expect(moveOutOfScope.status).toBe(403);
+
+    const missingExplicitUpdateScope = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/601`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ message: 'No explicit scope' }),
+    });
+    expect(missingExplicitUpdateScope.status).toBe(403);
+
+    const crossTenantSelector = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?tenant_id=2&project_id=99&sprint_type=dev`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(crossTenantSelector.status).toBe(403);
+    await expect(crossTenantSelector.json()).resolves.toMatchObject({
+      code: 'mcp_tenant_scope_denied',
+      details: { required_capability: 'admin.cross_tenant' },
+    });
+  });
+
+  it('fails closed for transition requirement CRUD when the agent has no canonical project', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 11, [
+      'discovery.read_catalog',
+      'transition_requirements.manage_project_scope',
+    ]);
+
+    const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&sprint_type=dev`, {
+      headers: authHeaders(noProjectKey),
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'transition_requirements.manage_project_scope' },
     });
   });
 
