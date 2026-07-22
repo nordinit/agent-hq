@@ -432,6 +432,20 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'external.manage_project_task_events',
+    group: 'Runtime',
+    label: 'Manage project external task events',
+    description: 'Allows listing and reading external task-event receipts only for tasks in the MCP agent\'s assigned project and tenant. Does not allow posting callbacks, cross-project receipt access, cross-tenant receipt access, mapping mutation, or unrelated admin routes.',
+    endpoints: [
+      'GET /api/v1/external/task-events/receipts',
+      'GET /api/v1/external/task-events/receipts/:receiptId',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'mcp_capability_policies.read',
     group: 'MCP capability policy',
     label: 'Read MCP capability policy',
@@ -521,6 +535,7 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
   'sprints.read_active_sprint',
   'workflow.read_active_configuration',
   'external.write_task_events',
+  'external.manage_project_task_events',
   'mcp_capability_policies.read',
 ]);
 
@@ -1441,6 +1456,35 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       'external.write_task_events',
       `External task event callbacks are disabled for ${identity.agentSlug}.`,
     )) return;
+    return next();
+  }
+
+  if (requestPath === '/external/task-events/receipts' && method === 'GET') {
+    if (!requireCapability(
+      'external.manage_project_task_events',
+      `External task-event receipt management is disabled for ${identity.agentSlug}.`,
+    )) return;
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for external task-event management.`,
+        requiredCapability: 'external.manage_project_task_events',
+      });
+    }
+    return next();
+  }
+
+  const externalTaskEventReceiptMatch = requestPath.match(/^\/external\/task-events\/receipts\/(\d+)$/);
+  if (externalTaskEventReceiptMatch && method === 'GET') {
+    if (!requireCapability(
+      'external.manage_project_task_events',
+      `External task-event receipt management is disabled for ${identity.agentSlug}.`,
+    )) return;
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for external task-event management.`,
+        requiredCapability: 'external.manage_project_task_events',
+      });
+    }
     return next();
   }
 

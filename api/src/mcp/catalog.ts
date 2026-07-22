@@ -146,6 +146,7 @@ export function getMcpCatalog() {
       'routing_rules',
       'routing_transitions',
       'model_routing',
+      'external_task_events',
       'task_definitions',
       'agents',
       'skills',

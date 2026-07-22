@@ -1451,6 +1451,14 @@ export class AgentHqApiClient {
     return this.request<unknown>('DELETE', appendQuery(`/api/v1/routing/workflow-event-mappings/${mappingId}`, params));
   }
 
+  listExternalTaskEventReceipts(params: { task_id?: number; source?: string; event?: string; processing_state?: string; limit?: number; offset?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery('/api/v1/external/task-events/receipts', params));
+  }
+
+  getExternalTaskEventReceipt(receiptId: number) {
+    return this.request<unknown>('GET', `/api/v1/external/task-events/receipts/${receiptId}`);
+  }
+
   getAgentDispatchContract(params: { sprint_type?: string; sprint_type_key?: string } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/agent-contract', params));
   }
