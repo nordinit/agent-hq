@@ -8,6 +8,18 @@ Trusted services can report narrow task facts to Agent HQ through:
 
 This endpoint is intentionally event-based. It does **not** expose arbitrary task mutation.
 
+## Project-scoped MCP management
+
+Assigned-project MCP agents can inspect external task-event receipts without `admin.full_access` when explicitly granted `external.manage_project_task_events`.
+
+Supported non-admin operations:
+
+- `GET /api/v1/external/task-events/receipts` — list receipts for tasks in the MCP agent's assigned project and tenant, with optional `task_id`, `source`, `event`, `processing_state`, `limit`, and `offset` filters.
+- `GET /api/v1/external/task-events/receipts/:receiptId` — read one receipt only when its task is in the MCP agent's assigned project and tenant.
+- Typed MCP tools: `agent_hq_list_external_task_event_receipts` and `agent_hq_get_external_task_event_receipt`.
+
+Project-scoped receipt management is read-only. It does not post callbacks, retry processing, mutate workflow-event mappings, change tasks, access unrelated admin routes, or cross project/tenant boundaries. Out-of-scope MCP access returns `mcp_scope_denied`.
+
 ## Authentication
 
 The route reuses Agent HQ MCP API key auth already mounted on `/api/v1`.

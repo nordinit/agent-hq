@@ -918,6 +918,9 @@ function buildResolvedTaskTerminalityExpression(
   params.push(...TERMINAL_TASK_STATUSES);
   sources.push(`CASE WHEN ${taskAlias}.status IN (${fallbackPlaceholders}) THEN 1 ELSE 0 END`);
 
+  if (sources.length === 1) {
+    return { sql: sources[0], params };
+  }
   return { sql: `COALESCE(${sources.join(', ')})`, params };
 }
 

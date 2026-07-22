@@ -50,6 +50,35 @@ type ExistingReceiptRow = {
   processing_state: string | null;
 };
 
+type ExternalTaskEventReceiptRow = {
+  id: number;
+  fingerprint: string;
+  source: string;
+  event: string;
+  task_id: number;
+  environment_id: string;
+  queue_id: string;
+  lease_id: string;
+  branch: string | null;
+  commit_sha: string | null;
+  review_url: string | null;
+  message: string;
+  payload_json: string;
+  received_by: string;
+  processing_state: string | null;
+  processing_error: string | null;
+  mapping_id: number | null;
+  mapping_action_kind: string | null;
+  mapping_action_target: string | null;
+  request_metadata_json: string | null;
+  created_at: string | null;
+  processed_at: string | null;
+  task_project_id: number | null;
+  task_tenant_id: number | null;
+  task_status: string | null;
+  task_title: string | null;
+};
+
 function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
   try {
     return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
@@ -96,6 +125,17 @@ function normalizeTaskId(value: unknown): number {
     throw new Error('task_id must be a positive integer');
   }
   return parsed;
+}
+
+function normalizeLimit(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) return 50;
+  return Math.min(parsed, 200);
+}
+
+function normalizeOffset(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function normalizeExternalTaskEvent(body: Record<string, unknown>): NormalizedExternalTaskEvent {
@@ -392,6 +432,108 @@ function loadTask(taskId: number): TaskRow {
   return task;
 }
 
+function getAssignedProjectId(db: Database.Database, identity: McpApiIdentity): number | null {
+  if (!tableHasColumn(db, 'agents', 'project_id')) return null;
+  const hasTenantId = tableHasColumn(db, 'agents', 'tenant_id');
+  const row = db.prepare(`
+    SELECT project_id
+    FROM agents
+    WHERE id = ?
+      ${hasTenantId ? 'AND tenant_id = ?' : ''}
+    LIMIT 1
+  `).get(identity.agentId, ...(hasTenantId ? [identity.tenantId] : [])) as { project_id: number | null } | undefined;
+  const parsed = typeof row?.project_id === 'number' ? row.project_id : Number(row?.project_id);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseJsonObject(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function serializeReceipt(row: ExternalTaskEventReceiptRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    fingerprint: row.fingerprint,
+    source: row.source,
+    event: row.event,
+    task_id: row.task_id,
+    task: {
+      id: row.task_id,
+      title: row.task_title,
+      status: row.task_status,
+      project_id: row.task_project_id,
+      tenant_id: row.task_tenant_id,
+    },
+    environment_id: row.environment_id,
+    queue_id: row.queue_id,
+    lease_id: row.lease_id,
+    branch: row.branch,
+    commit_sha: row.commit_sha,
+    review_url: row.review_url,
+    message: row.message,
+    payload: parseJsonObject(row.payload_json),
+    received_by: row.received_by,
+    processing_state: row.processing_state,
+    processing_error: row.processing_error,
+    mapping_id: row.mapping_id,
+    mapping_action_kind: row.mapping_action_kind,
+    mapping_action_target: row.mapping_action_target,
+    request_metadata: parseJsonObject(row.request_metadata_json),
+    created_at: row.created_at,
+    processed_at: row.processed_at,
+  };
+}
+
+function buildReceiptSelect(db: Database.Database): string {
+  return `
+    SELECT
+      r.id,
+      r.fingerprint,
+      r.source,
+      r.event,
+      r.task_id,
+      r.environment_id,
+      r.queue_id,
+      r.lease_id,
+      r.branch,
+      r.commit_sha,
+      r.review_url,
+      r.message,
+      r.payload_json,
+      r.received_by,
+      ${tableHasColumn(db, 'external_task_event_receipts', 'processing_state') ? 'r.processing_state' : 'NULL'} AS processing_state,
+      ${tableHasColumn(db, 'external_task_event_receipts', 'processing_error') ? 'r.processing_error' : 'NULL'} AS processing_error,
+      ${tableHasColumn(db, 'external_task_event_receipts', 'mapping_id') ? 'r.mapping_id' : 'NULL'} AS mapping_id,
+      ${tableHasColumn(db, 'external_task_event_receipts', 'mapping_action_kind') ? 'r.mapping_action_kind' : 'NULL'} AS mapping_action_kind,
+      ${tableHasColumn(db, 'external_task_event_receipts', 'mapping_action_target') ? 'r.mapping_action_target' : 'NULL'} AS mapping_action_target,
+      ${tableHasColumn(db, 'external_task_event_receipts', 'request_metadata_json') ? 'r.request_metadata_json' : 'NULL'} AS request_metadata_json,
+      r.created_at,
+      ${tableHasColumn(db, 'external_task_event_receipts', 'processed_at') ? 'r.processed_at' : 'NULL'} AS processed_at,
+      t.project_id AS task_project_id,
+      ${tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS task_tenant_id,
+      t.status AS task_status,
+      t.title AS task_title
+    FROM external_task_event_receipts r
+    JOIN tasks t ON t.id = r.task_id
+  `;
+}
+
+function scopedReceiptWhere(db: Database.Database, identity: McpApiIdentity, assignedProjectId: number): { clauses: string[]; params: unknown[] } {
+  const clauses = ['t.project_id = ?'];
+  const params: unknown[] = [assignedProjectId];
+  if (tableHasColumn(db, 'tasks', 'tenant_id')) {
+    clauses.push('t.tenant_id = ?');
+    params.push(identity.tenantId);
+  }
+  return { clauses, params };
+}
+
 function writeWorkflowEventHistory(taskId: number, changedBy: string, event: NormalizedExternalTaskEvent, mapping: WorkflowEventMapping | null): void {
   const db = getDb();
   const historyEntries: Array<[string, string | number | null]> = [
@@ -501,6 +643,144 @@ function validateReviewEvidenceForMapping(event: NormalizedExternalTaskEvent): v
     throw new Error(validation.errors[0] ?? 'Review evidence validation failed');
   }
 }
+
+router.get('/task-events/receipts', (req: Request, res: Response) => {
+  try {
+    const identity = getMcpIdentityFromRequest(req);
+    if (!identity) return res.status(401).json({ error: 'MCP API key is required', code: 'mcp_api_key_missing' });
+
+    const db = getDb();
+    const assignedProjectId = getAssignedProjectId(db, identity);
+    if (!assignedProjectId) {
+      return res.status(403).json({
+        error: `${identity.agentSlug} does not have an assigned project for external task-event management.`,
+        code: 'mcp_scope_denied',
+        details: {
+          agent_id: identity.agentId,
+          agent_slug: identity.agentSlug,
+          required_capability: 'external.manage_project_task_events',
+        },
+      });
+    }
+
+    const { clauses, params } = scopedReceiptWhere(db, identity, assignedProjectId);
+    const taskId = req.query.task_id !== undefined ? normalizeTaskId(req.query.task_id) : null;
+    if (taskId) {
+      clauses.push('r.task_id = ?');
+      params.push(taskId);
+    }
+    const source = normalizeOptionalString(req.query.source);
+    if (source) {
+      clauses.push('r.source = ?');
+      params.push(source);
+    }
+    const event = normalizeOptionalString(req.query.event);
+    if (event) {
+      clauses.push('r.event = ?');
+      params.push(event);
+    }
+    const processingState = normalizeOptionalString(req.query.processing_state);
+    if (processingState && tableHasColumn(db, 'external_task_event_receipts', 'processing_state')) {
+      clauses.push('r.processing_state = ?');
+      params.push(processingState);
+    }
+
+    const limit = normalizeLimit(req.query.limit);
+    const offset = normalizeOffset(req.query.offset);
+    const where = `WHERE ${clauses.join(' AND ')}`;
+    const receipts = db.prepare(`
+      ${buildReceiptSelect(db)}
+      ${where}
+      ORDER BY r.id DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset) as ExternalTaskEventReceiptRow[];
+    const total = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM external_task_event_receipts r
+      JOIN tasks t ON t.id = r.task_id
+      ${where}
+    `).get(...params) as { count: number };
+
+    return res.json({
+      ok: true,
+      project_id: assignedProjectId,
+      operations: ['list_project_receipts', 'get_project_receipt'],
+      receipts: receipts.map(serializeReceipt),
+      total: total.count,
+      limit,
+      offset,
+      hasMore: offset + receipts.length < total.count,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(400).json({ error: message, code: 'external_task_event_management_failed' });
+  }
+});
+
+router.get('/task-events/receipts/:receiptId', (req: Request, res: Response) => {
+  try {
+    const identity = getMcpIdentityFromRequest(req);
+    if (!identity) return res.status(401).json({ error: 'MCP API key is required', code: 'mcp_api_key_missing' });
+
+    const db = getDb();
+    const assignedProjectId = getAssignedProjectId(db, identity);
+    if (!assignedProjectId) {
+      return res.status(403).json({
+        error: `${identity.agentSlug} does not have an assigned project for external task-event management.`,
+        code: 'mcp_scope_denied',
+        details: {
+          agent_id: identity.agentId,
+          agent_slug: identity.agentSlug,
+          required_capability: 'external.manage_project_task_events',
+        },
+      });
+    }
+
+    const receiptId = normalizeTaskId(req.params.receiptId);
+    const { clauses, params } = scopedReceiptWhere(db, identity, assignedProjectId);
+    clauses.push('r.id = ?');
+    params.push(receiptId);
+    const receipt = db.prepare(`
+      ${buildReceiptSelect(db)}
+      WHERE ${clauses.join(' AND ')}
+      LIMIT 1
+    `).get(...params) as ExternalTaskEventReceiptRow | undefined;
+
+    if (!receipt) {
+      const existing = db.prepare(`
+        ${buildReceiptSelect(db)}
+        WHERE r.id = ?
+        LIMIT 1
+      `).get(receiptId) as ExternalTaskEventReceiptRow | undefined;
+      if (existing) {
+        return res.status(403).json({
+          error: `External task-event receipt #${receiptId} is outside the assigned project for ${identity.agentSlug}.`,
+          code: 'mcp_scope_denied',
+          details: {
+            agent_id: identity.agentId,
+            agent_slug: identity.agentSlug,
+            receipt_id: receiptId,
+            required_capability: 'external.manage_project_task_events',
+          },
+        });
+      }
+      return res.status(404).json({
+        error: 'External task-event receipt not found in assigned project scope',
+        code: 'external_task_event_receipt_not_found',
+      });
+    }
+
+    return res.json({
+      ok: true,
+      project_id: assignedProjectId,
+      operations: ['get_project_receipt'],
+      receipt: serializeReceipt(receipt),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(400).json({ error: message, code: 'external_task_event_management_failed' });
+  }
+});
 
 router.post('/task-events', async (req: Request, res: Response) => {
   try {

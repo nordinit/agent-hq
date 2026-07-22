@@ -1,6 +1,7 @@
 import { McpDomainContext } from './registrar';
 import { registerAdvancedTools } from './domains/advanced';
 import { registerAgentsTools } from './domains/agents';
+import { registerExternalTaskEventTools } from './domains/external-task-events';
 import { registerLifecycleTools } from './domains/lifecycle';
 import { registerMcpServersTools } from './domains/mcp-servers';
 import { registerProjectsTools } from './domains/projects';
@@ -17,6 +18,7 @@ export function registerAgentHqMcpDomains(context: McpDomainContext) {
   registerWorkflowsTools(context);
   registerTasksTools(context);
   registerLifecycleTools(context);
+  registerExternalTaskEventTools(context);
   registerAgentsTools(context);
   registerAdvancedTools(context);
   registerToolRegistryTools(context);

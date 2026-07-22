@@ -26,7 +26,12 @@ jest.mock('../lib/taskLifecycle', () => {
 
 import { closeDb, getDb } from '../db/client';
 import externalTaskEventsRouter, { DEV_ENV_LEASE_MANAGER_SOURCE } from './external-task-events';
-import { authenticateMcpApiKeyIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
+import {
+  authenticateMcpApiKeyIfPresent,
+  authorizeMcpApiRequestIfPresent,
+  issueMcpApiKeyForAgent,
+  replaceAgentMcpPermissionPolicy,
+} from '../lib/mcpApiAuth';
 import { DEV_ENV_DEPLOY_FAILURE_EVENTS, seedDefaultExternalEventMappings } from '../domains/routing/externalEventMappings';
 import { cleanupTaskExecutionLinkageForStatus } from '../lib/taskLifecycle';
 
@@ -44,6 +49,7 @@ function resetDb(): void {
   db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY,
+      tenant_id INTEGER DEFAULT 1,
       name TEXT NOT NULL
     );
     CREATE TABLE sprints (
@@ -54,6 +60,7 @@ function resetDb(): void {
     );
     CREATE TABLE tasks (
       id INTEGER PRIMARY KEY,
+      tenant_id INTEGER DEFAULT 1,
       title TEXT NOT NULL,
       status TEXT NOT NULL,
       task_type TEXT,
@@ -173,6 +180,8 @@ function resetDb(): void {
     );
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
+      tenant_id INTEGER DEFAULT 1,
+      project_id INTEGER,
       name TEXT NOT NULL,
       slug TEXT,
       openclaw_agent_id TEXT,
@@ -301,15 +310,16 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`).run();
+  db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`).run();
   db.prepare(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1)`).run();
   db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Enhancements', 'generic')`).run();
-  db.prepare(`INSERT INTO agents (id, name, slug, openclaw_agent_id, job_title, enabled) VALUES (7, 'Lease Manager', ?, ?, 'Service', 1)`).run(DEV_ENV_LEASE_MANAGER_SOURCE, DEV_ENV_LEASE_MANAGER_SOURCE);
-  db.prepare(`INSERT INTO agents (id, name, slug, job_title, enabled) VALUES (42, 'Cinder', 'cinder-backend', 'Backend Engineer', 1)`).run();
+  db.prepare(`INSERT INTO agents (id, tenant_id, project_id, name, slug, openclaw_agent_id, job_title, enabled) VALUES (7, 1, 1, 'Lease Manager', ?, ?, 'Service', 1)`).run(DEV_ENV_LEASE_MANAGER_SOURCE, DEV_ENV_LEASE_MANAGER_SOURCE);
+  db.prepare(`INSERT INTO agents (id, tenant_id, project_id, name, slug, job_title, enabled) VALUES (42, 1, 1, 'Cinder', 'cinder-backend', 'Backend Engineer', 1)`).run();
+  db.prepare(`INSERT INTO agents (id, tenant_id, project_id, name, slug, job_title, enabled) VALUES (43, 1, 1, 'Scoped No Access', 'scoped-no-access', 'Backend Engineer', 1)`).run();
   db.prepare(`
     INSERT INTO tasks (
-      id, title, status, task_type, sprint_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
-    ) VALUES (449, 'External task event callback', 'in_progress', 'backend', 10, 1, 42, 1784, 42, datetime('now'))
+      id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
+    ) VALUES (449, 1, 'External task event callback', 'in_progress', 'backend', 10, 1, 42, 1784, 42, datetime('now'))
   `).run();
   db.prepare(`
     INSERT INTO job_instances (
@@ -342,6 +352,7 @@ async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(express.json());
   app.use('/api/v1', authenticateMcpApiKeyIfPresent);
+  app.use('/api/v1', authorizeMcpApiRequestIfPresent);
   app.use('/api/v1/external', externalTaskEventsRouter);
   const server = await new Promise<Server>((resolve) => {
     const bound = app.listen(0, '127.0.0.1', () => resolve(bound));
@@ -359,6 +370,16 @@ async function stopTestServer(server: Server): Promise<void> {
 
 function issueLeaseManagerApiKey(): string {
   return issueMcpApiKeyForAgent(getDb(), 7, 'lease manager test key').apiKey;
+}
+
+function issueScopedApiKey(agentId: number, capabilities: string[]): string {
+  const db = getDb();
+  replaceAgentMcpPermissionPolicy(db, agentId, capabilities);
+  return issueMcpApiKeyForAgent(db, agentId, 'scoped test key').apiKey;
+}
+
+function issueCinderApiKey(capabilities: string[]): string {
+  return issueScopedApiKey(42, capabilities);
 }
 
 describe('external task events route', () => {
@@ -438,6 +459,158 @@ describe('external task events route', () => {
       expect(task.review_branch).toBe('feature/config-driven-review');
       expect(task.review_commit).toBe('abc123def456');
       expect(task.review_url).toBe('http://127.0.0.1:3510');
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('allows scoped non-admin agents to list and get external task-event receipts for their assigned project', async () => {
+    const leaseManagerKey = issueLeaseManagerApiKey();
+    const cinderKey = issueCinderApiKey([
+      'discovery.read_catalog',
+      'external.manage_project_task_events',
+    ]);
+    const { server, baseUrl } = await startTestServer();
+
+    try {
+      const callback = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': leaseManagerKey,
+        },
+        body: JSON.stringify({
+          source: DEV_ENV_LEASE_MANAGER_SOURCE,
+          event: 'dev_deploy_queued',
+          task_id: 449,
+          environment_id: 'agent-hq-dev',
+          queue_id: 'queue-scoped-list',
+          lease_id: 'lease-scoped-list',
+          branch: 'cinder-backend/task-990',
+          commit_sha: 'abc123',
+          review_url: 'http://127.0.0.1:3510',
+          message: 'Queued for scoped receipt management test.',
+        }),
+      });
+      expect(callback.status).toBe(200);
+      const callbackBody = await callback.json() as { receipt_id: number };
+
+      const list = await fetch(`${baseUrl}/api/v1/external/task-events/receipts?task_id=449`, {
+        headers: { 'x-api-key': cinderKey },
+      });
+      expect(list.status).toBe(200);
+      const listBody = await list.json() as { receipts: Array<Record<string, unknown>>; operations: string[] };
+      expect(listBody.operations).toEqual(['list_project_receipts', 'get_project_receipt']);
+      expect(listBody.receipts).toEqual([
+        expect.objectContaining({
+          id: callbackBody.receipt_id,
+          task_id: 449,
+          source: DEV_ENV_LEASE_MANAGER_SOURCE,
+          event: 'dev_deploy_queued',
+          processing_state: 'processed',
+        }),
+      ]);
+
+      const get = await fetch(`${baseUrl}/api/v1/external/task-events/receipts/${callbackBody.receipt_id}`, {
+        headers: { 'x-api-key': cinderKey },
+      });
+      expect(get.status).toBe(200);
+      await expect(get.json()).resolves.toMatchObject({
+        ok: true,
+        receipt: {
+          id: callbackBody.receipt_id,
+          task_id: 449,
+          payload: {
+            taskId: 449,
+            source: DEV_ENV_LEASE_MANAGER_SOURCE,
+          },
+        },
+      });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('denies scoped external task-event management without capability and across project boundaries', async () => {
+    const db = getDb();
+    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (2, 1, 'Other Project')`).run();
+    db.prepare(`
+      INSERT INTO tasks (
+        id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
+      ) VALUES (450, 1, 'Other project event', 'in_progress', 'backend', NULL, 2, 42, NULL, 42, datetime('now'))
+    `).run();
+    const payload = {
+      source: DEV_ENV_LEASE_MANAGER_SOURCE,
+      event: 'dev_deploy_queued',
+      taskId: 450,
+      environmentId: 'agent-hq-dev',
+      queueId: 'queue-other-project',
+      leaseId: 'lease-other-project',
+      branch: 'other/project',
+      commitSha: 'def456',
+      reviewUrl: 'http://127.0.0.1:3510',
+      failureClass: null,
+      phase: null,
+      error: null,
+      message: 'Other project receipt.',
+    };
+    const otherReceipt = db.prepare(`
+      INSERT INTO external_task_event_receipts (
+        fingerprint, source, event, task_id, environment_id, queue_id, lease_id,
+        branch, commit_sha, review_url, message, payload_json, received_by, processing_state
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'other-project-fingerprint',
+      DEV_ENV_LEASE_MANAGER_SOURCE,
+      'dev_deploy_queued',
+      450,
+      'agent-hq-dev',
+      'queue-other-project',
+      'lease-other-project',
+      'other/project',
+      'def456',
+      'http://127.0.0.1:3510',
+      'Other project receipt.',
+      JSON.stringify(payload),
+      DEV_ENV_LEASE_MANAGER_SOURCE,
+      'processed',
+    ).lastInsertRowid;
+
+    const missingCapabilityKey = issueScopedApiKey(43, ['discovery.read_catalog']);
+    const scopedKey = issueCinderApiKey([
+      'discovery.read_catalog',
+      'external.manage_project_task_events',
+    ]);
+    const { server, baseUrl } = await startTestServer();
+
+    try {
+      const denied = await fetch(`${baseUrl}/api/v1/external/task-events/receipts`, {
+        headers: { 'x-api-key': missingCapabilityKey },
+      });
+      expect(denied.status).toBe(403);
+      await expect(denied.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: { required_capability: 'external.manage_project_task_events' },
+      });
+
+      const list = await fetch(`${baseUrl}/api/v1/external/task-events/receipts`, {
+        headers: { 'x-api-key': scopedKey },
+      });
+      expect(list.status).toBe(200);
+      const listBody = await list.json() as { receipts: Array<{ id: number }> };
+      expect(listBody.receipts.map((receipt) => receipt.id)).not.toContain(Number(otherReceipt));
+
+      const crossProject = await fetch(`${baseUrl}/api/v1/external/task-events/receipts/${otherReceipt}`, {
+        headers: { 'x-api-key': scopedKey },
+      });
+      expect(crossProject.status).toBe(403);
+      await expect(crossProject.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: {
+          receipt_id: Number(otherReceipt),
+          required_capability: 'external.manage_project_task_events',
+        },
+      });
     } finally {
       await stopTestServer(server);
     }
