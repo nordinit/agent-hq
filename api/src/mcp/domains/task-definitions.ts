@@ -19,9 +19,24 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   registerTool(
     ['agent_hq_list_sprint_types', 'agent_hq_list_workflow_types', 'atlas_list_sprint_types', 'atlas_list_workflow_types'],
     'List workflow types. Optional tenant_id is super-admin MCP only.',
-    tenantSelectorSchema,
+    {
+      ...tenantSelectorSchema,
+      project_id: z.number().int().positive().optional().describe('Optional project scope for project-owned workflow definitions'),
+    },
     (args) => wrap(() => api.listSprintTypes(args))(),
     { domain: 'task_definitions', rest_paths: ['/api/v1/sprints/types/list', '/api/v1/task-definitions/workflow-types'] },
+  );
+
+  registerTool(
+    ['agent_hq_get_project_workflow_definition', 'agent_hq_get_workflow_definition', 'atlas_get_project_workflow_definition'],
+    'Read one project-scoped workflow definition and its configurable metadata. Non-admin MCP keys must pass their assigned project_id.',
+    {
+      key: z.string().min(1).describe('Workflow definition key'),
+      project_id: z.number().int().positive().describe('Project scope for least-privilege readback'),
+      ...tenantSelectorSchema,
+    },
+    ({ key, ...params }) => wrap(() => api.getSprintType(key, params))(),
+    { domain: 'task_definitions', rest_paths: ['/api/v1/sprints/types/:key', '/api/v1/workflow-definitions/types/:key'] },
   );
   
   registerTool(
@@ -44,10 +59,11 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_sprint_type', 'atlas_create_sprint_type'],
-    'Create a workflow type.',
+    ['agent_hq_create_sprint_type', 'agent_hq_create_project_workflow_definition', 'atlas_create_sprint_type'],
+    'Create a workflow type. Non-admin MCP keys require project_id and the workflow_definitions.manage_project_scope capability.',
     {
       key: z.string().min(1).describe('Workflow type key'),
+      project_id: z.number().int().positive().optional().describe('Project scope for least-privilege workflow-definition creation'),
       name: z.string().min(1).describe('Workflow type name'),
       description: z.string().optional().describe('Workflow type description'),
     },
@@ -56,10 +72,11 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_sprint_type', 'atlas_update_sprint_type'],
-    'Update a workflow type.',
+    ['agent_hq_update_sprint_type', 'agent_hq_update_project_workflow_definition', 'atlas_update_sprint_type'],
+    'Update a workflow type. Non-admin MCP keys require project_id matching the definition and their assigned project.',
     {
       key: z.string().min(1).describe('Workflow type key'),
+      project_id: z.number().int().positive().optional().describe('Project scope for least-privilege workflow-definition updates'),
       name: z.string().min(1).optional().describe('Workflow type name'),
       description: z.string().optional().describe('Workflow type description'),
     },
@@ -68,10 +85,13 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_sprint_type', 'atlas_delete_sprint_type'],
-    'Delete a workflow type.',
-    { key: z.string().min(1).describe('Workflow type key') },
-    ({ key }) => wrap(() => api.deleteSprintType(key))(),
+    ['agent_hq_delete_sprint_type', 'agent_hq_delete_project_workflow_definition', 'atlas_delete_sprint_type'],
+    'Delete a workflow type. Non-admin MCP keys require project_id matching the definition and their assigned project.',
+    {
+      key: z.string().min(1).describe('Workflow type key'),
+      project_id: z.number().int().positive().optional().describe('Project scope for least-privilege workflow-definition deletion'),
+    },
+    ({ key, ...params }) => wrap(() => api.deleteSprintType(key, params))(),
     { domain: 'task_definitions', rest_paths: ['/api/v1/sprints/types/:key', '/api/v1/task-definitions/workflow-types/:key'] },
   );
   
@@ -247,9 +267,12 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_get_workflow_config', 'atlas_get_workflow_config'],
-    'Read the full Workflow Definitions workflow configuration snapshot.',
-    {},
-    () => wrap(() => api.getWorkflowConfig())(),
+    'Read the Workflow Definitions configuration snapshot. Non-admin MCP keys must pass project_id for project-scoped readback.',
+    {
+      project_id: z.number().int().positive().optional().describe('Optional project scope for project-owned workflow definitions'),
+      ...tenantSelectorSchema,
+    },
+    (args) => wrap(() => api.getWorkflowConfig(args))(),
     { domain: 'task_definitions', rest_paths: ['/api/v1/sprints/config'] },
   );
   

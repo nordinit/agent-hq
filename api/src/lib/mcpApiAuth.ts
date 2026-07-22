@@ -356,6 +356,48 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'workflow_definitions.read_project_scope',
+    group: 'Workflow',
+    label: 'Read project workflow definitions',
+    description: 'Allows reading workflow definitions and configurable metadata only when scoped to the MCP agent\'s assigned project and tenant. Does not allow tenant-wide, cross-project, cross-tenant, or mutation access.',
+    endpoints: [
+      'GET /api/v1/sprints/config',
+      'GET /api/v1/sprints/types/list',
+      'GET /api/v1/sprints/types/:key',
+      'GET /api/v1/workflows/config',
+      'GET /api/v1/workflows/types/list',
+      'GET /api/v1/workflows/types/:key',
+      'GET /api/v1/workflow-definitions/config',
+      'GET /api/v1/workflow-definitions/types',
+      'GET /api/v1/workflow-definitions/types/:key',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
+    key: 'workflow_definitions.manage_project_scope',
+    group: 'Workflow',
+    label: 'Edit project workflow definitions',
+    description: 'Allows creating, updating, and deleting workflow definitions only inside the MCP agent\'s assigned project and tenant. Does not allow tenant-wide definitions, global definitions, cross-project edits, cross-tenant edits, or unrelated admin routes.',
+    endpoints: [
+      'POST /api/v1/sprints/types',
+      'PUT /api/v1/sprints/types/:key',
+      'DELETE /api/v1/sprints/types/:key',
+      'POST /api/v1/workflows/types',
+      'PUT /api/v1/workflows/types/:key',
+      'DELETE /api/v1/workflows/types/:key',
+      'POST /api/v1/workflow-definitions/types',
+      'PUT /api/v1/workflow-definitions/types/:key',
+      'DELETE /api/v1/workflow-definitions/types/:key',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'external.write_task_events',
     group: 'Runtime',
     label: 'Post external task events',
@@ -1101,6 +1143,52 @@ function routingRuleScopeMatchesAssignedProject(scope: RoutingRuleScopeContext |
     && scope.projectId === canonicalAgentProjectId;
 }
 
+type WorkflowDefinitionScopeContext = {
+  projectId: number | null;
+  key: string | null;
+  source: 'request' | 'existing_definition';
+};
+
+function getWorkflowDefinitionScopeFromKey(
+  db: Database.Database,
+  workflowDefinitionKey: string,
+  tenantId: number,
+): WorkflowDefinitionScopeContext | null {
+  if (!hasTable(db, 'sprint_types')) return null;
+  const hasTenant = hasColumn(db, 'sprint_types', 'tenant_id');
+  const hasProject = hasColumn(db, 'sprint_types', 'project_id');
+  const row = db.prepare(`
+    SELECT key, ${hasProject ? 'project_id' : 'NULL'} AS project_id
+    FROM sprint_types
+    WHERE key = ?
+      ${hasTenant ? 'AND tenant_id = ?' : ''}
+    LIMIT 1
+  `).get(workflowDefinitionKey, ...(hasTenant ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    projectId: parsePositiveInt(row.project_id),
+    key: normalizeScopeString(row.key),
+    source: 'existing_definition',
+  };
+}
+
+function getWorkflowDefinitionScopeFromRequest(input: Record<string, unknown>): WorkflowDefinitionScopeContext | null {
+  const projectId = parsePositiveInt(input.project_id);
+  const key = normalizeScopeString(firstPresent(input.key, input.sprint_type_key, input.workflow_type_key, input.workflow_definition_key));
+  if (projectId == null && key == null) return null;
+  return {
+    projectId,
+    key,
+    source: 'request',
+  };
+}
+
+function workflowDefinitionScopeMatchesAssignedProject(scope: WorkflowDefinitionScopeContext | null, canonicalAgentProjectId: number | null): boolean {
+  return canonicalAgentProjectId != null
+    && scope?.projectId != null
+    && scope.projectId === canonicalAgentProjectId;
+}
+
 function insertMcpScopeDeniedNote(db: Database.Database, params: {
   taskId: number | null;
   identity: McpApiIdentity;
@@ -1535,6 +1623,71 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     if (scopesToAuthorize.length === 0 || scopesToAuthorize.some((scope) => !routingRuleScopeMatchesAssignedProject(scope, canonicalAgentProjectId))) {
       return deny({
         reason: `Normal Agent HQ MCP keys can only manage assignment rules inside the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    return next();
+  }
+
+  const workflowDefinitionMatch = requestPath.match(/^\/(?:sprints|workflows)\/(?:config|types(?:\/list)?|types\/([^/]+))$/);
+  if (workflowDefinitionMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
+    const requiredCapability: AgentMcpCapabilityKey = method === 'GET'
+      ? 'workflow_definitions.read_project_scope'
+      : 'workflow_definitions.manage_project_scope';
+    if (!requireCapability(
+      requiredCapability,
+      `Project-scoped workflow definition ${method === 'GET' ? 'reads are' : 'edits are'} disabled for ${identity.agentSlug}.`,
+    )) return;
+
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for workflow definition access.`,
+        requiredCapability,
+      });
+    }
+
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as Record<string, unknown>
+      : {};
+    const requestInput = { ...req.query, ...body } as Record<string, unknown>;
+    const encodedKey = workflowDefinitionMatch[1];
+    const workflowDefinitionKey = encodedKey ? decodeURIComponent(encodedKey) : null;
+    const existingScope = workflowDefinitionKey ? getWorkflowDefinitionScopeFromKey(db, workflowDefinitionKey, identity.tenantId) : null;
+    const requestScope = getWorkflowDefinitionScopeFromRequest(requestInput);
+    const scopesToAuthorize = [
+      ...(existingScope ? [existingScope] : []),
+      ...(requestScope ? [requestScope] : []),
+    ].filter((scope) => (
+      scope.projectId != null
+      || scope.source !== 'existing_definition'
+      || requestScope == null
+    ));
+
+    if (workflowDefinitionKey && existingScope == null && method !== 'POST') {
+      return deny({
+        reason: `Workflow definition "${workflowDefinitionKey}" is outside the MCP key tenant or does not exist.`,
+        requiredCapability,
+      });
+    }
+
+    if (method === 'POST' && requestScope == null) {
+      return deny({
+        reason: `Workflow definition creation requires project_id within the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    if (method === 'GET' && requestPath.match(/^\/(?:sprints|workflows)\/(?:config|types(?:\/list)?)$/) && requestScope == null) {
+      return deny({
+        reason: `Workflow definition readback requires project_id within the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    if (scopesToAuthorize.length === 0 || scopesToAuthorize.some((scope) => !workflowDefinitionScopeMatchesAssignedProject(scope, canonicalAgentProjectId))) {
+      return deny({
+        reason: `Normal Agent HQ MCP keys can only access workflow definitions inside the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }

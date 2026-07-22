@@ -20,6 +20,7 @@ import { RELATIONSHIP_DIRECTION_SEMANTICS } from '../../lib/workflowVocabulary';
 interface SprintTypeRow {
   key: string;
   tenant_id?: number | null;
+  project_id?: number | null;
   name: string;
   description: string;
   is_system: number;
@@ -186,6 +187,20 @@ function sprintTypeTenantInsertFragment(db: ReturnType<typeof getDb>, tenantId?:
   return { columns: 'tenant_id, ', placeholders: '?, ', params: [tenantId] };
 }
 
+function sprintTypeProjectPredicate(db: ReturnType<typeof getDb>, rawProjectId: unknown, alias = 'sprint_types'): { sql: string; params: unknown[]; projectId: number | null } {
+  if (!tableHasColumn(db, 'sprint_types', 'project_id')) return { sql: '', params: [], projectId: null };
+  const projectId = Number(rawProjectId);
+  if (!Number.isInteger(projectId) || projectId <= 0) return { sql: '', params: [], projectId: null };
+  return { sql: ` AND ${alias}.project_id = ?`, params: [projectId], projectId };
+}
+
+function sprintTypeProjectInsertFragment(db: ReturnType<typeof getDb>, rawProjectId: unknown): { columns: string; placeholders: string; params: unknown[]; projectId: number | null } {
+  if (!tableHasColumn(db, 'sprint_types', 'project_id')) return { columns: '', placeholders: '', params: [], projectId: null };
+  const projectId = Number(rawProjectId);
+  if (!Number.isInteger(projectId) || projectId <= 0) return { columns: '', placeholders: '', params: [], projectId: null };
+  return { columns: 'project_id, ', placeholders: '?, ', params: [projectId], projectId };
+}
+
 function configTenantPredicate(db: ReturnType<typeof getDb>, table: string, tenantId?: number | null, alias = table): { sql: string; params: unknown[] } {
   if (tenantId == null || !tableHasColumn(db, table, 'tenant_id')) return { sql: '', params: [] };
   return { sql: ` AND ${alias}.tenant_id = ?`, params: [tenantId] };
@@ -212,7 +227,7 @@ function outcomeListTenantPredicate(db: ReturnType<typeof getDb>, tenantId?: num
 function getSprintTypeOr404(db: ReturnType<typeof getDb>, sprintTypeKey: string, tenantId?: number | null): SprintTypeRow | null {
   const tenant = sprintTypeTenantPredicate(db, tenantId);
   return db.prepare(`
-    SELECT ${tableHasColumn(db, 'sprint_types', 'tenant_id') ? 'tenant_id,' : ''} key, name, description, is_system, created_at, updated_at
+    SELECT ${tableHasColumn(db, 'sprint_types', 'tenant_id') ? 'tenant_id,' : ''}${tableHasColumn(db, 'sprint_types', 'project_id') ? 'project_id,' : ''} key, name, description, is_system, created_at, updated_at
     FROM sprint_types
     WHERE key = ?
       ${tenant.sql}
@@ -539,15 +554,17 @@ function validateOutcomePayload(input: SprintTypeOutcomeInput, index = 0) {
   };
 }
 
-function buildWorkflowConfigSnapshot(db: ReturnType<typeof getDb>, tenantId?: number) {
+function buildWorkflowConfigSnapshot(db: ReturnType<typeof getDb>, tenantId?: number, rawProjectId?: unknown) {
   const tenant = sprintTypeTenantPredicate(db, tenantId);
+  const project = sprintTypeProjectPredicate(db, rawProjectId);
   const sprintTypes = db.prepare(`
-    SELECT ${tableHasColumn(db, 'sprint_types', 'tenant_id') ? 'tenant_id,' : ''} key, name, description, is_system, created_at, updated_at
+    SELECT ${tableHasColumn(db, 'sprint_types', 'tenant_id') ? 'tenant_id,' : ''}${tableHasColumn(db, 'sprint_types', 'project_id') ? 'project_id,' : ''} key, name, description, is_system, created_at, updated_at
     FROM sprint_types
     WHERE 1 = 1
       ${tenant.sql}
+      ${project.sql}
     ORDER BY is_system DESC, name ASC, key ASC
-  `).all(...tenant.params) as SprintTypeRow[];
+  `).all(...tenant.params, ...project.params) as SprintTypeRow[];
   const visibleSprintTypes = sprintTypes.filter((sprintType) => {
     if (!(sprintType.key === 'pm' && sprintType.is_system === 1)) return true;
     return getSprintTypeDeletionSummary(db, sprintType.key, tenantId).total_sprint_count > 0;
@@ -572,13 +589,15 @@ router.get('/types/list', (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = resolveTenantIdFromRequest(db, req);
     const tenant = sprintTypeTenantPredicate(db, tenantId);
+    const project = sprintTypeProjectPredicate(db, req.query.project_id);
     const sprintTypes = db.prepare(`
-      SELECT ${tableHasColumn(db, 'sprint_types', 'tenant_id') ? 'tenant_id,' : ''} key, name, description, is_system, created_at, updated_at
+      SELECT ${tableHasColumn(db, 'sprint_types', 'tenant_id') ? 'tenant_id,' : ''}${tableHasColumn(db, 'sprint_types', 'project_id') ? 'project_id,' : ''} key, name, description, is_system, created_at, updated_at
       FROM sprint_types
       WHERE 1 = 1
         ${tenant.sql}
+        ${project.sql}
       ORDER BY is_system DESC, name ASC
-    `).all(...tenant.params);
+    `).all(...tenant.params, ...project.params);
 
     res.json(sprintTypes);
   } catch (err) {
@@ -749,7 +768,15 @@ router.get('/config', (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = resolveTenantIdFromRequest(db, req);
-    return res.json(buildWorkflowConfigSnapshot(db, tenantId));
+    const snapshot = buildWorkflowConfigSnapshot(db, tenantId, req.query.project_id);
+    if (!tableHasColumn(db, 'sprint_types', 'project_id') || req.query.project_id == null || req.query.project_id === '') {
+      return res.json(snapshot);
+    }
+    const projectId = Number(req.query.project_id);
+    if (!Number.isInteger(projectId) || projectId <= 0) {
+      return res.status(400).json({ error: 'project_id must be a positive integer' });
+    }
+    return res.json({ ...snapshot, project_id: projectId });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
@@ -763,6 +790,7 @@ router.post('/types', (req: Request, res: Response) => {
     const name = normalizeOptionalText(req.body?.name);
     if (!name) return res.status(400).json({ error: 'name is required' });
     const description = normalizeOptionalText(req.body?.description);
+    const project = sprintTypeProjectInsertFragment(db, req.body?.project_id);
 
     const existing = getSprintTypeOr404(db, key, tenantId);
     if (existing) return res.status(409).json({ error: `Sprint type "${key}" already exists` });
@@ -770,9 +798,9 @@ router.post('/types', (req: Request, res: Response) => {
 
     const tx = db.transaction(() => {
       db.prepare(`
-        INSERT INTO sprint_types (${tenant.columns}key, name, description, is_system, created_at, updated_at)
-        VALUES (${tenant.placeholders}?, ?, ?, 0, datetime('now'), datetime('now'))
-      `).run(...tenant.params, key, name, description);
+        INSERT INTO sprint_types (${tenant.columns}${project.columns}key, name, description, is_system, created_at, updated_at)
+        VALUES (${tenant.placeholders}${project.placeholders}?, ?, ?, 0, datetime('now'), datetime('now'))
+      `).run(...tenant.params, ...project.params, key, name, description);
       if (isStarterPolicySprintType(key)) {
         seedSprintTypeTaskStatuses(db, key, { tenantId });
       }
@@ -800,14 +828,15 @@ router.put('/types/:key', (req: Request, res: Response) => {
     const name = req.body?.name !== undefined ? normalizeOptionalText(req.body.name) : existing.name;
     if (!name) return res.status(400).json({ error: 'name is required' });
     const description = req.body?.description !== undefined ? normalizeOptionalText(req.body.description) : existing.description;
+    const project = sprintTypeProjectInsertFragment(db, req.body?.project_id);
 
     const tenant = sprintTypeTenantPredicate(db, tenantId);
     db.prepare(`
       UPDATE sprint_types
-      SET name = ?, description = ?, updated_at = datetime('now')
+      SET ${project.projectId != null ? 'project_id = ?, ' : ''}name = ?, description = ?, updated_at = datetime('now')
       WHERE key = ?
         ${tenant.sql}
-    `).run(name, description, sprintTypeKey, ...tenant.params);
+    `).run(...project.params, name, description, sprintTypeKey, ...tenant.params);
 
     return res.json(getSprintTypeOr404(db, sprintTypeKey, tenantId));
   } catch (err) {

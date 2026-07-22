@@ -95,6 +95,16 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         priority INTEGER NOT NULL DEFAULT 0,
         enabled INTEGER NOT NULL DEFAULT 1
       );
+      CREATE TABLE sprint_types (
+        key TEXT PRIMARY KEY,
+        tenant_id INTEGER,
+        project_id INTEGER,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        is_system INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,
         tenant_id INTEGER,
@@ -172,6 +182,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       503, 1, 87, null, 'dev', 'backend', 'ready', 9, 10,
       504, 2, 99, null, 'dev', 'backend', 'ready', 10, 10,
     );
+    db.prepare(`
+      INSERT INTO sprint_types (key, tenant_id, project_id, name, description, is_system)
+      VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)
+    `).run(
+      'dev', 1, 86, 'Development', 'Agent HQ project development workflow', 0,
+      'other-project-dev', 1, 87, 'Other project development', 'Other project workflow', 0,
+      'eco-dev', 2, 99, 'Eco development', 'EcoPool workflow', 0,
+    );
     db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`)
       .run(2551, 448, 7, 'running', 2552, 449, 9, 'running', 2553, 450, 10, 'running');
     db.prepare(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`)
@@ -230,6 +248,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     }
     app.get('/api/v1/routing/transitions', (req, res) => res.json({ ok: true, query: req.query }));
     app.put('/api/v1/routing/transition-requirements/:id', (req, res) => res.json({ ok: true, requirement_id: Number(req.params.id), body: req.body }));
+    app.get('/api/v1/sprints/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
+    app.get('/api/v1/sprints/types/list', (req, res) => res.json({ ok: true, query: req.query }));
+    app.get('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
+    app.post('/api/v1/sprints/types', (req, res) => res.status(201).json({ ok: true, body: req.body }));
+    app.put('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
+    app.delete('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
     app.post('/api/v1/external/task-events', (_req, res) => res.status(202).json({ ok: true }));
     app.post('/api/v1/tasks', (_req, res) => res.status(201).json({ ok: true }));
 
@@ -350,6 +374,20 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       default_enabled: false,
       explicit_enabled: null,
     });
+    expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'workflow_definitions.read_project_scope')).toMatchObject({
+      group: 'Workflow',
+      label: 'Read project workflow definitions',
+      enabled: false,
+      default_enabled: false,
+      explicit_enabled: null,
+    });
+    expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'workflow_definitions.manage_project_scope')).toMatchObject({
+      group: 'Workflow',
+      label: 'Edit project workflow definitions',
+      enabled: false,
+      default_enabled: false,
+      explicit_enabled: null,
+    });
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.full_access')?.enabled).toBe(false);
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.cross_tenant')?.enabled).toBe(false);
 
@@ -366,6 +404,129 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const resetSnapshot = resetAgentMcpPermissionPolicy(db, 7);
     expect(resetSnapshot.policy_mode).toBe('default');
     expect(resetSnapshot.capabilities.find((capability) => capability.key === 'tasks.write_active_lifecycle')?.enabled).toBe(true);
+  });
+
+  it('allows project-scoped workflow definition read and mutation with explicit capabilities', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'workflow_definitions.read_project_scope',
+      'workflow_definitions.manage_project_scope',
+    ]);
+
+    const configResponse = await fetch(`${baseUrl}/api/v1/sprints/config?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(configResponse.status).toBe(200);
+
+    const listResponse = await fetch(`${baseUrl}/api/v1/sprints/types/list?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(listResponse.status).toBe(200);
+
+    const getResponse = await fetch(`${baseUrl}/api/v1/sprints/types/dev?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(getResponse.status).toBe(200);
+
+    const createResponse = await fetch(`${baseUrl}/api/v1/sprints/types`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        key: 'agent-hq-custom',
+        project_id: 86,
+        name: 'Agent HQ custom',
+        description: 'Project-scoped workflow definition',
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const updateResponse = await fetch(`${baseUrl}/api/v1/sprints/types/dev`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 86, name: 'Development updated' }),
+    });
+    expect(updateResponse.status).toBe(200);
+
+    const deleteResponse = await fetch(`${baseUrl}/api/v1/sprints/types/dev?project_id=86`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(deleteResponse.status).toBe(200);
+  });
+
+  it('denies workflow definition reads and edits without capability or outside assigned project scope', async () => {
+    const missingCapability = await fetch(`${baseUrl}/api/v1/sprints/types/list?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(missingCapability.status).toBe(403);
+    await expect(missingCapability.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.read_project_scope' },
+    });
+
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'workflow_definitions.read_project_scope',
+      'workflow_definitions.manage_project_scope',
+    ]);
+
+    const unscopedList = await fetch(`${baseUrl}/api/v1/sprints/types/list`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(unscopedList.status).toBe(403);
+    await expect(unscopedList.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.read_project_scope' },
+    });
+
+    const otherProjectRead = await fetch(`${baseUrl}/api/v1/sprints/types/other-project-dev?project_id=87`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(otherProjectRead.status).toBe(403);
+
+    const otherProjectCreate = await fetch(`${baseUrl}/api/v1/sprints/types`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ key: 'wrong-project', project_id: 87, name: 'Wrong project' }),
+    });
+    expect(otherProjectCreate.status).toBe(403);
+    await expect(otherProjectCreate.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.manage_project_scope' },
+    });
+
+    const moveOutOfScope = await fetch(`${baseUrl}/api/v1/sprints/types/dev`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 87, name: 'Move elsewhere' }),
+    });
+    expect(moveOutOfScope.status).toBe(403);
+
+    const crossTenantSelector = await fetch(`${baseUrl}/api/v1/sprints/types/eco-dev?tenant_id=2&project_id=99`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(crossTenantSelector.status).toBe(403);
+    await expect(crossTenantSelector.json()).resolves.toMatchObject({
+      code: 'mcp_tenant_scope_denied',
+      details: { required_capability: 'admin.cross_tenant' },
+    });
+  });
+
+  it('fails closed for workflow definition management when the agent has no canonical project', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 11, [
+      'discovery.read_catalog',
+      'workflow_definitions.read_project_scope',
+      'workflow_definitions.manage_project_scope',
+    ]);
+
+    const response = await fetch(`${baseUrl}/api/v1/sprints/types/list?project_id=86`, {
+      headers: authHeaders(noProjectKey),
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.read_project_scope' },
+    });
   });
 
   it('refuses unrelated task access and admin-style writes for normal task-agent keys', async () => {
