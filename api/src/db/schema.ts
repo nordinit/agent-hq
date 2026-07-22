@@ -1137,6 +1137,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sprint_types (
       key         TEXT PRIMARY KEY,
+      project_id  INTEGER REFERENCES projects(id) ON DELETE CASCADE,
       name        TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       is_system   INTEGER NOT NULL DEFAULT 1,
@@ -1288,9 +1289,11 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   ensureColumn('sprints', 'task_policy_seeded_at', `task_policy_seeded_at TEXT`);
   ensureColumn('sprint_types', 'description', `description TEXT NOT NULL DEFAULT ''`);
   ensureColumn('sprint_types', 'is_system', `is_system INTEGER NOT NULL DEFAULT 1`);
+  ensureColumn('sprint_types', 'project_id', `project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
   ensureColumn('sprint_types', 'created_at', `created_at TEXT`);
   ensureColumn('sprint_types', 'updated_at', `updated_at TEXT`);
   ensureColumn('sprint_types', 'status_seeded_at', `status_seeded_at TEXT`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_types_project ON sprint_types(project_id)`);
   db.exec(`UPDATE sprint_types SET description = COALESCE(description, ''), is_system = COALESCE(is_system, 1), created_at = COALESCE(created_at, datetime('now')), updated_at = COALESCE(updated_at, datetime('now'))`);
   const sprintTypesTenantScoped = tableHasColumn(db, 'sprint_types', 'tenant_id');
   if (sprintTypesTenantScoped) {

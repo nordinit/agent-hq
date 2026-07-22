@@ -1495,8 +1495,12 @@ export class AgentHqApiClient {
     }));
   }
 
-  listSprintTypes(params: { tenant_id?: number } = {}) {
+  listSprintTypes(params: { tenant_id?: number; project_id?: number } = {}) {
     return this.request<unknown[]>('GET', appendQuery('/api/v1/sprints/types/list', params));
+  }
+
+  getSprintType(key: string, params: { tenant_id?: number; project_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(key)}`, params));
   }
 
   createSprintType(data: Record<string, unknown>) {
@@ -1507,8 +1511,8 @@ export class AgentHqApiClient {
     return this.request<unknown>('PUT', `/api/v1/sprints/types/${encodeURIComponent(key)}`, data);
   }
 
-  deleteSprintType(key: string) {
-    return this.request<unknown>('DELETE', `/api/v1/sprints/types/${encodeURIComponent(key)}`);
+  deleteSprintType(key: string, params: { tenant_id?: number; project_id?: number } = {}) {
+    return this.request<unknown>('DELETE', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(key)}`, params));
   }
 
   listSprintTypeTaskTypes(sprintTypeKey: string, params: { tenant_id?: number } = {}) {
@@ -1539,8 +1543,8 @@ export class AgentHqApiClient {
     return this.request<unknown>('DELETE', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/field-schemas/${schemaId}`);
   }
 
-  getWorkflowConfig() {
-    return this.request<unknown>('GET', '/api/v1/sprints/config');
+  getWorkflowConfig(params: { tenant_id?: number; project_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery('/api/v1/sprints/config', params));
   }
 
   getWorkflowMetadata(params: { tenant_id?: number; sprint_id?: number; sprint_type?: string; task_type?: string } = {}) {
