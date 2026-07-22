@@ -488,7 +488,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_get_transition_requirements', 'atlas_get_transition_requirements', 'agent_hq_list_transition_requirements', 'atlas_list_transition_requirements'],
-    'List workflow gate requirements that drive review, QA, and release evidence checks. Optional tenant_id is super-admin MCP only. These are the real configurable gate rows behind outcome validation.',
+    'List workflow gate requirements that drive review, QA, and release evidence checks. Non-admin MCP keys require transition_requirements.manage_project_scope or active workflow configuration read access and must scope reads to their assigned project. Optional tenant_id is super-admin MCP only. These are the real configurable gate rows behind outcome validation.',
     {
       ...tenantSelectorSchema,
       sprint_id: z.number().int().positive().optional().describe('Optional sprint-scoped requirement set'),
@@ -503,7 +503,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_create_transition_requirement', 'atlas_create_transition_requirement'],
-    'Create a workflow gate requirement row. Optional tenant_id is super-admin MCP only. Use this for truthful MCP editing of review or release evidence requirements when they are config-driven.',
+    'Create a workflow gate requirement row. Non-admin MCP keys require transition_requirements.manage_project_scope and can only create requirements inside their assigned project with explicit project/workflow scope. Optional tenant_id is super-admin MCP only. Use this for truthful MCP editing of review or release evidence requirements when they are config-driven.',
     {
       ...transitionRequirementSchema.shape,
       dry_run: z.boolean().optional().describe('Preview validation and affected transition requirement row without writing config'),
@@ -514,7 +514,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_update_transition_requirement', 'atlas_update_transition_requirement'],
-    'Update a workflow gate requirement row. Optional tenant_id is super-admin MCP only. This edits the real configurable gate behavior used by task outcomes.',
+    'Update a workflow gate requirement row. Non-admin MCP keys require transition_requirements.manage_project_scope and can only update requirements inside their assigned project with explicit project/workflow scope. Optional tenant_id is super-admin MCP only. This edits the real configurable gate behavior used by task outcomes.',
     {
       requirement_id: z.number().int().positive().describe('Requirement ID'),
       ...tenantSelectorSchema,
@@ -530,7 +530,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_delete_transition_requirement', 'atlas_delete_transition_requirement'],
-    'Delete a workflow gate requirement row. Optional tenant_id is super-admin MCP only.',
+    'Delete a workflow gate requirement row. Non-admin MCP keys require transition_requirements.manage_project_scope and can only delete requirements inside their assigned project with explicit project/workflow scope. Optional tenant_id is super-admin MCP only.',
     {
       requirement_id: z.number().int().positive().describe('Requirement ID'),
       ...tenantSelectorSchema,

@@ -73,6 +73,10 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       'agent_hq_create_agent_mcp_capability_policy',
       'agent_hq_update_agent_mcp_capability_policy',
       'agent_hq_delete_agent_mcp_capability_policy',
+      'agent_hq_get_transition_requirements',
+      'agent_hq_create_transition_requirement',
+      'agent_hq_update_transition_requirement',
+      'agent_hq_delete_transition_requirement',
       'agent_hq_create_task',
       'agent_hq_get_task_detail',
       'agent_hq_update_task',
@@ -106,6 +110,10 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(byName.get('agent_hq_create_agent_mcp_capability_policy')?.description).toContain('safe non-admin capability keys');
     expect(byName.get('agent_hq_update_agent_mcp_capability_policy')?.args.map(arg => arg.name).sort()).toEqual(['agent_id', 'enabled_capabilities']);
     expect(byName.get('agent_hq_delete_agent_mcp_capability_policy')?.rest_paths).toEqual(['/api/v1/agents/:id/mcp-permissions']);
+    expect(byName.get('agent_hq_get_transition_requirements')?.description).toContain('transition_requirements.manage_project_scope');
+    expect(byName.get('agent_hq_create_transition_requirement')?.description).toContain('assigned project');
+    expect(byName.get('agent_hq_update_transition_requirement')?.description).toContain('explicit project/workflow scope');
+    expect(byName.get('agent_hq_delete_transition_requirement')?.description).toContain('explicit project/workflow scope');
 
     const assignmentRules = byName.get('agent_hq_list_routing_rules');
     expect(assignmentRules?.domain).toBe('assignment_rules');

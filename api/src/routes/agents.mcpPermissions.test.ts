@@ -128,6 +128,19 @@ describe('agent MCP permissions routes', () => {
           'DELETE /api/v1/routing/assignment-rules/:id',
         ]),
       });
+      expect(body.capabilities.find((capability) => capability.key === 'transition_requirements.manage_project_scope')).toMatchObject({
+        group: 'Workflow',
+        label: 'Project transition requirement CRUD',
+        enabled: false,
+        explicit_enabled: null,
+        description: expect.stringContaining('assigned project'),
+        endpoints: expect.arrayContaining([
+          'GET /api/v1/routing/transition-requirements',
+          'POST /api/v1/routing/transition-requirements',
+          'PUT /api/v1/routing/transition-requirements/:id',
+          'DELETE /api/v1/routing/transition-requirements/:id',
+        ]),
+      });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
         group: 'Task lifecycle',
         label: 'Create Tasks',
