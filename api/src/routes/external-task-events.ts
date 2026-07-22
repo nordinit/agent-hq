@@ -9,6 +9,7 @@ import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/histor
 import { applyTaskOutcome, RefusedTaskOutcomeError } from '../lib/taskOutcome';
 import {
   DEV_ENV_LEASE_MANAGER_SOURCE,
+  STALE_LEASE_RELEASED_EVENT,
   resolveWorkflowEventMapping,
   type WorkflowEventMapping,
 } from '../domains/routing/externalEventMappings';
@@ -27,6 +28,9 @@ type NormalizedExternalTaskEvent = {
   reviewUrl: string | null;
   failureClass: string | null;
   phase: string | null;
+  releaseReason: string | null;
+  priorLeaseStatus: string | null;
+  priorDeployStatus: string | null;
   error: Record<string, unknown> | null;
   message: string;
 };
@@ -161,7 +165,22 @@ function normalizeExternalTaskEvent(body: Record<string, unknown>): NormalizedEx
     ?? normalizeOptionalString(error?.phase)
     ?? normalizeOptionalString(errorResult?.phase)
     ?? normalizeOptionalString(errorDeployResult?.phase);
+  const releaseReason = normalizeOptionalString(body.release_reason)
+    ?? normalizeOptionalString(error?.release_reason)
+    ?? normalizeOptionalString(errorResult?.release_reason);
+  const priorLeaseStatus = normalizeOptionalString(body.prior_lease_status)
+    ?? normalizeOptionalString(error?.prior_lease_status)
+    ?? normalizeOptionalString(errorResult?.prior_lease_status);
+  const priorDeployStatus = normalizeOptionalString(body.prior_deploy_status)
+    ?? normalizeOptionalString(error?.prior_deploy_status)
+    ?? normalizeOptionalString(errorResult?.prior_deploy_status);
   const message = normalizeRequiredString(body.message, 'message');
+
+  if (event === STALE_LEASE_RELEASED_EVENT) {
+    if (!releaseReason) throw new Error('release_reason is required for stale_lease_released');
+    if (!priorLeaseStatus) throw new Error('prior_lease_status is required for stale_lease_released');
+    if (!priorDeployStatus) throw new Error('prior_deploy_status is required for stale_lease_released');
+  }
 
   if (reviewUrl) {
     try {
@@ -183,6 +202,9 @@ function normalizeExternalTaskEvent(body: Record<string, unknown>): NormalizedEx
     reviewUrl,
     failureClass,
     phase,
+    releaseReason,
+    priorLeaseStatus,
+    priorDeployStatus,
     error,
     message,
   };
@@ -221,6 +243,9 @@ function buildFingerprint(event: NormalizedExternalTaskEvent): string {
     review_url: event.reviewUrl,
     failure_class: event.failureClass,
     phase: event.phase,
+    release_reason: event.releaseReason,
+    prior_lease_status: event.priorLeaseStatus,
+    prior_deploy_status: event.priorDeployStatus,
     message: event.message,
     error: event.error,
   }), 'utf8').digest('hex');
@@ -547,6 +572,9 @@ function writeWorkflowEventHistory(taskId: number, changedBy: string, event: Nor
     ['external_review_url', event.reviewUrl],
     ['external_failure_class', event.failureClass],
     ['external_phase', event.phase],
+    ['external_release_reason', event.releaseReason],
+    ['external_prior_lease_status', event.priorLeaseStatus],
+    ['external_prior_deploy_status', event.priorDeployStatus],
     ['external_message', event.message],
     ['external_mapping_id', mapping?.id ?? null],
     ['external_mapping_action_kind', mapping?.action_kind ?? null],
@@ -573,6 +601,9 @@ function buildEventNote(event: NormalizedExternalTaskEvent, mapping: WorkflowEve
   if (event.reviewUrl) lines.push(`Review URL: ${event.reviewUrl}`);
   if (event.failureClass) lines.push(`Failure Class: ${event.failureClass}`);
   if (event.phase) lines.push(`Phase: ${event.phase}`);
+  if (event.releaseReason) lines.push(`Release Reason: ${event.releaseReason}`);
+  if (event.priorLeaseStatus) lines.push(`Prior Lease Status: ${event.priorLeaseStatus}`);
+  if (event.priorDeployStatus) lines.push(`Prior Deploy Status: ${event.priorDeployStatus}`);
   lines.push(`Message: ${event.message}`);
   if (mapping) {
     lines.push(`Resolved mapping: #${mapping.id}`);
@@ -628,6 +659,9 @@ function buildFailureDetail(event: NormalizedExternalTaskEvent): string {
     `Lease ID: ${event.leaseId}`,
     ...(event.failureClass ? [`Failure Class: ${event.failureClass}`] : []),
     ...(event.phase ? [`Phase: ${event.phase}`] : []),
+    ...(event.releaseReason ? [`Release Reason: ${event.releaseReason}`] : []),
+    ...(event.priorLeaseStatus ? [`Prior Lease Status: ${event.priorLeaseStatus}`] : []),
+    ...(event.priorDeployStatus ? [`Prior Deploy Status: ${event.priorDeployStatus}`] : []),
     `Message: ${event.message}`,
     ...(event.error ? [`Error: ${JSON.stringify(event.error).slice(0, 2000)}`] : []),
   ].join('\n');

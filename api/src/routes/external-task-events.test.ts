@@ -32,7 +32,11 @@ import {
   issueMcpApiKeyForAgent,
   replaceAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
-import { DEV_ENV_DEPLOY_FAILURE_EVENTS, seedDefaultExternalEventMappings } from '../domains/routing/externalEventMappings';
+import {
+  DEV_ENV_DEPLOY_FAILURE_EVENTS,
+  STALE_LEASE_RELEASED_EVENT,
+  seedDefaultExternalEventMappings,
+} from '../domains/routing/externalEventMappings';
 import { cleanupTaskExecutionLinkageForStatus } from '../lib/taskLifecycle';
 
 let tempDir: string;
@@ -861,6 +865,180 @@ describe('external task events route', () => {
         WHERE task_id = 449 AND field = 'status' AND new_value IN ('blocked', 'stalled')
       `).get() as { count: number };
       expect(blockedCount.count).toBe(0);
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('routes stale lease release events from dev_deploying to blocked with recovery detail', async () => {
+    const db = getDb();
+    db.prepare(`UPDATE tasks SET status = 'dev_deploying' WHERE id = 449`).run();
+
+    const apiKey = issueLeaseManagerApiKey();
+    const { server, baseUrl } = await startTestServer();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          source: DEV_ENV_LEASE_MANAGER_SOURCE,
+          event: STALE_LEASE_RELEASED_EVENT,
+          task_id: 449,
+          environment_id: 'agent-hq-dev',
+          queue_id: 'queue-stale',
+          lease_id: 'lease-stale',
+          branch: 'cinder-backend/task-993-stale-release',
+          commit_sha: 'abc123def4567890',
+          release_reason: 'stale_released',
+          prior_lease_status: 'deploying',
+          prior_deploy_status: 'deploying',
+          message: 'Lease lease-stale was stale and released by MCP preflight cleanup.',
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        duplicate: false,
+        event: STALE_LEASE_RELEASED_EVENT,
+        action_kind: 'status',
+        action_target: 'blocked',
+        outcome: null,
+        outcome_applied: true,
+        next_status: 'blocked',
+      });
+
+      const task = db.prepare(`SELECT status, failure_detail FROM tasks WHERE id = 449`).get() as {
+        status: string;
+        failure_detail: string;
+      };
+      expect(task.status).toBe('blocked');
+      expect(task.failure_detail).toContain('Event: stale_lease_released');
+      expect(task.failure_detail).toContain('Release Reason: stale_released');
+      expect(task.failure_detail).toContain('Prior Lease Status: deploying');
+      expect(task.failure_detail).toContain('Prior Deploy Status: deploying');
+
+      const note = db.prepare(`
+        SELECT content
+        FROM task_notes
+        WHERE task_id = 449
+        ORDER BY id DESC
+        LIMIT 1
+      `).get() as { content: string };
+      expect(note.content).toContain('Release Reason: stale_released');
+      expect(note.content).toContain('Prior Lease Status: deploying');
+
+      const history = db.prepare(`
+        SELECT field, new_value
+        FROM task_history
+        WHERE task_id = 449
+          AND field IN ('external_release_reason', 'external_prior_lease_status', 'external_prior_deploy_status')
+        ORDER BY field
+      `).all() as Array<{ field: string; new_value: string }>;
+      expect(history).toEqual(expect.arrayContaining([
+        { field: 'external_release_reason', new_value: 'stale_released' },
+        { field: 'external_prior_lease_status', new_value: 'deploying' },
+        { field: 'external_prior_deploy_status', new_value: 'deploying' },
+      ]));
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('handles repeated stale lease release events after recovery without a second status move', async () => {
+    const db = getDb();
+    db.prepare(`UPDATE tasks SET status = 'dev_deploy_queued' WHERE id = 449`).run();
+
+    const apiKey = issueLeaseManagerApiKey();
+    const { server, baseUrl } = await startTestServer();
+    const firstPayload = {
+      source: DEV_ENV_LEASE_MANAGER_SOURCE,
+      event: STALE_LEASE_RELEASED_EVENT,
+      task_id: 449,
+      environment_id: 'agent-hq-dev',
+      queue_id: 'queue-stale-repeat',
+      lease_id: 'lease-stale-repeat',
+      branch: 'cinder-backend/task-993-stale-release',
+      commit_sha: 'abc123def4567890',
+      release_reason: 'stale_released',
+      prior_lease_status: 'stale',
+      prior_deploy_status: 'deploying',
+      message: 'Lease lease-stale-repeat was stale and released by MCP preflight cleanup.',
+    };
+
+    try {
+      const first = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify(firstPayload),
+      });
+      expect(first.status).toBe(200);
+      expect(await first.json()).toMatchObject({
+        duplicate: false,
+        outcome_applied: true,
+        next_status: 'blocked',
+      });
+
+      const duplicate = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify(firstPayload),
+      });
+      expect(duplicate.status).toBe(200);
+      expect(await duplicate.json()).toMatchObject({
+        duplicate: true,
+        processing_state: 'duplicate',
+      });
+
+      const repeated = await fetch(`${baseUrl}/api/v1/external/task-events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          ...firstPayload,
+          message: 'Repeated stale release sweep saw the lease was already released.',
+        }),
+      });
+      expect(repeated.status).toBe(200);
+      expect(await repeated.json()).toMatchObject({
+        duplicate: false,
+        action_kind: null,
+        action_target: null,
+        outcome_applied: false,
+        next_status: 'blocked',
+      });
+
+      const transitions = db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM task_events
+        WHERE task_id = 449 AND to_status = 'blocked'
+      `).get() as { count: number };
+      const receipts = db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM external_task_event_receipts
+        WHERE task_id = 449 AND event = ?
+      `).get(STALE_LEASE_RELEASED_EVENT) as { count: number };
+      const notes = db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM task_notes
+        WHERE task_id = 449 AND content LIKE 'Workflow event received%'
+      `).get() as { count: number };
+
+      expect(transitions.count).toBe(1);
+      expect(receipts.count).toBe(2);
+      expect(notes.count).toBe(2);
     } finally {
       await stopTestServer(server);
     }

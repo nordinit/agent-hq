@@ -50,6 +50,7 @@ A `NULL` mapping source is still supported as a wildcard compatibility alias for
 - `dev_deploying`
 - `deployed_for_qa`
 - `deploy_failed`
+- `stale_lease_released`
 - `database_backup_failed`
 - `database_migration_failed`
 - `database_integrity_failed`
@@ -96,16 +97,26 @@ Compatibility aliases still work:
 }
 ```
 
+For `stale_lease_released`, the lease manager also sends:
+
+```json
+{
+  "release_reason": "stale_released",
+  "prior_lease_status": "deploying",
+  "prior_deploy_status": "deploying"
+}
+```
+
 ## Canonical Agent HQ effects
 
 Accepted workflow events are translated into canonical writes:
 
 - create a task note
-- create task history rows for event source, event name, environment, queue, lease, branch, commit, review URL, and message
+- create task history rows for event source, event name, environment, queue, lease, branch, commit, review URL, release reason, prior statuses, and message
 - persist an idempotency receipt
 - resolve a workflow-event mapping by source, event, project, task type, and current status
 
-`deployed_for_qa` writes review evidence and uses canonical outcome semantics to post `completed_for_review` when valid. `deploy_failed` and structured deployment failures use canonical outcome semantics to post `env_blocked` and record failure detail. `agent_started` is an internal `agent_hq_runtime` workflow event that can move a dispatched task to `in_progress`.
+`deployed_for_qa` writes review evidence and uses canonical outcome semantics to post `completed_for_review` when valid. `deploy_failed` and structured deployment failures use canonical outcome semantics to post `env_blocked` and record failure detail. `stale_lease_released` directly moves affected `dev_deploy_queued` and `dev_deploying` tasks to `blocked` with stale-release recovery detail. `agent_started` is an internal `agent_hq_runtime` workflow event that can move a dispatched task to `in_progress`.
 
 ## Idempotency
 

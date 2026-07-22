@@ -12,6 +12,7 @@ export const RUNTIME_FAILED_EVENT = 'runtime_failed';
 export const MISSING_OUTCOME_WORKFLOW_EVENTS = ['no_semantic_handoff_posted', 'missing_outcome', 'unknown_outcome'] as const;
 export const PRIMARY_MISSING_OUTCOME_WORKFLOW_EVENT = MISSING_OUTCOME_WORKFLOW_EVENTS[0];
 export const DISPATCH_STARTUP_FAILED_EVENT = 'dispatch_startup_failed';
+export const STALE_LEASE_RELEASED_EVENT = 'stale_lease_released';
 
 export type WorkflowEventSourceKind = 'agent_hq_internal' | 'external_integration' | 'wildcard_compatibility';
 
@@ -202,6 +203,18 @@ export const DEFAULT_WORKFLOW_EVENT_MAPPINGS = [
     apply_failure_detail: 1,
     enabled: 1,
     priority: 100,
+  },
+  {
+    source: DEV_ENV_LEASE_MANAGER_SOURCE,
+    event_name: STALE_LEASE_RELEASED_EVENT,
+    status_includes: ['dev_deploy_queued', 'dev_deploying'],
+    status_excludes: [],
+    action_kind: 'status',
+    action_target: 'blocked',
+    apply_review_evidence: 0,
+    apply_failure_detail: 1,
+    enabled: 1,
+    priority: 120,
   },
   ...DEFAULT_DEPLOY_FAILURE_EVENT_MAPPINGS,
   {
