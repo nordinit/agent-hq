@@ -1630,7 +1630,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     return next();
   }
 
-  const workflowDefinitionMatch = requestPath.match(/^\/(?:sprints|workflows)\/(?:config|types(?:\/list)?|types\/([^/]+))$/);
+  const workflowDefinitionMatch = requestPath.match(/^\/(?:sprints|workflows|workflow-definitions)\/(?:config|types(?:\/list)?|types\/([^/]+))$/);
   if (workflowDefinitionMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const requiredCapability: AgentMcpCapabilityKey = method === 'GET'
       ? 'workflow_definitions.read_project_scope'
@@ -1678,7 +1678,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       });
     }
 
-    if (method === 'GET' && requestPath.match(/^\/(?:sprints|workflows)\/(?:config|types(?:\/list)?)$/) && requestScope == null) {
+    if (method === 'GET' && requestPath.match(/^\/(?:sprints|workflows|workflow-definitions)\/(?:config|types(?:\/list)?)$/) && requestScope == null) {
       return deny({
         reason: `Workflow definition readback requires project_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,

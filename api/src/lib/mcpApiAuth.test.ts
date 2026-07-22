@@ -254,6 +254,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.post('/api/v1/sprints/types', (req, res) => res.status(201).json({ ok: true, body: req.body }));
     app.put('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
     app.delete('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
+    app.get('/api/v1/workflow-definitions/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
+    app.get('/api/v1/workflow-definitions/types', (req, res) => res.json({ ok: true, query: req.query }));
+    app.get('/api/v1/workflow-definitions/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
+    app.post('/api/v1/workflow-definitions/types', (req, res) => res.status(201).json({ ok: true, body: req.body }));
+    app.put('/api/v1/workflow-definitions/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
+    app.delete('/api/v1/workflow-definitions/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
     app.post('/api/v1/external/task-events', (_req, res) => res.status(202).json({ ok: true }));
     app.post('/api/v1/tasks', (_req, res) => res.status(201).json({ ok: true }));
 
@@ -452,6 +458,45 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       headers: authHeaders(normalKey),
     });
     expect(deleteResponse.status).toBe(200);
+
+    const definitionConfigResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/config?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(definitionConfigResponse.status).toBe(200);
+
+    const definitionListResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(definitionListResponse.status).toBe(200);
+
+    const definitionGetResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(definitionGetResponse.status).toBe(200);
+
+    const definitionCreateResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        key: 'agent-hq-definition-custom',
+        project_id: 86,
+        name: 'Agent HQ definition custom',
+      }),
+    });
+    expect(definitionCreateResponse.status).toBe(201);
+
+    const definitionUpdateResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 86, name: 'Development definition updated' }),
+    });
+    expect(definitionUpdateResponse.status).toBe(200);
+
+    const definitionDeleteResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev?project_id=86`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(definitionDeleteResponse.status).toBe(200);
   });
 
   it('denies workflow definition reads and edits without capability or outside assigned project scope', async () => {
@@ -460,6 +505,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(missingCapability.status).toBe(403);
     await expect(missingCapability.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.read_project_scope' },
+    });
+
+    const missingDefinitionAliasCapability = await fetch(`${baseUrl}/api/v1/workflow-definitions/types?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(missingDefinitionAliasCapability.status).toBe(403);
+    await expect(missingDefinitionAliasCapability.json()).resolves.toMatchObject({
       code: 'mcp_scope_denied',
       details: { required_capability: 'workflow_definitions.read_project_scope' },
     });
@@ -479,6 +533,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'workflow_definitions.read_project_scope' },
     });
 
+    const unscopedDefinitionAliasList = await fetch(`${baseUrl}/api/v1/workflow-definitions/types`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(unscopedDefinitionAliasList.status).toBe(403);
+    await expect(unscopedDefinitionAliasList.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.read_project_scope' },
+    });
+
     const otherProjectRead = await fetch(`${baseUrl}/api/v1/sprints/types/other-project-dev?project_id=87`, {
       headers: authHeaders(normalKey),
     });
@@ -491,6 +554,17 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(otherProjectCreate.status).toBe(403);
     await expect(otherProjectCreate.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.manage_project_scope' },
+    });
+
+    const otherProjectDefinitionAliasCreate = await fetch(`${baseUrl}/api/v1/workflow-definitions/types`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ key: 'wrong-project-definition', project_id: 87, name: 'Wrong project definition' }),
+    });
+    expect(otherProjectDefinitionAliasCreate.status).toBe(403);
+    await expect(otherProjectDefinitionAliasCreate.json()).resolves.toMatchObject({
       code: 'mcp_scope_denied',
       details: { required_capability: 'workflow_definitions.manage_project_scope' },
     });
