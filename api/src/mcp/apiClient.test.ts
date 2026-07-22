@@ -747,6 +747,28 @@ describe('AgentHqApiClient admin MCP CRUD endpoints', () => {
     (global as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
   });
 
+  it('calls scoped MCP capability policy endpoints through typed helpers', async () => {
+    const calls: Array<{ method: string; url: string; body: unknown }> = [];
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = jest.fn(async (input: string | URL, init?: RequestInit) => {
+      calls.push({ method: String(init?.method ?? 'GET'), url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
+      return jsonResponse({ ok: true });
+    }) as unknown as typeof fetch;
+
+    const client = new AgentHqApiClient('http://agent-hq.test');
+
+    await client.getAgentMcpCapabilityPolicy(7);
+    await client.createAgentMcpCapabilityPolicy(7, ['discovery.read_catalog']);
+    await client.updateAgentMcpCapabilityPolicy(7, ['discovery.read_catalog', 'tasks.create']);
+    await client.deleteAgentMcpCapabilityPolicy(7);
+
+    expect(calls).toEqual([
+      { method: 'GET', url: 'http://agent-hq.test/api/v1/agents/7/mcp-permissions', body: null },
+      { method: 'POST', url: 'http://agent-hq.test/api/v1/agents/7/mcp-permissions', body: { enabled_capabilities: ['discovery.read_catalog'] } },
+      { method: 'PUT', url: 'http://agent-hq.test/api/v1/agents/7/mcp-permissions', body: { enabled_capabilities: ['discovery.read_catalog', 'tasks.create'] } },
+      { method: 'DELETE', url: 'http://agent-hq.test/api/v1/agents/7/mcp-permissions', body: null },
+    ]);
+  });
+
   it('passes tenant-selectable task routing rule filters through typed CRUD calls', async () => {
     const calls: Array<{ method: string; url: string; body: unknown }> = [];
     (global as typeof globalThis & { fetch: typeof fetch }).fetch = jest.fn(async (input: string | URL, init?: RequestInit) => {

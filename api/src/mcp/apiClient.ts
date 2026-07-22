@@ -1371,6 +1371,26 @@ export class AgentHqApiClient {
     return this.request<unknown>('DELETE', `/api/v1/agents/${agentId}/mcp-servers/${mcpServerId}`);
   }
 
+  getAgentMcpCapabilityPolicy(agentId: number) {
+    return this.request<unknown>('GET', `/api/v1/agents/${agentId}/mcp-permissions`);
+  }
+
+  createAgentMcpCapabilityPolicy(agentId: number, enabledCapabilities: string[]) {
+    return this.request<unknown>('POST', `/api/v1/agents/${agentId}/mcp-permissions`, {
+      enabled_capabilities: enabledCapabilities,
+    });
+  }
+
+  updateAgentMcpCapabilityPolicy(agentId: number, enabledCapabilities: string[]) {
+    return this.request<unknown>('PUT', `/api/v1/agents/${agentId}/mcp-permissions`, {
+      enabled_capabilities: enabledCapabilities,
+    });
+  }
+
+  deleteAgentMcpCapabilityPolicy(agentId: number) {
+    return this.request<unknown>('DELETE', `/api/v1/agents/${agentId}/mcp-permissions`);
+  }
+
   listRoutingRules(params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/rules', params));
   }
