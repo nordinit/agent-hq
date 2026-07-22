@@ -364,12 +364,21 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
       'GET /api/v1/sprints/config',
       'GET /api/v1/sprints/types/list',
       'GET /api/v1/sprints/types/:key',
+      'GET /api/v1/sprints/types/:key/task-types',
+      'GET /api/v1/sprints/types/:key/field-schemas',
+      'GET /api/v1/sprints/types/:key/field-schemas/:schemaId',
       'GET /api/v1/workflows/config',
       'GET /api/v1/workflows/types/list',
       'GET /api/v1/workflows/types/:key',
+      'GET /api/v1/workflows/types/:key/task-types',
+      'GET /api/v1/workflows/types/:key/field-schemas',
+      'GET /api/v1/workflows/types/:key/field-schemas/:schemaId',
       'GET /api/v1/workflow-definitions/config',
       'GET /api/v1/workflow-definitions/types',
       'GET /api/v1/workflow-definitions/types/:key',
+      'GET /api/v1/workflow-definitions/types/:key/task-types',
+      'GET /api/v1/workflow-definitions/types/:key/field-schemas',
+      'GET /api/v1/workflow-definitions/types/:key/field-schemas/:schemaId',
     ],
     defaultEnabled: {
       scoped_runtime: false,
@@ -385,12 +394,24 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
       'POST /api/v1/sprints/types',
       'PUT /api/v1/sprints/types/:key',
       'DELETE /api/v1/sprints/types/:key',
+      'PUT /api/v1/sprints/types/:key/task-types',
+      'POST /api/v1/sprints/types/:key/field-schemas',
+      'PUT /api/v1/sprints/types/:key/field-schemas/:schemaId',
+      'DELETE /api/v1/sprints/types/:key/field-schemas/:schemaId',
       'POST /api/v1/workflows/types',
       'PUT /api/v1/workflows/types/:key',
       'DELETE /api/v1/workflows/types/:key',
+      'PUT /api/v1/workflows/types/:key/task-types',
+      'POST /api/v1/workflows/types/:key/field-schemas',
+      'PUT /api/v1/workflows/types/:key/field-schemas/:schemaId',
+      'DELETE /api/v1/workflows/types/:key/field-schemas/:schemaId',
       'POST /api/v1/workflow-definitions/types',
       'PUT /api/v1/workflow-definitions/types/:key',
       'DELETE /api/v1/workflow-definitions/types/:key',
+      'PUT /api/v1/workflow-definitions/types/:key/task-types',
+      'POST /api/v1/workflow-definitions/types/:key/field-schemas',
+      'PUT /api/v1/workflow-definitions/types/:key/field-schemas/:schemaId',
+      'DELETE /api/v1/workflow-definitions/types/:key/field-schemas/:schemaId',
     ],
     defaultEnabled: {
       scoped_runtime: false,
@@ -1630,7 +1651,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     return next();
   }
 
-  const workflowDefinitionMatch = requestPath.match(/^\/(?:sprints|workflows|workflow-definitions)\/(?:config|types(?:\/list)?|types\/([^/]+))$/);
+  const workflowDefinitionMatch = requestPath.match(/^\/(?:sprints|workflows|workflow-definitions)\/(?:config|types(?:\/list)?|types\/([^/]+)(?:\/(?:task-types|field-schemas(?:\/[^/]+)?))?)$/);
   if (workflowDefinitionMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const requiredCapability: AgentMcpCapabilityKey = method === 'GET'
       ? 'workflow_definitions.read_project_scope'

@@ -259,8 +259,22 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.post('/api/v1/sprints/types', (req, res) => res.status(201).json({ ok: true, body: req.body }));
     app.put('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
     app.delete('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
+    app.get('/api/v1/sprints/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, task_types: [] }));
+    app.put('/api/v1/sprints/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
+    app.get('/api/v1/sprints/types/:key/field-schemas', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, field_schemas: [] }));
+    app.post('/api/v1/sprints/types/:key/field-schemas', (req, res) => res.status(201).json({ ok: true, key: req.params.key, body: req.body }));
+    app.get('/api/v1/sprints/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
+    app.put('/api/v1/sprints/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), body: req.body }));
+    app.delete('/api/v1/sprints/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
     app.get('/api/v1/workflows/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
     app.get('/api/v1/workflows/types/list', (req, res) => res.json({ ok: true, query: req.query }));
+    app.get('/api/v1/workflows/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, task_types: [] }));
+    app.put('/api/v1/workflows/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
+    app.get('/api/v1/workflows/types/:key/field-schemas', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, field_schemas: [] }));
+    app.post('/api/v1/workflows/types/:key/field-schemas', (req, res) => res.status(201).json({ ok: true, key: req.params.key, body: req.body }));
+    app.get('/api/v1/workflows/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
+    app.put('/api/v1/workflows/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), body: req.body }));
+    app.delete('/api/v1/workflows/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
     app.get('/api/v1/workflow-definitions/config', (req, res) => {
       res.redirect(307, redirectPreservingQuery(req, '/api/v1/workflows/config'));
     });
@@ -271,6 +285,13 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.post('/api/v1/workflow-definitions/types', (req, res) => res.status(201).json({ ok: true, body: req.body }));
     app.put('/api/v1/workflow-definitions/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
     app.delete('/api/v1/workflow-definitions/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
+    app.get('/api/v1/workflow-definitions/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, task_types: [] }));
+    app.put('/api/v1/workflow-definitions/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
+    app.get('/api/v1/workflow-definitions/types/:key/field-schemas', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, field_schemas: [] }));
+    app.post('/api/v1/workflow-definitions/types/:key/field-schemas', (req, res) => res.status(201).json({ ok: true, key: req.params.key, body: req.body }));
+    app.get('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
+    app.put('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), body: req.body }));
+    app.delete('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
     app.post('/api/v1/external/task-events', (_req, res) => res.status(202).json({ ok: true }));
     app.post('/api/v1/tasks', (_req, res) => res.status(201).json({ ok: true }));
 
@@ -487,6 +508,58 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(definitionGetResponse.status).toBe(200);
 
+    const definitionTaskTypesResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev/task-types?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(definitionTaskTypesResponse.status).toBe(200);
+
+    const canonicalWorkflowTaskTypesResponse = await fetch(`${baseUrl}/api/v1/workflows/types/dev/task-types?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(canonicalWorkflowTaskTypesResponse.status).toBe(200);
+
+    const canonicalSprintTaskTypesResponse = await fetch(`${baseUrl}/api/v1/sprints/types/dev/task-types?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(canonicalSprintTaskTypesResponse.status).toBe(200);
+
+    const updateDefinitionTaskTypesResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev/task-types`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 86, task_types: [{ key: 'backend', label: 'Backend' }] }),
+    });
+    expect(updateDefinitionTaskTypesResponse.status).toBe(200);
+
+    const listDefinitionFieldSchemasResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev/field-schemas?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(listDefinitionFieldSchemasResponse.status).toBe(200);
+
+    const getDefinitionFieldSchemaResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev/field-schemas/5?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(getDefinitionFieldSchemaResponse.status).toBe(200);
+
+    const createDefinitionFieldSchemaResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev/field-schemas`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 86, task_type: 'backend', fields: [] }),
+    });
+    expect(createDefinitionFieldSchemaResponse.status).toBe(201);
+
+    const updateDefinitionFieldSchemaResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev/field-schemas/5`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 86, fields: [{ key: 'risk', type: 'text' }] }),
+    });
+    expect(updateDefinitionFieldSchemaResponse.status).toBe(200);
+
+    const deleteDefinitionFieldSchemaResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev/field-schemas/5?project_id=86`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(deleteDefinitionFieldSchemaResponse.status).toBe(200);
+
     const definitionCreateResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types`, {
       method: 'POST',
       headers: authHeaders(normalKey),
@@ -578,6 +651,37 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(otherProjectDefinitionAliasCreate.status).toBe(403);
     await expect(otherProjectDefinitionAliasCreate.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.manage_project_scope' },
+    });
+
+    const otherProjectDefinitionTaskTypesRead = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/other-project-dev/task-types?project_id=87`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(otherProjectDefinitionTaskTypesRead.status).toBe(403);
+    await expect(otherProjectDefinitionTaskTypesRead.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.read_project_scope' },
+    });
+
+    const otherProjectDefinitionTaskTypesWrite = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/other-project-dev/task-types`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 87, task_types: [{ key: 'qa', label: 'QA' }] }),
+    });
+    expect(otherProjectDefinitionTaskTypesWrite.status).toBe(403);
+    await expect(otherProjectDefinitionTaskTypesWrite.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow_definitions.manage_project_scope' },
+    });
+
+    const otherProjectDefinitionFieldSchemaCreate = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/other-project-dev/field-schemas`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 87, task_type: 'backend', fields: [] }),
+    });
+    expect(otherProjectDefinitionFieldSchemaCreate.status).toBe(403);
+    await expect(otherProjectDefinitionFieldSchemaCreate.json()).resolves.toMatchObject({
       code: 'mcp_scope_denied',
       details: { required_capability: 'workflow_definitions.manage_project_scope' },
     });
