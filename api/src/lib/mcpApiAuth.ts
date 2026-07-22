@@ -290,6 +290,23 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'transition_requirements.manage_project_scope',
+    group: 'Workflow',
+    label: 'Manage project gate requirements',
+    description: 'Allows reading, creating, updating, and deleting workflow transition gate requirements only inside the MCP agent\'s assigned project and tenant. Requires explicit project_id and sprint_type scope, validates optional sprint overrides against that scope, and does not allow global defaults, cross-project edits, cross-tenant edits, transition mutations, assignment-rule edits, or unrelated admin routes.',
+    endpoints: [
+      'GET /api/v1/routing/transition-requirements',
+      'GET /api/v1/routing/transition-requirements/:id',
+      'POST /api/v1/routing/transition-requirements',
+      'PUT /api/v1/routing/transition-requirements/:id',
+      'DELETE /api/v1/routing/transition-requirements/:id',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'projects.read_active_project',
     group: 'Context',
     label: 'Read active project',
@@ -520,6 +537,7 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
   'projects.manage_active_files',
   'sprints.read_active_sprint',
   'workflow.read_active_configuration',
+  'transition_requirements.manage_project_scope',
   'external.write_task_events',
   'mcp_capability_policies.read',
 ]);
@@ -1134,6 +1152,13 @@ type RoutingRuleScopeContext = {
   source: 'request' | 'existing_rule';
 };
 
+type TransitionRequirementScopeContext = {
+  projectId: number | null;
+  sprintId: number | null;
+  sprintType: string | null;
+  source: 'request' | 'existing_requirement';
+};
+
 function normalizeScopeString(value: unknown): string | null {
   if (Array.isArray(value)) return normalizeScopeString(value[0]);
   if (typeof value !== 'string') return null;
@@ -1219,6 +1244,81 @@ function routingRuleScopeMatchesAssignedProject(scope: RoutingRuleScopeContext |
   return canonicalAgentProjectId != null
     && scope?.projectId != null
     && scope.projectId === canonicalAgentProjectId;
+}
+
+function getTransitionRequirementScopeFromRequirementId(
+  db: Database.Database,
+  requirementId: number,
+  tenantId: number,
+): TransitionRequirementScopeContext | null {
+  if (!hasTable(db, 'sprint_task_transition_requirements')) return null;
+  const hasRequirementProject = hasColumn(db, 'sprint_task_transition_requirements', 'project_id');
+  const hasRequirementSprintType = hasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
+  const hasRequirementTenant = hasColumn(db, 'sprint_task_transition_requirements', 'tenant_id');
+  const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
+  const row = db.prepare(`
+    SELECT
+      req.id,
+      ${hasRequirementProject ? 'req.project_id' : 'NULL'} AS requirement_project_id,
+      req.sprint_id AS requirement_sprint_id,
+      ${hasRequirementSprintType ? 'req.sprint_type' : 'NULL'} AS requirement_sprint_type,
+      s.project_id AS sprint_project_id,
+      s.sprint_type AS sprint_type
+    FROM sprint_task_transition_requirements req
+    LEFT JOIN sprints s ON s.id = req.sprint_id
+    WHERE req.id = ?
+      ${hasRequirementTenant ? 'AND req.tenant_id = ?' : ''}
+      ${!hasRequirementTenant && hasSprintTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
+    LIMIT 1
+  `).get(requirementId, ...((hasRequirementTenant || (!hasRequirementTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    projectId: parsePositiveInt(row.requirement_project_id) ?? parsePositiveInt(row.sprint_project_id),
+    sprintId: parsePositiveInt(row.requirement_sprint_id),
+    sprintType: normalizeScopeString(row.requirement_sprint_type) ?? normalizeScopeString(row.sprint_type),
+    source: 'existing_requirement',
+  };
+}
+
+function getTransitionRequirementScopeFromRequest(
+  db: Database.Database,
+  input: Record<string, unknown>,
+  tenantId: number,
+): TransitionRequirementScopeContext | null {
+  const sprintId = parsePositiveInt(firstPresent(input.sprint_id, input.workflow_id));
+  const requestedProjectId = parsePositiveInt(input.project_id);
+  const requestedSprintType = normalizeScopeString(firstPresent(input.sprint_type, input.workflow_type));
+
+  if (requestedProjectId == null || requestedSprintType == null) return null;
+
+  if (sprintId != null && hasTable(db, 'sprints')) {
+    const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
+    const sprint = db.prepare(`
+      SELECT id, project_id, sprint_type
+      FROM sprints
+      WHERE id = ?
+        ${hasSprintTenant ? 'AND tenant_id = ?' : ''}
+      LIMIT 1
+    `).get(sprintId, ...(hasSprintTenant ? [tenantId] : [])) as { id: number; project_id: number | null; sprint_type: string | null } | undefined;
+    if (!sprint) return { projectId: null, sprintId, sprintType: requestedSprintType, source: 'request' };
+    if (parsePositiveInt(sprint.project_id) !== requestedProjectId || normalizeScopeString(sprint.sprint_type) !== requestedSprintType) {
+      return { projectId: null, sprintId, sprintType: requestedSprintType, source: 'request' };
+    }
+  }
+
+  return {
+    projectId: requestedProjectId,
+    sprintId: sprintId ?? null,
+    sprintType: requestedSprintType,
+    source: 'request',
+  };
+}
+
+function transitionRequirementScopeMatchesAssignedProject(scope: TransitionRequirementScopeContext | null, canonicalAgentProjectId: number | null): boolean {
+  return canonicalAgentProjectId != null
+    && scope?.projectId != null
+    && scope.projectId === canonicalAgentProjectId
+    && scope.sprintType != null;
 }
 
 type WorkflowDefinitionScopeContext = {
@@ -1775,6 +1875,77 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     return next();
   }
 
+  const transitionRequirementMatch = requestPath.match(/^\/routing\/transition-requirements(?:\/(\d+))?$/);
+  if (transitionRequirementMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
+    if (
+      method === 'GET'
+      && !permissionState.enabledCapabilities.has('transition_requirements.manage_project_scope')
+      && requestPath === '/routing/transition-requirements'
+    ) {
+      if (!requireCapability(
+        'workflow.read_active_configuration',
+        `Workflow configuration reads are disabled for ${identity.agentSlug}.`,
+      )) return;
+      const sprintId = parsePositiveInt(req.query.sprint_id);
+      const projectId = parsePositiveInt(req.query.project_id);
+      const sprintAllowed = sprintId != null && scopedSprintIds.has(sprintId);
+      const projectAllowed = projectId != null && scopedProjectIds.has(projectId);
+      if (sprintAllowed && projectAllowed) return next();
+      return deny({
+        reason: `Normal Agent HQ MCP keys can only read workflow configuration scoped to the active task's sprint and project.`,
+        requiredCapability: 'workflow.read_active_configuration',
+      });
+    }
+
+    const requiredCapability: AgentMcpCapabilityKey = 'transition_requirements.manage_project_scope';
+    if (!requireCapability(
+      requiredCapability,
+      `Transition gate requirement management is disabled for ${identity.agentSlug}.`,
+    )) return;
+
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for transition gate requirement management.`,
+        requiredCapability,
+      });
+    }
+
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as Record<string, unknown>
+      : {};
+    const requestInput = { ...req.query, ...body } as Record<string, unknown>;
+    const requirementId = parsePositiveInt(transitionRequirementMatch[1]);
+    const existingScope = requirementId != null ? getTransitionRequirementScopeFromRequirementId(db, requirementId, identity.tenantId) : null;
+    const requestedScope = getTransitionRequirementScopeFromRequest(db, requestInput, identity.tenantId);
+    const scopesToAuthorize = [
+      ...(existingScope ? [existingScope] : []),
+      ...(requestedScope ? [requestedScope] : []),
+    ];
+
+    if (requirementId != null && existingScope == null) {
+      return deny({
+        reason: `Transition gate requirement #${requirementId} is outside the MCP key tenant or does not exist.`,
+        requiredCapability,
+      });
+    }
+
+    if (requestedScope == null) {
+      return deny({
+        reason: `Transition gate requirement ${method === 'GET' ? 'readback' : 'mutation'} requires explicit project_id and sprint_type within the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    if (scopesToAuthorize.length === 0 || scopesToAuthorize.some((scope) => !transitionRequirementScopeMatchesAssignedProject(scope, canonicalAgentProjectId))) {
+      return deny({
+        reason: `Normal Agent HQ MCP keys can only manage transition gate requirements inside the assigned project and workflow type for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    return next();
+  }
+
   const workflowDefinitionMatch = requestPath.match(/^\/(?:sprints|workflows|workflow-definitions)\/(?:config|types(?:\/list)?|types\/([^/]+)(?:\/(?:task-types|field-schemas(?:\/[^/]+)?))?)$/);
   if (workflowDefinitionMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const requiredCapability: AgentMcpCapabilityKey = method === 'GET'
@@ -1840,7 +2011,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     return next();
   }
 
-  if ((requestPath === '/routing/transitions' || requestPath === '/routing/transition-requirements') && method === 'GET') {
+  if (requestPath === '/routing/transitions' && method === 'GET') {
     if (!requireCapability(
       'workflow.read_active_configuration',
       `Workflow configuration reads are disabled for ${identity.agentSlug}.`,
@@ -1848,9 +2019,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     const sprintId = parsePositiveInt(req.query.sprint_id);
     const projectId = parsePositiveInt(req.query.project_id);
     const sprintAllowed = sprintId != null && scopedSprintIds.has(sprintId);
-    const projectAllowed = requestPath === '/routing/transition-requirements'
-      ? true
-      : projectId != null && scopedProjectIds.has(projectId);
+    const projectAllowed = projectId != null && scopedProjectIds.has(projectId);
     if (sprintAllowed && projectAllowed) return next();
     return deny({
       reason: `Normal Agent HQ MCP keys can only read workflow configuration scoped to the active task's sprint and project.`,

@@ -52,6 +52,10 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       'agent_hq_get_task_instances',
       'agent_hq_get_task_active_owner',
       'agent_hq_list_transition_requirement_fields',
+      'agent_hq_get_transition_requirements',
+      'agent_hq_create_transition_requirement',
+      'agent_hq_update_transition_requirement',
+      'agent_hq_delete_transition_requirement',
       'agent_hq_list_sprint_type_statuses',
       'agent_hq_get_resolved_sprint_type_statuses',
       'agent_hq_get_sprint_type_status',
@@ -113,6 +117,15 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       '/api/v1/assignment-rules',
       '/api/v1/routing/rules',
     ]));
+
+    const gateRequirements = byName.get('agent_hq_get_transition_requirements');
+    expect(gateRequirements?.description).toContain('transition_requirements.manage_project_scope');
+    expect(gateRequirements?.description).toContain('explicit project_id and sprint_type scope');
+    expect(gateRequirements?.rest_paths).toEqual(['/api/v1/routing/transition-requirements']);
+    expect(gateRequirements?.args.find(arg => arg.name === 'project_id')?.required).toBe(true);
+    expect(gateRequirements?.args.find(arg => arg.name === 'sprint_type')?.required).toBe(true);
+    expect(byName.get('agent_hq_update_transition_requirement')?.args.find(arg => arg.name === 'project_id')?.required).toBe(true);
+    expect(byName.get('agent_hq_update_transition_requirement')?.args.find(arg => arg.name === 'sprint_type')?.required).toBe(true);
   });
 
   it('keeps scoped routing-rule schemas aligned with the current routing API', () => {
@@ -136,6 +149,8 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       'agent_hq_create_routing_transition',
       'agent_hq_get_transition_requirements',
       'agent_hq_create_transition_requirement',
+      'agent_hq_update_transition_requirement',
+      'agent_hq_delete_transition_requirement',
       'agent_hq_list_workflow_event_mappings',
       'agent_hq_create_workflow_event_mapping',
       'agent_hq_get_workflow_metadata',

@@ -128,6 +128,19 @@ describe('agent MCP permissions routes', () => {
           'DELETE /api/v1/routing/assignment-rules/:id',
         ]),
       });
+      expect(body.capabilities.find((capability) => capability.key === 'transition_requirements.manage_project_scope')).toMatchObject({
+        group: 'Workflow',
+        label: 'Manage project gate requirements',
+        enabled: false,
+        explicit_enabled: null,
+        description: expect.stringContaining('explicit project_id and sprint_type scope'),
+        endpoints: expect.arrayContaining([
+          'GET /api/v1/routing/transition-requirements',
+          'POST /api/v1/routing/transition-requirements',
+          'PUT /api/v1/routing/transition-requirements/:id',
+          'DELETE /api/v1/routing/transition-requirements/:id',
+        ]),
+      });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
         group: 'Task lifecycle',
         label: 'Create Tasks',
@@ -213,6 +226,10 @@ describe('agent MCP permissions routes', () => {
         enabled: false,
         explicit_enabled: false,
       });
+      expect(updated.capabilities.find((capability) => capability.key === 'transition_requirements.manage_project_scope')).toMatchObject({
+        enabled: false,
+        explicit_enabled: false,
+      });
       expect(updated.capabilities.find((capability) => capability.key === 'mcp_capability_policies.read')).toMatchObject({
         enabled: true,
         explicit_enabled: true,
@@ -284,6 +301,9 @@ describe('agent MCP permissions routes', () => {
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')).toMatchObject({
+        enabled: true,
+      });
+      expect(body.capabilities.find((capability) => capability.key === 'transition_requirements.manage_project_scope')).toMatchObject({
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'mcp_capability_policies.read')).toMatchObject({

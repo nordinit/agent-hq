@@ -111,8 +111,8 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   const transitionRequirementSchema = z.object({
     ...tenantSelectorSchema,
     sprint_id: z.number().int().positive().optional().describe('Optional sprint-scoped override target'),
-    project_id: z.number().int().positive().optional().describe('Optional project scope for workflow-type defaults'),
-    sprint_type: z.string().min(1).optional().describe('Optional workflow type scope for default requirements'),
+    project_id: z.number().int().positive().describe('Required project scope for scoped workflow gate requirements'),
+    sprint_type: z.string().min(1).describe('Required workflow type scope for scoped default requirements and sprint overrides'),
     task_type: z.string().nullable().optional().describe('Optional task type scope'),
     outcome: z.string().min(1).describe('Outcome key this requirement applies to'),
     field_name: z.string().min(1).describe('Evidence or task field name to require'),
@@ -488,12 +488,12 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_get_transition_requirements', 'atlas_get_transition_requirements', 'agent_hq_list_transition_requirements', 'atlas_list_transition_requirements'],
-    'List workflow gate requirements that drive review, QA, and release evidence checks. Optional tenant_id is super-admin MCP only. These are the real configurable gate rows behind outcome validation.',
+    'List project-scoped workflow gate requirements that drive review, QA, and release evidence checks. Non-admin MCP keys require transition_requirements.manage_project_scope and can only read rows in their assigned project with explicit project_id and sprint_type scope. Optional tenant_id is super-admin MCP only.',
     {
       ...tenantSelectorSchema,
       sprint_id: z.number().int().positive().optional().describe('Optional sprint-scoped requirement set'),
-      project_id: z.number().int().positive().optional().describe('Optional project scope for workflow-type defaults'),
-      sprint_type: z.string().min(1).optional().describe('Optional workflow type scope for default requirements'),
+      project_id: z.number().int().positive().describe('Required project scope for workflow-type defaults'),
+      sprint_type: z.string().min(1).describe('Required workflow type scope for default requirements'),
       task_type: z.string().optional().describe('Optional task type filter'),
       outcome: z.string().optional().describe('Optional outcome key filter'),
     },
@@ -503,7 +503,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_create_transition_requirement', 'atlas_create_transition_requirement'],
-    'Create a workflow gate requirement row. Optional tenant_id is super-admin MCP only. Use this for truthful MCP editing of review or release evidence requirements when they are config-driven.',
+    'Create a project-scoped workflow gate requirement row. Non-admin MCP keys require transition_requirements.manage_project_scope and can only create rows in their assigned project with explicit project_id and sprint_type scope. Optional sprint_id creates a workflow-specific override. Optional tenant_id is super-admin MCP only.',
     {
       ...transitionRequirementSchema.shape,
       dry_run: z.boolean().optional().describe('Preview validation and affected transition requirement row without writing config'),
@@ -514,13 +514,13 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_update_transition_requirement', 'atlas_update_transition_requirement'],
-    'Update a workflow gate requirement row. Optional tenant_id is super-admin MCP only. This edits the real configurable gate behavior used by task outcomes.',
+    'Update a project-scoped workflow gate requirement row. Non-admin MCP keys require transition_requirements.manage_project_scope and can only update rows that remain in their assigned project with explicit project_id and sprint_type scope. Optional tenant_id is super-admin MCP only.',
     {
       requirement_id: z.number().int().positive().describe('Requirement ID'),
       ...tenantSelectorSchema,
       sprint_id: z.number().int().positive().optional().describe('Optional sprint scope for sprint-specific overrides'),
-      project_id: z.number().int().positive().optional().describe('Optional project scope for workflow-type defaults'),
-      sprint_type: z.string().min(1).optional().describe('Optional workflow type scope for default requirements'),
+      project_id: z.number().int().positive().describe('Required project scope for workflow-type defaults'),
+      sprint_type: z.string().min(1).describe('Required workflow type scope for default requirements'),
       patch: transitionRequirementSchema.partial().describe('Partial requirement update payload'),
       dry_run: z.boolean().optional().describe('Preview validation and affected transition requirement row without writing config'),
     },
@@ -530,13 +530,13 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_delete_transition_requirement', 'atlas_delete_transition_requirement'],
-    'Delete a workflow gate requirement row. Optional tenant_id is super-admin MCP only.',
+    'Delete a project-scoped workflow gate requirement row. Non-admin MCP keys require transition_requirements.manage_project_scope and can only delete rows in their assigned project with explicit project_id and sprint_type scope. Optional tenant_id is super-admin MCP only.',
     {
       requirement_id: z.number().int().positive().describe('Requirement ID'),
       ...tenantSelectorSchema,
       sprint_id: z.number().int().positive().optional().describe('Optional sprint scope for sprint-specific overrides'),
-      project_id: z.number().int().positive().optional().describe('Optional project scope for workflow-type defaults'),
-      sprint_type: z.string().min(1).optional().describe('Optional workflow type scope for default requirements'),
+      project_id: z.number().int().positive().describe('Required project scope for workflow-type defaults'),
+      sprint_type: z.string().min(1).describe('Required workflow type scope for default requirements'),
       dry_run: z.boolean().optional().describe('Preview validation and affected transition requirement row without writing config'),
     },
     ({ requirement_id, ...params }) => wrap(() => api.deleteTransitionRequirement(requirement_id, params))(),
