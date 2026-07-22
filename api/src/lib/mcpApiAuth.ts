@@ -248,9 +248,25 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'tasks.create',
     group: 'Task lifecycle',
     label: 'Create Tasks',
-    description: 'Allows creating new Agent HQ tasks through the task creation MCP tool without granting broader administrative task management.',
+    description: 'Legacy scoped create capability. Allows creating new Agent HQ tasks only inside the MCP agent\'s assigned project and tenant. Prefer Project task CRUD for create/read/update/delete access.',
     endpoints: [
       'POST /api/v1/tasks',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
+    key: 'tasks.manage_project_tasks',
+    group: 'Task lifecycle',
+    label: 'Project task CRUD',
+    description: 'Allows creating, reading, updating, and deleting generic tasks only inside the MCP agent\'s assigned project and tenant. Project scope is resolved from the agent identity and validated against project_id, sprint_id/workflow_id, target task project, and assignment agent_id. Does not allow active-task lifecycle writes, relationship mutation, admin outcomes, cross-project edits, cross-tenant access, or unrelated admin routes.',
+    endpoints: [
+      'GET /api/v1/tasks/:id',
+      'POST /api/v1/tasks',
+      'PUT /api/v1/tasks/:id',
+      'DELETE /api/v1/tasks/:id',
     ],
     defaultEnabled: {
       scoped_runtime: false,
@@ -516,6 +532,7 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
   'tasks.search_project_tasks',
   'tasks.write_active_lifecycle',
   'tasks.create',
+  'tasks.manage_project_tasks',
   'projects.read_active_project',
   'projects.manage_active_files',
   'sprints.read_active_sprint',
@@ -1114,6 +1131,55 @@ function taskBelongsToProject(db: Database.Database, identity: McpApiIdentity, t
   return parsePositiveInt(row?.tenant_id) === identity.tenantId && parsePositiveInt(row?.project_id) === projectId;
 }
 
+function sprintBelongsToProject(db: Database.Database, identity: McpApiIdentity, sprintId: number, projectId: number): boolean {
+  if (!hasTable(db, 'sprints')) return false;
+  const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
+  const row = db.prepare(`
+    SELECT project_id
+    FROM sprints
+    WHERE id = ?
+      ${hasSprintTenant ? 'AND tenant_id = ?' : ''}
+    LIMIT 1
+  `).get(sprintId, ...(hasSprintTenant ? [identity.tenantId] : [])) as { project_id: number | null } | undefined;
+  return parsePositiveInt(row?.project_id) === projectId;
+}
+
+function requestBodyRecord(body: unknown): Record<string, unknown> {
+  return body && typeof body === 'object' && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : {};
+}
+
+function validateProjectTaskCrudRequestScope(
+  db: Database.Database,
+  identity: McpApiIdentity,
+  body: Record<string, unknown>,
+  projectId: number,
+): { ok: true } | { ok: false; reason: string } {
+  const requestedProjectId = parsePositiveInt(body.project_id);
+  if (requestedProjectId != null && requestedProjectId !== projectId) {
+    return { ok: false, reason: `Requested project_id ${requestedProjectId} is outside the assigned project for ${identity.agentSlug}.` };
+  }
+
+  const requestedSprintId = parsePositiveInt(firstPresent(body.sprint_id, body.workflow_id));
+  if (requestedSprintId != null && !sprintBelongsToProject(db, identity, requestedSprintId, projectId)) {
+    return { ok: false, reason: `Requested sprint/workflow #${requestedSprintId} is outside the assigned project for ${identity.agentSlug}.` };
+  }
+
+  const requestedAgentId = parsePositiveInt(body.agent_id);
+  if (requestedAgentId != null) {
+    const targetAgentProjectId = getTenantAgentProjectId(db, identity, requestedAgentId);
+    if (targetAgentProjectId === undefined) {
+      return { ok: false, reason: `Requested agent #${requestedAgentId} is outside the MCP key tenant or does not exist.` };
+    }
+    if (targetAgentProjectId !== projectId) {
+      return { ok: false, reason: `Requested agent #${requestedAgentId} is outside the assigned project for ${identity.agentSlug}.` };
+    }
+  }
+
+  return { ok: true };
+}
+
 function extractRequestedMcpPolicyCapabilities(body: unknown): string[] | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const value = (body as { enabled_capabilities?: unknown }).enabled_capabilities;
@@ -1445,10 +1511,33 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
   }
 
   if (requestPath === '/tasks' && method === 'POST') {
+    const requiredCapability: AgentMcpCapabilityKey = permissionState.enabledCapabilities.has('tasks.manage_project_tasks')
+      ? 'tasks.manage_project_tasks'
+      : 'tasks.create';
     if (!requireCapability(
-      'tasks.create',
-      `Task creation is disabled for ${identity.agentSlug}.`,
+      requiredCapability,
+      `Project task creation is disabled for ${identity.agentSlug}.`,
     )) return;
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for project task creation.`,
+        requiredCapability,
+      });
+    }
+    const body = requestBodyRecord(req.body);
+    if (parsePositiveInt(body.project_id) == null) {
+      return deny({
+        reason: `Project-scoped task creation requires project_id within the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+    const scope = validateProjectTaskCrudRequestScope(db, identity, body, canonicalAgentProjectId);
+    if (!scope.ok) {
+      return deny({
+        reason: scope.reason,
+        requiredCapability,
+      });
+    }
     return next();
   }
 
@@ -1579,10 +1668,16 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       || (suffix === 'outcome' && method === 'POST')
     );
     const hasProjectTaskRead = permissionState.enabledCapabilities.has('tasks.read_project_context');
+    const hasProjectTaskCrud = permissionState.enabledCapabilities.has('tasks.manage_project_tasks');
+    const projectCrudAllowed = suffix === '' && (method === 'PUT' || method === 'DELETE');
     const requiredCapability: AgentMcpCapabilityKey | null = readAllowed
-      ? hasProjectTaskRead
+      ? hasProjectTaskCrud
+        ? 'tasks.manage_project_tasks'
+        : hasProjectTaskRead
         ? 'tasks.read_project_context'
         : 'tasks.read_active_context'
+      : projectCrudAllowed
+        ? 'tasks.manage_project_tasks'
       : writeAllowed
         ? 'tasks.write_active_lifecycle'
         : null;
@@ -1599,10 +1694,10 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       return;
     }
 
-    if (readAllowed && hasProjectTaskRead) {
+    if ((readAllowed && (hasProjectTaskRead || hasProjectTaskCrud)) || projectCrudAllowed) {
       if (canonicalAgentProjectId == null) {
         return deny({
-          reason: `${identity.agentSlug} does not have an assigned project for project task context reads.`,
+          reason: `${identity.agentSlug} does not have an assigned project for project task ${projectCrudAllowed ? 'CRUD' : 'context reads'}.`,
           requiredCapability,
           taskId,
         });
@@ -1613,6 +1708,16 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
           requiredCapability,
           taskId,
         });
+      }
+      if (method === 'PUT') {
+        const scope = validateProjectTaskCrudRequestScope(db, identity, requestBodyRecord(req.body), canonicalAgentProjectId);
+        if (!scope.ok) {
+          return deny({
+            reason: scope.reason,
+            requiredCapability,
+            taskId,
+          });
+        }
       }
       return next();
     }

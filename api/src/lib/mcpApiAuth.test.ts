@@ -299,6 +299,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.delete('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
     app.post('/api/v1/external/task-events', (_req, res) => res.status(202).json({ ok: true }));
     app.post('/api/v1/tasks', (_req, res) => res.status(201).json({ ok: true }));
+    app.put('/api/v1/tasks/:id', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), body: req.body }));
+    app.delete('/api/v1/tasks/:id', (req, res) => res.json({ ok: true, task_id: Number(req.params.id) }));
 
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
@@ -410,6 +412,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       default_enabled: false,
       explicit_enabled: null,
     });
+    expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'tasks.manage_project_tasks')).toMatchObject({
+      group: 'Task lifecycle',
+      label: 'Project task CRUD',
+      enabled: false,
+      default_enabled: false,
+      explicit_enabled: null,
+      description: expect.stringContaining('assigned project'),
+    });
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')).toMatchObject({
       group: 'Workflow',
       label: 'Manage project assignment rules',
@@ -441,6 +451,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(explicitSnapshot.policy_mode).toBe('explicit');
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.read_active_context')?.enabled).toBe(true);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.create')?.enabled).toBe(false);
+    expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.manage_project_tasks')?.enabled).toBe(false);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')?.enabled).toBe(false);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.write_active_lifecycle')?.enabled).toBe(false);
 
@@ -1036,6 +1047,133 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
     expect(createTaskRes.status).toBe(201);
     await expect(createTaskRes.json()).resolves.toMatchObject({ ok: true });
+  });
+
+  it('allows generic project task CRUD only inside the assigned project', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'tasks.manage_project_tasks',
+    ]);
+
+    const createTaskRes = await fetch(`${baseUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        title: 'Scoped follow-up',
+        project_id: 86,
+        sprint_id: 42,
+        agent_id: 9,
+      }),
+    });
+    expect(createTaskRes.status).toBe(201);
+
+    const readTaskRes = await fetch(`${baseUrl}/api/v1/tasks/451`, { headers: authHeaders(normalKey) });
+    expect(readTaskRes.status).toBe(200);
+
+    const updateTaskRes = await fetch(`${baseUrl}/api/v1/tasks/451`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({
+        title: 'Scoped update',
+        project_id: 86,
+        sprint_id: 42,
+        agent_id: 9,
+      }),
+    });
+    expect(updateTaskRes.status).toBe(200);
+    await expect(updateTaskRes.json()).resolves.toMatchObject({
+      ok: true,
+      task_id: 451,
+      body: {
+        project_id: 86,
+        sprint_id: 42,
+        agent_id: 9,
+      },
+    });
+
+    const deleteTaskRes = await fetch(`${baseUrl}/api/v1/tasks/451`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(deleteTaskRes.status).toBe(200);
+
+    const crossProjectRead = await fetch(`${baseUrl}/api/v1/tasks/452`, { headers: authHeaders(normalKey) });
+    expect(crossProjectRead.status).toBe(403);
+    await expect(crossProjectRead.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'tasks.manage_project_tasks', task_id: 452 },
+    });
+
+    const crossTenantRead = await fetch(`${baseUrl}/api/v1/tasks/449`, { headers: authHeaders(normalKey) });
+    expect(crossTenantRead.status).toBe(403);
+    await expect(crossTenantRead.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'tasks.manage_project_tasks', task_id: 449 },
+    });
+
+    const crossProjectCreate = await fetch(`${baseUrl}/api/v1/tasks`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ title: 'Wrong project', project_id: 87, sprint_id: 44 }),
+    });
+    expect(crossProjectCreate.status).toBe(403);
+    await expect(crossProjectCreate.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      error: expect.stringContaining('project_id 87'),
+      details: { required_capability: 'tasks.manage_project_tasks' },
+    });
+
+    const crossProjectUpdate = await fetch(`${baseUrl}/api/v1/tasks/451`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ sprint_id: 44 }),
+    });
+    expect(crossProjectUpdate.status).toBe(403);
+    await expect(crossProjectUpdate.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      error: expect.stringContaining('sprint/workflow #44'),
+      details: { required_capability: 'tasks.manage_project_tasks', task_id: 451 },
+    });
+
+    const crossTenantAgentUpdate = await fetch(`${baseUrl}/api/v1/tasks/451`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ agent_id: 10 }),
+    });
+    expect(crossTenantAgentUpdate.status).toBe(403);
+    await expect(crossTenantAgentUpdate.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'tasks.manage_project_tasks', task_id: 451 },
+    });
+  });
+
+  it('keeps project task CRUD separate from active lifecycle and relationship mutation routes', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'tasks.manage_project_tasks',
+    ]);
+
+    const lifecycleNoteRes = await fetch(`${baseUrl}/api/v1/tasks/448/notes`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ content: 'Not a generic CRUD write' }),
+    });
+    expect(lifecycleNoteRes.status).toBe(403);
+    await expect(lifecycleNoteRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'tasks.write_active_lifecycle', task_id: 448 },
+    });
+
+    const relationshipRes = await fetch(`${baseUrl}/api/v1/tasks/451/relationships`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ target_task_id: 448, relationship_type_key: 'relates_to' }),
+    });
+    expect(relationshipRes.status).toBe(403);
+    await expect(relationshipRes.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'admin.full_access', task_id: 451 },
+    });
   });
 
   it('requires explicit project task search capability for scoped runtime agents', async () => {

@@ -27,7 +27,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_create_task', 'atlas_create_task'],
-    'Create a new task in Agent HQ in a required workflow, with optional initial workflow status, assignment, and dry-run preview. Legacy compatibility: blockers is deprecated for one release; prefer relationship-first tools for dispatch dependencies.',
+    'Create a new task in Agent HQ in a required workflow, with optional initial workflow status, assignment, and dry-run preview. Scoped non-admin MCP callers need Project task CRUD or legacy Create Tasks capability and may only create inside their assigned project. Legacy compatibility: blockers is deprecated for one release; prefer relationship-first tools for dispatch dependencies.',
     {
       title: z.string().min(1).describe('Task title (required)'),
       project_id: z.number().int().positive().describe('Project ID (required)'),
@@ -64,7 +64,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_update_task', 'atlas_update_task'],
-    'Update editable fields on an existing task, including workflow movement and assignment, with optional dry-run preview.',
+    'Update editable fields on an existing task, including workflow movement and assignment, with optional dry-run preview. Scoped non-admin MCP callers need Project task CRUD and may only update tasks, workflows, and assignments inside their assigned project.',
     {
       task_id: z.number().int().positive().describe('Task ID (required)'),
       title: z.string().min(1).optional().describe('New title'),
@@ -162,7 +162,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_get_task_detail', 'atlas_get_task_detail', 'agent_hq_get_task', 'atlas_get_task'],
-    'Get full task detail including blocker, sprint, and assignment context.',
+    'Get full task detail including blocker, sprint, and assignment context. Scoped non-admin MCP callers need active task context, read project task context, or Project task CRUD for tasks in their assigned project.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTask(task_id))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id'] },
@@ -194,7 +194,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_delete_task', 'atlas_delete_task'],
-    'Delete a task from Agent HQ.',
+    'Delete a generic task from Agent HQ. Scoped non-admin MCP callers need Project task CRUD and may only delete tasks inside their assigned project.',
     {
       task_id: z.number().int().positive().describe('Task ID'),
       deleted_by: z.string().optional().describe('Audit label for the delete operation'),

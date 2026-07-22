@@ -134,6 +134,18 @@ describe('agent MCP permissions routes', () => {
         enabled: false,
         explicit_enabled: null,
       });
+      expect(body.capabilities.find((capability) => capability.key === 'tasks.manage_project_tasks')).toMatchObject({
+        group: 'Task lifecycle',
+        label: 'Project task CRUD',
+        enabled: false,
+        explicit_enabled: null,
+        description: expect.stringContaining('assigned project'),
+        endpoints: expect.arrayContaining([
+          'POST /api/v1/tasks',
+          'PUT /api/v1/tasks/:id',
+          'DELETE /api/v1/tasks/:id',
+        ]),
+      });
       expect(body.capabilities.find((capability) => capability.key === 'mcp_capability_policies.read')).toMatchObject({
         group: 'MCP capability policy',
         label: 'Read MCP capability policy',
@@ -194,6 +206,10 @@ describe('agent MCP permissions routes', () => {
         explicit_enabled: true,
       });
       expect(updated.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
+        enabled: false,
+        explicit_enabled: false,
+      });
+      expect(updated.capabilities.find((capability) => capability.key === 'tasks.manage_project_tasks')).toMatchObject({
         enabled: false,
         explicit_enabled: false,
       });
@@ -275,6 +291,9 @@ describe('agent MCP permissions routes', () => {
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
+        enabled: true,
+      });
+      expect(body.capabilities.find((capability) => capability.key === 'tasks.manage_project_tasks')).toMatchObject({
         enabled: true,
       });
       expect(body.capabilities.find((capability) => capability.key === 'tasks.read_project_context')).toMatchObject({
