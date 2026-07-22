@@ -33,6 +33,11 @@ function restoreEnv(name: string, value: string | undefined): void {
   else process.env[name] = value;
 }
 
+function redirectPreservingQuery(req: express.Request, path: string): string {
+  const queryStart = req.originalUrl.indexOf('?');
+  return queryStart === -1 ? path : `${path}${req.originalUrl.slice(queryStart)}`;
+}
+
 describe('mcpApiAuth scoped Agent HQ permissions', () => {
   let tempDir: string;
   let server: Server | null = null;
@@ -254,8 +259,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.post('/api/v1/sprints/types', (req, res) => res.status(201).json({ ok: true, body: req.body }));
     app.put('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
     app.delete('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
-    app.get('/api/v1/workflow-definitions/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
-    app.get('/api/v1/workflow-definitions/types', (req, res) => res.json({ ok: true, query: req.query }));
+    app.get('/api/v1/workflows/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
+    app.get('/api/v1/workflows/types/list', (req, res) => res.json({ ok: true, query: req.query }));
+    app.get('/api/v1/workflow-definitions/config', (req, res) => {
+      res.redirect(307, redirectPreservingQuery(req, '/api/v1/workflows/config'));
+    });
+    app.get('/api/v1/workflow-definitions/types', (req, res) => {
+      res.redirect(307, redirectPreservingQuery(req, '/api/v1/workflows/types/list'));
+    });
     app.get('/api/v1/workflow-definitions/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
     app.post('/api/v1/workflow-definitions/types', (req, res) => res.status(201).json({ ok: true, body: req.body }));
     app.put('/api/v1/workflow-definitions/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
@@ -463,11 +474,13 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       headers: authHeaders(normalKey),
     });
     expect(definitionConfigResponse.status).toBe(200);
+    await expect(definitionConfigResponse.json()).resolves.toMatchObject({ project_id: 86 });
 
     const definitionListResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types?project_id=86`, {
       headers: authHeaders(normalKey),
     });
     expect(definitionListResponse.status).toBe(200);
+    await expect(definitionListResponse.json()).resolves.toMatchObject({ query: { project_id: '86' } });
 
     const definitionGetResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev?project_id=86`, {
       headers: authHeaders(normalKey),

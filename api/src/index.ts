@@ -122,6 +122,11 @@ function buildWorkflowEventMappingSuffix(req: Request): string {
   return query.toString() ? `?${query.toString()}` : '';
 }
 
+function redirectPreservingQuery(req: Request, path: string): string {
+  const queryStart = req.originalUrl.indexOf('?');
+  return queryStart === -1 ? path : `${path}${req.originalUrl.slice(queryStart)}`;
+}
+
 app.get('/api/v1/workflow-events/definitions', (req, res) => {
   res.redirect(307, `/api/v1/routing/workflow-event-mappings${buildWorkflowEventMappingSuffix(req)}`);
 });
@@ -212,50 +217,50 @@ app.delete('/api/v1/sprint-types/:key/field-schemas/:schemaId', (req, res) => {
 app.get('/api/v1/task-definitions', (_req, res) => {
   res.redirect(307, '/api/v1/sprints/config');
 });
-app.get('/api/v1/workflow-definitions', (_req, res) => {
-  res.redirect(307, '/api/v1/workflows/config');
+app.get('/api/v1/workflow-definitions', (req, res) => {
+  res.redirect(307, redirectPreservingQuery(req, '/api/v1/workflows/config'));
 });
 app.get('/api/v1/task-definitions/config', (_req, res) => {
   res.redirect(307, '/api/v1/sprints/config');
 });
-app.get('/api/v1/workflow-definitions/config', (_req, res) => {
-  res.redirect(307, '/api/v1/workflows/config');
+app.get('/api/v1/workflow-definitions/config', (req, res) => {
+  res.redirect(307, redirectPreservingQuery(req, '/api/v1/workflows/config'));
 });
-app.get('/api/v1/workflow-definitions/types', (_req, res) => {
-  res.redirect(307, '/api/v1/workflows/types/list');
+app.get('/api/v1/workflow-definitions/types', (req, res) => {
+  res.redirect(307, redirectPreservingQuery(req, '/api/v1/workflows/types/list'));
 });
-app.post('/api/v1/workflow-definitions/types', (_req, res) => {
-  res.redirect(307, '/api/v1/workflows/types');
+app.post('/api/v1/workflow-definitions/types', (req, res) => {
+  res.redirect(307, redirectPreservingQuery(req, '/api/v1/workflows/types'));
 });
 app.get('/api/v1/workflow-definitions/types/:key', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}`));
 });
 app.put('/api/v1/workflow-definitions/types/:key', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}`));
 });
 app.delete('/api/v1/workflow-definitions/types/:key', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}`));
 });
 app.get('/api/v1/workflow-definitions/types/:key/task-types', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/task-types`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/task-types`));
 });
 app.put('/api/v1/workflow-definitions/types/:key/task-types', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/task-types`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/task-types`));
 });
 app.get('/api/v1/workflow-definitions/types/:key/field-schemas', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas`));
 });
 app.post('/api/v1/workflow-definitions/types/:key/field-schemas', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas`));
 });
 app.get('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`));
 });
 app.put('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`));
 });
 app.delete('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => {
-  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
+  res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`));
 });
 app.get('/api/v1/task-definitions/sprint-types', (_req, res) => {
   res.redirect(307, '/api/v1/sprints/types/list');
