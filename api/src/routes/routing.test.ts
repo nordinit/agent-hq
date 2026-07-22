@@ -1698,6 +1698,176 @@ describe('routing rules API', () => {
     }
   });
 
+  it('allows non-admin MCP keys to CRUD project-scoped workflow transitions only in their assigned project', async () => {
+    const tenantContext = await import('../lib/tenantContext');
+    const db = getDb();
+    tenantContext.ensureTenantSchema(db);
+    const apiKey = issueMcpApiKeyForAgent(db, 7, 'transition manager key').apiKey;
+    replaceAgentMcpPermissionPolicy(db, 7, ['discovery.read_catalog', 'routing_transitions.manage_project_scope']);
+    const authHeaders = {
+      Authorization: `Bearer ${apiKey}`,
+      'x-agent-hq-mcp-client': 'agent-hq-mcp',
+    };
+
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const defaultCreate = await fetch(`${baseUrl}/api/v1/routing/transitions`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: 1,
+          sprint_type: 'bugs',
+          task_type: 'backend',
+          from_status: 'in_progress',
+          outcome: 'completed_for_review',
+          to_status: 'review',
+        }),
+      });
+      expect(defaultCreate.status).toBe(201);
+      const defaultCreated = await defaultCreate.json() as { id: number; project_id: number; sprint_id: number | null; scope_kind: string };
+      expect(defaultCreated).toEqual(expect.objectContaining({ project_id: 1, sprint_id: null, scope_kind: 'sprint_type_default' }));
+
+      const defaultGet = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&sprint_type=bugs`, { headers: authHeaders });
+      expect(defaultGet.status).toBe(200);
+      await expect(defaultGet.json()).resolves.toEqual(expect.objectContaining({ id: defaultCreated.id, project_id: 1, sprint_id: null }));
+
+      const defaultUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&sprint_type=bugs`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ priority: 14 }),
+      });
+      expect(defaultUpdate.status).toBe(200);
+      await expect(defaultUpdate.json()).resolves.toEqual(expect.objectContaining({ id: defaultCreated.id, priority: 14 }));
+
+      const overrideCreate = await fetch(`${baseUrl}/api/v1/routing/transitions`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: 1,
+          sprint_id: 10,
+          from_status: 'in_progress',
+          outcome: 'blocked',
+          to_status: 'blocked',
+        }),
+      });
+      expect(overrideCreate.status).toBe(201);
+      const overrideCreated = await overrideCreate.json() as { id: number; project_id: number; sprint_id: number; scope_kind: string };
+      expect(overrideCreated).toEqual(expect.objectContaining({ project_id: 1, sprint_id: 10, scope_kind: 'sprint_override' }));
+
+      const overrideUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${overrideCreated.id}?project_id=1&sprint_id=10`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      });
+      expect(overrideUpdate.status).toBe(200);
+      await expect(overrideUpdate.json()).resolves.toEqual(expect.objectContaining({ id: overrideCreated.id, enabled: 0 }));
+
+      const list = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&sprint_type=bugs&sprint_id=10`, { headers: authHeaders });
+      expect(list.status).toBe(200);
+      const listBody = await list.json() as { transitions: Array<{ id: number; project_id: number; sprint_id: number | null }> };
+      expect(listBody.transitions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: defaultCreated.id, project_id: 1, sprint_id: null }),
+        expect.objectContaining({ id: overrideCreated.id, project_id: 1, sprint_id: 10 }),
+      ]));
+
+      const overrideDelete = await fetch(`${baseUrl}/api/v1/routing/transitions/${overrideCreated.id}?project_id=1&sprint_id=10`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      });
+      expect(overrideDelete.status).toBe(200);
+      await expect(overrideDelete.json()).resolves.toEqual({ ok: true });
+
+      const defaultDelete = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&sprint_type=bugs`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      });
+      expect(defaultDelete.status).toBe(200);
+      await expect(defaultDelete.json()).resolves.toEqual({ ok: true });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('denies scoped MCP workflow transition CRUD outside the caller project or tenant', async () => {
+    const tenantContext = await import('../lib/tenantContext');
+    const db = getDb();
+    const defaultTenantId = tenantContext.ensureTenantSchema(db);
+    const betaTenantId = Number(db.prepare(`
+      INSERT INTO tenants (name, slug, is_default)
+      VALUES ('Beta Company', 'beta-company', 0)
+    `).run().lastInsertRowid);
+    db.prepare(`UPDATE projects SET tenant_id = ? WHERE id = 2`).run(betaTenantId);
+    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`).run(betaTenantId);
+    db.prepare(`UPDATE agents SET tenant_id = ? WHERE id = 8`).run(betaTenantId);
+    db.prepare(`
+      INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status)
+      VALUES (?, 2, 'bugs', NULL, 'backend', 'in_progress', 'completed_for_review', 'review')
+    `).run(betaTenantId);
+    const betaTransitionId = Number((db.prepare(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`).get(betaTenantId) as { id: number }).id);
+
+    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (3, ?, 'Same Tenant Other Project')`).run(defaultTenantId);
+    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (30, ?, 3, 'Other Bugs', 'bugs')`).run(defaultTenantId);
+    db.prepare(`
+      INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status)
+      VALUES (?, 3, 'bugs', NULL, 'backend', 'in_progress', 'completed_for_review', 'review')
+    `).run(defaultTenantId);
+    const otherProjectTransitionId = Number((db.prepare(`SELECT id FROM sprint_task_transitions WHERE project_id = 3`).get() as { id: number }).id);
+
+    const apiKey = issueMcpApiKeyForAgent(db, 7, 'transition manager key').apiKey;
+    replaceAgentMcpPermissionPolicy(db, 7, ['routing_transitions.manage_project_scope']);
+    const authHeaders = {
+      Authorization: `Bearer ${apiKey}`,
+      'x-agent-hq-mcp-client': 'agent-hq-mcp',
+    };
+    db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run(String(defaultTenantId));
+
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const crossProjectCreate = await fetch(`${baseUrl}/api/v1/routing/transitions`, {
+        method: 'POST',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: 3,
+          sprint_type: 'bugs',
+          from_status: 'in_progress',
+          outcome: 'blocked',
+          to_status: 'blocked',
+        }),
+      });
+      expect(crossProjectCreate.status).toBe(403);
+      await expect(crossProjectCreate.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: { required_capability: 'routing_transitions.manage_project_scope' },
+      });
+
+      const crossProjectUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${otherProjectTransitionId}?project_id=3&sprint_type=bugs`, {
+        method: 'PUT',
+        headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ priority: 99 }),
+      });
+      expect(crossProjectUpdate.status).toBe(403);
+      await expect(crossProjectUpdate.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: { required_capability: 'routing_transitions.manage_project_scope' },
+      });
+
+      const crossTenantRead = await fetch(`${baseUrl}/api/v1/routing/transitions/${betaTransitionId}?tenant_id=${betaTenantId}&project_id=2&sprint_type=bugs`, {
+        headers: authHeaders,
+      });
+      expect(crossTenantRead.status).toBe(403);
+      await expect(crossTenantRead.json()).resolves.toMatchObject({
+        code: 'mcp_tenant_scope_denied',
+        details: {
+          key_tenant_id: defaultTenantId,
+          requested_tenant_id: betaTenantId,
+          required_capability: 'admin.cross_tenant',
+        },
+      });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   it('allows sprint transition rows to be disabled and deleted even when legacy protected flags exist', async () => {
     const { server, baseUrl } = await startTestServer();
     try {

@@ -306,6 +306,23 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'routing_transitions.manage_project_scope',
+    group: 'Workflow',
+    label: 'Manage project workflow transitions',
+    description: 'Allows reading, creating, updating, and deleting automatic workflow transition rows only inside the MCP agent\'s assigned project and tenant, including workflow-type defaults and workflow-specific overrides. Does not allow assignment-rule edits, workflow-definition edits, transition requirement edits, cross-project edits, cross-tenant edits, or unrelated admin routes.',
+    endpoints: [
+      'GET /api/v1/routing/transitions',
+      'GET /api/v1/routing/transitions/:id',
+      'POST /api/v1/routing/transitions',
+      'PUT /api/v1/routing/transitions/:id',
+      'DELETE /api/v1/routing/transitions/:id',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'projects.read_active_project',
     group: 'Context',
     label: 'Read active project',
@@ -537,6 +554,7 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
   'projects.manage_active_files',
   'sprints.read_active_sprint',
   'workflow.read_active_configuration',
+  'routing_transitions.manage_project_scope',
   'external.write_task_events',
   'mcp_capability_policies.read',
 ]);
@@ -1200,6 +1218,13 @@ type RoutingRuleScopeContext = {
   source: 'request' | 'existing_rule';
 };
 
+type RoutingTransitionScopeContext = {
+  projectId: number | null;
+  sprintId: number | null;
+  sprintType: string | null;
+  source: 'request' | 'existing_transition';
+};
+
 function normalizeScopeString(value: unknown): string | null {
   if (Array.isArray(value)) return normalizeScopeString(value[0]);
   if (typeof value !== 'string') return null;
@@ -1282,6 +1307,61 @@ function getRoutingRuleScopeFromRequest(
 }
 
 function routingRuleScopeMatchesAssignedProject(scope: RoutingRuleScopeContext | null, canonicalAgentProjectId: number | null): boolean {
+  return canonicalAgentProjectId != null
+    && scope?.projectId != null
+    && scope.projectId === canonicalAgentProjectId;
+}
+
+function getRoutingTransitionScopeFromTransitionId(
+  db: Database.Database,
+  transitionId: number,
+  tenantId: number,
+): RoutingTransitionScopeContext | null {
+  if (!hasTable(db, 'sprint_task_transitions')) return null;
+  const hasTransitionProject = hasColumn(db, 'sprint_task_transitions', 'project_id');
+  const hasTransitionSprintType = hasColumn(db, 'sprint_task_transitions', 'sprint_type');
+  const hasTransitionTenant = hasColumn(db, 'sprint_task_transitions', 'tenant_id');
+  const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
+  const row = db.prepare(`
+    SELECT
+      stt.id,
+      ${hasTransitionProject ? 'stt.project_id' : 'NULL'} AS transition_project_id,
+      stt.sprint_id AS transition_sprint_id,
+      ${hasTransitionSprintType ? 'stt.sprint_type' : 'NULL'} AS transition_sprint_type,
+      s.project_id AS sprint_project_id,
+      s.sprint_type AS sprint_type
+    FROM sprint_task_transitions stt
+    LEFT JOIN sprints s ON s.id = stt.sprint_id
+    WHERE stt.id = ?
+      ${hasTransitionTenant ? 'AND stt.tenant_id = ?' : ''}
+      ${!hasTransitionTenant && hasSprintTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
+    LIMIT 1
+  `).get(transitionId, ...((hasTransitionTenant || (!hasTransitionTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    projectId: parsePositiveInt(row.transition_project_id) ?? parsePositiveInt(row.sprint_project_id),
+    sprintId: parsePositiveInt(row.transition_sprint_id),
+    sprintType: normalizeScopeString(row.transition_sprint_type) ?? normalizeScopeString(row.sprint_type),
+    source: 'existing_transition',
+  };
+}
+
+function getRoutingTransitionScopeFromRequest(
+  db: Database.Database,
+  input: Record<string, unknown>,
+  tenantId: number,
+): RoutingTransitionScopeContext | null {
+  const ruleScope = getRoutingRuleScopeFromRequest(db, input, tenantId);
+  if (!ruleScope) return null;
+  return {
+    projectId: ruleScope.projectId,
+    sprintId: ruleScope.sprintId,
+    sprintType: ruleScope.sprintType,
+    source: 'request',
+  };
+}
+
+function routingTransitionScopeMatchesAssignedProject(scope: RoutingTransitionScopeContext | null, canonicalAgentProjectId: number | null): boolean {
   return canonicalAgentProjectId != null
     && scope?.projectId != null
     && scope.projectId === canonicalAgentProjectId;
@@ -1873,6 +1953,71 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     if (scopesToAuthorize.length === 0 || scopesToAuthorize.some((scope) => !routingRuleScopeMatchesAssignedProject(scope, canonicalAgentProjectId))) {
       return deny({
         reason: `Normal Agent HQ MCP keys can only manage assignment rules inside the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    return next();
+  }
+
+  const routingTransitionMatch = requestPath.match(/^\/routing\/transitions(?:\/(\d+))?$/);
+  if (routingTransitionMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
+    const requiredCapability: AgentMcpCapabilityKey = 'routing_transitions.manage_project_scope';
+    if (!requireCapability(
+      requiredCapability,
+      `Workflow transition management is disabled for ${identity.agentSlug}.`,
+    )) return;
+
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for workflow transition management.`,
+        requiredCapability,
+      });
+    }
+
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as Record<string, unknown>
+      : {};
+    const requestInput = { ...req.query, ...body } as Record<string, unknown>;
+    const transitionId = parsePositiveInt(routingTransitionMatch[1]);
+    const existingScope = transitionId != null ? getRoutingTransitionScopeFromTransitionId(db, transitionId, identity.tenantId) : null;
+    const requestHasScope = firstPresent(
+      requestInput.project_id,
+      requestInput.sprint_id,
+      requestInput.workflow_id,
+      requestInput.sprint_type,
+      requestInput.workflow_type,
+    ) !== undefined;
+    const requestedScope = requestHasScope ? getRoutingTransitionScopeFromRequest(db, requestInput, identity.tenantId) : null;
+    const scopesToAuthorize = [
+      ...(existingScope ? [existingScope] : []),
+      ...(requestedScope ? [requestedScope] : []),
+    ];
+
+    if (transitionId != null && existingScope == null) {
+      return deny({
+        reason: `Workflow transition #${transitionId} is outside the MCP key tenant or does not exist.`,
+        requiredCapability,
+      });
+    }
+
+    if (method === 'POST' && requestedScope == null) {
+      return deny({
+        reason: `Workflow transition creation requires project_id with sprint_type or sprint_id within the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    if (method === 'GET' && transitionId == null && requestedScope == null) {
+      return deny({
+        reason: `Workflow transition listing requires project_id with sprint_type or sprint_id within the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    if (scopesToAuthorize.length === 0 || scopesToAuthorize.some((scope) => !routingTransitionScopeMatchesAssignedProject(scope, canonicalAgentProjectId))) {
+      return deny({
+        reason: `Normal Agent HQ MCP keys can only manage workflow transitions inside the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }

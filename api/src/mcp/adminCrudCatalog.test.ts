@@ -121,6 +121,12 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       '/api/v1/assignment-rules',
       '/api/v1/routing/rules',
     ]));
+
+    const transitions = byName.get('agent_hq_list_routing_transitions');
+    expect(transitions?.domain).toBe('routing_transitions');
+    expect(transitions?.description).toContain('automatic workflow transitions');
+    expect(transitions?.description).toContain('routing_transitions.manage_project_scope');
+    expect(byName.get('agent_hq_create_routing_transition')?.description).toContain('assigned project');
   });
 
   it('keeps scoped routing-rule schemas aligned with the current routing API', () => {

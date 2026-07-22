@@ -105,7 +105,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_list_routing_transitions', 'atlas_list_routing_transitions'],
-    'List canonical routing transitions used for model/workflow routing. Optional tenant_id is super-admin MCP only.',
+    'List automatic workflow transitions for workflow-type defaults or workflow-specific overrides. Non-admin MCP keys require routing_transitions.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only.',
     {
       ...tenantSelectorSchema,
       sprint_id: z.number().int().positive().optional().describe('Sprint override scope'),
@@ -118,7 +118,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_get_routing_transition', 'atlas_get_routing_transition'],
-    'Get a canonical routing transition by ID. Optional tenant_id is super-admin MCP only.',
+    'Get an automatic workflow transition by ID within its scoped project/workflow-type context. Non-admin MCP keys require routing_transitions.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only.',
     {
       transition_id: z.number().int().positive().describe('Transition ID'),
       ...tenantSelectorSchema,
@@ -132,7 +132,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_create_routing_transition', 'atlas_create_routing_transition'],
-    'Create a canonical routing transition. Optional tenant_id is super-admin MCP only.',
+    'Create an automatic workflow transition for a workflow-type default or workflow-specific override. Non-admin MCP keys require routing_transitions.manage_project_scope and can only create transitions in their assigned project. Optional tenant_id is super-admin MCP only.',
     {
       ...tenantSelectorSchema,
       sprint_id: z.number().int().positive().optional().describe('Sprint override scope'),
@@ -153,7 +153,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_update_routing_transition', 'atlas_update_routing_transition'],
-    'Update a canonical routing transition. Optional tenant_id is super-admin MCP only.',
+    'Update an automatic workflow transition. Non-admin MCP keys require routing_transitions.manage_project_scope and can only update transitions that remain in their assigned project. Optional tenant_id is super-admin MCP only.',
     {
       transition_id: z.number().int().positive().describe('Transition ID'),
       ...tenantSelectorSchema,
@@ -175,7 +175,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_delete_routing_transition', 'atlas_delete_routing_transition'],
-    'Delete a canonical routing transition. Optional tenant_id is super-admin MCP only.',
+    'Delete a workflow-type default or workflow-specific automatic transition. Non-admin MCP keys require routing_transitions.manage_project_scope and can only delete transitions in their assigned project. Optional tenant_id is super-admin MCP only.',
     {
       transition_id: z.number().int().positive().describe('Transition ID'),
       ...tenantSelectorSchema,
