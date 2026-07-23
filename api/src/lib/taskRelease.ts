@@ -182,10 +182,15 @@ function doneStatusRequiresDeployLiveEvidence(
     const sprintType = task.sprint_type ?? resolveSprintTypeForSprintId(db, task.sprint_id ?? null);
     const workflow = resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
     const sprintTransitions = listSprintTaskTransitions(db, task.sprint_id ?? null);
+    const enabledTransitions = sprintTransitions.filter(transition => transition.enabled !== 0);
+    const taskTypeDoneTransitions = workflow.taskType
+      ? enabledTransitions.filter(transition => transition.task_type === workflow.taskType && transition.to_status === 'done')
+      : [];
+    const completionTransitions = taskTypeDoneTransitions.length > 0
+      ? taskTypeDoneTransitions
+      : enabledTransitions.filter(transition => transition.task_type == null || transition.task_type === workflow.taskType);
 
-    return sprintTransitions
-      .filter(transition => transition.enabled !== 0)
-      .filter(transition => transition.task_type == null || transition.task_type === workflow.taskType)
+    return completionTransitions
       .some(transition => transition.outcome === 'live_verified' && transition.to_status === 'done');
   } catch {
     return true;
