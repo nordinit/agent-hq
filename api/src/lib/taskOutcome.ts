@@ -14,6 +14,7 @@ import {
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
+import { taskColumnSet, taskCustomFieldsSelect, taskEvidenceSelects } from '../domains/tasks/evidenceFields';
 
 export interface ApplyTaskOutcomeInput {
   taskId: number;
@@ -278,7 +279,11 @@ function resolveOutcomeAuthority(
 }
 
 function reloadTaskOutcomeTaskRow(db: Database.Database, taskId: number): TaskOutcomeTaskRow {
-  const customFieldsSelect = tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
+  const taskColumns = taskColumnSet(db);
+  const customFieldsSelect = taskCustomFieldsSelect(db, { tableAlias: 'tasks', columns: taskColumns });
+  const evidenceJsonSelect = taskColumns.has('evidence_json') ? 'tasks.evidence_json' : 'NULL AS evidence_json';
+  const reviewOwnerSelect = taskColumns.has('review_owner_agent_id') ? 'review_owner_agent_id' : 'NULL AS review_owner_agent_id';
+  const previousStatusSelect = taskColumns.has('previous_status') ? 'previous_status' : 'NULL AS previous_status';
   const assignedAgentSelect = tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id' : 'agent_id AS assigned_agent_id';
   const reloaded = db.prepare(`
     SELECT
@@ -291,21 +296,11 @@ function reloadTaskOutcomeTaskRow(db: Database.Database, taskId: number): TaskOu
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
-      review_owner_agent_id,
-      review_branch,
-      review_commit,
-      review_url,
-      qa_verified_commit,
-      qa_tested_url,
-      merged_commit,
-      deployed_commit,
-      deployed_at,
-      live_verified_at,
-      live_verified_by,
-      deploy_target,
-      evidence_json,
+      ${reviewOwnerSelect},
+      ${taskEvidenceSelects(db, { tableAlias: 'tasks', columns: taskColumns }).join(',\n      ')},
+      ${evidenceJsonSelect},
       ${customFieldsSelect},
-      previous_status
+      ${previousStatusSelect}
     FROM tasks
     WHERE id = ?
   `).get(taskId) as TaskOutcomeTaskRow | undefined;
@@ -337,7 +332,11 @@ function routeFallbackOutcomes(outcome: string, semantics: { failureLike: boolea
 
 export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOutcomeInput): Promise<ApplyTaskOutcomeResult> {
   const changedBy = input.changedBy ?? 'system';
-  const customFieldsSelect = tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
+  const taskColumns = taskColumnSet(db);
+  const customFieldsSelect = taskCustomFieldsSelect(db, { tableAlias: 'tasks', columns: taskColumns });
+  const evidenceJsonSelect = taskColumns.has('evidence_json') ? 'tasks.evidence_json' : 'NULL AS evidence_json';
+  const reviewOwnerSelect = taskColumns.has('review_owner_agent_id') ? 'review_owner_agent_id' : 'NULL AS review_owner_agent_id';
+  const previousStatusSelect = taskColumns.has('previous_status') ? 'previous_status' : 'NULL AS previous_status';
   const hasAssignedAgentColumn = tableHasColumn(db, 'tasks', 'assigned_agent_id');
   const assignedAgentSelect = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id AS assigned_agent_id';
   const existing = db.prepare(`
@@ -351,21 +350,11 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
-      review_owner_agent_id,
-      review_branch,
-      review_commit,
-      review_url,
-      qa_verified_commit,
-      qa_tested_url,
-      merged_commit,
-      deployed_commit,
-      deployed_at,
-      live_verified_at,
-      live_verified_by,
-      deploy_target,
-      evidence_json,
+      ${reviewOwnerSelect},
+      ${taskEvidenceSelects(db, { tableAlias: 'tasks', columns: taskColumns }).join(',\n      ')},
+      ${evidenceJsonSelect},
       ${customFieldsSelect},
-      previous_status
+      ${previousStatusSelect}
     FROM tasks
     WHERE id = ?
   `).get(input.taskId) as TaskOutcomeTaskRow | undefined;
@@ -592,32 +581,26 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
   // position instead of always resetting to 'ready'.
   const preserveFailureMetadata = isUnsuccessfulOutcome || nextStatus === 'failed' || nextStatus === 'stalled';
   const assignmentColumn = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id';
-  if (isUnsuccessfulOutcome) {
-    db.prepare(`
-      UPDATE tasks
-      SET status = ?,
-          ${assignmentColumn} = ?,
-          review_owner_agent_id = ?,
-          failure_detail = ?,
-          previous_status = ?,
-          updated_at = datetime('now')
-      WHERE id = ?
-    `).run(nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.failureDetail ?? input.summary ?? null,
-           preserveFailureMetadata ? priorStatus : null,
-           input.taskId);
-  } else {
-    db.prepare(`
-      UPDATE tasks
-      SET status = ?,
-          ${assignmentColumn} = ?,
-          review_owner_agent_id = ?,
-          failure_detail = NULL,
-          previous_status = NULL,
-          updated_at = datetime('now')
-      WHERE id = ?
-    `).run(nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId,
-           input.taskId);
+  const updateAssignments = ['status = ?', `${assignmentColumn} = ?`];
+  const updateValues: unknown[] = [nextStatus, nextAssignedAgentId];
+  if (taskColumns.has('review_owner_agent_id')) {
+    updateAssignments.push('review_owner_agent_id = ?');
+    updateValues.push(nextReviewOwnerAgentId);
   }
+  if (taskColumns.has('failure_detail')) {
+    updateAssignments.push('failure_detail = ?');
+    updateValues.push(isUnsuccessfulOutcome ? input.failureDetail ?? input.summary ?? null : null);
+  }
+  if (taskColumns.has('previous_status')) {
+    updateAssignments.push('previous_status = ?');
+    updateValues.push(isUnsuccessfulOutcome && preserveFailureMetadata ? priorStatus : null);
+  }
+  db.prepare(`
+    UPDATE tasks
+    SET ${updateAssignments.join(', ')},
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(...updateValues, input.taskId);
   syncTaskActiveAgentFromInstance(db, input.taskId);
 
   // Record the task outcome on the authoritative instance so the Jobs UI can

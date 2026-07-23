@@ -150,7 +150,10 @@ describe('OpenClawRuntime terminal failure handling', () => {
                  t.merged_commit,
                  t.deployed_commit,
                  t.deploy_target,
-                 t.deployed_at
+                 t.deployed_at,
+                 t.live_verified_by,
+                 t.live_verified_at,
+                 t.custom_fields_json
           FROM job_instances ji
           LEFT JOIN tasks t ON t.id = ji.task_id
           LEFT JOIN sprints s ON s.id = t.sprint_id
@@ -175,6 +178,9 @@ describe('OpenClawRuntime terminal failure handling', () => {
             deployed_commit: null,
             deploy_target: null,
             deployed_at: null,
+            live_verified_by: null,
+            live_verified_at: null,
+            custom_fields_json: '{}',
           }),
         },
       ],

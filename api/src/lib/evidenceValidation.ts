@@ -34,7 +34,9 @@ export interface LiveVerificationEvidence {
   deployed_commit?: string | null;
 }
 
-export interface InlineEvidence extends ReviewEvidence, QaEvidence, DeployEvidence, LiveVerificationEvidence {}
+export interface InlineEvidence extends ReviewEvidence, QaEvidence, DeployEvidence, LiveVerificationEvidence {
+  [field: string]: unknown;
+}
 
 export interface ValidationResult {
   valid: boolean;
@@ -300,11 +302,20 @@ function validateEvidenceField(fieldName: string, value: unknown, errors: string
  * Extract evidence fields from a request body, returning only the fields
  * that are explicitly provided (not undefined).
  */
-export function extractInlineEvidence(body: Record<string, unknown>): InlineEvidence {
+export function extractInlineEvidence(body: Record<string, unknown>, requirements: GateRequirement[] = []): InlineEvidence {
   const result: InlineEvidence = {};
-  for (const field of INLINE_EVIDENCE_FIELD_KEYS) {
+  const configuredFields = new Set<string>(INLINE_EVIDENCE_FIELD_KEYS);
+  for (const requirement of requirements) {
+    for (const field of parseFieldExpression(requirement.field_name)) {
+      if (field !== 'status') configuredFields.add(field);
+    }
+    if (requirement.match_field && requirement.match_field !== 'status') {
+      configuredFields.add(requirement.match_field);
+    }
+  }
+  for (const field of configuredFields) {
     if (field in body) {
-      (result as Record<string, unknown>)[field] = body[field] as string | null;
+      result[field] = body[field];
     }
   }
   return result;

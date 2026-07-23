@@ -335,6 +335,117 @@ describe('tasks qa-evidence aliases', () => {
     }
   });
 
+  it('stores lifecycle evidence in custom fields when the schema column exists', async () => {
+    const db = getDb();
+    db.exec(`ALTER TABLE tasks ADD COLUMN custom_fields_json TEXT NOT NULL DEFAULT '{}'`);
+
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/tasks/383/qa-evidence`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          qa_verified_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+          qa_tested_url: 'http://localhost:3501/api/v1/tasks/383?contract=custom-fields',
+          changed_by: 'talon-qa',
+          instance_id: 1784,
+        }),
+      });
+      const body = await response.json() as { qa_verified_commit?: string | null; qa_tested_url?: string | null; error?: string };
+
+      if (response.status !== 200) {
+        throw new Error(`Expected 200, received ${response.status}: ${JSON.stringify(body)}`);
+      }
+      expect(body.qa_verified_commit).toBe('6d614b3b104ae36d1dd75210b9f9fb0342673329');
+      expect(body.qa_tested_url).toBe('http://localhost:3501/api/v1/tasks/383?contract=custom-fields');
+
+      const row = db.prepare(`SELECT qa_verified_commit, qa_tested_url, custom_fields_json FROM tasks WHERE id = ?`).get(383) as {
+        qa_verified_commit: string | null;
+        qa_tested_url: string | null;
+        custom_fields_json: string;
+      };
+      expect(row.qa_verified_commit).toBeNull();
+      expect(row.qa_tested_url).toBeNull();
+      expect(JSON.parse(row.custom_fields_json)).toEqual(expect.objectContaining({
+        qa_verified_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+        qa_tested_url: 'http://localhost:3501/api/v1/tasks/383?contract=custom-fields',
+      }));
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('writes workflow-declared custom evidence fields during an active outcome handoff', async () => {
+    const db = getDb();
+    db.exec(`
+      ALTER TABLE tasks ADD COLUMN custom_fields_json TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE tasks ADD COLUMN review_owner_agent_id INTEGER;
+      ALTER TABLE tasks ADD COLUMN previous_status TEXT;
+      ALTER TABLE tasks ADD COLUMN failure_detail TEXT;
+      CREATE TABLE routing_config (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_status TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        to_status TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        project_id INTEGER
+      );
+      CREATE TABLE task_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER,
+        project_id INTEGER,
+        agent_id INTEGER,
+        from_status TEXT,
+        to_status TEXT,
+        moved_by TEXT,
+        move_type TEXT,
+        instance_id INTEGER,
+        reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    db.prepare(`UPDATE tasks SET status = ? WHERE id = ?`).run('in_progress', 383);
+    db.prepare(`INSERT INTO routing_config (from_status, outcome, to_status, enabled, project_id) VALUES (?, ?, ?, 1, ?)`).run(
+      'in_progress',
+      'completed_for_review',
+      'review',
+      1,
+    );
+    db.prepare(`
+      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, severity, message)
+      VALUES (10, NULL, 'completed_for_review', 'review_bundle_digest', 'required', 'block', 'review bundle digest required')
+    `).run();
+
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/tasks/383/outcome`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          outcome: 'completed_for_review',
+          summary: 'Custom evidence handoff.',
+          changed_by: 'cinder-backend',
+          instance_id: 1784,
+          review_bundle_digest: 'sha256:bundle-383',
+        }),
+      });
+      const body = await response.json() as { task?: { status?: string; custom_fields?: Record<string, unknown> }; error?: string; validation_errors?: string[] };
+
+      if (response.status !== 200) {
+        throw new Error(`Expected 200, received ${response.status}: ${JSON.stringify(body)}`);
+      }
+      expect(body.task?.status).toBe('review');
+      expect(body.task?.custom_fields?.review_bundle_digest).toBe('sha256:bundle-383');
+
+      const row = db.prepare(`SELECT custom_fields_json FROM tasks WHERE id = ?`).get(383) as { custom_fields_json: string };
+      expect(JSON.parse(row.custom_fields_json)).toEqual(expect.objectContaining({
+        review_bundle_digest: 'sha256:bundle-383',
+      }));
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   it('rejects review evidence from a stopped instance after task linkage is cleared', async () => {
     const db = getDb();
     db.prepare(`UPDATE tasks SET active_instance_id = NULL WHERE id = ?`).run(383);

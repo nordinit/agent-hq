@@ -16,6 +16,7 @@ import {
   type OpenClawInstanceSessionStateResult,
 } from '../../domains/runs/openclawSessionState';
 import { stopOpenClawRawSessionTerminalPoll } from './transcript';
+import { taskColumnSet, taskCustomFieldsSelect, taskEvidenceSelects, withLifecycleEvidence } from '../../domains/tasks/evidenceFields';
 
 const deferredRuntimeEndRetries = new Map<number, NodeJS.Timeout>();
 
@@ -300,6 +301,7 @@ export async function handleOpenClawRuntimeEnd(
       `).run(JSON.stringify(normalizedEvent), instanceId);
 
     if (shouldPostTerminalFailureOutcome || missingRequiredLifecycleOutcome) {
+      const taskColumns = taskColumnSet(db);
       const taskRow = db.prepare(`
           SELECT ji.task_id, ji.agent_id,
                  t.status AS task_status,
@@ -308,15 +310,8 @@ export async function handleOpenClawRuntimeEnd(
                  t.task_type,
                  t.sprint_id,
                  s.sprint_type,
-                 t.review_branch,
-                 t.review_commit,
-                 t.review_url,
-                 t.qa_verified_commit,
-                 t.qa_tested_url,
-                 t.merged_commit,
-                 t.deployed_commit,
-                 t.deploy_target,
-                 t.deployed_at
+                 ${taskEvidenceSelects(db, { tableAlias: 't', columns: taskColumns }).join(',\n                 ')},
+                 ${taskCustomFieldsSelect(db, { tableAlias: 't', columns: taskColumns })}
           FROM job_instances ji
           LEFT JOIN tasks t ON t.id = ji.task_id
           LEFT JOIN sprints s ON s.id = t.sprint_id
@@ -339,6 +334,7 @@ export async function handleOpenClawRuntimeEnd(
         deployed_commit: string | null;
         deploy_target: string | null;
         deployed_at: string | null;
+        custom_fields_json: string | null;
       } | undefined;
       if (taskRow?.task_id) {
         const resolvedWorkflow = taskRow.task_status ? resolveWorkflow({
@@ -348,7 +344,7 @@ export async function handleOpenClawRuntimeEnd(
           sprintType: taskRow.sprint_type,
           db,
         }) : null;
-        const evidenceRecorded = determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, taskRow);
+        const evidenceRecorded = determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, withLifecycleEvidence(taskRow as unknown as Record<string, unknown>));
         if (missingRequiredLifecycleOutcome) {
           console.warn(`[OpenClawRuntime] Missing lifecycle outcome after runtime end, quarantining task #${taskRow.task_id} instance #${instanceId}`);
           markTaskNeedsAttentionForMissingSemanticHandoff(db, {

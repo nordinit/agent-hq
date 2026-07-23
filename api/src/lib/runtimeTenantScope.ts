@@ -104,6 +104,7 @@ export function insertRuntimeLog(
   pushValue('job_title', input.jobTitle == null ? '' : String(input.jobTitle));
   pushValue('level', input.level ?? 'info');
   pushValue('message', input.message);
+  if (columns.length === 0) return;
   db.prepare(`
     INSERT INTO logs (${columns.join(', ')})
     VALUES (${placeholders.join(', ')})

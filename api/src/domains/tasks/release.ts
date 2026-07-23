@@ -12,11 +12,11 @@ import {
 import { loadSprintTaskTransitionRequirements } from '../routing/policy/statuses';
 import type { McpApiIdentity } from '../../lib/mcpApiAuth';
 import { parseCustomFields } from './fields';
+import { taskCustomFieldsSelect, taskEvidenceSelects, withLifecycleEvidence } from './evidenceFields';
 import { getTaskInstanceAuthorityFailure } from './authority';
 import {
   addTaskNote,
   maybeTriggerDispatch,
-  taskTableHasColumn,
   updateTaskEvidence,
 } from './mutations';
 import { enrichTask, TASK_SELECT } from './readModel';
@@ -123,14 +123,11 @@ export async function postTaskOutcome(
 ) {
   const normalizedBody = normalizeOutcomeBody(body);
   const dryRun = normalizedBody.dry_run === true || normalizedBody.dry_run === 'true';
-  const customFieldsSelect = taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
+  const taskColumns = new Set((db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map((col) => col.name));
   const existing = db.prepare(
     `SELECT id, status, task_type, sprint_id,
-            review_branch, review_commit, review_url,
-            qa_verified_commit, qa_tested_url,
-            merged_commit, deployed_commit, deploy_target, deployed_at,
-            live_verified_by, live_verified_at,
-            ${customFieldsSelect}
+            ${taskEvidenceSelects(db, { columns: taskColumns }).join(',\n            ')},
+            ${taskCustomFieldsSelect(db, { columns: taskColumns })}
      FROM tasks WHERE id = ?`,
   ).get(taskId) as {
     id: number;
@@ -165,8 +162,6 @@ export async function postTaskOutcome(
     throw error;
   }
 
-  const inlineEvidence = extractInlineEvidence(normalizedBody);
-  const hasInline = hasAnyEvidence(inlineEvidence);
   const transitionRequirements = loadSprintTaskTransitionRequirements(db, existing.sprint_id ?? null, outcome, existing.task_type ?? null)
     .map((row): GateRequirement => ({
       field_name: row.field_name,
@@ -175,21 +170,14 @@ export async function postTaskOutcome(
       severity: row.severity,
       message: row.message,
     }));
+  const inlineEvidence = extractInlineEvidence(normalizedBody, transitionRequirements);
+  const hasInline = hasAnyEvidence(inlineEvidence);
 
   const existingCustomFields = parseCustomFields(existing.custom_fields_json);
+  const existingEvidence = withLifecycleEvidence(existing as unknown as Record<string, unknown>);
   const evidenceValidation = validateInlineEvidenceForOutcome(outcome, inlineEvidence, {
     status: existing.status,
-    review_branch: existing.review_branch,
-    review_commit: existing.review_commit,
-    review_url: existing.review_url,
-    qa_verified_commit: existing.qa_verified_commit,
-    qa_tested_url: existing.qa_tested_url,
-    merged_commit: existing.merged_commit,
-    deployed_commit: existing.deployed_commit,
-    deploy_target: existing.deploy_target,
-    deployed_at: existing.deployed_at,
-    live_verified_by: existing.live_verified_by,
-    live_verified_at: existing.live_verified_at,
+    ...existingEvidence,
     ...existingCustomFields,
   }, transitionRequirements);
 
@@ -497,13 +485,13 @@ export function putQaEvidence(
 
   const hasSubstantiveCommit = resolvedQaVerifiedCommit !== undefined && resolvedQaVerifiedCommit !== null && resolvedQaVerifiedCommit !== '';
   if (explicitClears.size === 0 && hasSubstantiveCommit) {
-    const customFieldsSelect = taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
-    const taskRow = db.prepare(`SELECT review_commit, ${customFieldsSelect} FROM tasks WHERE id = ?`).get(taskId) as {
+    const taskColumns = new Set((db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map((col) => col.name));
+    const taskRow = db.prepare(`SELECT ${taskEvidenceSelects(db, { columns: taskColumns }).join(', ')}, ${taskCustomFieldsSelect(db, { columns: taskColumns })} FROM tasks WHERE id = ?`).get(taskId) as {
       review_commit: string | null;
       custom_fields_json: string | null;
     } | undefined;
-    const taskCustomFields = taskRow ? parseCustomFields(taskRow.custom_fields_json) : {};
-    const existingReviewCommit = (taskCustomFields.review_commit as string | null | undefined) ?? taskRow?.review_commit ?? null;
+    const taskEvidence = taskRow ? withLifecycleEvidence(taskRow as unknown as Record<string, unknown>) : {};
+    const existingReviewCommit = taskEvidence.review_commit as string | null | undefined ?? null;
     const qaValidation = validateQaEvidence(
       {
         qa_verified_commit: resolvedQaVerifiedCommit as string | null | undefined,

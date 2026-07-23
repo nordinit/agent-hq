@@ -93,14 +93,14 @@ export function updateTaskEvidence(
     nextCustomFields[key] = updates[key] ?? null;
   }
 
-  const shadowColumnKeys = activeKeys.filter((key) => taskColumns.has(key));
+  const fallbackColumnKeys = taskColumns.has('custom_fields_json') ? [] : activeKeys.filter((key) => taskColumns.has(key));
   const assignments = [
     ...(taskColumns.has('custom_fields_json') ? ['custom_fields_json = ?'] : []),
-    ...shadowColumnKeys.map((key) => `${key} = ?`),
+    ...fallbackColumnKeys.map((key) => `${key} = ?`),
   ];
   const values = [
     ...(taskColumns.has('custom_fields_json') ? [JSON.stringify(nextCustomFields)] : []),
-    ...shadowColumnKeys.map((key) => updates[key]),
+    ...fallbackColumnKeys.map((key) => updates[key]),
   ];
   if (assignments.length === 0) return;
   db.prepare(`

@@ -5,6 +5,7 @@ import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOu
 import { recordRunCheckIn } from './observability';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
 import { normalizeTokenUsage } from './tokenUsage';
+import { taskColumnSet, taskCustomFieldsSelect, taskEvidenceSelects, withLifecycleEvidence } from '../tasks/evidenceFields';
 
 export interface TerminalRuntimeEndEvent {
   type: string;
@@ -213,6 +214,7 @@ export async function applyRuntimeEndToJobInstance(
   });
 
   if (shouldPostTerminalFailureOutcome || missingRequiredLifecycleOutcome) {
+    const taskColumns = taskColumnSet(db);
     const taskRow = db.prepare(`
       SELECT ji.task_id, ji.agent_id,
              t.status AS task_status,
@@ -221,15 +223,8 @@ export async function applyRuntimeEndToJobInstance(
              t.task_type,
              t.sprint_id,
              s.sprint_type,
-             t.review_branch,
-             t.review_commit,
-             t.review_url,
-             t.qa_verified_commit,
-             t.qa_tested_url,
-             t.merged_commit,
-             t.deployed_commit,
-             t.deploy_target,
-             t.deployed_at
+             ${taskEvidenceSelects(db, { tableAlias: 't', columns: taskColumns }).join(',\n             ')},
+             ${taskCustomFieldsSelect(db, { tableAlias: 't', columns: taskColumns })}
       FROM job_instances ji
       LEFT JOIN tasks t ON t.id = ji.task_id
       LEFT JOIN sprints s ON s.id = t.sprint_id
@@ -252,6 +247,7 @@ export async function applyRuntimeEndToJobInstance(
       deployed_commit: string | null;
       deploy_target: string | null;
       deployed_at: string | null;
+      custom_fields_json: string | null;
     } | undefined;
 
     if (taskRow?.task_id) {
@@ -272,7 +268,7 @@ export async function applyRuntimeEndToJobInstance(
           workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
           priorTaskStatus: taskRow.task_status ?? existing.status,
           sessionKey: existing.session_key,
-          reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, taskRow),
+          reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, withLifecycleEvidence(taskRow as unknown as Record<string, unknown>)),
           runtimeEnd: {
             source: runtimeEndSource,
             success: params.event.success,

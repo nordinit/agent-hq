@@ -61,6 +61,23 @@ describe('sprint field schema migration', () => {
     }
     expect(schema.fields.map(field => field.key)).not.toEqual(expect.arrayContaining(['id', 'status']));
     expect(schema.fields.filter(field => field.system === true).map(field => field.key)).toEqual([]);
+
+    const taskColumns = (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map((column) => column.name);
+    expect(taskColumns).not.toEqual(expect.arrayContaining([
+      'review_branch',
+      'review_commit',
+      'review_url',
+      'qa_verified_commit',
+      'qa_tested_url',
+      'merged_commit',
+      'deployed_commit',
+      'deploy_target',
+      'deployed_at',
+      'live_verified_by',
+      'live_verified_at',
+      'evidence_json',
+    ]));
+    expect(taskColumns).toContain('custom_fields_json');
   });
 
   it('resolves dev task workflow metadata from sprint task policy', () => {

@@ -16,6 +16,7 @@ import { normalizeTokenUsage } from '../domains/runs/tokenUsage';
 import { createNotificationRecord } from '../lib/notifications';
 import { getActiveTenantId } from '../lib/tenantContext';
 import { insertRuntimeLog } from '../lib/runtimeTenantScope';
+import { taskColumnSet, taskCustomFieldsSelect, taskEvidenceSelects, withLifecycleEvidence } from '../domains/tasks/evidenceFields';
 
 const DEFAULT_TIMEOUT_MINUTES = 20;
 const DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MINUTES * 60_000;
@@ -365,30 +366,25 @@ interface WatchdogTaskRuntimeContext {
   deployed_commit: string | null;
   deploy_target: string | null;
   deployed_at: string | null;
+  custom_fields_json: string | null;
 }
 
 function loadTaskRuntimeContext(db: Database.Database, taskId: number | null): WatchdogTaskRuntimeContext | null {
   if (!taskId) return null;
   try {
+    const taskColumns = taskColumnSet(db);
     const row = db.prepare(`
       SELECT t.status AS task_status,
              t.task_type,
              t.sprint_id,
              s.sprint_type,
-             t.review_branch,
-             t.review_commit,
-             t.review_url,
-             t.qa_verified_commit,
-             t.qa_tested_url,
-             t.merged_commit,
-             t.deployed_commit,
-             t.deploy_target,
-             t.deployed_at
+             ${taskEvidenceSelects(db, { tableAlias: 't', columns: taskColumns }).join(',\n             ')},
+             ${taskCustomFieldsSelect(db, { tableAlias: 't', columns: taskColumns })}
       FROM tasks t
       LEFT JOIN sprints s ON s.id = t.sprint_id
       WHERE t.id = ?
     `).get(taskId) as WatchdogTaskRuntimeContext | undefined;
-    return row ?? null;
+    return row ? withLifecycleEvidence(row as unknown as Record<string, unknown>) as unknown as WatchdogTaskRuntimeContext : null;
   } catch {
     return null;
   }

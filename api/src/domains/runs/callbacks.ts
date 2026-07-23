@@ -14,6 +14,7 @@ import { notifyTaskStatusChange } from '../../lib/taskNotifications';
 import { writeTaskHistory, writeTaskStatusChange } from '../tasks/history';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
+import { taskColumnSet, taskCustomFieldsSelect, taskEvidenceSelects, withLifecycleEvidence } from '../tasks/evidenceFields';
 
 const START_EVENT_LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
 
@@ -295,13 +296,13 @@ export async function completeRunInstance(
       ? (summary ?? 'Runtime reported failed terminal state')
       : null;
 
+  const taskColumns = taskColumnSet(db);
   const taskRow = taskId
     ? db.prepare(`
         SELECT ${tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
                t.status, t.task_type, t.project_id, t.agent_id, t.sprint_id, s.sprint_type,
-               t.review_branch, t.review_commit, t.review_url,
-               t.qa_verified_commit, t.qa_tested_url,
-               t.merged_commit, t.deployed_commit, t.deploy_target, t.deployed_at
+               ${taskEvidenceSelects(db, { tableAlias: 't', columns: taskColumns }).join(',\n               ')},
+               ${taskCustomFieldsSelect(db, { tableAlias: 't', columns: taskColumns })}
         FROM tasks t
         LEFT JOIN sprints s ON s.id = t.sprint_id
         WHERE t.id = ?
@@ -322,6 +323,7 @@ export async function completeRunInstance(
         deployed_commit: string | null;
         deploy_target: string | null;
         deployed_at: string | null;
+        custom_fields_json: string | null;
       } | undefined
     : undefined;
   const resolvedWorkflow = taskRow ? resolveWorkflow({
@@ -331,7 +333,7 @@ export async function completeRunInstance(
     sprintType: taskRow.sprint_type,
     db,
   }) : null;
-  const evidenceRecorded = determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, taskRow);
+  const evidenceRecorded = determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, taskRow ? withLifecycleEvidence(taskRow as unknown as Record<string, unknown>) : null);
 
   const tokenUsage = normalizeTokenUsage(
     {

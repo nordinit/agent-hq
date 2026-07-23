@@ -45,8 +45,8 @@ function seedTaskContextFixture(): void {
   db.prepare(`
     INSERT INTO tasks (
       id, title, description, status, priority, project_id, sprint_id, agent_id, active_instance_id, task_type, story_points,
-      review_branch, review_commit, review_url, custom_fields_json, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      custom_fields_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     460,
     'Add task-context endpoint',
@@ -59,10 +59,11 @@ function seedTaskContextFixture(): void {
     null,
     'backend',
     5,
-    'cinder-backend/task-460',
-    'abcdef1234567890abcdef1234567890abcdef12',
-    'http://localhost:3510/tasks/460/review',
-    '{}',
+    JSON.stringify({
+      review_branch: 'cinder-backend/task-460',
+      review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+      review_url: 'http://localhost:3510/tasks/460/review',
+    }),
     '2026-05-09 18:31:00',
   );
 

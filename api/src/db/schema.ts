@@ -1743,27 +1743,6 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     console.log('[schema] Migrated: added custom_fields_json to tasks');
   } catch (_) { /* column already exists */ }
 
-  const taskEvidenceColumns: Array<{ name: string; sql: string; log: string }> = [
-    { name: 'review_branch', sql: `ALTER TABLE tasks ADD COLUMN review_branch TEXT`, log: 'review_branch' },
-    { name: 'review_commit', sql: `ALTER TABLE tasks ADD COLUMN review_commit TEXT`, log: 'review_commit' },
-    { name: 'review_url', sql: `ALTER TABLE tasks ADD COLUMN review_url TEXT`, log: 'review_url' },
-    { name: 'qa_verified_commit', sql: `ALTER TABLE tasks ADD COLUMN qa_verified_commit TEXT`, log: 'qa_verified_commit' },
-    { name: 'qa_tested_url', sql: `ALTER TABLE tasks ADD COLUMN qa_tested_url TEXT`, log: 'qa_tested_url' },
-    { name: 'merged_commit', sql: `ALTER TABLE tasks ADD COLUMN merged_commit TEXT`, log: 'merged_commit' },
-    { name: 'deployed_commit', sql: `ALTER TABLE tasks ADD COLUMN deployed_commit TEXT`, log: 'deployed_commit' },
-    { name: 'deployed_at', sql: `ALTER TABLE tasks ADD COLUMN deployed_at TEXT`, log: 'deployed_at' },
-    { name: 'live_verified_at', sql: `ALTER TABLE tasks ADD COLUMN live_verified_at TEXT`, log: 'live_verified_at' },
-    { name: 'live_verified_by', sql: `ALTER TABLE tasks ADD COLUMN live_verified_by TEXT`, log: 'live_verified_by' },
-    { name: 'deploy_target', sql: `ALTER TABLE tasks ADD COLUMN deploy_target TEXT`, log: 'deploy_target' },
-    { name: 'evidence_json', sql: `ALTER TABLE tasks ADD COLUMN evidence_json TEXT`, log: 'evidence_json' },
-  ];
-
-  for (const column of taskEvidenceColumns) {
-    try {
-      db.exec(column.sql);
-      console.log(`[schema] Migrated: added ${column.log} to tasks`);
-    } catch (_) { /* column already exists */ }
-  }
   backfillEvidenceFieldsIntoCustomFields(db);
 
   // Project files table

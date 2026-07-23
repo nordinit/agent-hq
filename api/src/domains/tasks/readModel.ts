@@ -2,6 +2,7 @@ import { getDb } from '../../db/client';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
 import { TERMINAL_TASK_STATUSES } from '../../lib/taskStatuses';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
+import { taskColumnSet, taskCustomFieldsSelect, taskEvidenceSelects, withLifecycleEvidence } from './evidenceFields';
 import { getTaskRelationshipsForEnrichment } from './relationships';
 
 export type TaskRecord = Record<string, unknown>;
@@ -16,7 +17,7 @@ export function stripRetiredTaskColumns(row: TaskRecord): TaskRecord {
 
 export function enrichTask(task: TaskRecord): TaskRecord {
   const db = getDb();
-  const taskWithoutRetiredColumns = stripRetiredTaskColumns(task);
+  const taskWithoutRetiredColumns = withLifecycleEvidence(stripRetiredTaskColumns(task));
   const id = task.id as number;
   const tenantId = typeof task.tenant_id === 'number' ? task.tenant_id : null;
   const tenantFilter = tenantId == null ? '' : ' AND t.tenant_id = ?';
@@ -462,6 +463,7 @@ export function listRecentlyCompletedTasks(
   const projectFilter = projectId ? 'AND t.project_id = ?' : '';
   const tenantFilter = tenantId ? 'AND t.tenant_id = ?' : '';
   const params: unknown[] = [hours];
+  const taskColumns = taskColumnSet(db);
   if (projectId) params.push(projectId);
   if (tenantId) params.push(tenantId);
 
@@ -472,8 +474,8 @@ export function listRecentlyCompletedTasks(
       t.status,
       t.priority,
       t.project_id,
-      t.live_verified_at,
-      t.live_verified_by,
+      ${taskEvidenceSelects(db, { tableAlias: 't', columns: taskColumns }).join(',\n      ')},
+      ${taskCustomFieldsSelect(db, { tableAlias: 't', columns: taskColumns })},
       t.updated_at,
       t.agent_id,
       a.name  AS agent_name,
@@ -516,7 +518,7 @@ export function listRecentlyCompletedTasks(
       ${projectFilter}
       ${tenantFilter}
     ORDER BY t.updated_at DESC
-  `).all(...params) as Record<string, unknown>[];
+  `).all(...params).map((row) => withLifecycleEvidence(row as Record<string, unknown>)) as Record<string, unknown>[];
 
   return { hours, count: rows.length, tasks: rows };
 }
