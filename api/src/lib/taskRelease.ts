@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
 import { resolveSprintTypeForSprintId, resolveTaskWorkflowContext } from '../domains/sprint-definitions/config';
+import { getCanonicalTaskRecord } from '../domains/tasks/evidence';
 import {
   listSprintTaskTransitions,
   loadSprintTaskTransitionRequirements,
@@ -114,21 +115,8 @@ type TransitionRequirementRow = {
   message: string;
 };
 
-function parseCustomFields(raw: unknown): Record<string, unknown> {
-  if (typeof raw !== 'string' || raw.trim().length === 0) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
-
 function buildTaskRecord(task: TaskReleaseRecord): Record<string, unknown> {
-  return {
-    ...(task as unknown as Record<string, unknown>),
-    ...parseCustomFields(task.custom_fields_json),
-  };
+  return getCanonicalTaskRecord(task as unknown as Record<string, unknown>);
 }
 
 function loadTransitionRequirements(

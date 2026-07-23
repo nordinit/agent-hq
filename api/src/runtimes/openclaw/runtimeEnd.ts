@@ -8,6 +8,7 @@ import { derivePostRuntimeInstanceStatus, determineRuntimeEndEvidenceRecorded } 
 import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOutcome } from '../../domains/runs/lifecycleHandoff';
 import { applyConfiguredRuntimeFailedEvent } from '../../domains/runs/runtimeFailureEvent';
 import { normalizeTokenUsage } from '../../domains/runs/tokenUsage';
+import { getCanonicalTaskRecord } from '../../domains/tasks/evidence';
 import { resolveWorkflow } from '../../services/contracts/workflowContract';
 import { isProviderLimitFailureText, trimProviderLimitFailureText } from '../providerLimitFailure';
 import {
@@ -18,6 +19,14 @@ import {
 import { stopOpenClawRawSessionTerminalPoll } from './transcript';
 
 const deferredRuntimeEndRetries = new Map<number, NodeJS.Timeout>();
+
+function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+}
+
+function taskEvidenceSelect(db: Database.Database, column: string): string {
+  return tableHasColumn(db, 'tasks', column) ? `t.${column}` : `NULL AS ${column}`;
+}
 
 function isOpenClawPreReplyFailure(content: string): boolean {
   const haystack = content.toLowerCase();
@@ -308,15 +317,16 @@ export async function handleOpenClawRuntimeEnd(
                  t.task_type,
                  t.sprint_id,
                  s.sprint_type,
-                 t.review_branch,
-                 t.review_commit,
-                 t.review_url,
-                 t.qa_verified_commit,
-                 t.qa_tested_url,
-                 t.merged_commit,
-                 t.deployed_commit,
-                 t.deploy_target,
-                 t.deployed_at
+                 ${taskEvidenceSelect(db, 'review_branch')},
+                 ${taskEvidenceSelect(db, 'review_commit')},
+                 ${taskEvidenceSelect(db, 'review_url')},
+                 ${taskEvidenceSelect(db, 'qa_verified_commit')},
+                 ${taskEvidenceSelect(db, 'qa_tested_url')},
+                 ${taskEvidenceSelect(db, 'merged_commit')},
+                 ${taskEvidenceSelect(db, 'deployed_commit')},
+                 ${taskEvidenceSelect(db, 'deploy_target')},
+                 ${taskEvidenceSelect(db, 'deployed_at')},
+                 ${tableHasColumn(db, 'tasks', 'custom_fields_json') ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
           FROM job_instances ji
           LEFT JOIN tasks t ON t.id = ji.task_id
           LEFT JOIN sprints s ON s.id = t.sprint_id
@@ -339,6 +349,7 @@ export async function handleOpenClawRuntimeEnd(
         deployed_commit: string | null;
         deploy_target: string | null;
         deployed_at: string | null;
+        custom_fields_json: string | null;
       } | undefined;
       if (taskRow?.task_id) {
         const resolvedWorkflow = taskRow.task_status ? resolveWorkflow({
@@ -348,7 +359,10 @@ export async function handleOpenClawRuntimeEnd(
           sprintType: taskRow.sprint_type,
           db,
         }) : null;
-        const evidenceRecorded = determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, taskRow);
+        const evidenceRecorded = determineRuntimeEndEvidenceRecorded(
+          resolvedWorkflow?.workflowPhase ?? null,
+          getCanonicalTaskRecord(taskRow as unknown as Record<string, unknown>),
+        );
         if (missingRequiredLifecycleOutcome) {
           console.warn(`[OpenClawRuntime] Missing lifecycle outcome after runtime end, quarantining task #${taskRow.task_id} instance #${instanceId}`);
           markTaskNeedsAttentionForMissingSemanticHandoff(db, {

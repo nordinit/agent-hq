@@ -5,6 +5,7 @@ import { getDb } from '../db/client';
 import { validateReviewEvidence } from '../lib/evidenceValidation';
 import { getMcpIdentityFromRequest, type McpApiIdentity } from '../lib/mcpApiAuth';
 import { notifyTaskStatusChange } from '../lib/taskNotifications';
+import { getCanonicalTaskCustomFields } from '../domains/tasks/evidence';
 import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/history';
 import { applyTaskOutcome, RefusedTaskOutcomeError } from '../lib/taskOutcome';
 import {
@@ -349,22 +350,12 @@ function addTaskNote(taskId: number, author: string, content: string): void {
   `).run(taskId, author, content);
 }
 
-function parseCustomFields(raw: unknown): Record<string, unknown> {
-  if (typeof raw !== 'string' || raw.trim().length === 0) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
-
 function updateTaskEvidence(taskId: number, changedBy: string, updates: Record<string, unknown>): void {
   const db = getDb();
   const existing = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(taskId) as Record<string, unknown> | undefined;
   if (!existing) throw new Error('Task not found');
   const taskColumns = new Set((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map(col => col.name));
-  const existingCustomFields = taskColumns.has('custom_fields_json') ? parseCustomFields(existing.custom_fields_json) : {};
+  const existingCustomFields = taskColumns.has('custom_fields_json') ? getCanonicalTaskCustomFields(existing) : {};
 
   const requestedKeys = Object.keys(updates).filter((key) => updates[key] !== undefined);
   if (requestedKeys.length === 0) return;
@@ -392,13 +383,15 @@ function updateTaskEvidence(taskId: number, changedBy: string, updates: Record<s
   for (const key of activeKeys) {
     nextCustomFields[key] = updates[key] ?? null;
   }
-  const shadowColumnKeys = activeKeys.filter(key => taskColumns.has(key));
-  const assignments = [
-    ...(taskColumns.has('custom_fields_json') ? ['custom_fields_json = ?'] : []),
+  const hasCustomFieldsJson = taskColumns.has('custom_fields_json');
+  const shadowColumnKeys = hasCustomFieldsJson ? [] : activeKeys.filter((key) => taskColumns.has(key));
+  const assignmentParts = [
+    ...(hasCustomFieldsJson ? ['custom_fields_json = ?'] : []),
     ...shadowColumnKeys.map((key) => `${key} = ?`),
-  ].join(', ');
+  ];
+  const assignments = assignmentParts.join(', ');
   const values = [
-    ...(taskColumns.has('custom_fields_json') ? [JSON.stringify(nextCustomFields)] : []),
+    ...(hasCustomFieldsJson ? [JSON.stringify(nextCustomFields)] : []),
     ...shadowColumnKeys.map((key) => updates[key]),
   ];
   if (!assignments) return;

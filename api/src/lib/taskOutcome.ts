@@ -4,6 +4,7 @@ import { canonicalOutcomeRoute, requireReleaseGate, resolveSprintWorkflowOutcome
 import { notifyTaskStatusChange } from './taskNotifications';
 import { isTerminalOutcome, closeInstance } from '../domains/runs/instanceClose';
 import { emitIntegrityEvent, writeTaskLifecycleOutcomeHistory, writeTaskStatusChange } from '../domains/tasks/history';
+import { getCanonicalTaskRecord } from '../domains/tasks/evidence';
 import { resolveSprintTaskRoutingAssignment } from '../domains/routing/policy/statuses';
 import { resolveSprintOutcomeMap } from '../domains/sprint-definitions/outcomes';
 import {
@@ -127,25 +128,37 @@ function addAuditNote(db: Database.Database, taskId: number, author: string, con
   `).run(...tenant.values, taskId, author, content);
 }
 
-function parseCustomFields(raw: unknown): Record<string, unknown> {
-  if (typeof raw !== 'string' || raw.trim().length === 0) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
-
 function withCanonicalFieldValues(task: TaskOutcomeTaskRow): TaskOutcomeTaskRow {
-  return {
-    ...task,
-    ...parseCustomFields(task.custom_fields_json),
-  } as TaskOutcomeTaskRow;
+  return getCanonicalTaskRecord(task as unknown as Record<string, unknown>) as TaskOutcomeTaskRow;
 }
 
 function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
   return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(col => col.name === column);
+}
+
+function selectTaskEvidenceColumns(db: Database.Database): string {
+  const columns = [
+    'review_branch',
+    'review_commit',
+    'review_url',
+    'qa_verified_commit',
+    'qa_tested_url',
+    'merged_commit',
+    'deployed_commit',
+    'deployed_at',
+    'live_verified_at',
+    'live_verified_by',
+    'deploy_target',
+    'evidence_json',
+    'previous_status',
+  ];
+  return columns
+    .map((column) => (tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`))
+    .join(',\n      ');
+}
+
+function selectTaskColumnOrNull(db: Database.Database, column: string): string {
+  return tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`;
 }
 
 export function resolveRefusedTaskOutcome(
@@ -280,6 +293,7 @@ function resolveOutcomeAuthority(
 function reloadTaskOutcomeTaskRow(db: Database.Database, taskId: number): TaskOutcomeTaskRow {
   const customFieldsSelect = tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
   const assignedAgentSelect = tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id' : 'agent_id AS assigned_agent_id';
+  const evidenceSelect = selectTaskEvidenceColumns(db);
   const reloaded = db.prepare(`
     SELECT
       id,
@@ -291,21 +305,9 @@ function reloadTaskOutcomeTaskRow(db: Database.Database, taskId: number): TaskOu
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
-      review_owner_agent_id,
-      review_branch,
-      review_commit,
-      review_url,
-      qa_verified_commit,
-      qa_tested_url,
-      merged_commit,
-      deployed_commit,
-      deployed_at,
-      live_verified_at,
-      live_verified_by,
-      deploy_target,
-      evidence_json,
-      ${customFieldsSelect},
-      previous_status
+      ${selectTaskColumnOrNull(db, 'review_owner_agent_id')},
+      ${evidenceSelect},
+      ${customFieldsSelect}
     FROM tasks
     WHERE id = ?
   `).get(taskId) as TaskOutcomeTaskRow | undefined;
@@ -340,6 +342,7 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
   const customFieldsSelect = tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
   const hasAssignedAgentColumn = tableHasColumn(db, 'tasks', 'assigned_agent_id');
   const assignedAgentSelect = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id AS assigned_agent_id';
+  const evidenceSelect = selectTaskEvidenceColumns(db);
   const existing = db.prepare(`
     SELECT
       id,
@@ -351,21 +354,9 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
-      review_owner_agent_id,
-      review_branch,
-      review_commit,
-      review_url,
-      qa_verified_commit,
-      qa_tested_url,
-      merged_commit,
-      deployed_commit,
-      deployed_at,
-      live_verified_at,
-      live_verified_by,
-      deploy_target,
-      evidence_json,
-      ${customFieldsSelect},
-      previous_status
+      ${selectTaskColumnOrNull(db, 'review_owner_agent_id')},
+      ${evidenceSelect},
+      ${customFieldsSelect}
     FROM tasks
     WHERE id = ?
   `).get(input.taskId) as TaskOutcomeTaskRow | undefined;

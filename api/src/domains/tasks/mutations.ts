@@ -3,7 +3,7 @@ import { getDb } from '../../db/client';
 import { createRelationshipFromBlockedBy, deleteTaskRelationshipByTuple } from './relationships';
 import { triggerDispatch } from '../../services/dispatchTrigger';
 import { writeTaskHistory } from './history';
-import { parseCustomFields } from './fields';
+import { getCanonicalTaskCustomFields } from './evidence';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 
 export interface TaskBlockerInput {
@@ -52,13 +52,7 @@ export function updateTaskEvidence(
   const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown> | undefined;
   if (!existing) throw new Error('Task not found');
   const taskColumns = new Set((db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map((col) => col.name));
-  const existingCustomFields = (() => {
-    try {
-      return taskColumns.has('custom_fields_json') ? parseCustomFields(existing.custom_fields_json) : {};
-    } catch {
-      return {};
-    }
-  })();
+  const existingCustomFields = taskColumns.has('custom_fields_json') ? getCanonicalTaskCustomFields(existing) : {};
 
   const requestedKeys = Object.keys(updates).filter((key) => updates[key] !== undefined);
   if (requestedKeys.length === 0) return;
@@ -93,13 +87,14 @@ export function updateTaskEvidence(
     nextCustomFields[key] = updates[key] ?? null;
   }
 
-  const shadowColumnKeys = activeKeys.filter((key) => taskColumns.has(key));
+  const hasCustomFieldsJson = taskColumns.has('custom_fields_json');
+  const shadowColumnKeys = hasCustomFieldsJson ? [] : activeKeys.filter((key) => taskColumns.has(key));
   const assignments = [
-    ...(taskColumns.has('custom_fields_json') ? ['custom_fields_json = ?'] : []),
+    ...(hasCustomFieldsJson ? ['custom_fields_json = ?'] : []),
     ...shadowColumnKeys.map((key) => `${key} = ?`),
   ];
   const values = [
-    ...(taskColumns.has('custom_fields_json') ? [JSON.stringify(nextCustomFields)] : []),
+    ...(hasCustomFieldsJson ? [JSON.stringify(nextCustomFields)] : []),
     ...shadowColumnKeys.map((key) => updates[key]),
   ];
   if (assignments.length === 0) return;

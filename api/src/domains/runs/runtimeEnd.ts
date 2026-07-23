@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecycle';
 import { resolveWorkflow } from '../../services/contracts/workflowContract';
+import { getCanonicalTaskRecord } from '../tasks/evidence';
 import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOutcome } from './lifecycleHandoff';
 import { recordRunCheckIn } from './observability';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
@@ -30,6 +31,11 @@ export interface RuntimeEndEvidenceFields {
   deployed_at?: string | null;
 }
 
+function taskEvidenceSelect(db: Database.Database, column: keyof RuntimeEndEvidenceFields): string {
+  const hasColumn = (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((row) => row.name === column);
+  return hasColumn ? `t.${column}` : `NULL AS ${column}`;
+}
+
 export function derivePostRuntimeInstanceStatus(
   status: string,
   runtimeEndedAt: string | null | undefined,
@@ -50,16 +56,17 @@ export function determineRuntimeEndEvidenceRecorded(
   row: RuntimeEndEvidenceFields | null | undefined,
 ): 'yes' | 'no' {
   if (!row) return 'no';
+  const canonicalRow = getCanonicalTaskRecord(row as Record<string, unknown>);
 
   if (workflowPhase === 'review') {
-    return row.qa_verified_commit ? 'yes' : 'no';
+    return canonicalRow.qa_verified_commit ? 'yes' : 'no';
   }
 
   if (workflowPhase === 'release') {
-    return (row.merged_commit || row.deployed_commit || row.deploy_target || row.deployed_at) ? 'yes' : 'no';
+    return (canonicalRow.merged_commit || canonicalRow.deployed_commit || canonicalRow.deploy_target || canonicalRow.deployed_at) ? 'yes' : 'no';
   }
 
-  return (row.review_branch || row.review_commit || row.review_url) ? 'yes' : 'no';
+  return (canonicalRow.review_branch || canonicalRow.review_commit || canonicalRow.review_url) ? 'yes' : 'no';
 }
 
 export function markRuntimeEnded(
@@ -221,15 +228,16 @@ export async function applyRuntimeEndToJobInstance(
              t.task_type,
              t.sprint_id,
              s.sprint_type,
-             t.review_branch,
-             t.review_commit,
-             t.review_url,
-             t.qa_verified_commit,
-             t.qa_tested_url,
-             t.merged_commit,
-             t.deployed_commit,
-             t.deploy_target,
-             t.deployed_at
+             ${taskEvidenceSelect(db, 'review_branch')},
+             ${taskEvidenceSelect(db, 'review_commit')},
+             ${taskEvidenceSelect(db, 'review_url')},
+             ${taskEvidenceSelect(db, 'qa_verified_commit')},
+             ${taskEvidenceSelect(db, 'qa_tested_url')},
+             ${taskEvidenceSelect(db, 'merged_commit')},
+             ${taskEvidenceSelect(db, 'deployed_commit')},
+             ${taskEvidenceSelect(db, 'deploy_target')},
+             ${taskEvidenceSelect(db, 'deployed_at')},
+             ${((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((row) => row.name === 'custom_fields_json')) ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
       FROM job_instances ji
       LEFT JOIN tasks t ON t.id = ji.task_id
       LEFT JOIN sprints s ON s.id = t.sprint_id
@@ -252,9 +260,11 @@ export async function applyRuntimeEndToJobInstance(
       deployed_commit: string | null;
       deploy_target: string | null;
       deployed_at: string | null;
+      custom_fields_json: string | null;
     } | undefined;
 
     if (taskRow?.task_id) {
+      const canonicalTaskRow = getCanonicalTaskRecord(taskRow as unknown as Record<string, unknown>);
       const resolvedWorkflow = taskRow.task_status ? resolveWorkflow({
         taskStatus: taskRow.task_status,
         taskType: taskRow.task_type,
@@ -272,7 +282,7 @@ export async function applyRuntimeEndToJobInstance(
           workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
           priorTaskStatus: taskRow.task_status ?? existing.status,
           sessionKey: existing.session_key,
-          reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, taskRow),
+          reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, canonicalTaskRow),
           runtimeEnd: {
             source: runtimeEndSource,
             success: params.event.success,

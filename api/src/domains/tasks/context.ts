@@ -1,5 +1,6 @@
 import { getDb } from '../../db/client';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
+import { getCanonicalTaskRecord } from './evidence';
 
 export type TaskContextMode = 'summary' | 'full';
 
@@ -264,8 +265,9 @@ function loadTask(taskId: number): RecordLike | null {
   const db = getDb();
   const task = db.prepare(`${TASK_CONTEXT_SELECT} WHERE t.id = ?`).get(taskId) as RecordLike | undefined;
   if (!task) return null;
+  const canonicalTask = getCanonicalTaskRecord(task);
   const customFields = parseCustomFields(task.custom_fields_json);
-  const taskWithoutRetiredColumns = stripRetiredTaskColumns({ ...task, ...customFields });
+  const taskWithoutRetiredColumns = stripRetiredTaskColumns({ ...canonicalTask, ...customFields });
 
   const blockers = db.prepare(`
     SELECT t.id, t.title, t.status, t.priority, t.task_type, t.agent_id, a.name AS agent_name, t.sprint_id, s.name AS sprint_name, t.project_id
@@ -287,7 +289,7 @@ function loadTask(taskId: number): RecordLike | null {
 
   return {
     ...taskWithoutRetiredColumns,
-    ...evaluateTaskIntegrity(task as { status?: string | null; task_type?: string | null }, db),
+    ...evaluateTaskIntegrity(canonicalTask as { status?: string | null; task_type?: string | null }, db),
     changed_files: parseChangedFiles(task.changed_files_json),
     blockers: blockers.map(formatTaskRef),
     blocking: blocking.map(formatTaskRef),

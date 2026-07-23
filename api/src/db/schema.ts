@@ -46,6 +46,7 @@ import { ensureNotificationTables } from '../lib/notifications';
 const HOME = process.env.HOME ?? os.homedir();
 const OPENCLAW_DIR = process.env.WORKSPACE_PARENT ?? `${HOME}/.openclaw`;
 const ATLAS_MIGRATION_SETTING_KEY = 'migration.task25.atlas_cutover.completed';
+const LEGACY_TASK_EVIDENCE_COLUMNS = [...INLINE_EVIDENCE_FIELD_KEYS, 'evidence_json'] as const;
 let activeTenantMode: 'repair' | 'verify' = 'repair';
 
 const TASKS_STATUS_CHECK_RE = /\s+CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i;
@@ -339,6 +340,40 @@ function backfillEvidenceFieldsIntoCustomFields(db: Database.Database): void {
     }
   });
   tx();
+}
+
+function rebuildTasksWithoutLegacyEvidenceColumns(db: Database.Database): void {
+  if (!tableExists(db, 'tasks')) return;
+  const columns = (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map((col) => col.name);
+  const removableColumns = LEGACY_TASK_EVIDENCE_COLUMNS.filter((column) => columns.includes(column));
+  if (removableColumns.length === 0) return;
+
+  const tasksDdl = (db.prepare(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`
+  ).get() as { sql?: string } | undefined)?.sql ?? '';
+  if (!tasksDdl) return;
+
+  let rebuiltDdl = tasksDdl.replace(/CREATE TABLE\s+"?tasks"?/, 'CREATE TABLE tasks_lifecycle_evidence_pruned');
+  for (const column of removableColumns) {
+    rebuiltDdl = rebuiltDdl.replace(new RegExp(`,\\s*"?${column}"?\\s+[^,\\n\\r)]+`, 'i'), '');
+  }
+
+  const keptColumns = columns.filter((column) => !removableColumns.includes(column as typeof LEGACY_TASK_EVIDENCE_COLUMNS[number]));
+  const keptColumnList = keptColumns.join(', ');
+  db.pragma('foreign_keys = OFF');
+  const migrate = db.transaction(() => {
+    db.prepare(rebuiltDdl).run();
+    db.prepare(`INSERT INTO tasks_lifecycle_evidence_pruned (${keptColumnList}) SELECT ${keptColumnList} FROM tasks`).run();
+    db.prepare(`DROP TABLE tasks`).run();
+    db.prepare(`ALTER TABLE tasks_lifecycle_evidence_pruned RENAME TO tasks`).run();
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`).run();
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`).run();
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`).run();
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_agent ON tasks(assigned_agent_id)`).run();
+  });
+  migrate();
+  db.pragma('foreign_keys = ON');
+  console.log(`[schema] Migrated: removed legacy task evidence columns (${removableColumns.join(', ')})`);
 }
 
 /**
@@ -1743,28 +1778,8 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     console.log('[schema] Migrated: added custom_fields_json to tasks');
   } catch (_) { /* column already exists */ }
 
-  const taskEvidenceColumns: Array<{ name: string; sql: string; log: string }> = [
-    { name: 'review_branch', sql: `ALTER TABLE tasks ADD COLUMN review_branch TEXT`, log: 'review_branch' },
-    { name: 'review_commit', sql: `ALTER TABLE tasks ADD COLUMN review_commit TEXT`, log: 'review_commit' },
-    { name: 'review_url', sql: `ALTER TABLE tasks ADD COLUMN review_url TEXT`, log: 'review_url' },
-    { name: 'qa_verified_commit', sql: `ALTER TABLE tasks ADD COLUMN qa_verified_commit TEXT`, log: 'qa_verified_commit' },
-    { name: 'qa_tested_url', sql: `ALTER TABLE tasks ADD COLUMN qa_tested_url TEXT`, log: 'qa_tested_url' },
-    { name: 'merged_commit', sql: `ALTER TABLE tasks ADD COLUMN merged_commit TEXT`, log: 'merged_commit' },
-    { name: 'deployed_commit', sql: `ALTER TABLE tasks ADD COLUMN deployed_commit TEXT`, log: 'deployed_commit' },
-    { name: 'deployed_at', sql: `ALTER TABLE tasks ADD COLUMN deployed_at TEXT`, log: 'deployed_at' },
-    { name: 'live_verified_at', sql: `ALTER TABLE tasks ADD COLUMN live_verified_at TEXT`, log: 'live_verified_at' },
-    { name: 'live_verified_by', sql: `ALTER TABLE tasks ADD COLUMN live_verified_by TEXT`, log: 'live_verified_by' },
-    { name: 'deploy_target', sql: `ALTER TABLE tasks ADD COLUMN deploy_target TEXT`, log: 'deploy_target' },
-    { name: 'evidence_json', sql: `ALTER TABLE tasks ADD COLUMN evidence_json TEXT`, log: 'evidence_json' },
-  ];
-
-  for (const column of taskEvidenceColumns) {
-    try {
-      db.exec(column.sql);
-      console.log(`[schema] Migrated: added ${column.log} to tasks`);
-    } catch (_) { /* column already exists */ }
-  }
   backfillEvidenceFieldsIntoCustomFields(db);
+  rebuildTasksWithoutLegacyEvidenceColumns(db);
 
   // Project files table
   db.exec(`

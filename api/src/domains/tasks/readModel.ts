@@ -2,11 +2,16 @@ import { getDb } from '../../db/client';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
 import { TERMINAL_TASK_STATUSES } from '../../lib/taskStatuses';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
+import { getCanonicalTaskCustomFields, getCanonicalTaskRecord } from './evidence';
 import { getTaskRelationshipsForEnrichment } from './relationships';
 
 export type TaskRecord = Record<string, unknown>;
 
 const LIVE_TASK_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
+
+function tableHasTaskColumn(db: ReturnType<typeof getDb>, column: string): boolean {
+  return (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((row) => row.name === column);
+}
 
 export function stripRetiredTaskColumns(row: TaskRecord): TaskRecord {
   const retiredFailureColumn = ['failure', 'class'].join('_');
@@ -16,7 +21,8 @@ export function stripRetiredTaskColumns(row: TaskRecord): TaskRecord {
 
 export function enrichTask(task: TaskRecord): TaskRecord {
   const db = getDb();
-  const taskWithoutRetiredColumns = stripRetiredTaskColumns(task);
+  const canonicalTask = getCanonicalTaskRecord(task);
+  const taskWithoutRetiredColumns = stripRetiredTaskColumns(canonicalTask);
   const id = task.id as number;
   const tenantId = typeof task.tenant_id === 'number' ? task.tenant_id : null;
   const tenantFilter = tenantId == null ? '' : ' AND t.tenant_id = ?';
@@ -30,7 +36,7 @@ export function enrichTask(task: TaskRecord): TaskRecord {
   })();
   const customFields = (() => {
     try {
-      return parseCustomFields(task.custom_fields_json);
+      return getCanonicalTaskCustomFields(task);
     } catch {
       return {};
     }
@@ -51,7 +57,7 @@ export function enrichTask(task: TaskRecord): TaskRecord {
   const unifiedCustomFields = { ...customFields };
   for (const field of resolvedFieldSchema.schema.fields ?? []) {
     if (unifiedCustomFields[field.key] !== undefined && unifiedCustomFields[field.key] !== null && unifiedCustomFields[field.key] !== '') continue;
-    const legacyValue = task[field.key];
+    const legacyValue = canonicalTask[field.key];
     if (legacyValue !== undefined && legacyValue !== null && legacyValue !== '') {
       unifiedCustomFields[field.key] = legacyValue;
     }
@@ -123,7 +129,7 @@ export function enrichTask(task: TaskRecord): TaskRecord {
     : (typeof task.active_instance_task_outcome === 'string' && task.active_instance_task_outcome.trim() ? task.active_instance_task_outcome.trim() : null);
   return {
     ...taskWithoutRetiredColumns,
-    ...evaluateTaskIntegrity({ ...task, ...unifiedCustomFields } as { status?: string | null; task_type?: string | null }, db),
+    ...evaluateTaskIntegrity({ ...canonicalTask, ...unifiedCustomFields } as { status?: string | null; task_type?: string | null }, db),
     latest_task_outcome: latestTaskOutcome,
     changed_files: changedFiles,
     custom_fields: unifiedCustomFields,
@@ -472,8 +478,8 @@ export function listRecentlyCompletedTasks(
       t.status,
       t.priority,
       t.project_id,
-      t.live_verified_at,
-      t.live_verified_by,
+      ${tableHasTaskColumn(db, 'live_verified_at') ? 't.live_verified_at' : 'NULL AS live_verified_at'},
+      ${tableHasTaskColumn(db, 'live_verified_by') ? 't.live_verified_by' : 'NULL AS live_verified_by'},
       t.updated_at,
       t.agent_id,
       a.name  AS agent_name,

@@ -449,16 +449,15 @@ describe('external task events route', () => {
       expect(payload.outcome).toBe('completed_for_review');
       expect(payload.next_status).toBe('review');
 
-      const task = db.prepare(`SELECT status, review_branch, review_commit, review_url FROM tasks WHERE id = 449`).get() as {
+      const task = db.prepare(`SELECT status, custom_fields_json FROM tasks WHERE id = 449`).get() as {
         status: string;
-        review_branch: string;
-        review_commit: string;
-        review_url: string;
+        custom_fields_json: string | null;
       };
+      const customFields = JSON.parse(task.custom_fields_json ?? '{}') as Record<string, unknown>;
       expect(task.status).toBe('review');
-      expect(task.review_branch).toBe('feature/config-driven-review');
-      expect(task.review_commit).toBe('abc123def456');
-      expect(task.review_url).toBe('http://127.0.0.1:3510');
+      expect(customFields.review_branch).toBe('feature/config-driven-review');
+      expect(customFields.review_commit).toBe('abc123def456');
+      expect(customFields.review_url).toBe('http://127.0.0.1:3510');
     } finally {
       await stopTestServer(server);
     }
@@ -717,16 +716,14 @@ describe('external task events route', () => {
       });
 
       const task = getDb().prepare(`
-        SELECT status, review_branch, review_commit, review_url
+        SELECT status, custom_fields_json
         FROM tasks WHERE id = 449
       `).get() as {
         status: string;
-        review_branch: string | null;
-        review_commit: string | null;
-        review_url: string | null;
+        custom_fields_json: string | null;
       };
-      expect(task).toMatchObject({
-        status: 'review',
+      expect(task.status).toBe('review');
+      expect(JSON.parse(task.custom_fields_json ?? '{}')).toMatchObject({
         review_branch: 'cinder-backend/task-449-external-task-events',
         review_commit: '1234567890abcdef1234567890abcdef12345678',
         review_url: 'http://127.0.0.1:3510',
@@ -944,9 +941,9 @@ describe('external task events route', () => {
         next_status: 'review',
       });
 
-      const task = getDb().prepare(`SELECT status, review_commit FROM tasks WHERE id = 449`).get() as { status: string; review_commit: string | null };
-      expect(task).toMatchObject({
-        status: 'review',
+      const task = getDb().prepare(`SELECT status, custom_fields_json FROM tasks WHERE id = 449`).get() as { status: string; custom_fields_json: string | null };
+      expect(task.status).toBe('review');
+      expect(JSON.parse(task.custom_fields_json ?? '{}')).toMatchObject({
         review_commit: '1234567890abcdef1234567890abcdef12345678',
       });
     } finally {
@@ -998,20 +995,18 @@ describe('external task events route', () => {
       });
 
       let task = db.prepare(`
-        SELECT status, active_instance_id, review_branch, review_commit, custom_fields_json
+        SELECT status, active_instance_id, custom_fields_json
         FROM tasks
         WHERE id = 449
       `).get() as {
         status: string;
         active_instance_id: number | null;
-        review_branch: string | null;
-        review_commit: string | null;
         custom_fields_json: string | null;
       };
       expect(task.status).toBe('dev_deploying');
       expect(task.active_instance_id).toBe(1784);
-      expect(task.review_branch).toBeNull();
-      expect(task.review_commit).toBeNull();
+      expect(JSON.parse(task.custom_fields_json ?? '{}').review_branch ?? null).toBeNull();
+      expect(JSON.parse(task.custom_fields_json ?? '{}').review_commit ?? null).toBeNull();
       expect(cleanupTaskExecutionLinkageForStatus).not.toHaveBeenCalled();
 
       db.prepare(`
@@ -1044,21 +1039,19 @@ describe('external task events route', () => {
       });
 
       const recoveredTask = db.prepare(`
-        SELECT status, review_branch, review_commit, review_url, custom_fields_json
+        SELECT status, custom_fields_json
         FROM tasks
         WHERE id = 449
       `).get() as {
         status: string;
-        review_branch: string | null;
-        review_commit: string | null;
-        review_url: string | null;
         custom_fields_json: string | null;
       };
+      const recoveredCustomFields = JSON.parse(recoveredTask.custom_fields_json ?? '{}') as Record<string, unknown>;
       expect(recoveredTask.status).toBe('review');
-      expect(recoveredTask.review_branch).toBe('cinder-backend/task-980-preserve-lifecycle-recovery-after-deploy');
-      expect(recoveredTask.review_commit).toBe('5414a60758c163677f05d7f1faea3897c47be042');
-      expect(recoveredTask.review_url).toBe('http://127.0.0.1:3510');
-      expect(JSON.parse(recoveredTask.custom_fields_json ?? '{}')).toMatchObject({
+      expect(recoveredCustomFields.review_branch).toBe('cinder-backend/task-980-preserve-lifecycle-recovery-after-deploy');
+      expect(recoveredCustomFields.review_commit).toBe('5414a60758c163677f05d7f1faea3897c47be042');
+      expect(recoveredCustomFields.review_url).toBe('http://127.0.0.1:3510');
+      expect(recoveredCustomFields).toMatchObject({
         configuration_resource: 'dev-environment-lease-manager:lease-config-retry/configuration',
       });
       expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledTimes(1);

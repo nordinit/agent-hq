@@ -12,6 +12,7 @@ import { normalizeTokenUsage } from './tokenUsage';
 import { AGENT_HQ_RUNTIME_SOURCE, resolveWorkflowEventMapping } from '../routing/externalEventMappings';
 import { notifyTaskStatusChange } from '../../lib/taskNotifications';
 import { writeTaskHistory, writeTaskStatusChange } from '../tasks/history';
+import { getCanonicalTaskRecord } from '../tasks/evidence';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
 
@@ -23,6 +24,10 @@ function tableHasColumn(db: Database.Database, table: string, column: string): b
   } catch {
     return false;
   }
+}
+
+function taskEvidenceSelect(db: Database.Database, column: string): string {
+  return tableHasColumn(db, 'tasks', column) ? `t.${column}` : `NULL AS ${column}`;
 }
 
 function isStartEventLiveInstanceStatus(status: string | null | undefined): boolean {
@@ -299,9 +304,16 @@ export async function completeRunInstance(
     ? db.prepare(`
         SELECT ${tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
                t.status, t.task_type, t.project_id, t.agent_id, t.sprint_id, s.sprint_type,
-               t.review_branch, t.review_commit, t.review_url,
-               t.qa_verified_commit, t.qa_tested_url,
-               t.merged_commit, t.deployed_commit, t.deploy_target, t.deployed_at
+               ${taskEvidenceSelect(db, 'review_branch')},
+               ${taskEvidenceSelect(db, 'review_commit')},
+               ${taskEvidenceSelect(db, 'review_url')},
+               ${taskEvidenceSelect(db, 'qa_verified_commit')},
+               ${taskEvidenceSelect(db, 'qa_tested_url')},
+               ${taskEvidenceSelect(db, 'merged_commit')},
+               ${taskEvidenceSelect(db, 'deployed_commit')},
+               ${taskEvidenceSelect(db, 'deploy_target')},
+               ${taskEvidenceSelect(db, 'deployed_at')},
+               ${tableHasColumn(db, 'tasks', 'custom_fields_json') ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
         FROM tasks t
         LEFT JOIN sprints s ON s.id = t.sprint_id
         WHERE t.id = ?
@@ -322,8 +334,10 @@ export async function completeRunInstance(
         deployed_commit: string | null;
         deploy_target: string | null;
         deployed_at: string | null;
+        custom_fields_json: string | null;
       } | undefined
     : undefined;
+  const canonicalTaskRow = taskRow ? getCanonicalTaskRecord(taskRow as unknown as Record<string, unknown>) : undefined;
   const resolvedWorkflow = taskRow ? resolveWorkflow({
     taskStatus: taskRow.status,
     taskType: taskRow.task_type,
@@ -331,7 +345,7 @@ export async function completeRunInstance(
     sprintType: taskRow.sprint_type,
     db,
   }) : null;
-  const evidenceRecorded = determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, taskRow);
+  const evidenceRecorded = determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, canonicalTaskRow);
 
   const tokenUsage = normalizeTokenUsage(
     {

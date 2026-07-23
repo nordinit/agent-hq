@@ -12,6 +12,7 @@ import {
 import { loadSprintTaskTransitionRequirements } from '../routing/policy/statuses';
 import type { McpApiIdentity } from '../../lib/mcpApiAuth';
 import { parseCustomFields } from './fields';
+import { getCanonicalTaskRecord } from './evidence';
 import { getTaskInstanceAuthorityFailure } from './authority';
 import {
   addTaskNote,
@@ -47,6 +48,10 @@ function normalizeOutcomeBody(body: Record<string, unknown>): Record<string, unk
     : {};
   const { payload: _payload, ...topLevel } = body;
   return { ...payload, ...topLevel };
+}
+
+function selectEvidenceColumn(db: Database.Database, column: string): string {
+  return taskTableHasColumn(db, column) ? column : `NULL AS ${column}`;
 }
 
 function errorWithBody(status: number, body: Record<string, unknown>): Error & { status?: number; body?: Record<string, unknown> } {
@@ -126,10 +131,17 @@ export async function postTaskOutcome(
   const customFieldsSelect = taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
   const existing = db.prepare(
     `SELECT id, status, task_type, sprint_id,
-            review_branch, review_commit, review_url,
-            qa_verified_commit, qa_tested_url,
-            merged_commit, deployed_commit, deploy_target, deployed_at,
-            live_verified_by, live_verified_at,
+            ${selectEvidenceColumn(db, 'review_branch')},
+            ${selectEvidenceColumn(db, 'review_commit')},
+            ${selectEvidenceColumn(db, 'review_url')},
+            ${selectEvidenceColumn(db, 'qa_verified_commit')},
+            ${selectEvidenceColumn(db, 'qa_tested_url')},
+            ${selectEvidenceColumn(db, 'merged_commit')},
+            ${selectEvidenceColumn(db, 'deployed_commit')},
+            ${selectEvidenceColumn(db, 'deploy_target')},
+            ${selectEvidenceColumn(db, 'deployed_at')},
+            ${selectEvidenceColumn(db, 'live_verified_by')},
+            ${selectEvidenceColumn(db, 'live_verified_at')},
             ${customFieldsSelect}
      FROM tasks WHERE id = ?`,
   ).get(taskId) as {
@@ -176,20 +188,21 @@ export async function postTaskOutcome(
       message: row.message,
     }));
 
+  const canonicalExisting = getCanonicalTaskRecord(existing as unknown as Record<string, unknown>);
   const existingCustomFields = parseCustomFields(existing.custom_fields_json);
   const evidenceValidation = validateInlineEvidenceForOutcome(outcome, inlineEvidence, {
     status: existing.status,
-    review_branch: existing.review_branch,
-    review_commit: existing.review_commit,
-    review_url: existing.review_url,
-    qa_verified_commit: existing.qa_verified_commit,
-    qa_tested_url: existing.qa_tested_url,
-    merged_commit: existing.merged_commit,
-    deployed_commit: existing.deployed_commit,
-    deploy_target: existing.deploy_target,
-    deployed_at: existing.deployed_at,
-    live_verified_by: existing.live_verified_by,
-    live_verified_at: existing.live_verified_at,
+    review_branch: canonicalExisting.review_branch,
+    review_commit: canonicalExisting.review_commit,
+    review_url: canonicalExisting.review_url,
+    qa_verified_commit: canonicalExisting.qa_verified_commit,
+    qa_tested_url: canonicalExisting.qa_tested_url,
+    merged_commit: canonicalExisting.merged_commit,
+    deployed_commit: canonicalExisting.deployed_commit,
+    deploy_target: canonicalExisting.deploy_target,
+    deployed_at: canonicalExisting.deployed_at,
+    live_verified_by: canonicalExisting.live_verified_by,
+    live_verified_at: canonicalExisting.live_verified_at,
     ...existingCustomFields,
   }, transitionRequirements);
 
@@ -498,12 +511,12 @@ export function putQaEvidence(
   const hasSubstantiveCommit = resolvedQaVerifiedCommit !== undefined && resolvedQaVerifiedCommit !== null && resolvedQaVerifiedCommit !== '';
   if (explicitClears.size === 0 && hasSubstantiveCommit) {
     const customFieldsSelect = taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
-    const taskRow = db.prepare(`SELECT review_commit, ${customFieldsSelect} FROM tasks WHERE id = ?`).get(taskId) as {
+    const taskRow = db.prepare(`SELECT ${selectEvidenceColumn(db, 'review_commit')}, ${customFieldsSelect} FROM tasks WHERE id = ?`).get(taskId) as {
       review_commit: string | null;
       custom_fields_json: string | null;
     } | undefined;
-    const taskCustomFields = taskRow ? parseCustomFields(taskRow.custom_fields_json) : {};
-    const existingReviewCommit = (taskCustomFields.review_commit as string | null | undefined) ?? taskRow?.review_commit ?? null;
+    const canonicalTaskRow = taskRow ? getCanonicalTaskRecord(taskRow as unknown as Record<string, unknown>) : null;
+    const existingReviewCommit = canonicalTaskRow?.review_commit ?? null;
     const qaValidation = validateQaEvidence(
       {
         qa_verified_commit: resolvedQaVerifiedCommit as string | null | undefined,

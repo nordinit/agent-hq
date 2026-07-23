@@ -7,6 +7,7 @@ import { writeTaskHistory, writeTaskRuntimeEndHistory } from '../domains/tasks/h
 import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOutcome } from '../domains/runs/lifecycleHandoff';
 import { determineRuntimeEndEvidenceRecorded } from '../domains/runs/runtimeEnd';
 import { resolveWorkflow } from '../services/contracts/workflowContract';
+import { getCanonicalTaskRecord } from '../domains/tasks/evidence';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../lib/taskLifecycle';
 import { pruneOrphanedWorktrees, resolveWorktreeBasePath } from '../services/worktreeManager';
 import type { RepoAccessMode } from '../services/repoWorkspaceManager';
@@ -365,6 +366,12 @@ interface WatchdogTaskRuntimeContext {
   deployed_commit: string | null;
   deploy_target: string | null;
   deployed_at: string | null;
+  custom_fields_json?: string | null;
+}
+
+function taskEvidenceSelect(db: Database.Database, column: string): string {
+  const hasColumn = (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((row) => row.name === column);
+  return hasColumn ? `t.${column}` : `NULL AS ${column}`;
 }
 
 function loadTaskRuntimeContext(db: Database.Database, taskId: number | null): WatchdogTaskRuntimeContext | null {
@@ -375,20 +382,21 @@ function loadTaskRuntimeContext(db: Database.Database, taskId: number | null): W
              t.task_type,
              t.sprint_id,
              s.sprint_type,
-             t.review_branch,
-             t.review_commit,
-             t.review_url,
-             t.qa_verified_commit,
-             t.qa_tested_url,
-             t.merged_commit,
-             t.deployed_commit,
-             t.deploy_target,
-             t.deployed_at
+             ${taskEvidenceSelect(db, 'review_branch')},
+             ${taskEvidenceSelect(db, 'review_commit')},
+             ${taskEvidenceSelect(db, 'review_url')},
+             ${taskEvidenceSelect(db, 'qa_verified_commit')},
+             ${taskEvidenceSelect(db, 'qa_tested_url')},
+             ${taskEvidenceSelect(db, 'merged_commit')},
+             ${taskEvidenceSelect(db, 'deployed_commit')},
+             ${taskEvidenceSelect(db, 'deploy_target')},
+             ${taskEvidenceSelect(db, 'deployed_at')},
+             ${((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((row) => row.name === 'custom_fields_json')) ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
       FROM tasks t
       LEFT JOIN sprints s ON s.id = t.sprint_id
       WHERE t.id = ?
     `).get(taskId) as WatchdogTaskRuntimeContext | undefined;
-    return row ?? null;
+    return row ? getCanonicalTaskRecord(row as unknown as Record<string, unknown>) as unknown as WatchdogTaskRuntimeContext : null;
   } catch {
     return null;
   }
