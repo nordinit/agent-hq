@@ -21,6 +21,7 @@ import {
   updateTaskEvidence,
 } from './mutations';
 import { enrichTask, TASK_SELECT } from './readModel';
+import { INLINE_EVIDENCE_FIELD_KEYS } from '../../lib/starterCatalog';
 
 function loadTask(taskId: number, db: Database.Database): Record<string, unknown> | undefined {
   return db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(taskId) as Record<string, unknown> | undefined;
@@ -42,12 +43,29 @@ function normalizeOptionalInstanceId(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+const OUTCOME_CONTROL_FIELD_KEYS = new Set([
+  'outcome',
+  'changed_by',
+  'summary',
+  'dry_run',
+  'instance_id',
+  'instanceId',
+  'failure_detail',
+  'blocker_reason',
+]);
+
+function topLevelLifecycleEvidenceFields(body: Record<string, unknown>): string[] {
+  return INLINE_EVIDENCE_FIELD_KEYS.filter((field) => Object.prototype.hasOwnProperty.call(body, field));
+}
+
 function normalizeOutcomeBody(body: Record<string, unknown>): Record<string, unknown> {
   const payload = body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload)
     ? body.payload as Record<string, unknown>
     : {};
-  const { payload: _payload, ...topLevel } = body;
-  return { ...payload, ...topLevel };
+  const controls = Object.fromEntries(
+    Object.entries(body).filter(([key]) => OUTCOME_CONTROL_FIELD_KEYS.has(key)),
+  );
+  return { ...payload, ...controls };
 }
 
 function selectEvidenceColumn(db: Database.Database, column: string): string {
@@ -126,6 +144,15 @@ export async function postTaskOutcome(
   changedBy: string,
   options: { mcpIdentity?: McpApiIdentity | null } = {},
 ) {
+  const unsupportedTopLevelEvidenceFields = topLevelLifecycleEvidenceFields(body);
+  if (unsupportedTopLevelEvidenceFields.length > 0) {
+    throw errorWithBody(400, {
+      ok: false,
+      code: 'top_level_lifecycle_evidence_not_supported',
+      error: 'Top-level lifecycle evidence fields are no longer accepted on task outcome requests. Put workflow evidence under payload or use the typed lifecycle evidence endpoints.',
+      fields: unsupportedTopLevelEvidenceFields,
+    });
+  }
   const normalizedBody = normalizeOutcomeBody(body);
   const dryRun = normalizedBody.dry_run === true || normalizedBody.dry_run === 'true';
   const customFieldsSelect = taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';

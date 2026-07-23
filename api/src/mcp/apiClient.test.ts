@@ -1,4 +1,4 @@
-import { AgentHqApiClient, AgentHqApiError } from './apiClient';
+import { AgentHqApiClient, AgentHqApiError, shapeTaskDetail } from './apiClient';
 import { formatMcpToolError } from './registrar';
 
 function jsonResponse(body: unknown): Response {
@@ -174,6 +174,37 @@ describe('AgentHqApiClient.createTask', () => {
         body: expect.objectContaining({ status: 'ready' }),
       },
     });
+  });
+});
+
+describe('shapeTaskDetail', () => {
+  it('exposes lifecycle evidence through custom_fields instead of legacy top-level fields', () => {
+    const shaped = shapeTaskDetail({
+      id: 995,
+      title: 'Remove legacy lifecycle evidence fields',
+      status: 'review',
+      custom_fields: {
+        review_commit: 'abc1234',
+        qa_verified_commit: 'abc1234',
+      },
+      resolved_custom_field_schema: {
+        fields: [{ key: 'review_commit', type: 'text' }],
+      },
+      review_commit: 'abc1234',
+      qa_verified_commit: 'abc1234',
+      blockers: [],
+      blocking: [],
+    }) as unknown as Record<string, unknown>;
+
+    expect(shaped.custom_fields).toMatchObject({
+      review_commit: 'abc1234',
+      qa_verified_commit: 'abc1234',
+    });
+    expect(shaped.resolved_custom_field_schema).toMatchObject({
+      fields: [{ key: 'review_commit', type: 'text' }],
+    });
+    expect(shaped).not.toHaveProperty('review_commit');
+    expect(shaped).not.toHaveProperty('qa_verified_commit');
   });
 });
 
@@ -472,8 +503,6 @@ describe('AgentHqApiClient lifecycle write helpers', () => {
       outcome: 'completed_for_review',
       summary: 'Ready for review',
       instance_id: 2551,
-      review_branch: 'cinder-backend/task-448',
-      review_commit: 'abc123',
     });
 
     expect(calls).toEqual([
@@ -523,8 +552,6 @@ describe('AgentHqApiClient lifecycle write helpers', () => {
           outcome: 'completed_for_review',
           summary: 'Ready for review',
           instance_id: 2551,
-          review_branch: 'cinder-backend/task-448',
-          review_commit: 'abc123',
         },
       },
     ]);

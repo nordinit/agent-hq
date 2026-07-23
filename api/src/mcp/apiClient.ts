@@ -125,6 +125,9 @@ export interface AgentHqTaskSummary {
   agent_name: string | null;
   active_instance_id: number | null;
   updated_at: string | null;
+  custom_fields: Record<string, unknown>;
+  resolved_custom_field_schema: Record<string, unknown>;
+  resolved_sprint_type: string | null;
   blockers: Array<{ id: number; title: string; status: string | null }>;
   blocking: Array<{ id: number; title: string; status: string | null }>;
 }
@@ -155,14 +158,6 @@ export interface AgentHqProjectTaskSearchResponse {
 
 export interface AgentHqTaskDetail extends AgentHqTaskSummary {
   description: string | null;
-  review_branch: string | null;
-  review_commit: string | null;
-  review_url: string | null;
-  qa_verified_commit: string | null;
-  qa_tested_url: string | null;
-  merged_commit: string | null;
-  deployed_commit: string | null;
-  deploy_target: string | null;
   latest_run_stage: string | null;
   latest_run_outcome: string | null;
   blocker_reason: string | null;
@@ -385,6 +380,9 @@ export function shapeTaskSummary(value: unknown): AgentHqTaskSummary {
     agent_name: asString(row.agent_name),
     active_instance_id: asNumber(row.active_instance_id),
     updated_at: asString(row.updated_at),
+    custom_fields: asRecord(row.custom_fields),
+    resolved_custom_field_schema: asRecord(row.resolved_custom_field_schema),
+    resolved_sprint_type: asString(row.resolved_sprint_type),
     blockers: asArray(row.blockers).map(shapeTaskRef).filter((item): item is NonNullable<typeof item> => item !== null),
     blocking: asArray(row.blocking).map(shapeTaskRef).filter((item): item is NonNullable<typeof item> => item !== null),
   };
@@ -426,14 +424,6 @@ export function shapeTaskDetail(value: unknown): AgentHqTaskDetail {
   return {
     ...summary,
     description: asString(row.description),
-    review_branch: asString(row.review_branch),
-    review_commit: asString(row.review_commit),
-    review_url: asString(row.review_url),
-    qa_verified_commit: asString(row.qa_verified_commit),
-    qa_tested_url: asString(row.qa_tested_url),
-    merged_commit: asString(row.merged_commit),
-    deployed_commit: asString(row.deployed_commit),
-    deploy_target: asString(row.deploy_target),
     latest_run_stage: asString(row.latest_run_stage),
     latest_run_outcome: asString(row.latest_run_outcome),
     blocker_reason: asString(row.blocker_reason),
@@ -1021,21 +1011,8 @@ export class AgentHqApiClient {
     summary?: string;
     payload?: Record<string, unknown>;
     dry_run?: boolean;
-    // Legacy/admin REST callers may still pass explicit fields. The normal MCP
-    // tool schema exposes only payload.
     changed_by?: string;
     instance_id?: number;
-    review_branch?: string;
-    review_commit?: string;
-    review_url?: string;
-    qa_verified_commit?: string;
-    qa_tested_url?: string;
-    merged_commit?: string;
-    deployed_commit?: string;
-    deploy_target?: string;
-    deployed_at?: string;
-    live_verified_by?: string;
-    live_verified_at?: string;
     blocker_reason?: string;
     failure_detail?: string;
   }) {

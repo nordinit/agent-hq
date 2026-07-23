@@ -515,9 +515,11 @@ describe('tasks qa-evidence aliases', () => {
           summary: 'Preview re-submission after QA fixes.',
           changed_by: 'cinder-backend',
           instance_id: 1784,
-          review_branch: 'feature/task-383-rereview',
-          review_commit: newCommit,
-          review_url: 'http://localhost:3510/review/task-383?attempt=2',
+          payload: {
+            review_branch: 'feature/task-383-rereview',
+            review_commit: newCommit,
+            review_url: 'http://localhost:3510/review/task-383?attempt=2',
+          },
         }),
       });
       const previewBody = await previewResponse.json() as { dry_run?: boolean; proposed_changes?: { status?: { from?: string; to?: string } }; validation_errors?: string[] };
@@ -538,9 +540,11 @@ describe('tasks qa-evidence aliases', () => {
           summary: 'Re-submitting after QA fixes.',
           changed_by: 'cinder-backend',
           instance_id: 1784,
-          review_branch: 'feature/task-383-rereview',
-          review_commit: newCommit,
-          review_url: 'http://localhost:3510/review/task-383?attempt=2',
+          payload: {
+            review_branch: 'feature/task-383-rereview',
+            review_commit: newCommit,
+            review_url: 'http://localhost:3510/review/task-383?attempt=2',
+          },
         }),
       });
       const body = await response.json() as {
@@ -591,6 +595,35 @@ describe('tasks qa-evidence aliases', () => {
         { field: 'review_commit', old_value: '6d614b3b104ae36d1dd75210b9f9fb0342673329', new_value: newCommit },
         { field: 'review_url', old_value: 'http://localhost:3510/review/task-383?attempt=1', new_value: 'http://localhost:3510/review/task-383?attempt=2' },
       ]);
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('rejects legacy top-level lifecycle evidence on unversioned outcome requests', async () => {
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/tasks/383/outcome`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dry_run: true,
+          outcome: 'completed_for_review',
+          summary: 'Legacy top-level evidence should not be accepted.',
+          changed_by: 'cinder-backend',
+          instance_id: 1784,
+          review_branch: 'feature/task-383-rereview',
+          review_commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        }),
+      });
+      const body = await response.json() as Record<string, unknown>;
+
+      expect(response.status).toBe(400);
+      expect(body).toMatchObject({
+        ok: false,
+        code: 'top_level_lifecycle_evidence_not_supported',
+        fields: ['review_branch', 'review_commit'],
+      });
     } finally {
       await stopTestServer(server);
     }
