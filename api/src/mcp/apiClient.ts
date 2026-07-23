@@ -1147,17 +1147,7 @@ export class AgentHqApiClient {
       status: string;
       summary?: string;
       changed_by?: string;
-      review_branch?: string;
-      review_commit?: string;
-      review_url?: string;
-      qa_verified_commit?: string;
-      qa_tested_url?: string;
-      merged_commit?: string;
-      deployed_commit?: string;
-      deploy_target?: string;
-      deployed_at?: string;
-      live_verified_by?: string;
-      live_verified_at?: string;
+      payload?: Record<string, unknown>;
       failure_detail?: string;
       dry_run?: boolean;
     },
@@ -1181,17 +1171,7 @@ export class AgentHqApiClient {
         outcome,
         summary: data.summary,
         changed_by: data.changed_by ?? 'Agent HQ',
-        review_branch: data.review_branch,
-        review_commit: data.review_commit,
-        review_url: data.review_url,
-        qa_verified_commit: data.qa_verified_commit,
-        qa_tested_url: data.qa_tested_url,
-        merged_commit: data.merged_commit,
-        deployed_commit: data.deployed_commit,
-        deploy_target: data.deploy_target,
-        deployed_at: data.deployed_at,
-        live_verified_by: data.live_verified_by,
-        live_verified_at: data.live_verified_at,
+        payload: data.payload,
         failure_detail: data.failure_detail,
       };
       if (data.dry_run) {

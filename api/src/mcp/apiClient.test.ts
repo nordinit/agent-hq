@@ -235,14 +235,27 @@ describe('AgentHqApiClient.moveTask configured outcomes', () => {
     const { postedBodies } = installMoveTaskFetchMock();
     const client = new AgentHqApiClient('http://agent-hq.test');
 
-    await client.moveTask(42, { status: 'review', summary: 'Ready for review' });
+    await client.moveTask(42, {
+      status: 'review',
+      summary: 'Ready for review',
+      payload: {
+        review_branch: 'feature/task-42',
+        review_commit: 'abc1234',
+      },
+    });
 
     expect(postedBodies).toEqual([
       expect.objectContaining({
         outcome: 'ship_it',
         summary: 'Ready for review',
+        payload: {
+          review_branch: 'feature/task-42',
+          review_commit: 'abc1234',
+        },
       }),
     ]);
+    expect(postedBodies[0]).not.toHaveProperty('review_branch');
+    expect(postedBodies[0]).not.toHaveProperty('review_commit');
   });
 
   it('can target workflow-defined statuses that are not in the legacy default status list', async () => {

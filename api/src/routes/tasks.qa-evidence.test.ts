@@ -261,12 +261,13 @@ describe('tasks qa-evidence aliases', () => {
           instance_id: 1784,
         }),
       });
-      const body = await response.json() as { qa_tested_url?: string | null; error?: string };
+      const body = await response.json() as { custom_fields?: { qa_tested_url?: string | null }; error?: string };
 
       if (response.status !== 200) {
         throw new Error(`Expected 200, received ${response.status}: ${JSON.stringify(body)}`);
       }
-      expect(body.qa_tested_url).toBe('http://localhost:3501/api/v1/tasks/383');
+      expect(body).not.toHaveProperty('qa_tested_url');
+      expect(body.custom_fields?.qa_tested_url).toBe('http://localhost:3501/api/v1/tasks/383');
 
       const db = getDb();
       const row = db.prepare(`SELECT qa_tested_url FROM tasks WHERE id = ?`).get(383) as { qa_tested_url: string | null };
@@ -289,12 +290,13 @@ describe('tasks qa-evidence aliases', () => {
           instance_id: 1784,
         }),
       });
-      const body = await response.json() as { qa_tested_url?: string | null; error?: string };
+      const body = await response.json() as { custom_fields?: { qa_tested_url?: string | null }; error?: string };
 
       if (response.status !== 200) {
         throw new Error(`Expected 200, received ${response.status}: ${JSON.stringify(body)}`);
       }
-      expect(body.qa_tested_url).toBe('http://localhost:3501/api/v1/tasks/383?legacy=1');
+      expect(body).not.toHaveProperty('qa_tested_url');
+      expect(body.custom_fields?.qa_tested_url).toBe('http://localhost:3501/api/v1/tasks/383?legacy=1');
     } finally {
       await stopTestServer(server);
     }
@@ -313,13 +315,18 @@ describe('tasks qa-evidence aliases', () => {
           instance_id: 1784,
         }),
       });
-      const body = await response.json() as { qa_verified_commit?: string | null; qa_tested_url?: string | null; error?: string };
+      const body = await response.json() as {
+        custom_fields?: { qa_verified_commit?: string | null; qa_tested_url?: string | null };
+        error?: string;
+      };
 
       if (response.status !== 200) {
         throw new Error(`Expected 200, received ${response.status}: ${JSON.stringify(body)}`);
       }
-      expect(body.qa_verified_commit).toBe('6d614b3b104ae36d1dd75210b9f9fb0342673329');
-      expect(body.qa_tested_url).toBe('http://localhost:3501/api/v1/tasks/383?contract=old');
+      expect(body).not.toHaveProperty('qa_verified_commit');
+      expect(body).not.toHaveProperty('qa_tested_url');
+      expect(body.custom_fields?.qa_verified_commit).toBe('6d614b3b104ae36d1dd75210b9f9fb0342673329');
+      expect(body.custom_fields?.qa_tested_url).toBe('http://localhost:3501/api/v1/tasks/383?contract=old');
 
       const db = getDb();
       const row = db.prepare(`SELECT qa_verified_commit, qa_tested_url FROM tasks WHERE id = ?`).get(383) as {
@@ -536,16 +543,29 @@ describe('tasks qa-evidence aliases', () => {
           review_url: 'http://localhost:3510/review/task-383?attempt=2',
         }),
       });
-      const body = await response.json() as { task?: { review_branch?: string | null; review_commit?: string | null; review_url?: string | null; status?: string }; error?: string };
+      const body = await response.json() as {
+        task?: {
+          custom_fields?: {
+            review_branch?: string | null;
+            review_commit?: string | null;
+            review_url?: string | null;
+          };
+          status?: string;
+        };
+        error?: string;
+      };
 
       if (response.status !== 200) {
         throw new Error(`Expected 200, received ${response.status}: ${JSON.stringify(body)}`);
       }
 
       expect(body.task?.status).toBe('review');
-      expect(body.task?.review_branch).toBe('feature/task-383-rereview');
-      expect(body.task?.review_commit).toBe(newCommit);
-      expect(body.task?.review_url).toBe('http://localhost:3510/review/task-383?attempt=2');
+      expect(body.task ?? {}).not.toHaveProperty('review_branch');
+      expect(body.task ?? {}).not.toHaveProperty('review_commit');
+      expect(body.task ?? {}).not.toHaveProperty('review_url');
+      expect(body.task?.custom_fields?.review_branch).toBe('feature/task-383-rereview');
+      expect(body.task?.custom_fields?.review_commit).toBe(newCommit);
+      expect(body.task?.custom_fields?.review_url).toBe('http://localhost:3510/review/task-383?attempt=2');
 
       const row = db.prepare(`SELECT review_branch, review_commit, review_url, status FROM tasks WHERE id = ?`).get(383) as {
         review_branch: string | null;

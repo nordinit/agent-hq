@@ -52,3 +52,11 @@ export function getCanonicalTaskCustomFields(row: Record<string, unknown>): Reco
   }
   return customFields;
 }
+
+export function stripTaskLifecycleEvidenceFields<T extends Record<string, unknown>>(row: T): T {
+  const stripped = { ...row };
+  for (const field of TASK_LIFECYCLE_EVIDENCE_FIELD_KEYS) {
+    delete stripped[field];
+  }
+  return stripped;
+}

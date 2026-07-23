@@ -367,8 +367,39 @@ describe('tasks route write-model handoff', () => {
       title: 'Editable task updated',
       priority: 'high',
     });
+    expect(body).not.toHaveProperty('review_branch');
+    expect(body).not.toHaveProperty('review_commit');
+    expect(body).not.toHaveProperty('review_url');
+    expect(body.custom_fields).toEqual(expect.objectContaining({
+      review_branch: 'cinder-backend/task-481',
+      review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+      review_url: 'http://127.0.0.1:3510/tasks/102/review',
+    }));
     const blockers = Array.isArray(body.blockers) ? body.blockers as Array<Record<string, unknown>> : [];
     expect(blockers.map((task) => task.id)).toEqual([101]);
+  });
+
+  it('returns migrated lifecycle evidence only through custom_fields on task reads', async () => {
+    const db = getDb();
+    db.prepare(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`).run(JSON.stringify({
+      review_branch: 'cinder-backend/task-995',
+      review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+      qa_verified_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+    }));
+
+    const res = await fetch(`${baseUrl}/api/v1/tasks/102`);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).not.toHaveProperty('review_branch');
+    expect(body).not.toHaveProperty('review_commit');
+    expect(body).not.toHaveProperty('qa_verified_commit');
+    expect(body.custom_fields).toEqual(expect.objectContaining({
+      review_branch: 'cinder-backend/task-995',
+      review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+      qa_verified_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+    }));
+    expect(body).toHaveProperty('resolved_custom_field_schema');
   });
 
   it('updates and clears defect metadata through the generic task update route', async () => {
