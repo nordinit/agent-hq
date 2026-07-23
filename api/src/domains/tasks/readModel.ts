@@ -2,16 +2,12 @@ import { getDb } from '../../db/client';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
 import { TERMINAL_TASK_STATUSES } from '../../lib/taskStatuses';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
-import { getCanonicalTaskCustomFields, getCanonicalTaskRecord } from './evidence';
+import { getCanonicalTaskCustomFields, getCanonicalTaskRecord, stripTaskLifecycleEvidenceFields } from './evidence';
 import { getTaskRelationshipsForEnrichment } from './relationships';
 
 export type TaskRecord = Record<string, unknown>;
 
 const LIVE_TASK_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
-
-function tableHasTaskColumn(db: ReturnType<typeof getDb>, column: string): boolean {
-  return (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((row) => row.name === column);
-}
 
 export function stripRetiredTaskColumns(row: TaskRecord): TaskRecord {
   const retiredFailureColumn = ['failure', 'class'].join('_');
@@ -19,10 +15,18 @@ export function stripRetiredTaskColumns(row: TaskRecord): TaskRecord {
   return rest;
 }
 
+function tableHasTaskColumn(db: ReturnType<typeof getDb>, column: string): boolean {
+  return (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((row) => row.name === column);
+}
+
+function stripPublicTaskResponseColumns(row: TaskRecord): TaskRecord {
+  return stripTaskLifecycleEvidenceFields(stripRetiredTaskColumns(row));
+}
+
 export function enrichTask(task: TaskRecord): TaskRecord {
   const db = getDb();
   const canonicalTask = getCanonicalTaskRecord(task);
-  const taskWithoutRetiredColumns = stripRetiredTaskColumns(canonicalTask);
+  const publicTask = stripPublicTaskResponseColumns(task);
   const id = task.id as number;
   const tenantId = typeof task.tenant_id === 'number' ? task.tenant_id : null;
   const tenantFilter = tenantId == null ? '' : ' AND t.tenant_id = ?';
@@ -128,7 +132,7 @@ export function enrichTask(task: TaskRecord): TaskRecord {
     ? task.latest_task_outcome.trim()
     : (typeof task.active_instance_task_outcome === 'string' && task.active_instance_task_outcome.trim() ? task.active_instance_task_outcome.trim() : null);
   return {
-    ...taskWithoutRetiredColumns,
+    ...publicTask,
     ...evaluateTaskIntegrity({ ...canonicalTask, ...unifiedCustomFields } as { status?: string | null; task_type?: string | null }, db),
     latest_task_outcome: latestTaskOutcome,
     changed_files: changedFiles,
@@ -138,8 +142,8 @@ export function enrichTask(task: TaskRecord): TaskRecord {
     relationships: getTaskRelationshipsForEnrichment(id),
     assigned_agent_name: assignedAgentId == null ? null : agentNames.get(assignedAgentId) ?? null,
     active_agent_name: activeAgentId == null ? null : agentNames.get(activeAgentId) ?? null,
-    blockers: blockers.map(stripRetiredTaskColumns),
-    blocking: blocking.map(stripRetiredTaskColumns),
+    blockers: blockers.map(stripPublicTaskResponseColumns),
+    blocking: blocking.map(stripPublicTaskResponseColumns),
   };
 }
 
@@ -470,6 +474,9 @@ export function listRecentlyCompletedTasks(
   const params: unknown[] = [hours];
   if (projectId) params.push(projectId);
   if (tenantId) params.push(tenantId);
+  const customFieldsSelect = tableHasTaskColumn(db, 'custom_fields_json')
+    ? 't.custom_fields_json'
+    : 'NULL AS custom_fields_json';
 
   const rows = db.prepare(`
     SELECT
@@ -478,8 +485,7 @@ export function listRecentlyCompletedTasks(
       t.status,
       t.priority,
       t.project_id,
-      ${tableHasTaskColumn(db, 'live_verified_at') ? 't.live_verified_at' : 'NULL AS live_verified_at'},
-      ${tableHasTaskColumn(db, 'live_verified_by') ? 't.live_verified_by' : 'NULL AS live_verified_by'},
+      ${customFieldsSelect},
       t.updated_at,
       t.agent_id,
       a.name  AS agent_name,
@@ -524,7 +530,14 @@ export function listRecentlyCompletedTasks(
     ORDER BY t.updated_at DESC
   `).all(...params) as Record<string, unknown>[];
 
-  return { hours, count: rows.length, tasks: rows };
+  return {
+    hours,
+    count: rows.length,
+    tasks: rows.map((row) => ({
+      ...stripPublicTaskResponseColumns(row),
+      custom_fields: parseCustomFields(row.custom_fields_json),
+    })),
+  };
 }
 
 export function listTasks(

@@ -98,7 +98,7 @@ function requireTaskVisibleForTenant(db: ReturnType<typeof getDb>, taskId: numbe
 
 // ── GET /api/v1/tasks/completed-recent?hours=N ──────────────────────────────
 // Returns tasks that reached 'done' status within the last N hours (default 24).
-// Includes task title, agent name, completion time (live_verified_at or updated_at),
+// Includes task title, agent name, completion time, outcome, and custom_fields.
 // and the terminal outcome (live_verified, qa_pass, etc.).
 // Ordered by most recent completion first.
 
@@ -518,11 +518,13 @@ router.put('/:id', (req: Request, res: Response) => {
     );
     res.json(updateTaskRecord(db, Number(req.params.id), req.body as UpdateTaskInput, actor));
   } catch (err) {
-    const status = (err as Error & { status?: number }).status;
+    const typedErr = err as Error & { status?: number; body?: Record<string, unknown> };
+    const status = typedErr.status;
     if (sendWorkflowAllowedValuesError(res, err)) return;
     if (err instanceof TaskCustomFieldValidationError) {
       return res.status(err.status).json({ error: err.message, validation_errors: err.validation_errors });
     }
+    if (typedErr.body) return res.status(status ?? 500).json(typedErr.body);
     const message = err instanceof Error ? err.message : String(err);
     if (status) return res.status(status).json({ error: message });
     if (message.includes('may change task status through the generic update endpoint')) {
@@ -648,8 +650,8 @@ router.post('/:id/unpause', (req: Request, res: Response) => {
 });
 
 // ── POST /api/v1/tasks/:id/outcome ───────────────────────────────────────────
-// Supports atomic evidence writes: pass review_branch, review_commit, etc.
-// alongside the outcome. Evidence is validated and written in the same
+// Supports atomic evidence writes through payload.review_branch,
+// payload.review_commit, etc. Evidence is validated and written in the same
 // SQLite transaction as the status transition, ensuring the task record
 // always reflects the actual artifact when completion succeeds.
 

@@ -65,7 +65,9 @@ describe('Agent HQ OpenAPI document', () => {
     const document = getOpenApiDocument();
     const taskSchema = document.components.schemas.Task as Record<string, unknown>;
     const createSchema = document.components.schemas.TaskCreateRequest as Record<string, unknown>;
+    const outcomeSchema = document.components.schemas.TaskOutcomeRequest as Record<string, unknown>;
     const taskPath = document.paths['/api/v1/tasks'];
+    const outcomeProperties = outcomeSchema.properties as Record<string, unknown>;
 
     expect(taskSchema).toMatchObject({
       type: 'object',
@@ -90,6 +92,25 @@ describe('Agent HQ OpenAPI document', () => {
         },
       },
     });
+    expect(outcomeProperties.payload).toMatchObject({
+      type: 'object',
+      additionalProperties: true,
+    });
+    for (const legacyField of [
+      'review_branch',
+      'review_commit',
+      'review_url',
+      'qa_verified_commit',
+      'qa_tested_url',
+      'merged_commit',
+      'deployed_commit',
+      'deploy_target',
+      'deployed_at',
+      'live_verified_by',
+      'live_verified_at',
+    ]) {
+      expect(outcomeProperties).not.toHaveProperty(legacyField);
+    }
   });
 
   it('documents workflows as the first-class board lifecycle surface while keeping sprint aliases', () => {

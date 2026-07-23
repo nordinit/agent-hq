@@ -24,10 +24,6 @@ function tableHasColumn(db: Database.Database, table: string, column: string): b
   return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
 }
 
-function taskEvidenceSelect(db: Database.Database, column: string): string {
-  return tableHasColumn(db, 'tasks', column) ? `t.${column}` : `NULL AS ${column}`;
-}
-
 function isOpenClawPreReplyFailure(content: string): boolean {
   const haystack = content.toLowerCase();
   if (haystack.includes('agent failed before reply')) return true;
@@ -317,15 +313,6 @@ export async function handleOpenClawRuntimeEnd(
                  t.task_type,
                  t.sprint_id,
                  s.sprint_type,
-                 ${taskEvidenceSelect(db, 'review_branch')},
-                 ${taskEvidenceSelect(db, 'review_commit')},
-                 ${taskEvidenceSelect(db, 'review_url')},
-                 ${taskEvidenceSelect(db, 'qa_verified_commit')},
-                 ${taskEvidenceSelect(db, 'qa_tested_url')},
-                 ${taskEvidenceSelect(db, 'merged_commit')},
-                 ${taskEvidenceSelect(db, 'deployed_commit')},
-                 ${taskEvidenceSelect(db, 'deploy_target')},
-                 ${taskEvidenceSelect(db, 'deployed_at')},
                  ${tableHasColumn(db, 'tasks', 'custom_fields_json') ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
           FROM job_instances ji
           LEFT JOIN tasks t ON t.id = ji.task_id
@@ -340,15 +327,6 @@ export async function handleOpenClawRuntimeEnd(
         task_type: string | null;
         sprint_id: number | null;
         sprint_type: string | null;
-        review_branch: string | null;
-        review_commit: string | null;
-        review_url: string | null;
-        qa_verified_commit: string | null;
-        qa_tested_url: string | null;
-        merged_commit: string | null;
-        deployed_commit: string | null;
-        deploy_target: string | null;
-        deployed_at: string | null;
         custom_fields_json: string | null;
       } | undefined;
       if (taskRow?.task_id) {

@@ -26,10 +26,6 @@ function tableHasColumn(db: Database.Database, table: string, column: string): b
   }
 }
 
-function taskEvidenceSelect(db: Database.Database, column: string): string {
-  return tableHasColumn(db, 'tasks', column) ? `t.${column}` : `NULL AS ${column}`;
-}
-
 function isStartEventLiveInstanceStatus(status: string | null | undefined): boolean {
   return Boolean(status && START_EVENT_LIVE_INSTANCE_STATUSES.includes(status as typeof START_EVENT_LIVE_INSTANCE_STATUSES[number]));
 }
@@ -304,15 +300,6 @@ export async function completeRunInstance(
     ? db.prepare(`
         SELECT ${tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
                t.status, t.task_type, t.project_id, t.agent_id, t.sprint_id, s.sprint_type,
-               ${taskEvidenceSelect(db, 'review_branch')},
-               ${taskEvidenceSelect(db, 'review_commit')},
-               ${taskEvidenceSelect(db, 'review_url')},
-               ${taskEvidenceSelect(db, 'qa_verified_commit')},
-               ${taskEvidenceSelect(db, 'qa_tested_url')},
-               ${taskEvidenceSelect(db, 'merged_commit')},
-               ${taskEvidenceSelect(db, 'deployed_commit')},
-               ${taskEvidenceSelect(db, 'deploy_target')},
-               ${taskEvidenceSelect(db, 'deployed_at')},
                ${tableHasColumn(db, 'tasks', 'custom_fields_json') ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
         FROM tasks t
         LEFT JOIN sprints s ON s.id = t.sprint_id
@@ -325,15 +312,6 @@ export async function completeRunInstance(
         agent_id: number | null;
         sprint_id: number | null;
         sprint_type: string | null;
-        review_branch: string | null;
-        review_commit: string | null;
-        review_url: string | null;
-        qa_verified_commit: string | null;
-        qa_tested_url: string | null;
-        merged_commit: string | null;
-        deployed_commit: string | null;
-        deploy_target: string | null;
-        deployed_at: string | null;
         custom_fields_json: string | null;
       } | undefined
     : undefined;
