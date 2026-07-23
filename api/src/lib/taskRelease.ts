@@ -44,6 +44,7 @@ export interface TaskReleaseRecord extends Partial<TaskReleaseEvidence> {
   status: string;
   task_type?: string | null;
   sprint_id?: number | null;
+  sprint_type?: string | null;
   custom_fields_json?: string | null;
 }
 
@@ -157,7 +158,7 @@ function loadTransitionRequirements(
 
 function statusRequiresQaEvidence(
   db: Database.Database | undefined,
-  task: ({ status?: string | null; task_type?: string | null; sprint_id?: number | null } & Partial<TaskReleaseEvidence>),
+  task: ({ status?: string | null; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null } & Partial<TaskReleaseEvidence>),
 ): boolean {
   const status = task.status ?? null;
   if (status !== 'ready_to_merge') return false;
@@ -171,8 +172,28 @@ function statusRequiresQaEvidence(
   }
 }
 
+function doneStatusRequiresDeployLiveEvidence(
+  db: Database.Database | undefined,
+  task: { task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null },
+): boolean {
+  if (!db) return true;
+
+  try {
+    const sprintType = task.sprint_type ?? resolveSprintTypeForSprintId(db, task.sprint_id ?? null);
+    const workflow = resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
+    const sprintTransitions = listSprintTaskTransitions(db, task.sprint_id ?? null);
+
+    return sprintTransitions
+      .filter(transition => transition.enabled !== 0)
+      .filter(transition => transition.task_type == null || transition.task_type === workflow.taskType)
+      .some(transition => transition.outcome === 'live_verified' && transition.to_status === 'done');
+  } catch {
+    return true;
+  }
+}
+
 export function evaluateTaskIntegrity(
-  task: { status?: string | null; task_type?: string | null } & Partial<TaskReleaseEvidence>,
+  task: { status?: string | null; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null } & Partial<TaskReleaseEvidence>,
   db?: Database.Database,
 ): IntegrityEvaluation {
   const warnings: string[] = [];
@@ -182,6 +203,7 @@ export function evaluateTaskIntegrity(
   const deployOk = hasDeployEvidence(task);
   const liveOk = hasLiveVerification(task);
   const requiresQaEvidence = statusRequiresQaEvidence(db, task);
+  const requiresDoneDeployLiveEvidence = status === 'done' && doneStatusRequiresDeployLiveEvidence(db, task);
 
   let integrityState: IntegrityState = 'clean';
 
@@ -197,7 +219,7 @@ export function evaluateTaskIntegrity(
   } else if (status === 'deployed' && !liveOk) {
     integrityState = 'missing_live_verification';
     warnings.push('Task is deployed, awaiting live verification.');
-  } else if (status === 'done' && (!deployOk || !liveOk)) {
+  } else if (status === 'done' && requiresDoneDeployLiveEvidence && (!deployOk || !liveOk)) {
     integrityState = 'invalid_done_state';
     if (!deployOk) warnings.push('Done task is missing deploy evidence.');
     if (!liveOk) warnings.push('Done task is missing live verification evidence.');
@@ -230,8 +252,8 @@ export function evaluateTaskIntegrity(
     release_state_badge = 'live deployed';
     release_state_label = 'Deployed to live';
   } else if (status === 'done') {
-    release_state_badge = liveOk ? 'live verified' : 'live deployed';
-    release_state_label = liveOk ? 'Live verified' : 'Done (legacy, unverified)';
+    release_state_badge = requiresDoneDeployLiveEvidence ? (liveOk ? 'live verified' : 'live deployed') : null;
+    release_state_label = requiresDoneDeployLiveEvidence ? (liveOk ? 'Live verified' : 'Done (legacy, unverified)') : null;
   }
 
   return {
@@ -239,7 +261,7 @@ export function evaluateTaskIntegrity(
     integrity_warnings: warnings,
     release_state_badge,
     release_state_label,
-    is_legacy_unverified_done: status === 'done' && (!deployOk || !liveOk),
+    is_legacy_unverified_done: status === 'done' && requiresDoneDeployLiveEvidence && (!deployOk || !liveOk),
   };
 }
 

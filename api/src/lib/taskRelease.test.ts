@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { getDb } from '../db/client';
 import { initSchema } from '../db/schema';
 import { getDefaultTenantId } from './tenantContext';
-import { assertAtlasDirectStatusGate, canonicalOutcomeRoute } from './taskRelease';
+import { assertAtlasDirectStatusGate, canonicalOutcomeRoute, evaluateTaskIntegrity } from './taskRelease';
 
 describe('taskRelease configurable outcome routing', () => {
   let db: Database.Database;
@@ -68,5 +68,46 @@ describe('taskRelease configurable outcome routing', () => {
     `).run();
 
     expect(canonicalOutcomeRoute(db, 'review', 'qa_pass', 'backend', 10, 'enhancements')).toBeNull();
+  });
+
+  it('does not mark configuration-style done tasks legacy/unverified when deploy evidence is not part of the workflow', () => {
+    const tenantId = getDefaultTenantId(db);
+    db.prepare(`
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
+      VALUES (?, 10, NULL, 'in_progress', 'completed', 'done', 1, 20, 0, datetime('now'), datetime('now'))
+    `).run(tenantId);
+
+    const result = evaluateTaskIntegrity({
+      status: 'done',
+      sprint_id: 10,
+      task_type: 'configuration',
+    }, db);
+
+    expect(result.integrity_state).toBe('clean');
+    expect(result.integrity_warnings).not.toContain('Done task is missing deploy evidence.');
+    expect(result.integrity_warnings).not.toContain('Done task is missing live verification evidence.');
+    expect(result.release_state_badge).toBeNull();
+    expect(result.release_state_label).toBeNull();
+    expect(result.is_legacy_unverified_done).toBe(false);
+  });
+
+  it('keeps missing deploy/live warnings for done tasks in deploy-verification workflows', () => {
+    const tenantId = getDefaultTenantId(db);
+    db.prepare(`
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
+      VALUES (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 20, 0, datetime('now'), datetime('now'))
+    `).run(tenantId);
+
+    const result = evaluateTaskIntegrity({
+      status: 'done',
+      sprint_id: 10,
+      task_type: 'backend',
+    }, db);
+
+    expect(result.integrity_state).toBe('invalid_done_state');
+    expect(result.integrity_warnings).toContain('Done task is missing deploy evidence.');
+    expect(result.integrity_warnings).toContain('Done task is missing live verification evidence.');
+    expect(result.release_state_label).toBe('Done (legacy, unverified)');
+    expect(result.is_legacy_unverified_done).toBe(true);
   });
 });
