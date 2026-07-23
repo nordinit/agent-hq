@@ -32,7 +32,8 @@ function hasConcreteValue(value: unknown): boolean {
 
 export function getCanonicalTaskRecord<T extends Record<string, unknown>>(row: T): T & TaskLifecycleEvidenceRecord {
   const customFields = parseTaskCustomFields(row.custom_fields_json);
-  const canonical = { ...row, ...customFields } as T & TaskLifecycleEvidenceRecord;
+  const stripped = stripTaskLifecycleEvidenceFields(row);
+  const canonical = { ...stripped, ...customFields } as T & TaskLifecycleEvidenceRecord;
   for (const field of TASK_LIFECYCLE_EVIDENCE_FIELD_KEYS) {
     if (hasConcreteValue(canonical[field])) continue;
     const value = customFields[field];
@@ -44,13 +45,7 @@ export function getCanonicalTaskRecord<T extends Record<string, unknown>>(row: T
 }
 
 export function getCanonicalTaskCustomFields(row: Record<string, unknown>): Record<string, unknown> {
-  const customFields = parseTaskCustomFields(row.custom_fields_json);
-  for (const field of TASK_LIFECYCLE_EVIDENCE_FIELD_KEYS) {
-    if (hasConcreteValue(customFields[field])) continue;
-    const value = row[field];
-    if (hasConcreteValue(value)) customFields[field] = value;
-  }
-  return customFields;
+  return parseTaskCustomFields(row.custom_fields_json);
 }
 
 export function stripTaskLifecycleEvidenceFields<T extends Record<string, unknown>>(row: T): T {

@@ -1,6 +1,6 @@
 import { getDb } from '../../db/client';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
-import { getCanonicalTaskRecord } from './evidence';
+import { getCanonicalTaskRecord, stripTaskLifecycleEvidenceFields } from './evidence';
 
 export type TaskContextMode = 'summary' | 'full';
 
@@ -267,7 +267,7 @@ function loadTask(taskId: number): RecordLike | null {
   if (!task) return null;
   const canonicalTask = getCanonicalTaskRecord(task);
   const customFields = parseCustomFields(task.custom_fields_json);
-  const taskWithoutRetiredColumns = stripRetiredTaskColumns({ ...canonicalTask, ...customFields });
+  const publicTask = stripTaskLifecycleEvidenceFields(stripRetiredTaskColumns(canonicalTask));
 
   const blockers = db.prepare(`
     SELECT t.id, t.title, t.status, t.priority, t.task_type, t.agent_id, a.name AS agent_name, t.sprint_id, s.name AS sprint_name, t.project_id
@@ -288,8 +288,9 @@ function loadTask(taskId: number): RecordLike | null {
   `).all(taskId) as RecordLike[];
 
   return {
-    ...taskWithoutRetiredColumns,
+    ...publicTask,
     ...evaluateTaskIntegrity(canonicalTask as { status?: string | null; task_type?: string | null }, db),
+    custom_fields: customFields,
     changed_files: parseChangedFiles(task.changed_files_json),
     blockers: blockers.map(formatTaskRef),
     blocking: blocking.map(formatTaskRef),
@@ -780,13 +781,14 @@ function buildTimeline(notes: ClassifiedNote[], events: Array<RecordLike>, limit
 
 function deriveNextAction(task: RecordLike, blockerContext: RecordLike | null, leaseContext: RecordLike | null, runState: RecordLike | null): string | null {
   const status = asString(task.status) ?? 'unknown';
+  const customFields = asRecord(task.custom_fields);
   if (blockerContext && ['blocked', 'failed', 'stalled'].includes(status)) {
     return 'Resolve the blocker or failure context before retrying the task.';
   }
   if (status === 'dev_deploy_queued') return 'Wait for the shared dev deploy queue to advance or for lease-manager callbacks to update task truth.';
   if (status === 'dev_deploying') return 'Wait for the shared dev deploy to finish, then verify the served branch and commit.';
   if (status === 'review') {
-    const commit = shortSha(asString(task.review_commit));
+    const commit = shortSha(asString(customFields.review_commit));
     return `QA or review should validate the deployed review artifact${commit ? ` at commit ${commit}` : ''}.`;
   }
   if (status === 'ready_to_merge') return 'Release ownership should pick up the task for deploy and live verification.';
@@ -804,6 +806,7 @@ function deriveNextAction(task: RecordLike, blockerContext: RecordLike | null, l
 function buildServerSummary(task: RecordLike, blockerContext: RecordLike | null, leaseContext: RecordLike | null, runState: RecordLike | null): string {
   const parts: string[] = [];
   const status = asString(task.status) ?? 'unknown';
+  const customFields = asRecord(task.custom_fields);
   parts.push(`Task #${asNumber(task.id) ?? '?'} is ${status}`);
 
   const assignee = asString(task.agent_name);
@@ -823,12 +826,12 @@ function buildServerSummary(task: RecordLike, blockerContext: RecordLike | null,
     const latestEvent = asRecord(leaseContext.latest_event);
     const event = asString(latestEvent.event);
     const env = asString(latestEvent.environment_id);
-    const commit = shortSha(asString(latestEvent.commit_sha) ?? asString(task.review_commit));
+    const commit = shortSha(asString(latestEvent.commit_sha) ?? asString(customFields.review_commit));
     if (event || env || commit) {
       parts.push(`Latest dev lease context is ${event ?? 'recorded'}${env ? ` on ${env}` : ''}${commit ? ` @ ${commit}` : ''}`);
     }
-  } else if (asString(task.review_commit) || asString(task.review_branch)) {
-    parts.push(`Review evidence is recorded${asString(task.review_branch) ? ` on ${asString(task.review_branch)}` : ''}${shortSha(asString(task.review_commit)) ? ` @ ${shortSha(asString(task.review_commit))}` : ''}`);
+  } else if (asString(customFields.review_commit) || asString(customFields.review_branch)) {
+    parts.push(`Review evidence is recorded${asString(customFields.review_branch) ? ` on ${asString(customFields.review_branch)}` : ''}${shortSha(asString(customFields.review_commit)) ? ` @ ${shortSha(asString(customFields.review_commit))}` : ''}`);
   } else if (runState && asString(runState.current_stage)) {
     parts.push(`Latest run stage is ${asString(runState.current_stage)}`);
   }

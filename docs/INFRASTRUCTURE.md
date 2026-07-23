@@ -127,7 +127,7 @@ Job instances track: dispatched/started/completed timestamps, session key, heart
 ### 6.5 Release truth
 Evidence gates are config-driven. Code validates configured requirement rows and does not infer required evidence from workflow phase labels, status names, or outcome names.
 
-Canonical evidence fields:
+Canonical evidence is stored and returned through workflow-defined `custom_fields` plus resolved field schema metadata:
 - Review: `review_branch`, `review_commit`, `review_url`
 - QA: `qa_verified_commit`, `qa_tested_url`
 - Deploy: `merged_commit`, `deployed_commit`, `deploy_target`, `deployed_at`
@@ -184,7 +184,7 @@ Legacy/internal compatibility: older databases may still retain `agents.job_titl
 Concrete runs. Key fields: id, agent_id, task_id, status, session_key, dispatched_at, started_at, completed_at, run_id, task_outcome, token_total, effective_model, payload_sent, response, error, abort_*, worktree_path.
 
 ### 8.3 tasks
-Key fields: id, title, description, status, priority, agent_id, project_id, sprint_id, task_type, story_points, active_instance_id, retry_count, max_retries, routing_reason, review_owner_agent_id. Release evidence: review_branch/commit/url, qa_verified_commit/tested_url, merged_commit, deployed_commit/at/target, live_verified_at/by, evidence_json.
+Key fields: id, title, description, status, priority, agent_id, project_id, sprint_id, task_type, story_points, active_instance_id, retry_count, max_retries, routing_reason, review_owner_agent_id, custom_fields_json. Lifecycle/release evidence such as review branch/commit/url, QA verified commit/tested URL, deploy commit/target/timestamp, and live verification metadata is canonical in `custom_fields_json` and exposed through task `custom_fields`.
 
 ### 8.4 Routing tables
 - `sprint_task_transitions` — primary workflow transitions (sprint, task_type, from_status, outcome, to_status)

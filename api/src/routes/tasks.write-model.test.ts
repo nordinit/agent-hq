@@ -352,9 +352,6 @@ describe('tasks route write-model handoff', () => {
       body: JSON.stringify({
         title: 'Editable task updated',
         priority: 'high',
-        review_branch: 'cinder-backend/task-481',
-        review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
-        review_url: 'http://127.0.0.1:3510/tasks/102/review',
         blockers: [{ task_id: 101 }],
         changed_by: 'cinder-backend',
       }),
@@ -370,13 +367,27 @@ describe('tasks route write-model handoff', () => {
     expect(body).not.toHaveProperty('review_branch');
     expect(body).not.toHaveProperty('review_commit');
     expect(body).not.toHaveProperty('review_url');
-    expect(body.custom_fields).toEqual(expect.objectContaining({
-      review_branch: 'cinder-backend/task-481',
-      review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
-      review_url: 'http://127.0.0.1:3510/tasks/102/review',
-    }));
     const blockers = Array.isArray(body.blockers) ? body.blockers as Array<Record<string, unknown>> : [];
     expect(blockers.map((task) => task.id)).toEqual([101]);
+  });
+
+  it('rejects legacy top-level lifecycle evidence on generic task updates', async () => {
+    const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        review_branch: 'cinder-backend/task-481',
+        review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+        changed_by: 'cinder-backend',
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).toMatchObject({
+      code: 'top_level_lifecycle_evidence_not_supported',
+      fields: ['review_branch', 'review_commit'],
+    });
   });
 
   it('returns migrated lifecycle evidence only through custom_fields on task reads', async () => {

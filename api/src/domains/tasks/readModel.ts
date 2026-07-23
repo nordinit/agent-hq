@@ -9,14 +9,14 @@ export type TaskRecord = Record<string, unknown>;
 
 const LIVE_TASK_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
 
-function tableHasTaskColumn(db: ReturnType<typeof getDb>, column: string): boolean {
-  return (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((row) => row.name === column);
-}
-
 export function stripRetiredTaskColumns(row: TaskRecord): TaskRecord {
   const retiredFailureColumn = ['failure', 'class'].join('_');
   const { [retiredFailureColumn]: _retiredFailureColumn, ...rest } = row;
   return rest;
+}
+
+function tableHasTaskColumn(db: ReturnType<typeof getDb>, column: string): boolean {
+  return (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((row) => row.name === column);
 }
 
 function stripPublicTaskResponseColumns(row: TaskRecord): TaskRecord {
@@ -474,6 +474,9 @@ export function listRecentlyCompletedTasks(
   const params: unknown[] = [hours];
   if (projectId) params.push(projectId);
   if (tenantId) params.push(tenantId);
+  const customFieldsSelect = tableHasTaskColumn(db, 'custom_fields_json')
+    ? 't.custom_fields_json'
+    : 'NULL AS custom_fields_json';
 
   const rows = db.prepare(`
     SELECT
@@ -482,8 +485,7 @@ export function listRecentlyCompletedTasks(
       t.status,
       t.priority,
       t.project_id,
-      ${tableHasTaskColumn(db, 'live_verified_at') ? 't.live_verified_at' : 'NULL AS live_verified_at'},
-      ${tableHasTaskColumn(db, 'live_verified_by') ? 't.live_verified_by' : 'NULL AS live_verified_by'},
+      ${customFieldsSelect},
       t.updated_at,
       t.agent_id,
       a.name  AS agent_name,
@@ -528,7 +530,14 @@ export function listRecentlyCompletedTasks(
     ORDER BY t.updated_at DESC
   `).all(...params) as Record<string, unknown>[];
 
-  return { hours, count: rows.length, tasks: rows };
+  return {
+    hours,
+    count: rows.length,
+    tasks: rows.map((row) => ({
+      ...stripPublicTaskResponseColumns(row),
+      custom_fields: parseCustomFields(row.custom_fields_json),
+    })),
+  };
 }
 
 export function listTasks(

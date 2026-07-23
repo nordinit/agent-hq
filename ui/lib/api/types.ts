@@ -485,8 +485,7 @@ export interface CompletedRecentTask {
   project_name: string | null;
   sprint_name: string | null;
   agent_name: string | null;
-  live_verified_at: string | null;
-  live_verified_by: string | null;
+  custom_fields?: Record<string, unknown> | null;
   updated_at: string;
   completed_at: string | null;
   outcome: string | null;

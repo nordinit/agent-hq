@@ -29,11 +29,7 @@ export interface RuntimeEndEvidenceFields {
   deployed_commit?: string | null;
   deploy_target?: string | null;
   deployed_at?: string | null;
-}
-
-function taskEvidenceSelect(db: Database.Database, column: keyof RuntimeEndEvidenceFields): string {
-  const hasColumn = (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((row) => row.name === column);
-  return hasColumn ? `t.${column}` : `NULL AS ${column}`;
+  custom_fields_json?: string | null;
 }
 
 export function derivePostRuntimeInstanceStatus(
@@ -228,15 +224,6 @@ export async function applyRuntimeEndToJobInstance(
              t.task_type,
              t.sprint_id,
              s.sprint_type,
-             ${taskEvidenceSelect(db, 'review_branch')},
-             ${taskEvidenceSelect(db, 'review_commit')},
-             ${taskEvidenceSelect(db, 'review_url')},
-             ${taskEvidenceSelect(db, 'qa_verified_commit')},
-             ${taskEvidenceSelect(db, 'qa_tested_url')},
-             ${taskEvidenceSelect(db, 'merged_commit')},
-             ${taskEvidenceSelect(db, 'deployed_commit')},
-             ${taskEvidenceSelect(db, 'deploy_target')},
-             ${taskEvidenceSelect(db, 'deployed_at')},
              ${((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((row) => row.name === 'custom_fields_json')) ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
       FROM job_instances ji
       LEFT JOIN tasks t ON t.id = ji.task_id
@@ -251,15 +238,6 @@ export async function applyRuntimeEndToJobInstance(
       task_type: string | null;
       sprint_id: number | null;
       sprint_type: string | null;
-      review_branch: string | null;
-      review_commit: string | null;
-      review_url: string | null;
-      qa_verified_commit: string | null;
-      qa_tested_url: string | null;
-      merged_commit: string | null;
-      deployed_commit: string | null;
-      deploy_target: string | null;
-      deployed_at: string | null;
       custom_fields_json: string | null;
     } | undefined;
 

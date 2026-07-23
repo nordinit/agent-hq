@@ -27,6 +27,7 @@ import {
 import { syncTaskActiveAgentFromInstance } from './ownership';
 import { enrichTask, getTaskById, TASK_SELECT, type TaskRecord } from './readModel';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
+import { TASK_LIFECYCLE_EVIDENCE_FIELD_KEYS } from './evidence';
 
 export interface CreateTaskInput {
   title: string;
@@ -75,9 +76,6 @@ export interface UpdateTaskInput {
   story_points?: number | string | null;
   origin_task_id?: number | null;
   defect_type?: string | null;
-  review_branch?: string | null;
-  review_commit?: string | null;
-  review_url?: string | null;
   blockers?: TaskBlockerInput[];
   custom_fields?: Record<string, unknown> | string | null;
 }
@@ -388,12 +386,26 @@ export function updateTaskRecord(
     story_points,
     origin_task_id,
     defect_type,
-    review_branch,
-    review_commit,
-    review_url,
     blockers,
     custom_fields,
   } = input;
+
+  const topLevelEvidenceFields = TASK_LIFECYCLE_EVIDENCE_FIELD_KEYS.filter((field) =>
+    Object.prototype.hasOwnProperty.call(input as Record<string, unknown>, field),
+  );
+  if (topLevelEvidenceFields.length > 0) {
+    throw Object.assign(
+      new Error('Top-level lifecycle evidence fields are no longer accepted on task update requests. Put workflow evidence under custom_fields or use the typed lifecycle evidence endpoints.'),
+      {
+        status: 400,
+        body: {
+          error: 'Top-level lifecycle evidence fields are no longer accepted on task update requests. Put workflow evidence under custom_fields or use the typed lifecycle evidence endpoints.',
+          code: 'top_level_lifecycle_evidence_not_supported',
+          fields: topLevelEvidenceFields,
+        },
+      },
+    );
+  }
 
   const normalizedStoryPoints = normalizeStoryPoints(story_points);
   const normalizedTaskType = normalizeOptionalTaskType(task_type);
@@ -469,12 +481,6 @@ export function updateTaskRecord(
       allowUnchangedUnknownFields: true,
     });
   }
-
-  const reviewEvidencePatch = Object.fromEntries(
-    Object.entries({ review_branch, review_commit, review_url }).filter(([, value]) =>
-      value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '')
-    ),
-  );
 
   assertTaskStatusUpdateAllowed(
     { status: String(existing.status) },
@@ -559,10 +565,6 @@ export function updateTaskRecord(
       updated.origin_task_id as number | null | undefined,
       updated.defect_type as string | null | undefined,
     );
-  }
-
-  if (Object.keys(reviewEvidencePatch).length > 0) {
-    updateTaskEvidence(taskId, actor.changedBy, reviewEvidencePatch);
   }
 
   if (Array.isArray(blockers)) {

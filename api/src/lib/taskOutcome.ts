@@ -137,7 +137,7 @@ function tableHasColumn(db: Database.Database, table: string, column: string): b
 }
 
 function selectTaskEvidenceColumns(db: Database.Database): string {
-  const columns = [
+  const lifecycleColumns = [
     'review_branch',
     'review_commit',
     'review_url',
@@ -149,11 +149,15 @@ function selectTaskEvidenceColumns(db: Database.Database): string {
     'live_verified_at',
     'live_verified_by',
     'deploy_target',
+  ];
+  const compatibilityColumns = [
     'evidence_json',
     'previous_status',
   ];
-  return columns
-    .map((column) => (tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`))
+  return [
+    ...lifecycleColumns.map((column) => `NULL AS ${column}`),
+    ...compatibilityColumns.map((column) => (tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`)),
+  ]
     .join(',\n      ');
 }
 

@@ -41,9 +41,12 @@ function StatCard({
 }
 
 function CompletedTaskRow({ task, outcomeMap }: { task: CompletedRecentTask; outcomeMap: TaskOutcomeMetaMap }) {
-  const completionTime = task.live_verified_at ?? task.completed_at ?? task.updated_at;
+  const customFields = task.custom_fields ?? {};
+  const liveVerifiedAt = typeof customFields.live_verified_at === 'string' ? customFields.live_verified_at : null;
+  const liveVerifiedBy = typeof customFields.live_verified_by === 'string' ? customFields.live_verified_by : null;
+  const completionTime = liveVerifiedAt ?? task.completed_at ?? task.updated_at;
   const outcome = task.outcome ?? null;
-  const agentDisplay = task.agent_name ?? task.live_verified_by ?? '—';
+  const agentDisplay = task.agent_name ?? liveVerifiedBy ?? '—';
   const outcomeMeta = outcome ? getTaskOutcomeMeta(outcome, outcomeMap) : null;
 
   return (
