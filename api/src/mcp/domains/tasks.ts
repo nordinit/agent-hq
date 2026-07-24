@@ -233,7 +233,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_create_task_relationship', 'atlas_create_task_relationship'],
-    'Create or update a generic task relationship using a workflow-configured relationship_type_key. Dispatch eligibility is affected only when the relationship type configuration says so.',
+    'Create or update a generic task relationship using a workflow-configured relationship_type_key. Scoped non-admin MCP callers need Project task CRUD and may only link tasks inside their assigned project. Dispatch eligibility is affected only when the relationship type configuration says so.',
     {
       task_id: z.number().int().positive().describe('Source task ID'),
       target_task_id: z.number().int().positive().describe('Target/related task ID in the same tenant/workspace'),
@@ -248,9 +248,9 @@ export function registerTasksTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_delete_task_relationship', 'atlas_delete_task_relationship'],
-    'Delete a generic task relationship by relationship record ID.',
+    'Delete a generic task relationship by relationship record ID. Scoped non-admin MCP callers need Project task CRUD and may only remove relationships whose source and target tasks are inside their assigned project.',
     {
-      task_id: z.number().int().positive().describe('Task ID visible on the relationship source or target side'),
+      task_id: z.number().int().positive().describe('Source task ID for the relationship'),
       relationship_id: z.number().int().positive().describe('Relationship record ID'),
     },
     ({ task_id, relationship_id }) => wrap(() => api.deleteTaskRelationship(task_id, relationship_id))(),

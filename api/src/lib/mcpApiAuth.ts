@@ -261,12 +261,14 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'tasks.manage_project_tasks',
     group: 'Task lifecycle',
     label: 'Project task CRUD',
-    description: 'Allows creating, reading, updating, and deleting generic tasks only inside the MCP agent\'s assigned project and tenant. Project scope is resolved from the agent identity and validated against project_id, sprint_id/workflow_id, target task project, and assignment agent_id. Does not allow active-task lifecycle writes, relationship mutation, admin outcomes, cross-project edits, cross-tenant access, or unrelated admin routes.',
+    description: 'Allows creating, reading, updating, and deleting generic tasks and workflow-configured task relationships only inside the MCP agent\'s assigned project and tenant. Project scope is resolved from the agent identity and validated against project_id, sprint_id/workflow_id, relationship peer tasks, target task project, and assignment agent_id. Does not allow active-task lifecycle writes, admin outcomes, cross-project edits, cross-tenant access, or unrelated admin routes.',
     endpoints: [
       'GET /api/v1/tasks/:id',
       'POST /api/v1/tasks',
       'PUT /api/v1/tasks/:id',
       'DELETE /api/v1/tasks/:id',
+      'POST /api/v1/tasks/:id/relationships',
+      'DELETE /api/v1/tasks/:id/relationships/:relationshipId',
     ],
     defaultEnabled: {
       scoped_runtime: false,
@@ -1181,6 +1183,33 @@ function taskBelongsToProject(db: Database.Database, identity: McpApiIdentity, t
   return parsePositiveInt(row?.tenant_id) === identity.tenantId && parsePositiveInt(row?.project_id) === projectId;
 }
 
+function relationshipBelongsToProject(
+  db: Database.Database,
+  identity: McpApiIdentity,
+  relationshipId: number,
+  sourceTaskId: number,
+  projectId: number,
+): boolean {
+  if (!hasTable(db, 'task_relationships')) return false;
+  const row = db.prepare(`
+    SELECT
+      source.tenant_id AS source_tenant_id,
+      source.project_id AS source_project_id,
+      target.tenant_id AS target_tenant_id,
+      target.project_id AS target_project_id
+    FROM task_relationships tr
+    JOIN tasks source ON source.id = tr.source_task_id
+    JOIN tasks target ON target.id = tr.target_task_id
+    WHERE tr.id = ? AND tr.source_task_id = ?
+    LIMIT 1
+  `).get(relationshipId, sourceTaskId) as Record<string, unknown> | undefined;
+  if (!row) return false;
+  return parsePositiveInt(row.source_tenant_id) === identity.tenantId
+    && parsePositiveInt(row.target_tenant_id) === identity.tenantId
+    && parsePositiveInt(row.source_project_id) === projectId
+    && parsePositiveInt(row.target_project_id) === projectId;
+}
+
 function sprintBelongsToProject(db: Database.Database, identity: McpApiIdentity, sprintId: number, projectId: number): boolean {
   if (!hasTable(db, 'sprints')) return false;
   const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
@@ -1880,10 +1909,11 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     });
   }
 
+  const taskRelationshipMutationMatch = requestPath.match(/^\/tasks\/(\d+)\/relationships(?:\/(\d+))?$/);
   const taskMatch = requestPath.match(/^\/tasks\/(\d+)(?:\/(context|notes|history|instances|relationships|relationship-types|review-evidence|qa-evidence|deploy-evidence|live-verification|outcome))?$/);
-  if (taskMatch) {
-    const taskId = Number(taskMatch[1]);
-    const suffix = taskMatch[2] ?? '';
+  if (taskMatch || taskRelationshipMutationMatch) {
+    const taskId = Number((taskMatch ?? taskRelationshipMutationMatch)?.[1]);
+    const suffix = taskRelationshipMutationMatch ? 'relationships' : taskMatch?.[2] ?? '';
     const readAllowed = method === 'GET' && (suffix === '' || suffix === 'context' || suffix === 'notes' || suffix === 'history' || suffix === 'instances' || suffix === 'relationships' || suffix === 'relationship-types');
     const writeAllowed = (
       (suffix === 'notes' && method === 'POST')
@@ -1895,6 +1925,9 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     );
     const hasProjectTaskRead = permissionState.enabledCapabilities.has('tasks.read_project_context');
     const hasProjectTaskCrud = permissionState.enabledCapabilities.has('tasks.manage_project_tasks');
+    const relationshipCrudAllowed = hasProjectTaskCrud
+      && taskRelationshipMutationMatch != null
+      && ((method === 'POST' && taskRelationshipMutationMatch[2] == null) || (method === 'DELETE' && taskRelationshipMutationMatch[2] != null));
     const projectCrudAllowed = suffix === '' && (method === 'PUT' || method === 'DELETE');
     const requiredCapability: AgentMcpCapabilityKey | null = readAllowed
       ? hasProjectTaskCrud
@@ -1902,7 +1935,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
         : hasProjectTaskRead
         ? 'tasks.read_project_context'
         : 'tasks.read_active_context'
-      : projectCrudAllowed
+      : projectCrudAllowed || relationshipCrudAllowed
         ? 'tasks.manage_project_tasks'
       : writeAllowed
         ? 'tasks.write_active_lifecycle'
@@ -1920,10 +1953,10 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       return;
     }
 
-    if ((readAllowed && (hasProjectTaskRead || hasProjectTaskCrud)) || projectCrudAllowed) {
+    if ((readAllowed && (hasProjectTaskRead || hasProjectTaskCrud)) || projectCrudAllowed || relationshipCrudAllowed) {
       if (canonicalAgentProjectId == null) {
         return deny({
-          reason: `${identity.agentSlug} does not have an assigned project for project task ${projectCrudAllowed ? 'CRUD' : 'context reads'}.`,
+          reason: `${identity.agentSlug} does not have an assigned project for project task ${projectCrudAllowed || relationshipCrudAllowed ? 'CRUD' : 'context reads'}.`,
           requiredCapability,
           taskId,
         });
@@ -1940,6 +1973,26 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
         if (!scope.ok) {
           return deny({
             reason: scope.reason,
+            requiredCapability,
+            taskId,
+          });
+        }
+      }
+      if (relationshipCrudAllowed && method === 'POST') {
+        const targetTaskId = parsePositiveInt(requestBodyRecord(req.body).target_task_id);
+        if (targetTaskId != null && !taskBelongsToProject(db, identity, targetTaskId, canonicalAgentProjectId)) {
+          return deny({
+            reason: `Relationship target task #${targetTaskId} is outside the assigned project for ${identity.agentSlug}.`,
+            requiredCapability,
+            taskId,
+          });
+        }
+      }
+      if (relationshipCrudAllowed && method === 'DELETE') {
+        const relationshipId = parsePositiveInt(taskRelationshipMutationMatch?.[2]);
+        if (relationshipId == null || !relationshipBelongsToProject(db, identity, relationshipId, taskId, canonicalAgentProjectId)) {
+          return deny({
+            reason: `Relationship #${relationshipId ?? 'unknown'} is outside the assigned project for ${identity.agentSlug}.`,
             requiredCapability,
             taskId,
           });

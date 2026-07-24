@@ -147,6 +147,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         author TEXT,
         content TEXT
       );
+      CREATE TABLE task_relationships (
+        id INTEGER PRIMARY KEY,
+        source_task_id INTEGER NOT NULL,
+        target_task_id INTEGER NOT NULL,
+        relationship_type_key TEXT NOT NULL
+      );
       CREATE TABLE project_files (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER NOT NULL,
@@ -224,6 +230,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       .run(2551, 448, 7, 'running', 2552, 449, 9, 'running', 2553, 450, 10, 'running');
     db.prepare(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`)
       .run(448, 1, 86, 42, 7, 9, 2551, 449, 2, 99, 43, 9, 9, 2552, 450, 2, 99, 43, 10, 10, 2553, 451, 1, 86, 42, null, null, null, 452, 1, 87, 44, null, null, null);
+    db.prepare(`INSERT INTO task_relationships (id, source_task_id, target_task_id, relationship_type_key) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`)
+      .run(12, 451, 448, 'relates_to', 13, 451, 452, 'relates_to');
 
     normalKey = issueMcpApiKeyForAgent(db, 7).apiKey;
     adminKey = issueMcpApiKeyForAgent(db, 8).apiKey;
@@ -1138,6 +1146,32 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(deleteTaskRes.status).toBe(200);
 
+    const createRelationshipRes = await fetch(`${baseUrl}/api/v1/tasks/451/relationships`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ target_task_id: 448, relationship_type_key: 'blocked_by' }),
+    });
+    expect(createRelationshipRes.status).toBe(201);
+    await expect(createRelationshipRes.json()).resolves.toMatchObject({
+      ok: true,
+      task_id: 451,
+      body: {
+        target_task_id: 448,
+        relationship_type_key: 'blocked_by',
+      },
+    });
+
+    const deleteRelationshipRes = await fetch(`${baseUrl}/api/v1/tasks/451/relationships/12`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(deleteRelationshipRes.status).toBe(200);
+    await expect(deleteRelationshipRes.json()).resolves.toMatchObject({
+      ok: true,
+      task_id: 451,
+      relationship_id: 12,
+    });
+
     const crossProjectRead = await fetch(`${baseUrl}/api/v1/tasks/452`, { headers: authHeaders(normalKey) });
     expect(crossProjectRead.status).toBe(403);
     await expect(crossProjectRead.json()).resolves.toMatchObject({
@@ -1186,9 +1220,32 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       code: 'mcp_scope_denied',
       details: { required_capability: 'tasks.manage_project_tasks', task_id: 451 },
     });
+
+    const crossProjectRelationshipCreate = await fetch(`${baseUrl}/api/v1/tasks/451/relationships`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ target_task_id: 452, relationship_type_key: 'blocked_by' }),
+    });
+    expect(crossProjectRelationshipCreate.status).toBe(403);
+    await expect(crossProjectRelationshipCreate.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      error: expect.stringContaining('Relationship target task #452'),
+      details: { required_capability: 'tasks.manage_project_tasks', task_id: 451 },
+    });
+
+    const crossProjectRelationshipDelete = await fetch(`${baseUrl}/api/v1/tasks/451/relationships/13`, {
+      method: 'DELETE',
+      headers: authHeaders(normalKey),
+    });
+    expect(crossProjectRelationshipDelete.status).toBe(403);
+    await expect(crossProjectRelationshipDelete.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      error: expect.stringContaining('Relationship #13'),
+      details: { required_capability: 'tasks.manage_project_tasks', task_id: 451 },
+    });
   });
 
-  it('keeps project task CRUD separate from active lifecycle and relationship mutation routes', async () => {
+  it('keeps project task CRUD separate from active lifecycle routes', async () => {
     replaceAgentMcpPermissionPolicy(getDb(), 7, [
       'discovery.read_catalog',
       'tasks.manage_project_tasks',
@@ -1210,11 +1267,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       headers: authHeaders(normalKey),
       body: JSON.stringify({ target_task_id: 448, relationship_type_key: 'relates_to' }),
     });
-    expect(relationshipRes.status).toBe(403);
-    await expect(relationshipRes.json()).resolves.toMatchObject({
-      code: 'mcp_scope_denied',
-      details: { required_capability: 'admin.full_access', task_id: 451 },
-    });
+    expect(relationshipRes.status).toBe(201);
   });
 
   it('requires explicit project task search capability for scoped runtime agents', async () => {
