@@ -205,7 +205,14 @@ export function runWorktreePrunePass(db: Database.Database = getDb()): void {
         repo_access_mode: agent.repo_access_mode,
       },
     });
-    if (effectiveRepo.repo_access_mode !== 'worktree' || !effectiveRepo.repo_path) continue;
+    // Both access modes leak workspaces, so both are reclaimed here. Clone-mode
+    // workspaces are the expensive ones (each gets a real `npm ci` rather than a
+    // symlinked node_modules), and until now they had no prune path at all.
+    const repoAccessMode: RepoAccessMode = effectiveRepo.repo_access_mode === 'clone' ? 'clone' : 'worktree';
+    // An agent with no repo configured has no task workspaces to reclaim.
+    if (!effectiveRepo.repo_path && !effectiveRepo.repo_url) continue;
+    // Detaching a worktree needs the source repo; deleting a clone does not.
+    if (repoAccessMode === 'worktree' && !effectiveRepo.repo_path) continue;
 
     const basePath = resolveWorktreeBasePath({
       osUser: agent.os_user,
@@ -214,6 +221,7 @@ export function runWorktreePrunePass(db: Database.Database = getDb()): void {
     const result = pruneOrphanedWorktrees({
       repoPath: effectiveRepo.repo_path,
       basePath,
+      mode: repoAccessMode,
       maxAgeHours: 24,
       getTaskRecord: (taskId: number) => {
         const row = db.prepare(`
