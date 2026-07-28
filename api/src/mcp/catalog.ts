@@ -143,6 +143,7 @@ export function getMcpCatalog() {
       'workflows',
       'sprints',
       'tasks',
+      'recurring_task_series',
       'routing_rules',
       'routing_transitions',
       'model_routing',

@@ -5,6 +5,7 @@ import { registerExternalTaskEventTools } from './domains/external-task-events';
 import { registerLifecycleTools } from './domains/lifecycle';
 import { registerMcpServersTools } from './domains/mcp-servers';
 import { registerProjectsTools } from './domains/projects';
+import { registerRecurringTaskSeriesTools } from './domains/recurring-task-series';
 import { registerResourcesTools } from './domains/resources';
 import { registerRoutingTools } from './domains/routing';
 import { registerSkillsTools } from './domains/skills';
@@ -17,6 +18,7 @@ export function registerAgentHqMcpDomains(context: McpDomainContext) {
   registerProjectsTools(context);
   registerWorkflowsTools(context);
   registerTasksTools(context);
+  registerRecurringTaskSeriesTools(context);
   registerLifecycleTools(context);
   registerExternalTaskEventTools(context);
   registerAgentsTools(context);

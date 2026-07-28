@@ -595,6 +595,101 @@ describe('AgentHqApiClient lifecycle write helpers', () => {
   });
 });
 
+describe('AgentHqApiClient recurring task series helpers', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+  });
+
+  it('calls recurring task series REST endpoints through typed helpers', async () => {
+    const calls: Array<{ method: string; url: string; body: unknown }> = [];
+    const fetchMock = jest.fn(async (input: string | URL, init?: RequestInit) => {
+      calls.push({
+        method: String(init?.method ?? 'GET'),
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return jsonResponse({ ok: true });
+    });
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+    const client = new AgentHqApiClient('http://agent-hq.test', 'ahq_mcp_test');
+    const payload = {
+      project_id: 1,
+      workflow_id: 2,
+      title_template: 'Follow up on new sales lead',
+      description_template: 'Check CRM and create outreach plan.',
+      task_type: 'sales',
+      priority: 'high' as const,
+      story_points: 2,
+      status_on_create: 'ready',
+      schedule_expression: 'every day 09:00',
+      timezone: 'America/New_York',
+      enabled: true,
+      overlap_policy: 'skip_if_active' as const,
+      agent_id: 7,
+      changed_by: 'cinder-backend',
+    };
+
+    await client.listRecurringTaskSeries({ project_id: 1, workflow_id: 2, enabled: true, limit: 10, offset: 5 });
+    await client.getRecurringTaskSeries(44, 8);
+    await client.getRecurringTaskSeriesHistory(44, 12);
+    await client.createRecurringTaskSeries(payload);
+    await client.updateRecurringTaskSeries(44, { schedule_expression: 'every monday 09:00', timezone: 'America/New_York', agent_id: null });
+    await client.enableRecurringTaskSeries(44, 'cinder-backend');
+    await client.disableRecurringTaskSeries(44, 'cinder-backend');
+    await client.runRecurringTaskSeriesNow(44, 'cinder-backend');
+
+    expect(calls).toEqual([
+      {
+        method: 'GET',
+        url: 'http://agent-hq.test/api/v1/recurring-task-series?project_id=1&workflow_id=2&enabled=true&limit=10&offset=5',
+        body: null,
+      },
+      {
+        method: 'GET',
+        url: 'http://agent-hq.test/api/v1/recurring-task-series/44?limit=8',
+        body: null,
+      },
+      {
+        method: 'GET',
+        url: 'http://agent-hq.test/api/v1/recurring-task-series/44/history?limit=12',
+        body: null,
+      },
+      {
+        method: 'POST',
+        url: 'http://agent-hq.test/api/v1/recurring-task-series',
+        body: payload,
+      },
+      {
+        method: 'PUT',
+        url: 'http://agent-hq.test/api/v1/recurring-task-series/44',
+        body: { schedule_expression: 'every monday 09:00', timezone: 'America/New_York', agent_id: null },
+      },
+      {
+        method: 'POST',
+        url: 'http://agent-hq.test/api/v1/recurring-task-series/44/enable',
+        body: { changed_by: 'cinder-backend' },
+      },
+      {
+        method: 'POST',
+        url: 'http://agent-hq.test/api/v1/recurring-task-series/44/disable',
+        body: { changed_by: 'cinder-backend' },
+      },
+      {
+        method: 'POST',
+        url: 'http://agent-hq.test/api/v1/recurring-task-series/44/run-now',
+        body: { changed_by: 'cinder-backend' },
+      },
+    ]);
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      Authorization: 'Bearer ahq_mcp_test',
+      'x-agent-hq-mcp-client': 'agent-hq-mcp',
+    });
+  });
+});
+
 describe('AgentHqApiClient project file helpers', () => {
   const originalFetch = global.fetch;
 

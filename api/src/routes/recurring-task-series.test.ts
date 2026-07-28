@@ -233,6 +233,33 @@ describe('recurring task series API', () => {
     }
   });
 
+  it('rejects generated-task story points that normal task creation cannot use', async () => {
+    for (const storyPoints of [0, 4]) {
+      const createRes = await fetch(`${baseUrl}/api/v1/recurring-task-series`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(validPayload({ story_points: storyPoints })),
+      });
+      expect(createRes.status).toBe(400);
+      await expect(createRes.json()).resolves.toMatchObject({
+        code: 'story_points_invalid',
+        error: expect.stringContaining(`Invalid story_points "${storyPoints}"`),
+      });
+
+      const series = await createSeries();
+      const updateRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/${series.id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ story_points: storyPoints }),
+      });
+      expect(updateRes.status).toBe(400);
+      await expect(updateRes.json()).resolves.toMatchObject({
+        code: 'story_points_invalid',
+        error: expect.stringContaining(`Invalid story_points "${storyPoints}"`),
+      });
+    }
+  });
+
   it('rejects invalid project/workflow, schedule, timezone, status, and task type combinations', async () => {
     for (const [override, code] of [
       [{ sprint_id: 6151 }, 'workflow_project_mismatch'],

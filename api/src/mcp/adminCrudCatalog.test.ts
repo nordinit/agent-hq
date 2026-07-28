@@ -81,6 +81,14 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       'agent_hq_get_task_detail',
       'agent_hq_update_task',
       'agent_hq_delete_task',
+      'agent_hq_list_recurring_task_series',
+      'agent_hq_get_recurring_task_series',
+      'agent_hq_get_recurring_task_series_history',
+      'agent_hq_create_recurring_task_series',
+      'agent_hq_update_recurring_task_series',
+      'agent_hq_enable_recurring_task_series',
+      'agent_hq_disable_recurring_task_series',
+      'agent_hq_run_recurring_task_series_now',
     ];
 
     for (const toolName of expectedTools) {
@@ -107,6 +115,25 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(byName.get('agent_hq_get_task_detail')?.description).toContain('Project task CRUD');
     expect(byName.get('agent_hq_delete_task')?.description).toContain('Project task CRUD');
     expect(byName.get('agent_hq_get_agent_mcp_capability_policy')?.description).toContain('MCP capability policy read access');
+    expect(byName.get('agent_hq_create_recurring_task_series')?.domain).toBe('recurring_task_series');
+    expect(byName.get('agent_hq_create_recurring_task_series')?.description).toContain('schedule');
+    expect(byName.get('agent_hq_create_recurring_task_series')?.args.map(arg => arg.name).sort()).toEqual([
+      'agent_id',
+      'changed_by',
+      'description_template',
+      'enabled',
+      'overlap_policy',
+      'priority',
+      'project_id',
+      'schedule_expression',
+      'status_on_create',
+      'story_points',
+      'task_type',
+      'timezone',
+      'title_template',
+      'workflow_id',
+    ]);
+    expect(byName.get('agent_hq_run_recurring_task_series_now')?.rest_paths).toEqual(['/api/v1/recurring-task-series/:id/run-now']);
     expect(byName.get('agent_hq_create_agent_mcp_capability_policy')?.description).toContain('safe non-admin capability keys');
     expect(byName.get('agent_hq_update_agent_mcp_capability_policy')?.args.map(arg => arg.name).sort()).toEqual(['agent_id', 'enabled_capabilities']);
     expect(byName.get('agent_hq_delete_agent_mcp_capability_policy')?.rest_paths).toEqual(['/api/v1/agents/:id/mcp-permissions']);
