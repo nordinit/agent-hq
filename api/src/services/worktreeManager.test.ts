@@ -36,7 +36,15 @@ describe('pruneOrphanedWorktrees', () => {
     return dir;
   }
 
-  it('preserves non-done task worktrees even when stale and idle', () => {
+  function makeDirectoryAgedDays(name: string, days: number): string {
+    const dir = path.join(basePath, name);
+    fs.mkdirSync(dir, { recursive: true });
+    const old = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    fs.utimesSync(dir, old, old);
+    return dir;
+  }
+
+  it('preserves non-terminal task worktrees that are idle but within the stale backstop', () => {
     const reviewWorktree = makeOldDirectory('task-101');
 
     const result = pruneOrphanedWorktrees({
@@ -52,20 +60,77 @@ describe('pruneOrphanedWorktrees', () => {
     expect(fs.existsSync(reviewWorktree)).toBe(true);
   });
 
-  it('preserves cancelled task worktrees until a later explicit cleanup path handles them', () => {
-    const cancelledWorktree = makeOldDirectory('task-105');
+  it.each(['cancelled', 'failed'])('prunes terminal %s task worktrees once idle', (status) => {
+    const terminalWorktree = makeOldDirectory('task-105');
 
     const result = pruneOrphanedWorktrees({
       repoPath,
       basePath,
       maxAgeHours: 1,
-      getTaskRecord: (taskId) => ({ exists: true, status: taskId === 105 ? 'cancelled' : null }),
+      getTaskRecord: (taskId) => ({ exists: true, status: taskId === 105 ? status : null }),
       hasLiveInstance: () => false,
     });
 
     expect(result.errors).toEqual([]);
+    expect(result.pruned).toEqual([terminalWorktree]);
+    expect(fs.existsSync(terminalWorktree)).toBe(false);
+  });
+
+  it('reclaims non-terminal task worktrees once past the stale backstop', () => {
+    const abandoned = makeDirectoryAgedDays('task-106', 30);
+
+    const result = pruneOrphanedWorktrees({
+      repoPath,
+      basePath,
+      maxAgeHours: 1,
+      staleWorkspaceDays: 14,
+      getTaskRecord: (taskId) => ({ exists: true, status: taskId === 106 ? 'blocked' : null }),
+      hasLiveInstance: () => false,
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.pruned).toEqual([abandoned]);
+    expect(fs.existsSync(abandoned)).toBe(false);
+  });
+
+  it('keeps a live non-terminal worktree even when past the stale backstop', () => {
+    const stillRunning = makeDirectoryAgedDays('task-107', 30);
+
+    const result = pruneOrphanedWorktrees({
+      repoPath,
+      basePath,
+      maxAgeHours: 1,
+      staleWorkspaceDays: 14,
+      getTaskRecord: () => ({ exists: true, status: 'blocked' }),
+      hasLiveInstance: (worktreePath) => worktreePath === stillRunning,
+    });
+
+    expect(result.errors).toEqual([]);
     expect(result.pruned).toEqual([]);
-    expect(fs.existsSync(cancelledWorktree)).toBe(true);
+    expect(fs.existsSync(stillRunning)).toBe(true);
+  });
+
+  it('reclaims clone-mode workspaces by deleting the directory', () => {
+    const clone = path.join(basePath, 'task-108');
+    // A clone is standalone: it owns a .git directory rather than a worktree
+    // pointer file, and is not registered with the source repo.
+    fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(clone, 'package.json'), '{}');
+    // Age the directory last: writing into it bumps its mtime.
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(clone, old, old);
+
+    const result = pruneOrphanedWorktrees({
+      basePath,
+      mode: 'clone',
+      maxAgeHours: 1,
+      getTaskRecord: () => ({ exists: true, status: 'done' }),
+      hasLiveInstance: () => false,
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.pruned).toEqual([clone]);
+    expect(fs.existsSync(clone)).toBe(false);
   });
 
   it('prunes done task worktrees when no live instance exists', () => {

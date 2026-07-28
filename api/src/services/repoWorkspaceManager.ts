@@ -308,6 +308,42 @@ export interface TaskWorktreeRecord {
   status: string | null;
 }
 
+/**
+ * Task statuses whose workspace is safe to reclaim as soon as it goes idle.
+ * These are terminal: the task will never resume work in that working copy.
+ */
+export const RECLAIMABLE_TASK_STATUSES: ReadonlySet<string> = new Set([
+  'done',
+  'cancelled',
+  'failed',
+]);
+
+/**
+ * Backstop for tasks parked in a non-terminal status (blocked, stalled,
+ * review, ...). Their workspace is kept while the task might still resume, but
+ * a working copy untouched for this long is abandoned in practice. Without the
+ * backstop a task that never reaches a terminal status holds its workspace
+ * forever, which is how clone-mode workspaces accumulated indefinitely.
+ */
+const DEFAULT_STALE_WORKSPACE_DAYS = 14;
+
+/**
+ * Reclaim a task workspace using the strategy its access mode requires:
+ * worktrees must be detached from the source repo via `git worktree remove`,
+ * clones are standalone directories and are simply deleted.
+ */
+function removeWorkspaceForMode(params: {
+  mode: RepoAccessMode;
+  repoPath?: string | null;
+  workspacePath: string;
+}): RepoWorkspaceCleanupResult {
+  const { mode, repoPath, workspacePath } = params;
+  if (mode === 'clone') {
+    return removeTaskClone({ workspacePath });
+  }
+  return removeTaskWorktree({ repoPath: repoPath ?? '', worktreePath: workspacePath });
+}
+
 type WorktreePruneCandidate =
   | { kind: 'task'; taskId: number }
   | { kind: 'orphan'; reason: 'malformed-task-folder' };
@@ -329,16 +365,27 @@ function classifyWorktreeDirectory(name: string): WorktreePruneCandidate | null 
 }
 
 export function pruneOrphanedWorktrees(params: {
-  repoPath: string;
+  repoPath?: string | null;
   basePath: string;
+  mode?: RepoAccessMode;
   maxAgeHours?: number;
+  staleWorkspaceDays?: number;
   getTaskRecord: (taskId: number) => TaskWorktreeRecord;
   hasLiveInstance: (worktreePath: string, taskId: number | null) => boolean;
 }): WorktreePruneResult {
-  const { repoPath, basePath, maxAgeHours = 24, getTaskRecord, hasLiveInstance } = params;
+  const {
+    repoPath,
+    basePath,
+    mode = 'worktree',
+    maxAgeHours = 24,
+    staleWorkspaceDays = DEFAULT_STALE_WORKSPACE_DAYS,
+    getTaskRecord,
+    hasLiveInstance,
+  } = params;
   const pruned: string[] = [];
   const errors: string[] = [];
   const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
+  const staleMs = staleWorkspaceDays * 24 * 60 * 60 * 1000;
 
   if (!fs.existsSync(basePath)) return { pruned, errors };
 
@@ -358,13 +405,21 @@ export function pruneOrphanedWorktrees(params: {
 
       if (candidate.kind === 'task') {
         const task = getTaskRecord(candidate.taskId);
-        // Existing tasks keep their worktree unless they are explicitly done.
-        // That intentionally preserves cancelled and other non-done lifecycle
-        // states until a narrower terminal cleanup path handles them.
-        if (task.exists && task.status !== 'done') continue;
+        // Terminal tasks are reclaimed as soon as they go idle. Tasks parked in
+        // a non-terminal status keep their workspace until it has been
+        // untouched past the stale backstop, so work in progress is preserved
+        // without letting a never-completed task pin its workspace forever.
+        if (task.exists && !RECLAIMABLE_TASK_STATUSES.has(task.status ?? '')) {
+          if (ageMs < staleMs) continue;
+          const idleDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+          console.log(
+            `[repoWorkspaceManager] Reclaiming stale ${mode} workspace ${fullPath} `
+            + `(task #${candidate.taskId} status=${task.status}, idle ${idleDays}d)`,
+          );
+        }
       }
 
-      const result = removeTaskWorktree({ repoPath, worktreePath: fullPath });
+      const result = removeWorkspaceForMode({ mode, repoPath, workspacePath: fullPath });
       if (result.removed) pruned.push(fullPath);
       else if (result.error) errors.push(`${fullPath}: ${result.error}`);
     } catch (err) {
