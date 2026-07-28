@@ -1,12 +1,24 @@
 import { z } from 'zod';
-import { VALID_TASK_PRIORITIES } from '../apiClient';
+import { VALID_TASK_PRIORITIES, VALID_TASK_STORY_POINTS } from '../apiClient';
 import { McpDomainContext } from '../registrar';
 
 const overlapPolicySchema = z.enum(['skip_if_active', 'create_anyway']);
 const changedBySchema = z.string().min(1).optional().describe('Optional audit actor label; defaults to Agent HQ MCP');
 const seriesIdSchema = z.number().int().positive().describe('Recurring task series ID');
 const workflowIdSchema = z.number().int().positive().optional().describe('Workflow ID. Legacy sprint_id is also accepted by the API, but workflow_id is preferred for new MCP clients.');
-const storyPointsSchema = z.number().int().min(0).describe('Story points for generated tasks');
+const storyPointsSchema = z
+  .union(
+    VALID_TASK_STORY_POINTS.map((value) => z.literal(value)) as [
+      z.ZodLiteral<1>,
+      z.ZodLiteral<2>,
+      z.ZodLiteral<3>,
+      z.ZodLiteral<5>,
+      z.ZodLiteral<8>,
+      z.ZodLiteral<13>,
+      z.ZodLiteral<21>,
+    ],
+  )
+  .describe('Story points for generated tasks: 1, 2, 3, 5, 8, 13, or 21');
 
 export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
   const { api, registerTool, wrap } = ctx;
@@ -84,7 +96,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
       description_template: z.string().optional().describe('Description template for generated tasks'),
       task_type: z.string().min(1).optional().describe('Task type for generated tasks. Resolve valid values with agent_hq_get_workflow_metadata.'),
       priority: z.enum(VALID_TASK_PRIORITIES).optional().describe('Priority for generated tasks'),
-      story_points: z.number().int().min(0).optional().describe('Story points for generated tasks'),
+      story_points: storyPointsSchema.optional(),
       status_on_create: z.string().min(1).optional().describe('Initial workflow task status for generated tasks. Resolve valid values with agent_hq_get_workflow_metadata.'),
       schedule_expression: z.string().min(1).optional().describe('Schedule expression: "every N minutes", "every day HH:mm", or "every <weekday> HH:mm"'),
       timezone: z.string().min(1).optional().describe('IANA timezone for schedule evaluation'),

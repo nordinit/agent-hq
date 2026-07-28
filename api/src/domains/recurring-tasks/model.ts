@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { listSprintTaskStatuses } from '../routing/policy/statuses';
 import { createTaskRecord } from '../tasks/writeModel';
+import { VALID_STORY_POINTS } from '../tasks/fields';
 import { isTaskStatus } from '../../lib/taskStatuses';
 import { isValidTaskType } from '../../lib/taskTypes';
 import { isTaskTypeAllowedForSprintType } from '../sprint-definitions/config';
@@ -155,7 +156,9 @@ function parseOverlapPolicy(raw: unknown): RecurringTaskOverlapPolicy {
 
 function parseStoryPoints(raw: unknown): number {
   const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) throw badRequest('story_points must be a non-negative integer', 'story_points_invalid');
+  if (!Number.isInteger(value) || !VALID_STORY_POINTS.includes(value as typeof VALID_STORY_POINTS[number])) {
+    throw badRequest(`Invalid story_points "${raw}". Valid: ${VALID_STORY_POINTS.join(', ')}`, 'story_points_invalid');
+  }
   return value;
 }
 
