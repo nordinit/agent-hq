@@ -208,6 +208,37 @@ export interface AgentHqLifecycleCheckIn {
   details?: Record<string, unknown>;
 }
 
+export type AgentHqRecurringTaskOverlapPolicy = 'skip_if_active' | 'create_anyway';
+
+export interface AgentHqRecurringTaskSeriesInput {
+  project_id: number;
+  workflow_id?: number;
+  sprint_id?: number;
+  title_template: string;
+  description_template?: string;
+  task_type: string;
+  priority: 'low' | 'medium' | 'high';
+  story_points: number;
+  status_on_create: string;
+  schedule_expression: string;
+  timezone: string;
+  enabled?: boolean | number;
+  overlap_policy?: AgentHqRecurringTaskOverlapPolicy;
+  agent_id?: number | null;
+  changed_by?: string;
+}
+
+export interface AgentHqRecurringTaskSeriesFilters {
+  project_id?: number;
+  workflow_id?: number;
+  sprint_id?: number;
+  enabled?: boolean;
+  next_run_from?: string;
+  next_run_to?: string;
+  limit?: number;
+  offset?: number;
+}
+
 function asRecord(value: unknown): RecordLike {
   return value && typeof value === 'object' ? (value as RecordLike) : {};
 }
@@ -1017,6 +1048,44 @@ export class AgentHqApiClient {
     failure_detail?: string;
   }) {
     return this.request<unknown>('POST', `/api/v1/tasks/${id}/outcome`, data);
+  }
+
+  listRecurringTaskSeries(params: AgentHqRecurringTaskSeriesFilters = {}) {
+    return this.request<unknown>('GET', appendQuery('/api/v1/recurring-task-series', { ...params }));
+  }
+
+  getRecurringTaskSeries(id: number, limit?: number) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/recurring-task-series/${id}`, { limit }));
+  }
+
+  getRecurringTaskSeriesHistory(id: number, limit?: number) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/recurring-task-series/${id}/history`, { limit }));
+  }
+
+  createRecurringTaskSeries(data: AgentHqRecurringTaskSeriesInput) {
+    return this.request<unknown>('POST', '/api/v1/recurring-task-series', data);
+  }
+
+  updateRecurringTaskSeries(id: number, data: Partial<AgentHqRecurringTaskSeriesInput>) {
+    return this.request<unknown>('PUT', `/api/v1/recurring-task-series/${id}`, data);
+  }
+
+  enableRecurringTaskSeries(id: number, changedBy?: string) {
+    return this.request<unknown>('POST', `/api/v1/recurring-task-series/${id}/enable`, {
+      changed_by: changedBy ?? 'Agent HQ MCP',
+    });
+  }
+
+  disableRecurringTaskSeries(id: number, changedBy?: string) {
+    return this.request<unknown>('POST', `/api/v1/recurring-task-series/${id}/disable`, {
+      changed_by: changedBy ?? 'Agent HQ MCP',
+    });
+  }
+
+  runRecurringTaskSeriesNow(id: number, changedBy?: string) {
+    return this.request<unknown>('POST', `/api/v1/recurring-task-series/${id}/run-now`, {
+      changed_by: changedBy ?? 'Agent HQ MCP',
+    });
   }
 
   addBlocker(taskId: number, blockedByTaskId: number, dryRun?: boolean) {

@@ -20,6 +20,7 @@ Agent HQ API
 
 Design goals:
 - expose Agent HQ projects, workflows, tasks, notes, workflow-configured task relationships, jobs, and agents to MCP clients
+- expose recurring task series so scheduled task automation can be managed without opening the UI
 - allow safe task-oriented writes from chat
 - keep the server stateless by routing all operations through the existing API
 - use Agent HQ naming throughout
@@ -57,6 +58,7 @@ Once connected, you can ask things like:
 | Workflows / Boards | Yes | Yes | Full CRUD via workflow tools; sprint-named tools remain legacy aliases |
 | Workflow Files | Yes | Yes | Use for specs and artifacts owned by one workflow |
 | Tasks | Yes | Yes | Create, update, move status, delete |
+| Recurring Task Series | Yes | Yes | Create and manage scheduled task automation |
 | Task Notes | Yes | Yes | Add notes/comments |
 | Task Lifecycle Writes | Yes | Yes | Scoped start/check-in/blocker, evidence, and outcome tools |
 | Task Relationships | Yes | Yes | Relationship-first tools create/list/delete workflow-configured task relationships |
@@ -105,6 +107,9 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 | `agent_hq_get_task` | Get full task detail |
 | `agent_hq_get_task_notes` | Get notes for a task |
 | `agent_hq_get_task_history` | Get task history |
+| `agent_hq_list_recurring_task_series` | List recurring task series with project/workflow/enabled filters |
+| `agent_hq_get_recurring_task_series` | Get recurring task series detail with recent run history |
+| `agent_hq_get_recurring_task_series_history` | List generated-run history for one recurring task series |
 | `agent_hq_get_task_relationship_types` | Resolve valid relationship type keys and dispatch semantics for a task workflow |
 | `agent_hq_list_task_relationships` | List generic task relationships for a task |
 | `agent_hq_get_workflow_metadata` | Resolve task statuses, task types, outcomes, relationship types, and custom field schema metadata for a workflow |
@@ -150,6 +155,11 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 | `agent_hq_post_task_outcome` | Post an outcome with optional inline evidence |
 | `agent_hq_create_task_relationship` | Create or update a workflow-configured task relationship |
 | `agent_hq_delete_task_relationship` | Delete a generic task relationship |
+| `agent_hq_create_recurring_task_series` | Create a recurring task series with schedule, timezone, workflow, initial generated-task status, overlap policy, enabled state, and optional agent assignment |
+| `agent_hq_update_recurring_task_series` | Update recurring task series configuration |
+| `agent_hq_enable_recurring_task_series` | Enable scheduling for a recurring task series |
+| `agent_hq_disable_recurring_task_series` | Disable scheduling for a recurring task series |
+| `agent_hq_run_recurring_task_series_now` | Trigger a recurring task series immediately and create a task now |
 | `agent_hq_add_blocker` | Legacy compatibility: add `blocked_by` only when configured as dispatch-blocking |
 | `agent_hq_remove_blocker` | Legacy compatibility: remove a `blocked_by` compatibility relationship/dependency |
 | `agent_hq_create_assignment_rule` | Create a workflow assignment rule |
@@ -216,6 +226,33 @@ Safe replay pattern for recurring task #959:
 1. Call `agent_hq_search_project_tasks` with `workflow_id`, `task_type`, `nonterminal_only: true`, and `custom_fields` containing an exact `crm_lead_id` or `external_project_id`.
 2. If a result is returned, reuse the returned task ID and do not create a duplicate follow-up.
 3. If no result is returned, create the follow-up with the typed task creation tool. Do not take external bid, proposal, or message actions as part of this dedupe check.
+
+### Recurring task series over MCP
+
+Use the recurring task series tools when an external client needs scheduled task automation without using the UI. A create call requires the target `project_id`, `workflow_id`, generated-task template fields, `status_on_create`, `schedule_expression`, and `timezone`. Optional fields include `enabled`, `overlap_policy`, and `agent_id`.
+
+Example create payload:
+
+```json
+{
+  "project_id": 12,
+  "workflow_id": 34,
+  "title_template": "Daily sales follow-up",
+  "description_template": "Review new CRM leads and create follow-up tasks.",
+  "task_type": "sales",
+  "priority": "high",
+  "story_points": 2,
+  "status_on_create": "ready",
+  "schedule_expression": "every day 09:00",
+  "timezone": "America/New_York",
+  "enabled": true,
+  "overlap_policy": "skip_if_active",
+  "agent_id": 7,
+  "changed_by": "mcp-client"
+}
+```
+
+Supported schedules are the same as the API/UI recurring task scheduler: `every N minutes`, `every day HH:mm`, and `every <weekday> HH:mm`. Resolve `task_type` and `status_on_create` for the target workflow with `agent_hq_get_workflow_metadata` before creating or updating a series.
 
 ---
 
