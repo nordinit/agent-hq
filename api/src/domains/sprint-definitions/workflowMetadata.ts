@@ -258,7 +258,7 @@ async function loadRoutingWarnings(
 
   const transitionRows = (await listSprintTaskTransitions(db, sprintId))
     .filter((transition) => transition.enabled === 1);
-  const externalMappings = listExternalEventMappings(db, {}).mappings.filter((mapping) => {
+  const externalMappings = (await listExternalEventMappings(db, {})).mappings.filter((mapping) => {
     if (mapping.enabled !== 1) return false;
     if (mapping.action_kind === 'ignore') return false;
     if (mapping.project_id !== null) return false;

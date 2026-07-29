@@ -831,7 +831,7 @@ router.post('/backfill-release-integrity', async (_req: Request, res: Response) 
       title: task.title,
       ...await evaluateTaskIntegrity(task as { status?: string | null; task_type?: string | null }, db),
     }));
-    const flagged = results.filter(task => task.integrity_state !== 'clean');
+    const flagged = results.filter(async task => (await task).integrity_state !== 'clean');
     res.json({ ok: true, total: results.length, flagged: flagged.length, results, flagged_results: flagged });
   } catch (err) {
     res.status(500).json({ error: String(err) });

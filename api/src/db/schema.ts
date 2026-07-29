@@ -48,6 +48,7 @@ import { beginIntentionalForeignKeyDisable, endIntentionalForeignKeyDisable } fr
 import { tableHasColumn } from '../lib/durableRunIdentity';
 import { syncAllTaskActiveAgentsFromInstances } from '../domains/tasks/ownership';
 import { ensureNotificationTables } from '../lib/notifications';
+import { SqliteAdapter } from "./adapter/SqliteAdapter";
 
 const HOME = process.env.HOME ?? os.homedir();
 const OPENCLAW_DIR = process.env.WORKSPACE_PARENT ?? `${HOME}/.openclaw`;
@@ -62,7 +63,7 @@ function tableExists(db: Database.Database, table: string): boolean {
 }
 
 async function ensureTableColumn(db: Database.Database, table: string, column: string, ddl: string): Promise<void> {
-  if (await tableHasColumn(db, table, column)) return;
+  if (await tableHasColumn(new SqliteAdapter(db), table, column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   console.log(`[schema] Migrated: added ${table}.${column}`);
 }
@@ -146,12 +147,12 @@ function stripTasksStatusCheck(ddl: string): string {
 
 async function tenantDefaultIdForSchemaInit(db: Database.Database): Promise<number> {
   return activeTenantMode === 'verify'
-    ? await verifyTenantSchemaForStartup(db)
-    : await ensureTenantSchema(db);
+    ? await verifyTenantSchemaForStartup(new SqliteAdapter(db))
+    : await ensureTenantSchema(new SqliteAdapter(db));
 }
 
 async function backfillJobInstanceDurableRunIds(db: Database.Database): Promise<void> {
-  if (!await tableHasColumn(db, 'job_instances', 'durable_run_id')) return;
+  if (!await tableHasColumn(new SqliteAdapter(db), 'job_instances', 'durable_run_id')) return;
   const rows = db.prepare(`
     SELECT id
     FROM job_instances
@@ -1028,8 +1029,8 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     console.log('[schema] Migrated: added assigned_agent_id to tasks and backfilled from agent_id');
   } catch (_) { /* column already exists */ }
   try {
-    db.exec(`UPDATE tasks SET assigned_agent_id = agent_id WHERE assigned_agent_id IS NULL`);
-    await syncAllTaskActiveAgentsFromInstances(db);
+    db.exec(new SqliteAdapter(`UPDATE tasks SET assigned_agent_id = agent_id WHERE assigned_agent_id IS NULL`));
+    await syncAllTaskActiveAgentsFromInstances(new SqliteAdapter(db));
     db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_agent ON tasks(assigned_agent_id)`);
   } catch (_) { /* minimal schema or transient migration ordering */ }
 
@@ -1336,7 +1337,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   ensureColumn('sprint_types', 'status_seeded_at', `status_seeded_at TEXT`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_types_project ON sprint_types(project_id)`);
   db.exec(`UPDATE sprint_types SET description = COALESCE(description, ''), is_system = COALESCE(is_system, 1), created_at = COALESCE(created_at, datetime('now')), updated_at = COALESCE(updated_at, datetime('now'))`);
-  const sprintTypesTenantScoped = await tableHasColumn(db, 'sprint_types', 'tenant_id');
+  const sprintTypesTenantScoped = await tableHasColumn(new SqliteAdapter(db), 'sprint_types', 'tenant_id');
   if (sprintTypesTenantScoped) {
     for (const table of [
       'task_field_schemas',
@@ -1459,8 +1460,8 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   db.exec(`UPDATE sprint_workflow_templates SET updated_at = COALESCE(updated_at, datetime('now'))`);
 
   const defaultTenantIdSql = `(SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1)`;
-  const sprintTypesHasTenantId = await tableHasColumn(db, 'sprint_types', 'tenant_id');
-  const workflowConfigTenantPredicate = async (tableName: string): Promise<string> => await tableHasColumn(db, tableName, 'tenant_id')
+  const sprintTypesHasTenantId = await tableHasColumn(new SqliteAdapter(db), 'sprint_types', 'tenant_id');
+  const workflowConfigTenantPredicate = async (tableName: string): Promise<string> => await tableHasColumn(new SqliteAdapter(db), tableName, 'tenant_id')
     ? `AND (tenant_id IS NULL OR tenant_id = ${defaultTenantIdSql})`
     : '';
 
@@ -1520,7 +1521,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     }
   };
 
-  const sprintTypeTaskTypesHasTenantId = await tableHasColumn(db, 'sprint_type_task_types', 'tenant_id');
+  const sprintTypeTaskTypesHasTenantId = await tableHasColumn(new SqliteAdapter(db), 'sprint_type_task_types', 'tenant_id');
   const updateSprintTypeTaskType = db.prepare(`
     UPDATE sprint_type_task_types
     SET is_system = 1, updated_at = datetime('now')
@@ -1543,7 +1544,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     }
   };
 
-  const sprintTypeOutcomesHasTenantId = await tableHasColumn(db, 'sprint_type_outcomes', 'tenant_id');
+  const sprintTypeOutcomesHasTenantId = await tableHasColumn(new SqliteAdapter(db), 'sprint_type_outcomes', 'tenant_id');
   const updateSprintOutcome = db.prepare(`
     UPDATE sprint_type_outcomes
     SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
@@ -1781,10 +1782,10 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
   ensureTaskRelationshipModel(db, { sprintTypesTenantScoped, rebuildWithoutSprintTypeKeyForeignKey });
   if (!sprintTypesTenantScoped) {
-    await pruneUnexpectedStarterWorkflowRelationshipTypes(db);
+    await pruneUnexpectedStarterWorkflowRelationshipTypes(new SqliteAdapter(db));
   }
   if (shouldSeedStarterSprintDefinitions) {
-    await seedStarterWorkflowRelationshipTypes(db);
+    await seedStarterWorkflowRelationshipTypes(new SqliteAdapter(db));
   }
 
   // Safe migration: add branch_url to tasks
@@ -2314,7 +2315,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // "restore foreign-key enforcement" below. Do not narrow it to this block; the
   // compatibility DDL that needs enforcement off continues for several hundred lines.
   let foreignKeysDisabledForLegacyWorkflowDdl = false;
-  if (await tableHasColumn(db, 'sprint_types', 'tenant_id')) {
+  if (await tableHasColumn(new SqliteAdapter(db), 'sprint_types', 'tenant_id')) {
     db.pragma('foreign_keys = OFF');
     // Register the window so the startup tripwire does not mistake this deliberate
     // disable for a leak. It matters because initSchema() calls ensureTenantSchema()
@@ -2442,7 +2443,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   if (!sprintTypesTenantScoped || shouldSeedStarterSprintTypeStatuses) {
     for (const sprintType of sprintTypeSeeds) {
-      await seedSprintTypeTaskStatuses(db, sprintType.key);
+      await seedSprintTypeTaskStatuses(new SqliteAdapter(db), sprintType.key);
     }
   }
   ensureColumn('sprint_task_transitions', 'project_id', `project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
@@ -2668,7 +2669,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     `);
     console.log('[schema] Migrated: sprint_task_routing_rules.sprint_id now allows NULL for sprint-type defaults');
   }
-  db.exec(`
+  db.exec(new SqliteAdapter(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_task_routing_rules_candidate_unique
       ON sprint_task_routing_rules(
         project_id,
@@ -2680,8 +2681,8 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
         priority
       )
       WHERE project_id IS NOT NULL AND sprint_type IS NOT NULL;
-  `);
-  await normalizeSprintTaskRoutingRuleTaskTypes(db);
+  `));
+  await normalizeSprintTaskRoutingRuleTaskTypes(new SqliteAdapter(db));
   db.exec(`
     UPDATE sprints
     SET task_policy_seeded_at = COALESCE(task_policy_seeded_at, datetime('now'))
@@ -2736,7 +2737,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   ensureProjectAuditLogTable();
   ensureAppSettingsTable();
   if (activeTenantMode !== 'verify') {
-    await ensureDefaultProjectId(db);
+    await ensureDefaultProjectId(new SqliteAdapter(db));
   }
   try {
     db.exec(`ALTER TABLE agents ADD COLUMN system_role TEXT`);
@@ -2750,7 +2751,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   await ensureGitHubIdentitiesTable();
   ensureFailureDetailAndWorkflowColumns();
   await seedInitialData();
-  await ensureMcpApiKeyTable(db);
+  await ensureMcpApiKeyTable(new SqliteAdapter(db));
   await ensureMcpRegistryTables();
   ensureLifecycleRulesTable();
   ensureDataMigration593();
@@ -3106,7 +3107,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   try {
     const defaultTenantId = await tenantDefaultIdForSchemaInit(db);
-    await ensureDefaultProjectId(db);
+    await ensureDefaultProjectId(new SqliteAdapter(db));
   } catch (err) {
     console.error('[schema] Failed to ensure default project:', err);
   }
@@ -6157,7 +6158,7 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
     ['mapping_action_target', 'TEXT'],
     ['request_metadata_json', 'TEXT'],
   ] as const) {
-    if (!await tableHasColumn(db, 'external_task_event_receipts', column)) {
+    if (!await tableHasColumn(new SqliteAdapter(db), 'external_task_event_receipts', column)) {
       db.prepare(`ALTER TABLE external_task_event_receipts ADD COLUMN ${column} ${definition}`).run();
     }
   }
@@ -6219,14 +6220,14 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
   `);
   ensureTasksRequireWorkflow(db);
   if (activeTenantMode === 'verify') {
-    await verifyTenantSchemaForStartup(db);
+    await verifyTenantSchemaForStartup(new SqliteAdapter(db));
   } else {
-    await ensureTenantSchema(db);
+    await ensureTenantSchema(new SqliteAdapter(db));
     // Legacy upgrade path: projects.tenant_id is only added by ensureTenantSchema,
     // so repeat the version-history backfill that was skipped earlier in this run.
     await backfillProjectFileVersionHistory(db);
   }
-  await ensureNotificationTables(db);
+  await ensureNotificationTables(new SqliteAdapter(db));
 
   try {
     migrateAgentSessionKeysToCanonical(db);
@@ -6239,7 +6240,7 @@ async function backfillProjectFileVersionHistory(db: Database.Database): Promise
   // Requires projects.tenant_id, which legacy databases gain only once
   // ensureTenantSchema has run. Idempotent: INSERT OR IGNORE + NOT EXISTS,
   // and the UPDATE only touches rows that still need backfilling.
-  if (!await tableHasColumn(db, 'projects', 'tenant_id')) return;
+  if (!await tableHasColumn(new SqliteAdapter(db), 'projects', 'tenant_id')) return;
   if (!tableExists(db, 'project_files') || !tableExists(db, 'project_file_versions')) return;
 
   db.exec(`

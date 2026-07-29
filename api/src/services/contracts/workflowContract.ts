@@ -390,7 +390,7 @@ async function loadConfiguredGateRequirements(
   }
 }
 
-export function resolveEvidenceRequirements(options: {
+export async function resolveEvidenceRequirements(options: {
   db?: Db | null;
   taskType?: string | null;
   sprintId?: number | null;
@@ -417,18 +417,18 @@ export function resolveEvidenceRequirements(options: {
       options.taskType ?? null,
     ));
 
-  const blockingRequirements = requirements.filter((requirement) => requirement.severity !== 'warn');
+  const blockingRequirements = requirements.filter(async (requirement) => (await requirement).severity !== 'warn');
   const fieldExpressions = new Set<string>();
   const fieldNames = new Set<string>();
 
   for (const requirement of blockingRequirements) {
-    if (requirement.requirement_type === 'from_status') continue;
-    if (requirement.requirement_type !== 'required' && requirement.requirement_type !== 'match') continue;
+    if ((await requirement).requirement_type === 'from_status') continue;
+    if ((await requirement).requirement_type !== 'required' && (await requirement).requirement_type !== 'match') continue;
 
-    const fields = parseFieldExpression(requirement.field_name).filter((field) => !NON_EVIDENCE_FIELDS.has(field));
+    const fields = parseFieldExpression((await requirement).field_name).filter((field) => !NON_EVIDENCE_FIELDS.has(field));
     if (fields.length === 0) continue;
 
-    fieldExpressions.add(formatFieldExpression(requirement.field_name));
+    fieldExpressions.add(formatFieldExpression((await requirement).field_name));
     for (const field of fields) fieldNames.add(field);
   }
 

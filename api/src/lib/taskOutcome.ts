@@ -483,7 +483,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     throw new RefusedTaskOutcomeError(refusal);
   }
 
-  let canonicalNextStatus = sprintWorkflowRoute?.nextStatus
+  let canonicalNextStatus = (await sprintWorkflowRoute)?.nextStatus
     ?? (await canonicalOutcomeRoute(db, routingBaseStatus, routingOutcome, reloadedExisting.task_type, reloadedExisting.sprint_id, reloadedExisting.sprint_type));
   if (!canonicalNextStatus) {
     for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {

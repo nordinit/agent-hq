@@ -140,8 +140,8 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
     resolved_sprint_type: resolvedFieldSchema.sprint_type,
     resolved_custom_field_schema: resolvedFieldSchema.schema,
     relationships: await getTaskRelationshipsForEnrichment(id),
-    assigned_agent_name: assignedAgentId == null ? null : agentNames.get(assignedAgentId) ?? null,
-    active_agent_name: activeAgentId == null ? null : agentNames.get(activeAgentId) ?? null,
+    assigned_agent_name: assignedAgentId == null ? null : (await agentNames).get(assignedAgentId) ?? null,
+    active_agent_name: activeAgentId == null ? null : (await agentNames).get(activeAgentId) ?? null,
     blockers: blockers.map(stripPublicTaskResponseColumns),
     blocking: blocking.map(stripPublicTaskResponseColumns),
   };

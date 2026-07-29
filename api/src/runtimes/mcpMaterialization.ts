@@ -1624,19 +1624,19 @@ export async function syncAssignedMcpForServer(params: {
       refreshPluginRegistry: false,
       materializeOpenClawGlobalConfig: params.materializeOpenClawGlobalConfig,
     }));
-  const successfulOpenClawMaterializations = results.filter(result => (
-    result.runtimeType === 'openclaw'
+  const successfulOpenClawMaterializations = results.filter(async result => (
+    (await result).runtimeType === 'openclaw'
     && params.materializeOpenClawGlobalConfig === true
-    && result.ok
-    && result.count > 0
-    && !result.skipped
+    && (await result).ok
+    && (await result).count > 0
+    && !(await result).skipped
   ));
 
   if (successfulOpenClawMaterializations.length > 0) {
     const refresh = params.refreshOpenClawPluginRegistry ?? refreshOpenClawPluginRegistry;
     const refreshResult = refresh({
       mcpServerId: params.mcpServerId,
-      materializedCount: successfulOpenClawMaterializations.reduce((sum, result) => sum + result.count, 0),
+      materializedCount: successfulOpenClawMaterializations.reduce(async (sum, result) => sum + (await result).count, 0),
     });
     if (!refreshResult.ok) {
       for (const result of successfulOpenClawMaterializations) {

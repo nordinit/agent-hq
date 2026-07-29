@@ -202,7 +202,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(0);
+    expect((await result).dispatched).toBe(0);
     expect(resolveRuntime).not.toHaveBeenCalled();
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
@@ -228,7 +228,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(1);
+    expect((await result).dispatched).toBe(1);
     const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 608`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'ready', agent_id: 1, active_instance_id: 1 });
     db.close();
@@ -245,7 +245,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(1);
+    expect((await result).dispatched).toBe(1);
     const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 797`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'intake', agent_id: 1, active_instance_id: 1 });
     await new Promise(resolve => setImmediate(resolve));
@@ -259,7 +259,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(0);
+    expect((await result).dispatched).toBe(0);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 798`) as { status: string; active_instance_id: number | null };
     expect(task).toEqual({ status: 'field_reported', active_instance_id: null });
     db.close();
@@ -280,7 +280,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(0);
+    expect((await result).dispatched).toBe(0);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 799`) as { status: string; active_instance_id: number | null };
     expect(task).toEqual({ status: 'archived', active_instance_id: null });
     db.close();
@@ -301,7 +301,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(1);
+    expect((await result).dispatched).toBe(1);
     const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 800`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'failed', agent_id: 1, active_instance_id: 1 });
     await new Promise(resolve => setImmediate(resolve));
@@ -325,7 +325,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(1);
+    expect((await result).dispatched).toBe(1);
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 801`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
@@ -349,7 +349,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(0);
+    expect((await result).dispatched).toBe(0);
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 806`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBeNull();
     db.close();
@@ -406,7 +406,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(1);
+    expect((await result).dispatched).toBe(1);
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 802`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
@@ -431,7 +431,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(0);
+    expect((await result).dispatched).toBe(0);
     const tasks = await db.all(`SELECT id, active_instance_id FROM tasks WHERE id IN (802, 803, 804) ORDER BY id`) as Array<{ id: number; active_instance_id: number | null }>;
     expect(tasks).toEqual([
       { id: 802, active_instance_id: null },
@@ -450,7 +450,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(0);
+    expect((await result).dispatched).toBe(0);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeNull();
@@ -468,7 +468,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(1);
+    expect((await result).dispatched).toBe(1);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeGreaterThan(0);
@@ -485,7 +485,7 @@ describe('dispatcher relationship-driven eligibility', () => {
 
     const result = runDispatcher(db, 86);
 
-    expect(result.dispatched).toBe(1);
+    expect((await result).dispatched).toBe(1);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeGreaterThan(0);
