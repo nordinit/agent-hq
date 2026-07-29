@@ -248,35 +248,34 @@ interface CaptureContext {
   durableRunId: string | null;
 }
 
-function resolveDurableRunId(instanceId: number): string | null {
+async function resolveDurableRunId(instanceId: number): Promise<string | null> {
   try {
     const db = getDb();
-    if (!tableHasColumn(db, 'job_instances', 'durable_run_id')) return null;
-    const row = db.prepare('SELECT durable_run_id FROM job_instances WHERE id = ?')
-      .get(instanceId) as { durable_run_id?: string | null } | undefined;
+    if (!await tableHasColumn(db, 'job_instances', 'durable_run_id')) return null;
+    const row = await db.get('SELECT durable_run_id FROM job_instances WHERE id = ?', instanceId) as { durable_run_id?: string | null } | undefined;
     return row?.durable_run_id ?? null;
   } catch {
     return null;
   }
 }
 
-function chatMessageIdentityColumns(
+async function chatMessageIdentityColumns(
   db: ReturnType<typeof getDb>,
   ctx: CaptureContext,
-): {
+): Promise<{
   insertColumnSql: string;
   valueSql: string;
   updateSql: string;
   values: unknown[];
-} {
+}> {
   const columns: string[] = [];
   const values: unknown[] = [];
 
-  if (tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
+  if (await tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
     columns.push('durable_run_id');
     values.push(ctx.durableRunId);
   }
-  if (tableHasColumn(db, 'chat_messages', 'session_key')) {
+  if (await tableHasColumn(db, 'chat_messages', 'session_key')) {
     columns.push('session_key');
     values.push(ctx.sessionKey);
   }
@@ -289,13 +288,13 @@ function chatMessageIdentityColumns(
   };
 }
 
-function persistHistoryMessages(
+async function persistHistoryMessages(
   ctx: CaptureContext,
   messages: Array<Record<string, unknown>>,
-): number {
+): Promise<number> {
   try {
     const db = getDb();
-    const identity = chatMessageIdentityColumns(db, ctx);
+    const identity = await chatMessageIdentityColumns(db, ctx);
     const stmt = db.prepare(`
       INSERT INTO chat_messages (id, agent_id, instance_id, ${identity.insertColumnSql}role, content, timestamp, event_type, event_meta)
       VALUES (?, ?, ?, ${identity.valueSql}?, ?, ?, ?, ?)
@@ -308,10 +307,7 @@ function persistHistoryMessages(
         event_meta = excluded.event_meta
     `);
 
-    db.prepare('DELETE FROM chat_messages WHERE id LIKE ? OR id LIKE ?').run(
-      `oc-hist-${ctx.instanceId}-%`,
-      `oc-live-${ctx.instanceId}-%`,
-    );
+    await db.run('DELETE FROM chat_messages WHERE id LIKE ? OR id LIKE ?', `oc-hist-${ctx.instanceId}-%`, `oc-live-${ctx.instanceId}-%`);
 
     let rowIndex = 0;
     for (const m of messages) {
@@ -348,48 +344,48 @@ function persistHistoryMessages(
   }
 }
 
-function persistStreamDelta(ctx: CaptureContext, cumulativeText: string): void {
+async function persistStreamDelta(ctx: CaptureContext, cumulativeText: string): Promise<void> {
   try {
     const db = getDb();
     const now = nowTimestamp();
-    const identity = chatMessageIdentityColumns(db, ctx);
-    db.prepare(`
+    const identity = await chatMessageIdentityColumns(db, ctx);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, ${identity.insertColumnSql}role, content, timestamp, event_type, event_meta)
       VALUES (?, ?, ?, ${identity.valueSql}'assistant', ?, ?, 'text', '{}')
       ON CONFLICT(id) DO UPDATE SET
         ${identity.updateSql}
         content = excluded.content,
         timestamp = excluded.timestamp
-    `).run(`oc-stream-${ctx.instanceId}`, ctx.agentId, ctx.instanceId, ...identity.values, cumulativeText, now);
+    `, `oc-stream-${ctx.instanceId}`, ctx.agentId, ctx.instanceId, ...identity.values, cumulativeText, now);
   } catch { /* non-critical */ }
 }
 
-function persistFinalMessage(ctx: CaptureContext, text: string, msgIndex: number): void {
+async function persistFinalMessage(ctx: CaptureContext, text: string, msgIndex: number): Promise<void> {
   try {
     const db = getDb();
     const now = nowTimestamp();
-    const identity = chatMessageIdentityColumns(db, ctx);
-    db.prepare(`
+    const identity = await chatMessageIdentityColumns(db, ctx);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, ${identity.insertColumnSql}role, content, timestamp, event_type, event_meta)
       VALUES (?, ?, ?, ${identity.valueSql}'assistant', ?, ?, 'text', '{}')
       ON CONFLICT(id) DO UPDATE SET
         ${identity.updateSql}
         content = excluded.content,
         timestamp = excluded.timestamp
-    `).run(`oc-asst-${ctx.instanceId}-${msgIndex}`, ctx.agentId, ctx.instanceId, ...identity.values, text, now);
+    `, `oc-asst-${ctx.instanceId}-${msgIndex}`, ctx.agentId, ctx.instanceId, ...identity.values, text, now);
     // Remove the rolling stream row — final message replaces it
-    db.prepare('DELETE FROM chat_messages WHERE id = ?').run(`oc-stream-${ctx.instanceId}`);
+    await db.run('DELETE FROM chat_messages WHERE id = ?', `oc-stream-${ctx.instanceId}`);
   } catch { /* non-critical */ }
 }
 
-function persistLiveStructuredMessage(
+async function persistLiveStructuredMessage(
   ctx: CaptureContext,
   message: Record<string, unknown>,
   rowIndex: number,
-): number {
+): Promise<number> {
   try {
     const db = getDb();
-    const identity = chatMessageIdentityColumns(db, ctx);
+    const identity = await chatMessageIdentityColumns(db, ctx);
     const ts =
       typeof message.timestamp === 'number'
         ? (timestampFromEpochMs(message.timestamp) ?? nowTimestamp())
@@ -506,7 +502,7 @@ class GatewayTranscriptCapture {
   }
 
   /** Stop the capture and close the WS connection */
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
 
@@ -521,7 +517,7 @@ class GatewayTranscriptCapture {
 
     if (this.streamText) {
       // Flush any partial stream before stopping
-      persistFinalMessage(this.ctx, this.streamText, this.assistantMsgIndex++);
+      await persistFinalMessage(this.ctx, this.streamText, this.assistantMsgIndex++);
       this.streamText = '';
     }
 
@@ -739,10 +735,10 @@ class GatewayTranscriptCapture {
       const msgs = Array.isArray(histPayload.messages) ? histPayload.messages : [];
 
       if (msgs.length > 0) {
-        persistHistoryMessages(
-          this.ctx,
-          msgs as Array<Record<string, unknown>>,
-        );
+        await persistHistoryMessages(
+                    this.ctx,
+                    msgs as Array<Record<string, unknown>>,
+                  );
         // Track how many assistant messages are already persisted
         const assistantCount = msgs.filter(
           (m: unknown) =>
@@ -775,7 +771,7 @@ class GatewayTranscriptCapture {
     }, this.historyRetryDelayMs);
   }
 
-  private handleChatEvent(state: string, message: unknown): void {
+  private async handleChatEvent(state: string, message: unknown): Promise<void> {
     if (this.stopped) return;
 
     if (state === 'delta') {
@@ -784,7 +780,7 @@ class GatewayTranscriptCapture {
       this.streamText = newText;
       // Persist every non-empty delta so live polling is not gated on long output.
       if (this.streamText && this.streamText !== this.lastStreamFlushText) {
-        persistStreamDelta(this.ctx, this.streamText);
+        await persistStreamDelta(this.ctx, this.streamText);
         this.lastStreamFlushText = this.streamText;
       }
     } else if (state === 'final') {
@@ -793,7 +789,7 @@ class GatewayTranscriptCapture {
 
       // Persist the final text message
       if (textToSave) {
-        persistFinalMessage(this.ctx, textToSave, this.assistantMsgIndex++);
+        await persistFinalMessage(this.ctx, textToSave, this.assistantMsgIndex++);
       }
       this.streamText = '';
       this.lastStreamFlushText = '';
@@ -807,7 +803,7 @@ class GatewayTranscriptCapture {
     } else if (state === 'aborted' || state === 'error') {
       // Flush whatever partial text was streamed before abort
       if (this.streamText) {
-        persistFinalMessage(this.ctx, this.streamText, this.assistantMsgIndex++);
+        await persistFinalMessage(this.ctx, this.streamText, this.assistantMsgIndex++);
         this.streamText = '';
         this.lastStreamFlushText = '';
       }
@@ -817,11 +813,11 @@ class GatewayTranscriptCapture {
         this.stop();
       });
     } else if (message && typeof message === 'object') {
-      this.liveRowIndex = persistLiveStructuredMessage(
-        this.ctx,
-        message as Record<string, unknown>,
-        this.liveRowIndex,
-      );
+      this.liveRowIndex = await persistLiveStructuredMessage(
+              this.ctx,
+              message as Record<string, unknown>,
+              this.liveRowIndex,
+            );
     }
   }
 }
@@ -844,12 +840,12 @@ const activeCaptures = new Map<string, GatewayTranscriptCapture>();
  * @param sessionKey   Full gateway session key (e.g. "agent:<project>:<agent>:<role>:run:<id>")
  * @param opts         Optional: timeoutMs override
  */
-export function startTranscriptCapture(
+export async function startTranscriptCapture(
   instanceId: number,
   agentId: number,
   sessionKey: string,
   opts: CaptureOptions = {},
-): GatewayTranscriptCaptureHandle {
+): Promise<GatewayTranscriptCaptureHandle> {
   // Idempotent: if already capturing this session, return existing handle
   const existing = activeCaptures.get(sessionKey);
   if (existing) {
@@ -868,7 +864,7 @@ export function startTranscriptCapture(
     instanceId,
     agentId,
     sessionKey,
-    durableRunId: resolveDurableRunId(instanceId),
+    durableRunId: await resolveDurableRunId(instanceId),
   }, sessionKey, opts);
   activeCaptures.set(sessionKey, capture);
 

@@ -1,7 +1,7 @@
-import type Database from 'better-sqlite3';
 import type { MaterializationResult } from '../runtimes/skillMaterialization';
 import { createNotificationRecord } from './notifications';
 import { getActiveTenantId } from './tenantContext';
+import { type Db } from "../db/adapter/types";
 
 export interface SkillMaterializationNotificationContext {
   runtimeType: string;
@@ -23,11 +23,11 @@ export interface SkillMaterializationNotificationContext {
  *
  * Returns true when a notification was recorded.
  */
-export function recordSkillMaterializationIssues(
-  db: Database.Database,
+export async function recordSkillMaterializationIssues(
+  db: Db,
   result: MaterializationResult,
   context: SkillMaterializationNotificationContext,
-): boolean {
+): Promise<boolean> {
   const unresolved = result.details
     .filter((d) => d.action === 'skipped' && d.reason === 'source not found')
     .map((d) => d.skill);
@@ -58,31 +58,31 @@ export function recordSkillMaterializationIssues(
       : unresolved.length + errored.length;
 
     const tenantId = Number(context.tenantId);
-    createNotificationRecord(db, {
-      tenantId: Number.isInteger(tenantId) && tenantId > 0 ? tenantId : getActiveTenantId(db),
-      type: 'skill_materialization_failure',
-      title: `🧩 Skill materialization issue for ${agentLabel}`,
-      body: [
-        `${affectedCount} of ${context.requestedSkillNames.length} assigned skill(s) did not materialize for ${agentLabel} (${context.runtimeType}).`,
-        ...problems,
-        context.instanceId ? `Instance #${context.instanceId}${context.taskId ? ` · Task #${context.taskId}` : ''}` : null,
-        'The agent was dispatched without the missing skill content.',
-      ].filter((line): line is string => Boolean(line)).join('\n'),
-      source: 'dispatcher',
-      outlet: 'agent_hq',
-      metadata: {
-        runtimeType: context.runtimeType,
-        agentId: context.agentId,
-        agentName: context.agentName,
-        instanceId: context.instanceId,
-        taskId: context.taskId ?? null,
-        requestedSkills: context.requestedSkillNames,
-        unresolvedSkills: unresolved,
-        erroredSkills: errored,
-        warnings: result.warnings,
-        error: result.error ?? null,
-      },
-    });
+    await createNotificationRecord(db, {
+            tenantId: Number.isInteger(tenantId) && tenantId > 0 ? tenantId : await getActiveTenantId(db),
+            type: 'skill_materialization_failure',
+            title: `🧩 Skill materialization issue for ${agentLabel}`,
+            body: [
+              `${affectedCount} of ${context.requestedSkillNames.length} assigned skill(s) did not materialize for ${agentLabel} (${context.runtimeType}).`,
+              ...problems,
+              context.instanceId ? `Instance #${context.instanceId}${context.taskId ? ` · Task #${context.taskId}` : ''}` : null,
+              'The agent was dispatched without the missing skill content.',
+            ].filter((line): line is string => Boolean(line)).join('\n'),
+            source: 'dispatcher',
+            outlet: 'agent_hq',
+            metadata: {
+              runtimeType: context.runtimeType,
+              agentId: context.agentId,
+              agentName: context.agentName,
+              instanceId: context.instanceId,
+              taskId: context.taskId ?? null,
+              requestedSkills: context.requestedSkillNames,
+              unresolvedSkills: unresolved,
+              erroredSkills: errored,
+              warnings: result.warnings,
+              error: result.error ?? null,
+            },
+          });
     return true;
   } catch (err) {
     console.error('[dispatcher] Failed to record skill materialization notification:', err);

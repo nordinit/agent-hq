@@ -23,7 +23,7 @@ const router = Router();
 // Body: { project_id: number }
 // Response: { promoted, blocked, stalled, dispatched, skipped }
 
-router.post('/trigger', (req: Request, res: Response) => {
+router.post('/trigger', async (req: Request, res: Response) => {
   try {
     const { project_id } = req.body as { project_id?: number };
     if (project_id == null || typeof project_id !== 'number') {
@@ -32,8 +32,8 @@ router.post('/trigger', (req: Request, res: Response) => {
 
     const db = getDb();
 
-    const eligResult: EligibilityResult = runEligibilityPass(db, project_id);
-    const dispResult: DispatchResult    = runDispatcher(db, project_id);
+    const eligResult: EligibilityResult = await runEligibilityPass(db, project_id);
+    const dispResult: DispatchResult    = await runDispatcher(db, project_id);
 
     res.json({
       project_id,
@@ -62,7 +62,7 @@ router.post('/reconcile', async (_req: Request, res: Response) => {
     const summary = await runReconcilerTick(undefined, db);
 
     if (summary.dispatched > 0 || summary.errors.length > 0) {
-      notifyTelegram(`📋 Reconcile complete: ${summary.dispatched} dispatched, ${summary.stalled} stalled, ${summary.errors.length} errors`);
+      await notifyTelegram(`📋 Reconcile complete: ${summary.dispatched} dispatched, ${summary.stalled} stalled, ${summary.errors.length} errors`);
     }
 
     res.json({
@@ -157,36 +157,34 @@ router.get('/log', (req: Request, res: Response) => {
 //   - total stalled today
 //   - starved_jobs (agents that have explicitly routed ready tasks but no active dispatch)
 
-router.get('/status', (_req: Request, res: Response) => {
+router.get('/status', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
 
     // Last dispatch event in the log acts as proxy for last reconcile
-    const lastLog = db.prepare(
-      `SELECT dispatched_at FROM dispatch_log ORDER BY dispatched_at DESC LIMIT 1`
-    ).get() as { dispatched_at: string } | undefined;
+    const lastLog = await db.get(`SELECT dispatched_at FROM dispatch_log ORDER BY dispatched_at DESC LIMIT 1`) as { dispatched_at: string } | undefined;
 
     const lastReconcileAt = lastLog?.dispatched_at ?? null;
 
     // Dispatched today
-    const dispatchedToday = (db.prepare(`
+    const dispatchedToday = (await db.get(`
       SELECT COUNT(*) as n
       FROM dispatch_log
       WHERE dispatched_at >= datetime('now', 'start of day')
-    `).get() as { n: number }).n;
+    `) as { n: number }).n;
 
     // Stalled today (tasks that transitioned to stalled today)
-    const stalledToday = (db.prepare(`
+    const stalledToday = (await db.get(`
       SELECT COUNT(*) as n
       FROM tasks
       WHERE status = 'stalled'
         AND updated_at >= datetime('now', 'start of day')
-    `).get() as { n: number }).n;
+    `) as { n: number }).n;
 
     // Starved jobs: enabled agents that currently own an explicit sprint routing rule
     // for ready tasks but have no active dispatch. Legacy task.agent_id ownership is
     // intentionally ignored here so the status view reflects the explicit routing model.
-    const starvedJobs = db.prepare(`
+    const starvedJobs = await db.all(`
       SELECT a.id, a.job_title as title, a.name as agent_name,
              COUNT(DISTINCT t.id) as ready_task_count
       FROM agents a
@@ -208,7 +206,7 @@ router.get('/status', (_req: Request, res: Response) => {
         )
       GROUP BY a.id
       ORDER BY ready_task_count DESC
-    `).all() as { id: number; title: string; agent_name: string; ready_task_count: number }[];
+    `) as { id: number; title: string; agent_name: string; ready_task_count: number }[];
 
     res.json({
       last_reconcile_at: lastReconcileAt,

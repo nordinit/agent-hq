@@ -15,8 +15,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import type Database from 'better-sqlite3';
 import { insertRuntimeLog } from './runtimeTenantScope';
+import { type Db } from "../db/adapter/types";
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
@@ -234,10 +234,10 @@ export interface SecurityViolationContext {
  * Also writes a row to the `logs` table (level=error) so the event appears
  * in the existing Agent HQ log viewer.
  */
-export function logSecurityViolation(
-  db: Database.Database,
+export async function logSecurityViolation(
+  db: Db,
   ctx: SecurityViolationContext,
-): void {
+): Promise<void> {
   const summary =
     `WORKSPACE_BOUNDARY_VIOLATION: agent_id=${ctx.agentId ?? 'unknown'} ` +
     `instance_id=${ctx.instanceId ?? 'unknown'} ` +
@@ -248,20 +248,15 @@ export function logSecurityViolation(
 
   // Write to security_events table
   try {
-    db.prepare(`
+    await db.run(`
       INSERT INTO security_events (event_type, agent_id, instance_id, task_id, details)
       VALUES ('workspace_boundary_violation', ?, ?, ?, ?)
-    `).run(
-      ctx.agentId ?? null,
-      ctx.instanceId ?? null,
-      ctx.taskId ?? null,
-      JSON.stringify({
-        attempted_path: ctx.attemptedPath,
-        resolved_path: ctx.resolvedPath,
-        workspace_root: ctx.workspaceRoot,
-        detail: ctx.detail ?? null,
-      }),
-    );
+    `, ctx.agentId ?? null, ctx.instanceId ?? null, ctx.taskId ?? null, JSON.stringify({
+              attempted_path: ctx.attemptedPath,
+              resolved_path: ctx.resolvedPath,
+              workspace_root: ctx.workspaceRoot,
+              detail: ctx.detail ?? null,
+            }));
   } catch (err) {
     // Table may not exist in stale DBs — log to stderr as fallback
     console.error('[workspaceBoundary] security_events insert failed:', err);
@@ -269,14 +264,14 @@ export function logSecurityViolation(
 
   // Also write to the existing logs table so the event appears in the UI log viewer
   try {
-    insertRuntimeLog(db, {
-      taskId: ctx.taskId ?? null,
-      instanceId: ctx.instanceId ?? null,
-      agentId: ctx.agentId ?? null,
-      jobTitle: 'security',
-      level: 'error',
-      message: summary,
-    });
+    await insertRuntimeLog(db, {
+            taskId: ctx.taskId ?? null,
+            instanceId: ctx.instanceId ?? null,
+            agentId: ctx.agentId ?? null,
+            jobTitle: 'security',
+            level: 'error',
+            message: summary,
+          });
   } catch (err) {
     console.error('[workspaceBoundary] logs insert failed:', err);
   }
@@ -293,22 +288,22 @@ export function logSecurityViolation(
  *
  * This is the primary entry point for callers that have a DB handle.
  */
-export function validateAndLogViolation(
-  db: Database.Database,
+export async function validateAndLogViolation(
+  db: Db,
   workspaceRoot: string,
   targetPath: string,
   ctx: Omit<SecurityViolationContext, 'attemptedPath' | 'resolvedPath' | 'workspaceRoot'>,
-): string {
+): Promise<string> {
   try {
     return resolveAndValidate(workspaceRoot, targetPath);
   } catch (err) {
     if (err instanceof WorkspaceBoundaryError) {
-      logSecurityViolation(db, {
-        ...ctx,
-        attemptedPath: err.attemptedPath,
-        resolvedPath: err.resolvedPath,
-        workspaceRoot: err.workspaceRoot,
-      });
+      await logSecurityViolation(db, {
+                ...ctx,
+                attemptedPath: err.attemptedPath,
+                resolvedPath: err.resolvedPath,
+                workspaceRoot: err.workspaceRoot,
+              });
     }
     throw err;
   }

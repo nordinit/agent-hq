@@ -1,5 +1,5 @@
-import type Database from 'better-sqlite3';
 import { resolveSprintTaskRoutingAssignment } from '../domains/routing/policy/statuses';
+import { type Db } from "../db/adapter/types";
 
 export const USER_UPDATE_OUTCOME = 'user_update';
 
@@ -8,18 +8,18 @@ export function isManualUserStatusChange(changedBy: string | null | undefined, p
     && String(priorStatus ?? '') !== String(nextStatus ?? '');
 }
 
-export function resolveTaskRoutingRule(
-  db: Database.Database,
+export async function resolveTaskRoutingRule(
+  db: Db,
   sprintId: number | null | undefined,
   _projectId: number | null | undefined,
   taskType: string | null | undefined,
   status: string | null | undefined,
-): { agentId: number | null; routingReason: string | null } {
+): Promise<{ agentId: number | null; routingReason: string | null }> {
   if (!status) {
     return { agentId: null, routingReason: null };
   }
 
-  const sprintRule = resolveSprintTaskRoutingAssignment(db, sprintId ?? null, taskType ?? null, status);
+  const sprintRule = await resolveSprintTaskRoutingAssignment(db, sprintId ?? null, taskType ?? null, status);
   if (sprintRule.agent_id == null) {
     return { agentId: null, routingReason: null };
   }
@@ -30,8 +30,8 @@ export function resolveTaskRoutingRule(
   };
 }
 
-export function resolveManualUserUpdate(
-  db: Database.Database,
+export async function resolveManualUserUpdate(
+  db: Db,
   params: {
     changedBy: string | null | undefined;
     priorStatus: string | null | undefined;
@@ -43,7 +43,7 @@ export function resolveManualUserUpdate(
     explicitAgentId: number | null | undefined;
     currentAgentId: number | null | undefined;
   }
-): { emitted: boolean; resolvedAgentId: number | null; routingReason: string | null } {
+): Promise<{ emitted: boolean; resolvedAgentId: number | null; routingReason: string | null }> {
   const emitted = isManualUserStatusChange(params.changedBy, params.priorStatus, params.nextStatus);
   if (!emitted) {
     return {
@@ -61,7 +61,7 @@ export function resolveManualUserUpdate(
     };
   }
 
-  const route = resolveTaskRoutingRule(db, params.sprintId, params.projectId, params.taskType, params.nextStatus);
+  const route = await resolveTaskRoutingRule(db, params.sprintId, params.projectId, params.taskType, params.nextStatus);
   if (route.agentId != null) {
     return {
       emitted: true,

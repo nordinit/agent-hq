@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import {
   defaultAgentModelForProvider,
   getConnectedProviderSlugs,
@@ -15,6 +14,7 @@ import {
   type StarterFieldDefinition,
 } from './starterCatalog';
 import { buildCanonicalAgentMainSessionKey, slugifySessionKeyPart } from './sessionKeys';
+import { type Db } from "../db/adapter/types";
 
 export type StarterTemplateKey = 'development' | 'ops' | 'lead-generation' | 'blank';
 
@@ -225,9 +225,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
   try {
-    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
   } catch {
     return false;
   }
@@ -384,8 +384,8 @@ function mergeRouteOverrides(defaultRoutes: StarterRoutePlan[], overrides: unkno
   return Array.from(byKey.values());
 }
 
-function connectedProviderForPlan(tenantId: number): string | null {
-  const connected = getConnectedProviderSlugs(tenantId);
+async function connectedProviderForPlan(tenantId: number): Promise<string | null> {
+  const connected = await getConnectedProviderSlugs(tenantId);
   if (connected.length === 0) return null;
   return resolveSchemaSafePreferredProvider(connected);
 }
@@ -453,15 +453,15 @@ export function listStarterTemplates(): StarterTemplateCatalogEntry[] {
   return STARTER_TEMPLATE_CATALOG.map((template) => ({ ...template, owner_roles: [...template.owner_roles] }));
 }
 
-export function buildStarterSetupPlan(db: Database.Database, tenantId: number, input: StarterPlanInput = {}): StarterSetupPlan {
+export async function buildStarterSetupPlan(db: Db, tenantId: number, input: StarterPlanInput = {}): Promise<StarterSetupPlan> {
   const templateKeys = normalizeTemplateKeys(input);
   const templates = templateKeys.map((key) => STARTER_TEMPLATE_CATALOG.find((entry) => entry.key === key)!);
   const primaryTemplate = templates[0];
   const projectName = normalizeNonEmptyText(input.project_name, 'Agent HQ Project');
   const owners = ownerMap(input);
 
-  const runtime = readRuntimeConnectionConfig(db);
-  const provider = connectedProviderForPlan(tenantId);
+  const runtime = await readRuntimeConnectionConfig(db);
+  const provider = await connectedProviderForPlan(tenantId);
   const model = defaultAgentModelForProvider(provider);
   const requiresAgents = templates.some((template) => template.key !== 'blank');
   const compatibilityErrors: string[] = [];
@@ -474,7 +474,7 @@ export function buildStarterSetupPlan(db: Database.Database, tenantId: number, i
     compatibilityErrors.push('Starter agents require at least one connected provider.');
   }
   if (requiresAgents) {
-    const providerError = validateAgentProviderSelection(tenantId, provider, model);
+    const providerError = await validateAgentProviderSelection(tenantId, provider, model);
     if (providerError) compatibilityErrors.push(providerError);
   }
 
@@ -568,75 +568,75 @@ export function buildStarterSetupPlan(db: Database.Database, tenantId: number, i
   };
 }
 
-function insertProject(db: Database.Database, tenantId: number, plan: StarterSetupPlan): number {
-  const result = db.prepare(`
+async function insertProject(db: Db, tenantId: number, plan: StarterSetupPlan): Promise<number> {
+  const result = await db.run(`
     INSERT INTO projects (tenant_id, name, description, context_md)
     VALUES (?, ?, ?, ?)
-  `).run(tenantId, plan.project.name, plan.project.description, '');
+  `, tenantId, plan.project.name, plan.project.description, '');
   return Number(result.lastInsertRowid);
 }
 
-function insertWorkflow(db: Database.Database, tenantId: number, projectId: number, workflow: StarterWorkflowPlan): number {
-  const result = db.prepare(`
+async function insertWorkflow(db: Db, tenantId: number, projectId: number, workflow: StarterWorkflowPlan): Promise<number> {
+  const result = await db.run(`
     INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, workflow_template_key, status, length_kind, length_value)
     VALUES (?, ?, ?, ?, ?, ?, 'active', 'time', 'ongoing')
-  `).run(tenantId, projectId, workflow.workflow.name, workflow.workflow.goal, workflow.workflow.sprint_type, workflow.template.key);
+  `, tenantId, projectId, workflow.workflow.name, workflow.workflow.goal, workflow.workflow.sprint_type, workflow.template.key);
   const sprintId = Number(result.lastInsertRowid);
-  seedSprintTaskPolicy(db, sprintId);
+  await seedSprintTaskPolicy(db, sprintId);
   return sprintId;
 }
 
-function tenantPredicate(db: Database.Database, table: string, tenantId: number): { sql: string; params: unknown[] } {
-  if (!tableHasColumn(db, table, 'tenant_id')) return { sql: '', params: [] };
+async function tenantPredicate(db: Db, table: string, tenantId: number): Promise<{ sql: string; params: unknown[] }> {
+  if (!await tableHasColumn(db, table, 'tenant_id')) return { sql: '', params: [] };
   return { sql: ' AND tenant_id = ?', params: [tenantId] };
 }
 
-function tenantInsert(db: Database.Database, table: string, tenantId: number): { columns: string; placeholders: string; params: unknown[] } {
-  if (!tableHasColumn(db, table, 'tenant_id')) return { columns: '', placeholders: '', params: [] };
+async function tenantInsert(db: Db, table: string, tenantId: number): Promise<{ columns: string; placeholders: string; params: unknown[] }> {
+  if (!await tableHasColumn(db, table, 'tenant_id')) return { columns: '', placeholders: '', params: [] };
   return { columns: 'tenant_id, ', placeholders: '?, ', params: [tenantId] };
 }
 
-function ensureStarterSprintTypeRegistry(db: Database.Database, tenantId: number, workflow: StarterWorkflowPlan): void {
+async function ensureStarterSprintTypeRegistry(db: Db, tenantId: number, workflow: StarterWorkflowPlan): Promise<void> {
   const sprintType = workflow.workflow.sprint_type;
   const sprintTypeSeed = STARTER_SPRINT_TYPE_SEEDS.find((seed) => seed.key === sprintType);
   if (!sprintTypeSeed) return;
 
-  const typeTenant = tenantPredicate(db, 'sprint_types', tenantId);
-  const existingType = db.prepare(`
+  const typeTenant = await tenantPredicate(db, 'sprint_types', tenantId);
+  const existingType = await db.get(`
     SELECT key, is_system
     FROM sprint_types
     WHERE key = ?
       ${typeTenant.sql}
     LIMIT 1
-  `).get(sprintType, ...typeTenant.params) as { key: string; is_system: number } | undefined;
+  `, sprintType, ...typeTenant.params) as { key: string; is_system: number } | undefined;
 
   if (!existingType) {
-    const insert = tenantInsert(db, 'sprint_types', tenantId);
-    db.prepare(`
+    const insert = await tenantInsert(db, 'sprint_types', tenantId);
+    await db.run(`
       INSERT INTO sprint_types (${insert.columns}key, name, description, is_system, created_at, updated_at)
       VALUES (${insert.placeholders}?, ?, ?, 1, datetime('now'), datetime('now'))
-    `).run(...insert.params, sprintTypeSeed.key, sprintTypeSeed.name, sprintTypeSeed.description);
+    `, ...insert.params, sprintTypeSeed.key, sprintTypeSeed.name, sprintTypeSeed.description);
   } else if (existingType.is_system === 1) {
-    db.prepare(`
+    await db.run(`
       UPDATE sprint_types
       SET name = ?, description = ?, is_system = 1, updated_at = datetime('now')
       WHERE key = ?
         ${typeTenant.sql}
-    `).run(sprintTypeSeed.name, sprintTypeSeed.description, sprintType, ...typeTenant.params);
+    `, sprintTypeSeed.name, sprintTypeSeed.description, sprintType, ...typeTenant.params);
   }
 
   const taskTypes = getStarterTaskTypesForSprintType(sprintType);
-  const taskTypeTenant = tenantPredicate(db, 'sprint_type_task_types', tenantId);
+  const taskTypeTenant = await tenantPredicate(db, 'sprint_type_task_types', tenantId);
   if (taskTypes.length > 0) {
-    db.prepare(`
+    await db.run(`
       DELETE FROM sprint_type_task_types
       WHERE sprint_type_key = ?
         ${taskTypeTenant.sql}
         AND COALESCE(is_system, 0) = 1
         AND task_type NOT IN (${taskTypes.map(() => '?').join(', ')})
-    `).run(sprintType, ...taskTypeTenant.params, ...taskTypes);
+    `, sprintType, ...taskTypeTenant.params, ...taskTypes);
   }
-  const taskTypeInsert = tenantInsert(db, 'sprint_type_task_types', tenantId);
+  const taskTypeInsert = await tenantInsert(db, 'sprint_type_task_types', tenantId);
   const taskTypeExisting = db.prepare(`
     SELECT id, is_system
     FROM sprint_type_task_types
@@ -663,37 +663,37 @@ function ensureStarterSprintTypeRegistry(db: Database.Database, tenantId: number
   const fieldSeed = STARTER_FIELD_SCHEMA_SEEDS.find((seed) => seed.sprintType === sprintType);
   if (fieldSeed) {
     const schemaJson = JSON.stringify(fieldSeed.schema);
-    const fieldTenant = tenantPredicate(db, 'task_field_schemas', tenantId);
-    const existing = db.prepare(`
+    const fieldTenant = await tenantPredicate(db, 'task_field_schemas', tenantId);
+    const existing = await db.get(`
       SELECT id, is_system
       FROM task_field_schemas
       WHERE sprint_type_key = ? AND task_type IS NULL
         ${fieldTenant.sql}
       LIMIT 1
-    `).get(sprintType, ...fieldTenant.params) as { id: number; is_system: number } | undefined;
+    `, sprintType, ...fieldTenant.params) as { id: number; is_system: number } | undefined;
     if (!existing) {
-      const insert = tenantInsert(db, 'task_field_schemas', tenantId);
-      db.prepare(`
+      const insert = await tenantInsert(db, 'task_field_schemas', tenantId);
+      await db.run(`
         INSERT INTO task_field_schemas (${insert.columns}sprint_type_key, task_type, schema_json, is_system, created_at, updated_at)
         VALUES (${insert.placeholders}?, NULL, ?, 1, datetime('now'), datetime('now'))
-      `).run(...insert.params, sprintType, schemaJson);
+      `, ...insert.params, sprintType, schemaJson);
     } else if (existing.is_system === 1) {
-      db.prepare(`
+      await db.run(`
         UPDATE task_field_schemas
         SET schema_json = ?, is_system = 1, updated_at = datetime('now')
         WHERE sprint_type_key = ? AND task_type IS NULL
           ${fieldTenant.sql}
-      `).run(schemaJson, sprintType, ...fieldTenant.params);
+      `, schemaJson, sprintType, ...fieldTenant.params);
     }
   }
 
-  seedSprintTypeTaskStatuses(db, sprintType, { force: true, tenantId });
+  await seedSprintTypeTaskStatuses(db, sprintType, { force: true, tenantId });
 
   const outcomeSeed = STARTER_SPRINT_OUTCOME_SEEDS.find((seed) => seed.sprintType === sprintType);
   if (!outcomeSeed) return;
 
-  const outcomeTenant = tenantPredicate(db, 'sprint_type_outcomes', tenantId);
-  const outcomeInsert = tenantInsert(db, 'sprint_type_outcomes', tenantId);
+  const outcomeTenant = await tenantPredicate(db, 'sprint_type_outcomes', tenantId);
+  const outcomeInsert = await tenantInsert(db, 'sprint_type_outcomes', tenantId);
   const existingOutcome = db.prepare(`
     SELECT id, is_system
     FROM sprint_type_outcomes
@@ -731,46 +731,34 @@ function ensureStarterSprintTypeRegistry(db: Database.Database, tenantId: number
   }
 }
 
-function insertAgent(db: Database.Database, tenantId: number, projectId: number, projectName: string, agent: StarterAgentPlan): number {
+async function insertAgent(db: Db, tenantId: number, projectId: number, projectName: string, agent: StarterAgentPlan): Promise<number> {
   const sessionKey = buildCanonicalAgentMainSessionKey({
     projectName,
     projectSlug: slugifySessionKeyPart(projectName, 'project'),
     agentName: agent.name,
     role: agent.job_title,
   });
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO agents (
       tenant_id, name, role, session_key, workspace_path, status, runtime_type, runtime_config,
       project_id, preferred_provider, model, system_role, enabled, job_title, schedule,
       job_instructions, skill_names, timeout_seconds, stall_threshold_min, max_retries, sort_rules
     )
     VALUES (?, ?, ?, ?, '', 'idle', ?, NULL, ?, ?, ?, NULL, 1, ?, '', ?, ?, 900, 30, 3, '[]')
-  `).run(
-    tenantId,
-    agent.name,
-    agent.role,
-    sessionKey,
-    agent.runtime_type,
-    projectId,
-    agent.preferred_provider,
-    agent.model,
-    agent.job_title,
-    `Starter owner role: ${agent.owner_role}`,
-    JSON.stringify(agent.skill_names),
-  );
+  `, tenantId, agent.name, agent.role, sessionKey, agent.runtime_type, projectId, agent.preferred_provider, agent.model, agent.job_title, `Starter owner role: ${agent.owner_role}`, JSON.stringify(agent.skill_names));
   return Number(result.lastInsertRowid);
 }
 
-function insertRoutingRule(db: Database.Database, sprintId: number, projectId: number, sprintType: string, route: StarterRoutePlan, agentId: number): number {
-  const result = db.prepare(`
+async function insertRoutingRule(db: Db, sprintId: number, projectId: number, sprintType: string, route: StarterRoutePlan, agentId: number): Promise<number> {
+  const result = await db.run(`
     INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, enabled, priority, is_system, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
-  `).run(sprintId, projectId, sprintType, route.task_type, route.status, agentId, route.enabled ? 1 : 0, route.priority);
+  `, sprintId, projectId, sprintType, route.task_type, route.status, agentId, route.enabled ? 1 : 0, route.priority);
   return Number(result.lastInsertRowid);
 }
 
-function insertModelRouting(db: Database.Database, tenantId: number, projectId: number, sprintId: number, rule: StarterModelRoutingPlan): number {
-  const hasTenant = tableHasColumn(db, 'story_point_model_routing', 'tenant_id');
+async function insertModelRouting(db: Db, tenantId: number, projectId: number, sprintId: number, rule: StarterModelRoutingPlan): Promise<number> {
+  const hasTenant = await tableHasColumn(db, 'story_point_model_routing', 'tenant_id');
   const columns = [
     ...(hasTenant ? ['tenant_id'] : []),
     'project_id', 'sprint_id', 'sprint_type', 'max_points', 'provider', 'model', 'fallback_model',
@@ -792,14 +780,14 @@ function insertModelRouting(db: Database.Database, tenantId: number, projectId: 
     rule.enabled ? 1 : 0,
     rule.label,
   ];
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO story_point_model_routing (${columns.join(', ')})
     VALUES (${columns.map(() => '?').join(', ')})
-  `).run(...values);
+  `, ...values);
   return Number(result.lastInsertRowid);
 }
 
-export function applyStarterSetupPlan(db: Database.Database, tenantId: number, input: StarterPlanInput = {}): {
+export async function applyStarterSetupPlan(db: Db, tenantId: number, input: StarterPlanInput = {}): Promise<{
   ok: true;
   plan: StarterSetupPlan;
   project_id: number;
@@ -808,8 +796,8 @@ export function applyStarterSetupPlan(db: Database.Database, tenantId: number, i
   agent_ids: Record<string, number>;
   route_ids: number[];
   model_routing_ids: number[];
-} {
-  const plan = buildStarterSetupPlan(db, tenantId, input);
+}> {
+  const plan = await buildStarterSetupPlan(db, tenantId, input);
   if (!plan.compatibility.ok) {
     throw Object.assign(new Error(plan.compatibility.errors.join('; ')), {
       status: 422,
@@ -818,15 +806,15 @@ export function applyStarterSetupPlan(db: Database.Database, tenantId: number, i
     });
   }
 
-  const tx = db.transaction(() => {
-    const projectId = insertProject(db, tenantId, plan);
+  const tx = db.transaction(async () => {
+    const projectId = await insertProject(db, tenantId, plan);
     const workflowIds: Record<string, number> = {};
     const agentIdsByOwner = new Map<string, number>();
     const agentIds: Record<string, number> = {};
 
     for (const agent of plan.agents) {
       const key = agent.owner_name.trim().toLowerCase();
-      const id = agentIdsByOwner.get(key) ?? insertAgent(db, tenantId, projectId, plan.project.name, agent);
+      const id = agentIdsByOwner.get(key) ?? (await insertAgent(db, tenantId, projectId, plan.project.name, agent));
       agentIdsByOwner.set(key, id);
       agentIds[agent.owner_role] = id;
     }
@@ -834,15 +822,15 @@ export function applyStarterSetupPlan(db: Database.Database, tenantId: number, i
     const routeIds: number[] = [];
     const modelRoutingIds: number[] = [];
     for (const workflow of plan.workflows) {
-      ensureStarterSprintTypeRegistry(db, tenantId, workflow);
-      const workflowId = insertWorkflow(db, tenantId, projectId, workflow);
+      await ensureStarterSprintTypeRegistry(db, tenantId, workflow);
+      const workflowId = await insertWorkflow(db, tenantId, projectId, workflow);
       workflowIds[workflow.template.key] = workflowId;
       for (const route of workflow.routes) {
         const agentId = agentIds[route.owner_role];
         if (!agentId) continue;
-        routeIds.push(insertRoutingRule(db, workflowId, projectId, workflow.workflow.sprint_type, route, agentId));
+        routeIds.push(await insertRoutingRule(db, workflowId, projectId, workflow.workflow.sprint_type, route, agentId));
       }
-      modelRoutingIds.push(...workflow.model_routing.map((rule) => insertModelRouting(db, tenantId, projectId, workflowId, rule)));
+      modelRoutingIds.push(...workflow.model_routing.map(async (rule) => await insertModelRouting(db, tenantId, projectId, workflowId, rule)));
     }
 
     return {

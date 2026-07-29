@@ -13,7 +13,7 @@ const sentGatewayRequests: SentRequest[] = [];
 const gatewaySockets: MockGatewaySocket[] = [];
 const proxyClients: MockClientSocket[] = [];
 let historyMessages: Array<Record<string, unknown>> = [];
-let db: Database.Database;
+let db: Db;
 let openclawHome: string;
 let previousOpenClawHome: string | undefined;
 
@@ -96,6 +96,7 @@ jest.mock('ws', () => ({
 }));
 
 import { setupChatProxy } from './chat';
+import { type Db } from "../db/adapter/types";
 
 class MockClientSocket {
   readyState = MockGatewaySocket.OPEN;
@@ -126,9 +127,9 @@ class MockClientSocket {
   }
 }
 
-function setupDb(): void {
+async function setupDb(): Promise<void> {
   db = new Database(':memory:');
-  db.exec(`
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       name TEXT,
@@ -182,10 +183,10 @@ function setupDb(): void {
       event_meta TEXT NOT NULL DEFAULT '{}'
     );
   `);
-  db.prepare(`
+  await db.run(`
     INSERT INTO agents (id, name, runtime_type, session_key, openclaw_agent_id)
     VALUES (2, 'Atlas', 'openclaw', 'agent:atlas:main', 'atlas')
-  `).run();
+  `);
 }
 
 function waitForAsyncFrames(): Promise<void> {
@@ -238,7 +239,7 @@ function connectProxyClient(): MockClientSocket {
 }
 
 describe('chat websocket live structured persistence', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     sentGatewayRequests.length = 0;
     gatewaySockets.length = 0;
     proxyClients.length = 0;
@@ -246,7 +247,7 @@ describe('chat websocket live structured persistence', () => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
     openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-chat-jsonl-'));
     process.env.OPENCLAW_HOME = openclawHome;
-    setupDb();
+    await setupDb();
   });
 
   afterEach(() => {
@@ -282,13 +283,13 @@ describe('chat websocket live structured persistence', () => {
       }),
     ]));
 
-    const chatRun = db.prepare(`
+    const chatRun = await db.get(`
       SELECT id, durable_run_id
       FROM job_instances
       WHERE session_key = ?
       ORDER BY id DESC
       LIMIT 1
-    `).get(sessionKey) as { id: number; durable_run_id: string };
+    `, sessionKey) as { id: number; durable_run_id: string };
     expect(chatRun?.id).toBeGreaterThan(0);
 
     writeDirectSessionJsonl(sessionKey, [
@@ -308,12 +309,12 @@ describe('chat websocket live structured persistence', () => {
 
     await waitForPoll();
 
-    const midTurnRows = db.prepare(`
+    const midTurnRows = await db.all(`
       SELECT id, role, event_type, content, session_key
       FROM chat_messages
       WHERE session_key = ? AND event_type <> 'text'
       ORDER BY event_type ASC
-    `).all(sessionKey);
+    `, sessionKey);
 
     expect(midTurnRows).toEqual([
       expect.objectContaining({
@@ -356,12 +357,12 @@ describe('chat websocket live structured persistence', () => {
     })));
     await waitForAsyncFrames();
 
-    const finalRows = db.prepare(`
+    const finalRows = await db.all(`
       SELECT id, role, event_type, content
       FROM chat_messages
       WHERE session_key = ?
       ORDER BY timestamp ASC, id ASC
-    `).all(sessionKey);
+    `, sessionKey);
 
     expect(sentGatewayRequests.filter(req => req.method === 'chat.history')).toEqual([]);
     const finalSummaries = finalRows.map(row => ({
@@ -381,10 +382,10 @@ describe('chat websocket live structured persistence', () => {
 
   it('rotates a direct chat session even when the key has an existing chat-stage instance', async () => {
     const sessionKey = 'agent:atlas:web:direct:8fa72628-c1d7-401c-a106-9190b2b623d6';
-    db.prepare(`
+    await db.run(`
       INSERT INTO job_instances (id, agent_id, task_id, session_key, status, run_stage, durable_run_id)
       VALUES (99974585, 2, NULL, ?, 'done', 'chat', 'chat-existing')
-    `).run(sessionKey);
+    `, sessionKey);
     const client = connectProxyClient();
 
     await waitForAsyncFrames();
@@ -424,12 +425,12 @@ describe('chat websocket live structured persistence', () => {
     })));
     await waitForAsyncFrames();
 
-    const chatRuns = db.prepare(`
+    const chatRuns = await db.all(`
       SELECT agent_id, task_id, session_key, status, run_stage
       FROM job_instances
       WHERE session_key = ?
       ORDER BY id ASC
-    `).all(sessionKey);
+    `, sessionKey);
 
     expect(chatRuns).toHaveLength(2);
     expect(chatRuns).toEqual([

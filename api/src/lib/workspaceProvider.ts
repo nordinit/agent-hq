@@ -619,21 +619,21 @@ function parseRuntimeConfig(agent: AgentRow): RemoteRuntimeConfig {
  *   - workspace_path set → LocalWorkspaceProvider
  *   - fallback → LocalWorkspaceProvider with DEFAULT_WORKSPACE_ROOT
  */
-export function resolveWorkspaceProvider(agentId?: string | number, options: WorkspaceProviderOptions = {}): WorkspaceProvider {
+export async function resolveWorkspaceProvider(agentId?: string | number, options: WorkspaceProviderOptions = {}): Promise<WorkspaceProvider> {
   const tenantId = options.tenantId ?? null;
   const allowDefaultFallback = options.allowDefaultFallback !== false;
   if (!agentId) {
     if (tenantId !== null) {
       const db = getDb();
-      const deletedFilter = (() => {
+      const deletedFilter = (async () => {
         try {
-          const columns = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
+          const columns = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
           return columns.some((column) => column.name === 'deleted_at') ? 'AND deleted_at IS NULL' : '';
         } catch {
           return '';
         }
       })();
-      const tenantAtlas = db.prepare(`
+      const tenantAtlas = await db.get(`
         SELECT *
         FROM agents
         WHERE tenant_id = ?
@@ -641,20 +641,20 @@ export function resolveWorkspaceProvider(agentId?: string | number, options: Wor
           ${deletedFilter}
         ORDER BY id ASC
         LIMIT 1
-      `).get(tenantId, ATLAS_SYSTEM_ROLE) as AgentRow | undefined;
+      `, tenantId, ATLAS_SYSTEM_ROLE) as AgentRow | undefined;
       if (tenantAtlas) {
-        return resolveWorkspaceProvider(tenantAtlas.id, { tenantId, allowDefaultFallback: false });
+        return await resolveWorkspaceProvider(tenantAtlas.id, { tenantId, allowDefaultFallback: false });
       }
-      return allowDefaultFallback ? new LocalWorkspaceProvider(resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT) : new EmptyWorkspaceProvider();
+      return allowDefaultFallback ? new LocalWorkspaceProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT) : new EmptyWorkspaceProvider();
     }
-    return new LocalWorkspaceProvider(resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
+    return new LocalWorkspaceProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
   }
 
   try {
     const db = getDb();
-    const agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId) as AgentRow | undefined;
+    const agent = await db.get('SELECT * FROM agents WHERE id = ?', agentId) as AgentRow | undefined;
     if (!agent) {
-      if (allowDefaultFallback) return new LocalWorkspaceProvider(resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
+      if (allowDefaultFallback) return new LocalWorkspaceProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
       throw new FileNotFoundError(`Agent not found: ${agentId}`);
     }
 
@@ -687,5 +687,5 @@ export function resolveWorkspaceProvider(agentId?: string | number, options: Wor
     // fall through
   }
 
-  return new LocalWorkspaceProvider(resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
+  return new LocalWorkspaceProvider(await resolveAtlasWorkspaceRoot() || DEFAULT_WORKSPACE_ROOT);
 }

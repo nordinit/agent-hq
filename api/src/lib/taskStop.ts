@@ -1,5 +1,5 @@
-import type Database from 'better-sqlite3';
 import { stopInstanceExecution, type StopInstanceExecutionResult } from '../domains/runs/stopInstanceExecution';
+import { type Db } from "../db/adapter/types";
 
 export interface StopTaskActiveInstanceResult {
   had_active_run: boolean;
@@ -9,16 +9,16 @@ export interface StopTaskActiveInstanceResult {
 }
 
 export async function stopTaskActiveInstance(
-  db: Database.Database,
+  db: Db,
   taskId: number,
   changedBy: string,
   stopReason: string | null,
 ): Promise<StopTaskActiveInstanceResult> {
-  const existing = db.prepare(`
+  const existing = await db.get(`
     SELECT id, status, active_instance_id, paused_at, pause_reason
     FROM tasks
     WHERE id = ?
-  `).get(taskId) as {
+  `, taskId) as {
     id: number;
     status: string;
     active_instance_id: number | null;
@@ -36,23 +36,23 @@ export async function stopTaskActiveInstance(
   let hadActiveRun = false;
 
   if (existing.active_instance_id != null) {
-    const instance = db.prepare(`
+    const instance = await db.get(`
       SELECT id, status
       FROM job_instances
       WHERE id = ?
-    `).get(existing.active_instance_id) as { id: number; status: string } | undefined;
+    `, existing.active_instance_id) as { id: number; status: string } | undefined;
 
     if (instance && !['done', 'failed', 'cancelled'].includes(instance.status)) {
       hadActiveRun = true;
       stopResult = await stopInstanceExecution(db, instance.id, 'stop');
     } else {
-      db.prepare(`
+      await db.run(`
         UPDATE tasks
         SET active_instance_id = NULL,
             agent_id = NULL,
             updated_at = datetime('now')
         WHERE id = ? AND active_instance_id = ?
-      `).run(taskId, existing.active_instance_id);
+      `, taskId, existing.active_instance_id);
     }
   }
 
@@ -61,10 +61,10 @@ export async function stopTaskActiveInstance(
     const note = stopReason
       ? `Active instance manually stopped by ${changedBy}: ${stopReason}`
       : `Active instance manually stopped by ${changedBy}.`;
-    db.prepare(`
+    await db.run(`
       INSERT INTO task_notes (task_id, author, content)
       VALUES (?, ?, ?)
-    `).run(taskId, changedBy, note);
+    `, taskId, changedBy, note);
   }
 
   return {

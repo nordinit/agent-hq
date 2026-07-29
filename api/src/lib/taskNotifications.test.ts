@@ -2,14 +2,15 @@ import Database from 'better-sqlite3';
 import { notifyTelegram } from '../integrations/telegram';
 import { saveNotificationPreferences } from './notifications';
 import { notifyTaskStatusChange } from './taskNotifications';
+import { type Db } from "../db/adapter/types";
 
 jest.mock('../integrations/telegram', () => ({
   notifyTelegram: jest.fn(),
 }));
 
-function createDb(): Database.Database {
+async function createDb(): Promise<Db> {
   const db = new Database(':memory:');
-  db.exec(`
+  await db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL
@@ -138,29 +139,29 @@ function createDb(): Database.Database {
     );
   `);
 
-  db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1), (5, 'Tenant 5', 'tenant-5', 0)`).run();
-  db.prepare(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`).run();
-  db.prepare(`INSERT INTO sprint_types (key, name, is_system) VALUES ('enhancements', 'Enhancements', 0)`).run();
-  db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Enhancements Sprint', 'enhancements')`).run();
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1), (5, 'Tenant 5', 'tenant-5', 0)`);
+  await db.run(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`);
+  await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('enhancements', 'Enhancements', 0)`);
+  await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Enhancements Sprint', 'enhancements')`);
 
   return db;
 }
 
-function seedTask(db: Database.Database, taskId: number, tenantId = 1): void {
-  db.prepare(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (?, ?, 'Status emoji test', 1, 10)`).run(taskId, tenantId);
+async function seedTask(db: Db, taskId: number, tenantId = 1): Promise<void> {
+  await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (?, ?, 'Status emoji test', 1, 10)`, taskId, tenantId);
 }
 
-function seedSprintStatus(
-  db: Database.Database,
+async function seedSprintStatus(
+  db: Db,
   statusKey: string,
   metadataJson = '{}',
   stageOrder = 0,
-): void {
-  db.prepare(`
+): Promise<void> {
+  await db.run(`
     INSERT INTO sprint_task_statuses (
       sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
     ) VALUES (?, ?, ?, 'slate', 0, 0, '[]', ?, 0, ?)
-  `).run(10, statusKey, statusKey, stageOrder, metadataJson);
+  `, 10, statusKey, statusKey, stageOrder, metadataJson);
 }
 
 describe('notifyTaskStatusChange', () => {
@@ -171,19 +172,19 @@ describe('notifyTaskStatusChange', () => {
     notifyTelegramMock.mockResolvedValue(undefined as never);
   });
 
-  it('uses configured sprint-scoped emoji for system statuses when present', () => {
-    const db = createDb();
+  it('uses configured sprint-scoped emoji for system statuses when present', async () => {
+    const db = await createDb();
     try {
-      seedTask(db, 484);
-      seedSprintStatus(db, 'in_progress', '{"emoji":"🏗️"}', 0);
-      seedSprintStatus(db, 'blocked', '{"emoji":"🧱"}', 1);
+      await seedTask(db, 484);
+      await seedSprintStatus(db, 'in_progress', '{"emoji":"🏗️"}', 0);
+      await seedSprintStatus(db, 'blocked', '{"emoji":"🧱"}', 1);
 
-      notifyTaskStatusChange(db, {
-        taskId: 484,
-        fromStatus: 'in_progress',
-        toStatus: 'blocked',
-        source: 'cinder-backend',
-      });
+      await notifyTaskStatusChange(db, {
+                taskId: 484,
+                fromStatus: 'in_progress',
+                toStatus: 'blocked',
+                source: 'cinder-backend',
+              });
 
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🧱 <b>Task #484 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🏗️ <i>in_progress</i>  →  🧱 <b>blocked</b>'));
@@ -192,19 +193,19 @@ describe('notifyTaskStatusChange', () => {
     }
   });
 
-  it('uses configured sprint-scoped emoji for custom sprint statuses', () => {
-    const db = createDb();
+  it('uses configured sprint-scoped emoji for custom sprint statuses', async () => {
+    const db = await createDb();
     try {
-      seedTask(db, 485);
-      seedSprintStatus(db, 'review', '{}', 0);
-      seedSprintStatus(db, 'review_ready', '{"emoji":"🧪"}', 1);
+      await seedTask(db, 485);
+      await seedSprintStatus(db, 'review', '{}', 0);
+      await seedSprintStatus(db, 'review_ready', '{"emoji":"🧪"}', 1);
 
-      notifyTaskStatusChange(db, {
-        taskId: 485,
-        fromStatus: 'review',
-        toStatus: 'review_ready',
-        source: 'cinder-backend',
-      });
+      await notifyTaskStatusChange(db, {
+                taskId: 485,
+                fromStatus: 'review',
+                toStatus: 'review_ready',
+                source: 'cinder-backend',
+              });
 
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🧪 <b>Task #485 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🔍 <i>review</i>  →  🧪 <b>review_ready</b>'));
@@ -213,19 +214,19 @@ describe('notifyTaskStatusChange', () => {
     }
   });
 
-  it('falls back to the canonical persisted/system emoji map when no configured emoji exists', () => {
-    const db = createDb();
+  it('falls back to the canonical persisted/system emoji map when no configured emoji exists', async () => {
+    const db = await createDb();
     try {
-      seedTask(db, 486);
-      seedSprintStatus(db, 'ready', '{}', 0);
-      seedSprintStatus(db, 'review', '{}', 1);
+      await seedTask(db, 486);
+      await seedSprintStatus(db, 'ready', '{}', 0);
+      await seedSprintStatus(db, 'review', '{}', 1);
 
-      notifyTaskStatusChange(db, {
-        taskId: 486,
-        fromStatus: 'ready',
-        toStatus: 'review',
-        source: 'cinder-backend',
-      });
+      await notifyTaskStatusChange(db, {
+                taskId: 486,
+                fromStatus: 'ready',
+                toStatus: 'review',
+                source: 'cinder-backend',
+              });
 
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🔍 <b>Task #486 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🔵 <i>ready</i>  →  🔍 <b>review</b>'));
@@ -234,19 +235,19 @@ describe('notifyTaskStatusChange', () => {
     }
   });
 
-  it('uses canonical emoji for statuses that were missing from the old Telegram fallback map', () => {
-    const db = createDb();
+  it('uses canonical emoji for statuses that were missing from the old Telegram fallback map', async () => {
+    const db = await createDb();
     try {
-      seedTask(db, 487);
-      seedSprintStatus(db, 'dev_deploy_queued', '{}', 0);
-      seedSprintStatus(db, 'blocked', '{}', 1);
+      await seedTask(db, 487);
+      await seedSprintStatus(db, 'dev_deploy_queued', '{}', 0);
+      await seedSprintStatus(db, 'blocked', '{}', 1);
 
-      notifyTaskStatusChange(db, {
-        taskId: 487,
-        fromStatus: 'dev_deploy_queued',
-        toStatus: 'blocked',
-        source: 'cinder-backend',
-      });
+      await notifyTaskStatusChange(db, {
+                taskId: 487,
+                fromStatus: 'dev_deploy_queued',
+                toStatus: 'blocked',
+                source: 'cinder-backend',
+              });
 
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🧱 <b>Task #487 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🕒 <i>dev_deploy_queued</i>  →  🧱 <b>blocked</b>'));
@@ -255,21 +256,21 @@ describe('notifyTaskStatusChange', () => {
     }
   });
 
-  it('persists a notification record for status changes', () => {
-    const db = createDb();
+  it('persists a notification record for status changes', async () => {
+    const db = await createDb();
     try {
-      seedTask(db, 488);
-      seedSprintStatus(db, 'ready', '{}', 0);
-      seedSprintStatus(db, 'review', '{}', 1);
+      await seedTask(db, 488);
+      await seedSprintStatus(db, 'ready', '{}', 0);
+      await seedSprintStatus(db, 'review', '{}', 1);
 
-      notifyTaskStatusChange(db, {
-        taskId: 488,
-        fromStatus: 'ready',
-        toStatus: 'review',
-        source: 'cinder-backend',
-      });
+      await notifyTaskStatusChange(db, {
+                taskId: 488,
+                fromStatus: 'ready',
+                toStatus: 'review',
+                source: 'cinder-backend',
+              });
 
-      const row = db.prepare(`SELECT title, body, source, outlet FROM notification_records WHERE type = 'task_status_change'`).get() as {
+      const row = await db.get(`SELECT title, body, source, outlet FROM notification_records WHERE type = 'task_status_change'`) as {
         title: string;
         body: string;
         source: string;
@@ -287,22 +288,22 @@ describe('notifyTaskStatusChange', () => {
     }
   });
 
-  it('keeps notification history when delivery is disabled', () => {
-    const db = createDb();
+  it('keeps notification history when delivery is disabled', async () => {
+    const db = await createDb();
     try {
-      saveNotificationPreferences({ enabled: false }, db);
-      seedTask(db, 489);
-      seedSprintStatus(db, 'ready', '{}', 0);
-      seedSprintStatus(db, 'blocked', '{}', 1);
+      await saveNotificationPreferences({ enabled: false }, db);
+      await seedTask(db, 489);
+      await seedSprintStatus(db, 'ready', '{}', 0);
+      await seedSprintStatus(db, 'blocked', '{}', 1);
 
-      notifyTaskStatusChange(db, {
-        taskId: 489,
-        fromStatus: 'ready',
-        toStatus: 'blocked',
-        source: 'cinder-backend',
-      });
+      await notifyTaskStatusChange(db, {
+                taskId: 489,
+                fromStatus: 'ready',
+                toStatus: 'blocked',
+                source: 'cinder-backend',
+              });
 
-      const count = (db.prepare(`SELECT COUNT(*) AS n FROM notification_records WHERE type = 'task_status_change'`).get() as { n: number }).n;
+      const count = (await db.get(`SELECT COUNT(*) AS n FROM notification_records WHERE type = 'task_status_change'`) as { n: number }).n;
       expect(count).toBe(1);
       expect(notifyTelegramMock).not.toHaveBeenCalled();
     } finally {
@@ -310,25 +311,25 @@ describe('notifyTaskStatusChange', () => {
     }
   });
 
-  it('uses the task tenant preferences for Telegram delivery', () => {
-    const db = createDb();
+  it('uses the task tenant preferences for Telegram delivery', async () => {
+    const db = await createDb();
     try {
-      saveNotificationPreferences({ enabled: false }, db, 5);
-      seedTask(db, 490, 5);
-      seedSprintStatus(db, 'ready', '{}', 0);
-      seedSprintStatus(db, 'review', '{}', 1);
+      await saveNotificationPreferences({ enabled: false }, db, 5);
+      await seedTask(db, 490, 5);
+      await seedSprintStatus(db, 'ready', '{}', 0);
+      await seedSprintStatus(db, 'review', '{}', 1);
 
-      notifyTaskStatusChange(db, {
-        taskId: 490,
-        fromStatus: 'ready',
-        toStatus: 'review',
-        source: 'cinder-backend',
-      });
+      await notifyTaskStatusChange(db, {
+                taskId: 490,
+                fromStatus: 'ready',
+                toStatus: 'review',
+                source: 'cinder-backend',
+              });
 
-      const row = db.prepare(`SELECT tenant_id FROM notification_records WHERE type = 'task_status_change'`).get() as { tenant_id: number };
+      const row = await db.get(`SELECT tenant_id FROM notification_records WHERE type = 'task_status_change'`) as { tenant_id: number };
       expect(row.tenant_id).toBe(5);
       expect(notifyTelegramMock).not.toHaveBeenCalled();
-      expect(db.prepare(`SELECT value FROM app_settings WHERE key = 'notifications.preferences'`).get()).toBeUndefined();
+      expect(await db.get(`SELECT value FROM app_settings WHERE key = 'notifications.preferences'`)).toBeUndefined();
     } finally {
       db.close();
     }

@@ -9,12 +9,12 @@ import settingsRouter from './settings';
 
 let tempDir: string;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-notifications-'));
   process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL DEFAULT '',
@@ -55,16 +55,16 @@ async function stopTestServer(server: Server): Promise<void> {
   });
 }
 
-function setActiveTenantIdForTest(tenantId: number): void {
-  getDb().prepare(`
+async function setActiveTenantIdForTest(tenantId: number): Promise<void> {
+  await getDb().run(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES ('active_tenant_id', ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `).run(String(tenantId));
+  `, String(tenantId));
 }
 
 describe('settings notification preferences', () => {
-  beforeEach(() => resetDb());
+  beforeEach(async () => await resetDb());
 
   afterEach(() => {
     closeDb();
@@ -75,7 +75,7 @@ describe('settings notification preferences', () => {
   it('keeps preference writes scoped to the requested tenant', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
-      setActiveTenantIdForTest(5);
+      await setActiveTenantIdForTest(5);
       const update = await fetch(`${baseUrl}/api/v1/settings/notifications/preferences`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -86,7 +86,7 @@ describe('settings notification preferences', () => {
       const tenantFive = await (await fetch(`${baseUrl}/api/v1/settings/notifications`)).json() as {
         preferences: { enabled: boolean; liveEnabled: boolean; outlets: { telegram: boolean } };
       };
-      setActiveTenantIdForTest(1);
+      await setActiveTenantIdForTest(1);
       const tenantOne = await (await fetch(`${baseUrl}/api/v1/settings/notifications`)).json() as {
         preferences: { enabled: boolean; liveEnabled: boolean; outlets: { telegram: boolean } };
       };
@@ -100,34 +100,34 @@ describe('settings notification preferences', () => {
 
   it('returns stable tenant-scoped notification history pages', async () => {
     const db = getDb();
-    const first = createNotificationRecord(db, {
-      tenantId: 5,
-      type: 'task_status_change',
-      title: '🔵 First',
-      body: 'first',
-      source: 'test',
-      outlet: 'agent_hq',
-    });
-    const second = createNotificationRecord(db, {
-      tenantId: 5,
-      type: 'watchdog_stale_run',
-      title: '⏰ Second',
-      body: 'second',
-      source: 'watchdog',
-      outlet: 'agent_hq',
-    });
-    createNotificationRecord(db, {
-      tenantId: 1,
-      type: 'worktree_pruned',
-      title: '🧹 Other tenant',
-      body: 'other',
-      source: 'watchdog',
-      outlet: 'agent_hq',
-    });
+    const first = await createNotificationRecord(db, {
+          tenantId: 5,
+          type: 'task_status_change',
+          title: '🔵 First',
+          body: 'first',
+          source: 'test',
+          outlet: 'agent_hq',
+        });
+    const second = await createNotificationRecord(db, {
+          tenantId: 5,
+          type: 'watchdog_stale_run',
+          title: '⏰ Second',
+          body: 'second',
+          source: 'watchdog',
+          outlet: 'agent_hq',
+        });
+    await createNotificationRecord(db, {
+            tenantId: 1,
+            type: 'worktree_pruned',
+            title: '🧹 Other tenant',
+            body: 'other',
+            source: 'watchdog',
+            outlet: 'agent_hq',
+          });
 
     const { server, baseUrl } = await startTestServer();
     try {
-      setActiveTenantIdForTest(5);
+      await setActiveTenantIdForTest(5);
       const pageOne = await (await fetch(`${baseUrl}/api/v1/settings/notifications?limit=1`)).json() as {
         records: Array<{ id: number; title: string }>;
         pagination: { next_cursor: string | null };

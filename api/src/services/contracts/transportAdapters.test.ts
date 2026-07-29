@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import Database from 'better-sqlite3';
-
+import { type Db } from "../../db/adapter/types";
 
 let buildContractInstructions: typeof import('./transportAdapters').buildContractInstructions;
 let buildCompletionContractInstructions: typeof import('./transportAdapters').buildCompletionContractInstructions;
@@ -13,7 +13,7 @@ const originalRoot = process.env.AGENT_CONTRACT_ROOT;
 const originalCwd = process.cwd();
 let tempDir: string;
 let extraTempDirs: string[] = [];
-let extraDbs: Database.Database[] = [];
+let extraDbs: Db[] = [];
 
 function loadTransportAdapters() {
   let loaded: typeof import('./transportAdapters');
@@ -63,9 +63,9 @@ afterEach(() => {
   extraDbs = [];
 });
 
-function createGateDb(): Database.Database {
+async function createGateDb(): Promise<Db> {
   const db = new Database(':memory:');
-  db.exec(`
+  await db.exec(`
     CREATE TABLE transition_requirements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_type TEXT,
@@ -168,12 +168,12 @@ describe('dispatch contract template renderer', () => {
     expect(contract).not.toMatch(/"qa_url"\s*:/);
   });
 
-  it('renders configured gate fields from the template placeholders', () => {
-    const db = createGateDb();
-    db.prepare(`
+  it('renders configured gate fields from the template placeholders', async () => {
+    const db = await createGateDb();
+    await db.run(`
       INSERT INTO transition_requirements (outcome, field_name, requirement_type, severity, message)
       VALUES ('qa_pass', 'qa_verified_commit', 'required', 'block', 'qa_pass requires qa_verified_commit')
-    `).run();
+    `);
 
     const contract = buildContractInstructions(buildContext({
       taskStatus: 'review',

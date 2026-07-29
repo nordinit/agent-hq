@@ -2,9 +2,9 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type Database from 'better-sqlite3';
 import { ensureMaterializedMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 import { parseAgentSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
+import { type Db } from "../db/adapter/types";
 
 const MANAGED_KEYS_FIELD = 'agentHqManagedMcpServers';
 const HERMES_MANAGED_KEYS_FIELD = 'agent_hq_managed_mcp_servers';
@@ -36,15 +36,15 @@ interface AgentWorkspaceRow {
   workspace_path: string | null;
 }
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
-  const tableExists = Boolean(db.prepare(`
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
+  const tableExists = Boolean(await db.get(`
     SELECT 1
     FROM sqlite_master
     WHERE type = 'table' AND name = ?
     LIMIT 1
-  `).get(table));
+  `, table));
   if (!tableExists) return false;
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
 }
 
 export interface McpMaterializationResult {
@@ -598,15 +598,15 @@ function readStringEnvValue(env: unknown, key: string): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function buildDesiredServerConfig(
+async function buildDesiredServerConfig(
   row: AgentMcpRow,
   params: {
-    db: Database.Database;
+    db: Db;
     agentId: number;
     existingServer?: Record<string, unknown>;
     resolveAgentApiKey?: (existingApiKey: string | null, name: string) => string;
   },
-): Record<string, unknown> | null {
+): Promise<Record<string, unknown> | null> {
   if (!row.command || !row.command.trim()) return null;
 
   const baseConfig: Record<string, unknown> = {
@@ -641,12 +641,12 @@ function buildDesiredServerConfig(
     const existingApiKey = readStringEnvValue(existingEnv, 'AGENT_HQ_MCP_API_KEY');
     const apiKey = params.resolveAgentApiKey
       ? params.resolveAgentApiKey(existingApiKey, 'Agent HQ MCP materialized key')
-      : ensureMaterializedMcpApiKeyForAgent({
-          db: params.db,
-          agentId: params.agentId,
-          existingApiKey,
-          name: 'Agent HQ MCP materialized key',
-        }).apiKey;
+      : (await ensureMaterializedMcpApiKeyForAgent({
+                  db: params.db,
+                  agentId: params.agentId,
+                  existingApiKey,
+                  name: 'Agent HQ MCP materialized key',
+                })).apiKey;
     const env = isRecord(merged.env) ? { ...(merged.env as Record<string, unknown>) } : {};
     env.AGENT_HQ_MCP_API_KEY = apiKey;
     merged.env = Object.fromEntries(
@@ -659,13 +659,13 @@ function buildDesiredServerConfig(
   return applyAssignmentToolAllowlist(merged, row, allowlist);
 }
 
-export function fetchAssignedMcpServers(
-  db: Database.Database,
+export async function fetchAssignedMcpServers(
+  db: Db,
   agentId: number,
   existingServers: Record<string, Record<string, unknown>> = {},
-): Record<string, Record<string, unknown>> {
-  const enforceTenantScope = tableHasColumn(db, 'agents', 'tenant_id') && tableHasColumn(db, 'mcp_servers', 'tenant_id');
-  const rows = db.prepare(`
+): Promise<Record<string, Record<string, unknown>>> {
+  const enforceTenantScope = await tableHasColumn(db, 'agents', 'tenant_id') && await tableHasColumn(db, 'mcp_servers', 'tenant_id');
+  const rows = await db.all(`
     SELECT ama.id as assignment_id, s.slug, s.command, s.args, s.env, s.cwd, ama.overrides
     FROM agent_mcp_assignments ama
     JOIN mcp_servers s ON s.id = ama.mcp_server_id
@@ -674,35 +674,35 @@ export function fetchAssignedMcpServers(
       AND ama.enabled = 1
       AND s.enabled = 1
     ORDER BY s.slug ASC
-  `).all(agentId) as AgentMcpRow[];
+  `, agentId) as AgentMcpRow[];
 
   let sharedAgentApiKey: string | null = null;
-  const resolveAgentApiKey = (existingApiKey: string | null, name: string): string => {
+  const resolveAgentApiKey = async (existingApiKey: string | null, name: string): Promise<string> => {
     if (existingApiKey) {
-      const key = ensureMaterializedMcpApiKeyForAgent({ db, agentId, existingApiKey, name });
+      const key = await ensureMaterializedMcpApiKeyForAgent({ db, agentId, existingApiKey, name });
       sharedAgentApiKey = key.apiKey;
       return key.apiKey;
     }
     if (sharedAgentApiKey) {
-      const key = ensureMaterializedMcpApiKeyForAgent({ db, agentId, existingApiKey: sharedAgentApiKey, name });
+      const key = await ensureMaterializedMcpApiKeyForAgent({ db, agentId, existingApiKey: sharedAgentApiKey, name });
       sharedAgentApiKey = key.apiKey;
       return key.apiKey;
     }
-    const key = ensureMaterializedMcpApiKeyForAgent({ db, agentId, name });
+    const key = await ensureMaterializedMcpApiKeyForAgent({ db, agentId, name });
     sharedAgentApiKey = key.apiKey;
     return key.apiKey;
   };
 
   return Object.fromEntries(
     rows
-      .map((row) => {
+      .map(async (row) => {
         const scopedName = openClawScopedMcpServerName(row.slug, agentId);
-        return [scopedName, buildDesiredServerConfig(row, {
-          db,
-          agentId,
-          existingServer: existingServers[scopedName] ?? existingServers[row.slug],
-          resolveAgentApiKey,
-        })] as const;
+        return [scopedName, await buildDesiredServerConfig(row, {
+                      db,
+                      agentId,
+                      existingServer: existingServers[scopedName] ?? existingServers[row.slug],
+                      resolveAgentApiKey,
+                    })] as const;
       })
       .filter((entry): entry is [string, Record<string, unknown>] => entry[1] !== null),
   );
@@ -1103,11 +1103,11 @@ function resolveHermesAgentHqServerPaths(
   );
 }
 
-export function materializeHermesMcpConfig(params: {
-  db: Database.Database;
+export async function materializeHermesMcpConfig(params: {
+  db: Db;
   agentId: number;
   hermesHome: string;
-}): HermesMcpMaterializationResult {
+}): Promise<HermesMcpMaterializationResult> {
   const configPath = path.join(params.hermesHome, 'config.yaml');
   const result: HermesMcpMaterializationResult = {
     ok: true,
@@ -1133,7 +1133,7 @@ export function materializeHermesMcpConfig(params: {
   const existingServers = readExistingMcpJsonServers(params.hermesHome);
   const desiredServers = resolveHermesServerPaths(
     resolveHermesAgentHqServerPaths(
-      fetchAssignedMcpServers(params.db, params.agentId, existingServers),
+      await fetchAssignedMcpServers(params.db, params.agentId, existingServers),
     ),
   );
   const desiredKeys = Object.keys(desiredServers).sort();
@@ -1215,13 +1215,13 @@ function writeOpenClawWorkspaceBundleManifest(bundleDirectory: string): void {
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
 
-export function materializeAgentMcpConfig(params: {
-  db: Database.Database;
+export async function materializeAgentMcpConfig(params: {
+  db: Db;
   agentId: number;
   workingDirectory: string;
   // Shared OpenClaw config writes can interrupt active sessions; dispatch uses workspace-only sync.
   materializeOpenClawGlobalConfig?: boolean;
-}): McpMaterializationResult {
+}): Promise<McpMaterializationResult> {
   const result: McpMaterializationResult = {
     ok: true,
     count: 0,
@@ -1232,11 +1232,11 @@ export function materializeAgentMcpConfig(params: {
     warnings: [],
   };
 
-  const agent = params.db.prepare(`
+  const agent = await params.db.get(`
     SELECT id, name, role, session_key, openclaw_agent_id, runtime_type, workspace_path
     FROM agents
     WHERE id = ?
-  `).get(params.agentId) as AgentWorkspaceRow | undefined;
+  `, params.agentId) as AgentWorkspaceRow | undefined;
   if (!agent) {
     return {
       ...result,
@@ -1277,7 +1277,7 @@ export function materializeAgentMcpConfig(params: {
       );
     }
   }
-  const desiredServers = fetchAssignedMcpServers(params.db, params.agentId, existingServers);
+  const desiredServers = await fetchAssignedMcpServers(params.db, params.agentId, existingServers);
   const desiredKeys = Object.keys(desiredServers);
   result.serverNames = desiredKeys;
   const preservedTopLevel: Record<string, unknown> = {};
@@ -1347,8 +1347,8 @@ export function materializeAgentMcpConfig(params: {
   }
 }
 
-export function syncAssignedMcpForAgent(params: {
-  db: Database.Database;
+export async function syncAssignedMcpForAgent(params: {
+  db: Db;
   agentId: number;
   workingDirectory?: string | null;
   /**
@@ -1364,12 +1364,12 @@ export function syncAssignedMcpForAgent(params: {
   activateOpenClawWorkspaceBundle?: boolean;
   refreshPluginRegistry?: boolean;
   refreshOpenClawPluginRegistry?: OpenClawPluginRegistryRefreshFn;
-}): AgentMcpSyncResult {
-  const agent = params.db.prepare(`
+}): Promise<AgentMcpSyncResult> {
+  const agent = await params.db.get(`
     SELECT id, name, role, session_key, openclaw_agent_id, runtime_type, workspace_path
     FROM agents
     WHERE id = ?
-  `).get(params.agentId) as AgentWorkspaceRow | undefined;
+  `, params.agentId) as AgentWorkspaceRow | undefined;
 
   if (!agent) {
     return {
@@ -1472,15 +1472,15 @@ export function syncAssignedMcpForAgent(params: {
   // workspace. Fail closed instead of leaking one agent's servers into
   // another agent's sessions.
   if (runtimeType === 'openclaw') {
-    const hasEnabledColumn = tableHasColumn(params.db, 'agents', 'enabled');
-    const otherAgents = params.db.prepare(`
+    const hasEnabledColumn = await tableHasColumn(params.db, 'agents', 'enabled');
+    const otherAgents = await params.db.all(`
       SELECT id, name, workspace_path
       FROM agents
       WHERE id != ?
         AND (runtime_type IS NULL OR runtime_type = '' OR runtime_type = 'openclaw')
         ${hasEnabledColumn ? 'AND enabled = 1' : ''}
         AND workspace_path IS NOT NULL
-    `).all(agent.id) as Array<{ id: number; name: string | null; workspace_path: string }>;
+    `, agent.id) as Array<{ id: number; name: string | null; workspace_path: string }>;
     const conflicting = otherAgents.filter(
       (other) => resolveFsPathOrNull(other.workspace_path) === workingDirectory,
     );
@@ -1504,12 +1504,12 @@ export function syncAssignedMcpForAgent(params: {
     }
   }
 
-  const result = materializeAgentMcpConfig({
-    db: params.db,
-    agentId: agent.id,
-    workingDirectory,
-    materializeOpenClawGlobalConfig: params.materializeOpenClawGlobalConfig,
-  });
+  const result = await materializeAgentMcpConfig({
+      db: params.db,
+      agentId: agent.id,
+      workingDirectory,
+      materializeOpenClawGlobalConfig: params.materializeOpenClawGlobalConfig,
+    });
 
   const shouldActivateOpenClawWorkspaceBundle = params.activateOpenClawWorkspaceBundle !== false;
   const shouldRefreshRegistry = runtimeType === 'openclaw'
@@ -1559,10 +1559,10 @@ export function syncAssignedMcpForAgent(params: {
   };
 }
 
-export function cleanupOpenClawGlobalMcpForAgent(params: {
-  db: Database.Database;
+export async function cleanupOpenClawGlobalMcpForAgent(params: {
+  db: Db;
   agentId: number;
-}): {
+}): Promise<{
   ok: boolean;
   agentId: number;
   runtimeType: string;
@@ -1570,12 +1570,12 @@ export function cleanupOpenClawGlobalMcpForAgent(params: {
   path?: string;
   error?: string;
   skipped?: string;
-} {
-  const agent = params.db.prepare(`
+}> {
+  const agent = await params.db.get(`
     SELECT id, name, role, session_key, openclaw_agent_id, runtime_type, workspace_path
     FROM agents
     WHERE id = ?
-  `).get(params.agentId) as AgentWorkspaceRow | undefined;
+  `, params.agentId) as AgentWorkspaceRow | undefined;
 
   if (!agent) {
     return {
@@ -1605,25 +1605,25 @@ export function cleanupOpenClawGlobalMcpForAgent(params: {
   };
 }
 
-export function syncAssignedMcpForServer(params: {
-  db: Database.Database;
+export async function syncAssignedMcpForServer(params: {
+  db: Db;
   mcpServerId: number;
   materializeOpenClawGlobalConfig?: boolean;
   refreshOpenClawPluginRegistry?: OpenClawPluginRegistryRefreshFn;
-}): AgentMcpSyncResult[] {
-  const agentIds = params.db.prepare(`
+}): Promise<AgentMcpSyncResult[]> {
+  const agentIds = await params.db.all(`
     SELECT DISTINCT agent_id
     FROM agent_mcp_assignments
     WHERE mcp_server_id = ?
     ORDER BY agent_id ASC
-  `).all(params.mcpServerId) as Array<{ agent_id: number }>;
+  `, params.mcpServerId) as Array<{ agent_id: number }>;
 
-  const results = agentIds.map(({ agent_id }) => syncAssignedMcpForAgent({
-    db: params.db,
-    agentId: agent_id,
-    refreshPluginRegistry: false,
-    materializeOpenClawGlobalConfig: params.materializeOpenClawGlobalConfig,
-  }));
+  const results = agentIds.map(async ({ agent_id }) => await syncAssignedMcpForAgent({
+      db: params.db,
+      agentId: agent_id,
+      refreshPluginRegistry: false,
+      materializeOpenClawGlobalConfig: params.materializeOpenClawGlobalConfig,
+    }));
   const successfulOpenClawMaterializations = results.filter(result => (
     result.runtimeType === 'openclaw'
     && params.materializeOpenClawGlobalConfig === true

@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import { type Db } from "../db/adapter/types";
 
 export const NEEDS_ATTENTION_ELIGIBLE_STATUSES_SETTING_KEY = 'reconciler.needs_attention_eligible_statuses';
 export const DEFAULT_NEEDS_ATTENTION_ELIGIBLE_STATUSES = [] as const;
@@ -15,8 +15,8 @@ function normalizeStatuses(statuses: unknown): string[] {
   return normalized.length > 0 ? normalized : [...DEFAULT_NEEDS_ATTENTION_ELIGIBLE_STATUSES];
 }
 
-export function getNeedsAttentionEligibleStatuses(db: Database.Database): string[] {
-  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(NEEDS_ATTENTION_ELIGIBLE_STATUSES_SETTING_KEY) as { value: string } | undefined;
+export async function getNeedsAttentionEligibleStatuses(db: Db): Promise<string[]> {
+  const row = await db.get('SELECT value FROM app_settings WHERE key = ?', NEEDS_ATTENTION_ELIGIBLE_STATUSES_SETTING_KEY) as { value: string } | undefined;
   if (!row?.value) return [...DEFAULT_NEEDS_ATTENTION_ELIGIBLE_STATUSES];
 
   try {
@@ -26,17 +26,17 @@ export function getNeedsAttentionEligibleStatuses(db: Database.Database): string
   }
 }
 
-export function setNeedsAttentionEligibleStatuses(db: Database.Database, statuses: unknown): string[] {
+export async function setNeedsAttentionEligibleStatuses(db: Db, statuses: unknown): Promise<string[]> {
   const normalized = normalizeStatuses(statuses);
-  db.prepare(`
+  await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `).run(NEEDS_ATTENTION_ELIGIBLE_STATUSES_SETTING_KEY, JSON.stringify(normalized));
+  `, NEEDS_ATTENTION_ELIGIBLE_STATUSES_SETTING_KEY, JSON.stringify(normalized));
   return normalized;
 }
 
-export function isNeedsAttentionEligibleStatus(db: Database.Database, status: string | null | undefined): boolean {
+export async function isNeedsAttentionEligibleStatus(db: Db, status: string | null | undefined): Promise<boolean> {
   if (!status) return false;
-  return getNeedsAttentionEligibleStatuses(db).includes(status);
+  return (await getNeedsAttentionEligibleStatuses(db)).includes(status);
 }

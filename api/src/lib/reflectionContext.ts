@@ -114,15 +114,15 @@ export interface ReflectionContextOptions {
  *
  * Returns null if the session doesn't exist.
  */
-export function buildReflectionContext(
+export async function buildReflectionContext(
   sessionId: number,
   opts: ReflectionContextOptions = {},
-): ReflectionContext | null {
+): Promise<ReflectionContext | null> {
   const db = getDb();
   const { eventTypes, messageLimit = 200, includeRaw = false, runHistoryLimit = 20 } = opts;
 
   // ── 1. Session header ────────────────────────────────────────────────────
-  const session = db.prepare(`
+  const session = await db.get(`
     SELECT
       s.*,
       a.name AS agent_name,
@@ -133,7 +133,7 @@ export function buildReflectionContext(
     LEFT JOIN tasks t ON t.id = s.task_id
     LEFT JOIN projects p ON p.id = s.project_id
     WHERE s.id = ?
-  `).get(sessionId) as SessionHeader | undefined;
+  `, sessionId) as SessionHeader | undefined;
 
   if (!session) return null;
 
@@ -151,41 +151,41 @@ export function buildReflectionContext(
     : 'id, ordinal, role, event_type, content, event_meta, timestamp';
 
   msgParams.push(Math.min(messageLimit, 500));
-  const messages = db.prepare(`
+  const messages = await db.all(`
     SELECT ${selectCols}
     FROM session_messages
     WHERE ${msgConditions.join(' AND ')}
     ORDER BY ordinal ASC
     LIMIT ?
-  `).all(...msgParams) as MessageEntry[];
+  `, ...msgParams) as MessageEntry[];
 
   // ── 3. Task context (if linked) ──────────────────────────────────────────
   let task: TaskContext | null = null;
 
   if (session.task_id) {
-    const taskRow = db.prepare(`
+    const taskRow = await db.get(`
       SELECT
         t.id, t.title, t.status, t.priority, t.story_points, t.task_type,
         t.failure_detail, t.retry_count,
         t.created_at, t.updated_at
       FROM tasks t
       WHERE t.id = ?
-    `).get(session.task_id) as Omit<TaskContext, 'notes' | 'outcome_metrics'> | undefined;
+    `, session.task_id) as Omit<TaskContext, 'notes' | 'outcome_metrics'> | undefined;
 
     if (taskRow) {
-      const notes = db.prepare(`
+      const notes = await db.all(`
         SELECT id, author, content, created_at
         FROM task_notes
         WHERE task_id = ?
         ORDER BY created_at ASC
-      `).all(session.task_id) as TaskContext['notes'];
+      `, session.task_id) as TaskContext['notes'];
 
-      const metricsRow = db.prepare(`
+      const metricsRow = await db.get(`
         SELECT first_pass_qa, reopened_count, rerouted_count, spawned_defects,
                cycle_time_hours
         FROM task_outcome_metrics
         WHERE task_id = ?
-      `).get(session.task_id) as OutcomeMetrics | undefined;
+      `, session.task_id) as OutcomeMetrics | undefined;
 
       task = {
         ...taskRow,
@@ -202,12 +202,12 @@ export function buildReflectionContext(
 
   if (session.task_id) {
     // Detect available columns to build a compatible query
-    const colInfo = db.prepare("PRAGMA table_info(job_instances)").all() as Array<{ name: string }>;
+    const colInfo = await db.all("PRAGMA table_info(job_instances)") as Array<{ name: string }>;
     const cols = new Set(colInfo.map(c => c.name));
     const blockerCol = cols.has('blocker_reason') ? 'ji.blocker_reason' : "NULL";
     const summaryCol = cols.has('artifact_summary') ? 'ji.artifact_summary' : "NULL";
 
-    runHistory = db.prepare(`
+    runHistory = await db.all(`
       SELECT
         ji.id AS instance_id,
         ji.agent_id,
@@ -226,7 +226,7 @@ export function buildReflectionContext(
       WHERE ji.task_id = ?
       ORDER BY ji.created_at DESC
       LIMIT ?
-    `).all(session.task_id, Math.min(runHistoryLimit, 100)) as RunHistoryEntry[];
+    `, session.task_id, Math.min(runHistoryLimit, 100)) as RunHistoryEntry[];
   }
 
   return { session, messages, task, run_history: runHistory };
@@ -256,12 +256,12 @@ export interface AgentSessionSummary {
   instance_id: number | null;
 }
 
-export function buildAgentReflectionSummary(
+export async function buildAgentReflectionSummary(
   agentId: number,
   limit = 50,
-): AgentSessionSummary[] {
+): Promise<AgentSessionSummary[]> {
   const db = getDb();
-  return db.prepare(`
+  return await db.all(`
     SELECT
       s.id AS session_id,
       s.external_key,
@@ -282,7 +282,7 @@ export function buildAgentReflectionSummary(
     WHERE s.agent_id = ?
     ORDER BY COALESCE(s.started_at, s.created_at) DESC, s.id DESC
     LIMIT ?
-  `).all(agentId, Math.min(limit, 500)) as AgentSessionSummary[];
+  `, agentId, Math.min(limit, 500)) as AgentSessionSummary[];
 }
 
 /**
@@ -305,14 +305,14 @@ export interface TaskSessionEntry {
   completed_at: string | null;
 }
 
-export function buildTaskSessionHistory(taskId: number): TaskSessionEntry[] {
+export async function buildTaskSessionHistory(taskId: number): Promise<TaskSessionEntry[]> {
   const db = getDb();
   // Schema-tolerant: blocker_reason may not exist in all environments
-  const colInfo = db.prepare("PRAGMA table_info(job_instances)").all() as Array<{ name: string }>;
+  const colInfo = await db.all("PRAGMA table_info(job_instances)") as Array<{ name: string }>;
   const cols = new Set(colInfo.map(c => c.name));
   const blockerCol = cols.has('blocker_reason') ? 'ji.blocker_reason' : "NULL";
 
-  return db.prepare(`
+  return await db.all(`
     SELECT
       s.id AS session_id,
       s.external_key,
@@ -332,5 +332,5 @@ export function buildTaskSessionHistory(taskId: number): TaskSessionEntry[] {
     LEFT JOIN agents a ON a.id = ji.agent_id
     WHERE ji.task_id = ?
     ORDER BY ji.created_at DESC
-  `).all(taskId) as TaskSessionEntry[];
+  `, taskId) as TaskSessionEntry[];
 }

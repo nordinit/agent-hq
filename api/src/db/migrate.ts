@@ -4,12 +4,12 @@ import { initSchema } from './schema';
 import { bootstrapRoutingAndWorkflowDefaults } from './bootstrapDefaults';
 import { STARTUP_SCHEMA_LEDGER_CHECKSUM, STARTUP_SCHEMA_LEDGER_ID } from './startupVerifier';
 
-function main(): void {
-  initSchema();
+async function main(): Promise<void> {
+  await initSchema();
   const db = getDb();
-  bootstrapRoutingAndWorkflowDefaults(db);
-  const runtimeMcpKey = ensureConfiguredRuntimeMcpApiKey(db);
-  db.exec(`
+  await bootstrapRoutingAndWorkflowDefaults(db);
+  const runtimeMcpKey = await ensureConfiguredRuntimeMcpApiKey(db);
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       id         TEXT PRIMARY KEY,
       checksum   TEXT NOT NULL,
@@ -18,7 +18,7 @@ function main(): void {
       app_commit TEXT NOT NULL DEFAULT ''
     )
   `);
-  db.prepare(`
+  await db.run(`
     INSERT INTO schema_migrations (id, checksum, applied_by, app_commit)
     VALUES (?, ?, 'agent-hq-api', ?)
     ON CONFLICT(id) DO UPDATE SET
@@ -26,13 +26,9 @@ function main(): void {
       applied_at = datetime('now'),
       applied_by = excluded.applied_by,
       app_commit = excluded.app_commit
-  `).run(
-    STARTUP_SCHEMA_LEDGER_ID,
-    STARTUP_SCHEMA_LEDGER_CHECKSUM,
-    process.env.AGENT_HQ_APP_COMMIT ?? process.env.GIT_COMMIT ?? '',
-  );
+  `, STARTUP_SCHEMA_LEDGER_ID, STARTUP_SCHEMA_LEDGER_CHECKSUM, process.env.AGENT_HQ_APP_COMMIT ?? process.env.GIT_COMMIT ?? '');
 
-  const integrity = db.prepare(`PRAGMA integrity_check`).pluck().get();
+  const integrity = await db.value(`PRAGMA integrity_check`);
   if (integrity !== 'ok') {
     throw new Error(`Database integrity check failed: ${String(integrity)}`);
   }

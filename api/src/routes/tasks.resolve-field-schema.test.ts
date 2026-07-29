@@ -32,33 +32,29 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 }
 
-function seedFieldSchemaFixture(): void {
+async function seedFieldSchemaFixture(): Promise<void> {
   const db = getDb();
 
-  db.prepare(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`).run();
-  db.prepare(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Backend Domain Refactor', '', 'dev', 'active')`).run();
-  db.prepare(`DELETE FROM sprint_type_task_types WHERE sprint_type_key = 'dev'`).run();
-  db.prepare(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type) VALUES (1, 'dev', 'backend'), (1, 'dev', 'frontend'), (1, 'dev', 'qa')`).run();
-  db.prepare(`DELETE FROM task_field_schemas WHERE sprint_type_key IN ('generic', 'dev') AND task_type IS NULL`).run();
-  db.prepare(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'dev' AND task_type = 'backend'`).run();
-  db.prepare(`
+  await db.run(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`);
+  await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Backend Domain Refactor', '', 'dev', 'active')`);
+  await db.run(`DELETE FROM sprint_type_task_types WHERE sprint_type_key = 'dev'`);
+  await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type) VALUES (1, 'dev', 'backend'), (1, 'dev', 'frontend'), (1, 'dev', 'qa')`);
+  await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key IN ('generic', 'dev') AND task_type IS NULL`);
+  await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'dev' AND task_type = 'backend'`);
+  await db.run(`
     INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
     VALUES
       (1, 'generic', NULL, ?),
       (1, 'dev', NULL, ?),
       (1, 'dev', 'backend', ?)
-  `).run(
-    JSON.stringify({ fields: [{ key: 'generic_only', label: 'Generic Only', type: 'text' }] }),
-    JSON.stringify({ fields: [
-      { key: 'review_branch', label: 'Review Branch', type: 'text', required: true },
-      { key: 'review_commit', label: 'Review Commit', type: 'text', required: true },
-      { key: 'qa_verified_commit', label: 'QA Verified Commit', type: 'text' },
-    ] }),
-    JSON.stringify({ fields: [
-      { key: 'target_surface', label: 'Target Surface', type: 'select', options: ['api', 'ui'] },
-      { key: 'review_commit', label: 'Backend Review Commit', type: 'text', help_text: 'Backend-specific label override.' },
-    ] }),
-  );
+  `, JSON.stringify({ fields: [{ key: 'generic_only', label: 'Generic Only', type: 'text' }] }), JSON.stringify({ fields: [
+          { key: 'review_branch', label: 'Review Branch', type: 'text', required: true },
+          { key: 'review_commit', label: 'Review Commit', type: 'text', required: true },
+          { key: 'qa_verified_commit', label: 'QA Verified Commit', type: 'text' },
+        ] }), JSON.stringify({ fields: [
+          { key: 'target_surface', label: 'Target Surface', type: 'select', options: ['api', 'ui'] },
+          { key: 'review_commit', label: 'Backend Review Commit', type: 'text', help_text: 'Backend-specific label override.' },
+        ] }));
 }
 
 describe('GET /api/v1/tasks/field-schema/resolve', () => {
@@ -70,8 +66,8 @@ describe('GET /api/v1/tasks/field-schema/resolve', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-field-schema-resolve-'));
     process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
     closeDb();
-    initSchema();
-    seedFieldSchemaFixture();
+    await initSchema();
+    await seedFieldSchemaFixture();
     ({ server, baseUrl } = await startServer());
   });
 

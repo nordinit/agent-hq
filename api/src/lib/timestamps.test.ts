@@ -40,10 +40,10 @@ describe('nowTimestamp emits exactly one format', () => {
     }
   });
 
-  it('is byte-identical in shape to what SQLite datetime(\'now\') produces', () => {
+  it('is byte-identical in shape to what SQLite datetime(\'now\') produces', async () => {
     const db = new Database(':memory:');
     try {
-      const sqlNow = db.prepare(`SELECT ${CANONICAL_TIMESTAMP_SQL} AS v`).get() as { v: string };
+      const sqlNow = await db.get(`SELECT ${CANONICAL_TIMESTAMP_SQL} AS v`) as { v: string };
       const jsNow = nowTimestamp();
 
       expect(sqlNow.v).toMatch(CANONICAL_TIMESTAMP_PATTERN);
@@ -69,10 +69,10 @@ describe('nowTimestamp emits exactly one format', () => {
     expect(Math.abs(asUtc - Date.now())).toBeLessThan(5000);
   });
 
-  it('agrees with the SQL DEFAULT written into an actual column', () => {
+  it('agrees with the SQL DEFAULT written into an actual column', async () => {
     const db = new Database(':memory:');
     try {
-      db.exec(`
+      await db.exec(`
         CREATE TABLE t (
           id INTEGER PRIMARY KEY,
           from_default TEXT NOT NULL DEFAULT (${CANONICAL_TIMESTAMP_SQL}),
@@ -80,9 +80,9 @@ describe('nowTimestamp emits exactly one format', () => {
         )
       `);
       for (let i = 0; i < 25; i += 1) {
-        db.prepare('INSERT INTO t (from_js) VALUES (?)').run(nowTimestamp());
+        await db.run('INSERT INTO t (from_js) VALUES (?)', nowTimestamp());
       }
-      const rows = db.prepare('SELECT from_default, from_js FROM t').all() as Array<{
+      const rows = await db.all('SELECT from_default, from_js FROM t') as Array<{
         from_default: string;
         from_js: string;
       }>;

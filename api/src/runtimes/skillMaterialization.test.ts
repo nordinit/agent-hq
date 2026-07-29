@@ -3,10 +3,11 @@ import os from 'os';
 import path from 'path';
 import Database from 'better-sqlite3';
 import { OpenClawSkillAdapter } from './skillMaterialization';
+import { type Db } from "../db/adapter/types";
 
-function createDb(): Database.Database {
+async function createDb(): Promise<Db> {
   const db = new Database(':memory:');
-  db.exec(`
+  await db.exec(`
     CREATE TABLE skills (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL DEFAULT 1,
@@ -35,8 +36,8 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     tempDirs = [];
   });
 
-  it('does not fall back to global/system filesystem skills without an explicit tenant DB row', () => {
-    const db = createDb();
+  it('does not fall back to global/system filesystem skills without an explicit tenant DB row', async () => {
+    const db = await createDb();
     const workspace = makeTempDir('skill-workspace');
     const globalSkills = makeTempDir('global-skills');
     tempDirs.push(workspace, globalSkills);
@@ -59,10 +60,10 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     db.close();
   });
 
-  it('materializes the tenant-local DB skill when tenants reuse the same name', () => {
-    const db = createDb();
-    db.prepare(`INSERT INTO skills (tenant_id, name, description, content) VALUES (1, 'shared-skill', 'Tenant A', '# Tenant A skill')`).run();
-    db.prepare(`INSERT INTO skills (tenant_id, name, description, content) VALUES (2, 'shared-skill', 'Tenant B', '# Tenant B skill')`).run();
+  it('materializes the tenant-local DB skill when tenants reuse the same name', async () => {
+    const db = await createDb();
+    await db.run(`INSERT INTO skills (tenant_id, name, description, content) VALUES (1, 'shared-skill', 'Tenant A', '# Tenant A skill')`);
+    await db.run(`INSERT INTO skills (tenant_id, name, description, content) VALUES (2, 'shared-skill', 'Tenant B', '# Tenant B skill')`);
 
     const workspaceA = makeTempDir('tenant-a-workspace');
     const workspaceB = makeTempDir('tenant-b-workspace');
@@ -79,9 +80,9 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     db.close();
   });
 
-  it('uses system skill directories only when the tenant has an explicit system skill row', () => {
-    const db = createDb();
-    db.prepare(`INSERT INTO skills (tenant_id, name, description, source) VALUES (2, 'system-skill', 'Tenant B explicit system skill', 'system')`).run();
+  it('uses system skill directories only when the tenant has an explicit system skill row', async () => {
+    const db = await createDb();
+    await db.run(`INSERT INTO skills (tenant_id, name, description, source) VALUES (2, 'system-skill', 'Tenant B explicit system skill', 'system')`);
 
     const workspaceA = makeTempDir('system-a-workspace');
     const workspaceB = makeTempDir('system-b-workspace');

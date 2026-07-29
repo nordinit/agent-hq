@@ -33,7 +33,7 @@ export interface InstanceCallbackContractInput {
  * Falls back to 'local' transport when transportMode is not specified, preserving
  * backward compatibility with existing local agent dispatches.
  */
-export function buildInstanceCallbackContract({
+export async function buildInstanceCallbackContract({
   instanceId,
   durableRunId,
   taskId,
@@ -45,7 +45,7 @@ export function buildInstanceCallbackContract({
   sessionKey,
   baseUrl: baseUrlOverride,
   transportMode,
-}: InstanceCallbackContractInput): string {
+}: InstanceCallbackContractInput): Promise<string> {
   const ctx: TransportContext = {
     instanceId,
     durableRunId,
@@ -61,10 +61,10 @@ export function buildInstanceCallbackContract({
     db: getDb(),
   };
 
-  return buildContractInstructions(ctx);
+  return await buildContractInstructions(ctx);
 }
 
-export function appendInstanceInstructions(
+export async function appendInstanceInstructions(
   message: string,
   instanceId: number,
   durableRunId: string | null,
@@ -77,6 +77,6 @@ export function appendInstanceInstructions(
   sprintId?: number | null,
   sprintType?: string | null,
   transportMode?: 'local' | 'remote-direct',
-): string {
-  return `${message}\n\n${buildInstanceCallbackContract({ instanceId, durableRunId, taskId, taskStatus, taskType, sprintId, sprintType, agentSlug, sessionKey, baseUrl, transportMode })}`;
+): Promise<string> {
+  return `${message}\n\n${await buildInstanceCallbackContract({ instanceId, durableRunId, taskId, taskStatus, taskType, sprintId, sprintType, agentSlug, sessionKey, baseUrl, transportMode })}`;
 }

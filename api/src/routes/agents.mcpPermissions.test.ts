@@ -9,7 +9,7 @@ import agentsRouter from './agents';
 let tempDir: string;
 let dbPath: string;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-mcp-permissions-'));
@@ -17,7 +17,7 @@ function resetDb(): void {
   process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     PRAGMA foreign_keys = ON;
 
     CREATE TABLE agents (
@@ -50,16 +50,16 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('agent MCP permissions routes', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-mcp-permissions-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
-    resetDb();
+    await resetDb();
 
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, name, system_role, enabled)
       VALUES (?, ?, NULL, 1), (?, ?, 'admin', 1)
-    `).run(7, 'Cinder', 8, 'Atlas');
+    `, 7, 'Cinder', 8, 'Atlas');
   });
 
   afterEach(() => {

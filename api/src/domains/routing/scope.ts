@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import { type Db } from "../../db/adapter/types";
 
 export type StatusError = Error & { status?: number };
 export type SprintRecord = { id: number; project_id: number; name: string; sprint_type?: string | null; tenant_id?: number | null };
@@ -65,21 +65,20 @@ export function normalizeOptionalEnabled(input: unknown, fallback: number): numb
   throw withStatus('enabled must be a boolean', 400);
 }
 
-export function tenantPredicateFor(db: Database.Database, table: string, tableAlias: string, tenantId?: number | null): { sql: string; params: number[] } {
-  if (tenantId == null || !tableHasColumn(db, table, 'tenant_id')) return { sql: '', params: [] };
+export async function tenantPredicateFor(db: Db, table: string, tableAlias: string, tenantId?: number | null): Promise<{ sql: string; params: number[] }> {
+  if (tenantId == null || !await tableHasColumn(db, table, 'tenant_id')) return { sql: '', params: [] };
   return { sql: ` AND ${tableAlias}.tenant_id = ?`, params: [tenantId] };
 }
 
-export function tenantInsertFragment(db: Database.Database, table: string, tenantId?: number | null): { columns: string; placeholders: string; params: number[] } {
-  if (tenantId == null || !tableHasColumn(db, table, 'tenant_id')) return { columns: '', placeholders: '', params: [] };
+export async function tenantInsertFragment(db: Db, table: string, tenantId?: number | null): Promise<{ columns: string; placeholders: string; params: number[] }> {
+  if (tenantId == null || !await tableHasColumn(db, table, 'tenant_id')) return { columns: '', placeholders: '', params: [] };
   return { columns: 'tenant_id, ', placeholders: '?, ', params: [tenantId] };
 }
 
-export function requireSprint(db: Database.Database, sprintId: number | null, tenantId?: number | null): SprintRecord {
+export async function requireSprint(db: Db, sprintId: number | null, tenantId?: number | null): Promise<SprintRecord> {
   if (!sprintId) throw withStatus('sprint_id is required', 400);
-  const hasTenant = tableHasColumn(db, 'sprints', 'tenant_id');
-  const sprint = db.prepare(`SELECT id, project_id, name, sprint_type${hasTenant ? ', tenant_id' : ''} FROM sprints WHERE id = ?${hasTenant && tenantId != null ? ' AND tenant_id = ?' : ''}`)
-    .get(...(hasTenant && tenantId != null ? [sprintId, tenantId] : [sprintId])) as SprintRecord | undefined;
+  const hasTenant = await tableHasColumn(db, 'sprints', 'tenant_id');
+  const sprint = await db.get(`SELECT id, project_id, name, sprint_type${hasTenant ? ', tenant_id' : ''} FROM sprints WHERE id = ?${hasTenant && tenantId != null ? ' AND tenant_id = ?' : ''}`, ...(hasTenant && tenantId != null ? [sprintId, tenantId] : [sprintId])) as SprintRecord | undefined;
   if (!sprint) throw withStatus(`Sprint ${sprintId} not found`, 404);
   return sprint;
 }
@@ -90,9 +89,9 @@ export function normalizeSprintTypeKey(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+export async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
   try {
-    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    const columns = await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>;
     return columns.some((entry) => entry.name === column);
   } catch {
     return false;
@@ -109,31 +108,30 @@ export function parseObjectJson(value: unknown): Record<string, unknown> {
   }
 }
 
-export function requireProject(db: Database.Database, projectId: unknown, tenantId?: number | null): { id: number; name: string; tenant_id?: number | null } {
+export async function requireProject(db: Db, projectId: unknown, tenantId?: number | null): Promise<{ id: number; name: string; tenant_id?: number | null }> {
   const id = Number(projectId);
   if (!Number.isFinite(id)) {
     throw withStatus('project_id is required', 400);
   }
-  const hasTenant = tableHasColumn(db, 'projects', 'tenant_id');
-  const project = db.prepare(`SELECT id, name${hasTenant ? ', tenant_id' : ''} FROM projects WHERE id = ?${hasTenant && tenantId != null ? ' AND tenant_id = ?' : ''}`)
-    .get(...(hasTenant && tenantId != null ? [id, tenantId] : [id])) as { id: number; name: string; tenant_id?: number | null } | undefined;
+  const hasTenant = await tableHasColumn(db, 'projects', 'tenant_id');
+  const project = await db.get(`SELECT id, name${hasTenant ? ', tenant_id' : ''} FROM projects WHERE id = ?${hasTenant && tenantId != null ? ' AND tenant_id = ?' : ''}`, ...(hasTenant && tenantId != null ? [id, tenantId] : [id])) as { id: number; name: string; tenant_id?: number | null } | undefined;
   if (!project) {
     throw withStatus(`Project ${id} not found`, 404);
   }
   return project;
 }
 
-export function requireProjectSprintTypeScope(
-  db: Database.Database,
+export async function requireProjectSprintTypeScope(
+  db: Db,
   input: { project_id?: unknown; sprint_id?: unknown; sprint_type?: unknown; tenant_id?: unknown },
-): ProjectSprintTypeScope {
+): Promise<ProjectSprintTypeScope> {
   const sprintId = parseSprintId(input.sprint_id);
   const explicitSprintType = normalizeSprintTypeKey(input.sprint_type);
   const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
 
   if (sprintId) {
-    const project = requireProject(db, input.project_id, tenantId);
-    const sprint = requireSprint(db, sprintId, tenantId);
+    const project = await requireProject(db, input.project_id, tenantId);
+    const sprint = await requireSprint(db, sprintId, tenantId);
     if (sprint.project_id !== project.id) {
       throw withStatus(`Sprint ${sprint.id} belongs to project ${sprint.project_id}, not project ${project.id}`, 400);
     }
@@ -157,7 +155,7 @@ export function requireProjectSprintTypeScope(
     throw withStatus('sprint_type is required when sprint_id is not provided', 400);
   }
 
-  const sprintTypeRow = db.prepare(`SELECT key FROM sprint_types WHERE key = ? LIMIT 1`).get(explicitSprintType) as { key?: string } | undefined;
+  const sprintTypeRow = await db.get(`SELECT key FROM sprint_types WHERE key = ? LIMIT 1`, explicitSprintType) as { key?: string } | undefined;
   if (!sprintTypeRow) {
     throw withStatus(`Unknown sprint_type \"${explicitSprintType}\"`, 404);
   }
@@ -172,7 +170,7 @@ export function requireProjectSprintTypeScope(
     };
   }
 
-  const project = requireProject(db, input.project_id, tenantId);
+  const project = await requireProject(db, input.project_id, tenantId);
   return {
     projectId: project.id,
     sprintType: explicitSprintType,
@@ -183,24 +181,24 @@ export function requireProjectSprintTypeScope(
 }
 
 
-export function requireTransitionRequirementScope(
-  db: Database.Database,
+export async function requireTransitionRequirementScope(
+  db: Db,
   input: { project_id?: unknown; sprint_id?: unknown; sprint_type?: unknown; tenant_id?: unknown },
-): ProjectSprintTypeScope {
+): Promise<ProjectSprintTypeScope> {
   const sprintId = parseSprintId(input.sprint_id);
-  if (!sprintId || input.project_id != null) return requireProjectSprintTypeScope(db, input);
+  if (!sprintId || input.project_id != null) return await requireProjectSprintTypeScope(db, input);
   const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-  const sprint = requireSprint(db, sprintId, tenantId);
-  return requireProjectSprintTypeScope(db, { ...input, project_id: sprint.project_id, tenant_id: tenantId });
+  const sprint = await requireSprint(db, sprintId, tenantId);
+  return await requireProjectSprintTypeScope(db, { ...input, project_id: sprint.project_id, tenant_id: tenantId });
 }
 
-export function tableHasRoutingRuleScopeColumns(db: Database.Database): boolean {
-  return tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type')
-    && tableHasColumn(db, 'sprint_task_routing_rules', 'project_id');
+export async function tableHasRoutingRuleScopeColumns(db: Db): Promise<boolean> {
+  return await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type')
+    && await tableHasColumn(db, 'sprint_task_routing_rules', 'project_id');
 }
 
-export function detectDuplicateRoutingRule(
-  db: Database.Database,
+export async function detectDuplicateRoutingRule(
+  db: Db,
   args: {
     projectId: number | null;
     sprintType: string;
@@ -212,9 +210,9 @@ export function detectDuplicateRoutingRule(
     tenantId?: number | null;
     excludeId?: number;
   },
-): { id: number } | undefined {
-  if (tableHasRoutingRuleScopeColumns(db)) {
-    const tenant = tenantPredicateFor(db, 'sprint_task_routing_rules', 'sprint_task_routing_rules', args.tenantId);
+): Promise<{ id: number } | undefined> {
+  if (await tableHasRoutingRuleScopeColumns(db)) {
+    const tenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'sprint_task_routing_rules', args.tenantId);
     const projectPredicate = args.projectId == null ? 'project_id IS NULL' : 'project_id = ?';
     const params: Array<number | string | null> = args.projectId == null
       ? [args.sprintType, args.sprintId, args.sprintId, args.taskType, args.taskType, args.status, args.agentId, args.priority]
@@ -250,7 +248,7 @@ export function detectDuplicateRoutingRule(
       AND agent_id = ?
       AND priority = ?
   `;
-  const tenant = tenantPredicateFor(db, 'sprint_task_routing_rules', 'sprint_task_routing_rules', args.tenantId);
+  const tenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'sprint_task_routing_rules', args.tenantId);
   if (typeof args.excludeId === 'number' && Number.isFinite(args.excludeId)) {
     sql += ' AND id != ?';
     params.push(args.excludeId);
@@ -272,8 +270,8 @@ export function selectSprintScopedRoutingRuleRowSql(): string {
   `;
 }
 
-export function selectScopedRoutingRuleRowSql(db: Database.Database): string {
-  if (!tableHasRoutingRuleScopeColumns(db)) return selectSprintScopedRoutingRuleRowSql();
+export async function selectScopedRoutingRuleRowSql(db: Db): Promise<string> {
+  if (!await tableHasRoutingRuleScopeColumns(db)) return selectSprintScopedRoutingRuleRowSql();
   return `
       SELECT trr.*,
              CASE WHEN trr.sprint_id IS NULL THEN 'sprint_type_default' ELSE 'sprint_override' END as rule_scope_kind,
@@ -290,17 +288,17 @@ export function selectScopedRoutingRuleRowSql(db: Database.Database): string {
   `;
 }
 
-export function readRoutingRuleScopeRows(
-  db: Database.Database,
+export async function readRoutingRuleScopeRows(
+  db: Db,
   scope: ProjectSprintTypeScope,
   options?: { scopeKind?: unknown },
-): RoutingRuleRow[] {
+): Promise<RoutingRuleRow[]> {
   const normalizedScopeKind = typeof options?.scopeKind === 'string' ? options.scopeKind.trim() : null;
   const defaultsOnly = normalizedScopeKind === 'defaults' || normalizedScopeKind === 'sprint_type_default';
   const overridesOnly = normalizedScopeKind === 'overrides' || normalizedScopeKind === 'sprint_override';
 
-  if (tableHasRoutingRuleScopeColumns(db)) {
-    const tenant = tenantPredicateFor(db, 'sprint_task_routing_rules', 'trr', scope.tenantId);
+  if (await tableHasRoutingRuleScopeColumns(db)) {
+    const tenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'trr', scope.tenantId);
     const clauses = [
       'trr.sprint_type = ?',
     ];
@@ -324,23 +322,23 @@ export function readRoutingRuleScopeRows(
     }
     params.push(...tenant.params);
 
-    return db.prepare(`
-      ${selectScopedRoutingRuleRowSql(db)}
+    return await db.all(`
+      ${await selectScopedRoutingRuleRowSql(db)}
       WHERE ${clauses.join('\n        AND ')}
         ${tenant.sql}
       ORDER BY CASE WHEN trr.sprint_id = ? THEN 0 ELSE 1 END,
                trr.status ASC, trr.task_type ASC, trr.priority DESC, trr.id ASC
-    `).all(...params, scope.sprintId) as RoutingRuleRow[];
+    `, ...params, scope.sprintId) as RoutingRuleRow[];
   }
 
-  const sprintTenant = tenantPredicateFor(db, 'sprints', 's', scope.tenantId);
-  const rows = db.prepare(`
+  const sprintTenant = await tenantPredicateFor(db, 'sprints', 's', scope.tenantId);
+  const rows = await db.all(`
     ${selectSprintScopedRoutingRuleRowSql()}
     WHERE s.project_id = ? AND s.sprint_type = ?
       ${sprintTenant.sql}
     ORDER BY CASE WHEN trr.sprint_id = ? THEN 0 ELSE 1 END,
              trr.status ASC, trr.task_type ASC, trr.priority DESC, trr.id ASC
-  `).all(scope.projectId, scope.sprintType, ...sprintTenant.params, scope.sprintId ?? -1) as RoutingRuleRow[];
+  `, scope.projectId, scope.sprintType, ...sprintTenant.params, scope.sprintId ?? -1) as RoutingRuleRow[];
 
   return rows;
 }
@@ -378,19 +376,19 @@ export function annotateRoutingRuleScope(
   });
 }
 
-export function selectTransitionScopeRows(
-  db: Database.Database,
+export async function selectTransitionScopeRows(
+  db: Db,
   scope: ProjectSprintTypeScope,
-): Array<Record<string, unknown>> {
-  if (tableHasTransitionScopeColumns(db)) {
-    const tenant = tenantPredicateFor(db, 'sprint_task_transitions', 'stt', scope.tenantId);
+): Promise<Array<Record<string, unknown>>> {
+  if (await tableHasTransitionScopeColumns(db)) {
+    const tenant = await tenantPredicateFor(db, 'sprint_task_transitions', 'stt', scope.tenantId);
     const projectPredicate = scope.projectId == null
       ? 'COALESCE(stt.project_id, s.project_id) IS NULL'
       : 'COALESCE(stt.project_id, s.project_id) = ?';
     const filterParams: Array<string | number | null> = scope.projectId == null
       ? [scope.sprintType, scope.sprintId]
       : [scope.projectId, scope.sprintType, scope.sprintId];
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT stt.id, stt.sprint_id, stt.project_id, stt.sprint_type, stt.task_type,
              stt.from_status, stt.outcome, stt.to_status, stt.enabled, stt.priority,
              stt.is_protected, stt.created_at, stt.updated_at,
@@ -408,13 +406,13 @@ export function selectTransitionScopeRows(
         ${tenant.sql}
       ORDER BY CASE WHEN stt.sprint_id = ? THEN 0 ELSE 1 END,
                stt.from_status ASC, stt.outcome ASC, stt.task_type ASC, stt.priority DESC, stt.id ASC
-    `).all(...filterParams, ...tenant.params, scope.sprintId) as Array<Record<string, unknown>>;
+    `, ...filterParams, ...tenant.params, scope.sprintId) as Array<Record<string, unknown>>;
     return rows;
   }
 
   if (scope.sprintId == null) return [];
-  const tenant = tenantPredicateFor(db, 'sprints', 's', scope.tenantId);
-  return db.prepare(`
+  const tenant = await tenantPredicateFor(db, 'sprints', 's', scope.tenantId);
+  return await db.all(`
     SELECT stt.id, stt.sprint_id, stt.task_type, stt.from_status, stt.outcome,
            stt.to_status, stt.enabled, stt.priority, stt.is_protected,
            stt.created_at, stt.updated_at, s.name as sprint_name, s.project_id, s.sprint_type
@@ -425,7 +423,7 @@ export function selectTransitionScopeRows(
       AND stt.sprint_id = ?
       ${tenant.sql}
     ORDER BY stt.priority DESC, stt.id ASC
-  `).all(scope.projectId, scope.sprintType, scope.sprintId, ...tenant.params) as Array<Record<string, unknown>>;
+  `, scope.projectId, scope.sprintType, scope.sprintId, ...tenant.params) as Array<Record<string, unknown>>;
 }
 
 export function annotateTransitionScope(
@@ -459,14 +457,14 @@ export function annotateTransitionScope(
   });
 }
 
-export function tableHasTransitionScopeColumns(db: Database.Database): boolean {
-  return tableHasColumn(db, 'sprint_task_transitions', 'project_id')
-    && tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
+export async function tableHasTransitionScopeColumns(db: Db): Promise<boolean> {
+  return await tableHasColumn(db, 'sprint_task_transitions', 'project_id')
+    && await tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
 }
 
-export function tableHasRequirementScopeColumns(db: Database.Database): boolean {
-  return tableHasColumn(db, 'sprint_task_transition_requirements', 'project_id')
-    && tableHasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
+export async function tableHasRequirementScopeColumns(db: Db): Promise<boolean> {
+  return await tableHasColumn(db, 'sprint_task_transition_requirements', 'project_id')
+    && await tableHasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
 }
 
 export function requirementOverrideKey(row: TransitionRequirementRecord): string {
@@ -479,14 +477,14 @@ export function requirementOverrideKey(row: TransitionRequirementRecord): string
   ].join('::');
 }
 
-export function selectRequirementScopeRows(
-  db: Database.Database,
+export async function selectRequirementScopeRows(
+  db: Db,
   scope: ProjectSprintTypeScope,
-): Array<TransitionRequirementRecord> {
-  if (!tableHasRequirementScopeColumns(db)) {
+): Promise<Array<TransitionRequirementRecord>> {
+  if (!await tableHasRequirementScopeColumns(db)) {
     if (scope.sprintId == null) return [];
-    const tenant = tenantPredicateFor(db, 'sprints', 's', scope.tenantId);
-    return db.prepare(`
+    const tenant = await tenantPredicateFor(db, 'sprints', 's', scope.tenantId);
+    return await db.all(`
       SELECT req.*, s.name as sprint_name, s.project_id, s.sprint_type
       FROM sprint_task_transition_requirements req
       INNER JOIN sprints s ON s.id = req.sprint_id
@@ -498,7 +496,7 @@ export function selectRequirementScopeRows(
                req.task_type IS NULL ASC,
                req.priority DESC,
                req.id ASC
-    `).all(scope.projectId, scope.sprintType, scope.sprintId, ...tenant.params) as TransitionRequirementRecord[];
+    `, scope.projectId, scope.sprintType, scope.sprintId, ...tenant.params) as TransitionRequirementRecord[];
   }
 
   const params: unknown[] = scope.projectId == null ? [scope.sprintType] : [scope.projectId, scope.sprintType];
@@ -510,9 +508,9 @@ export function selectRequirementScopeRows(
   const projectPredicate = scope.projectId == null
     ? 'COALESCE(req.project_id, s.project_id) IS NULL'
     : 'COALESCE(req.project_id, s.project_id) = ?';
-  const tenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'req', scope.tenantId);
+  const tenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'req', scope.tenantId);
 
-  return db.prepare(`
+  return await db.all(`
     SELECT req.*, s.name as sprint_name, COALESCE(req.project_id, s.project_id) AS project_id, COALESCE(req.sprint_type, s.sprint_type) AS sprint_type
     FROM sprint_task_transition_requirements req
     LEFT JOIN sprints s ON s.id = req.sprint_id
@@ -525,7 +523,7 @@ export function selectRequirementScopeRows(
              req.task_type IS NULL ASC,
              req.priority DESC,
              req.id ASC
-  `).all(...params, ...tenant.params) as TransitionRequirementRecord[];
+  `, ...params, ...tenant.params) as TransitionRequirementRecord[];
 }
 
 export function annotateRequirementScope(
@@ -553,55 +551,55 @@ export function annotateRequirementScope(
   });
 }
 
-export function requireScopedTransitionContext(
-  db: Database.Database,
+export async function requireScopedTransitionContext(
+  db: Db,
   projectId: unknown,
   sprintIdRaw: unknown,
   sprintTypeRaw?: unknown,
   tenantIdRaw?: unknown,
-): { projectId: number | null; sprintType: string; sprintId: number | null; sprintName: string | null; tenantId: number | null } {
+): Promise<{ projectId: number | null; sprintType: string; sprintId: number | null; sprintName: string | null; tenantId: number | null }> {
   const tenantId = Number.isFinite(Number(tenantIdRaw)) ? Number(tenantIdRaw) : null;
-  const scoped = requireProjectSprintTypeScope(db, { project_id: projectId, sprint_id: sprintIdRaw, sprint_type: sprintTypeRaw, tenant_id: tenantId });
+  const scoped = await requireProjectSprintTypeScope(db, { project_id: projectId, sprint_id: sprintIdRaw, sprint_type: sprintTypeRaw, tenant_id: tenantId });
   const sprintId = parseSprintId(sprintIdRaw);
   if (!sprintId) {
-    if (tableHasTransitionScopeColumns(db)) {
+    if (await tableHasTransitionScopeColumns(db)) {
       return { projectId: scoped.projectId, sprintType: scoped.sprintType, sprintId: null, sprintName: null, tenantId };
     }
     throw withStatus('sprint_id is required', 400);
   }
-  const sprint = requireSprint(db, scoped.sprintId, tenantId);
+  const sprint = await requireSprint(db, scoped.sprintId, tenantId);
   return { projectId: scoped.projectId, sprintType: scoped.sprintType, sprintId: scoped.sprintId, sprintName: sprint.name, tenantId };
 }
 
-export function readScopedRoutingTransition(db: Database.Database, scope: ProjectSprintTypeScope, id: number) {
-  if (tableHasTransitionScopeColumns(db)) {
-    const rows = selectTransitionScopeRows(db, scope);
+export async function readScopedRoutingTransition(db: Db, scope: ProjectSprintTypeScope, id: number) {
+  if (await tableHasTransitionScopeColumns(db)) {
+    const rows = await selectTransitionScopeRows(db, scope);
     return annotateTransitionScope(rows, scope.sprintId).find((row) => Number(row.id) === id);
   }
   if (scope.sprintId == null) return undefined;
-  const sprint = requireSprint(db, scope.sprintId, scope.tenantId);
-  const projectName = (db.prepare(`SELECT name FROM projects WHERE id = ?`).get(sprint.project_id) as { name?: string } | undefined)?.name ?? null;
-  const row = db.prepare(`
+  const sprint = await requireSprint(db, scope.sprintId, scope.tenantId);
+  const projectName = (await db.get(`SELECT name FROM projects WHERE id = ?`, sprint.project_id) as { name?: string } | undefined)?.name ?? null;
+  const row = await db.get(`
     SELECT *
     FROM sprint_task_transitions
     WHERE id = ? AND sprint_id = ?
-      ${tenantPredicateFor(db, 'sprint_task_transitions', 'sprint_task_transitions', scope.tenantId).sql}
-  `).get(id, scope.sprintId, ...tenantPredicateFor(db, 'sprint_task_transitions', 'sprint_task_transitions', scope.tenantId).params) as RoutingRuleRecord | undefined;
+      ${(await tenantPredicateFor(db, 'sprint_task_transitions', 'sprint_task_transitions', scope.tenantId)).sql}
+  `, id, scope.sprintId, ...(await tenantPredicateFor(db, 'sprint_task_transitions', 'sprint_task_transitions', scope.tenantId)).params) as RoutingRuleRecord | undefined;
   return row ? { ...row, sprint_name: sprint.name, project_id: sprint.project_id, project_name: projectName, scope_kind: 'sprint_override', is_inherited: false, is_override: true, overridden_by_sprint: false, effective_for_sprint: true } : undefined;
 }
 
 
-export function resolveRoutingRuleTarget(
-  db: Database.Database,
+export async function resolveRoutingRuleTarget(
+  db: Db,
   input: { job_id?: unknown; agent_id?: unknown; tenant_id?: unknown },
-): { agent_id: number } {
+): Promise<{ agent_id: number }> {
   const agentId = input.agent_id != null ? Number(input.agent_id) : null;
   const jobId = input.job_id != null ? Number(input.job_id) : null;
   const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-  const tenant = tenantPredicateFor(db, 'agents', 'agents', tenantId);
+  const tenant = await tenantPredicateFor(db, 'agents', 'agents', tenantId);
 
   if (agentId != null && Number.isFinite(agentId)) {
-    const agent = db.prepare(`SELECT id FROM agents WHERE id = ?${tenant.sql}`).get(agentId, ...tenant.params);
+    const agent = await db.get(`SELECT id FROM agents WHERE id = ?${tenant.sql}`, agentId, ...tenant.params);
     if (!agent) {
       throw withStatus(`Agent ${agentId} not found`, 404);
     }
@@ -609,7 +607,7 @@ export function resolveRoutingRuleTarget(
   }
 
   if (jobId != null && Number.isFinite(jobId)) {
-    const agent = db.prepare(`SELECT id FROM agents WHERE id = ?${tenant.sql}`).get(jobId, ...tenant.params);
+    const agent = await db.get(`SELECT id FROM agents WHERE id = ?${tenant.sql}`, jobId, ...tenant.params);
     if (!agent) {
       throw withStatus(`Agent ${jobId} not found`, 404);
     }

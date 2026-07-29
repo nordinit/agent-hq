@@ -11,7 +11,7 @@
 
 import { getDb } from '../db/client';
 
-function getCredentials(): { token: string; chatId: string } | null {
+async function getCredentials(): Promise<{ token: string; chatId: string } | null> {
   // Env vars take priority
   let token = process.env.TELEGRAM_BOT_TOKEN ?? '';
   let chatId = process.env.TELEGRAM_CHAT_ID ?? '';
@@ -21,7 +21,7 @@ function getCredentials(): { token: string; chatId: string } | null {
   // Fall back to app_settings
   try {
     const db = getDb();
-    const rows = db.prepare("SELECT key, value FROM app_settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id')").all() as { key: string; value: string }[];
+    const rows = await db.all("SELECT key, value FROM app_settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id')") as { key: string; value: string }[];
     for (const r of rows) {
       if (r.key === 'telegram_bot_token' && !token) token = r.value;
       if (r.key === 'telegram_chat_id' && !chatId) chatId = r.value;
@@ -35,7 +35,7 @@ function getCredentials(): { token: string; chatId: string } | null {
 }
 
 export async function notifyTelegram(text: string): Promise<void> {
-  const creds = getCredentials();
+  const creds = await getCredentials();
 
   if (!creds) {
     console.error('[telegram] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID — skipping notification');

@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { runWatchdogPass, runWorktreePrunePass } from './watchdog';
 import { pruneOrphanedWorktrees } from '../services/worktreeManager';
 import { setActiveTenantId } from '../lib/tenantContext';
+import { type Db } from "../db/adapter/types";
 
 jest.mock('../integrations/telegram', () => ({
   notifyTelegram: jest.fn(),
@@ -18,9 +19,9 @@ jest.mock('../services/worktreeManager', () => {
   };
 });
 
-function createDb(): Database.Database {
+async function createDb(): Promise<Db> {
   const db = new Database(':memory:');
-  db.exec(`
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
@@ -145,14 +146,14 @@ function createDb(): Database.Database {
   return db;
 }
 
-function seedRunningInstance(db: Database.Database, params: {
+async function seedRunningInstance(db: Db, params: {
   instanceId?: number;
   taskId?: number;
   durableRunId?: string;
   createdAt?: string;
   dispatchedAt?: string;
   startedAt?: string | null;
-} = {}): void {
+} = {}): Promise<void> {
   const {
     instanceId = 42,
     taskId = 478,
@@ -162,7 +163,7 @@ function seedRunningInstance(db: Database.Database, params: {
     startedAt = '2026-05-13T10:48:38.000Z',
   } = params;
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO agents (
       id, name, job_title, runtime_type, session_key, openclaw_agent_id,
       timeout_seconds, heartbeat_stale_seconds
@@ -171,16 +172,16 @@ function seedRunningInstance(db: Database.Database, params: {
       94, 'Cinder', 'Backend', 'openclaw', 'agent:cinder-backend:main', 'cinder-backend',
       1800, 600
     )
-  `).run();
-  db.prepare(`INSERT INTO tasks (id, tenant_id, title, active_instance_id) VALUES (?, 1, 'Task', ?)`).run(taskId, instanceId);
-  db.prepare(`
+  `);
+  await db.run(`INSERT INTO tasks (id, tenant_id, title, active_instance_id) VALUES (?, 1, 'Task', ?)`, taskId, instanceId);
+  await db.run(`
     INSERT INTO job_instances (id, agent_id, task_id, status, created_at, dispatched_at, started_at, session_key)
     VALUES (?, 94, ?, 'running', ?, ?, ?, ?)
-  `).run(instanceId, taskId, createdAt, dispatchedAt, startedAt, `run:${instanceId}:${durableRunId}`);
-  db.prepare(`
+  `, instanceId, taskId, createdAt, dispatchedAt, startedAt, `run:${instanceId}:${durableRunId}`);
+  await db.run(`
     INSERT INTO instance_artifacts (instance_id, task_id, started_at)
     VALUES (?, ?, ?)
-  `).run(instanceId, taskId, startedAt);
+  `, instanceId, taskId, startedAt);
 }
 
 function writeOpenClawSession(openclawHome: string, params: {
@@ -216,12 +217,12 @@ function writeOpenClawTrajectory(sessionFile: string, lines: Array<Record<string
 }
 
 describe('watchdog transcript activity', () => {
-  let db: Database.Database;
+  let db: Db;
   let openclawHome: string;
   let previousOpenClawHome: string | undefined;
 
-  beforeEach(() => {
-    db = createDb();
+  beforeEach(async () => {
+    db = await createDb();
     openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-watchdog-openclaw-'));
     previousOpenClawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = openclawHome;
@@ -238,36 +239,36 @@ describe('watchdog transcript activity', () => {
   });
 
   it('reconciles a stale Hermes response.runtimeEnd success before watchdog stale failure', async () => {
-    seedRunningInstance(db, {
-      instanceId: 4590,
-      taskId: 715,
-      startedAt: '2026-06-03T00:00:00.000Z',
-      dispatchedAt: '2026-06-03T00:00:00.000Z',
-      createdAt: '2026-06-03T00:00:00.000Z',
-    });
-    db.prepare(`UPDATE agents SET runtime_type = 'hermes', name = 'Hermes' WHERE id = 94`).run();
-    db.prepare(`
+    await seedRunningInstance(db, {
+            instanceId: 4590,
+            taskId: 715,
+            startedAt: '2026-06-03T00:00:00.000Z',
+            dispatchedAt: '2026-06-03T00:00:00.000Z',
+            createdAt: '2026-06-03T00:00:00.000Z',
+          });
+    await db.run(`UPDATE agents SET runtime_type = 'hermes', name = 'Hermes' WHERE id = 94`);
+    await db.run(`
       UPDATE job_instances
       SET response = ?
       WHERE id = 4590
-    `).run(JSON.stringify({
-      runtimeEnd: {
-        type: 'runEnded',
-        source: 'hermes',
-        sessionKey: 'run:4590',
-        success: true,
-        endedAt: '2026-06-03T00:32:30.031Z',
-        reason: 'completed',
-      },
-    }));
+    `, JSON.stringify({
+            runtimeEnd: {
+              type: 'runEnded',
+              source: 'hermes',
+              sessionKey: 'run:4590',
+              success: true,
+              endedAt: '2026-06-03T00:32:30.031Z',
+              reason: 'completed',
+            },
+          }));
 
-    runWatchdogPass(db, new Date('2026-06-03T01:00:00.000Z'));
+    await runWatchdogPass(db, new Date('2026-06-03T01:00:00.000Z'));
     await new Promise(resolve => setImmediate(resolve));
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_source, runtime_end_error, error
       FROM job_instances WHERE id = 4590
-    `).get() as {
+    `) as {
       status: string;
       completed_at: string | null;
       runtime_ended_at: string | null;
@@ -284,36 +285,36 @@ describe('watchdog transcript activity', () => {
     expect(row.runtime_end_error).toBeNull();
     expect(row.error).toBeNull();
 
-    const log = db.prepare(`SELECT message FROM logs WHERE instance_id = 4590`).get() as { message: string };
+    const log = await db.get(`SELECT message FROM logs WHERE instance_id = 4590`) as { message: string };
     expect(log.message).toContain('response.runtimeEnd');
   });
 
   it('reconciles a persisted runtimeEnd failure generically', async () => {
-    seedRunningInstance(db, { instanceId: 88, taskId: 808, startedAt: '2026-05-13T10:00:00.000Z' });
-    db.prepare(`UPDATE agents SET runtime_type = 'veri', name = 'Veri' WHERE id = 94`).run();
-    db.prepare(`
+    await seedRunningInstance(db, { instanceId: 88, taskId: 808, startedAt: '2026-05-13T10:00:00.000Z' });
+    await db.run(`UPDATE agents SET runtime_type = 'veri', name = 'Veri' WHERE id = 94`);
+    await db.run(`
       UPDATE job_instances
       SET response = ?
       WHERE id = 88
-    `).run(JSON.stringify({
-      runtimeEnd: {
-        type: 'runEnded',
-        source: 'veri',
-        sessionKey: 'run:88',
-        success: false,
-        endedAt: '2026-05-13T10:05:00.000Z',
-        reason: 'error',
-        error: 'veri execution failed',
-      },
-    }));
+    `, JSON.stringify({
+            runtimeEnd: {
+              type: 'runEnded',
+              source: 'veri',
+              sessionKey: 'run:88',
+              success: false,
+              endedAt: '2026-05-13T10:05:00.000Z',
+              reason: 'error',
+              error: 'veri execution failed',
+            },
+          }));
 
-    runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
+    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
     await new Promise(resolve => setImmediate(resolve));
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_source, runtime_end_error, error
       FROM job_instances WHERE id = 88
-    `).get() as {
+    `) as {
       status: string;
       completed_at: string | null;
       runtime_ended_at: string | null;
@@ -332,29 +333,25 @@ describe('watchdog transcript activity', () => {
   });
 
   it('falls back to a terminal turn_end chat message when response.runtimeEnd is absent', async () => {
-    seedRunningInstance(db, { instanceId: 77, taskId: 707, startedAt: '2026-05-13T10:00:00.000Z' });
-    db.prepare(`UPDATE agents SET runtime_type = 'hermes', name = 'Hermes' WHERE id = 94`).run();
-    db.prepare(`
+    await seedRunningInstance(db, { instanceId: 77, taskId: 707, startedAt: '2026-05-13T10:00:00.000Z' });
+    await db.run(`UPDATE agents SET runtime_type = 'hermes', name = 'Hermes' WHERE id = 94`);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta, session_key)
       VALUES (?, 94, 77, 'system', 'Runtime runEnded (completed)', ?, 'turn_end', ?, 'run:77')
-    `).run(
-      'hermes-runtime-end-77',
-      '2026-05-13T10:06:00.000Z',
-      JSON.stringify({
-        runtime_end_type: 'runEnded',
-        terminal_reason: 'completed',
-        success: true,
-        error: null,
-      }),
-    );
+    `, 'hermes-runtime-end-77', '2026-05-13T10:06:00.000Z', JSON.stringify({
+              runtime_end_type: 'runEnded',
+              terminal_reason: 'completed',
+              success: true,
+              error: null,
+            }));
 
-    runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
+    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
     await new Promise(resolve => setImmediate(resolve));
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_source, runtime_end_error, error
       FROM job_instances WHERE id = 77
-    `).get() as {
+    `) as {
       status: string;
       completed_at: string | null;
       runtime_ended_at: string | null;
@@ -372,8 +369,8 @@ describe('watchdog transcript activity', () => {
     expect(row.error).toBeNull();
   });
 
-  it('does not fail a run when raw OpenClaw transcript activity is recent', () => {
-    seedRunningInstance(db);
+  it('does not fail a run when raw OpenClaw transcript activity is recent', async () => {
+    await seedRunningInstance(db);
     writeOpenClawSession(openclawHome, {
       lines: [
         {
@@ -400,21 +397,21 @@ describe('watchdog transcript activity', () => {
       ],
     });
 
-    runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
+    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
 
-    const row = db.prepare(`SELECT status, error FROM job_instances WHERE id = 42`).get() as {
+    const row = await db.get(`SELECT status, error FROM job_instances WHERE id = 42`) as {
       status: string;
       error: string | null;
     };
     expect(row.status).toBe('running');
     expect(row.error).toBeNull();
 
-    const chatRows = db.prepare(`
+    const chatRows = await db.all(`
       SELECT role, event_type, content
         FROM chat_messages
         WHERE instance_id = 42
         ORDER BY timestamp ASC
-    `).all() as Array<{ role: string; event_type: string; content: string }>;
+    `) as Array<{ role: string; event_type: string; content: string }>;
     expect(chatRows.map(row => [row.role, row.event_type, row.content])).toEqual([
       ['assistant', 'tool_call', 'explore_codebase'],
       ['tool', 'tool_result', 'Still working through tool calls'],
@@ -422,13 +419,13 @@ describe('watchdog transcript activity', () => {
   });
 
   it('reconciles a stale row when the raw OpenClaw transcript reached a final answer', async () => {
-    seedRunningInstance(db);
-    db.prepare(`
+    await seedRunningInstance(db);
+    await db.run(`
       UPDATE job_instances
       SET task_outcome = 'deployed_live',
           lifecycle_outcome_posted_at = '2026-05-13T10:59:35.000Z'
       WHERE id = 42
-    `).run();
+    `);
     writeOpenClawSession(openclawHome, {
       lines: [
         {
@@ -452,14 +449,14 @@ describe('watchdog transcript activity', () => {
       ],
     });
 
-    runWatchdogPass(db, new Date('2026-05-13T11:20:00.000Z'));
+    await runWatchdogPass(db, new Date('2026-05-13T11:20:00.000Z'));
     await new Promise(resolve => setImmediate(resolve));
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_source, error
       FROM job_instances
       WHERE id = 42
-    `).get() as {
+    `) as {
       status: string;
       completed_at: string | null;
       runtime_ended_at: string | null;
@@ -475,16 +472,16 @@ describe('watchdog transcript activity', () => {
     expect(row.error).toBeNull();
   });
 
-  it('ignores the initial user prompt when deciding whether a run is alive', () => {
-    seedRunningInstance(db);
-    db.prepare(`
+  it('ignores the initial user prompt when deciding whether a run is alive', async () => {
+    await seedRunningInstance(db);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
       VALUES ('user-1', 94, 42, 'user', 'Dispatch prompt', '2026-05-13T10:59:30.000Z')
-    `).run();
+    `);
 
-    runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
+    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
 
-    const row = db.prepare(`SELECT status, error, runtime_end_source FROM job_instances WHERE id = 42`).get() as {
+    const row = await db.get(`SELECT status, error, runtime_end_source FROM job_instances WHERE id = 42`) as {
       status: string;
       error: string | null;
       runtime_end_source: string | null;
@@ -493,11 +490,11 @@ describe('watchdog transcript activity', () => {
     expect(row.error).toBe('Watchdog: stale run: no start signal for 11m');
     expect(row.runtime_end_source).toBe('watchdog');
 
-    const notification = db.prepare(`
+    const notification = await db.get(`
       SELECT tenant_id, type, title, body, source, outlet
       FROM notification_records
       WHERE type = 'watchdog_stale_run'
-    `).get() as {
+    `) as {
       tenant_id: number;
       type: string;
       title: string;
@@ -514,14 +511,14 @@ describe('watchdog transcript activity', () => {
   });
 
   it('reconciles a run 4581-style prompt-only OpenClaw session when trajectory ended with an error', async () => {
-    seedRunningInstance(db, {
-      instanceId: 4581,
-      taskId: 679,
-      durableRunId: '244f30ff-cf5d-4c86-96f9-273787cf8062',
-      createdAt: '2026-06-02T23:12:57.000Z',
-      dispatchedAt: '2026-06-02T23:12:57.000Z',
-      startedAt: '2026-06-02T23:13:00.000Z',
-    });
+    await seedRunningInstance(db, {
+            instanceId: 4581,
+            taskId: 679,
+            durableRunId: '244f30ff-cf5d-4c86-96f9-273787cf8062',
+            createdAt: '2026-06-02T23:12:57.000Z',
+            dispatchedAt: '2026-06-02T23:12:57.000Z',
+            startedAt: '2026-06-02T23:13:00.000Z',
+          });
     const sessionFile = writeOpenClawSession(openclawHome, {
       instanceId: 4581,
       durableRunId: '244f30ff-cf5d-4c86-96f9-273787cf8062',
@@ -554,14 +551,14 @@ describe('watchdog transcript activity', () => {
       },
     ]);
 
-    runWatchdogPass(db, new Date('2026-06-02T23:24:30.000Z'));
+    await runWatchdogPass(db, new Date('2026-06-02T23:24:30.000Z'));
     await new Promise(resolve => setImmediate(resolve));
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT status, completed_at, runtime_ended_at, runtime_end_success, runtime_end_error, runtime_end_source
       FROM job_instances
       WHERE id = 4581
-    `).get() as {
+    `) as {
       status: string;
       completed_at: string | null;
       runtime_ended_at: string | null;
@@ -576,17 +573,17 @@ describe('watchdog transcript activity', () => {
     expect(row.runtime_end_error).toBe("The model 'gpt-image-2' does not exist.");
     expect(row.runtime_end_source).toBe('watchdog_raw_session');
 
-    const log = db.prepare(`SELECT message FROM logs WHERE instance_id = 4581`).get() as { message: string };
+    const log = await db.get(`SELECT message FROM logs WHERE instance_id = 4581`) as { message: string };
     expect(log.message).toContain('trajectory_prompt_error');
     expect(log.message).toContain(trajectoryFile);
   });
 
-  it('does not defer a prompt-only OpenClaw session forever when no terminal trajectory exists', () => {
-    seedRunningInstance(db, {
-      startedAt: null,
-      createdAt: '2026-05-13T10:48:08.000Z',
-      dispatchedAt: '2026-05-13T10:48:08.000Z',
-    });
+  it('does not defer a prompt-only OpenClaw session forever when no terminal trajectory exists', async () => {
+    await seedRunningInstance(db, {
+            startedAt: null,
+            createdAt: '2026-05-13T10:48:08.000Z',
+            dispatchedAt: '2026-05-13T10:48:08.000Z',
+          });
     writeOpenClawSession(openclawHome, {
       lines: [
         {
@@ -601,9 +598,9 @@ describe('watchdog transcript activity', () => {
       ],
     });
 
-    runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
+    await runWatchdogPass(db, new Date('2026-05-13T11:00:00.000Z'));
 
-    const row = db.prepare(`SELECT status, error, runtime_end_source FROM job_instances WHERE id = 42`).get() as {
+    const row = await db.get(`SELECT status, error, runtime_end_source FROM job_instances WHERE id = 42`) as {
       status: string;
       error: string | null;
       runtime_end_source: string | null;
@@ -615,10 +612,10 @@ describe('watchdog transcript activity', () => {
 });
 
 describe('watchdog worktree pruning notifications', () => {
-  let db: Database.Database;
+  let db: Db;
 
-  beforeEach(() => {
-    db = createDb();
+  beforeEach(async () => {
+    db = await createDb();
     jest.mocked(pruneOrphanedWorktrees).mockReset();
   });
 
@@ -626,31 +623,31 @@ describe('watchdog worktree pruning notifications', () => {
     db.close();
   });
 
-  it('records prune notifications in the pruned agent tenant instead of the active tenant', () => {
-    db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Tenant 2', 'tenant-2', 0)`).run();
-    setActiveTenantId(db, 1);
-    db.prepare(`
+  it('records prune notifications in the pruned agent tenant instead of the active tenant', async () => {
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Tenant 2', 'tenant-2', 0)`);
+    await setActiveTenantId(db, 1);
+    await db.run(`
       INSERT INTO projects (id, tenant_id, name, repo_path, repo_access_mode)
       VALUES (200, 2, 'Tenant 2 Project', '/repo/from-project', 'worktree')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO agents (
         id, tenant_id, project_id, name, workspace_path, repo_path, repo_access_mode
       )
       VALUES (94, 2, 200, 'Cinder', '/workspace/cinder', '/repo/from-agent', 'worktree')
-    `).run();
+    `);
     jest.mocked(pruneOrphanedWorktrees).mockReturnValue({
       pruned: ['/workspace/cinder/task-776'],
       errors: [],
     });
 
-    runWorktreePrunePass(db);
+    await runWorktreePrunePass(db);
 
-    const notification = db.prepare(`
+    const notification = await db.get(`
       SELECT tenant_id, type, title, body, source, outlet, metadata_json
       FROM notification_records
       WHERE type = 'worktree_pruned'
-    `).get() as {
+    `) as {
       tenant_id: number;
       type: string;
       title: string;

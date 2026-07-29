@@ -1,10 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type Database from 'better-sqlite3';
 import { tableHasColumn } from '../lib/durableRunIdentity';
 import { normalizeChatMessageRole } from '../lib/chatMessageRoles';
 import { nowTimestamp, timestampFromDate, timestampFromEpochMs, toCanonicalTimestamp } from '../lib/timestamps';
+import { type Db } from "../db/adapter/types";
 
 export interface HermesTranscriptRunContext {
   instanceId: number;
@@ -14,7 +14,7 @@ export interface HermesTranscriptRunContext {
 }
 
 export interface HermesTranscriptIngestParams extends HermesTranscriptRunContext {
-  db: Database.Database;
+  db: Db;
   agentId: number;
   profile: string;
   hermesHome?: string | null;
@@ -236,7 +236,7 @@ function timestampForMessage(message: unknown, session: Record<string, unknown>,
   return fallback;
 }
 
-export function importHermesSessionJson(params: HermesTranscriptIngestParams & { filePath: string }): HermesTranscriptIngestResult {
+export async function importHermesSessionJson(params: HermesTranscriptIngestParams & { filePath: string }): Promise<HermesTranscriptIngestResult> {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(fs.readFileSync(params.filePath, 'utf-8')) as Record<string, unknown>;
@@ -247,8 +247,8 @@ export function importHermesSessionJson(params: HermesTranscriptIngestParams & {
   const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
   if (!messages.length) return { imported: 0, matchedFile: params.filePath, skipped: null };
 
-  const hasDurableRunId = tableHasColumn(params.db, 'chat_messages', 'durable_run_id');
-  const hasSessionKey = tableHasColumn(params.db, 'chat_messages', 'session_key');
+  const hasDurableRunId = await tableHasColumn(params.db, 'chat_messages', 'durable_run_id');
+  const hasSessionKey = await tableHasColumn(params.db, 'chat_messages', 'session_key');
   const optionalColumns = [
     hasDurableRunId ? 'durable_run_id' : null,
     hasSessionKey ? 'session_key' : null,
@@ -297,8 +297,8 @@ export function importHermesSessionJson(params: HermesTranscriptIngestParams & {
   return { imported, matchedFile: params.filePath, skipped: null };
 }
 
-export function ingestHermesTranscriptForRun(params: HermesTranscriptIngestParams): HermesTranscriptIngestResult {
+export async function ingestHermesTranscriptForRun(params: HermesTranscriptIngestParams): Promise<HermesTranscriptIngestResult> {
   const match = findHermesSessionFile(params);
   if (!match.filePath) return { imported: 0, matchedFile: null, skipped: match.skipped };
-  return importHermesSessionJson({ ...params, filePath: match.filePath });
+  return await importHermesSessionJson({ ...params, filePath: match.filePath });
 }

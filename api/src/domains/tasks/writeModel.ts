@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import fs from 'fs';
 import { cleanupTaskExecutionLinkageForStatus } from '../../lib/taskLifecycle';
 import { assertAtlasDirectStatusGate, assertTaskStatusUpdateAllowed } from '../../lib/taskRelease';
@@ -28,6 +27,7 @@ import { syncTaskActiveAgentFromInstance } from './ownership';
 import { enrichTask, getTaskById, TASK_SELECT, type TaskRecord } from './readModel';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { TASK_LIFECYCLE_EVIDENCE_FIELD_KEYS } from './evidence';
+import { type Db } from "../../db/adapter/types";
 
 export interface CreateTaskInput {
   title: string;
@@ -86,8 +86,8 @@ export interface TaskUpdateActor {
   isManualOverride: boolean;
 }
 
-function requireExistingTaskRow(db: Database.Database, taskId: number): TaskRecord {
-  const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRecord | undefined;
+async function requireExistingTaskRow(db: Db, taskId: number): Promise<TaskRecord> {
+  const existing = await db.get('SELECT * FROM tasks WHERE id = ?', taskId) as TaskRecord | undefined;
   if (!existing) {
     const error = new Error('Task not found') as Error & { status?: number };
     error.status = 404;
@@ -96,8 +96,8 @@ function requireExistingTaskRow(db: Database.Database, taskId: number): TaskReco
   return existing;
 }
 
-function requireEnrichedTask(db: Database.Database, taskId: number): TaskRecord {
-  const task = getTaskById(db, taskId);
+async function requireEnrichedTask(db: Db, taskId: number): Promise<TaskRecord> {
+  const task = await getTaskById(db, taskId);
   if (!task) {
     const error = new Error('Task not found') as Error & { status?: number };
     error.status = 404;
@@ -115,8 +115,8 @@ function requireSameTenant(
   if (actualTenantId !== expectedTenantId) throw new Error(message);
 }
 
-function taskTenantId(db: Database.Database, taskId: number): number | null | undefined {
-  return (db.prepare('SELECT tenant_id FROM tasks WHERE id = ?').get(taskId) as { tenant_id: number | null } | undefined)?.tenant_id;
+async function taskTenantId(db: Db, taskId: number): Promise<number | null | undefined> {
+  return (await db.get('SELECT tenant_id FROM tasks WHERE id = ?', taskId) as { tenant_id: number | null } | undefined)?.tenant_id;
 }
 
 function normalizeOptionalTaskType(raw: unknown): string | null | undefined {
@@ -125,48 +125,48 @@ function normalizeOptionalTaskType(raw: unknown): string | null | undefined {
   return normalizeConfigKey(raw, 'task_type');
 }
 
-function syncSpawnedDefectMetric(db: Database.Database, originTaskId: number | null | undefined): void {
+async function syncSpawnedDefectMetric(db: Db, originTaskId: number | null | undefined): Promise<void> {
   if (originTaskId == null) return;
-  const row = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE origin_task_id = ?').get(originTaskId) as { count: number };
-  db.prepare(`
+  const row = await db.get('SELECT COUNT(*) as count FROM tasks WHERE origin_task_id = ?', originTaskId) as { count: number };
+  await db.run(`
     INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(task_id) DO UPDATE SET
       spawned_defects = excluded.spawned_defects,
       updated_at = datetime('now')
-  `).run(originTaskId, row.count);
+  `, originTaskId, row.count);
 }
 
-function syncDefectRelationship(
-  db: Database.Database,
+async function syncDefectRelationship(
+  db: Db,
   taskId: number,
   previousOriginTaskId: number | null | undefined,
   nextOriginTaskId: number | null | undefined,
   defectType: string | null | undefined,
-): void {
+): Promise<void> {
   try {
     if (previousOriginTaskId != null && previousOriginTaskId !== nextOriginTaskId) {
-      deleteTaskRelationshipByTuple(db, taskId, previousOriginTaskId, 'defect_of');
+      await deleteTaskRelationshipByTuple(db, taskId, previousOriginTaskId, 'defect_of');
     }
     if (nextOriginTaskId != null) {
-      createTaskRelationship(db, {
-        source_task_id: taskId,
-        target_task_id: nextOriginTaskId,
-        relationship_type_key: 'defect_of',
-        metadata_json: defectType ? { legacy_defect_type: defectType } : {},
-        created_by: 'legacy-origin_task_id-field',
-      });
+      await createTaskRelationship(db, {
+                source_task_id: taskId,
+                target_task_id: nextOriginTaskId,
+                relationship_type_key: 'defect_of',
+                metadata_json: defectType ? { legacy_defect_type: defectType } : {},
+                created_by: 'legacy-origin_task_id-field',
+              });
     }
   } catch {
     // Preserve legacy origin_task_id / defect_type writes on minimal DBs without relationship config.
   }
 }
 
-export function createTaskRecord(
-  db: Database.Database,
+export async function createTaskRecord(
+  db: Db,
   input: CreateTaskInput,
   createdBy: string,
-): TaskRecord {
+): Promise<TaskRecord> {
   const {
     title,
     description = '',
@@ -203,17 +203,17 @@ export function createTaskRecord(
     throw Object.assign(new Error('sprint_id is required'), { status: 400 });
   }
   if (origin_task_id != null) {
-    const originExists = db.prepare('SELECT id, tenant_id FROM tasks WHERE id = ?').get(origin_task_id) as { id: number; tenant_id: number | null } | undefined;
+    const originExists = await db.get('SELECT id, tenant_id FROM tasks WHERE id = ?', origin_task_id) as { id: number; tenant_id: number | null } | undefined;
     if (!originExists) throw new Error(`origin_task_id ${origin_task_id} does not exist`);
     requireSameTenant(originExists.tenant_id, resolvedTenantId, `origin_task_id ${origin_task_id} is not in the same workspace`);
   }
   if (resolvedProjectId != null) {
-    const projectExists = db.prepare('SELECT id, tenant_id FROM projects WHERE id = ?').get(resolvedProjectId) as { id: number; tenant_id: number | null } | undefined;
+    const projectExists = await db.get('SELECT id, tenant_id FROM projects WHERE id = ?', resolvedProjectId) as { id: number; tenant_id: number | null } | undefined;
     if (!projectExists) throw new Error(`project_id ${resolvedProjectId} does not exist`);
     resolvedTenantId = resolvedTenantId ?? projectExists.tenant_id ?? null;
     requireSameTenant(projectExists.tenant_id, resolvedTenantId, `project_id ${resolvedProjectId} is not in the same workspace`);
   }
-  const sprintExists = db.prepare('SELECT id, project_id, tenant_id FROM sprints WHERE id = ?').get(resolvedSprintId) as { id: number; project_id: number | null; tenant_id: number | null } | undefined;
+  const sprintExists = await db.get('SELECT id, project_id, tenant_id FROM sprints WHERE id = ?', resolvedSprintId) as { id: number; project_id: number | null; tenant_id: number | null } | undefined;
   if (!sprintExists) throw new Error(`sprint_id ${resolvedSprintId} does not exist`);
   resolvedTenantId = resolvedTenantId ?? sprintExists.tenant_id ?? null;
   requireSameTenant(sprintExists.tenant_id, resolvedTenantId, `sprint_id ${resolvedSprintId} is not in the same workspace`);
@@ -222,36 +222,36 @@ export function createTaskRecord(
     throw new Error(`sprint_id ${resolvedSprintId} does not belong to project_id ${resolvedProjectId}`);
   }
   if (resolvedAgentId != null) {
-    const agentExists = db.prepare('SELECT id, tenant_id FROM agents WHERE id = ?').get(resolvedAgentId) as { id: number; tenant_id: number | null } | undefined;
+    const agentExists = await db.get('SELECT id, tenant_id FROM agents WHERE id = ?', resolvedAgentId) as { id: number; tenant_id: number | null } | undefined;
     if (!agentExists) throw new Error(`agent_id ${resolvedAgentId} does not exist`);
     requireSameTenant(agentExists.tenant_id, resolvedTenantId, `agent_id ${resolvedAgentId} is not in the same workspace`);
   }
   if (recurring_series_id != null) {
-    const seriesExists = db.prepare('SELECT id, tenant_id FROM recurring_task_series WHERE id = ?').get(recurring_series_id) as { id: number; tenant_id: number | null } | undefined;
+    const seriesExists = await db.get('SELECT id, tenant_id FROM recurring_task_series WHERE id = ?', recurring_series_id) as { id: number; tenant_id: number | null } | undefined;
     if (!seriesExists) throw new Error(`recurring_series_id ${recurring_series_id} does not exist`);
     requireSameTenant(seriesExists.tenant_id, resolvedTenantId, `recurring_series_id ${recurring_series_id} is not in the same workspace`);
   }
   if (schedule_run_id != null) {
-    const runExists = db.prepare(`
+    const runExists = await db.get(`
       SELECT r.id, s.tenant_id
       FROM recurring_task_runs r
       LEFT JOIN recurring_task_series s ON s.id = r.series_id
       WHERE r.id = ?
-    `).get(schedule_run_id) as { id: number; tenant_id: number | null } | undefined;
+    `, schedule_run_id) as { id: number; tenant_id: number | null } | undefined;
     if (!runExists) throw new Error(`schedule_run_id ${schedule_run_id} does not exist`);
     requireSameTenant(runExists.tenant_id, resolvedTenantId, `schedule_run_id ${schedule_run_id} is not in the same workspace`);
   }
 
-  const resolvedFieldSchema = resolveTaskFieldSchema(resolvedSprintId, normalizedTaskType ?? null);
-  if (typeof normalizedTaskType === 'string' && !isTaskTypeAllowedForSprintType(db, resolvedFieldSchema.sprint_type, normalizedTaskType)) {
+  const resolvedFieldSchema = await resolveTaskFieldSchema(resolvedSprintId, normalizedTaskType ?? null);
+  if (typeof normalizedTaskType === 'string' && !await isTaskTypeAllowedForSprintType(db, resolvedFieldSchema.sprint_type, normalizedTaskType)) {
     throw new Error(`task_type "${normalizedTaskType}" is not allowed for sprint type "${resolvedFieldSchema.sprint_type}"`);
   }
   if (status !== undefined && status !== null) {
-    assertTaskStatusDefinedForWorkflow(db, status, { sprintId: resolvedSprintId, sprintType: resolvedFieldSchema.sprint_type });
+    await assertTaskStatusDefinedForWorkflow(db, status, { sprintId: resolvedSprintId, sprintType: resolvedFieldSchema.sprint_type });
   }
   validateTaskCustomFields(normalizedCustomFields, resolvedFieldSchema.schema);
 
-  const { validBlockerIds, invalidBlockerIds } = resolveTaskBlockers(blockers);
+  const { validBlockerIds, invalidBlockerIds } = await resolveTaskBlockers(blockers);
   const normalizedRelationships = Array.isArray(relationships)
     ? relationships
       .map((relationship) => ({
@@ -272,12 +272,12 @@ export function createTaskRecord(
   }
   if (validBlockerIds.length > 0 && resolvedTenantId != null) {
     for (const blockerId of validBlockerIds) {
-      requireSameTenant(taskTenantId(db, blockerId), resolvedTenantId, `blocker_id ${blockerId} is not in the same workspace`);
+      requireSameTenant(await taskTenantId(db, blockerId), resolvedTenantId, `blocker_id ${blockerId} is not in the same workspace`);
     }
   }
 
-  const insertTask = db.transaction(() => {
-    const result = db.prepare(`
+  const insertTask = db.transaction(async () => {
+    const result = await db.run(`
       INSERT INTO tasks (
         tenant_id, title, description, status, priority, project_id, assigned_agent_id, sprint_id, recurring,
         task_type, story_points, origin_task_id, defect_type,
@@ -285,49 +285,30 @@ export function createTaskRecord(
         custom_fields_json
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      resolvedTenantId,
-      title,
-      description,
-      status,
-      priority,
-      resolvedProjectId,
-      resolvedAgentId,
-      resolvedSprintId,
-      recurring ? 1 : 0,
-      normalizedTaskType ?? null,
-      normalizedStoryPoints ?? null,
-      origin_task_id ?? null,
-      defect_type ?? null,
-      recurring_series_id ?? null,
-      scheduled_for ?? null,
-      schedule_run_id ?? null,
-      generated_from ?? null,
-      JSON.stringify(normalizedCustomFields),
-    );
+    `, resolvedTenantId, title, description, status, priority, resolvedProjectId, resolvedAgentId, resolvedSprintId, recurring ? 1 : 0, normalizedTaskType ?? null, normalizedStoryPoints ?? null, origin_task_id ?? null, defect_type ?? null, recurring_series_id ?? null, scheduled_for ?? null, schedule_run_id ?? null, generated_from ?? null, JSON.stringify(normalizedCustomFields));
 
     const taskId = Number(result.lastInsertRowid);
 
     const legacyBlockerWarnings: string[] = [];
     if (validBlockerIds.length > 0) {
       for (const blockerId of validBlockerIds) {
-        const legacyResult = createRelationshipFromBlockedBy(db, taskId, blockerId, 'legacy-blockers-field');
+        const legacyResult = await createRelationshipFromBlockedBy(db, taskId, blockerId, 'legacy-blockers-field');
         if (legacyResult.warning) legacyBlockerWarnings.push(legacyResult.warning);
       }
     }
 
     if (origin_task_id) {
-      syncDefectRelationship(db, taskId, null, origin_task_id, defect_type ?? null);
+      await syncDefectRelationship(db, taskId, null, origin_task_id, defect_type ?? null);
     }
 
     for (const relationship of normalizedRelationships) {
-      createTaskRelationship(db, {
-        source_task_id: taskId,
-        target_task_id: relationship.target_task_id,
-        relationship_type_key: relationship.relationship_type_key,
-        metadata_json: relationship.metadata_json,
-        created_by: createdBy,
-      });
+      await createTaskRelationship(db, {
+                source_task_id: taskId,
+                target_task_id: relationship.target_task_id,
+                relationship_type_key: relationship.relationship_type_key,
+                metadata_json: relationship.metadata_json,
+                created_by: createdBy,
+              });
     }
 
     return { taskId, legacyBlockerWarnings };
@@ -336,25 +317,25 @@ export function createTaskRecord(
   const { taskId, legacyBlockerWarnings } = insertTask();
 
   if (origin_task_id != null) {
-    const existingMetrics = db.prepare('SELECT id FROM task_outcome_metrics WHERE task_id = ?').get(origin_task_id) as { id: number } | undefined;
+    const existingMetrics = await db.get('SELECT id FROM task_outcome_metrics WHERE task_id = ?', origin_task_id) as { id: number } | undefined;
     if (existingMetrics) {
-      db.prepare('UPDATE task_outcome_metrics SET spawned_defects = spawned_defects + 1, updated_at = datetime(\'now\') WHERE task_id = ?').run(origin_task_id);
+      await db.run('UPDATE task_outcome_metrics SET spawned_defects = spawned_defects + 1, updated_at = datetime(\'now\') WHERE task_id = ?', origin_task_id);
     } else {
-      db.prepare('INSERT INTO task_outcome_metrics (task_id, spawned_defects) VALUES (?, 1)').run(origin_task_id);
+      await db.run('INSERT INTO task_outcome_metrics (task_id, spawned_defects) VALUES (?, 1)', origin_task_id);
     }
   }
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO task_history (task_id, field, old_value, new_value, changed_by)
     VALUES (?, 'created', NULL, ?, ?)
-  `).run(taskId, title, createdBy);
+  `, taskId, title, createdBy);
 
-  const task = db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(taskId) as TaskRecord;
+  const task = await db.get(`${TASK_SELECT} WHERE t.id = ?`, taskId) as TaskRecord;
   if (status === 'ready' || status === 'todo') {
     maybeTriggerDispatch(project_id ?? task.project_id);
   }
 
-  const enriched = enrichTask(task);
+  const enriched = await enrichTask(task);
   if (invalidBlockerIds.length > 0) {
     (enriched as Record<string, unknown>).skipped_blocker_ids = invalidBlockerIds;
   }
@@ -364,13 +345,13 @@ export function createTaskRecord(
   return enriched;
 }
 
-export function updateTaskRecord(
-  db: Database.Database,
+export async function updateTaskRecord(
+  db: Db,
   taskId: number,
   input: UpdateTaskInput,
   actor: TaskUpdateActor,
-): TaskRecord {
-  const existing = requireExistingTaskRow(db, taskId);
+): Promise<TaskRecord> {
+  const existing = await requireExistingTaskRow(db, taskId);
   const {
     title,
     description,
@@ -417,7 +398,7 @@ export function updateTaskRecord(
 
   if (origin_task_id !== undefined && origin_task_id !== null) {
     if (origin_task_id === taskId) throw new Error('origin_task_id cannot reference the task being updated');
-    const originExists = db.prepare('SELECT id, tenant_id FROM tasks WHERE id = ?').get(origin_task_id) as { id: number; tenant_id: number | null } | undefined;
+    const originExists = await db.get('SELECT id, tenant_id FROM tasks WHERE id = ?', origin_task_id) as { id: number; tenant_id: number | null } | undefined;
     if (!originExists) throw new Error(`origin_task_id ${origin_task_id} does not exist`);
     requireSameTenant(originExists.tenant_id, existing.tenant_id as number | null | undefined, `origin_task_id ${origin_task_id} is not in the same workspace`);
   }
@@ -445,12 +426,12 @@ export function updateTaskRecord(
     throw Object.assign(new Error('sprint_id is required and cannot be cleared'), { status: 400 });
   }
   if (updated.project_id != null) {
-    const projectExists = db.prepare('SELECT id, tenant_id FROM projects WHERE id = ?').get(updated.project_id) as { id: number; tenant_id: number | null } | undefined;
+    const projectExists = await db.get('SELECT id, tenant_id FROM projects WHERE id = ?', updated.project_id) as { id: number; tenant_id: number | null } | undefined;
     if (!projectExists) throw new Error(`project_id ${updated.project_id} does not exist`);
     requireSameTenant(projectExists.tenant_id, existing.tenant_id as number | null | undefined, `project_id ${updated.project_id} is not in the same workspace`);
   }
   if (updated.sprint_id != null) {
-    const sprintExists = db.prepare('SELECT id, project_id, tenant_id FROM sprints WHERE id = ?').get(updated.sprint_id) as { id: number; project_id: number | null; tenant_id: number | null } | undefined;
+    const sprintExists = await db.get('SELECT id, project_id, tenant_id FROM sprints WHERE id = ?', updated.sprint_id) as { id: number; project_id: number | null; tenant_id: number | null } | undefined;
     if (!sprintExists) throw new Error(`sprint_id ${updated.sprint_id} does not exist`);
     requireSameTenant(sprintExists.tenant_id, existing.tenant_id as number | null | undefined, `sprint_id ${updated.sprint_id} is not in the same workspace`);
     if (updated.project_id != null && sprintExists.project_id !== updated.project_id) {
@@ -458,21 +439,21 @@ export function updateTaskRecord(
     }
   }
   if (updated.assigned_agent_id != null) {
-    const agentExists = db.prepare('SELECT id, tenant_id FROM agents WHERE id = ?').get(updated.assigned_agent_id) as { id: number; tenant_id: number | null } | undefined;
+    const agentExists = await db.get('SELECT id, tenant_id FROM agents WHERE id = ?', updated.assigned_agent_id) as { id: number; tenant_id: number | null } | undefined;
     if (!agentExists) throw new Error(`agent_id ${updated.assigned_agent_id} does not exist`);
     requireSameTenant(agentExists.tenant_id, existing.tenant_id as number | null | undefined, `agent_id ${updated.assigned_agent_id} is not in the same workspace`);
   }
 
-  const resolvedFieldSchema = resolveTaskFieldSchema(updated.sprint_id, updated.task_type);
-  const resolvedSprintType = resolveSprintTypeForTask(updated.sprint_id);
-  if (typeof updated.task_type === 'string' && !isTaskTypeAllowedForSprintType(db, resolvedSprintType, updated.task_type)) {
+  const resolvedFieldSchema = await resolveTaskFieldSchema(updated.sprint_id, updated.task_type);
+  const resolvedSprintType = await resolveSprintTypeForTask(updated.sprint_id);
+  if (typeof updated.task_type === 'string' && !await isTaskTypeAllowedForSprintType(db, resolvedSprintType, updated.task_type)) {
     throw new Error(`task_type "${updated.task_type}" is not allowed for sprint type "${resolvedFieldSchema.sprint_type}"`);
   }
   if (status !== undefined && status !== null) {
-    assertTaskStatusDefinedForWorkflow(db, status, {
-      sprintId: (updated.sprint_id as number | null | undefined) ?? null,
-      sprintType: resolvedSprintType,
-    });
+    await assertTaskStatusDefinedForWorkflow(db, status, {
+            sprintId: (updated.sprint_id as number | null | undefined) ?? null,
+            sprintType: resolvedSprintType,
+          });
   }
   const shouldValidateCustomFields = customFieldsProvided || sprint_id !== undefined || task_type !== undefined;
   if (shouldValidateCustomFields) {
@@ -494,24 +475,24 @@ export function updateTaskRecord(
       ...parseCustomFields(existing.custom_fields_json),
       ...normalizedCustomFields,
     } as Record<string, unknown>;
-    assertAtlasDirectStatusGate(db, {
-      id: taskId,
-      status: String(existing.status),
-      sprint_id: (updated.sprint_id as number | null | undefined) ?? null,
-      task_type: (updated.task_type as string | null | undefined) ?? null,
-      review_branch: (existingFieldValues.review_branch as string | null | undefined) ?? null,
-      review_commit: (existingFieldValues.review_commit as string | null | undefined) ?? null,
-      review_url: (existingFieldValues.review_url as string | null | undefined) ?? null,
-      qa_verified_commit: (existingFieldValues.qa_verified_commit as string | null | undefined) ?? null,
-      qa_tested_url: (existingFieldValues.qa_tested_url as string | null | undefined) ?? null,
-      merged_commit: (existingFieldValues.merged_commit as string | null | undefined) ?? null,
-      deployed_commit: (existingFieldValues.deployed_commit as string | null | undefined) ?? null,
-      deployed_at: (existingFieldValues.deployed_at as string | null | undefined) ?? null,
-      live_verified_at: (existingFieldValues.live_verified_at as string | null | undefined) ?? null,
-      live_verified_by: (existingFieldValues.live_verified_by as string | null | undefined) ?? null,
-      deploy_target: (existingFieldValues.deploy_target as string | null | undefined) ?? null,
-      evidence_json: (existingFieldValues.evidence_json as string | null | undefined) ?? null,
-    }, status);
+    await assertAtlasDirectStatusGate(db, {
+            id: taskId,
+            status: String(existing.status),
+            sprint_id: (updated.sprint_id as number | null | undefined) ?? null,
+            task_type: (updated.task_type as string | null | undefined) ?? null,
+            review_branch: (existingFieldValues.review_branch as string | null | undefined) ?? null,
+            review_commit: (existingFieldValues.review_commit as string | null | undefined) ?? null,
+            review_url: (existingFieldValues.review_url as string | null | undefined) ?? null,
+            qa_verified_commit: (existingFieldValues.qa_verified_commit as string | null | undefined) ?? null,
+            qa_tested_url: (existingFieldValues.qa_tested_url as string | null | undefined) ?? null,
+            merged_commit: (existingFieldValues.merged_commit as string | null | undefined) ?? null,
+            deployed_commit: (existingFieldValues.deployed_commit as string | null | undefined) ?? null,
+            deployed_at: (existingFieldValues.deployed_at as string | null | undefined) ?? null,
+            live_verified_at: (existingFieldValues.live_verified_at as string | null | undefined) ?? null,
+            live_verified_by: (existingFieldValues.live_verified_by as string | null | undefined) ?? null,
+            deploy_target: (existingFieldValues.deploy_target as string | null | undefined) ?? null,
+            evidence_json: (existingFieldValues.evidence_json as string | null | undefined) ?? null,
+          }, status);
   }
 
   const trackedFields: Array<keyof typeof updated> = ['status', 'priority', 'title', 'sprint_id', 'assigned_agent_id', 'branch_url', 'task_type', 'story_points', 'origin_task_id', 'defect_type', 'custom_fields_json'];
@@ -521,11 +502,11 @@ export function updateTaskRecord(
     if (String(oldValue ?? '') !== String(newValue ?? '')) {
       const resolvedOld: string | null = oldValue == null ? null : String(oldValue);
       const resolvedNew: string | null = newValue == null ? null : String(newValue);
-      logHistory(taskId, actor.changedBy, field, resolvedOld, resolvedNew);
+      await logHistory(taskId, actor.changedBy, field, resolvedOld, resolvedNew);
     }
   }
 
-  db.prepare(`
+  await db.run(`
     UPDATE tasks SET
       title = ?, description = ?, status = ?, priority = ?,
       project_id = ?, assigned_agent_id = ?, sprint_id = ?, recurring = ?,
@@ -533,140 +514,124 @@ export function updateTaskRecord(
       origin_task_id = ?, defect_type = ?, custom_fields_json = ?,
       updated_at = datetime('now')
     WHERE id = ?
-  `).run(
-    updated.title,
-    updated.description,
-    updated.status,
-    updated.priority,
-    updated.project_id,
-    updated.assigned_agent_id,
-    updated.sprint_id,
-    updated.recurring,
-    updated.branch_url,
-    updated.task_type,
-    updated.story_points,
-    updated.origin_task_id,
-    updated.defect_type,
-    updated.custom_fields_json,
-    taskId,
-  );
+  `, updated.title, updated.description, updated.status, updated.priority, updated.project_id, updated.assigned_agent_id, updated.sprint_id, updated.recurring, updated.branch_url, updated.task_type, updated.story_points, updated.origin_task_id, updated.defect_type, updated.custom_fields_json, taskId);
 
   const originRelationshipChanged = origin_task_id !== undefined && String(existing.origin_task_id ?? '') !== String(updated.origin_task_id ?? '');
   const defectMetadataChanged = defect_type !== undefined && String(existing.defect_type ?? '') !== String(updated.defect_type ?? '');
   if (originRelationshipChanged) {
-    syncSpawnedDefectMetric(db, existing.origin_task_id as number | null | undefined);
-    syncSpawnedDefectMetric(db, updated.origin_task_id as number | null | undefined);
+    await syncSpawnedDefectMetric(db, existing.origin_task_id as number | null | undefined);
+    await syncSpawnedDefectMetric(db, updated.origin_task_id as number | null | undefined);
   }
   if (originRelationshipChanged || defectMetadataChanged) {
-    syncDefectRelationship(
-      db,
-      taskId,
-      existing.origin_task_id as number | null | undefined,
-      updated.origin_task_id as number | null | undefined,
-      updated.defect_type as string | null | undefined,
-    );
+    await syncDefectRelationship(
+            db,
+            taskId,
+            existing.origin_task_id as number | null | undefined,
+            updated.origin_task_id as number | null | undefined,
+            updated.defect_type as string | null | undefined,
+          );
   }
 
   if (Array.isArray(blockers)) {
     for (const blocker of blockers) {
       const blockerId = Number(blocker?.task_id ?? blocker?.blocker_id);
       if (!Number.isInteger(blockerId) || blockerId <= 0 || blockerId === taskId) continue;
-      const blockerTenantId = taskTenantId(db, blockerId);
+      const blockerTenantId = await taskTenantId(db, blockerId);
       if (blockerTenantId === undefined) continue;
       requireSameTenant(blockerTenantId, existing.tenant_id as number | null | undefined, `blocker_id ${blockerId} is not in the same workspace`);
     }
-    replaceTaskBlockers(taskId, blockers);
+    await replaceTaskBlockers(taskId, blockers);
   }
 
-  cleanupTaskExecutionLinkageForStatus(db, taskId, String(updated.status));
+  await cleanupTaskExecutionLinkageForStatus(db, taskId, String(updated.status));
 
   const isManualStatusChange = status !== undefined
     && String(status) !== String(existing.status)
     && !['eligibility', 'reconciler', 'watchdog', 'task_lifecycle', 'scheduler', 'system', 'dispatcher', 'task_outcome'].includes(String(actor.changedBy));
 
-  if (isManualStatusChange && taskTableHasColumn(db, 'manual_intervention_count')) {
-    db.prepare('UPDATE tasks SET manual_intervention_count = manual_intervention_count + 1 WHERE id = ?').run(taskId);
+  if (isManualStatusChange && await taskTableHasColumn(db, 'manual_intervention_count')) {
+    await db.run('UPDATE tasks SET manual_intervention_count = manual_intervention_count + 1 WHERE id = ?', taskId);
   }
 
   if (status !== undefined && String(status) !== String(existing.status)) {
-    notifyTaskStatusChange(db, {
-      taskId,
-      fromStatus: String(existing.status),
-      toStatus: String(status),
-      source: String(actor.changedBy),
-    });
+    await notifyTaskStatusChange(db, {
+            taskId,
+            fromStatus: String(existing.status),
+            toStatus: String(status),
+            source: String(actor.changedBy),
+          });
 
-    emitTaskEvent(db, {
-      taskId,
-      fromStatus: String(existing.status),
-      toStatus: String(status),
-      movedBy: String(actor.changedBy),
-      moveType: isManualStatusChange ? 'manual' : 'automatic',
-      projectId: (existing.project_id as number | null) ?? null,
-      agentId: (existing.assigned_agent_id as number | null) ?? null,
-    });
+    await emitTaskEvent(db, {
+            taskId,
+            fromStatus: String(existing.status),
+            toStatus: String(status),
+            movedBy: String(actor.changedBy),
+            moveType: isManualStatusChange ? 'manual' : 'automatic',
+            projectId: (existing.project_id as number | null) ?? null,
+            agentId: (existing.assigned_agent_id as number | null) ?? null,
+          });
   }
 
-  syncTaskActiveAgentFromInstance(db, taskId);
+  await syncTaskActiveAgentFromInstance(db, taskId);
 
-  return requireEnrichedTask(db, taskId);
+  return await requireEnrichedTask(db, taskId);
 }
 
-export function cancelTaskRecord(db: Database.Database, taskId: number, changedBy: string) {
-  const existing = requireExistingTaskRow(db, taskId);
+export async function cancelTaskRecord(db: Db, taskId: number, changedBy: string) {
+  const existing = await requireExistingTaskRow(db, taskId);
   const oldStatus = String(existing.status);
 
-  db.prepare('UPDATE tasks SET status = \'cancelled\', updated_at = datetime(\'now\') WHERE id = ?').run(taskId);
-  cleanupTaskExecutionLinkageForStatus(db, taskId, 'cancelled');
-  logHistory(taskId, changedBy, 'status', oldStatus, 'cancelled');
-  addTaskNote(taskId, changedBy, 'Task cancelled by user.');
+  await db.run('UPDATE tasks SET status = \'cancelled\', updated_at = datetime(\'now\') WHERE id = ?', taskId);
+  await cleanupTaskExecutionLinkageForStatus(db, taskId, 'cancelled');
+  await logHistory(taskId, changedBy, 'status', oldStatus, 'cancelled');
+  await addTaskNote(taskId, changedBy, 'Task cancelled by user.');
 
-  notifyTaskStatusChange(db, {
-    taskId,
-    fromStatus: oldStatus,
-    toStatus: 'cancelled',
-    source: changedBy,
-  });
+  await notifyTaskStatusChange(db, {
+        taskId,
+        fromStatus: oldStatus,
+        toStatus: 'cancelled',
+        source: changedBy,
+      });
 
-  return { ok: true, task: requireEnrichedTask(db, taskId) };
+  return { ok: true, task: await requireEnrichedTask(db, taskId) };
 }
 
-export function reopenTaskRecord(db: Database.Database, taskId: number, changedBy: string) {
-  const existing = requireExistingTaskRow(db, taskId);
+export async function reopenTaskRecord(db: Db, taskId: number, changedBy: string) {
+  const existing = await requireExistingTaskRow(db, taskId);
   if (existing.status !== 'failed') {
     throw Object.assign(new Error(`Cannot reopen a task in '${existing.status}' status. Only 'failed' tasks can be reopened.`), { status: 400 });
   }
 
   const restoreStatus = (existing.previous_status as string | null) ?? 'ready';
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET status = ?,
         previous_status = NULL,
         failure_detail = NULL,
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(restoreStatus, taskId);
+  `, restoreStatus, taskId);
 
-  cleanupTaskExecutionLinkageForStatus(db, taskId, restoreStatus);
-  logHistory(taskId, changedBy, 'status', String(existing.status), restoreStatus);
-  addTaskNote(taskId, changedBy, `Task reopened — restored to '${restoreStatus}'${existing.previous_status ? ' (previous position)' : ' (default fallback)'}.`);
+  await cleanupTaskExecutionLinkageForStatus(db, taskId, restoreStatus);
+  await logHistory(taskId, changedBy, 'status', String(existing.status), restoreStatus);
+  await addTaskNote(taskId, changedBy, `Task reopened — restored to '${restoreStatus}'${existing.previous_status ? ' (previous position)' : ' (default fallback)'}.`);
 
-  notifyTaskStatusChange(db, {
-    taskId,
-    fromStatus: String(existing.status),
-    toStatus: restoreStatus,
-    source: changedBy,
-  });
+  await notifyTaskStatusChange(db, {
+        taskId,
+        fromStatus: String(existing.status),
+        toStatus: restoreStatus,
+        source: changedBy,
+      });
 
   if (restoreStatus === 'ready') {
     maybeTriggerDispatch((existing.project_id as number | null) ?? undefined);
   }
 
-  return { ok: true, restored_to: restoreStatus, task: requireEnrichedTask(db, taskId) };
+  return { ok: true, restored_to: restoreStatus, task: await requireEnrichedTask(db, taskId) };
 }
 
-export function pauseTaskRecord(db: Database.Database, taskId: number, changedBy: string, pauseReason: string | null) {
-  const existing = requireExistingTaskRow(db, taskId);
+export async function pauseTaskRecord(db: Db, taskId: number, changedBy: string, pauseReason: string | null) {
+  const existing = await requireExistingTaskRow(db, taskId);
   const terminalStatuses = ['done', 'cancelled', 'failed'];
   if (terminalStatuses.includes(String(existing.status))) {
     throw Object.assign(new Error(`Cannot pause a task in terminal status '${existing.status}'`), { status: 400 });
@@ -675,34 +640,34 @@ export function pauseTaskRecord(db: Database.Database, taskId: number, changedBy
     throw Object.assign(new Error('Task is already paused'), { status: 400 });
   }
 
-  db.prepare(`
+  await db.run(`
     UPDATE tasks SET paused_at = datetime('now'), pause_reason = ?, updated_at = datetime('now') WHERE id = ?
-  `).run(pauseReason, taskId);
+  `, pauseReason, taskId);
 
-  logHistory(taskId, changedBy, 'paused_at', null, new Date().toISOString());
-  addTaskNote(taskId, changedBy, pauseReason ? `Task paused: ${pauseReason}` : 'Task paused by user.');
+  await logHistory(taskId, changedBy, 'paused_at', null, new Date().toISOString());
+  await addTaskNote(taskId, changedBy, pauseReason ? `Task paused: ${pauseReason}` : 'Task paused by user.');
 
-  return { ok: true, task: requireEnrichedTask(db, taskId) };
+  return { ok: true, task: await requireEnrichedTask(db, taskId) };
 }
 
-export function unpauseTaskRecord(db: Database.Database, taskId: number, changedBy: string) {
-  const existing = requireExistingTaskRow(db, taskId);
+export async function unpauseTaskRecord(db: Db, taskId: number, changedBy: string) {
+  const existing = await requireExistingTaskRow(db, taskId);
   if (!existing.paused_at) {
     throw Object.assign(new Error('Task is not paused'), { status: 400 });
   }
 
-  db.prepare(`
+  await db.run(`
     UPDATE tasks SET paused_at = NULL, pause_reason = NULL, updated_at = datetime('now') WHERE id = ?
-  `).run(taskId);
+  `, taskId);
 
-  logHistory(taskId, changedBy, 'paused_at', existing.paused_at as string, null);
-  addTaskNote(taskId, changedBy, 'Task unpaused — routing and dispatch eligibility restored.');
+  await logHistory(taskId, changedBy, 'paused_at', existing.paused_at as string, null);
+  await addTaskNote(taskId, changedBy, 'Task unpaused — routing and dispatch eligibility restored.');
 
-  return { ok: true, task: requireEnrichedTask(db, taskId) };
+  return { ok: true, task: await requireEnrichedTask(db, taskId) };
 }
 
-export function createTaskNoteRecord(db: Database.Database, taskId: number, author: string, content: string) {
-  const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+export async function createTaskNoteRecord(db: Db, taskId: number, author: string, content: string) {
+  const task = await db.get('SELECT id FROM tasks WHERE id = ?', taskId);
   if (!task) {
     const error = new Error('Task not found') as Error & { status?: number };
     error.status = 404;
@@ -714,16 +679,16 @@ export function createTaskNoteRecord(db: Database.Database, taskId: number, auth
     throw error;
   }
 
-  const tenantId = resolveRuntimeTenantId(db, { taskId });
-  const tenant = tenantInsertColumns(db, 'task_notes', tenantId);
-  const result = db.prepare(`
+  const tenantId = await resolveRuntimeTenantId(db, { taskId });
+  const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
+  const result = await db.run(`
     INSERT INTO task_notes (${tenant.columnSql}task_id, author, content) VALUES (${tenant.valueSql}?, ?, ?)
-  `).run(...tenant.values, taskId, author, content);
+  `, ...tenant.values, taskId, author, content);
 
-  return db.prepare('SELECT * FROM task_notes WHERE id = ?').get(result.lastInsertRowid);
+  return await db.get('SELECT * FROM task_notes WHERE id = ?', result.lastInsertRowid);
 }
 
-export function addTaskBlockerRecord(db: Database.Database, taskId: number, blockerId: number): TaskRecord {
+export async function addTaskBlockerRecord(db: Db, taskId: number, blockerId: number): Promise<TaskRecord> {
   if (!blockerId) {
     const error = new Error('blocker_id is required') as Error & { status?: number };
     error.status = 400;
@@ -735,37 +700,37 @@ export function addTaskBlockerRecord(db: Database.Database, taskId: number, bloc
     throw error;
   }
 
-  const blockedTask = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+  const blockedTask = await db.get('SELECT id FROM tasks WHERE id = ?', taskId);
   if (!blockedTask) {
     const error = new Error('Task not found') as Error & { status?: number };
     error.status = 404;
     throw error;
   }
 
-  const blockerTask = db.prepare('SELECT id FROM tasks WHERE id = ?').get(blockerId);
+  const blockerTask = await db.get('SELECT id FROM tasks WHERE id = ?', blockerId);
   if (!blockerTask) {
     const error = new Error('Blocker task not found') as Error & { status?: number };
     error.status = 404;
     throw error;
   }
 
-  const legacyResult = createRelationshipFromBlockedBy(db, taskId, blockerId);
+  const legacyResult = await createRelationshipFromBlockedBy(db, taskId, blockerId);
 
-  const task = requireEnrichedTask(db, taskId);
+  const task = await requireEnrichedTask(db, taskId);
   if (legacyResult.warning) task.legacy_blocker_warning = legacyResult.warning;
   return task;
 }
 
-export function removeTaskBlockerRecord(db: Database.Database, taskId: number, blockerId: number): TaskRecord {
-  deleteTaskRelationshipByTuple(db, taskId, blockerId, 'blocked_by');
-  db.prepare('DELETE FROM task_dependencies WHERE blocker_id = ? AND blocked_id = ?').run(blockerId, taskId);
-  return requireEnrichedTask(db, taskId);
+export async function removeTaskBlockerRecord(db: Db, taskId: number, blockerId: number): Promise<TaskRecord> {
+  await deleteTaskRelationshipByTuple(db, taskId, blockerId, 'blocked_by');
+  await db.run('DELETE FROM task_dependencies WHERE blocker_id = ? AND blocked_id = ?', blockerId, taskId);
+  return await requireEnrichedTask(db, taskId);
 }
 
-export function deleteTaskRecord(db: Database.Database, taskId: number, deletedBy: string) {
-  const existing = requireExistingTaskRow(db, taskId);
+export async function deleteTaskRecord(db: Db, taskId: number, deletedBy: string) {
+  const existing = await requireExistingTaskRow(db, taskId);
 
-  const attachments = db.prepare('SELECT filepath FROM task_attachments WHERE task_id = ?').all(taskId) as Array<{ filepath: string }>;
+  const attachments = await db.all('SELECT filepath FROM task_attachments WHERE task_id = ?', taskId) as Array<{ filepath: string }>;
   for (const attachment of attachments) {
     try {
       fs.unlinkSync(attachment.filepath);
@@ -774,12 +739,12 @@ export function deleteTaskRecord(db: Database.Database, taskId: number, deletedB
     }
   }
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO task_history (task_id, changed_by, field, old_value, new_value)
     VALUES (?, ?, 'deleted', ?, NULL)
-  `).run(taskId, deletedBy, String(existing.title ?? ''));
+  `, taskId, deletedBy, String(existing.title ?? ''));
 
-  db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+  await db.run('DELETE FROM tasks WHERE id = ?', taskId);
 
   return { ok: true, deleted_id: taskId, deleted_title: existing.title ?? null };
 }

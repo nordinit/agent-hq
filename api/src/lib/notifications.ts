@@ -1,7 +1,7 @@
-import type Database from 'better-sqlite3';
 import type { Request } from 'express';
 import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from './tenantContext';
+import { type Db } from "../db/adapter/types";
 
 const PREF_KEY = 'notifications.preferences';
 
@@ -49,8 +49,8 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   },
 };
 
-export function ensureNotificationTables(db: Database.Database = getDb()): void {
-  db.exec(`
+export async function ensureNotificationTables(db: Db = getDb()): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS notification_records (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id     INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -88,16 +88,16 @@ function preferenceKey(tenantId?: number | null): string {
     : PREF_KEY;
 }
 
-export function readNotificationPreferences(db: Database.Database = getDb(), tenantId?: number | null): NotificationPreferences {
+export async function readNotificationPreferences(db: Db = getDb(), tenantId?: number | null): Promise<NotificationPreferences> {
   const keys = tenantId ? [preferenceKey(tenantId), PREF_KEY] : [PREF_KEY];
   const placeholders = keys.map(() => '?').join(', ');
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT value
     FROM app_settings
     WHERE key IN (${placeholders})
     ORDER BY CASE key ${keys.map((_, index) => `WHEN ? THEN ${index}`).join(' ')} ELSE ${keys.length} END
     LIMIT 1
-  `).get(...keys, ...keys) as { value: string } | undefined;
+  `, ...keys, ...keys) as { value: string } | undefined;
   if (!row?.value) return DEFAULT_NOTIFICATION_PREFERENCES;
   try {
     return normalizePreferences(JSON.parse(row.value));
@@ -106,8 +106,8 @@ export function readNotificationPreferences(db: Database.Database = getDb(), ten
   }
 }
 
-export function saveNotificationPreferences(input: Partial<NotificationPreferences>, db: Database.Database = getDb(), tenantId?: number | null): NotificationPreferences {
-  const current = readNotificationPreferences(db, tenantId);
+export async function saveNotificationPreferences(input: Partial<NotificationPreferences>, db: Db = getDb(), tenantId?: number | null): Promise<NotificationPreferences> {
+  const current = await readNotificationPreferences(db, tenantId);
   const next = normalizePreferences({
     ...current,
     ...input,
@@ -116,29 +116,21 @@ export function saveNotificationPreferences(input: Partial<NotificationPreferenc
       ...(input.outlets ?? {}),
     },
   });
-  db.prepare(`
+  await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `).run(preferenceKey(tenantId), JSON.stringify(next));
+  `, preferenceKey(tenantId), JSON.stringify(next));
   return next;
 }
 
-export function createNotificationRecord(db: Database.Database, input: NotificationRecordInput): NotificationRecord {
-  ensureNotificationTables(db);
-  const result = db.prepare(`
+export async function createNotificationRecord(db: Db, input: NotificationRecordInput): Promise<NotificationRecord> {
+  await ensureNotificationTables(db);
+  const result = await db.run(`
     INSERT INTO notification_records (tenant_id, type, title, body, source, outlet, metadata_json)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    input.tenantId,
-    input.type,
-    input.title,
-    input.body,
-    input.source ?? null,
-    input.outlet ?? null,
-    JSON.stringify(input.metadata ?? {}),
-  );
-  return db.prepare(`SELECT * FROM notification_records WHERE id = ?`).get(result.lastInsertRowid) as NotificationRecord;
+  `, input.tenantId, input.type, input.title, input.body, input.source ?? null, input.outlet ?? null, JSON.stringify(input.metadata ?? {}));
+  return await db.get(`SELECT * FROM notification_records WHERE id = ?`, result.lastInsertRowid) as NotificationRecord;
 }
 
 function encodeNotificationCursor(record: NotificationRecord): string {
@@ -155,18 +147,18 @@ function parseNotificationCursor(cursor?: string | null): { createdAt: string; i
   return { createdAt, id };
 }
 
-export function listNotificationRecordsPage(
-  db: Database.Database,
+export async function listNotificationRecordsPage(
+  db: Db,
   tenantId: number,
   options: { limit?: number; cursor?: string | null } = {},
-): NotificationPage {
-  ensureNotificationTables(db);
+): Promise<NotificationPage> {
+  await ensureNotificationTables(db);
   const limit = options.limit ?? 50;
   const safeLimit = Math.max(1, Math.min(200, Number.isFinite(limit) ? Math.floor(limit) : 50));
   const parsedCursor = parseNotificationCursor(options.cursor);
   const pageSize = safeLimit + 1;
   const records = parsedCursor
-    ? db.prepare(`
+    ? await db.all(`
       SELECT *
       FROM notification_records
       WHERE tenant_id = ?
@@ -176,14 +168,14 @@ export function listNotificationRecordsPage(
         )
       ORDER BY datetime(created_at) DESC, id DESC
       LIMIT ?
-    `).all(tenantId, parsedCursor.createdAt, parsedCursor.createdAt, parsedCursor.id, pageSize) as NotificationRecord[]
-    : db.prepare(`
+    `, tenantId, parsedCursor.createdAt, parsedCursor.createdAt, parsedCursor.id, pageSize) as NotificationRecord[]
+    : await db.all(`
       SELECT *
       FROM notification_records
       WHERE tenant_id = ?
       ORDER BY datetime(created_at) DESC, id DESC
       LIMIT ?
-    `).all(tenantId, pageSize) as NotificationRecord[];
+    `, tenantId, pageSize) as NotificationRecord[];
 
   const visibleRecords = records.slice(0, safeLimit);
   const nextRecord = records.length > safeLimit ? visibleRecords[visibleRecords.length - 1] : null;
@@ -194,20 +186,20 @@ export function listNotificationRecordsPage(
   };
 }
 
-export function listNotificationRecords(db: Database.Database, tenantId: number, limit = 50): NotificationRecord[] {
-  return listNotificationRecordsPage(db, tenantId, { limit }).records;
+export async function listNotificationRecords(db: Db, tenantId: number, limit = 50): Promise<NotificationRecord[]> {
+  return (await listNotificationRecordsPage(db, tenantId, { limit })).records;
 }
 
-export function unreadNotificationCount(db: Database.Database, tenantId: number): number {
-  ensureNotificationTables(db);
-  const row = db.prepare(`
+export async function unreadNotificationCount(db: Db, tenantId: number): Promise<number> {
+  await ensureNotificationTables(db);
+  const row = await db.get(`
     SELECT COUNT(*) AS n
     FROM notification_records
     WHERE tenant_id = ?
-  `).get(tenantId) as { n: number } | undefined;
+  `, tenantId) as { n: number } | undefined;
   return Number(row?.n ?? 0);
 }
 
-export function notificationTenantIdFromRequest(db: Database.Database, req: Request): number {
-  return resolveTenantIdFromRequest(db, req);
+export async function notificationTenantIdFromRequest(db: Db, req: Request): Promise<number> {
+  return await resolveTenantIdFromRequest(db, req);
 }

@@ -9,10 +9,10 @@ const router = Router();
 // ---------------------------------------------------------------------------
 // GET /api/v1/tools — list tools (default: enabled only, opt into ?enabled=0|1)
 // ---------------------------------------------------------------------------
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     let sql = `SELECT * FROM tools WHERE tenant_id = ?`;
     const params: unknown[] = [tenantId];
 
@@ -48,17 +48,17 @@ router.get('/', (req: Request, res: Response) => {
 // Canonical OpenClaw plugin lookup. The plugin resolves the active OpenClaw
 // agent id from runtime context; Agent HQ maps that to the canonical agent row.
 // ---------------------------------------------------------------------------
-router.get('/materialized/agents/:openclawAgentId', (req: Request, res: Response) => {
+router.get('/materialized/agents/:openclawAgentId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const openclawAgentId = String(req.params.openclawAgentId ?? '').trim();
     if (!openclawAgentId) return res.status(400).json({ error: 'openclawAgentId is required' });
 
-    const agent = db.prepare(`SELECT id, openclaw_agent_id FROM agents WHERE openclaw_agent_id = ? AND tenant_id = ?`).get(openclawAgentId, tenantId) as { id: number; openclaw_agent_id: string | null } | undefined;
+    const agent = await db.get(`SELECT id, openclaw_agent_id FROM agents WHERE openclaw_agent_id = ? AND tenant_id = ?`, openclawAgentId, tenantId) as { id: number; openclaw_agent_id: string | null } | undefined;
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    const tools = fetchAgentTools(db, agent.id)
+    const tools = (await fetchAgentTools(db, agent.id))
       .flatMap((tool) => {
         if (!['bash', 'shell', 'script', 'http'].includes(tool.implementation_type)) return [];
         try {
@@ -87,11 +87,11 @@ router.get('/materialized/agents/:openclawAgentId', (req: Request, res: Response
 // ---------------------------------------------------------------------------
 // GET /api/v1/tools/:id — get tool detail
 // ---------------------------------------------------------------------------
-router.get('/:id', (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const tool = db.prepare(`SELECT * FROM tools WHERE id = ?`).get(req.params.id);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const tool = await db.get(`SELECT * FROM tools WHERE id = ?`, req.params.id);
     if (tool && Number((tool as { tenant_id?: number | null }).tenant_id) !== tenantId) return res.status(404).json({ error: 'Tool not found' });
     if (!tool) return res.status(404).json({ error: 'Tool not found' });
     return res.json(tool);
@@ -103,10 +103,10 @@ router.get('/:id', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // POST /api/v1/tools — create tool
 // ---------------------------------------------------------------------------
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const {
       name, slug, description,
       implementation_type, implementation_body,
@@ -117,23 +117,12 @@ router.post('/', (req: Request, res: Response) => {
     if (!slug) return res.status(400).json({ error: 'slug is required' });
     if (!implementation_type) return res.status(400).json({ error: 'implementation_type is required' });
 
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO tools (tenant_id, name, slug, description, implementation_type, implementation_body, input_schema, permissions, tags, enabled)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      tenantId,
-      name,
-      slug,
-      description ?? '',
-      implementation_type,
-      implementation_body ?? '',
-      input_schema ? JSON.stringify(input_schema) : '{}',
-      permissions ?? 'read_only',
-      tags ? JSON.stringify(tags) : '[]',
-      enabled !== undefined ? (enabled ? 1 : 0) : 1,
-    );
+    `, tenantId, name, slug, description ?? '', implementation_type, implementation_body ?? '', input_schema ? JSON.stringify(input_schema) : '{}', permissions ?? 'read_only', tags ? JSON.stringify(tags) : '[]', enabled !== undefined ? (enabled ? 1 : 0) : 1);
 
-    const created = db.prepare(`SELECT * FROM tools WHERE id = ?`).get(result.lastInsertRowid);
+    const created = await db.get(`SELECT * FROM tools WHERE id = ?`, result.lastInsertRowid);
     return res.status(201).json(created);
   } catch (err: any) {
     if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
@@ -146,11 +135,11 @@ router.post('/', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // PUT /api/v1/tools/:id — update tool
 // ---------------------------------------------------------------------------
-router.put('/:id', (req: Request, res: Response) => {
+router.put('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare(`SELECT * FROM tools WHERE id = ? AND tenant_id = ?`).get(req.params.id, tenantId) as any;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get(`SELECT * FROM tools WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId) as any;
     if (!existing) return res.status(404).json({ error: 'Tool not found' });
 
     const {
@@ -159,7 +148,7 @@ router.put('/:id', (req: Request, res: Response) => {
       input_schema, permissions, tags, enabled,
     } = req.body;
 
-    db.prepare(`
+    await db.run(`
       UPDATE tools SET
         name = ?,
         slug = ?,
@@ -172,21 +161,9 @@ router.put('/:id', (req: Request, res: Response) => {
         enabled = ?,
         updated_at = datetime('now')
       WHERE id = ? AND tenant_id = ?
-    `).run(
-      name ?? existing.name,
-      slug ?? existing.slug,
-      description ?? existing.description,
-      implementation_type ?? existing.implementation_type,
-      implementation_body ?? existing.implementation_body,
-      input_schema !== undefined ? JSON.stringify(input_schema) : existing.input_schema,
-      permissions ?? existing.permissions,
-      tags !== undefined ? JSON.stringify(tags) : existing.tags,
-      enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled,
-      req.params.id,
-      tenantId,
-    );
+    `, name ?? existing.name, slug ?? existing.slug, description ?? existing.description, implementation_type ?? existing.implementation_type, implementation_body ?? existing.implementation_body, input_schema !== undefined ? JSON.stringify(input_schema) : existing.input_schema, permissions ?? existing.permissions, tags !== undefined ? JSON.stringify(tags) : existing.tags, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
 
-    const updated = db.prepare(`SELECT * FROM tools WHERE id = ? AND tenant_id = ?`).get(req.params.id, tenantId);
+    const updated = await db.get(`SELECT * FROM tools WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     return res.json(updated);
   } catch (err: any) {
     if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
@@ -199,14 +176,14 @@ router.put('/:id', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // DELETE /api/v1/tools/:id — soft delete (disable and hide from default lists)
 // ---------------------------------------------------------------------------
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare(`SELECT id FROM tools WHERE id = ? AND tenant_id = ?`).get(req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get(`SELECT id FROM tools WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     if (!existing) return res.status(404).json({ error: 'Tool not found' });
 
-    db.prepare(`UPDATE tools SET enabled = 0, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`).run(req.params.id, tenantId);
+    await db.run(`UPDATE tools SET enabled = 0, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     return res.json({ ok: true, id: Number(req.params.id) });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
@@ -216,11 +193,11 @@ router.delete('/:id', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // POST /api/v1/tools/:id/test — run a tool with sample input in a sandbox
 // ---------------------------------------------------------------------------
-router.post('/:id/test', (req: Request, res: Response) => {
+router.post('/:id/test', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const tool = db.prepare(`SELECT * FROM tools WHERE id = ? AND tenant_id = ?`).get(req.params.id, tenantId) as any;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const tool = await db.get(`SELECT * FROM tools WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId) as any;
     if (!tool) return res.status(404).json({ error: 'Tool not found' });
 
     const { input } = req.body;
@@ -295,15 +272,15 @@ router.post('/:id/test', (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 export const agentToolsRouter = Router({ mergeParams: true });
 
-agentToolsRouter.get('/materialized', (req: Request, res: Response) => {
+agentToolsRouter.get('/materialized', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const openclawAgentId = String(req.query.openclaw_agent_id ?? '').trim();
 
     let agentId = req.params.agentId ?? req.params.id;
     if (!agentId && openclawAgentId) {
-      const agent = db.prepare(`SELECT id FROM agents WHERE openclaw_agent_id = ? AND tenant_id = ?`).get(openclawAgentId, tenantId) as { id: number } | undefined;
+      const agent = await db.get(`SELECT id FROM agents WHERE openclaw_agent_id = ? AND tenant_id = ?`, openclawAgentId, tenantId) as { id: number } | undefined;
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
       agentId = String(agent.id);
     }
@@ -312,10 +289,10 @@ agentToolsRouter.get('/materialized', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'agent id or openclaw_agent_id is required' });
     }
 
-    const agent = db.prepare(`SELECT id, openclaw_agent_id FROM agents WHERE id = ? AND tenant_id = ?`).get(agentId, tenantId) as { id: number; openclaw_agent_id: string | null } | undefined;
+    const agent = await db.get(`SELECT id, openclaw_agent_id FROM agents WHERE id = ? AND tenant_id = ?`, agentId, tenantId) as { id: number; openclaw_agent_id: string | null } | undefined;
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    const tools = fetchAgentTools(db, agent.id)
+    const tools = (await fetchAgentTools(db, agent.id))
       .flatMap((tool) => {
         if (!['bash', 'shell', 'script', 'http'].includes(tool.implementation_type)) return [];
         try {
@@ -341,17 +318,17 @@ agentToolsRouter.get('/materialized', (req: Request, res: Response) => {
   }
 });
 
-agentToolsRouter.get('/', (req: Request, res: Response) => {
+agentToolsRouter.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const agentId = req.params.agentId ?? req.params.id;
 
     // Verify agent exists
-    const agent = db.prepare(`SELECT id FROM agents WHERE id = ? AND tenant_id = ?`).get(agentId, tenantId);
+    const agent = await db.get(`SELECT id FROM agents WHERE id = ? AND tenant_id = ?`, agentId, tenantId);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT ata.id as assignment_id,
              ata.agent_id,
              ata.tool_id,
@@ -362,7 +339,7 @@ agentToolsRouter.get('/', (req: Request, res: Response) => {
       JOIN tools t ON t.id = ata.tool_id
       WHERE ata.agent_id = ? AND t.tenant_id = ?
       ORDER BY t.name ASC
-    `).all(agentId, tenantId);
+    `, agentId, tenantId);
 
     // Contract: each assignment row returns both assignment identity and tool identity.
     // `assignment_id` identifies the join row only.
@@ -375,32 +352,27 @@ agentToolsRouter.get('/', (req: Request, res: Response) => {
   }
 });
 
-agentToolsRouter.post('/', (req: Request, res: Response) => {
+agentToolsRouter.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const agentId = req.params.agentId ?? req.params.id;
     const { tool_id, overrides, enabled } = req.body;
 
     if (!tool_id) return res.status(400).json({ error: 'tool_id is required' });
 
     // Verify agent and tool exist
-    const agent = db.prepare(`SELECT id FROM agents WHERE id = ? AND tenant_id = ?`).get(agentId, tenantId);
+    const agent = await db.get(`SELECT id FROM agents WHERE id = ? AND tenant_id = ?`, agentId, tenantId);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    const tool = db.prepare(`SELECT id FROM tools WHERE id = ? AND tenant_id = ?`).get(tool_id, tenantId);
+    const tool = await db.get(`SELECT id FROM tools WHERE id = ? AND tenant_id = ?`, tool_id, tenantId);
     if (!tool) return res.status(404).json({ error: 'Tool not found' });
 
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO agent_tool_assignments (agent_id, tool_id, overrides, enabled)
       VALUES (?, ?, ?, ?)
-    `).run(
-      agentId,
-      tool_id,
-      overrides ? JSON.stringify(overrides) : '{}',
-      enabled !== undefined ? (enabled ? 1 : 0) : 1,
-    );
+    `, agentId, tool_id, overrides ? JSON.stringify(overrides) : '{}', enabled !== undefined ? (enabled ? 1 : 0) : 1);
 
-    const created = db.prepare(`
+    const created = await db.get(`
       SELECT ata.id as assignment_id,
              ata.agent_id,
              ata.tool_id,
@@ -410,7 +382,7 @@ agentToolsRouter.post('/', (req: Request, res: Response) => {
       FROM agent_tool_assignments ata
       JOIN tools t ON t.id = ata.tool_id
       WHERE ata.id = ?
-    `).get(result.lastInsertRowid);
+    `, result.lastInsertRowid);
 
     return res.status(201).json(created);
   } catch (err: any) {
@@ -421,21 +393,21 @@ agentToolsRouter.post('/', (req: Request, res: Response) => {
   }
 });
 
-agentToolsRouter.delete('/:toolId', (req: Request, res: Response) => {
+agentToolsRouter.delete('/:toolId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const agentId = req.params.agentId ?? req.params.id;
     const toolId = req.params.toolId;
 
-    const existing = db.prepare(`
+    const existing = await db.get(`
       SELECT id FROM agent_tool_assignments WHERE agent_id = ? AND tool_id = ?
         AND EXISTS (SELECT 1 FROM agents a WHERE a.id = agent_id AND a.tenant_id = ?)
         AND EXISTS (SELECT 1 FROM tools t WHERE t.id = tool_id AND t.tenant_id = ?)
-    `).get(agentId, toolId, tenantId, tenantId);
+    `, agentId, toolId, tenantId, tenantId);
     if (!existing) return res.status(404).json({ error: 'Assignment not found' });
 
-    db.prepare(`DELETE FROM agent_tool_assignments WHERE agent_id = ? AND tool_id = ?`).run(agentId, toolId);
+    await db.run(`DELETE FROM agent_tool_assignments WHERE agent_id = ? AND tool_id = ?`, agentId, toolId);
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: String(err) });

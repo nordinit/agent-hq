@@ -1,21 +1,4 @@
-/**
- * Telemetry Recommendation Engine v1
- *
- * Rules-based engine that analyzes telemetry patterns and produces
- * actionable improvement recommendations for task quality.
- *
- * Failure taxonomy (standard reasons):
- *   misrouted           — task was assigned to the wrong job/agent
- *   underspecified      — task description lacked enough detail to execute
- *   too_large           — task scope was too big for a single unit of work
- *   hidden_dependency   — task had an undeclared dependency that blocked progress
- *   wrong_priority      — task priority didn't match actual urgency/importance
- *   wrong_sprint        — task was placed in the wrong sprint
- *   env_issue           — environment/infra problem prevented completion
- *   execution_issue     — agent made errors during implementation
- */
-
-import type Database from 'better-sqlite3';
+import { type Db } from "../db/adapter/types";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -133,7 +116,7 @@ function buildWhere(
   if (filters.to)         { conditions.push(`${alias}.recorded_at <= ?`); params.push(filters.to);   }
 }
 
-export function generateRecommendations(db: Database.Database, filters: QueryFilters = {}): RecommendationResult {
+export async function generateRecommendations(db: Db, filters: QueryFilters = {}): Promise<RecommendationResult> {
   const recommendations: Recommendation[] = [];
 
   // Build filter clauses
@@ -161,13 +144,9 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
 
   // ── Gather base metrics ─────────────────────────────────────────────────
 
-  const taskCount = (db.prepare(
-    `SELECT COUNT(*) as n FROM tasks t ${tWhere}`
-  ).get(...tParams) as { n: number }).n;
+  const taskCount = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${tWhere}`, ...tParams) as { n: number }).n;
 
-  const outcomeCount = (db.prepare(
-    `SELECT COUNT(*) as n FROM task_outcome_metrics tom ${omWhere}`
-  ).get(...omParams) as { n: number }).n;
+  const outcomeCount = (await db.get(`SELECT COUNT(*) as n FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { n: number }).n;
 
   // Bail early if no outcome data
   if (outcomeCount === 0) {
@@ -193,18 +172,16 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
 
   // ── Rule 1: Low first-pass QA rate ───────────────────────────────────────
 
-  const firstPassData = db.prepare(
-    `SELECT
+  const firstPassData = await db.get(`SELECT
        COUNT(*) as total,
        SUM(first_pass_qa) as passed
-     FROM task_outcome_metrics tom ${omWhere}`
-  ).get(...omParams) as { total: number; passed: number };
+     FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { total: number; passed: number };
 
   const firstPassRate = firstPassData.total > 0 ? (firstPassData.passed / firstPassData.total) * 100 : 100;
 
   if (firstPassData.total >= 3 && firstPassRate < 70) {
     // Find which jobs have worst first-pass rates
-    const worstJobs = db.prepare(`
+    const worstJobs = await db.all(`
       SELECT tom.job_id, a.name as agent_name,
              COUNT(*) as total, SUM(tom.first_pass_qa) as passed
       FROM task_outcome_metrics tom
@@ -213,7 +190,7 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
       GROUP BY tom.job_id, a.name
       HAVING COUNT(*) >= 2 AND (CAST(SUM(tom.first_pass_qa) AS REAL) / COUNT(*)) < 0.7
       ORDER BY (CAST(SUM(tom.first_pass_qa) AS REAL) / COUNT(*)) ASC
-    `).all(...omParams) as { job_id: number; agent_name: string | null; total: number; passed: number }[];
+    `, ...omParams) as { job_id: number; agent_name: string | null; total: number; passed: number }[];
 
     recommendations.push({
       id: 'low-first-pass-rate',
@@ -233,9 +210,7 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
 
   // ── Rule 2: High reopened/rerouted counts ────────────────────────────────
 
-  const avgReopened = (db.prepare(
-    `SELECT AVG(reopened_count) as avg_r FROM task_outcome_metrics tom ${omWhere}`
-  ).get(...omParams) as { avg_r: number | null }).avg_r ?? 0;
+  const avgReopened = (await db.get(`SELECT AVG(reopened_count) as avg_r FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { avg_r: number | null }).avg_r ?? 0;
 
   if (outcomeCount >= 3 && avgReopened > 1.0) {
     recommendations.push({
@@ -251,9 +226,7 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
     });
   }
 
-  const avgRerouted = (db.prepare(
-    `SELECT AVG(rerouted_count) as avg_r FROM task_outcome_metrics tom ${omWhere}`
-  ).get(...omParams) as { avg_r: number | null }).avg_r ?? 0;
+  const avgRerouted = (await db.get(`SELECT AVG(rerouted_count) as avg_r FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { avg_r: number | null }).avg_r ?? 0;
 
   if (outcomeCount >= 3 && avgRerouted > 0.5) {
     recommendations.push({
@@ -271,15 +244,13 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
 
   // ── Rule 3: Slow cycle time ──────────────────────────────────────────────
 
-  const cycleData = db.prepare(
-    `SELECT AVG(cycle_time_hours) as avg_h, COUNT(*) as n
+  const cycleData = await db.get(`SELECT AVG(cycle_time_hours) as avg_h, COUNT(*) as n
      FROM task_outcome_metrics tom
-     ${omWhere ? omWhere + ' AND' : 'WHERE'} tom.cycle_time_hours IS NOT NULL`
-  ).get(...omParams) as { avg_h: number | null; n: number };
+     ${omWhere ? omWhere + ' AND' : 'WHERE'} tom.cycle_time_hours IS NOT NULL`, ...omParams) as { avg_h: number | null; n: number };
 
   if (cycleData.n >= 3 && cycleData.avg_h !== null && cycleData.avg_h > 8) {
     // Find slowest jobs
-    const slowJobs = db.prepare(`
+    const slowJobs = await db.all(`
       SELECT tom.job_id, a.name as agent_name,
              AVG(tom.cycle_time_hours) as avg_h, COUNT(*) as n
       FROM task_outcome_metrics tom
@@ -288,7 +259,7 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
       GROUP BY tom.job_id, a.name
       HAVING COUNT(*) >= 2 AND AVG(tom.cycle_time_hours) > 8
       ORDER BY avg_h DESC
-    `).all(...omParams) as { job_id: number; agent_name: string | null; avg_h: number; n: number }[];
+    `, ...omParams) as { job_id: number; agent_name: string | null; avg_h: number; n: number }[];
 
     recommendations.push({
       id: 'slow-cycle-time',
@@ -308,13 +279,9 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
 
   // ── Rule 4: Frequent need-to-split ───────────────────────────────────────
 
-  const creationCount = (db.prepare(
-    `SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere}`
-  ).get(...ceParams) as { n: number }).n;
+  const creationCount = (await db.get(`SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere}`, ...ceParams) as { n: number }).n;
 
-  const splitCount = (db.prepare(
-    `SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere ? ceWhere + ' AND' : 'WHERE'} tce.needs_split = 1`
-  ).get(...ceParams) as { n: number }).n;
+  const splitCount = (await db.get(`SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere ? ceWhere + ' AND' : 'WHERE'} tce.needs_split = 1`, ...ceParams) as { n: number }).n;
 
   const splitPct = creationCount > 0 ? (splitCount / creationCount) * 100 : 0;
 
@@ -334,9 +301,7 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
 
   // ── Rule 5: Blocked-after-creation pattern ───────────────────────────────
 
-  const blockedAfter = (db.prepare(
-    `SELECT SUM(blocked_after_creation) as n FROM task_outcome_metrics tom ${omWhere}`
-  ).get(...omParams) as { n: number | null }).n ?? 0;
+  const blockedAfter = (await db.get(`SELECT SUM(blocked_after_creation) as n FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { n: number | null }).n ?? 0;
 
   const blockedPct = outcomeCount > 0 ? (blockedAfter / outcomeCount) * 100 : 0;
 
@@ -356,10 +321,8 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
 
   // ── Rule 6: Failure reason concentration ─────────────────────────────────
 
-  const failureRows = db.prepare(
-    `SELECT failure_reasons FROM task_outcome_metrics tom
-     ${omWhere ? omWhere + ' AND' : 'WHERE'} tom.failure_reasons != '[]' AND tom.failure_reasons != ''`
-  ).all(...omParams) as { failure_reasons: string }[];
+  const failureRows = await db.all(`SELECT failure_reasons FROM task_outcome_metrics tom
+     ${omWhere ? omWhere + ' AND' : 'WHERE'} tom.failure_reasons != '[]' AND tom.failure_reasons != ''`, ...omParams) as { failure_reasons: string }[];
 
   const failureCounts: Record<string, number> = {};
   let totalFailures = 0;
@@ -403,10 +366,8 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
 
   // ── Rule 7: Poor outcome quality concentration ───────────────────────────
 
-  const poorCount = (db.prepare(
-    `SELECT COUNT(*) as n FROM task_outcome_metrics tom
-     ${omWhere ? omWhere + ' AND' : 'WHERE'} tom.outcome_quality = 'poor'`
-  ).get(...omParams) as { n: number }).n;
+  const poorCount = (await db.get(`SELECT COUNT(*) as n FROM task_outcome_metrics tom
+     ${omWhere ? omWhere + ' AND' : 'WHERE'} tom.outcome_quality = 'poor'`, ...omParams) as { n: number }).n;
 
   const poorPct = outcomeCount > 0 ? (poorCount / outcomeCount) * 100 : 0;
 
@@ -426,9 +387,7 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
 
   // ── Rule 8: High clarification count ─────────────────────────────────────
 
-  const avgClarification = (db.prepare(
-    `SELECT AVG(clarification_count) as avg_c FROM task_outcome_metrics tom ${omWhere}`
-  ).get(...omParams) as { avg_c: number | null }).avg_c ?? 0;
+  const avgClarification = (await db.get(`SELECT AVG(clarification_count) as avg_c FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { avg_c: number | null }).avg_c ?? 0;
 
   if (outcomeCount >= 3 && avgClarification > 2.0) {
     recommendations.push({
@@ -447,16 +406,14 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
   // ── Rule 9: Low-confidence tasks with poor outcomes ──────────────────────
 
   if (creationCount >= 3) {
-    const lowConfPoor = db.prepare(`
+    const lowConfPoor = await db.get(`
       SELECT COUNT(*) as n FROM task_creation_events tce
       JOIN task_outcome_metrics tom ON tom.task_id = tce.task_id
       ${ceWhere ? ceWhere + ' AND' : 'WHERE'} tce.confidence = 'low'
         AND (tom.outcome_quality = 'poor' OR tom.first_pass_qa = 0)
-    `).get(...ceParams) as { n: number };
+    `, ...ceParams) as { n: number };
 
-    const totalLowConf = (db.prepare(
-      `SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere ? ceWhere + ' AND' : 'WHERE'} tce.confidence = 'low'`
-    ).get(...ceParams) as { n: number }).n;
+    const totalLowConf = (await db.get(`SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere ? ceWhere + ' AND' : 'WHERE'} tce.confidence = 'low'`, ...ceParams) as { n: number }).n;
 
     if (totalLowConf >= 3 && lowConfPoor.n / totalLowConf > 0.5) {
       recommendations.push({

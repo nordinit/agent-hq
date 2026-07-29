@@ -512,11 +512,11 @@ describe('OpenClawRuntime gateway dispatch', () => {
     mockResponseDelays.set('chat.history', 15);
 
     const [historyResult, reloadResult] = await Promise.all([
-      gatewayGetHistory({
-        sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
-        limit: 12,
-      }),
-      reloadOpenClawSecretsRuntimeForAuthSync(),
+      await gatewayGetHistory({
+                sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
+                limit: 12,
+              }),
+      await reloadOpenClawSecretsRuntimeForAuthSync(),
     ]);
 
     expect(historyResult).toEqual({
@@ -539,10 +539,10 @@ describe('OpenClawRuntime gateway dispatch', () => {
 
   it('fails in-flight calls predictably after the disconnect retry is exhausted and reconnects lazily later', async () => {
     mockNeverRespondMethods.add('chat.history');
-    const inFlight = gatewayGetHistory({
-      sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
-      limit: 12,
-    });
+    const inFlight = await gatewayGetHistory({
+          sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
+          limit: 12,
+        });
 
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
@@ -617,11 +617,11 @@ describe('OpenClawRuntime gateway dispatch', () => {
     jest.useFakeTimers();
     mockNeverRespondMethods.add('chat.history');
 
-    const resultPromise = gatewayGetHistory({
-      sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
-      limit: 12,
-      timeoutMs: 25,
-    });
+    const resultPromise = await gatewayGetHistory({
+          sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
+          limit: 12,
+          timeoutMs: 25,
+        });
 
     await jest.advanceTimersByTimeAsync(25);
 

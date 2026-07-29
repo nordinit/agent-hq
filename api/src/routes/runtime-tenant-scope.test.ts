@@ -3,7 +3,7 @@ import express from 'express';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-let db: Database.Database;
+let db: Db;
 
 jest.mock('../db/client', () => ({
   getDb: () => db,
@@ -26,6 +26,7 @@ import logsRouter from './logs';
 import sessionsRouter from './sessions';
 import telemetryRouter from './telemetry';
 import { insertRuntimeLog } from '../lib/runtimeTenantScope';
+import { type Db } from "../db/adapter/types";
 
 async function requestJson(app: express.Express, route: string, init?: RequestInit): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -39,16 +40,16 @@ async function requestJson(app: express.Express, route: string, init?: RequestIn
   }
 }
 
-function setActiveTenant(tenantId: number): void {
-  db.prepare(`
+async function setActiveTenant(tenantId: number): Promise<void> {
+  await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES ('active_tenant_id', ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `).run(String(tenantId));
+  `, String(tenantId));
 }
 
-function setupDb(): void {
-  db.exec(`
+async function setupDb(): Promise<void> {
+  await db.exec(`
     CREATE TABLE app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL DEFAULT '',
@@ -267,9 +268,9 @@ function buildApp(): express.Express {
 }
 
 describe('runtime tenant scope', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     db = new Database(':memory:');
-    setupDb();
+    await setupDb();
   });
 
   afterEach(() => {
@@ -277,7 +278,7 @@ describe('runtime tenant scope', () => {
   });
 
   it('filters chat sessions, canonical sessions, logs, instance history, and telemetry to the active tenant', async () => {
-    setActiveTenant(2);
+    await setActiveTenant(2);
     const app = buildApp();
 
     const chatSessions = await requestJson(app, '/api/v1/chat/sessions');
@@ -310,8 +311,8 @@ describe('runtime tenant scope', () => {
   });
 
   it('imports canonical sessions with tenant ownership derived from the owning task', async () => {
-    setActiveTenant(2);
-    db.prepare(`DELETE FROM sessions WHERE id = 2`).run();
+    await setActiveTenant(2);
+    await db.run(`DELETE FROM sessions WHERE id = 2`);
 
     const app = buildApp();
     const imported = await requestJson(app, '/api/v1/sessions/import/instance/602', { method: 'POST' });
@@ -324,26 +325,26 @@ describe('runtime tenant scope', () => {
       agent_id: 202,
       project_id: 22,
     });
-    const row = db.prepare(`SELECT tenant_id FROM sessions WHERE external_key = 'run:602'`).get() as { tenant_id: number };
+    const row = await db.get(`SELECT tenant_id FROM sessions WHERE external_key = 'run:602'`) as { tenant_id: number };
     expect(row.tenant_id).toBe(2);
   });
 
-  it('writes runtime logs with tenant ownership derived from the owning instance', () => {
-    setActiveTenant(1);
+  it('writes runtime logs with tenant ownership derived from the owning instance', async () => {
+    await setActiveTenant(1);
 
-    insertRuntimeLog(db, {
-      instanceId: 602,
-      agentId: 202,
-      jobTitle: 'writer-test',
-      level: 'info',
-      message: 'tenant two derived runtime log',
-    });
+    await insertRuntimeLog(db, {
+            instanceId: 602,
+            agentId: 202,
+            jobTitle: 'writer-test',
+            level: 'info',
+            message: 'tenant two derived runtime log',
+          });
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT tenant_id, instance_id, agent_id, message
       FROM logs
       WHERE message = 'tenant two derived runtime log'
-    `).get() as { tenant_id: number; instance_id: number; agent_id: number; message: string };
+    `) as { tenant_id: number; instance_id: number; agent_id: number; message: string };
     expect(row).toEqual({
       tenant_id: 2,
       instance_id: 602,

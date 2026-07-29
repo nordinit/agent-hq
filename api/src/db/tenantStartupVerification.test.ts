@@ -27,22 +27,22 @@ describe('API startup tenant verification mode', () => {
     }
   });
 
-  it('fails instead of creating default tenant bootstrap state', () => {
-    expect(() => initSchema({ tenantMode: 'verify' })).toThrow('Tenant install/migration required');
+  it('fails instead of creating default tenant bootstrap state', async () => {
+    expect(async () => await initSchema({ tenantMode: 'verify' })).toThrow('Tenant install/migration required');
     const db = getDb();
-    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tenants'`).get()).toBeUndefined();
-    expect(db.prepare(`SELECT value FROM app_settings WHERE key = 'default_tenant_id'`).get()).toBeUndefined();
+    expect(await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tenants'`)).toBeUndefined();
+    expect(await db.get(`SELECT value FROM app_settings WHERE key = 'default_tenant_id'`)).toBeUndefined();
   });
 
-  it('does not update tenants or app_settings on a current database', () => {
-    initSchema({ tenantMode: 'repair' });
+  it('does not update tenants or app_settings on a current database', async () => {
+    await initSchema({ tenantMode: 'repair' });
     const db = getDb();
-    const beforeTenants = db.prepare(`SELECT id, name, slug, is_default, updated_at FROM tenants ORDER BY id`).all();
-    const beforeSettings = db.prepare(`SELECT key, value, updated_at FROM app_settings ORDER BY key`).all();
+    const beforeTenants = await db.all(`SELECT id, name, slug, is_default, updated_at FROM tenants ORDER BY id`);
+    const beforeSettings = await db.all(`SELECT key, value, updated_at FROM app_settings ORDER BY key`);
 
-    expect(() => initSchema({ tenantMode: 'verify' })).not.toThrow();
+    expect(async () => await initSchema({ tenantMode: 'verify' })).not.toThrow();
 
-    expect(db.prepare(`SELECT id, name, slug, is_default, updated_at FROM tenants ORDER BY id`).all()).toEqual(beforeTenants);
-    expect(db.prepare(`SELECT key, value, updated_at FROM app_settings ORDER BY key`).all()).toEqual(beforeSettings);
+    expect(await db.all(`SELECT id, name, slug, is_default, updated_at FROM tenants ORDER BY id`)).toEqual(beforeTenants);
+    expect(await db.all(`SELECT key, value, updated_at FROM app_settings ORDER BY key`)).toEqual(beforeSettings);
   });
 });

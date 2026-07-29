@@ -32,9 +32,9 @@ describe('initSchema job_instructions canonical migration', () => {
     }
   });
 
-  it('renames legacy pre_instructions storage to canonical job_instructions and preserves data', () => {
+  it('renames legacy pre_instructions storage to canonical job_instructions and preserves data', async () => {
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -55,9 +55,9 @@ describe('initSchema job_instructions canonical migration', () => {
       );
     `);
 
-    expect(() => initSchema()).not.toThrow();
+    expect(async () => await initSchema()).not.toThrow();
 
-    const columns = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
+    const columns = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
     const names = columns.map((column) => column.name);
 
     expect(names).toContain('job_instructions');
@@ -65,11 +65,11 @@ describe('initSchema job_instructions canonical migration', () => {
     expect(names).not.toContain('pre_instructions');
     expect(names).not.toContain('pre_instructions_updated_at');
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT job_instructions, job_instructions_updated_at
       FROM agents
       WHERE id = 1
-    `).get() as {
+    `) as {
       job_instructions: string;
       job_instructions_updated_at: string | null;
     };

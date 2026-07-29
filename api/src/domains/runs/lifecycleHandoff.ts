@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { notifyTaskStatusChange } from '../../lib/taskNotifications';
 import { resolveWorkflow } from '../../services/contracts/workflowContract';
 import {
@@ -10,6 +9,7 @@ import {
 } from '../routing/externalEventMappings';
 import { emitIntegrityEvent, writeTaskHistory, writeTaskRuntimeEndHistory, writeTaskStatusChange } from '../tasks/history';
 import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
+import { type Db } from "../../db/adapter/types";
 
 export type LifecycleHandoffStatus = 'posted' | 'missing' | 'reconciled';
 export type HandoffEvidencePresence = 'yes' | 'no';
@@ -40,60 +40,60 @@ interface MarkMissingHandoffParams {
   runtimeEnd?: MissingHandoffRuntimeMeta;
 }
 
-export function taskRequiresSemanticOutcome(db: Database.Database, taskId: number | null | undefined): boolean {
+export async function taskRequiresSemanticOutcome(db: Db, taskId: number | null | undefined): Promise<boolean> {
   if (!taskId) return false;
-  const task = db.prepare(`
+  const task = await db.get(`
     SELECT t.status, t.task_type, t.sprint_id, s.sprint_type
     FROM tasks t
     LEFT JOIN sprints s ON s.id = t.sprint_id
     WHERE t.id = ?
     LIMIT 1
-  `).get(taskId) as TaskLifecycleContractRow | undefined;
+  `, taskId) as TaskLifecycleContractRow | undefined;
   if (!task?.status) return false;
 
-  const workflow = resolveWorkflow({
-    taskStatus: task.status,
-    taskType: task.task_type,
-    sprintId: task.sprint_id,
-    sprintType: task.sprint_type,
-    db,
-  });
+  const workflow = await resolveWorkflow({
+      taskStatus: task.status,
+      taskType: task.task_type,
+      sprintId: task.sprint_id,
+      sprintType: task.sprint_type,
+      db,
+    });
   return workflow.requiresSemanticOutcome;
 }
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
   try {
-    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
   } catch {
     return false;
   }
 }
 
-function resolveMissingOutcomeMapping(db: Database.Database, task: { tenant_id: number | null; project_id: number | null; sprint_id?: number | null; sprint_type?: string | null; task_type: string | null; status: string }): WorkflowEventMapping | null {
-  const mappingsTable = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'external_event_mappings'`).get() as { name: string } | undefined;
+async function resolveMissingOutcomeMapping(db: Db, task: { tenant_id: number | null; project_id: number | null; sprint_id?: number | null; sprint_type?: string | null; task_type: string | null; status: string }): Promise<WorkflowEventMapping | null> {
+  const mappingsTable = await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'external_event_mappings'`) as { name: string } | undefined;
   if (!mappingsTable) return null;
 
   for (const eventName of MISSING_OUTCOME_WORKFLOW_EVENTS) {
-    const mapping = resolveWorkflowEventMapping(db, {
-      source: AGENT_HQ_RUNTIME_SOURCE,
-      eventName,
-      tenantId: task.tenant_id,
-      projectId: task.project_id,
-      sprintId: task.sprint_id ?? null,
-      sprintType: task.sprint_type ?? null,
-      taskType: task.task_type,
-      currentStatus: task.status,
-    });
+    const mapping = await resolveWorkflowEventMapping(db, {
+          source: AGENT_HQ_RUNTIME_SOURCE,
+          eventName,
+          tenantId: task.tenant_id,
+          projectId: task.project_id,
+          sprintId: task.sprint_id ?? null,
+          sprintType: task.sprint_type ?? null,
+          taskType: task.task_type,
+          currentStatus: task.status,
+        });
     if (mapping) return mapping;
   }
   return null;
 }
 
-export function markTaskNeedsAttentionForMissingSemanticHandoff(
-  db: Database.Database,
+export async function markTaskNeedsAttentionForMissingSemanticHandoff(
+  db: Db,
   params: MarkMissingHandoffParams,
-): MissingSemanticHandoffDisposition | null {
-  db.prepare(`
+): Promise<MissingSemanticHandoffDisposition | null> {
+  await db.run(`
     UPDATE job_instances
     SET lifecycle_handoff_status = 'missing',
         semantic_outcome_missing = 1,
@@ -101,14 +101,14 @@ export function markTaskNeedsAttentionForMissingSemanticHandoff(
     WHERE id = ?
       AND COALESCE(task_outcome, '') = ''
       AND lifecycle_outcome_posted_at IS NULL
-  `).run(toCanonicalTimestampOrNow(params.runtimeEnd?.endedAt), params.instanceId);
+  `, toCanonicalTimestampOrNow(params.runtimeEnd?.endedAt), params.instanceId);
 
   if (!params.taskId) return null;
 
-  const taskColumns = new Set((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map(column => column.name));
-  const task = db.prepare(`
+  const taskColumns = new Set((await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).map(column => column.name));
+  const task = await db.get(`
     SELECT tasks.id AS id,
-           ${tableHasColumn(db, 'tasks', 'tenant_id') ? 'tasks.tenant_id' : 'NULL'} AS tenant_id,
+           ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 'tasks.tenant_id' : 'NULL'} AS tenant_id,
            tasks.title AS title,
            tasks.status AS status,
            ${taskColumns.has('task_type') ? 'tasks.task_type' : 'NULL'} AS task_type,
@@ -119,52 +119,52 @@ export function markTaskNeedsAttentionForMissingSemanticHandoff(
     FROM tasks
     LEFT JOIN sprints s ON s.id = tasks.sprint_id
     WHERE tasks.id = ?
-  `).get(params.taskId) as
+  `, params.taskId) as
     | { id: number; tenant_id: number | null; title: string; status: string; task_type: string | null; project_id: number | null; sprint_id: number | null; sprint_type: string | null; agent_id: number | null }
     | undefined;
   if (!task) return null;
 
   const priorStatus = task.status;
-  const mapping = resolveMissingOutcomeMapping(db, task);
+  const mapping = await resolveMissingOutcomeMapping(db, task);
   const eventName = mapping?.event_name ?? PRIMARY_MISSING_OUTCOME_WORKFLOW_EVENT;
 
-  writeTaskRuntimeEndHistory(db, params.taskId, params.changedBy, {
-    endedAt: params.runtimeEnd?.endedAt,
-    success: params.runtimeEnd?.success ?? null,
-    source: params.runtimeEnd?.source ?? null,
-    error: params.runtimeEnd?.error ?? null,
-    lifecycleHandoff: 'missing_after_runtime_end',
-  });
-  writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_source', null, AGENT_HQ_RUNTIME_SOURCE, false);
-  writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_source_kind', null, 'agent_hq_internal', false);
-  writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_name', null, eventName, false);
-  writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_aliases', null, MISSING_OUTCOME_WORKFLOW_EVENTS.join(','), false);
-  writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_instance_id', null, params.instanceId, false);
-  writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_runtime_end_source', null, params.runtimeEnd?.source ?? 'unknown', false);
-  writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_mapping_id', null, mapping?.id ?? null, false);
-  writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_action_kind', null, mapping?.action_kind ?? null, false);
-  writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_action_target', null, mapping?.action_target ?? null, false);
+  await writeTaskRuntimeEndHistory(db, params.taskId, params.changedBy, {
+        endedAt: params.runtimeEnd?.endedAt,
+        success: params.runtimeEnd?.success ?? null,
+        source: params.runtimeEnd?.source ?? null,
+        error: params.runtimeEnd?.error ?? null,
+        lifecycleHandoff: 'missing_after_runtime_end',
+      });
+  await writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_source', null, AGENT_HQ_RUNTIME_SOURCE, false);
+  await writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_source_kind', null, 'agent_hq_internal', false);
+  await writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_name', null, eventName, false);
+  await writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_aliases', null, MISSING_OUTCOME_WORKFLOW_EVENTS.join(','), false);
+  await writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_instance_id', null, params.instanceId, false);
+  await writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_runtime_end_source', null, params.runtimeEnd?.source ?? 'unknown', false);
+  await writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_mapping_id', null, mapping?.id ?? null, false);
+  await writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_action_kind', null, mapping?.action_kind ?? null, false);
+  await writeTaskHistory(db, params.taskId, params.changedBy, 'workflow_event_action_target', null, mapping?.action_target ?? null, false);
 
   let currentStatus = priorStatus;
   let actionApplied = false;
   if (mapping?.action_kind === 'status' && mapping.action_target && mapping.action_target !== priorStatus) {
-    db.prepare(`
+    await db.run(`
       UPDATE tasks
       SET status = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(mapping.action_target, params.taskId);
-    writeTaskStatusChange(db, params.taskId, params.changedBy, priorStatus, mapping.action_target, {
-      instanceId: params.instanceId,
-      reason: `Workflow event ${eventName} via ${AGENT_HQ_RUNTIME_SOURCE}: runtime ended without a recognized semantic outcome`,
-      projectId: task.project_id,
-      agentId: task.agent_id,
-    });
-    notifyTaskStatusChange(db, {
-      taskId: params.taskId,
-      fromStatus: priorStatus,
-      toStatus: mapping.action_target,
-      source: params.changedBy,
-    });
+    `, mapping.action_target, params.taskId);
+    await writeTaskStatusChange(db, params.taskId, params.changedBy, priorStatus, mapping.action_target, {
+            instanceId: params.instanceId,
+            reason: `Workflow event ${eventName} via ${AGENT_HQ_RUNTIME_SOURCE}: runtime ended without a recognized semantic outcome`,
+            projectId: task.project_id,
+            agentId: task.agent_id,
+          });
+    await notifyTaskStatusChange(db, {
+            taskId: params.taskId,
+            fromStatus: priorStatus,
+            toStatus: mapping.action_target,
+            source: params.changedBy,
+          });
     currentStatus = mapping.action_target;
     actionApplied = true;
   }
@@ -200,13 +200,13 @@ export function markTaskNeedsAttentionForMissingSemanticHandoff(
   if (params.runtimeEnd?.endedAt) noteLines.push(`Runtime ended at: ${params.runtimeEnd.endedAt}`);
   if (params.runtimeEnd?.error) noteLines.push(`Runtime end error: ${params.runtimeEnd.error}`);
 
-  db.prepare(`INSERT INTO task_notes (task_id, author, content) VALUES (?, ?, ?)`).run(params.taskId, params.changedBy, noteLines.join('\n'));
+  await db.run(`INSERT INTO task_notes (task_id, author, content) VALUES (?, ?, ?)`, params.taskId, params.changedBy, noteLines.join('\n'));
 
-  emitIntegrityEvent(db, {
-    taskId: params.taskId,
-    anomalyType: 'missing_lifecycle_handoff',
-    detail: `Runtime ended on instance #${params.instanceId} without required lifecycle outcome; workflow event ${eventName} action=${mapping?.action_kind ?? 'none'}${mapping?.action_target ? `:${mapping.action_target}` : ''}`,
-    instanceId: params.instanceId,
-  });
+  await emitIntegrityEvent(db, {
+        taskId: params.taskId,
+        anomalyType: 'missing_lifecycle_handoff',
+        detail: `Runtime ended on instance #${params.instanceId} without required lifecycle outcome; workflow event ${eventName} action=${mapping?.action_kind ?? 'none'}${mapping?.action_target ? `:${mapping.action_target}` : ''}`,
+        instanceId: params.instanceId,
+      });
   return actionApplied && currentStatus === 'needs_attention' ? 'moved_to_needs_attention' : 'recorded_only';
 }

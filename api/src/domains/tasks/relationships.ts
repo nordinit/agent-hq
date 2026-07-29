@@ -1,5 +1,5 @@
-import type Database from 'better-sqlite3';
 import { getDb } from '../../db/client';
+import { type Db } from "../../db/adapter/types";
 
 export type RelationshipDirectionSemantics = 'target_blocks_source' | 'source_blocks_target' | 'informational';
 
@@ -88,30 +88,30 @@ function httpError(status: number, message: string): Error & { status?: number }
   return err;
 }
 
-function tableExists(db: Database.Database, tableName: string): boolean {
+async function tableExists(db: Db, tableName: string): Promise<boolean> {
   try {
-    return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1`).get(tableName) as { name?: string } | undefined)?.name);
+    return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1`, tableName) as { name?: string } | undefined)?.name);
   } catch {
     return false;
   }
 }
 
-function tableHasColumn(db: Database.Database, tableName: string, columnName: string): boolean {
+async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
   try {
-    return (db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).some((row) => row.name === columnName);
+    return (await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>).some((row) => row.name === columnName);
   } catch {
     return false;
   }
 }
 
-function sprintTypeForTask(db: Database.Database, taskId: number): string | null {
-  const row = db.prepare(`
+async function sprintTypeForTask(db: Db, taskId: number): Promise<string | null> {
+  const row = await db.get(`
     SELECT COALESCE(s.sprint_type, 'generic') AS sprint_type
     FROM tasks t
     LEFT JOIN sprints s ON s.id = t.sprint_id
     WHERE t.id = ?
     LIMIT 1
-  `).get(taskId) as { sprint_type: string | null } | undefined;
+  `, taskId) as { sprint_type: string | null } | undefined;
   return row ? (row.sprint_type || 'generic') : null;
 }
 
@@ -139,17 +139,17 @@ function shapeType(row: Record<string, unknown> | undefined | null): TaskRelatio
   };
 }
 
-function getRelationshipTypeForTask(db: Database.Database, taskId: number, typeKey: string): TaskRelationshipTypeConfig | null {
-  const sprintType = sprintTypeForTask(db, taskId);
+async function getRelationshipTypeForTask(db: Db, taskId: number, typeKey: string): Promise<TaskRelationshipTypeConfig | null> {
+  const sprintType = await sprintTypeForTask(db, taskId);
   if (!sprintType) throw httpError(404, 'Source task not found');
-  const hasRelationshipTenantId = tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
-  const hasTaskTenantId = tableHasColumn(db, 'tasks', 'tenant_id');
+  const hasRelationshipTenantId = await tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
+  const hasTaskTenantId = await tableHasColumn(db, 'tasks', 'tenant_id');
   const taskTenant = hasRelationshipTenantId && hasTaskTenantId
-    ? db.prepare(`SELECT tenant_id FROM tasks WHERE id = ?`).get(taskId) as { tenant_id: number | null } | undefined
+    ? await db.get(`SELECT tenant_id FROM tasks WHERE id = ?`, taskId) as { tenant_id: number | null } | undefined
     : undefined;
   const tenantSql = taskTenant?.tenant_id != null ? ' AND (tenant_id = ? OR tenant_id IS NULL)' : '';
   const tenantParams = taskTenant?.tenant_id != null ? [taskTenant.tenant_id] : [];
-  let row = db.prepare(`
+  let row = await db.get(`
     SELECT *
     FROM sprint_type_relationship_types
     WHERE key = ? AND sprint_type_key IN (?, 'generic')
@@ -158,22 +158,16 @@ function getRelationshipTypeForTask(db: Database.Database, taskId: number, typeK
       ${taskTenant?.tenant_id != null ? 'CASE WHEN tenant_id = ? THEN 0 ELSE 1 END,' : ''}
       CASE WHEN sprint_type_key = ? THEN 0 ELSE 1 END
     LIMIT 1
-  `).get(
-    typeKey,
-    sprintType,
-    ...tenantParams,
-    ...(taskTenant?.tenant_id != null ? [taskTenant.tenant_id] : []),
-    sprintType,
-  ) as Record<string, unknown> | undefined;
+  `, typeKey, sprintType, ...tenantParams, ...(taskTenant?.tenant_id != null ? [taskTenant.tenant_id] : []), sprintType) as Record<string, unknown> | undefined;
   if (!row && typeKey === 'defect_of') {
-    row = db.prepare(`
+    row = await db.get(`
       SELECT *
       FROM sprint_type_relationship_types
       WHERE key = ?
         ${tenantSql}
       ORDER BY CASE WHEN sprint_type_key = 'dev' THEN 0 ELSE 1 END, sprint_type_key ASC
       LIMIT 1
-    `).get(typeKey, ...tenantParams) as Record<string, unknown> | undefined;
+    `, typeKey, ...tenantParams) as Record<string, unknown> | undefined;
   }
   return shapeType(row);
 }
@@ -189,8 +183,8 @@ function taskSummary(row: Record<string, unknown> | null | undefined): Record<st
   };
 }
 
-function shapeRelationship(db: Database.Database, row: Record<string, unknown>): TaskRelationshipRecord {
-  const type = getRelationshipTypeForTask(db, Number(row.source_task_id), String(row.relationship_type_key));
+async function shapeRelationship(db: Db, row: Record<string, unknown>): Promise<TaskRelationshipRecord> {
+  const type = await getRelationshipTypeForTask(db, Number(row.source_task_id), String(row.relationship_type_key));
   return {
     id: Number(row.id),
     source_task_id: Number(row.source_task_id),
@@ -218,39 +212,39 @@ function shapeRelationship(db: Database.Database, row: Record<string, unknown>):
   };
 }
 
-export function listRelationshipTypesForSprintType(db: Database.Database, sprintTypeKey: string, tenantId?: number | null): TaskRelationshipTypeConfig[] {
-  if (!tableExists(db, 'sprint_type_relationship_types')) return [];
-  const hasTenantId = tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
+export async function listRelationshipTypesForSprintType(db: Db, sprintTypeKey: string, tenantId?: number | null): Promise<TaskRelationshipTypeConfig[]> {
+  if (!await tableExists(db, 'sprint_type_relationship_types')) return [];
+  const hasTenantId = await tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
   const tenantSql = tenantId != null && hasTenantId ? ' AND tenant_id = ?' : '';
   const params = tenantSql ? [sprintTypeKey, tenantId] : [sprintTypeKey];
-  const rows = db.prepare(`
+  const rows = await db.all(`
     SELECT *
     FROM sprint_type_relationship_types
     WHERE sprint_type_key = ?
       ${tenantSql}
     ORDER BY category ASC, key ASC
-  `).all(...params) as Array<Record<string, unknown>>;
+  `, ...params) as Array<Record<string, unknown>>;
   return rows.map(shapeType).filter((row): row is TaskRelationshipTypeConfig => Boolean(row));
 }
 
-export function listRelationshipTypesForTask(db: Database.Database, taskId: number): TaskRelationshipTypeConfig[] {
-  if (!tableExists(db, 'sprint_type_relationship_types')) return [];
-  const sprintType = sprintTypeForTask(db, taskId);
+export async function listRelationshipTypesForTask(db: Db, taskId: number): Promise<TaskRelationshipTypeConfig[]> {
+  if (!await tableExists(db, 'sprint_type_relationship_types')) return [];
+  const sprintType = await sprintTypeForTask(db, taskId);
   if (!sprintType) throw httpError(404, 'Task not found');
-  const hasRelationshipTenantId = tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
-  const hasTaskTenantId = tableHasColumn(db, 'tasks', 'tenant_id');
+  const hasRelationshipTenantId = await tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
+  const hasTaskTenantId = await tableHasColumn(db, 'tasks', 'tenant_id');
   const taskTenant = hasRelationshipTenantId && hasTaskTenantId
-    ? db.prepare(`SELECT tenant_id FROM tasks WHERE id = ?`).get(taskId) as { tenant_id: number | null } | undefined
+    ? await db.get(`SELECT tenant_id FROM tasks WHERE id = ?`, taskId) as { tenant_id: number | null } | undefined
     : undefined;
   const tenantSql = taskTenant?.tenant_id != null ? ' AND tenant_id = ?' : '';
   const tenantParams = taskTenant?.tenant_id != null ? [taskTenant.tenant_id] : [];
-  const rows = db.prepare(`
+  const rows = await db.all(`
     SELECT *
     FROM sprint_type_relationship_types
     WHERE sprint_type_key IN (?, 'generic')
       ${tenantSql}
     ORDER BY CASE WHEN sprint_type_key = ? THEN 0 ELSE 1 END, category ASC, key ASC
-  `).all(sprintType, ...tenantParams, sprintType) as Array<Record<string, unknown>>;
+  `, sprintType, ...tenantParams, sprintType) as Array<Record<string, unknown>>;
 
   const byKey = new Map<string, TaskRelationshipTypeConfig>();
   for (const row of rows) {
@@ -260,10 +254,10 @@ export function listRelationshipTypesForTask(db: Database.Database, taskId: numb
   return [...byKey.values()].sort((a, b) => a.category.localeCompare(b.category) || a.key.localeCompare(b.key));
 }
 
-export function listTaskRelationships(db: Database.Database, taskId: number): TaskRelationshipRecord[] {
-  const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+export async function listTaskRelationships(db: Db, taskId: number): Promise<TaskRelationshipRecord[]> {
+  const task = await db.get('SELECT id FROM tasks WHERE id = ?', taskId);
   if (!task) throw httpError(404, 'Task not found');
-  const rows = db.prepare(`
+  const rows = await db.all(`
     SELECT tr.*,
            source.title AS source_title, source.status AS source_status, source.sprint_id AS source_sprint_id, source.task_type AS source_task_type,
            target.title AS target_title, target.status AS target_status, target.sprint_id AS target_sprint_id, target.task_type AS target_task_type
@@ -272,39 +266,39 @@ export function listTaskRelationships(db: Database.Database, taskId: number): Ta
     JOIN tasks target ON target.id = tr.target_task_id
     WHERE tr.source_task_id = ? OR tr.target_task_id = ?
     ORDER BY tr.created_at ASC, tr.id ASC
-  `).all(taskId, taskId) as Array<Record<string, unknown>>;
-  return rows.map(row => shapeRelationship(db, row));
+  `, taskId, taskId) as Array<Record<string, unknown>>;
+  return rows.map(async row => await shapeRelationship(db, row));
 }
 
-function mirrorDispatchDependency(db: Database.Database, sourceTaskId: number, targetTaskId: number, type: TaskRelationshipTypeConfig): void {
+async function mirrorDispatchDependency(db: Db, sourceTaskId: number, targetTaskId: number, type: TaskRelationshipTypeConfig): Promise<void> {
   if (type.affects_dispatch_eligibility !== 1) return;
   if (type.direction_semantics === 'target_blocks_source') {
-    db.prepare(`INSERT OR IGNORE INTO task_dependencies (blocker_id, blocked_id) VALUES (?, ?)`).run(targetTaskId, sourceTaskId);
+    await db.run(`INSERT OR IGNORE INTO task_dependencies (blocker_id, blocked_id) VALUES (?, ?)`, targetTaskId, sourceTaskId);
     return;
   }
   if (type.direction_semantics === 'source_blocks_target') {
-    db.prepare(`INSERT OR IGNORE INTO task_dependencies (blocker_id, blocked_id) VALUES (?, ?)`).run(sourceTaskId, targetTaskId);
+    await db.run(`INSERT OR IGNORE INTO task_dependencies (blocker_id, blocked_id) VALUES (?, ?)`, sourceTaskId, targetTaskId);
   }
 }
 
-function removeDispatchDependency(db: Database.Database, sourceTaskId: number, targetTaskId: number, type: TaskRelationshipTypeConfig | null): void {
+async function removeDispatchDependency(db: Db, sourceTaskId: number, targetTaskId: number, type: TaskRelationshipTypeConfig | null): Promise<void> {
   if (!type || type.affects_dispatch_eligibility !== 1) return;
   if (type.direction_semantics === 'target_blocks_source') {
-    db.prepare(`DELETE FROM task_dependencies WHERE blocker_id = ? AND blocked_id = ?`).run(targetTaskId, sourceTaskId);
+    await db.run(`DELETE FROM task_dependencies WHERE blocker_id = ? AND blocked_id = ?`, targetTaskId, sourceTaskId);
     return;
   }
   if (type.direction_semantics === 'source_blocks_target') {
-    db.prepare(`DELETE FROM task_dependencies WHERE blocker_id = ? AND blocked_id = ?`).run(sourceTaskId, targetTaskId);
+    await db.run(`DELETE FROM task_dependencies WHERE blocker_id = ? AND blocked_id = ?`, sourceTaskId, targetTaskId);
   }
 }
 
-export function createTaskRelationship(db: Database.Database, input: {
+export async function createTaskRelationship(db: Db, input: {
   source_task_id: unknown;
   target_task_id: unknown;
   relationship_type_key: unknown;
   metadata_json?: unknown;
   created_by?: unknown;
-}): TaskRelationshipRecord {
+}): Promise<TaskRelationshipRecord> {
   const sourceTaskId = Number(input.source_task_id);
   const targetTaskId = Number(input.target_task_id);
   if (!Number.isInteger(sourceTaskId) || sourceTaskId <= 0) throw httpError(400, 'source_task_id is required');
@@ -314,30 +308,30 @@ export function createTaskRelationship(db: Database.Database, input: {
   const metadata = normalizeMetadata(input.metadata_json);
   const createdBy = typeof input.created_by === 'string' && input.created_by.trim() ? input.created_by.trim() : 'system';
 
-  const source = db.prepare('SELECT id, tenant_id FROM tasks WHERE id = ?').get(sourceTaskId) as { id: number; tenant_id?: number | null } | undefined;
+  const source = await db.get('SELECT id, tenant_id FROM tasks WHERE id = ?', sourceTaskId) as { id: number; tenant_id?: number | null } | undefined;
   if (!source) throw httpError(404, 'Source task not found');
-  const target = db.prepare('SELECT id, tenant_id FROM tasks WHERE id = ?').get(targetTaskId) as { id: number; tenant_id?: number | null } | undefined;
+  const target = await db.get('SELECT id, tenant_id FROM tasks WHERE id = ?', targetTaskId) as { id: number; tenant_id?: number | null } | undefined;
   if (!target) throw httpError(404, 'Target task not found');
   if (source.tenant_id != null && target.tenant_id != null && source.tenant_id !== target.tenant_id) {
     throw httpError(404, 'Target task not found');
   }
 
-  const type = getRelationshipTypeForTask(db, sourceTaskId, relationshipTypeKey);
+  const type = await getRelationshipTypeForTask(db, sourceTaskId, relationshipTypeKey);
   if (!type) throw httpError(400, `Relationship type "${relationshipTypeKey}" is not defined for source task sprint type`);
 
-  const tx = db.transaction(() => {
-    db.prepare(`
+  const tx = db.transaction(async () => {
+    await db.run(`
       INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key, metadata_json, created_by, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
       ON CONFLICT(source_task_id, target_task_id, relationship_type_key) DO UPDATE SET
         metadata_json = excluded.metadata_json,
         updated_at = datetime('now')
-    `).run(sourceTaskId, targetTaskId, relationshipTypeKey, JSON.stringify(metadata), createdBy);
-    mirrorDispatchDependency(db, sourceTaskId, targetTaskId, type);
+    `, sourceTaskId, targetTaskId, relationshipTypeKey, JSON.stringify(metadata), createdBy);
+    await mirrorDispatchDependency(db, sourceTaskId, targetTaskId, type);
   });
   tx();
 
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT tr.*,
            source.title AS source_title, source.status AS source_status, source.sprint_id AS source_sprint_id, source.task_type AS source_task_type,
            target.title AS target_title, target.status AS target_status, target.sprint_id AS target_sprint_id, target.task_type AS target_task_type
@@ -345,8 +339,8 @@ export function createTaskRelationship(db: Database.Database, input: {
     JOIN tasks source ON source.id = tr.source_task_id
     JOIN tasks target ON target.id = tr.target_task_id
     WHERE tr.source_task_id = ? AND tr.target_task_id = ? AND tr.relationship_type_key = ?
-  `).get(sourceTaskId, targetTaskId, relationshipTypeKey) as Record<string, unknown>;
-  return shapeRelationship(db, row);
+  `, sourceTaskId, targetTaskId, relationshipTypeKey) as Record<string, unknown>;
+  return await shapeRelationship(db, row);
 }
 
 export interface LegacyBlockerRelationshipResult {
@@ -357,21 +351,21 @@ export interface LegacyBlockerRelationshipResult {
 
 export const LEGACY_BLOCKER_DEPRECATION_WARNING = 'Legacy blocker writes are compatibility-only and will be removed after one release. Use agent_hq_get_task_relationship_types and agent_hq_create_task_relationship with a workflow-configured dispatch-blocking relationship type.';
 
-export function createRelationshipFromBlockedBy(db: Database.Database, taskId: number, blockerId: number, createdBy = 'legacy-blocker-api'): LegacyBlockerRelationshipResult {
-  if (!tableExists(db, 'task_relationships') || !tableExists(db, 'sprint_type_relationship_types')) {
+export async function createRelationshipFromBlockedBy(db: Db, taskId: number, blockerId: number, createdBy = 'legacy-blocker-api'): Promise<LegacyBlockerRelationshipResult> {
+  if (!await tableExists(db, 'task_relationships') || !await tableExists(db, 'sprint_type_relationship_types')) {
     return {
       ok: false,
       warning: `${LEGACY_BLOCKER_DEPRECATION_WARNING} This database does not expose the task relationship model, so no dispatch dependency was created.`,
     };
   }
   try {
-    const relationship = createTaskRelationship(db, {
-      source_task_id: taskId,
-      target_task_id: blockerId,
-      relationship_type_key: 'blocked_by',
-      metadata_json: {},
-      created_by: createdBy,
-    });
+    const relationship = await createTaskRelationship(db, {
+          source_task_id: taskId,
+          target_task_id: blockerId,
+          relationship_type_key: 'blocked_by',
+          metadata_json: {},
+          created_by: createdBy,
+        });
     return {
       ok: true,
       relationship,
@@ -385,31 +379,31 @@ export function createRelationshipFromBlockedBy(db: Database.Database, taskId: n
   }
 }
 
-export function deleteTaskRelationship(db: Database.Database, relationshipId: number): { ok: true; deleted_id: number } {
-  const row = db.prepare(`SELECT * FROM task_relationships WHERE id = ?`).get(relationshipId) as Record<string, unknown> | undefined;
+export async function deleteTaskRelationship(db: Db, relationshipId: number): Promise<{ ok: true; deleted_id: number }> {
+  const row = await db.get(`SELECT * FROM task_relationships WHERE id = ?`, relationshipId) as Record<string, unknown> | undefined;
   if (!row) throw httpError(404, 'Relationship not found');
-  const type = getRelationshipTypeForTask(db, Number(row.source_task_id), String(row.relationship_type_key));
-  const tx = db.transaction(() => {
-    db.prepare(`DELETE FROM task_relationships WHERE id = ?`).run(relationshipId);
-    removeDispatchDependency(db, Number(row.source_task_id), Number(row.target_task_id), type);
+  const type = await getRelationshipTypeForTask(db, Number(row.source_task_id), String(row.relationship_type_key));
+  const tx = db.transaction(async () => {
+    await db.run(`DELETE FROM task_relationships WHERE id = ?`, relationshipId);
+    await removeDispatchDependency(db, Number(row.source_task_id), Number(row.target_task_id), type);
   });
   tx();
   return { ok: true, deleted_id: relationshipId };
 }
 
-export function deleteTaskRelationshipByTuple(db: Database.Database, sourceTaskId: number, targetTaskId: number, relationshipTypeKey: string): void {
-  if (!tableExists(db, 'task_relationships')) return;
-  const row = db.prepare(`
+export async function deleteTaskRelationshipByTuple(db: Db, sourceTaskId: number, targetTaskId: number, relationshipTypeKey: string): Promise<void> {
+  if (!await tableExists(db, 'task_relationships')) return;
+  const row = await db.get(`
     SELECT * FROM task_relationships
     WHERE source_task_id = ? AND target_task_id = ? AND relationship_type_key = ?
-  `).get(sourceTaskId, targetTaskId, relationshipTypeKey) as Record<string, unknown> | undefined;
+  `, sourceTaskId, targetTaskId, relationshipTypeKey) as Record<string, unknown> | undefined;
   if (!row) return;
-  deleteTaskRelationship(db, Number(row.id));
+  await deleteTaskRelationship(db, Number(row.id));
 }
 
-export function getTaskRelationshipsForEnrichment(taskId: number): TaskRelationshipRecord[] {
+export async function getTaskRelationshipsForEnrichment(taskId: number): Promise<TaskRelationshipRecord[]> {
   try {
-    return listTaskRelationships(getDb(), taskId);
+    return await listTaskRelationships(getDb(), taskId);
   } catch {
     return [];
   }

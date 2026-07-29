@@ -10,7 +10,7 @@ import projectsRouter from './projects';
 let tempDir: string;
 let dbPath: string;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-project-repo-'));
@@ -18,7 +18,7 @@ function resetDb(): void {
   process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY,
       tenant_id INTEGER DEFAULT 1,
@@ -105,7 +105,7 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`).run('openai', 'connected');
+  await db.run(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`, 'openai', 'connected');
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -129,10 +129,10 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('agent repo ownership enforcement', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-project-repo-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
-    resetDb();
+    await resetDb();
   });
 
   it('rejects project-level repo fields on project create', async () => {
@@ -154,7 +154,7 @@ describe('agent repo ownership enforcement', () => {
       expect(body.code).toBe('project_repo_fields_deprecated');
       expect(body.rejected_fields).toEqual(['repo_path', 'repo_access_mode']);
 
-      const count = getDb().prepare(`SELECT COUNT(*) AS count FROM projects WHERE name = 'Agent HQ'`).get() as { count: number };
+      const count = await getDb().get(`SELECT COUNT(*) AS count FROM projects WHERE name = 'Agent HQ'`) as { count: number };
       expect(count.count).toBe(0);
     } finally {
       await stopTestServer(server);
@@ -163,10 +163,10 @@ describe('agent repo ownership enforcement', () => {
 
   it('rejects project-level repo fields on project update and preserves legacy values', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
       VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -186,7 +186,7 @@ describe('agent repo ownership enforcement', () => {
       expect(body.code).toBe('project_repo_fields_deprecated');
       expect(body.rejected_fields).toEqual(['repo_url', 'repo_access_mode']);
 
-      const project = db.prepare(`SELECT name, repo_path, repo_url, repo_access_mode FROM projects WHERE id = 86`).get() as Record<string, unknown>;
+      const project = await db.get(`SELECT name, repo_path, repo_url, repo_access_mode FROM projects WHERE id = 86`) as Record<string, unknown>;
       expect(project).toEqual({
         name: 'Agent HQ',
         repo_path: '/Users/nordini/agent-hq',
@@ -206,10 +206,10 @@ describe('agent repo ownership enforcement', () => {
 
   it('rejects repo fields on agent create instead of mutating the project', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
       VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -233,7 +233,7 @@ describe('agent repo ownership enforcement', () => {
       expect(body.code).toBe('agent_repo_fields_not_supported');
       expect(body.rejected_fields).toEqual(['repo_url', 'repo_access_mode']);
 
-      const project = db.prepare(`SELECT repo_path, repo_url, repo_access_mode FROM projects WHERE id = 86`).get() as {
+      const project = await db.get(`SELECT repo_path, repo_url, repo_access_mode FROM projects WHERE id = 86`) as {
         repo_path: string | null;
         repo_url: string | null;
         repo_access_mode: string | null;
@@ -244,7 +244,7 @@ describe('agent repo ownership enforcement', () => {
         repo_access_mode: 'worktree',
       });
 
-      const created = db.prepare(`SELECT COUNT(*) AS count FROM agents WHERE session_key = 'agent:cinder:main'`).get() as { count: number };
+      const created = await db.get(`SELECT COUNT(*) AS count FROM agents WHERE session_key = 'agent:cinder:main'`) as { count: number };
       expect(created.count).toBe(0);
     } finally {
       await stopTestServer(server);
@@ -253,14 +253,14 @@ describe('agent repo ownership enforcement', () => {
 
   it('rejects repo fields on agent update and preserves the project repo config', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
       VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO agents (id, name, role, session_key, runtime_type, project_id)
       VALUES (94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 86)
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -279,7 +279,7 @@ describe('agent repo ownership enforcement', () => {
       expect(body.code).toBe('agent_repo_fields_not_supported');
       expect(body.rejected_fields).toEqual(['repo_url', 'repo_access_mode']);
 
-      const project = db.prepare(`SELECT repo_path, repo_url, repo_access_mode FROM projects WHERE id = 86`).get() as {
+      const project = await db.get(`SELECT repo_path, repo_url, repo_access_mode FROM projects WHERE id = 86`) as {
         repo_path: string | null;
         repo_url: string | null;
         repo_access_mode: string | null;
@@ -296,10 +296,10 @@ describe('agent repo ownership enforcement', () => {
 
   it('creates agents as project-scoped even when legacy sprint_id is submitted', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
       VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -321,7 +321,7 @@ describe('agent repo ownership enforcement', () => {
       expect(body.project_id).toBe(86);
       expect(body).not.toHaveProperty('sprint_id');
 
-      const created = db.prepare(`SELECT project_id, sprint_id FROM agents WHERE session_key = 'agent:project-scoped:main'`).get() as {
+      const created = await db.get(`SELECT project_id, sprint_id FROM agents WHERE session_key = 'agent:project-scoped:main'`) as {
         project_id: number | null;
         sprint_id: number | null;
       };
@@ -333,14 +333,14 @@ describe('agent repo ownership enforcement', () => {
 
   it('ignores legacy sprint_id on agent update and hides it from responses', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
       VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO agents (id, name, role, session_key, runtime_type, project_id, sprint_id)
       VALUES (95, 'Legacy Sprint Agent', 'Backend Engineer', 'agent:legacy-sprint:main', 'webhook', 86, 12)
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -358,7 +358,7 @@ describe('agent repo ownership enforcement', () => {
       expect(body.name).toBe('Still Project Scoped Agent');
       expect(body).not.toHaveProperty('sprint_id');
 
-      const stored = db.prepare(`SELECT project_id, sprint_id FROM agents WHERE id = 95`).get() as {
+      const stored = await db.get(`SELECT project_id, sprint_id FROM agents WHERE id = 95`) as {
         project_id: number | null;
         sprint_id: number | null;
       };
@@ -370,14 +370,14 @@ describe('agent repo ownership enforcement', () => {
 
   it('keeps project repo config read-only on agent reads while preserving legacy agent fallback metadata', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
       VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO agents (id, name, role, session_key, runtime_type, project_id, repo_url, repo_access_mode)
       VALUES (94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 86, 'git@github.com:legacy/fallback.git', 'clone')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {

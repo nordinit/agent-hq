@@ -261,35 +261,35 @@ function formatTaskRef(row: RecordLike): TaskRelationRef {
   };
 }
 
-function loadTask(taskId: number): RecordLike | null {
+async function loadTask(taskId: number): Promise<RecordLike | null> {
   const db = getDb();
-  const task = db.prepare(`${TASK_CONTEXT_SELECT} WHERE t.id = ?`).get(taskId) as RecordLike | undefined;
+  const task = await db.get(`${TASK_CONTEXT_SELECT} WHERE t.id = ?`, taskId) as RecordLike | undefined;
   if (!task) return null;
   const canonicalTask = getCanonicalTaskRecord(task);
   const customFields = parseCustomFields(task.custom_fields_json);
   const publicTask = stripTaskLifecycleEvidenceFields(stripRetiredTaskColumns(canonicalTask));
 
-  const blockers = db.prepare(`
+  const blockers = await db.all(`
     SELECT t.id, t.title, t.status, t.priority, t.task_type, t.agent_id, a.name AS agent_name, t.sprint_id, s.name AS sprint_name, t.project_id
     FROM tasks t
     LEFT JOIN agents a ON a.id = t.agent_id
     LEFT JOIN sprints s ON s.id = t.sprint_id
     WHERE t.id IN (SELECT blocker_id FROM task_dependencies WHERE blocked_id = ?)
     ORDER BY t.id ASC
-  `).all(taskId) as RecordLike[];
+  `, taskId) as RecordLike[];
 
-  const blocking = db.prepare(`
+  const blocking = await db.all(`
     SELECT t.id, t.title, t.status, t.priority, t.task_type, t.agent_id, a.name AS agent_name, t.sprint_id, s.name AS sprint_name, t.project_id
     FROM tasks t
     LEFT JOIN agents a ON a.id = t.agent_id
     LEFT JOIN sprints s ON s.id = t.sprint_id
     WHERE t.id IN (SELECT blocked_id FROM task_dependencies WHERE blocker_id = ?)
     ORDER BY t.id ASC
-  `).all(taskId) as RecordLike[];
+  `, taskId) as RecordLike[];
 
   return {
     ...publicTask,
-    ...evaluateTaskIntegrity(canonicalTask as { status?: string | null; task_type?: string | null }, db),
+    ...await evaluateTaskIntegrity(canonicalTask as { status?: string | null; task_type?: string | null }, db),
     custom_fields: customFields,
     changed_files: parseChangedFiles(task.changed_files_json),
     blockers: blockers.map(formatTaskRef),
@@ -375,10 +375,10 @@ function loadRuns(taskId: number, options: NormalizedTaskContextOptions): Record
   }));
 }
 
-function loadExternalEvents(taskId: number, options: NormalizedTaskContextOptions): RecordLike[] {
+async function loadExternalEvents(taskId: number, options: NormalizedTaskContextOptions): Promise<RecordLike[]> {
   if (!options.includeLease) return [];
   const db = getDb();
-  const tableExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='external_task_event_receipts'`).get() as { name: string } | undefined;
+  const tableExists = await db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='external_task_event_receipts'`) as { name: string } | undefined;
   if (!tableExists) return [];
 
   const params: unknown[] = [taskId];
@@ -842,14 +842,14 @@ function buildServerSummary(task: RecordLike, blockerContext: RecordLike | null,
   return `${parts.join('. ')}.`;
 }
 
-function loadDeltaMarkers(taskId: number): RecordLike {
+async function loadDeltaMarkers(taskId: number): Promise<RecordLike> {
   const db = getDb();
-  const latestNote = db.prepare(`SELECT id, created_at FROM task_notes WHERE task_id = ? ORDER BY id DESC LIMIT 1`).get(taskId) as RecordLike | undefined;
-  const latestHistory = db.prepare(`SELECT id, created_at FROM task_history WHERE task_id = ? ORDER BY id DESC LIMIT 1`).get(taskId) as RecordLike | undefined;
-  const latestRun = db.prepare(`SELECT id, COALESCE(runtime_completed_at, completed_at, started_at, dispatched_at, created_at) AS activity_at FROM job_instances WHERE task_id = ? ORDER BY id DESC LIMIT 1`).get(taskId) as RecordLike | undefined;
-  const tableExists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='external_task_event_receipts'`).get() as { name: string } | undefined;
+  const latestNote = await db.get(`SELECT id, created_at FROM task_notes WHERE task_id = ? ORDER BY id DESC LIMIT 1`, taskId) as RecordLike | undefined;
+  const latestHistory = await db.get(`SELECT id, created_at FROM task_history WHERE task_id = ? ORDER BY id DESC LIMIT 1`, taskId) as RecordLike | undefined;
+  const latestRun = await db.get(`SELECT id, COALESCE(runtime_completed_at, completed_at, started_at, dispatched_at, created_at) AS activity_at FROM job_instances WHERE task_id = ? ORDER BY id DESC LIMIT 1`, taskId) as RecordLike | undefined;
+  const tableExists = await db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='external_task_event_receipts'`) as { name: string } | undefined;
   const latestExternal = tableExists
-    ? db.prepare(`SELECT id, created_at FROM external_task_event_receipts WHERE task_id = ? ORDER BY id DESC LIMIT 1`).get(taskId) as RecordLike | undefined
+    ? await db.get(`SELECT id, created_at FROM external_task_event_receipts WHERE task_id = ? ORDER BY id DESC LIMIT 1`, taskId) as RecordLike | undefined
     : undefined;
 
   const latestActivityAt = [
@@ -869,15 +869,15 @@ function loadDeltaMarkers(taskId: number): RecordLike {
   };
 }
 
-export function buildTaskContext(taskId: number, mode: TaskContextMode = 'summary', options: TaskContextOptions = {}): RecordLike | null {
+export async function buildTaskContext(taskId: number, mode: TaskContextMode = 'summary', options: TaskContextOptions = {}): Promise<RecordLike | null> {
   const normalized = normalizeOptions(mode, options);
-  const task = loadTask(taskId);
+  const task = await loadTask(taskId);
   if (!task) return null;
 
   const notes = loadNotes(taskId, normalized);
   const history = loadHistory(taskId, normalized);
   const runs = loadRuns(taskId, normalized);
-  const externalEvents = loadExternalEvents(taskId, normalized);
+  const externalEvents = await loadExternalEvents(taskId, normalized);
 
   const meaningfulNotes = buildMeaningfulNotesSummary(notes);
   const meaningfulEvents = buildMeaningfulEventSummary(history, externalEvents, normalized.includeNoisyEvents);
@@ -891,7 +891,7 @@ export function buildTaskContext(taskId: number, mode: TaskContextMode = 'summar
     mode,
     generated_at: new Date().toISOString(),
     options_applied: normalized,
-    delta_markers: loadDeltaMarkers(taskId),
+    delta_markers: await loadDeltaMarkers(taskId),
     task: task,
     blockers: task.blockers,
     blocking: task.blocking,

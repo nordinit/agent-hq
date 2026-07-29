@@ -16,37 +16,37 @@ function sendError(res: Response, err: unknown): Response {
   return res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
 }
 
-router.get('/', (_req: Request, res: Response) => {
+router.get('/', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
-    return res.json({ tenants: listTenants(db), active_tenant_id: getActiveTenantId(db) });
+    return res.json({ tenants: await listTenants(db), active_tenant_id: await getActiveTenantId(db) });
   } catch (err) {
     return sendError(res, err);
   }
 });
 
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenant = createTenantWithDefaults(db, req.body ?? {});
-    return res.status(201).json({ tenant, active_tenant_id: getActiveTenantId(db) });
+    const tenant = await createTenantWithDefaults(db, req.body ?? {});
+    return res.status(201).json({ tenant, active_tenant_id: await getActiveTenantId(db) });
   } catch (err) {
     return sendError(res, err);
   }
 });
 
-router.get('/active', (_req: Request, res: Response) => {
+router.get('/active', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
-    const activeTenantId = getActiveTenantId(db);
-    const tenant = db.prepare(`SELECT * FROM tenants WHERE id = ?`).get(activeTenantId);
+    const activeTenantId = await getActiveTenantId(db);
+    const tenant = await db.get(`SELECT * FROM tenants WHERE id = ?`, activeTenantId);
     return res.json({ tenant, active_tenant_id: activeTenantId });
   } catch (err) {
     return sendError(res, err);
   }
 });
 
-router.put('/active', (req: Request, res: Response) => {
+router.put('/active', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     // company_id is a deprecated compatibility alias; tenant_id is canonical.
@@ -55,52 +55,52 @@ router.put('/active', (req: Request, res: Response) => {
     if (!Number.isInteger(tenantId) || tenantId <= 0) {
       return res.status(400).json({ error: 'tenant_id is required' });
     }
-    const tenant = setActiveTenantId(db, tenantId);
+    const tenant = await setActiveTenantId(db, tenantId);
     return res.json({ tenant, active_tenant_id: tenantId });
   } catch (err) {
     return sendError(res, err);
   }
 });
 
-router.post('/:id/select', (req: Request, res: Response) => {
+router.post('/:id/select', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = Number(req.params.id);
     if (!Number.isInteger(tenantId) || tenantId <= 0) {
       return res.status(400).json({ error: 'Tenant id must be a positive integer' });
     }
-    const tenant = setActiveTenantId(db, tenantId);
+    const tenant = await setActiveTenantId(db, tenantId);
     return res.json({ tenant, active_tenant_id: tenantId });
   } catch (err) {
     return sendError(res, err);
   }
 });
 
-router.post('/:id/default-package/reinstall', (req: Request, res: Response) => {
+router.post('/:id/default-package/reinstall', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = Number(req.params.id);
     if (!Number.isInteger(tenantId) || tenantId <= 0) {
       return res.status(400).json({ error: 'Tenant id must be a positive integer' });
     }
-    const tenant = db.prepare(`SELECT id FROM tenants WHERE id = ? LIMIT 1`).get(tenantId);
+    const tenant = await db.get(`SELECT id FROM tenants WHERE id = ? LIMIT 1`, tenantId);
     if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
-    const result = applyDefaultInstallPackage(db, tenantId, { mode: 'reinstall' });
+    const result = await applyDefaultInstallPackage(db, tenantId, { mode: 'reinstall' });
     return res.json({ ok: true, result });
   } catch (err) {
     return sendError(res, err);
   }
 });
 
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = Number(req.params.id);
     // company_name is a deprecated compatibility alias; confirmation is canonical.
-    const result = deleteTenant(db, tenantId, { confirmation: req.body?.confirmation ?? req.body?.company_name });
+    const result = await deleteTenant(db, tenantId, { confirmation: req.body?.confirmation ?? req.body?.company_name });
     return res.json({
       ...result,
-      tenants: listTenants(db),
+      tenants: await listTenants(db),
     });
   } catch (err) {
     return sendError(res, err);

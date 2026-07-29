@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { getDb } from '../../db/client';
 import {
@@ -6,6 +5,7 @@ import {
   parseAgentSessionKey,
 } from '../../lib/sessionKeys';
 import { chatMessageTenantScope, sessionTenantScope } from '../../lib/runtimeTenantScope';
+import { type Db } from "../../db/adapter/types";
 
 function sessionSlug(sessionKey: string | null | undefined): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
@@ -24,20 +24,20 @@ function readOptionalPositiveInteger(value: unknown): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-export function resolveAgentRowForSessionKey(sessionKey: string | null | undefined): Record<string, unknown> | null {
+export async function resolveAgentRowForSessionKey(sessionKey: string | null | undefined): Promise<Record<string, unknown> | null> {
   const db = getDb();
-  const directAgent = db.prepare(`
+  const directAgent = await db.get(`
     SELECT *
     FROM agents
     WHERE session_key = ?
     LIMIT 1
-  `).get(sessionKey ?? null) as Record<string, unknown> | undefined;
+  `, sessionKey ?? null) as Record<string, unknown> | undefined;
   if (directAgent) return directAgent;
 
   const slug = sessionSlug(sessionKey);
   if (!slug) return null;
 
-  const agent = db.prepare(`
+  const agent = await db.get(`
     SELECT *
     FROM agents
     WHERE openclaw_agent_id = ?
@@ -45,66 +45,66 @@ export function resolveAgentRowForSessionKey(sessionKey: string | null | undefin
        OR session_key LIKE ?
     ORDER BY CASE WHEN openclaw_agent_id = ? THEN 0 ELSE 1 END, id DESC
     LIMIT 1
-  `).get(slug, `agent:${slug}:%`, `agent:%:${slug}:%`, slug) as Record<string, unknown> | undefined;
+  `, slug, `agent:${slug}:%`, `agent:%:${slug}:%`, slug) as Record<string, unknown> | undefined;
 
   return agent ?? null;
 }
 
-export function resolveAgentRowById(agentId: number | null | undefined): Record<string, unknown> | null {
+export async function resolveAgentRowById(agentId: number | null | undefined): Promise<Record<string, unknown> | null> {
   if (typeof agentId !== 'number') return null;
   const db = getDb();
-  return (db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId) as Record<string, unknown> | undefined) ?? null;
+  return (await db.get('SELECT * FROM agents WHERE id = ?', agentId) as Record<string, unknown> | undefined) ?? null;
 }
 
-export function getCanonicalChatSessionKey(agentId: number, channel = 'web'): string | null {
+export async function getCanonicalChatSessionKey(agentId: number, channel = 'web'): Promise<string | null> {
   const db = getDb();
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT session_key
     FROM canonical_chat_sessions
     WHERE agent_id = ? AND channel = ?
     LIMIT 1
-  `).get(agentId, channel) as { session_key?: string | null } | undefined;
+  `, agentId, channel) as { session_key?: string | null } | undefined;
   return typeof row?.session_key === 'string' && row.session_key.trim() ? row.session_key.trim() : null;
 }
 
-export function setCanonicalChatSessionKey(agentId: number, sessionKey: string, channel = 'web'): string {
+export async function setCanonicalChatSessionKey(agentId: number, sessionKey: string, channel = 'web'): Promise<string> {
   const db = getDb();
-  db.prepare(`
+  await db.run(`
     INSERT INTO canonical_chat_sessions (agent_id, channel, session_key, created_at, updated_at)
     VALUES (?, ?, ?, datetime('now'), datetime('now'))
     ON CONFLICT(agent_id, channel)
     DO UPDATE SET session_key = excluded.session_key, updated_at = datetime('now')
-  `).run(agentId, channel, sessionKey);
+  `, agentId, channel, sessionKey);
   return sessionKey;
 }
 
-export function buildDerivedDirectSessionKey(
+export async function buildDerivedDirectSessionKey(
   sessionKey: string,
   channel = 'web',
   agentId?: number | null,
   rotate = false,
-): string | null {
+): Promise<string | null> {
   const agent = typeof agentId === 'number'
-    ? resolveAgentRowById(agentId) ?? undefined
-    : resolveAgentRowForSessionKey(sessionKey) ?? undefined;
+    ? (await resolveAgentRowById(agentId)) ?? undefined
+    : (await resolveAgentRowForSessionKey(sessionKey)) ?? undefined;
   if (!agent) return null;
   const resolvedAgentId = Number(agent.id);
   if (!Number.isFinite(resolvedAgentId)) return null;
 
   if (!rotate) {
-    const existing = getCanonicalChatSessionKey(resolvedAgentId, channel);
+    const existing = await getCanonicalChatSessionKey(resolvedAgentId, channel);
     if (existing) return existing;
   }
 
   const next = buildGatewayDirectSessionKey(agent, channel, randomUUID());
   if (!next) return null;
-  return setCanonicalChatSessionKey(resolvedAgentId, next, channel);
+  return await setCanonicalChatSessionKey(resolvedAgentId, next, channel);
 }
 
-export function listChatSessions(
-  db: Database.Database,
+export async function listChatSessions(
+  db: Db,
   query: { agent_id?: unknown; instance_id?: unknown; project_id?: unknown; limit?: unknown; offset?: unknown; tenantId?: number },
-): Array<Record<string, unknown>> {
+): Promise<Array<Record<string, unknown>>> {
   const agentId = readOptionalPositiveInteger(query.agent_id);
   const instanceId = readOptionalPositiveInteger(query.instance_id);
   const projectId = readOptionalPositiveInteger(query.project_id);
@@ -112,7 +112,7 @@ export function listChatSessions(
   const offset = readPositiveInteger(query.offset, 0, Number.MAX_SAFE_INTEGER);
   const queryLimit = limit + offset;
   const tenantId = query.tenantId;
-  const jobInstanceColumns = (db.prepare('PRAGMA table_info(job_instances)').all() as Array<{ name: string }>)
+  const jobInstanceColumns = (await db.all('PRAGMA table_info(job_instances)') as Array<{ name: string }>)
     .map((col) => col.name);
   const hasJobInstanceDurableRunId = jobInstanceColumns.includes('durable_run_id');
   const canonicalFilters = [
@@ -120,9 +120,9 @@ export function listChatSessions(
     '(? IS NULL OR s.instance_id = ?)',
     '(? IS NULL OR s.project_id = ?)',
   ];
-  const canonicalTenant = tenantId ? sessionTenantScope(db, 's', tenantId) : { sql: '1 = 1', params: [] };
+  const canonicalTenant = tenantId ? await sessionTenantScope(db, 's', tenantId) : { sql: '1 = 1', params: [] };
 
-  const canonicalRows = db.prepare(`
+  const canonicalRows = await db.all(`
     WITH canonical_sessions AS (
       SELECT
         s.instance_id,
@@ -168,11 +168,11 @@ export function listChatSessions(
       LIMIT 1
     )
     ORDER BY cs.last_activity DESC
-  `).all(agentId, agentId, instanceId, instanceId, projectId, projectId, ...canonicalTenant.params, queryLimit) as Array<Record<string, unknown>>;
+  `, agentId, agentId, instanceId, instanceId, projectId, projectId, ...canonicalTenant.params, queryLimit) as Array<Record<string, unknown>>;
 
   const rawLimit = queryLimit;
 
-  const cols = (db.prepare('PRAGMA table_info(chat_messages)').all() as Array<{ name: string }>)
+  const cols = (await db.all('PRAGMA table_info(chat_messages)') as Array<{ name: string }>)
     .map((col) => col.name);
   const hasSessionKey = cols.includes('session_key');
   const hasDurableRunId = cols.includes('durable_run_id');
@@ -192,7 +192,7 @@ export function listChatSessions(
     params.push(projectId);
   }
   if (tenantId) {
-    const rawTenant = chatMessageTenantScope(db, 'cm', tenantId);
+    const rawTenant = await chatMessageTenantScope(db, 'cm', tenantId);
     filters.push(rawTenant.sql);
     params.push(...rawTenant.params);
   }
@@ -218,7 +218,7 @@ export function listChatSessions(
     ? 'MAX(cm_durable_run_id) AS durable_run_id'
     : `${hasJobInstanceDurableRunId ? 'MAX(ji_durable_run_id)' : 'NULL'} AS durable_run_id`;
 
-  const rawRows = db.prepare(`
+  const rawRows = await db.all(`
     WITH raw_source AS (
       SELECT
         cm.id,
@@ -302,7 +302,7 @@ export function listChatSessions(
       ON rl.agent_id = rg.agent_id
       AND rl.session_group_key = rg.session_group_key
     ORDER BY rg.last_activity DESC
-  `).all(...params) as Array<Record<string, unknown>>;
+  `, ...params) as Array<Record<string, unknown>>;
 
   const rawMapped: Array<Record<string, unknown>> = rawRows.map((row) => ({
     ...row,
@@ -317,22 +317,22 @@ export function listChatSessions(
     .slice(offset, offset + limit);
 }
 
-export function listChatSessionMessages(
-  db: Database.Database,
+export async function listChatSessionMessages(
+  db: Db,
   rawInstanceId: string,
   query: { session_key?: unknown; durable_run_id?: unknown; limit?: unknown; offset?: unknown; tenantId?: number },
-): unknown[] {
+): Promise<unknown[]> {
   const instanceId = rawInstanceId === '0' ? null : Number(rawInstanceId);
   const sessionKey = typeof query.session_key === 'string' ? query.session_key : '';
   const limit = Math.min(Number(query.limit ?? 200), 500);
   const offset = Math.max(Number(query.offset ?? 0), 0);
 
-  const cols = (db.prepare('PRAGMA table_info(chat_messages)').all() as Array<{ name: string }>)
+  const cols = (await db.all('PRAGMA table_info(chat_messages)') as Array<{ name: string }>)
     .map((col) => col.name);
   const hasSessionKey = cols.includes('session_key');
   const hasDurableRunId = cols.includes('durable_run_id');
   const tenantId = query.tenantId;
-  const tenantScope = tenantId ? chatMessageTenantScope(db, 'chat_messages', tenantId) : { sql: '1 = 1', params: [] };
+  const tenantScope = tenantId ? await chatMessageTenantScope(db, 'chat_messages', tenantId) : { sql: '1 = 1', params: [] };
 
   const selectCols = hasSessionKey
     ? `id, agent_id, instance_id, ${hasDurableRunId ? 'durable_run_id' : 'NULL AS durable_run_id'}, session_key, role, content, timestamp, event_type, event_meta`
@@ -344,48 +344,48 @@ export function listChatSessionMessages(
       // chats are now saved as per-turn job_instances (like every other agent run), so
       // their rows carry an instance_id; the bubble still loads the conversation by its
       // stable session_key across those turns (and any legacy instance-less rows).
-      return db.prepare(`
+      return await db.all(`
         SELECT ${selectCols}
         FROM chat_messages
         WHERE session_key = ?
           AND ${tenantScope.sql}
         ORDER BY timestamp ASC
         LIMIT ? OFFSET ?
-      `).all(sessionKey, ...tenantScope.params, limit, offset);
+      `, sessionKey, ...tenantScope.params, limit, offset);
     }
-    return db.prepare(`
+    return await db.all(`
       SELECT ${selectCols}
       FROM chat_messages
       WHERE instance_id IS NULL
         AND ${tenantScope.sql}
       ORDER BY timestamp ASC
       LIMIT ? OFFSET ?
-    `).all(...tenantScope.params, limit, offset);
+    `, ...tenantScope.params, limit, offset);
   }
 
   const durableRunId = hasDurableRunId && typeof query.durable_run_id === 'string' && query.durable_run_id.trim()
     ? query.durable_run_id.trim()
     : null;
   if (durableRunId) {
-    return db.prepare(`
+    return await db.all(`
       SELECT ${selectCols}
       FROM chat_messages
       WHERE durable_run_id = ?
         AND ${tenantScope.sql}
       ORDER BY timestamp ASC
       LIMIT ? OFFSET ?
-    `).all(durableRunId, ...tenantScope.params, limit, offset);
+    `, durableRunId, ...tenantScope.params, limit, offset);
   }
 
   const currentDurableRunId = hasDurableRunId && Number.isFinite(instanceId)
-    ? (db.prepare(`SELECT durable_run_id FROM job_instances WHERE id = ?`).get(instanceId) as { durable_run_id?: string | null } | undefined)?.durable_run_id ?? null
+    ? (await db.get(`SELECT durable_run_id FROM job_instances WHERE id = ?`, instanceId) as { durable_run_id?: string | null } | undefined)?.durable_run_id ?? null
     : null;
   const durableGuard = currentDurableRunId ? `AND (durable_run_id IS NULL OR durable_run_id = ?)` : '';
   const params = currentDurableRunId
     ? [instanceId, currentDurableRunId, ...tenantScope.params, limit, offset]
     : [instanceId, ...tenantScope.params, limit, offset];
 
-  return db.prepare(`
+  return await db.all(`
     SELECT ${selectCols}
     FROM chat_messages
     WHERE instance_id = ?
@@ -393,5 +393,5 @@ export function listChatSessionMessages(
     AND ${tenantScope.sql}
     ORDER BY timestamp ASC
     LIMIT ? OFFSET ?
-  `).all(...params);
+  `, ...params);
 }

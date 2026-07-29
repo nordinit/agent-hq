@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { listSprintTaskStatuses } from '../routing/policy/statuses';
 import { createTaskRecord } from '../tasks/writeModel';
 import { VALID_STORY_POINTS } from '../tasks/fields';
@@ -13,6 +12,7 @@ import type {
   RecurringTaskSeriesListItem,
   RecurringTaskSeriesRecord,
 } from './types';
+import { type Db } from "../../db/adapter/types";
 
 export interface CreateRecurringTaskSeriesInput {
   tenant_id?: number | null;
@@ -291,8 +291,8 @@ function calculateNextRunAt(scheduleExpression: string, timezone: string, enable
   return previewRecurringTaskSchedule(scheduleExpression, timezone, 1).occurrences[0] ?? null;
 }
 
-function requireProject(db: Database.Database, projectId: number, tenantId: number | null): number | null {
-  const row = db.prepare(`SELECT id, tenant_id FROM projects WHERE id = ? LIMIT 1`).get(projectId) as { id: number; tenant_id: number | null } | undefined;
+async function requireProject(db: Db, projectId: number, tenantId: number | null): Promise<number | null> {
+  const row = await db.get(`SELECT id, tenant_id FROM projects WHERE id = ? LIMIT 1`, projectId) as { id: number; tenant_id: number | null } | undefined;
   if (!row) throw badRequest(`project_id ${projectId} does not exist`, 'project_not_found');
   if (tenantId != null && row.tenant_id !== tenantId) {
     throw badRequest(`project_id ${projectId} is not available in this tenant`, 'project_not_found');
@@ -300,13 +300,13 @@ function requireProject(db: Database.Database, projectId: number, tenantId: numb
   return row.tenant_id ?? tenantId;
 }
 
-function requireSprintForProject(db: Database.Database, projectId: number, sprintId: number, enabled: number, tenantId: number | null): SprintValidationRow {
-  const row = db.prepare(`
+async function requireSprintForProject(db: Db, projectId: number, sprintId: number, enabled: number, tenantId: number | null): Promise<SprintValidationRow> {
+  const row = await db.get(`
     SELECT id, tenant_id, project_id, sprint_type, status, name
     FROM sprints
     WHERE id = ?
     LIMIT 1
-  `).get(sprintId) as SprintValidationRow | undefined;
+  `, sprintId) as SprintValidationRow | undefined;
   if (!row) throw badRequest(`workflow_id ${sprintId} does not exist`, 'workflow_not_found');
   if (tenantId != null && row.tenant_id !== tenantId) {
     throw badRequest(`workflow_id ${sprintId} is not available in this tenant`, 'workflow_not_found');
@@ -320,32 +320,32 @@ function requireSprintForProject(db: Database.Database, projectId: number, sprin
   return row;
 }
 
-function requireAgent(db: Database.Database, agentId: number | null, tenantId: number | null): void {
+async function requireAgent(db: Db, agentId: number | null, tenantId: number | null): Promise<void> {
   if (agentId == null) return;
-  const row = db.prepare(`SELECT id, tenant_id FROM agents WHERE id = ? LIMIT 1`).get(agentId) as { id: number; tenant_id: number | null } | undefined;
+  const row = await db.get(`SELECT id, tenant_id FROM agents WHERE id = ? LIMIT 1`, agentId) as { id: number; tenant_id: number | null } | undefined;
   if (!row) throw badRequest(`agent_id ${agentId} does not exist`, 'agent_not_found');
   if (tenantId != null && row.tenant_id !== tenantId) {
     throw badRequest(`agent_id ${agentId} is not available in this tenant`, 'agent_not_found');
   }
 }
 
-function validateWorkflowFields(db: Database.Database, sprint: SprintValidationRow, taskType: string, statusOnCreate: string): void {
+async function validateWorkflowFields(db: Db, sprint: SprintValidationRow, taskType: string, statusOnCreate: string): Promise<void> {
   if (!isValidTaskType(taskType)) {
     throw badRequest(`task_type "${taskType}" is not supported`, 'task_type_unsupported');
   }
-  if (!isTaskTypeAllowedForSprintType(db, sprint.sprint_type ?? 'generic', taskType)) {
+  if (!await isTaskTypeAllowedForSprintType(db, sprint.sprint_type ?? 'generic', taskType)) {
     throw badRequest(`task_type "${taskType}" is not allowed for sprint type "${sprint.sprint_type ?? 'generic'}"`, 'task_type_not_allowed_for_sprint_type');
   }
   if (!isTaskStatus(statusOnCreate)) {
     throw badRequest(`status_on_create "${statusOnCreate}" is not supported`, 'status_on_create_unsupported');
   }
-  const statuses = listSprintTaskStatuses(db, sprint.id).map(status => status.name);
+  const statuses = (await listSprintTaskStatuses(db, sprint.id)).map(status => status.name);
   if (statuses.length > 0 && !statuses.includes(statusOnCreate)) {
     throw badRequest(`status_on_create "${statusOnCreate}" is not valid for workflow_id ${sprint.id}`, 'status_on_create_not_allowed_for_workflow');
   }
 }
 
-function normalizeCreateInput(db: Database.Database, input: CreateRecurringTaskSeriesInput): CreateRecurringTaskSeriesInput {
+async function normalizeCreateInput(db: Db, input: CreateRecurringTaskSeriesInput): Promise<CreateRecurringTaskSeriesInput> {
   const projectId = parsePositiveInteger(input.project_id, 'project_id');
   const sprintId = parsePositiveInteger(coalesceWorkflowId(input), 'workflow_id');
   const titleTemplate = parseRequiredString(input.title_template, 'title_template');
@@ -359,10 +359,10 @@ function normalizeCreateInput(db: Database.Database, input: CreateRecurringTaskS
 
   parseSchedule(scheduleExpression);
   assertValidTimezone(timezone);
-  const tenantId = requireProject(db, projectId, requestedTenantId);
-  const sprint = requireSprintForProject(db, projectId, sprintId, enabled, tenantId);
-  requireAgent(db, agentId, tenantId);
-  validateWorkflowFields(db, sprint, taskType, statusOnCreate);
+  const tenantId = await requireProject(db, projectId, requestedTenantId);
+  const sprint = await requireSprintForProject(db, projectId, sprintId, enabled, tenantId);
+  await requireAgent(db, agentId, tenantId);
+  await validateWorkflowFields(db, sprint, taskType, statusOnCreate);
 
   return {
     ...input,
@@ -402,46 +402,27 @@ function normalizeSeries(row: RecurringTaskSeriesListItem | RecurringTaskSeriesR
   };
 }
 
-export function createRecurringTaskSeries(
-  db: Database.Database,
+export async function createRecurringTaskSeries(
+  db: Db,
   input: CreateRecurringTaskSeriesInput,
-): RecurringTaskSeriesRecord {
-  const normalized = normalizeCreateInput(db, input);
-  const result = db.prepare(`
+): Promise<RecurringTaskSeriesRecord> {
+  const normalized = await normalizeCreateInput(db, input);
+  const result = await db.run(`
     INSERT INTO recurring_task_series (
       tenant_id, project_id, sprint_id, title_template, description_template, task_type, priority,
       story_points, status_on_create, schedule_expression, timezone, enabled,
       next_run_at, last_run_at, overlap_policy, agent_id, created_by, updated_by
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    normalized.tenant_id ?? null,
-    normalized.project_id,
-    normalized.sprint_id,
-    normalized.title_template,
-    normalized.description_template ?? '',
-    normalized.task_type,
-    normalized.priority,
-    normalized.story_points,
-    normalized.status_on_create,
-    normalized.schedule_expression,
-    normalized.timezone,
-    normalized.enabled,
-    normalized.next_run_at ?? null,
-    normalized.last_run_at ?? null,
-    normalized.overlap_policy ?? 'skip_if_active',
-    normalized.agent_id ?? null,
-    normalized.created_by ?? 'system',
-    normalized.updated_by ?? normalized.created_by ?? 'system',
-  );
+  `, normalized.tenant_id ?? null, normalized.project_id, normalized.sprint_id, normalized.title_template, normalized.description_template ?? '', normalized.task_type, normalized.priority, normalized.story_points, normalized.status_on_create, normalized.schedule_expression, normalized.timezone, normalized.enabled, normalized.next_run_at ?? null, normalized.last_run_at ?? null, normalized.overlap_policy ?? 'skip_if_active', normalized.agent_id ?? null, normalized.created_by ?? 'system', normalized.updated_by ?? normalized.created_by ?? 'system');
 
-  return db.prepare(`SELECT * FROM recurring_task_series WHERE id = ?`).get(result.lastInsertRowid) as RecurringTaskSeriesRecord;
+  return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, result.lastInsertRowid) as RecurringTaskSeriesRecord;
 }
 
-export function listRecurringTaskSeries(
-  db: Database.Database,
+export async function listRecurringTaskSeries(
+  db: Db,
   filters: RecurringTaskSeriesFilters = {},
-): { series: Array<Record<string, unknown>>; total: number; limit: number; offset: number } {
+): Promise<{ series: Array<Record<string, unknown>>; total: number; limit: number; offset: number }> {
   const conditions: string[] = [];
   const params: unknown[] = [];
   const tenantId = parseOptionalPositiveInteger(filters.tenant_id, 'tenant_id');
@@ -474,7 +455,7 @@ export function listRecurringTaskSeries(
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const limit = Math.min(Math.max(1, Number(filters.limit) || 100), 500);
   const offset = Math.max(0, Number(filters.offset) || 0);
-  const series = db.prepare(`
+  const series = await db.all(`
     SELECT
       rts.*,
       p.name AS project_name,
@@ -506,15 +487,15 @@ export function listRecurringTaskSeries(
     ${where}
     ORDER BY COALESCE(rts.next_run_at, '9999-12-31T23:59:59.999Z') ASC, rts.id DESC
     LIMIT ? OFFSET ?
-  `).all(...params, limit, offset) as RecurringTaskSeriesListItem[];
-  const total = (db.prepare(`SELECT COUNT(*) AS count FROM recurring_task_series rts ${where}`).get(...params) as { count: number }).count;
+  `, ...params, limit, offset) as RecurringTaskSeriesListItem[];
+  const total = (await db.get(`SELECT COUNT(*) AS count FROM recurring_task_series rts ${where}`, ...params) as { count: number }).count;
   return { series: series.map(normalizeSeries), total, limit, offset };
 }
 
-export function getRecurringTaskSeries(db: Database.Database, seriesId: number, tenantId?: number | null): Record<string, unknown> | null {
+export async function getRecurringTaskSeries(db: Db, seriesId: number, tenantId?: number | null): Promise<Record<string, unknown> | null> {
   const tenantFilter = tenantId != null ? 'AND rts.tenant_id = ?' : '';
   const params = tenantId != null ? [seriesId, tenantId] : [seriesId];
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT
       rts.*,
       p.name AS project_name,
@@ -546,77 +527,60 @@ export function getRecurringTaskSeries(db: Database.Database, seriesId: number, 
     WHERE rts.id = ?
       ${tenantFilter}
     LIMIT 1
-  `).get(...params) as RecurringTaskSeriesListItem | undefined;
+  `, ...params) as RecurringTaskSeriesListItem | undefined;
   return row ? normalizeSeries(row) : null;
 }
 
-export function updateRecurringTaskSeries(
-  db: Database.Database,
+export async function updateRecurringTaskSeries(
+  db: Db,
   seriesId: number,
   input: UpdateRecurringTaskSeriesInput,
   tenantId?: number | null,
-): RecurringTaskSeriesRecord {
-  const existing = db.prepare(`SELECT * FROM recurring_task_series WHERE id = ?${tenantId != null ? ' AND tenant_id = ?' : ''} LIMIT 1`).get(...(tenantId != null ? [seriesId, tenantId] : [seriesId])) as RecurringTaskSeriesRecord | undefined;
+): Promise<RecurringTaskSeriesRecord> {
+  const existing = await db.get(`SELECT * FROM recurring_task_series WHERE id = ?${tenantId != null ? ' AND tenant_id = ?' : ''} LIMIT 1`, ...(tenantId != null ? [seriesId, tenantId] : [seriesId])) as RecurringTaskSeriesRecord | undefined;
   if (!existing) throw notFound('Recurring task series not found', 'series_not_found');
   const merged = { ...existing, ...input, next_run_at: input.next_run_at } as CreateRecurringTaskSeriesInput;
-  const normalized = normalizeCreateInput(db, merged);
-  db.prepare(`
+  const normalized = await normalizeCreateInput(db, merged);
+  await db.run(`
     UPDATE recurring_task_series
     SET project_id = ?, sprint_id = ?, title_template = ?, description_template = ?,
         task_type = ?, priority = ?, story_points = ?, status_on_create = ?,
         schedule_expression = ?, timezone = ?, enabled = ?, next_run_at = ?,
         overlap_policy = ?, agent_id = ?, updated_by = ?, updated_at = datetime('now')
     WHERE id = ?
-  `).run(
-    normalized.project_id,
-    normalized.sprint_id,
-    normalized.title_template,
-    normalized.description_template ?? '',
-    normalized.task_type,
-    normalized.priority,
-    normalized.story_points,
-    normalized.status_on_create,
-    normalized.schedule_expression,
-    normalized.timezone,
-    normalized.enabled,
-    normalized.next_run_at ?? null,
-    normalized.overlap_policy ?? 'skip_if_active',
-    normalized.agent_id ?? null,
-    normalized.updated_by ?? normalized.created_by ?? existing.updated_by ?? 'system',
-    seriesId,
-  );
-  return db.prepare(`SELECT * FROM recurring_task_series WHERE id = ?`).get(seriesId) as RecurringTaskSeriesRecord;
+  `, normalized.project_id, normalized.sprint_id, normalized.title_template, normalized.description_template ?? '', normalized.task_type, normalized.priority, normalized.story_points, normalized.status_on_create, normalized.schedule_expression, normalized.timezone, normalized.enabled, normalized.next_run_at ?? null, normalized.overlap_policy ?? 'skip_if_active', normalized.agent_id ?? null, normalized.updated_by ?? normalized.created_by ?? existing.updated_by ?? 'system', seriesId);
+  return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, seriesId) as RecurringTaskSeriesRecord;
 }
 
-export function setRecurringTaskSeriesEnabled(
-  db: Database.Database,
+export async function setRecurringTaskSeriesEnabled(
+  db: Db,
   seriesId: number,
   enabled: boolean,
   updatedBy = 'system',
   tenantId?: number | null,
-): RecurringTaskSeriesRecord {
-  const existing = db.prepare(`SELECT * FROM recurring_task_series WHERE id = ?${tenantId != null ? ' AND tenant_id = ?' : ''} LIMIT 1`).get(...(tenantId != null ? [seriesId, tenantId] : [seriesId])) as RecurringTaskSeriesRecord | undefined;
+): Promise<RecurringTaskSeriesRecord> {
+  const existing = await db.get(`SELECT * FROM recurring_task_series WHERE id = ?${tenantId != null ? ' AND tenant_id = ?' : ''} LIMIT 1`, ...(tenantId != null ? [seriesId, tenantId] : [seriesId])) as RecurringTaskSeriesRecord | undefined;
   if (!existing) throw notFound('Recurring task series not found', 'series_not_found');
-  const normalized = normalizeCreateInput(db, { ...existing, enabled: enabled ? 1 : 0, next_run_at: undefined, updated_by: updatedBy });
-  db.prepare(`
+  const normalized = await normalizeCreateInput(db, { ...existing, enabled: enabled ? 1 : 0, next_run_at: undefined, updated_by: updatedBy });
+  await db.run(`
     UPDATE recurring_task_series
     SET enabled = ?, next_run_at = ?, updated_by = ?, updated_at = datetime('now')
     WHERE id = ?
-  `).run(normalized.enabled, normalized.next_run_at ?? null, updatedBy, seriesId);
-  return db.prepare(`SELECT * FROM recurring_task_series WHERE id = ?`).get(seriesId) as RecurringTaskSeriesRecord;
+  `, normalized.enabled, normalized.next_run_at ?? null, updatedBy, seriesId);
+  return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, seriesId) as RecurringTaskSeriesRecord;
 }
 
-export function deleteRecurringTaskSeries(db: Database.Database, seriesId: number, tenantId?: number | null): { ok: true; deleted_id: number } {
-  const result = db.prepare(`DELETE FROM recurring_task_series WHERE id = ?${tenantId != null ? ' AND tenant_id = ?' : ''}`).run(...(tenantId != null ? [seriesId, tenantId] : [seriesId]));
+export async function deleteRecurringTaskSeries(db: Db, seriesId: number, tenantId?: number | null): Promise<{ ok: true; deleted_id: number }> {
+  const result = await db.run(`DELETE FROM recurring_task_series WHERE id = ?${tenantId != null ? ' AND tenant_id = ?' : ''}`, ...(tenantId != null ? [seriesId, tenantId] : [seriesId]));
   if (result.changes === 0) throw notFound('Recurring task series not found', 'series_not_found');
   return { ok: true, deleted_id: seriesId };
 }
 
-export function listRecurringTaskRuns(db: Database.Database, seriesId: number, limitRaw: unknown = 25, tenantId?: number | null): Array<Record<string, unknown>> {
+export async function listRecurringTaskRuns(db: Db, seriesId: number, limitRaw: unknown = 25, tenantId?: number | null): Promise<Array<Record<string, unknown>>> {
   const limit = Math.min(Math.max(1, Number(limitRaw) || 25), 100);
   const tenantFilter = tenantId != null ? 'AND rts.tenant_id = ?' : '';
   const params = tenantId != null ? [seriesId, tenantId, limit] : [seriesId, limit];
-  const rows = db.prepare(`
+  const rows = await db.all(`
     SELECT
       rtr.*,
       t.title AS generated_task_title,
@@ -628,7 +592,7 @@ export function listRecurringTaskRuns(db: Database.Database, seriesId: number, l
       ${tenantFilter}
     ORDER BY rtr.scheduled_for DESC, rtr.id DESC
     LIMIT ?
-  `).all(...params) as RecurringTaskRunWithTask[];
+  `, ...params) as RecurringTaskRunWithTask[];
   return rows.map(row => ({
     ...row,
     generated_task: row.created_task_id == null ? null : {
@@ -640,54 +604,45 @@ export function listRecurringTaskRuns(db: Database.Database, seriesId: number, l
   }));
 }
 
-export function recordRecurringTaskRun(
-  db: Database.Database,
+export async function recordRecurringTaskRun(
+  db: Db,
   input: RecordRecurringTaskRunInput,
-): RecurringTaskRunRecord {
-  const result = db.prepare(`
+): Promise<RecurringTaskRunRecord> {
+  const result = await db.run(`
     INSERT INTO recurring_task_runs (
       series_id, scheduled_for, created_task_id, status, error_message,
       started_at, finished_at, idempotency_key
     )
     VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?)
-  `).run(
-    input.series_id,
-    input.scheduled_for,
-    input.created_task_id ?? null,
-    input.status,
-    input.error_message ?? null,
-    input.started_at ?? null,
-    input.finished_at ?? null,
-    input.idempotency_key,
-  );
+  `, input.series_id, input.scheduled_for, input.created_task_id ?? null, input.status, input.error_message ?? null, input.started_at ?? null, input.finished_at ?? null, input.idempotency_key);
 
-  return db.prepare(`SELECT * FROM recurring_task_runs WHERE id = ?`).get(result.lastInsertRowid) as RecurringTaskRunRecord;
+  return await db.get(`SELECT * FROM recurring_task_runs WHERE id = ?`, result.lastInsertRowid) as RecurringTaskRunRecord;
 }
 
-export function linkRecurringRunToGeneratedTask(
-  db: Database.Database,
+export async function linkRecurringRunToGeneratedTask(
+  db: Db,
   runId: number,
   taskId: number,
-): RecurringTaskRunRecord {
-  db.prepare(`
+): Promise<RecurringTaskRunRecord> {
+  await db.run(`
     UPDATE recurring_task_runs
     SET created_task_id = ?, status = 'created', finished_at = COALESCE(finished_at, datetime('now')), updated_at = datetime('now')
     WHERE id = ?
-  `).run(taskId, runId);
+  `, taskId, runId);
 
-  return db.prepare(`SELECT * FROM recurring_task_runs WHERE id = ?`).get(runId) as RecurringTaskRunRecord;
+  return await db.get(`SELECT * FROM recurring_task_runs WHERE id = ?`, runId) as RecurringTaskRunRecord;
 }
 
-export function finishRecurringTaskRun(
-  db: Database.Database,
+export async function finishRecurringTaskRun(
+  db: Db,
   runId: number,
   input: {
     status: RecurringTaskRunStatus;
     created_task_id?: number | null;
     error_message?: string | null;
   },
-): RecurringTaskRunRecord {
-  db.prepare(`
+): Promise<RecurringTaskRunRecord> {
+  await db.run(`
     UPDATE recurring_task_runs
     SET status = ?,
         created_task_id = ?,
@@ -695,59 +650,54 @@ export function finishRecurringTaskRun(
         finished_at = COALESCE(finished_at, datetime('now')),
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(
-    input.status,
-    input.created_task_id ?? null,
-    input.error_message ?? null,
-    runId,
-  );
+  `, input.status, input.created_task_id ?? null, input.error_message ?? null, runId);
 
-  return db.prepare(`SELECT * FROM recurring_task_runs WHERE id = ?`).get(runId) as RecurringTaskRunRecord;
+  return await db.get(`SELECT * FROM recurring_task_runs WHERE id = ?`, runId) as RecurringTaskRunRecord;
 }
 
-export function runRecurringTaskSeriesNow(
-  db: Database.Database,
+export async function runRecurringTaskSeriesNow(
+  db: Db,
   seriesId: number,
   actor = 'system',
   tenantId?: number | null,
-): { series: Record<string, unknown>; run: RecurringTaskRunRecord; task: Record<string, unknown> } {
-  const series = db.prepare(`SELECT * FROM recurring_task_series WHERE id = ?${tenantId != null ? ' AND tenant_id = ?' : ''} LIMIT 1`).get(...(tenantId != null ? [seriesId, tenantId] : [seriesId])) as RecurringTaskSeriesRecord | undefined;
+): Promise<{ series: Record<string, unknown>; run: RecurringTaskRunRecord; task: Record<string, unknown> }> {
+  const series = await db.get(`SELECT * FROM recurring_task_series WHERE id = ?${tenantId != null ? ' AND tenant_id = ?' : ''} LIMIT 1`, ...(tenantId != null ? [seriesId, tenantId] : [seriesId])) as RecurringTaskSeriesRecord | undefined;
   if (!series) throw notFound('Recurring task series not found', 'series_not_found');
-  normalizeCreateInput(db, series);
+  await normalizeCreateInput(db, series);
   const scheduledFor = new Date().toISOString();
-  const result = db.transaction(() => {
-    const run = recordRecurringTaskRun(db, {
-      series_id: series.id,
-      scheduled_for: scheduledFor,
-      status: 'started',
-      idempotency_key: `${series.id}:run-now:${scheduledFor}`,
-    });
-    const task = createTaskRecord(db, {
-      tenant_id: series.tenant_id,
-      title: series.title_template,
-      description: series.description_template,
-      status: series.status_on_create,
-      priority: series.priority,
-      project_id: series.project_id,
-      sprint_id: series.sprint_id,
-      agent_id: series.agent_id,
-      task_type: series.task_type,
-      story_points: series.story_points,
-      recurring_series_id: series.id,
-      scheduled_for: run.scheduled_for,
-      schedule_run_id: run.id,
-      generated_from: 'recurring_task_series',
-    }, actor);
-    const linkedRun = linkRecurringRunToGeneratedTask(db, run.id, Number(task.id));
-    db.prepare(`
+  const result = db.transaction(async () => {
+    const run = await recordRecurringTaskRun(db, {
+          series_id: series.id,
+          scheduled_for: scheduledFor,
+          status: 'started',
+          idempotency_key: `${series.id}:run-now:${scheduledFor}`,
+        });
+    const task = await createTaskRecord(db, {
+          tenant_id: series.tenant_id,
+          title: series.title_template,
+          description: series.description_template,
+          status: series.status_on_create,
+          priority: series.priority,
+          project_id: series.project_id,
+          sprint_id: series.sprint_id,
+          agent_id: series.agent_id,
+          task_type: series.task_type,
+          story_points: series.story_points,
+          recurring_series_id: series.id,
+          scheduled_for: run.scheduled_for,
+          schedule_run_id: run.id,
+          generated_from: 'recurring_task_series',
+        }, actor);
+    const linkedRun = await linkRecurringRunToGeneratedTask(db, run.id, Number(task.id));
+    await db.run(`
       UPDATE recurring_task_series
       SET last_run_at = ?, next_run_at = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(scheduledFor, calculateNextRunAt(series.schedule_expression, series.timezone, series.enabled), series.id);
+    `, scheduledFor, calculateNextRunAt(series.schedule_expression, series.timezone, series.enabled), series.id);
     return { run: linkedRun, task };
   })();
   return {
-    series: getRecurringTaskSeries(db, series.id, tenantId) ?? normalizeSeries(series),
+    series: (await getRecurringTaskSeries(db, series.id, tenantId)) ?? normalizeSeries(series),
     run: result.run,
     task: {
       ...result.task,

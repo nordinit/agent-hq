@@ -1,18 +1,4 @@
-/**
- * projectAudit.ts — Central audit-log helper for project-level mutations
- *
- * Records audit events for projects, sprints, and job templates so that
- * every structural change to the project hierarchy is traceable.
- *
- * Standardized actor strings:
- *   'system'     — schema migration / seed
- *   'api'        — anonymous API call (no X-Actor header)
- *   'ui'         — UI-initiated action
- *   '<agent>'    — agent name (e.g. 'forge', 'pixel')
- *   '<user>'     — human user identifier
- */
-
-import type Database from 'better-sqlite3';
+import { type Db } from "../db/adapter/types";
 
 export type AuditEntityType = 'project' | 'sprint' | 'job_template';
 export type AuditAction = 'created' | 'updated' | 'deleted';
@@ -24,19 +10,19 @@ export interface AuditChanges {
 /**
  * Write a single project_audit_log row.
  */
-export function writeProjectAudit(
-  db: Database.Database,
+export async function writeProjectAudit(
+  db: Db,
   projectId: number,
   entityType: AuditEntityType,
   entityId: number,
   action: AuditAction,
   actor: string,
   changes: AuditChanges = {},
-): void {
-  db.prepare(`
+): Promise<void> {
+  await db.run(`
     INSERT INTO project_audit_log (project_id, entity_type, entity_id, action, actor, changes)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(projectId, entityType, entityId, action, actor, JSON.stringify(changes));
+  `, projectId, entityType, entityId, action, actor, JSON.stringify(changes));
 }
 
 /**

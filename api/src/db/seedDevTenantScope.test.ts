@@ -25,15 +25,15 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-it('seeds dev fixtures into the default tenant without leaking into another tenant', () => {
-  initSchema();
+it('seeds dev fixtures into the default tenant without leaking into another tenant', async () => {
+  await initSchema();
   const setupDb = getDb();
-  const defaultTenantId = getDefaultTenantId(setupDb);
-  const otherTenant = createTenantWithDefaults(setupDb, { name: 'EcoPool', slug: 'ecopool' });
-  setupDb.prepare(`
+  const defaultTenantId = await getDefaultTenantId(setupDb);
+  const otherTenant = await createTenantWithDefaults(setupDb, { name: 'EcoPool', slug: 'ecopool' });
+  await setupDb.run(`
     INSERT INTO projects (tenant_id, name, description, context_md)
     VALUES (?, 'Tenant 2 Existing', 'preexisting tenant 2 row', '')
-  `).run(otherTenant.id);
+  `, otherTenant.id);
   closeDb();
 
   const apiRoot = path.resolve(__dirname, '../..');
@@ -54,34 +54,34 @@ it('seeds dev fixtures into the default tenant without leaking into another tena
   const db = new Database(dbPath);
   try {
     for (const table of ['projects', 'agents', 'sprints', 'tasks']) {
-      const nullCount = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id IS NULL`).get() as { n: number };
+      const nullCount = await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id IS NULL`) as { n: number };
       expect(nullCount.n).toBe(0);
     }
 
-    const seededProjects = db.prepare(`
+    const seededProjects = await db.all(`
       SELECT tenant_id, name
       FROM projects
       WHERE name IN ('Agency', 'Agent HQ', 'Default Project')
       ORDER BY name, tenant_id
-    `).all() as Array<{ tenant_id: number; name: string }>;
+    `) as Array<{ tenant_id: number; name: string }>;
     expect(seededProjects).toEqual([
       { tenant_id: defaultTenantId, name: 'Agency' },
       { tenant_id: defaultTenantId, name: 'Agent HQ' },
       { tenant_id: otherTenant.id, name: 'Default Project' },
     ]);
 
-    const tenantTwoDevTaskCount = db.prepare(`
+    const tenantTwoDevTaskCount = await db.get(`
       SELECT COUNT(*) AS n
       FROM tasks
       WHERE tenant_id = ? AND title LIKE 'Sample dev task%'
-    `).get(otherTenant.id) as { n: number };
+    `, otherTenant.id) as { n: number };
     expect(tenantTwoDevTaskCount.n).toBe(0);
 
-    const defaultTaskCount = db.prepare(`
+    const defaultTaskCount = await db.get(`
       SELECT COUNT(*) AS n
       FROM tasks
       WHERE tenant_id = ? AND title LIKE 'Sample dev task%'
-    `).get(defaultTenantId) as { n: number };
+    `, defaultTenantId) as { n: number };
     expect(defaultTaskCount.n).toBe(3);
   } finally {
     db.close();

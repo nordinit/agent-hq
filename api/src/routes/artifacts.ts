@@ -24,10 +24,10 @@ function getAgentId(req: Request): string | undefined {
   return req.query.agentId as string | undefined;
 }
 
-function getWorkspaceProviderForRequest(req: Request) {
+async function getWorkspaceProviderForRequest(req: Request) {
   const db = getDb();
-  const tenantId = resolveTenantIdFromRequest(db, req);
-  return resolveWorkspaceProvider(getAgentId(req), { tenantId, allowDefaultFallback: false });
+  const tenantId = await resolveTenantIdFromRequest(db, req);
+  return await resolveWorkspaceProvider(getAgentId(req), { tenantId, allowDefaultFallback: false });
 }
 
 // ── Helper: map provider errors to HTTP responses ─────────────────────────────
@@ -53,7 +53,7 @@ function handleProviderError(err: unknown, res: Response): Response {
 // GET /api/v1/artifacts/tree
 router.get('/tree', async (req: Request, res: Response) => {
   try {
-    const provider = getWorkspaceProviderForRequest(req);
+    const provider = await getWorkspaceProviderForRequest(req);
     const result = await provider.tree(4);
     return res.json(result);
   } catch (err) {
@@ -67,7 +67,7 @@ router.get('/file', async (req: Request, res: Response) => {
     const relPath = req.query.path as string;
     if (!relPath) return res.status(400).json({ error: 'path query param required' });
 
-    const provider = getWorkspaceProviderForRequest(req);
+    const provider = await getWorkspaceProviderForRequest(req);
     const result = await provider.readFile(relPath);
     return res.json(result);
   } catch (err) {
@@ -84,7 +84,7 @@ router.put('/file', async (req: Request, res: Response) => {
     const { content } = req.body as { content?: string };
     if (content === undefined) return res.status(400).json({ error: 'content is required' });
 
-    const provider = getWorkspaceProviderForRequest(req);
+    const provider = await getWorkspaceProviderForRequest(req);
     const result = await provider.writeFile(relPath, content);
     return res.json(result);
   } catch (err) {
@@ -99,7 +99,7 @@ router.post('/file', async (req: Request, res: Response) => {
     if (!relPath) return res.status(400).json({ error: 'path is required in body' });
     if (content === undefined) return res.status(400).json({ error: 'content is required' });
 
-    const provider = getWorkspaceProviderForRequest(req);
+    const provider = await getWorkspaceProviderForRequest(req);
     const result = await provider.writeFile(relPath, content);
     return res.json(result);
   } catch (err) {
@@ -113,7 +113,7 @@ router.post('/mkdir', async (req: Request, res: Response) => {
     const relPath = req.query.path as string;
     if (!relPath) return res.status(400).json({ error: 'path query param required' });
 
-    const provider = getWorkspaceProviderForRequest(req);
+    const provider = await getWorkspaceProviderForRequest(req);
     const result = await provider.mkdir(relPath);
     return res.json(result);
   } catch (err) {
@@ -127,7 +127,7 @@ router.get('/raw', async (req: Request, res: Response) => {
     const relPath = req.query.path as string;
     if (!relPath) return res.status(400).json({ error: 'path query param required' });
 
-    const provider = getWorkspaceProviderForRequest(req);
+    const provider = await getWorkspaceProviderForRequest(req);
     const raw = await provider.rawFile(relPath);
 
     res.setHeader('Content-Type', raw.mime);
@@ -157,7 +157,7 @@ router.post('/rename', async (req: Request, res: Response) => {
     const { oldPath, newPath } = req.body as { oldPath?: string; newPath?: string };
     if (!oldPath || !newPath) return res.status(400).json({ error: 'oldPath and newPath required' });
 
-    const provider = getWorkspaceProviderForRequest(req);
+    const provider = await getWorkspaceProviderForRequest(req);
     const result = await provider.rename(oldPath, newPath);
     return res.json(result);
   } catch (err) {
@@ -171,7 +171,7 @@ router.delete('/file', async (req: Request, res: Response) => {
     const relPath = req.query.path as string;
     if (!relPath) return res.status(400).json({ error: 'path query param required' });
 
-    const provider = getWorkspaceProviderForRequest(req);
+    const provider = await getWorkspaceProviderForRequest(req);
     const result = await provider.deleteFile(relPath);
     return res.json(result);
   } catch (err) {

@@ -9,10 +9,10 @@
 
 import { execFile, spawnSync } from 'child_process';
 import fs from 'fs';
-import type Database from 'better-sqlite3';
 import { getDb } from '../../db/client';
 import { OPENCLAW_BIN, OPENCLAW_CONFIG_PATH, OPENCLAW_PATH } from '../../config';
 import { parseHookSessionKey } from '../../lib/sessionKeys';
+import { type Db } from "../../db/adapter/types";
 
 function readGatewayToken(): string {
   // Prefer explicit env override
@@ -180,8 +180,8 @@ export async function fetchHookSessionTokensAsync(): Promise<TokenMap> {
  * Backfill token data for recently completed instances that have no token data.
  * Returns the count of rows updated.
  */
-function getBackfillCandidates(db: Database.Database): Array<{ id: number; session_key: string | null }> {
-  return db.prepare(`
+async function getBackfillCandidates(db: Db): Promise<Array<{ id: number; session_key: string | null }>> {
+  return await db.all(`
     SELECT id, session_key
     FROM job_instances
     WHERE token_input IS NULL
@@ -191,11 +191,11 @@ function getBackfillCandidates(db: Database.Database): Array<{ id: number; sessi
       AND created_at >= datetime('now', '-14 days')
     ORDER BY created_at DESC, id DESC
     LIMIT 500
-  `).all() as Array<{ id: number; session_key: string | null }>;
+  `) as Array<{ id: number; session_key: string | null }>;
 }
 
 function applyTokenBackfill(
-  db: Database.Database,
+  db: Db,
   candidates: Array<{ id: number; session_key: string | null }>,
   tokenMap: TokenMap,
 ): number {
@@ -229,14 +229,14 @@ function applyTokenBackfill(
   return updated;
 }
 
-export function backfillInstanceTokens(db: Database.Database = getDb()): number {
-  const candidates = getBackfillCandidates(db);
+export async function backfillInstanceTokens(db: Db = getDb()): Promise<number> {
+  const candidates = await getBackfillCandidates(db);
   if (candidates.length === 0) return 0;
   return applyTokenBackfill(db, candidates, fetchHookSessionTokens());
 }
 
-export async function backfillInstanceTokensAsync(db: Database.Database = getDb()): Promise<number> {
-  const candidates = getBackfillCandidates(db);
+export async function backfillInstanceTokensAsync(db: Db = getDb()): Promise<number> {
+  const candidates = await getBackfillCandidates(db);
   if (candidates.length === 0) return 0;
 
   const now = Date.now();

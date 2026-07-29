@@ -3,13 +3,14 @@ import express from 'express';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-let db: Database.Database;
+let db: Db;
 
 jest.mock('../db/client', () => ({
   getDb: () => db,
 }));
 
 import chatRouter from './chat';
+import { type Db } from "../db/adapter/types";
 
 async function getJson(app: express.Express, route: string): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -26,8 +27,8 @@ async function getJson(app: express.Express, route: string): Promise<{ status: n
   }
 }
 
-function setupDb(): void {
-  db.exec(`
+async function setupDb(): Promise<void> {
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       name TEXT,
@@ -92,9 +93,9 @@ function setupDb(): void {
 }
 
 describe('GET /api/v1/chat/sessions/:instanceId/messages', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     db = new Database(':memory:');
-    setupDb();
+    await setupDb();
   });
 
   afterEach(() => {
@@ -102,17 +103,17 @@ describe('GET /api/v1/chat/sessions/:instanceId/messages', () => {
   });
 
   it('loads a direct chat conversation by session_key across instance-backed and legacy rows', async () => {
-    db.prepare(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Atlas', 'agent:atlas:web:direct:abc')`).run();
+    await db.run(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Atlas', 'agent:atlas:web:direct:abc')`);
     // A legacy instance-less row plus rows saved as per-turn job_instances (instance_id set),
     // all sharing the stable chat session_key. The bubble (instanceId=0) must return all of them.
-    db.prepare(`
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
       VALUES
         ('legacy-1', 1, NULL, 'agent:atlas:web:direct:abc', 'user', 'old hello', '2026-05-01T12:00:00Z', 'text'),
         ('oc-chat-user-501-1', 1, 501, 'agent:atlas:web:direct:abc', 'user', 'new question', '2026-05-01T12:05:00Z', 'text'),
         ('oc-hist-501-3', 1, 501, 'agent:atlas:web:direct:abc', 'assistant', '', '2026-05-01T12:05:01Z', 'tool_call'),
         ('oc-asst-501-0', 1, 501, 'agent:atlas:web:direct:abc', 'assistant', 'the answer', '2026-05-01T12:05:02Z', 'text')
-    `).run();
+    `);
 
     const app = express();
     app.use('/api/v1/chat', chatRouter);
@@ -131,9 +132,9 @@ describe('GET /api/v1/chat/sessions/:instanceId/messages', () => {
 });
 
 describe('GET /api/v1/chat/sessions', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     db = new Database(':memory:');
-    setupDb();
+    await setupDb();
   });
 
   afterEach(() => {
@@ -141,18 +142,18 @@ describe('GET /api/v1/chat/sessions', () => {
   });
 
   it('returns canonical session project metadata when present', async () => {
-    db.prepare(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Atlas', 'agent:atlas:main')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (7, 'Agent HQ Product')`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Atlas', 'agent:atlas:main')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (7, 'Agent HQ Product')`);
+    await db.run(`
       INSERT INTO sessions (id, external_key, runtime, agent_id, project_id, status, title)
       VALUES (1, 'direct:atlas:web', 'openclaw', 1, 7, 'active', 'Atlas session')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp)
       VALUES
         ('m1', 1, NULL, 'direct:atlas:web', 'user', 'hello', '2026-05-01T12:00:00Z'),
         ('m2', 1, NULL, 'direct:atlas:web', 'assistant', 'hi', '2026-05-01T12:01:00Z')
-    `).run();
+    `);
 
     const app = express();
     app.use('/api/v1/chat', chatRouter);
@@ -170,24 +171,24 @@ describe('GET /api/v1/chat/sessions', () => {
   });
 
   it('returns canonical session project metadata for run-backed chats and ignores agent project', async () => {
-    db.prepare(`INSERT INTO agents (id, name, session_key, project_id) VALUES (1, 'Cinder', 'agent:cinder:main', 99)`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (99, 'Wrong Agent Project')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Fix chats API', 9)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key, project_id) VALUES (1, 'Cinder', 'agent:cinder:main', 99)`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (99, 'Wrong Agent Project')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Fix chats API', 9)`);
+    await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, session_key, status, created_at)
       VALUES (33, 22, 1, 'run:33', 'done', '2026-05-01T11:59:00Z')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sessions (id, external_key, runtime, agent_id, task_id, instance_id, project_id, status, title)
       VALUES (1, 'run:33', 'openclaw', 1, 22, 33, 9, 'completed', 'Cinder run')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp)
       VALUES
         ('m1', 1, 33, 'run:33', 'user', 'start', '2026-05-01T12:00:00Z'),
         ('m2', 1, 33, 'run:33', 'assistant', 'done', '2026-05-01T12:03:00Z')
-    `).run();
+    `);
 
     const app = express();
     app.use('/api/v1/chat', chatRouter);
@@ -205,21 +206,21 @@ describe('GET /api/v1/chat/sessions', () => {
   });
 
   it('does not infer project metadata from a task when the canonical session is unassigned', async () => {
-    db.prepare(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Atlas', 'agent:atlas:main')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Fix chats API', 9)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Atlas', 'agent:atlas:main')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Fix chats API', 9)`);
+    await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, session_key, status, created_at)
       VALUES (33, 22, 1, 'run:33', 'done', '2026-05-01T11:59:00Z')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sessions (id, external_key, runtime, agent_id, task_id, instance_id, project_id, status, title)
       VALUES (1, 'run:33', 'openclaw', 1, 22, 33, NULL, 'completed', 'Unassigned run')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp)
       VALUES ('m1', 1, 33, 'run:33', 'user', 'hello', '2026-05-01T12:00:00Z')
-    `).run();
+    `);
 
     const app = express();
     app.use('/api/v1/chat', chatRouter);
@@ -237,24 +238,24 @@ describe('GET /api/v1/chat/sessions', () => {
   });
 
   it('includes dispatched prompt-only OpenClaw runs before a canonical sessions row exists', async () => {
-    db.prepare(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Cinder', 'agent:cinder:main')`).run();
-    db.prepare(`INSERT INTO agents (id, name, session_key) VALUES (2, 'Atlas', 'agent:atlas:main')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Show starting chat', 9)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Cinder', 'agent:cinder:main')`);
+    await db.run(`INSERT INTO agents (id, name, session_key) VALUES (2, 'Atlas', 'agent:atlas:main')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Show starting chat', 9)`);
+    await db.run(`
       INSERT INTO sessions (id, external_key, runtime, agent_id, project_id, status, title, message_count)
       VALUES (1, 'direct:atlas:web', 'openclaw', 2, NULL, 'active', 'Atlas direct', 1)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, session_key, status, created_at)
       VALUES (4581, 22, 1, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'dispatched', '2026-05-01T11:59:00Z')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp)
       VALUES
         ('prompt-1', 1, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z'),
         ('prompt-2', 1, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z')
-    `).run();
+    `);
 
     const app = express();
     app.use('/api/v1/chat', chatRouter);
@@ -277,24 +278,24 @@ describe('GET /api/v1/chat/sessions', () => {
   });
 
   it('honors instance_id for a pre-import dispatched prompt-only run', async () => {
-    db.prepare(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Cinder', 'agent:cinder:main')`).run();
-    db.prepare(`INSERT INTO agents (id, name, session_key) VALUES (2, 'Atlas', 'agent:atlas:main')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Show starting chat', 9)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Cinder', 'agent:cinder:main')`);
+    await db.run(`INSERT INTO agents (id, name, session_key) VALUES (2, 'Atlas', 'agent:atlas:main')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Show starting chat', 9)`);
+    await db.run(`
       INSERT INTO sessions (id, external_key, runtime, agent_id, project_id, status, title, message_count)
       VALUES (1, 'direct:atlas:web', 'openclaw', 2, NULL, 'active', 'Atlas direct', 1)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, session_key, status, created_at)
       VALUES (4581, 22, 1, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'dispatched', '2026-05-01T11:59:00Z')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp)
       VALUES
         ('prompt-1', 1, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z'),
         ('prompt-2', 1, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z')
-    `).run();
+    `);
 
     const app = express();
     app.use('/api/v1/chat', chatRouter);
@@ -315,27 +316,27 @@ describe('GET /api/v1/chat/sessions', () => {
   });
 
   it('filters canonical and raw chat sessions by project_id', async () => {
-    db.prepare(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Cinder', 'agent:cinder:main')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (10, 'Mobile UX')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Backend run', 9)`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (23, 'Mobile run', 10)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key) VALUES (1, 'Cinder', 'agent:cinder:main')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (10, 'Mobile UX')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (22, 'Backend run', 9)`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (23, 'Mobile run', 10)`);
+    await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, session_key, status, created_at)
       VALUES
         (33, 22, 1, 'run:33', 'done', '2026-05-01T11:59:00Z'),
         (44, 23, 1, 'run:44', 'done', '2026-05-01T12:00:00Z')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sessions (id, external_key, runtime, agent_id, task_id, instance_id, project_id, status, title, message_count)
       VALUES (1, 'run:33', 'openclaw', 1, 22, 33, 9, 'completed', 'Backend canonical', 1)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp)
       VALUES
         ('m1', 1, 33, 'run:33', 'assistant', 'backend canonical', '2026-05-01T12:01:00Z'),
         ('m2', 1, 44, 'run:44', 'assistant', 'mobile raw', '2026-05-01T12:02:00Z')
-    `).run();
+    `);
 
     const app = express();
     app.use('/api/v1/chat', chatRouter);

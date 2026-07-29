@@ -1,5 +1,4 @@
 import { spawnSync } from 'child_process';
-import type Database from 'better-sqlite3';
 import { abortChatRunBySessionKey } from '../../runtimes/OpenClawRuntime';
 import { applyStopBehavior, type StopBehavior } from './instanceStop';
 import { writeTaskRuntimeEndHistory } from '../tasks/history';
@@ -7,6 +6,8 @@ import { resolveRuntime } from '../../runtimes';
 import { OPENCLAW_BIN, OPENCLAW_PATH } from '../../config';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
 import { nowTimestamp } from '../../lib/timestamps';
+import { type Db } from "../../db/adapter/types";
+
 function resolveInstanceSessionKey(instance: Record<string, unknown>): string | null {
   const direct = typeof instance.session_key === 'string' && instance.session_key.trim()
     ? instance.session_key.trim()
@@ -86,16 +87,16 @@ export interface StopInstanceExecutionResult {
 }
 
 export async function stopInstanceExecution(
-  db: Database.Database,
+  db: Db,
   id: number,
   behavior: StopBehavior,
 ): Promise<StopInstanceExecutionResult> {
-  const instance = db.prepare(`
+  const instance = await db.get(`
     SELECT ji.*, a.session_key AS agent_session_key, a.runtime_type, a.runtime_config
     FROM job_instances ji
     LEFT JOIN agents a ON a.id = ji.agent_id
     WHERE ji.id = ?
-  `).get(id) as Record<string, unknown> | undefined;
+  `, id) as Record<string, unknown> | undefined;
 
   if (!instance) throw new Error('Instance not found');
 
@@ -112,13 +113,13 @@ export async function stopInstanceExecution(
   let abortResult: ReturnType<typeof abortChatRunBySessionKey> | null = null;
   if (sessionKey) {
     abortResult = await Promise.resolve(abortChatRunBySessionKey(sessionKey, stopReason));
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET abort_attempted_at = datetime('now'),
           abort_status = ?,
           abort_error = ?
       WHERE id = ?
-    `).run(abortResult.status, abortResult.ok ? null : abortResult.error ?? 'abort failed', id);
+    `, abortResult.status, abortResult.ok ? null : abortResult.error ?? 'abort failed', id);
   }
 
   const agentRuntimeType = instance.runtime_type as string | null;
@@ -148,40 +149,40 @@ export async function stopInstanceExecution(
   const runtimeUncertain = Boolean(abortResult && !abortConfirmed);
 
   if (abortResult?.status === 'timed_out') {
-    insertRuntimeLog(db, {
-      instanceId: id,
-      agentId: instance.agent_id as number | null,
-      jobTitle: instance.agent_id as number | null,
-      level: 'warn',
-      message: `Stop for instance ${id}: chat.abort timed out — underlying runtime state is uncertain. Agent HQ proceeding with authoritative stop. Session key: ${sessionKey ?? 'none'}`,
-    });
+    await insertRuntimeLog(db, {
+            instanceId: id,
+            agentId: instance.agent_id as number | null,
+            jobTitle: instance.agent_id as number | null,
+            level: 'warn',
+            message: `Stop for instance ${id}: chat.abort timed out — underlying runtime state is uncertain. Agent HQ proceeding with authoritative stop. Session key: ${sessionKey ?? 'none'}`,
+          });
   } else if (abortResult?.status === 'failed') {
     const failureReason = abortResult.error ?? 'chat.abort failed';
-    insertRuntimeLog(db, {
-      instanceId: id,
-      agentId: instance.agent_id as number | null,
-      jobTitle: instance.agent_id as number | null,
-      level: 'warn',
-      message: `Stop for instance ${id}: remote abort failed (${failureReason}) — underlying runtime state is uncertain. Agent HQ proceeding with authoritative stop. Session key: ${sessionKey ?? 'none'}`,
-    });
+    await insertRuntimeLog(db, {
+            instanceId: id,
+            agentId: instance.agent_id as number | null,
+            jobTitle: instance.agent_id as number | null,
+            level: 'warn',
+            message: `Stop for instance ${id}: remote abort failed (${failureReason}) — underlying runtime state is uncertain. Agent HQ proceeding with authoritative stop. Session key: ${sessionKey ?? 'none'}`,
+          });
   } else if (!sessionKey && !cronResult.removed) {
-    insertRuntimeLog(db, {
-      instanceId: id,
-      agentId: instance.agent_id as number | null,
-      jobTitle: instance.agent_id as number | null,
-      level: 'warn',
-      message: `Stop for instance ${id}: no live session key and no queued cron job found — underlying runtime state is uncertain. Agent HQ proceeding with authoritative stop.`,
-    });
+    await insertRuntimeLog(db, {
+            instanceId: id,
+            agentId: instance.agent_id as number | null,
+            jobTitle: instance.agent_id as number | null,
+            level: 'warn',
+            message: `Stop for instance ${id}: no live session key and no queued cron job found — underlying runtime state is uncertain. Agent HQ proceeding with authoritative stop.`,
+          });
   }
 
-  const stopResult = applyStopBehavior(db, id, behavior);
+  const stopResult = await applyStopBehavior(db, id, behavior);
   const stopRuntimeMessage = runtimeUncertain
     ? `Run stopped in Agent HQ (authoritative). Underlying runtime abort ${abortResult?.status === 'timed_out' ? 'timed out' : 'failed'} — runtime state is uncertain but Agent HQ has resolved the run.`
     : abortResult?.status === 'already_gone'
       ? 'Underlying hook session was already gone; Agent HQ cleaned up the stale run state.'
       : 'Run stopped successfully.';
 
-  db.prepare(`
+  await db.run(`
     UPDATE job_instances
     SET status = 'failed',
         completed_at = datetime('now'),
@@ -190,16 +191,16 @@ export async function stopInstanceExecution(
         runtime_end_error = COALESCE(runtime_end_error, ?),
         runtime_end_source = COALESCE(runtime_end_source, 'manual_stop')
     WHERE id = ?
-  `).run(stopRuntimeMessage, id);
+  `, stopRuntimeMessage, id);
 
   if (instance.task_id) {
-    writeTaskRuntimeEndHistory(db, Number(instance.task_id), 'instance_stop', {
-      endedAt: nowTimestamp(),
-      success: false,
-      source: 'manual_stop',
-      error: stopRuntimeMessage,
-      lifecycleHandoff: 'missing_after_runtime_end',
-    });
+    await writeTaskRuntimeEndHistory(db, Number(instance.task_id), 'instance_stop', {
+            endedAt: nowTimestamp(),
+            success: false,
+            source: 'manual_stop',
+            error: stopRuntimeMessage,
+            lifecycleHandoff: 'missing_after_runtime_end',
+          });
   }
 
   const taskSummary = stopResult.taskId
@@ -221,13 +222,13 @@ export async function stopInstanceExecution(
           message: 'Run stopped successfully.',
         };
 
-  insertRuntimeLog(db, {
-    instanceId: id,
-    agentId: instance.agent_id as number | null,
-    jobTitle: instance.agent_id as number | null,
-    level: 'warn',
-    message: `Job stopped manually by user (behavior=${behavior}). Abort attempted: ${Boolean(sessionKey)}. Abort status: ${sessionKey ? (abortResult?.status ?? (abortResult?.ok ? 'succeeded' : 'failed')) : 'not-attempted'}. Runtime uncertain: ${runtimeUncertain}. Cron job removed: ${cronResult.removed}. Session key: ${sessionKey ?? 'none'}. ${taskSummary}`,
-  });
+  await insertRuntimeLog(db, {
+        instanceId: id,
+        agentId: instance.agent_id as number | null,
+        jobTitle: instance.agent_id as number | null,
+        level: 'warn',
+        message: `Job stopped manually by user (behavior=${behavior}). Abort attempted: ${Boolean(sessionKey)}. Abort status: ${sessionKey ? (abortResult?.status ?? (abortResult?.ok ? 'succeeded' : 'failed')) : 'not-attempted'}. Runtime uncertain: ${runtimeUncertain}. Cron job removed: ${cronResult.removed}. Session key: ${sessionKey ?? 'none'}. ${taskSummary}`,
+      });
 
   return {
     id,

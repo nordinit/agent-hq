@@ -1,9 +1,9 @@
-import type Database from 'better-sqlite3';
 import { getDb } from '../../db/client';
 import { buildDispatchMessage, dispatchInstance } from '../runs';
 import { buildCompletionContractInstructions } from '../../services/contracts';
 import { createDurableRunId, tableHasColumn } from '../../lib/durableRunIdentity';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
+import { type Db } from "../../db/adapter/types";
 
 export type SprintStatus = 'planning' | 'planned' | 'active' | 'paused' | 'complete' | 'closed';
 
@@ -40,8 +40,8 @@ export function resolveSprintTypeOrNull(raw: unknown): string | null {
   return value.length > 0 ? value : null;
 }
 
-export function sprintTypeExists(db: Database.Database, sprintType: string): boolean {
-  const row = db.prepare(`SELECT key FROM sprint_types WHERE key = ? LIMIT 1`).get(sprintType);
+export async function sprintTypeExists(db: Db, sprintType: string): Promise<boolean> {
+  const row = await db.get(`SELECT key FROM sprint_types WHERE key = ? LIMIT 1`, sprintType);
   return Boolean(row);
 }
 
@@ -55,33 +55,33 @@ export function normalizeSprintStatus(raw: unknown): SprintStatus {
   throw new Error(`Invalid sprint status "${raw}". Valid values: planning, planned, active, paused, complete, closed`);
 }
 
-export function completeSprint(sprintId: number): void {
+export async function completeSprint(sprintId: number): Promise<void> {
   const db = getDb();
-  const sprint = db.prepare('SELECT * FROM sprints WHERE id = ?').get(sprintId) as SprintRecord | undefined;
+  const sprint = await db.get('SELECT * FROM sprints WHERE id = ?', sprintId) as SprintRecord | undefined;
   if (!sprint || sprint.status === 'complete') return;
 
-  db.prepare(`
+  await db.run(`
     UPDATE sprints SET status = 'complete', ended_at = datetime('now') WHERE id = ?
-  `).run(sprintId);
+  `, sprintId);
 
-  const paused = db.prepare(`
+  const paused = await db.run(`
     UPDATE agents SET enabled = 0 WHERE sprint_id = ?
-  `).run(sprintId);
+  `, sprintId);
 
-  insertRuntimeLog(db, {
-    projectId: sprint.project_id,
-    jobTitle: `Sprint: ${sprint.name}`,
-    level: 'info',
-    message: `Sprint "${sprint.name}" (id=${sprintId}) completed. ${paused.changes} job(s) paused.`,
-  });
+  await insertRuntimeLog(db, {
+        projectId: sprint.project_id,
+        jobTitle: `Sprint: ${sprint.name}`,
+        level: 'info',
+        message: `Sprint "${sprint.name}" (id=${sprintId}) completed. ${paused.changes} job(s) paused.`,
+      });
 
   console.log(`[sprints] Sprint ${sprintId} "${sprint.name}" completed. ${paused.changes} job(s) paused.`);
 
-  const sprintJobs = db.prepare(`
+  const sprintJobs = await db.all(`
     SELECT a.*, a.model as agent_model
     FROM agents a
     WHERE a.sprint_id = ?
-  `).all(sprintId) as Array<Record<string, unknown>>;
+  `, sprintId) as Array<Record<string, unknown>>;
 
   for (const job of sprintJobs) {
     const sprintSummaryModel = (job.agent_model ?? null) as string | null;
@@ -93,14 +93,14 @@ export function completeSprint(sprintId: number): void {
       + ` effective=${sprintSummaryModel ?? 'gateway-default'}`,
     );
 
-    const supportsDurableRunId = tableHasColumn(db, 'job_instances', 'durable_run_id');
+    const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
     const instanceResult = supportsDurableRunId
-      ? db.prepare(`
+      ? await db.run(`
           INSERT INTO job_instances (agent_id, status, durable_run_id) VALUES (?, 'queued', ?)
-        `).run(job.id, createDurableRunId())
-      : db.prepare(`
+        `, job.id, createDurableRunId())
+      : await db.run(`
           INSERT INTO job_instances (agent_id, status) VALUES (?, 'queued')
-        `).run(job.id);
+        `, job.id);
     const instanceId = instanceResult.lastInsertRowid as number;
 
     let message = buildDispatchMessage({
@@ -130,11 +130,11 @@ export function completeSprint(sprintId: number): void {
   }
 }
 
-export function checkSprintCompletion(): void {
+export async function checkSprintCompletion(): Promise<void> {
   const db = getDb();
-  const activeSprints = db.prepare(`
+  const activeSprints = await db.all(`
     SELECT * FROM sprints WHERE status = 'active'
-  `).all() as SprintRecord[];
+  `) as SprintRecord[];
 
   for (const sprint of activeSprints) {
     if (!sprint.started_at) continue;
@@ -145,21 +145,21 @@ export function checkSprintCompletion(): void {
       const startedMs = new Date(sprint.started_at).getTime();
       if (Date.now() >= startedMs + durationMs) {
         console.log(`[sprints] Sprint ${sprint.id} "${sprint.name}" time limit reached, completing.`);
-        completeSprint(sprint.id);
+        await completeSprint(sprint.id);
       }
     } else if (sprint.length_kind === 'runs') {
       const maxRuns = parseInt(sprint.length_value, 10);
       if (Number.isNaN(maxRuns)) continue;
-      const row = db.prepare(`
+      const row = await db.get(`
         SELECT COUNT(*) as cnt
         FROM job_instances ji
         JOIN agents a ON a.id = ji.agent_id
         WHERE a.sprint_id = ?
           AND ji.status IN ('done', 'failed')
-      `).get(sprint.id) as { cnt: number };
+      `, sprint.id) as { cnt: number };
       if (row.cnt >= maxRuns) {
         console.log(`[sprints] Sprint ${sprint.id} "${sprint.name}" run limit reached (${row.cnt}/${maxRuns}), completing.`);
-        completeSprint(sprint.id);
+        await completeSprint(sprint.id);
       }
     }
   }

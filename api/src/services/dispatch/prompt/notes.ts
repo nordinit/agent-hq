@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { type Db } from "../../../db/adapter/types";
 
 export interface DispatchTaskNoteRow {
   created_at: string;
@@ -24,11 +24,11 @@ export function formatDispatchTaskNote(note: DispatchTaskNoteRow): string {
   return `- [${note.created_at}] ${note.author}\n${content}`;
 }
 
-export function getDispatchTaskNotesContext(
-  db: Database.Database,
+export async function getDispatchTaskNotesContext(
+  db: Db,
   params: { taskId: number; agentId: number; currentInstanceId: number },
-): DispatchTaskNotesContext {
-  const priorInstance = db.prepare(`
+): Promise<DispatchTaskNotesContext> {
+  const priorInstance = await db.get(`
     SELECT created_at
     FROM job_instances
     WHERE task_id = ?
@@ -36,25 +36,25 @@ export function getDispatchTaskNotesContext(
       AND id != ?
     ORDER BY datetime(created_at) DESC, id DESC
     LIMIT 1
-  `).get(params.taskId, params.agentId, params.currentInstanceId) as { created_at: string } | undefined;
+  `, params.taskId, params.agentId, params.currentInstanceId) as { created_at: string } | undefined;
 
   const firstRun = !priorInstance?.created_at;
   const cutoff = priorInstance?.created_at ?? null;
 
   const notes = (cutoff
-    ? db.prepare(`
+    ? await db.all(`
         SELECT created_at, author, content
         FROM task_notes
         WHERE task_id = ?
           AND created_at >= ?
         ORDER BY datetime(created_at) ASC, id ASC
-      `).all(params.taskId, cutoff)
-    : db.prepare(`
+      `, params.taskId, cutoff)
+    : await db.all(`
         SELECT created_at, author, content
         FROM task_notes
         WHERE task_id = ?
         ORDER BY datetime(created_at) ASC, id ASC
-      `).all(params.taskId)) as DispatchTaskNoteRow[];
+      `, params.taskId)) as DispatchTaskNoteRow[];
 
   let totalChars = 0;
   const selected: DispatchTaskNoteRow[] = [];

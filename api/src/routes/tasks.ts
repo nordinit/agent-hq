@@ -92,8 +92,8 @@ const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } }); // 5
 
 const router = Router();
 
-function requireTaskVisibleForTenant(db: ReturnType<typeof getDb>, taskId: number | string, tenantId: number): boolean {
-  return Boolean(db.prepare(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`).get(taskId, tenantId));
+async function requireTaskVisibleForTenant(db: ReturnType<typeof getDb>, taskId: number | string, tenantId: number): Promise<boolean> {
+  return Boolean(await db.get(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`, taskId, tenantId));
 }
 
 // ── GET /api/v1/tasks/completed-recent?hours=N ──────────────────────────────
@@ -106,21 +106,21 @@ function requireTaskVisibleForTenant(db: ReturnType<typeof getDb>, taskId: numbe
 // Lightweight task search for use in pickers (e.g. blocker picker).
 // Searches by numeric id prefix (if q starts with #) or by title substring.
 // Returns id, title, status — enough to display in a dropdown.
-router.get('/search', (req: Request, res: Response) => {
+router.get('/search', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    res.json(searchTasks(db, { ...req.query, tenant_id: tenantId }));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    res.json(await searchTasks(db, { ...req.query, tenant_id: tenantId }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
 
-router.get('/completed-recent', (req: Request, res: Response) => {
+router.get('/completed-recent', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    res.json(listRecentlyCompletedTasks(db, req.query.hours, req.query.project_id, tenantId));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    res.json(await listRecentlyCompletedTasks(db, req.query.hours, req.query.project_id, tenantId));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -132,11 +132,11 @@ router.get('/completed-recent', (req: Request, res: Response) => {
 // Without limit, returns Task[] for backwards compatibility.
 // Optional exclude_done=true hides tasks with status='done'.
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    res.json(listTasks(db, { ...req.query, tenant_id: tenantId }));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    res.json(await listTasks(db, { ...req.query, tenant_id: tenantId }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -147,7 +147,7 @@ router.get('/', (req: Request, res: Response) => {
 // agent's assigned project. Caller-supplied project scope is intentionally
 // ignored; MCP auth also requires tasks.search_project_tasks for this route.
 
-router.post('/project-search', (req: Request, res: Response) => {
+router.post('/project-search', async (req: Request, res: Response) => {
   try {
     const identity = getMcpIdentityFromRequest(req);
     if (!identity) {
@@ -159,13 +159,13 @@ router.post('/project-search', (req: Request, res: Response) => {
     }
 
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const agent = db.prepare(`
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const agent = await db.get(`
       SELECT project_id
       FROM agents
       WHERE id = ? AND tenant_id = ?
       LIMIT 1
-    `).get(identity.agentId, tenantId) as { project_id: number | null } | undefined;
+    `, identity.agentId, tenantId) as { project_id: number | null } | undefined;
     const projectId = Number(agent?.project_id);
     if (!Number.isInteger(projectId) || projectId <= 0) {
       return res.status(403).json({
@@ -181,11 +181,11 @@ router.post('/project-search', (req: Request, res: Response) => {
     }
 
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as Record<string, unknown> : {};
-    res.json(searchProjectTasks(db, {
-      ...body,
-      tenant_id: tenantId,
-      project_id: projectId,
-    }));
+    res.json(await searchProjectTasks(db, {
+              ...body,
+              tenant_id: tenantId,
+              project_id: projectId,
+            }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('custom_fields') || message.includes('custom field')) {
@@ -197,13 +197,13 @@ router.post('/project-search', (req: Request, res: Response) => {
 
 // ── GET /api/v1/tasks/field-schema/resolve ───────────────────────────────────
 
-router.get('/field-schema/resolve', (req: Request, res: Response) => {
+router.get('/field-schema/resolve', async (req: Request, res: Response) => {
   try {
-    const resolved = resolveTaskFieldSchema(
-      req.query.sprint_id ?? null,
-      req.query.task_type ?? null,
-      req.query.sprint_type ?? null,
-    );
+    const resolved = await resolveTaskFieldSchema(
+          req.query.sprint_id ?? null,
+          req.query.task_type ?? null,
+          req.query.sprint_type ?? null,
+        );
     res.json({
       sprint_type: resolved.sprint_type,
       allowed_task_types: resolved.allowed_task_types,
@@ -218,7 +218,7 @@ router.get('/field-schema/resolve', (req: Request, res: Response) => {
 // ── GET /api/v1/tasks/:id/active-owner ──────────────────────────────────────
 // Returns whether the authenticated MCP agent owns the task's active run.
 
-router.get('/:id/active-owner', (req: Request, res: Response) => {
+router.get('/:id/active-owner', async (req: Request, res: Response) => {
   try {
     const identity = getMcpIdentityFromRequest(req);
     if (!identity) {
@@ -239,8 +239,8 @@ router.get('/:id/active-owner', (req: Request, res: Response) => {
     }
 
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const row = db.prepare(`
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const row = await db.get(`
       SELECT
         t.id AS task_id,
         t.status AS task_status,
@@ -254,7 +254,7 @@ router.get('/:id/active-owner', (req: Request, res: Response) => {
       LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
       WHERE t.id = ? AND t.tenant_id = ?
       LIMIT 1
-    `).get(taskId, tenantId) as ActiveOwnerRow | undefined;
+    `, taskId, tenantId) as ActiveOwnerRow | undefined;
 
     if (!row) {
       return res.status(404).json({
@@ -332,13 +332,13 @@ router.get('/:id/active-owner', (req: Request, res: Response) => {
 
 // ── GET /api/v1/tasks/:id/context ───────────────────────────────────────────
 
-router.get('/:id/context', (req: Request, res: Response) => {
+router.get('/:id/context', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const taskId = Number(req.params.id);
     if (!Number.isFinite(taskId)) return res.status(400).json({ error: 'Invalid task id' });
-    const task = db.prepare(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`).get(taskId, tenantId);
+    const task = await db.get(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`, taskId, tenantId);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const modeRaw = String(req.query.mode ?? 'summary').trim().toLowerCase();
@@ -376,7 +376,7 @@ router.get('/:id/context', (req: Request, res: Response) => {
       sinceHistoryId: parseOptionalInt(req.query.sinceHistoryId),
     };
 
-    const ctx = buildTaskContext(taskId, modeRaw as TaskContextMode, options);
+    const ctx = await buildTaskContext(taskId, modeRaw as TaskContextMode, options);
     if (!ctx) return res.status(404).json({ error: 'Task not found' });
     return res.json(ctx);
   } catch (err) {
@@ -386,12 +386,12 @@ router.get('/:id/context', (req: Request, res: Response) => {
 
 // ── GET /api/v1/tasks/:id ────────────────────────────────────────────────────
 
-router.get('/:id', (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    const task = getTaskById(db, Number(req.params.id));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const task = await getTaskById(db, Number(req.params.id));
     if (!task) return res.status(404).json({ error: 'Task not found' });
     res.json(task);
   } catch (err) {
@@ -401,12 +401,12 @@ router.get('/:id', (req: Request, res: Response) => {
 
 // ── GET /api/v1/tasks/:id/relationships ────────────────────────────────────
 
-router.get('/:id/relationships', (req: Request, res: Response) => {
+router.get('/:id/relationships', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    res.json({ relationships: listTaskRelationships(db, Number(req.params.id)) });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    res.json({ relationships: await listTaskRelationships(db, Number(req.params.id)) });
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -415,14 +415,14 @@ router.get('/:id/relationships', (req: Request, res: Response) => {
 
 // ── GET /api/v1/tasks/:id/relationship-types ───────────────────────────────
 
-router.get('/:id/relationship-types', (req: Request, res: Response) => {
+router.get('/:id/relationship-types', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     res.json({
       task_id: Number(req.params.id),
-      relationship_types: listRelationshipTypesForTask(db, Number(req.params.id)),
+      relationship_types: await listRelationshipTypesForTask(db, Number(req.params.id)),
     });
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
@@ -432,21 +432,21 @@ router.get('/:id/relationship-types', (req: Request, res: Response) => {
 
 // ── POST /api/v1/tasks/:id/relationships ───────────────────────────────────
 
-router.post('/:id/relationships', (req: Request, res: Response) => {
+router.post('/:id/relationships', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    const targetTask = db.prepare(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`).get(req.body?.target_task_id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const targetTask = await db.get(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`, req.body?.target_task_id, tenantId);
     if (!targetTask) return res.status(404).json({ error: 'Target task not found' });
     const createdBy = resolveRequestActor(req, req.body?.changed_by ?? req.body?.created_by ?? 'system').changedBy;
-    const relationship = createTaskRelationship(db, {
-      source_task_id: Number(req.params.id),
-      target_task_id: req.body?.target_task_id,
-      relationship_type_key: req.body?.relationship_type_key ?? req.body?.type_key,
-      metadata_json: req.body?.metadata_json ?? req.body?.metadata,
-      created_by: createdBy,
-    });
+    const relationship = await createTaskRelationship(db, {
+          source_task_id: Number(req.params.id),
+          target_task_id: req.body?.target_task_id,
+          relationship_type_key: req.body?.relationship_type_key ?? req.body?.type_key,
+          metadata_json: req.body?.metadata_json ?? req.body?.metadata,
+          created_by: createdBy,
+        });
     res.status(201).json(relationship);
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
@@ -456,20 +456,20 @@ router.post('/:id/relationships', (req: Request, res: Response) => {
 
 // ── DELETE /api/v1/tasks/:id/relationships/:relationshipId ──────────────────
 
-router.delete('/:id/relationships/:relationshipId', (req: Request, res: Response) => {
+router.delete('/:id/relationships/:relationshipId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    const relationship = db.prepare(`
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const relationship = await db.get(`
       SELECT tr.id
       FROM task_relationships tr
       JOIN tasks source ON source.id = tr.source_task_id
       JOIN tasks target ON target.id = tr.target_task_id
       WHERE tr.id = ? AND source.tenant_id = ? AND target.tenant_id = ?
-    `).get(req.params.relationshipId, tenantId, tenantId);
+    `, req.params.relationshipId, tenantId, tenantId);
     if (!relationship) return res.status(404).json({ error: 'Relationship not found' });
-    res.json(deleteTaskRelationship(db, Number(req.params.relationshipId)));
+    res.json(await deleteTaskRelationship(db, Number(req.params.relationshipId)));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -478,12 +478,12 @@ router.delete('/:id/relationships/:relationshipId', (req: Request, res: Response
 
 // ── POST /api/v1/tasks ───────────────────────────────────────────────────────
 
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const createdBy = resolveRequestActor(req, req.body.changed_by ?? 'system').changedBy;
-    res.status(201).json(createTaskRecord(db, { ...(req.body as CreateTaskInput), tenant_id: tenantId }, createdBy));
+    res.status(201).json(await createTaskRecord(db, { ...(req.body as CreateTaskInput), tenant_id: tenantId }, createdBy));
   } catch (err) {
     const status = (err as Error & { status?: number }).status;
     if (sendWorkflowAllowedValuesError(res, err)) return;
@@ -503,11 +503,11 @@ router.post('/', (req: Request, res: Response) => {
 
 // ── PUT /api/v1/tasks/:id ────────────────────────────────────────────────────
 
-router.put('/:id', (req: Request, res: Response) => {
+router.put('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`).get(req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     if (!existing) return res.status(404).json({ error: 'Task not found' });
     const changedBy = (req.body?.changed_by as string | undefined) ?? 'system';
     const headerAuthorityBy = (req.header('x-agenthq-authority-by') ?? req.header('x-agent-hq-authority-by') ?? undefined) as string | undefined;
@@ -516,7 +516,7 @@ router.put('/:id', (req: Request, res: Response) => {
       changedBy,
       headerAuthorityBy ?? (req.body.authorized_by as string | undefined) ?? (req.body.authority_by as string | undefined) ?? changedBy,
     );
-    res.json(updateTaskRecord(db, Number(req.params.id), req.body as UpdateTaskInput, actor));
+    res.json(await updateTaskRecord(db, Number(req.params.id), req.body as UpdateTaskInput, actor));
   } catch (err) {
     const typedErr = err as Error & { status?: number; body?: Record<string, unknown> };
     const status = typedErr.status;
@@ -550,13 +550,13 @@ router.put('/:id', (req: Request, res: Response) => {
 
 // ── POST /api/v1/tasks/:id/cancel ────────────────────────────────────────────
 
-router.post('/:id/cancel', (req: Request, res: Response) => {
+router.post('/:id/cancel', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'Atlas').changedBy;
-    res.json(cancelTaskRecord(db, Number(req.params.id), changedBy));
+    res.json(await cancelTaskRecord(db, Number(req.params.id), changedBy));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -571,15 +571,15 @@ router.post('/:id/cancel', (req: Request, res: Response) => {
 router.post('/:id/stop', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
-    if (!requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'User').changedBy;
     const reasonRaw = req.body?.reason as string | undefined;
     const stopReason = typeof reasonRaw === 'string' && reasonRaw.trim().length > 0 ? reasonRaw.trim() : null;
     const result = await stopTaskActiveInstance(db, id, changedBy, stopReason);
 
-    const task = getTaskById(db, id);
+    const task = await getTaskById(db, id);
     return res.json({
       ok: true,
       ...result,
@@ -600,13 +600,13 @@ router.post('/:id/stop', async (req: Request, res: Response) => {
 // before failing). Falls back to 'ready' if previous_status is not recorded.
 // Only callable on tasks in 'failed' status.
 
-router.post('/:id/reopen', (req: Request, res: Response) => {
+router.post('/:id/reopen', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'Atlas').changedBy;
-    res.json(reopenTaskRecord(db, Number(req.params.id), changedBy));
+    res.json(await reopenTaskRecord(db, Number(req.params.id), changedBy));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -618,14 +618,14 @@ router.post('/:id/reopen', (req: Request, res: Response) => {
 // Paused tasks are excluded from routing, dispatch, and lifecycle transitions
 // until explicitly unpaused. Status is not changed.
 
-router.post('/:id/pause', (req: Request, res: Response) => {
+router.post('/:id/pause', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const pauseReason = (req.body?.reason as string | undefined) ?? null;
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'user').changedBy;
-    res.json(pauseTaskRecord(db, Number(req.params.id), changedBy, pauseReason));
+    res.json(await pauseTaskRecord(db, Number(req.params.id), changedBy, pauseReason));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -636,13 +636,13 @@ router.post('/:id/pause', (req: Request, res: Response) => {
 // Unpause a task: clears paused_at and pause_reason, restoring full dispatch
 // eligibility immediately.
 
-router.post('/:id/unpause', (req: Request, res: Response) => {
+router.post('/:id/unpause', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'user').changedBy;
-    res.json(unpauseTaskRecord(db, Number(req.params.id), changedBy));
+    res.json(await unpauseTaskRecord(db, Number(req.params.id), changedBy));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -658,9 +658,9 @@ router.post('/:id/unpause', (req: Request, res: Response) => {
 router.post('/:id/outcome', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
-    if (!requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'system').changedBy;
     res.json(await postTaskOutcome(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy, {
       mcpIdentity: getMcpIdentityFromRequest(req),
@@ -703,9 +703,9 @@ router.post('/:id/outcome', async (req: Request, res: Response) => {
 router.post('/:id/admin-outcome', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
-    if (!requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'Atlas').changedBy;
     res.json(await postTaskOutcome(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
   } catch (err) {
@@ -741,14 +741,14 @@ router.post('/:id/admin-outcome', async (req: Request, res: Response) => {
 
 // ── PUT /api/v1/tasks/:id/review-evidence ────────────────────────────────────
 
-router.put('/:id/review-evidence', (req: Request, res: Response) => {
+router.put('/:id/review-evidence', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
-    if (!requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'system').changedBy;
-    res.json(putReviewEvidence(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
+    res.json(await putReviewEvidence(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
   } catch (err) {
     const typedErr = err as Error & { status?: number; body?: Record<string, unknown>; validation_errors?: string[] };
     const message = err instanceof Error ? err.message : String(err);
@@ -763,14 +763,14 @@ router.put('/:id/review-evidence', (req: Request, res: Response) => {
 
 // ── PUT /api/v1/tasks/:id/qa-evidence ────────────────────────────────────────
 
-router.put('/:id/qa-evidence', (req: Request, res: Response) => {
+router.put('/:id/qa-evidence', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
-    if (!requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'system').changedBy;
-    res.json(putQaEvidence(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
+    res.json(await putQaEvidence(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
   } catch (err) {
     const typedErr = err as Error & { status?: number; body?: Record<string, unknown>; validation_errors?: string[] };
     const message = err instanceof Error ? err.message : String(err);
@@ -785,14 +785,14 @@ router.put('/:id/qa-evidence', (req: Request, res: Response) => {
 
 // ── PUT /api/v1/tasks/:id/deploy-evidence ────────────────────────────────────
 
-router.put('/:id/deploy-evidence', (req: Request, res: Response) => {
+router.put('/:id/deploy-evidence', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
-    if (!requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'system').changedBy;
-    res.json(putDeployEvidence(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
+    res.json(await putDeployEvidence(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
   } catch (err) {
     const typedErr = err as Error & { status?: number; validation_errors?: string[] };
     const message = err instanceof Error ? err.message : String(err);
@@ -806,14 +806,14 @@ router.put('/:id/deploy-evidence', (req: Request, res: Response) => {
 
 // ── PUT /api/v1/tasks/:id/live-verification ──────────────────────────────────
 
-router.put('/:id/live-verification', (req: Request, res: Response) => {
+router.put('/:id/live-verification', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
-    if (!requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'system').changedBy;
-    res.json(putLiveVerification(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
+    res.json(await putLiveVerification(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy));
   } catch (err) {
     const typedErr = err as Error & { status?: number };
     res.status(typedErr.status ?? 500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -822,14 +822,14 @@ router.put('/:id/live-verification', (req: Request, res: Response) => {
 
 // ── POST /api/v1/tasks/backfill-release-integrity ───────────────────────────
 
-router.post('/backfill-release-integrity', (_req: Request, res: Response) => {
+router.post('/backfill-release-integrity', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tasks = db.prepare('SELECT * FROM tasks').all() as Record<string, unknown>[];
-    const results = tasks.map(task => ({
+    const tasks = await db.all('SELECT * FROM tasks') as Record<string, unknown>[];
+    const results = tasks.map(async task => ({
       id: task.id,
       title: task.title,
-      ...evaluateTaskIntegrity(task as { status?: string | null; task_type?: string | null }, db),
+      ...await evaluateTaskIntegrity(task as { status?: string | null; task_type?: string | null }, db),
     }));
     const flagged = results.filter(task => task.integrity_state !== 'clean');
     res.json({ ok: true, total: results.length, flagged: flagged.length, results, flagged_results: flagged });
@@ -840,13 +840,13 @@ router.post('/backfill-release-integrity', (_req: Request, res: Response) => {
 
 // ── DELETE /api/v1/tasks/:id ─────────────────────────────────────────────────
 
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const deletedBy = (req.query.deleted_by as string | undefined) ?? (req.body?.deleted_by as string | undefined) ?? 'system';
-    res.json(deleteTaskRecord(db, Number(req.params.id), deletedBy));
+    res.json(await deleteTaskRecord(db, Number(req.params.id), deletedBy));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -855,12 +855,12 @@ router.delete('/:id', (req: Request, res: Response) => {
 
 // ── GET /api/v1/tasks/:id/history ────────────────────────────────────────────
 
-router.get('/:id/history', (req: Request, res: Response) => {
+router.get('/:id/history', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    res.json(listTaskHistory(db, Number(req.params.id)));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    res.json(await listTaskHistory(db, Number(req.params.id)));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -869,12 +869,12 @@ router.get('/:id/history', (req: Request, res: Response) => {
 
 // ── GET /api/v1/tasks/:id/notes ──────────────────────────────────────────────
 
-router.get('/:id/notes', (req: Request, res: Response) => {
+router.get('/:id/notes', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    res.json(listTaskNotes(db, Number(req.params.id)));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    res.json(await listTaskNotes(db, Number(req.params.id)));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -883,15 +883,15 @@ router.get('/:id/notes', (req: Request, res: Response) => {
 
 // ── POST /api/v1/tasks/:id/notes ─────────────────────────────────────────────
 
-router.post('/:id/notes', (req: Request, res: Response) => {
+router.post('/:id/notes', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const { author = 'system', content } = req.body as { author?: string; content: string };
     const effectiveAuthor = resolveRequestActor(req, author).changedBy;
 
-    res.status(201).json(createTaskNoteRecord(db, Number(req.params.id), effectiveAuthor, content));
+    res.status(201).json(await createTaskNoteRecord(db, Number(req.params.id), effectiveAuthor, content));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -900,18 +900,18 @@ router.post('/:id/notes', (req: Request, res: Response) => {
 
 // ── DELETE /api/v1/tasks/:id/notes/:noteId ───────────────────────────────────
 
-router.delete('/:id/notes/:noteId', (req: Request, res: Response) => {
+router.delete('/:id/notes/:noteId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const taskId = Number(req.params.id);
     const noteId = Number(req.params.noteId);
-    if (!requireTaskVisibleForTenant(db, taskId, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, taskId, tenantId)) return res.status(404).json({ error: 'Task not found' });
 
-    const note = db.prepare('SELECT id FROM task_notes WHERE id = ? AND task_id = ?').get(noteId, taskId);
+    const note = await db.get('SELECT id FROM task_notes WHERE id = ? AND task_id = ?', noteId, taskId);
     if (!note) return res.status(404).json({ error: 'Note not found' });
 
-    db.prepare('DELETE FROM task_notes WHERE id = ?').run(noteId);
+    await db.run('DELETE FROM task_notes WHERE id = ?', noteId);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -920,15 +920,15 @@ router.delete('/:id/notes/:noteId', (req: Request, res: Response) => {
 
 // ── POST /api/v1/tasks/:id/blockers ─────────────────────────────────────────
 
-router.post('/:id/blockers', (req: Request, res: Response) => {
+router.post('/:id/blockers', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     const { blocker_id } = req.body as { blocker_id: number };
-    if (!requireTaskVisibleForTenant(db, blocker_id, tenantId)) return res.status(404).json({ error: 'Blocker task not found' });
+    if (!await requireTaskVisibleForTenant(db, blocker_id, tenantId)) return res.status(404).json({ error: 'Blocker task not found' });
 
-    res.json(addTaskBlockerRecord(db, Number(req.params.id), blocker_id));
+    res.json(await addTaskBlockerRecord(db, Number(req.params.id), blocker_id));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -937,13 +937,13 @@ router.post('/:id/blockers', (req: Request, res: Response) => {
 
 // ── DELETE /api/v1/tasks/:id/blockers/:blocker_id ───────────────────────────
 
-router.delete('/:id/blockers/:blocker_id', (req: Request, res: Response) => {
+router.delete('/:id/blockers/:blocker_id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    if (!requireTaskVisibleForTenant(db, req.params.blocker_id, tenantId)) return res.status(404).json({ error: 'Blocker task not found' });
-    res.json(removeTaskBlockerRecord(db, Number(req.params.id), Number(req.params.blocker_id)));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, req.params.blocker_id, tenantId)) return res.status(404).json({ error: 'Blocker task not found' });
+    res.json(await removeTaskBlockerRecord(db, Number(req.params.id), Number(req.params.blocker_id)));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -952,12 +952,12 @@ router.delete('/:id/blockers/:blocker_id', (req: Request, res: Response) => {
 
 // ── GET /api/v1/tasks/:id/attachments ────────────────────────────────────────
 
-router.get('/:id/attachments', (req: Request, res: Response) => {
+router.get('/:id/attachments', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    res.json(listTaskAttachments(db, Number(req.params.id)));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    res.json(await listTaskAttachments(db, Number(req.params.id)));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -965,25 +965,25 @@ router.get('/:id/attachments', (req: Request, res: Response) => {
 
 // ── POST /api/v1/tasks/:id/attachments ───────────────────────────────────────
 
-router.post('/:id/attachments', upload.single('file'), (req: Request, res: Response) => {
+router.post('/:id/attachments', upload.single('file'), async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const taskId = Number(req.params.id);
 
-    if (!requireTaskVisibleForTenant(db, taskId, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, taskId, tenantId)) return res.status(404).json({ error: 'Task not found' });
 
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file provided' });
 
     const uploadedBy = (req.body?.uploaded_by as string) || 'system';
 
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO task_attachments (task_id, filename, filepath, mime_type, size, uploaded_by)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(taskId, file.originalname, file.path, file.mimetype || '', file.size, uploadedBy);
+    `, taskId, file.originalname, file.path, file.mimetype || '', file.size, uploadedBy);
 
-    const attachment = db.prepare('SELECT * FROM task_attachments WHERE id = ?').get(result.lastInsertRowid);
+    const attachment = await db.get('SELECT * FROM task_attachments WHERE id = ?', result.lastInsertRowid);
     res.status(201).json(attachment);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -992,17 +992,15 @@ router.post('/:id/attachments', upload.single('file'), (req: Request, res: Respo
 
 // ── GET /api/v1/tasks/:id/attachments/:attachmentId/download ─────────────────
 
-router.get('/:id/attachments/:attachmentId/download', (req: Request, res: Response) => {
+router.get('/:id/attachments/:attachmentId/download', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const taskId = Number(req.params.id);
     const attachmentId = Number(req.params.attachmentId);
-    if (!requireTaskVisibleForTenant(db, taskId, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, taskId, tenantId)) return res.status(404).json({ error: 'Task not found' });
 
-    const attachment = db.prepare(
-      'SELECT * FROM task_attachments WHERE id = ? AND task_id = ?'
-    ).get(attachmentId, taskId) as { filepath: string; filename: string; mime_type: string } | undefined;
+    const attachment = await db.get('SELECT * FROM task_attachments WHERE id = ? AND task_id = ?', attachmentId, taskId) as { filepath: string; filename: string; mime_type: string } | undefined;
 
     if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
     if (!fs.existsSync(attachment.filepath)) return res.status(404).json({ error: 'File not found on disk' });
@@ -1017,24 +1015,22 @@ router.get('/:id/attachments/:attachmentId/download', (req: Request, res: Respon
 
 // ── DELETE /api/v1/tasks/:id/attachments/:attachmentId ───────────────────────
 
-router.delete('/:id/attachments/:attachmentId', (req: Request, res: Response) => {
+router.delete('/:id/attachments/:attachmentId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const taskId = Number(req.params.id);
     const attachmentId = Number(req.params.attachmentId);
-    if (!requireTaskVisibleForTenant(db, taskId, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskVisibleForTenant(db, taskId, tenantId)) return res.status(404).json({ error: 'Task not found' });
 
-    const attachment = db.prepare(
-      'SELECT * FROM task_attachments WHERE id = ? AND task_id = ?'
-    ).get(attachmentId, taskId) as { filepath: string } | undefined;
+    const attachment = await db.get('SELECT * FROM task_attachments WHERE id = ? AND task_id = ?', attachmentId, taskId) as { filepath: string } | undefined;
 
     if (!attachment) return res.status(404).json({ error: 'Attachment not found' });
 
     // Remove file from disk
     try { fs.unlinkSync(attachment.filepath); } catch { /* file may already be gone */ }
 
-    db.prepare('DELETE FROM task_attachments WHERE id = ?').run(attachmentId);
+    await db.run('DELETE FROM task_attachments WHERE id = ?', attachmentId);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -1042,12 +1038,12 @@ router.delete('/:id/attachments/:attachmentId', (req: Request, res: Response) =>
 });
 
 // GET /api/v1/tasks/:id/instances — job runs related to a task
-router.get('/:id/instances', (req: Request, res: Response) => {
+router.get('/:id/instances', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
-    return res.json(listTaskInstances(db, Number(req.params.id)));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    return res.json(await listTaskInstances(db, Number(req.params.id)));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: err instanceof Error ? err.message : String(err) });

@@ -85,13 +85,13 @@ function projectSelectSqlForTenant(whereClause = ''): string {
   return projectSelectSql(tenantScopedWhere({ alias: 'p', where: whereClause.replace(/^WHERE\s+/i, '') }));
 }
 
-function requireProjectForTenant(db: ReturnType<typeof getDb>, projectId: number | string, tenantId: number): void {
-  requireTenantOwnedRow(db, 'projects', projectId, tenantId, { notFoundMessage: 'Project not found' });
+async function requireProjectForTenant(db: ReturnType<typeof getDb>, projectId: number | string, tenantId: number): Promise<void> {
+  await requireTenantOwnedRow(db, 'projects', projectId, tenantId, { notFoundMessage: 'Project not found' });
 }
 
-function projectExistsForTenant(db: ReturnType<typeof getDb>, projectId: number | string, tenantId: number): boolean {
+async function projectExistsForTenant(db: ReturnType<typeof getDb>, projectId: number | string, tenantId: number): Promise<boolean> {
   try {
-    requireProjectForTenant(db, projectId, tenantId);
+    await requireProjectForTenant(db, projectId, tenantId);
     return true;
   } catch (err) {
     if ((err as Error & { status?: number }).status === 404) return false;
@@ -100,15 +100,15 @@ function projectExistsForTenant(db: ReturnType<typeof getDb>, projectId: number 
 }
 
 // GET /api/v1/projects
-router.get('/', (_req: Request, res: Response) => {
+router.get('/', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, _req);
-    ensureDefaultProjectId(db);
-    const projects = db.prepare(`
+    const tenantId = await resolveTenantIdFromRequest(db, _req);
+    await ensureDefaultProjectId(db);
+    const projects = await db.all(`
       ${projectSelectSqlForTenant()}
       ORDER BY p.created_at DESC
-    `).all(tenantId);
+    `, tenantId);
     res.json(projects);
   } catch (err) {
     return sendRouteError(res, err);
@@ -116,10 +116,10 @@ router.get('/', (_req: Request, res: Response) => {
 });
 
 // POST /api/v1/projects
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
     const repoRejection = rejectProjectRepoFields(body, res);
     if (repoRejection) return repoRejection;
@@ -130,26 +130,26 @@ router.post('/', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'name is required' });
     }
 
-    const result = runTenantScopedInsert(db, {
-      table: 'projects',
-      tenantId,
-      values: {
-        name,
-        description: description ?? '',
-        context_md: context_md ?? '',
-      },
-    });
+    const result = await runTenantScopedInsert(db, {
+          table: 'projects',
+          tenantId,
+          values: {
+            name,
+            description: description ?? '',
+            context_md: context_md ?? '',
+          },
+        });
 
     const newId = Number(result.lastInsertRowid);
-    ensureProjectBacklogSprint(db, newId);
-    syncStarterRoutingForProject(db, newId);
-    ensureDefaultProjectId(db);
+    await ensureProjectBacklogSprint(db, newId);
+    await syncStarterRoutingForProject(db, newId);
+    await ensureDefaultProjectId(db);
     const actor = extractActor(req);
-    writeProjectAudit(db, newId, 'project', newId, 'created', actor, {
-      name,
-      description: description ?? '',
-      context_md: context_md ?? '',
-    });
+    await writeProjectAudit(db, newId, 'project', newId, 'created', actor, {
+            name,
+            description: description ?? '',
+            context_md: context_md ?? '',
+          });
 
     const project = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(newId, tenantId);
     return res.status(201).json(project);
@@ -159,11 +159,11 @@ router.post('/', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/default
-router.get('/default', (_req: Request, res: Response) => {
+router.get('/default', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, _req);
-    const defaultProjectId = ensureDefaultProjectId(db);
+    const tenantId = await resolveTenantIdFromRequest(db, _req);
+    const defaultProjectId = await ensureDefaultProjectId(db);
     if (!defaultProjectId) return res.json({ project: null, default_project_id: null });
 
     const project = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(defaultProjectId, tenantId);
@@ -174,19 +174,19 @@ router.get('/default', (_req: Request, res: Response) => {
 });
 
 // PUT /api/v1/projects/:id/default
-router.put('/:id/default', (req: Request, res: Response) => {
+router.put('/:id/default', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const projectId = Number(req.params.id);
     if (!Number.isInteger(projectId) || projectId <= 0) {
       return res.status(400).json({ error: 'Project id must be a positive integer' });
     }
 
-    if (!projectExistsForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
-    setDefaultProjectId(db, projectId);
+    if (!await projectExistsForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
+    await setDefaultProjectId(db, projectId);
     const actor = extractActor(req);
-    writeProjectAudit(db, projectId, 'project', projectId, 'updated', actor, { default_project: true });
+    await writeProjectAudit(db, projectId, 'project', projectId, 'updated', actor, { default_project: true });
 
     const selectedProject = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(projectId, tenantId);
     return res.json({ ok: true, project: selectedProject, default_project_id: projectId });
@@ -197,19 +197,19 @@ router.put('/:id/default', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/:id/export?include_files=true
-router.get('/:id/export', (req: Request, res: Response) => {
+router.get('/:id/export', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const projectId = Number(req.params.id);
     if (!Number.isInteger(projectId) || projectId <= 0) {
       return res.status(400).json({ error: 'Project id must be a positive integer' });
     }
-    const project = db.prepare(`SELECT id, name FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`).get(...tenantScopedParams(tenantId, [projectId])) as { id: number; name: string } | undefined;
+    const project = await db.get(`SELECT id, name FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`, ...tenantScopedParams(tenantId, [projectId])) as { id: number; name: string } | undefined;
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const includeFiles = req.query.include_files === 'true';
-    const { manifest, warnings } = exportProjectManifest(db, projectId, includeFiles);
+    const { manifest, warnings } = await exportProjectManifest(db, projectId, includeFiles);
     const filename = `${project.name.replace(/[^a-zA-Z0-9_.-]/g, '_') || 'project'}-manifest-v1.json`;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -221,14 +221,14 @@ router.get('/:id/export', (req: Request, res: Response) => {
 });
 
 // POST /api/v1/projects/import/preview
-router.post('/import/preview', (req: Request, res: Response) => {
+router.post('/import/preview', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const manifest = (req.body as { manifest?: unknown }).manifest ?? req.body;
-    const preview = validateProjectManifest(db, manifest, {
-      projectName: typeof req.body?.project_name === 'string' ? req.body.project_name : undefined,
-      importFiles: Boolean(req.body?.include_files),
-    });
+    const preview = await validateProjectManifest(db, manifest, {
+          projectName: typeof req.body?.project_name === 'string' ? req.body.project_name : undefined,
+          importFiles: Boolean(req.body?.include_files),
+        });
     return res.status(preview.valid ? 200 : 400).json(preview);
   } catch (err) {
     return sendRouteError(res, err);
@@ -236,20 +236,20 @@ router.post('/import/preview', (req: Request, res: Response) => {
 });
 
 // POST /api/v1/projects/import
-router.post('/import', (req: Request, res: Response) => {
+router.post('/import', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const manifest = (req.body as { manifest?: unknown }).manifest ?? req.body;
     const actor = extractActor(req);
-    const result = importProjectManifest(db, manifest, {
-      projectName: typeof req.body?.project_name === 'string' ? req.body.project_name : undefined,
-      enableAgents: Boolean(req.body?.enable_agents),
-      activateWorkflows: Boolean(req.body?.activate_workflows),
-      importFiles: Boolean(req.body?.include_files),
-      tenantId,
-      actor,
-    });
+    const result = await importProjectManifest(db, manifest, {
+          projectName: typeof req.body?.project_name === 'string' ? req.body.project_name : undefined,
+          enableAgents: Boolean(req.body?.enable_agents),
+          activateWorkflows: Boolean(req.body?.activate_workflows),
+          importFiles: Boolean(req.body?.include_files),
+          tenantId,
+          actor,
+        });
     const project = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(result.project_id, tenantId);
     return res.status(201).json({ ok: true, project, ...result });
   } catch (err) {
@@ -262,11 +262,11 @@ router.post('/import', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/:id
-router.get('/:id', (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    ensureDefaultProjectId(db);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    await ensureDefaultProjectId(db);
     const project = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(req.params.id, tenantId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     return res.json(project);
@@ -276,11 +276,11 @@ router.get('/:id', (req: Request, res: Response) => {
 });
 
 // PUT /api/v1/projects/:id
-router.put('/:id', (req: Request, res: Response) => {
+router.put('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare(`SELECT * FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`).get(...tenantScopedParams(tenantId, [req.params.id])) as Project | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get(`SELECT * FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`, ...tenantScopedParams(tenantId, [req.params.id])) as Project | undefined;
     if (!existing) return res.status(404).json({ error: 'Project not found' });
 
     const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
@@ -306,12 +306,12 @@ router.put('/:id', (req: Request, res: Response) => {
       context_md: context_md !== undefined ? context_md : existing.context_md,
     };
 
-    runTenantScopedUpdate(db, {
-      table: 'projects',
-      id: req.params.id,
-      tenantId,
-      values: newValues,
-    });
+    await runTenantScopedUpdate(db, {
+            table: 'projects',
+            id: req.params.id,
+            tenantId,
+            values: newValues,
+          });
 
     const changes = diffFields(
       {
@@ -323,10 +323,10 @@ router.put('/:id', (req: Request, res: Response) => {
     );
     if (Object.keys(changes).length > 0) {
       const actor = extractActor(req);
-      writeProjectAudit(db, existing.id, 'project', existing.id, 'updated', actor, changes);
+      await writeProjectAudit(db, existing.id, 'project', existing.id, 'updated', actor, changes);
     }
 
-    ensureDefaultProjectId(db);
+    await ensureDefaultProjectId(db);
     const updated = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(req.params.id, tenantId);
     return res.json(updated);
   } catch (err) {
@@ -335,26 +335,26 @@ router.put('/:id', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/:id/cascade-check — check for active work before deleting
-router.get('/:id/cascade-check', (req: Request, res: Response) => {
+router.get('/:id/cascade-check', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!projectExistsForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Project not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await projectExistsForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Project not found' });
 
-    const activeTasksRow = db.prepare(`
+    const activeTasksRow = await db.get(`
       SELECT COUNT(*) as count FROM tasks
       WHERE project_id = ? AND tenant_id = ? AND status IN ('in_progress', 'review')
-    `).get(req.params.id, tenantId) as { count: number };
+    `, req.params.id, tenantId) as { count: number };
 
-    const runningInstancesRow = db.prepare(`
+    const runningInstancesRow = await db.get(`
       SELECT COUNT(*) as count FROM job_instances ji
       JOIN agents a ON a.id = ji.agent_id
       WHERE a.project_id = ? AND a.tenant_id = ? AND ji.status IN ('queued', 'dispatched', 'running')
-    `).get(req.params.id, tenantId) as { count: number };
+    `, req.params.id, tenantId) as { count: number };
 
-    const sprintCountRow = db.prepare(`SELECT COUNT(*) as count FROM sprints WHERE project_id = ? AND tenant_id = ?`).get(req.params.id, tenantId) as { count: number };
-    const taskCountRow = db.prepare(`SELECT COUNT(*) as count FROM tasks WHERE project_id = ? AND tenant_id = ?`).get(req.params.id, tenantId) as { count: number };
-    const agentCountRow = db.prepare(`SELECT COUNT(*) as count FROM agents WHERE project_id = ? AND tenant_id = ?`).get(req.params.id, tenantId) as { count: number };
+    const sprintCountRow = await db.get(`SELECT COUNT(*) as count FROM sprints WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
+    const taskCountRow = await db.get(`SELECT COUNT(*) as count FROM tasks WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
+    const agentCountRow = await db.get(`SELECT COUNT(*) as count FROM agents WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
 
     return res.json({
       active_tasks: activeTasksRow.count ?? 0,
@@ -370,29 +370,29 @@ router.get('/:id/cascade-check', (req: Request, res: Response) => {
 
 // DELETE /api/v1/projects/:id
 // Query params: ?force=true to bypass cascade warnings
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const project = db.prepare(`SELECT * FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`).get(...tenantScopedParams(tenantId, [req.params.id])) as Project | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const project = await db.get(`SELECT * FROM projects ${tenantScopedWhere({ where: 'id = ?' })}`, ...tenantScopedParams(tenantId, [req.params.id])) as Project | undefined;
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const force = req.query.force === 'true';
 
-    const activeTasksRow = db.prepare(`
+    const activeTasksRow = await db.get(`
       SELECT COUNT(*) as count FROM tasks
       WHERE project_id = ? AND tenant_id = ? AND status IN ('in_progress', 'review')
-    `).get(req.params.id, tenantId) as { count: number };
+    `, req.params.id, tenantId) as { count: number };
 
-    const runningInstancesRow = db.prepare(`
+    const runningInstancesRow = await db.get(`
       SELECT COUNT(*) as count FROM job_instances ji
       JOIN agents a ON a.id = ji.agent_id
       WHERE a.project_id = ? AND a.tenant_id = ? AND ji.status IN ('queued', 'dispatched', 'running')
-    `).get(req.params.id, tenantId) as { count: number };
+    `, req.params.id, tenantId) as { count: number };
 
-    const sprintCountRow = db.prepare(`SELECT COUNT(*) as count FROM sprints WHERE project_id = ? AND tenant_id = ?`).get(req.params.id, tenantId) as { count: number };
-    const taskCountRow = db.prepare(`SELECT COUNT(*) as count FROM tasks WHERE project_id = ? AND tenant_id = ?`).get(req.params.id, tenantId) as { count: number };
-    const agentCountRow = db.prepare(`SELECT COUNT(*) as count FROM agents WHERE project_id = ? AND tenant_id = ?`).get(req.params.id, tenantId) as { count: number };
+    const sprintCountRow = await db.get(`SELECT COUNT(*) as count FROM sprints WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
+    const taskCountRow = await db.get(`SELECT COUNT(*) as count FROM tasks WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
+    const agentCountRow = await db.get(`SELECT COUNT(*) as count FROM agents WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
 
     const activeTasks = activeTasksRow.count ?? 0;
     const runningInstances = runningInstancesRow.count ?? 0;
@@ -415,12 +415,12 @@ router.delete('/:id', (req: Request, res: Response) => {
 
     const actor = extractActor(req);
     const proj = project as Project;
-    writeProjectAudit(db, proj.id, 'project', proj.id, 'deleted', actor, {
-      name: proj.name, description: proj.description,
-    });
+    await writeProjectAudit(db, proj.id, 'project', proj.id, 'deleted', actor, {
+            name: proj.name, description: proj.description,
+          });
 
-    runTenantScopedDelete(db, { table: 'projects', id: req.params.id, tenantId });
-    ensureDefaultProjectId(db);
+    await runTenantScopedDelete(db, { table: 'projects', id: req.params.id, tenantId });
+    await ensureDefaultProjectId(db);
     return res.json({ ok: true, deleted: true, project_id: Number(req.params.id), forced: force });
   } catch (err) {
     return sendRouteError(res, err);
@@ -428,21 +428,21 @@ router.delete('/:id', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/:id/metrics — aggregate metrics across all sprints
-router.get('/:id/metrics', (req: Request, res: Response) => {
+router.get('/:id/metrics', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!projectExistsForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Project not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await projectExistsForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Project not found' });
 
-    const taskRow = db.prepare(`
+    const taskRow = await db.get(`
       SELECT
         COUNT(*) as tasks_total,
         COUNT(CASE WHEN t.status = 'done' THEN 1 END) as tasks_done
       FROM tasks t
       WHERE t.project_id = ? AND t.tenant_id = ?
-    `).get(Number(req.params.id), tenantId) as { tasks_total: number; tasks_done: number };
+    `, Number(req.params.id), tenantId) as { tasks_total: number; tasks_done: number };
 
-    const blockerRow = db.prepare(`
+    const blockerRow = await db.get(`
       SELECT COUNT(DISTINCT td.blocked_id) as blocker_count
       FROM task_dependencies td
       JOIN tasks blocked ON blocked.id = td.blocked_id
@@ -451,17 +451,17 @@ router.get('/:id/metrics', (req: Request, res: Response) => {
         AND blocked.tenant_id = ?
         AND blocker.tenant_id = ?
         AND blocker.status != 'done'
-    `).get(Number(req.params.id), tenantId, tenantId) as { blocker_count: number };
+    `, Number(req.params.id), tenantId, tenantId) as { blocker_count: number };
 
-    const durationRow = db.prepare(`
+    const durationRow = await db.get(`
       SELECT AVG(
         (strftime('%s', updated_at) - strftime('%s', created_at)) * 1000
       ) as avg_ms
       FROM tasks
       WHERE project_id = ? AND tenant_id = ? AND status = 'done'
-    `).get(Number(req.params.id), tenantId) as { avg_ms: number | null };
+    `, Number(req.params.id), tenantId) as { avg_ms: number | null };
 
-    const runRow = db.prepare(`
+    const runRow = await db.get(`
       SELECT
         COUNT(*) as job_runs_total,
         COUNT(CASE WHEN ji.status = 'done' THEN 1 END) as job_runs_success,
@@ -469,9 +469,9 @@ router.get('/:id/metrics', (req: Request, res: Response) => {
       FROM job_instances ji
       JOIN agents a ON a.id = ji.agent_id
       WHERE a.project_id = ? AND a.tenant_id = ?
-    `).get(Number(req.params.id), tenantId) as { job_runs_total: number; job_runs_success: number; job_runs_failed: number };
+    `, Number(req.params.id), tenantId) as { job_runs_total: number; job_runs_success: number; job_runs_failed: number };
 
-    const sprintCount = (db.prepare('SELECT COUNT(*) as n FROM sprints WHERE project_id = ? AND tenant_id = ?').get(Number(req.params.id), tenantId) as { n: number }).n;
+    const sprintCount = (await db.get('SELECT COUNT(*) as n FROM sprints WHERE project_id = ? AND tenant_id = ?', Number(req.params.id), tenantId) as { n: number }).n;
 
     const tasks_total = taskRow.tasks_total ?? 0;
     const tasks_done = taskRow.tasks_done ?? 0;
@@ -502,21 +502,21 @@ router.get('/:id/metrics', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/:id/jobs — list job templates for this project
-router.get('/:id/jobs', (req: Request, res: Response) => {
+router.get('/:id/jobs', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!projectExistsForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Project not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await projectExistsForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Project not found' });
 
     // Read from agents table — agents now have all job-template columns
-    const jobs = db.prepare(`
+    const jobs = await db.all(`
       SELECT a.*, a.name as agent_name, a.session_key as agent_session_key,
              a.job_title as title, p.name as project_name
       FROM agents a
       LEFT JOIN projects p ON p.id = a.project_id
       WHERE a.project_id = ? AND a.tenant_id = ?
       ORDER BY a.created_at DESC
-    `).all(req.params.id, tenantId);
+    `, req.params.id, tenantId);
     return res.json(jobs);
   } catch (err) {
     return sendRouteError(res, err);
@@ -524,15 +524,15 @@ router.get('/:id/jobs', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/:id/audit — project-level audit history
-router.get('/:id/audit', (req: Request, res: Response) => {
+router.get('/:id/audit', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const projectId = Number(req.params.id);
     if (!Number.isInteger(projectId) || projectId <= 0) {
       return res.status(400).json({ error: 'Project id must be a positive integer' });
     }
-    if (!projectExistsForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
+    if (!await projectExistsForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
 
     const limit = Math.min(Number(req.query.limit) || 100, 500);
     const offset = Number(req.query.offset) || 0;

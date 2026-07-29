@@ -1,6 +1,5 @@
 import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
-import type Database from 'better-sqlite3';
 import { OPENCLAW_BIN, OPENCLAW_CONFIG_PATH, OPENCLAW_PATH } from '../config';
 import { buildGatewayRunSessionKey } from './sessionKeys';
 import { removeTaskWorktree } from '../services/worktreeManager';
@@ -8,6 +7,7 @@ import { removeTaskClone } from '../services/repoWorkspaceManager';
 import { writeTaskHistory } from '../domains/tasks/history';
 import { taskTableHasColumn } from '../domains/tasks/ownership';
 import { nowTimestamp } from './timestamps';
+import { type Db } from "../db/adapter/types";
 
 const LIVE_TASK_STATUSES = ['in_progress', 'dev_deploy_queued', 'dev_deploying', 'stalled'] as const;
 const LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
@@ -47,27 +47,27 @@ function getGatewayAuthToken(): string {
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
-function isQaAgent(db: Database.Database, agentId: number | null | undefined): boolean {
+async function isQaAgent(db: Db, agentId: number | null | undefined): Promise<boolean> {
   if (!agentId) return false;
 
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT name, job_title
     FROM agents
     WHERE id = ?
-  `).get(agentId) as { name: string | null; job_title: string | null } | undefined;
+  `, agentId) as { name: string | null; job_title: string | null } | undefined;
   const haystack = ((row?.job_title ?? '') + ' ' + (row?.name ?? '')).toLowerCase();
 
   return /\bqa\b/.test(haystack);
 }
 
-function taskAllowsReviewExecution(db: Database.Database, task: { agent_id?: number | null; active_instance_id: number | null }): boolean {
-  if (!task.active_instance_id || !task.agent_id || !isQaAgent(db, task.agent_id)) return false;
+async function taskAllowsReviewExecution(db: Db, task: { agent_id?: number | null; active_instance_id: number | null }): Promise<boolean> {
+  if (!task.active_instance_id || !task.agent_id || !await isQaAgent(db, task.agent_id)) return false;
 
-  const instance = db.prepare(`
+  const instance = await db.get(`
     SELECT agent_id, status
     FROM job_instances
     WHERE id = ?
-  `).get(task.active_instance_id) as { agent_id: number; status: string } | undefined;
+  `, task.active_instance_id) as { agent_id: number; status: string } | undefined;
 
   if (!instance) return false;
   if (instance.agent_id !== task.agent_id) return false;
@@ -80,14 +80,14 @@ function taskAllowsReviewExecution(db: Database.Database, task: { agent_id?: num
  * cleanup; this guard only preserves authority while that live release run is
  * still legitimately in flight.
  */
-function taskAllowsReleaseExecution(db: Database.Database, task: { agent_id?: number | null; active_instance_id: number | null }): boolean {
+async function taskAllowsReleaseExecution(db: Db, task: { agent_id?: number | null; active_instance_id: number | null }): Promise<boolean> {
   if (!task.active_instance_id) return false;
 
-  const instance = db.prepare(`
+  const instance = await db.get(`
     SELECT agent_id, status
     FROM job_instances
     WHERE id = ?
-  `).get(task.active_instance_id) as { agent_id: number; status: string } | undefined;
+  `, task.active_instance_id) as { agent_id: number; status: string } | undefined;
 
   if (!instance) return false;
   return LIVE_INSTANCE_STATUSES.includes(instance.status as typeof LIVE_INSTANCE_STATUSES[number]);
@@ -120,21 +120,21 @@ function isWithinEndedLinkageGraceWindow(
   return nowMs - anchorMs < ACTIVE_INSTANCE_END_GRACE_MS;
 }
 
-function getEndedLinkageCleanupContext(db: Database.Database, taskId: number, instanceId: number): {
+async function getEndedLinkageCleanupContext(db: Db, taskId: number, instanceId: number): Promise<{
   taskId: number;
   instanceId: number;
   runtimeEndedAt: string | null;
   lifecycleOutcomePostedAt: string | null;
   anchorMs: number;
-} | null {
-  const row = db.prepare(`
+} | null> {
+  const row = await db.get(`
     SELECT t.active_instance_id,
            ji.runtime_ended_at,
            ji.lifecycle_outcome_posted_at
     FROM tasks t
     LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
     WHERE t.id = ?
-  `).get(taskId) as {
+  `, taskId) as {
     active_instance_id: number | null;
     runtime_ended_at: string | null;
     lifecycle_outcome_posted_at: string | null;
@@ -155,12 +155,12 @@ function getEndedLinkageCleanupContext(db: Database.Database, taskId: number, in
 }
 
 async function finalizeTaskTransitionRuntimeEndIfNeeded(
-  db: Database.Database,
+  db: Db,
   taskId: number,
   instanceId: number,
   changedBy?: string,
 ): Promise<void> {
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT status,
            session_key,
            runtime_ended_at,
@@ -168,7 +168,7 @@ async function finalizeTaskTransitionRuntimeEndIfNeeded(
            task_outcome
     FROM job_instances
     WHERE id = ?
-  `).get(instanceId) as {
+  `, instanceId) as {
     status: string;
     session_key: string | null;
     runtime_ended_at: string | null;
@@ -201,14 +201,14 @@ async function finalizeTaskTransitionRuntimeEndIfNeeded(
 
   if (!result.changed) return;
 
-  db.prepare(`
+  await db.run(`
     UPDATE job_instances
     SET status = 'done',
         completed_at = COALESCE(completed_at, runtime_ended_at, datetime('now'))
     WHERE id = ?
       AND status IN ('queued', 'dispatched', 'running')
       AND runtime_ended_at IS NOT NULL
-  `).run(instanceId);
+  `, instanceId);
 
   if (row.session_key && (row.status === 'dispatched' || row.status === 'running')) {
     abortOrphanedInstanceAsync(
@@ -220,8 +220,8 @@ async function finalizeTaskTransitionRuntimeEndIfNeeded(
   }
 }
 
-export function clearEndedActiveInstanceLinkageIfEligible(
-  db: Database.Database,
+export async function clearEndedActiveInstanceLinkageIfEligible(
+  db: Db,
   taskId: number,
   instanceId: number,
   options?: {
@@ -229,8 +229,8 @@ export function clearEndedActiveInstanceLinkageIfEligible(
     nowMs?: number;
     force?: boolean;
   },
-): boolean {
-  const context = getEndedLinkageCleanupContext(db, taskId, instanceId);
+): Promise<boolean> {
+  const context = await getEndedLinkageCleanupContext(db, taskId, instanceId);
   if (!context) return false;
 
   const nowMs = options?.nowMs ?? Date.now();
@@ -238,18 +238,18 @@ export function clearEndedActiveInstanceLinkageIfEligible(
     return false;
   }
 
-  const result = db.prepare(`
+  const result = await db.run(`
     UPDATE tasks
     SET active_instance_id = NULL,
-        ${taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
+        ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
         updated_at = datetime('now')
     WHERE id = ?
       AND active_instance_id = ?
-  `).run(taskId, instanceId);
+  `, taskId, instanceId);
 
   if (result.changes > 0) {
     try {
-      writeTaskHistory(db, taskId, options?.changedBy ?? 'task_lifecycle', 'active_instance_id', instanceId, null);
+      await writeTaskHistory(db, taskId, options?.changedBy ?? 'task_lifecycle', 'active_instance_id', instanceId, null);
     } catch {
       // Non-fatal in minimal test schemas.
     }
@@ -258,16 +258,16 @@ export function clearEndedActiveInstanceLinkageIfEligible(
   return result.changes > 0;
 }
 
-export function scheduleEndedActiveInstanceLinkageCleanup(
-  db: Database.Database,
+export async function scheduleEndedActiveInstanceLinkageCleanup(
+  db: Db,
   taskId: number,
   instanceId: number,
   options?: {
     changedBy?: string;
     nowMs?: number;
   },
-): boolean {
-  const context = getEndedLinkageCleanupContext(db, taskId, instanceId);
+): Promise<boolean> {
+  const context = await getEndedLinkageCleanupContext(db, taskId, instanceId);
   if (!context) return false;
 
   const nowMs = options?.nowMs ?? Date.now();
@@ -281,10 +281,10 @@ export function scheduleEndedActiveInstanceLinkageCleanup(
     pendingEndedLinkageCleanupTimers.delete(key);
     try {
       await finalizeTaskTransitionRuntimeEndIfNeeded(db, taskId, instanceId, options?.changedBy);
-      clearEndedActiveInstanceLinkageIfEligible(db, taskId, instanceId, {
-        changedBy: options?.changedBy,
-        force: true,
-      });
+      await clearEndedActiveInstanceLinkageIfEligible(db, taskId, instanceId, {
+                changedBy: options?.changedBy,
+                force: true,
+              });
     } catch (err) {
       console.warn(
         `[taskLifecycle] Failed delayed active-instance cleanup for task #${taskId} instance #${instanceId}:`,
@@ -344,10 +344,10 @@ function resolveCleanupRepoContext(row: {
   };
 }
 
-export function cleanupDoneTaskWorktrees(db: Database.Database, taskId: number): number {
-  const hasPayloadSent = (db.prepare(`PRAGMA table_info(job_instances)`).all() as Array<{ name: string }>).some(col => col.name === 'payload_sent');
-  const hasRepoAccessMode = (db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>).some(col => col.name === 'repo_access_mode');
-  const rows = db.prepare(`
+export async function cleanupDoneTaskWorktrees(db: Db, taskId: number): Promise<number> {
+  const hasPayloadSent = (await db.all(`PRAGMA table_info(job_instances)`) as Array<{ name: string }>).some(col => col.name === 'payload_sent');
+  const hasRepoAccessMode = (await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>).some(col => col.name === 'repo_access_mode');
+  const rows = await db.all(`
     SELECT DISTINCT ji.worktree_path,
            ${hasPayloadSent ? 'ji.payload_sent' : 'NULL AS payload_sent'},
            a.repo_path${hasRepoAccessMode ? ', a.repo_access_mode' : ', NULL AS repo_access_mode'}
@@ -362,13 +362,7 @@ export function cleanupDoneTaskWorktrees(db: Database.Database, taskId: number):
       )
       AND ji.worktree_path IS NOT NULL
       AND ji.worktree_path != ''
-  `).all(
-    taskId,
-    `task-${taskId}`,
-    `%/task-${taskId}`,
-    `agent-hq-task-${taskId}`,
-    `%/agent-hq-task-${taskId}`,
-  ) as Array<{ worktree_path: string; payload_sent?: string | null; repo_path: string | null; repo_access_mode: string | null }>;
+  `, taskId, `task-${taskId}`, `%/task-${taskId}`, `agent-hq-task-${taskId}`, `%/agent-hq-task-${taskId}`) as Array<{ worktree_path: string; payload_sent?: string | null; repo_path: string | null; repo_access_mode: string | null }>;
 
   let removed = 0;
   for (const row of rows) {
@@ -405,14 +399,14 @@ const WATCHDOG_MAX_POLLS = 5;        // max re-checks after grace period
  * payload. The DB stores the short key (hook:atlas:jobrun:<id>); the gateway
  * sessions.* methods require the agent-prefixed key.
  */
-function resolveFullSessionKey(db: Database.Database, instanceId: number, shortKey: string): string | null {
+async function resolveFullSessionKey(db: Db, instanceId: number, shortKey: string): Promise<string | null> {
   try {
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT ji.payload_sent, a.session_key, a.openclaw_agent_id, a.name
       FROM job_instances ji
       LEFT JOIN agents a ON a.id = ji.agent_id
       WHERE ji.id = ?
-    `).get(instanceId) as {
+    `, instanceId) as {
       payload_sent: string | null;
       session_key: string | null;
       openclaw_agent_id: string | null;
@@ -531,7 +525,7 @@ function hardKillSessionSync(fullSessionKey: string): { ok: boolean; error?: str
  * @param reason      - Human-readable reason for the abort (logged)
  */
 export function abortOrphanedInstanceAsync(
-  db: Database.Database,
+  db: Db,
   instanceId: number,
   sessionKey: string,
   reason: string,
@@ -566,15 +560,15 @@ export function abortOrphanedInstanceAsync(
   child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
   child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
 
-  const timeoutHandle = setTimeout(() => {
+  const timeoutHandle = setTimeout(async () => {
     if (settled) return;
     settled = true;
     child.kill('SIGKILL');
     console.warn(`[taskLifecycle] abort timed out for instance #${instanceId} (${sessionKey})`);
-    markInstanceFailed(db, instanceId, 'abort timed out after task cancel/stop');
+    await markInstanceFailed(db, instanceId, 'abort timed out after task cancel/stop');
   }, ABORT_TIMEOUT_MS);
 
-  child.on('close', (code: number | null) => {
+  child.on('close', async (code: number | null) => {
     if (settled) return;
     settled = true;
     clearTimeout(timeoutHandle);
@@ -590,7 +584,7 @@ export function abortOrphanedInstanceAsync(
         .some(s => haystack.includes(s));
 
     if (alreadyGone) {
-      markInstanceCancelled(db, instanceId, 'already_gone');
+      await markInstanceCancelled(db, instanceId, 'already_gone');
       console.log(`[taskLifecycle] instance #${instanceId} already gone — ${reason}`);
       return;
     }
@@ -599,7 +593,7 @@ export function abortOrphanedInstanceAsync(
       // Abort failed entirely — mark failed, no watchdog
       const failReason = errorText || `abort exited with code ${code}`;
       console.warn(`[taskLifecycle] abort failed for instance #${instanceId}: ${failReason}`);
-      markInstanceFailed(db, instanceId, `abort failed after task cancel/stop: ${failReason}`);
+      await markInstanceFailed(db, instanceId, `abort failed after task cancel/stop: ${failReason}`);
       return;
     }
 
@@ -608,20 +602,20 @@ export function abortOrphanedInstanceAsync(
     console.log(`[taskLifecycle] chat.abort sent for instance #${instanceId} — starting watchdog (${WATCHDOG_GRACE_MS}ms grace, ${WATCHDOG_MAX_POLLS} polls)`);
     const baselineTs = Date.now();
 
-    const watchdogTimer = setTimeout(() => {
-      runAbortWatchdog(db, instanceId, sessionKey, reason, baselineTs);
+    const watchdogTimer = setTimeout(async () => {
+      await runAbortWatchdog(db, instanceId, sessionKey, reason, baselineTs);
     }, WATCHDOG_GRACE_MS);
 
     // Unref so the watchdog doesn't prevent Node from exiting if everything else is done
     watchdogTimer.unref();
   });
 
-  child.on('error', (err: Error) => {
+  child.on('error', async (err: Error) => {
     if (settled) return;
     settled = true;
     clearTimeout(timeoutHandle);
     console.error(`[taskLifecycle] spawn error aborting instance #${instanceId}:`, err);
-    markInstanceFailed(db, instanceId, `spawn error during abort: ${err.message}`);
+    await markInstanceFailed(db, instanceId, `spawn error during abort: ${err.message}`);
   });
 }
 
@@ -632,35 +626,35 @@ export function abortOrphanedInstanceAsync(
  *
  * Fully non-blocking: uses recursive setTimeout so the event loop stays free.
  */
-function runAbortWatchdog(
-  db: Database.Database,
+async function runAbortWatchdog(
+  db: Db,
   instanceId: number,
   sessionKey: string,
   reason: string,
   baselineTs: number,
-): void {
+): Promise<void> {
   // First check: is the instance already terminal?
-  const inst = db.prepare(`SELECT status FROM job_instances WHERE id = ?`).get(instanceId) as { status: string } | undefined;
+  const inst = await db.get(`SELECT status FROM job_instances WHERE id = ?`, instanceId) as { status: string } | undefined;
   if (!inst || ['done', 'failed', 'cancelled'].includes(inst.status)) {
     console.log(`[taskLifecycle:watchdog] instance #${instanceId} already terminal (${inst?.status ?? 'gone'}) — watchdog done`);
     return;
   }
 
   // Resolve the full OpenClaw session key (agent:<slug>:<key>)
-  const maybeFullKey = resolveFullSessionKey(db, instanceId, sessionKey);
+  const maybeFullKey = await resolveFullSessionKey(db, instanceId, sessionKey);
   if (!maybeFullKey) {
     // Can't resolve full key — assume soft abort was sufficient
     console.warn(`[taskLifecycle:watchdog] cannot resolve full session key for instance #${instanceId}, assuming soft abort was sufficient`);
-    markInstanceCancelled(db, instanceId, 'succeeded');
+    await markInstanceCancelled(db, instanceId, 'succeeded');
     return;
   }
   const fullSessionKey: string = maybeFullKey;
 
   let pollCount = 0;
 
-  function doPoll(): void {
+  async function doPoll(): Promise<void> {
     // Re-check instance status before each poll
-    const current = db.prepare(`SELECT status FROM job_instances WHERE id = ?`).get(instanceId) as { status: string } | undefined;
+    const current = await db.get(`SELECT status FROM job_instances WHERE id = ?`, instanceId) as { status: string } | undefined;
     if (!current || ['done', 'failed', 'cancelled'].includes(current.status)) {
       console.log(`[taskLifecycle:watchdog] instance #${instanceId} became terminal during poll ${pollCount + 1} — watchdog done`);
       return;
@@ -671,7 +665,7 @@ function runAbortWatchdog(
 
     if (!sessionActive) {
       console.log(`[taskLifecycle:watchdog] session gone for instance #${instanceId} at poll ${pollCount} — marking cancelled`);
-      markInstanceCancelled(db, instanceId, 'succeeded');
+      await markInstanceCancelled(db, instanceId, 'succeeded');
       return;
     }
 
@@ -688,21 +682,21 @@ function runAbortWatchdog(
     console.warn(`[taskLifecycle:watchdog] session still active after ${WATCHDOG_MAX_POLLS} polls for instance #${instanceId} — escalating to sessions.delete`);
     const killResult = hardKillSessionSync(fullSessionKey);
     if (killResult.ok) {
-      markInstanceCancelled(db, instanceId, 'hard_killed');
+      await markInstanceCancelled(db, instanceId, 'hard_killed');
       console.log(`[taskLifecycle:watchdog] sessions.delete succeeded for instance #${instanceId} — marked cancelled (hard_killed)`);
     } else {
       console.error(`[taskLifecycle:watchdog] sessions.delete failed for instance #${instanceId}: ${killResult.error}`);
-      markInstanceFailed(db, instanceId, `hard kill failed after soft abort was ignored: ${killResult.error}`);
+      await markInstanceFailed(db, instanceId, `hard kill failed after soft abort was ignored: ${killResult.error}`);
     }
   }
 
   // Kick off the first poll immediately (we already waited WATCHDOG_GRACE_MS)
-  doPoll();
+  await doPoll();
 }
 
-function markInstanceCancelled(db: Database.Database, instanceId: number, abortStatus: string): void {
+async function markInstanceCancelled(db: Db, instanceId: number, abortStatus: string): Promise<void> {
   try {
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET status = 'cancelled',
           abort_attempted_at = COALESCE(abort_attempted_at, datetime('now')),
@@ -711,15 +705,15 @@ function markInstanceCancelled(db: Database.Database, instanceId: number, abortS
           completed_at = datetime('now')
       WHERE id = ?
         AND status NOT IN ('done', 'failed', 'cancelled')
-    `).run(abortStatus, instanceId);
+    `, abortStatus, instanceId);
   } catch (err) {
     console.error(`[taskLifecycle] failed to mark instance #${instanceId} as cancelled:`, err);
   }
 }
 
-function markInstanceFailed(db: Database.Database, instanceId: number, reason: string): void {
+async function markInstanceFailed(db: Db, instanceId: number, reason: string): Promise<void> {
   try {
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET status = 'failed',
           abort_attempted_at = COALESCE(abort_attempted_at, datetime('now')),
@@ -729,7 +723,7 @@ function markInstanceFailed(db: Database.Database, instanceId: number, reason: s
           completed_at = datetime('now')
       WHERE id = ?
         AND status NOT IN ('done', 'failed', 'cancelled')
-    `).run(reason, reason, instanceId);
+    `, reason, reason, instanceId);
   } catch (err) {
     console.error(`[taskLifecycle] failed to mark instance #${instanceId} as failed:`, err);
   }
@@ -737,8 +731,8 @@ function markInstanceFailed(db: Database.Database, instanceId: number, reason: s
 
 // ── Exported lifecycle functions ─────────────────────────────────────────────
 
-export function cleanupTaskExecutionLinkageForStatus(
-  db: Database.Database,
+export async function cleanupTaskExecutionLinkageForStatus(
+  db: Db,
   taskId: number,
   nextStatus?: string | null,
   options?: {
@@ -746,54 +740,54 @@ export function cleanupTaskExecutionLinkageForStatus(
     authoritativeInstanceId?: number | null;
     changedBy?: string;
   },
-): boolean {
-  const task = db.prepare(`
+): Promise<boolean> {
+  const task = await db.get(`
     SELECT id, status, agent_id, active_instance_id
     FROM tasks
     WHERE id = ?
-  `).get(taskId) as { id: number; status: string; agent_id: number | null; active_instance_id: number | null } | undefined;
+  `, taskId) as { id: number; status: string; agent_id: number | null; active_instance_id: number | null } | undefined;
 
   if (!task) return false;
 
   const effectiveStatus = nextStatus ?? task.status;
   if (effectiveStatus === 'done') {
-    cleanupDoneTaskWorktrees(db, taskId);
+    await cleanupDoneTaskWorktrees(db, taskId);
   }
 
   if (!task.active_instance_id) return false;
 
   if (taskAllowsActiveExecution(effectiveStatus)) return false;
-  if (effectiveStatus === 'review' && taskAllowsReviewExecution(db, task)) return false;
+  if (effectiveStatus === 'review' && await taskAllowsReviewExecution(db, task)) return false;
   // Deployment-stage exception: preserve authority while a release run is still
   // live. Once an outcome closes the instance, ended-linkage cleanup clears it.
-  if ((effectiveStatus === 'ready_to_merge' || effectiveStatus === 'deployed') && taskAllowsReleaseExecution(db, task)) return false;
+  if ((effectiveStatus === 'ready_to_merge' || effectiveStatus === 'deployed') && await taskAllowsReleaseExecution(db, task)) return false;
 
   if (options?.deferEndedActiveInstanceCleanup) {
     const authoritativeInstanceId = options.authoritativeInstanceId ?? task.active_instance_id;
     if (authoritativeInstanceId != null && authoritativeInstanceId === task.active_instance_id) {
-      const scheduled = scheduleEndedActiveInstanceLinkageCleanup(db, taskId, authoritativeInstanceId, {
-        changedBy: options.changedBy,
-      });
+      const scheduled = await scheduleEndedActiveInstanceLinkageCleanup(db, taskId, authoritativeInstanceId, {
+              changedBy: options.changedBy,
+            });
       if (scheduled) return false;
     }
   }
 
   // Capture orphaned instance info before clearing linkage
   const orphanedInstanceId = task.active_instance_id;
-  const orphanedInstance = db.prepare(`
+  const orphanedInstance = await db.get(`
     SELECT id, session_key, status
     FROM job_instances
     WHERE id = ?
-  `).get(orphanedInstanceId) as { id: number; session_key: string | null; status: string } | undefined;
+  `, orphanedInstanceId) as { id: number; session_key: string | null; status: string } | undefined;
 
-  const result = db.prepare(`
+  const result = await db.run(`
     UPDATE tasks
     SET active_instance_id = NULL,
-        ${taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
+        ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
         updated_at = datetime('now')
     WHERE id = ?
       AND active_instance_id IS NOT NULL
-  `).run(taskId);
+  `, taskId);
 
   if (result.changes > 0 && orphanedInstance) {
     const { session_key: sessionKey, status: instanceStatus } = orphanedInstance;
@@ -812,11 +806,11 @@ export function cleanupTaskExecutionLinkageForStatus(
       );
     } else if (instanceStatus === 'queued' || (isLive && !sessionKey)) {
       // Queued or live-but-sessionless: no session to abort, mark failed immediately
-      markInstanceFailed(
-        db,
-        orphanedInstanceId,
-        `orphaned by task #${taskId} cancel/stop (status → ${effectiveStatus}); no session key to abort`,
-      );
+      await markInstanceFailed(
+                db,
+                orphanedInstanceId,
+                `orphaned by task #${taskId} cancel/stop (status → ${effectiveStatus}); no session key to abort`,
+              );
     }
     // Already-terminal instances (done/failed) are left untouched
   }
@@ -824,8 +818,8 @@ export function cleanupTaskExecutionLinkageForStatus(
   return result.changes > 0;
 }
 
-export function cleanupImpossibleTaskLifecycleStates(db: Database.Database): number {
-  const rows = db.prepare(`
+export async function cleanupImpossibleTaskLifecycleStates(db: Db): Promise<number> {
+  const rows = await db.all(`
     SELECT t.id, t.status, t.active_instance_id,
            ji.status AS instance_status,
            ji.runtime_ended_at,
@@ -833,7 +827,7 @@ export function cleanupImpossibleTaskLifecycleStates(db: Database.Database): num
     FROM tasks t
     LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
     WHERE t.active_instance_id IS NOT NULL
-  `).all() as Array<{
+  `) as Array<{
     id: number;
     status: string;
     active_instance_id: number;
@@ -857,14 +851,14 @@ export function cleanupImpossibleTaskLifecycleStates(db: Database.Database): num
       continue;
     }
 
-    const result = db.prepare(`
+    const result = await db.run(`
       UPDATE tasks
       SET active_instance_id = NULL,
-          ${taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
+          ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
           updated_at = datetime('now')
       WHERE id = ?
         AND active_instance_id = ?
-    `).run(row.id, row.active_instance_id);
+    `, row.id, row.active_instance_id);
     cleared += result.changes;
   }
 

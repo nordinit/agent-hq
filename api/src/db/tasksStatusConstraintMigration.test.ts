@@ -23,9 +23,9 @@ describe('tasks.status schema migration', () => {
     tempDir = '';
   });
 
-  it('removes the legacy hard-coded tasks.status CHECK constraint without losing task rows', () => {
+  it('removes the legacy hard-coded tasks.status CHECK constraint without losing task rows', async () => {
     const legacyDb = new Database(process.env.AGENT_HQ_DB_PATH!);
-    legacyDb.exec(`
+    await legacyDb.exec(`
       CREATE TABLE projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -101,27 +101,27 @@ describe('tasks.status schema migration', () => {
     `);
     legacyDb.close();
 
-    initSchema();
+    await initSchema();
     const db = getDb();
-    const ddl = (db.prepare(`
+    const ddl = (await db.get(`
       SELECT sql
       FROM sqlite_master
       WHERE type = 'table' AND name = 'tasks'
-    `).get() as { sql: string }).sql;
+    `) as { sql: string }).sql;
 
     expect(ddl).not.toContain('CHECK(status IN');
-    expect(db.prepare(`SELECT title, status FROM tasks WHERE id = 797`).get()).toEqual({
+    expect(await db.get(`SELECT title, status FROM tasks WHERE id = 797`)).toEqual({
       title: 'Elevation Build intake',
       status: 'todo',
     });
 
-    expect(() => db.prepare(`UPDATE tasks SET status = 'field_reported' WHERE id = 797`).run()).not.toThrow();
-    expect((db.prepare(`SELECT status FROM tasks WHERE id = 797`).get() as { status: string }).status).toBe('field_reported');
+    expect(async () => await db.run(`UPDATE tasks SET status = 'field_reported' WHERE id = 797`)).not.toThrow();
+    expect((await db.get(`SELECT status FROM tasks WHERE id = 797`) as { status: string }).status).toBe('field_reported');
   });
 
-  it('removes orphaned tasks and rebuilds sprint_id as required with cascade delete', () => {
+  it('removes orphaned tasks and rebuilds sprint_id as required with cascade delete', async () => {
     const legacyDb = new Database(process.env.AGENT_HQ_DB_PATH!);
-    legacyDb.exec(`
+    await legacyDb.exec(`
       CREATE TABLE projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -164,20 +164,20 @@ describe('tasks.status schema migration', () => {
     `);
     legacyDb.close();
 
-    initSchema();
+    await initSchema();
     const db = getDb();
 
-    expect(db.prepare(`SELECT id, title, sprint_id FROM tasks ORDER BY id`).all()).toEqual([
+    expect(await db.all(`SELECT id, title, sprint_id FROM tasks ORDER BY id`)).toEqual([
       { id: 1, title: 'Valid workflow task', sprint_id: 56 },
     ]);
 
-    const sprintInfo = (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string; notnull: number }>)
+    const sprintInfo = (await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string; notnull: number }>)
       .find((column) => column.name === 'sprint_id');
     expect(sprintInfo?.notnull).toBe(1);
-    const sprintFk = (db.prepare(`PRAGMA foreign_key_list(tasks)`).all() as Array<{ from: string; table: string; on_delete: string }>)
+    const sprintFk = (await db.all(`PRAGMA foreign_key_list(tasks)`) as Array<{ from: string; table: string; on_delete: string }>)
       .find((fk) => fk.from === 'sprint_id' && fk.table === 'sprints');
     expect(sprintFk?.on_delete).toBe('CASCADE');
 
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE sprint_id IS NULL`).get()).toEqual({ count: 0 });
+    expect(await db.get(`SELECT COUNT(*) AS count FROM tasks WHERE sprint_id IS NULL`)).toEqual({ count: 0 });
   });
 });

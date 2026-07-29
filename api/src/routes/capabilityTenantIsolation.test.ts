@@ -7,10 +7,10 @@ import { closeDb, getDb } from '../db/client';
 import { ensureToolRegistryTables } from '../db/schema';
 import { fetchAgentTools } from '../runtimes/toolInjection';
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL DEFAULT '',
@@ -40,8 +40,8 @@ function resetDb(): void {
       openclaw_agent_id TEXT
     );
   `);
-  ensureToolRegistryTables();
-  db.exec(`
+  await ensureToolRegistryTables();
+  await db.exec(`
     CREATE TABLE skills (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL DEFAULT 1,
@@ -57,8 +57,8 @@ function resetDb(): void {
   `);
 }
 
-function setActiveTenant(tenantId: number): void {
-  getDb().prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run(String(tenantId));
+async function setActiveTenant(tenantId: number): Promise<void> {
+  await getDb().run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(tenantId));
 }
 
 function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -87,34 +87,34 @@ describe('tenant-owned skills and tools capability inventory', () => {
   beforeEach(resetDb);
   afterEach(closeDb);
 
-  it('allows duplicate tool slugs across tenants while preserving per-tenant uniqueness', () => {
+  it('allows duplicate tool slugs across tenants while preserving per-tenant uniqueness', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Search', 'repo_search', 'bash', 'echo a')`).run();
-    expect(() => db.prepare(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (2, 'B Search', 'repo_search', 'bash', 'echo b')`).run()).not.toThrow();
-    expect(() => db.prepare(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Duplicate', 'repo_search', 'bash', 'echo dup')`).run()).toThrow(/UNIQUE constraint failed/);
+    await db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Search', 'repo_search', 'bash', 'echo a')`);
+    expect(async () => await db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (2, 'B Search', 'repo_search', 'bash', 'echo b')`)).not.toThrow();
+    expect(async () => await db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Duplicate', 'repo_search', 'bash', 'echo dup')`)).toThrow(/UNIQUE constraint failed/);
   });
 
-  it('does not materialize stale cross-tenant tool assignments', () => {
+  it('does not materialize stale cross-tenant tool assignments', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, tenant_id, name, openclaw_agent_id) VALUES (10, 1, 'Agent A', 'agent-a')`).run();
-    db.prepare(`INSERT INTO tools (id, tenant_id, name, slug, implementation_type, implementation_body) VALUES (20, 1, 'Tenant A Tool', 'tenant_tool', 'bash', 'echo a')`).run();
-    db.prepare(`INSERT INTO tools (id, tenant_id, name, slug, implementation_type, implementation_body) VALUES (21, 2, 'Tenant B Tool', 'tenant_tool', 'bash', 'echo b')`).run();
-    db.prepare(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (10, 20)`).run();
-    db.prepare(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (10, 21)`).run();
+    await db.run(`INSERT INTO agents (id, tenant_id, name, openclaw_agent_id) VALUES (10, 1, 'Agent A', 'agent-a')`);
+    await db.run(`INSERT INTO tools (id, tenant_id, name, slug, implementation_type, implementation_body) VALUES (20, 1, 'Tenant A Tool', 'tenant_tool', 'bash', 'echo a')`);
+    await db.run(`INSERT INTO tools (id, tenant_id, name, slug, implementation_type, implementation_body) VALUES (21, 2, 'Tenant B Tool', 'tenant_tool', 'bash', 'echo b')`);
+    await db.run(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (10, 20)`);
+    await db.run(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (10, 21)`);
 
-    const materialized = fetchAgentTools(db, 10);
+    const materialized = await fetchAgentTools(db, 10);
     expect(materialized.map((tool) => tool.id)).toEqual([20]);
     expect(materialized[0]).toMatchObject({ tenant_id: 1, agent_tenant_id: 1, slug: 'tenant_tool' });
   });
 
   it('keeps tool list/read/assign/materialized behavior scoped to the active tenant', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, tenant_id, name, openclaw_agent_id) VALUES (10, 1, 'Agent A', 'agent-a')`).run();
-    db.prepare(`INSERT INTO agents (id, tenant_id, name, openclaw_agent_id) VALUES (11, 2, 'Agent B', 'agent-b')`).run();
+    await db.run(`INSERT INTO agents (id, tenant_id, name, openclaw_agent_id) VALUES (10, 1, 'Agent A', 'agent-a')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, openclaw_agent_id) VALUES (11, 2, 'Agent B', 'agent-b')`);
 
     const { server, baseUrl } = await startTestServer();
     try {
-      setActiveTenant(1);
+      await setActiveTenant(1);
       const createA = await fetch(`${baseUrl}/api/v1/tools`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -124,7 +124,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
       const toolA = await createA.json() as { id: number; tenant_id: number; slug: string };
       expect(toolA).toMatchObject({ tenant_id: 1, slug: 'shared_slug' });
 
-      setActiveTenant(2);
+      await setActiveTenant(2);
       const createB = await fetch(`${baseUrl}/api/v1/tools`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -144,7 +144,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
       });
       expect(assignTenantBToolToTenantB.status).toBe(201);
 
-      setActiveTenant(1);
+      await setActiveTenant(1);
       const assignTenantBToolToTenantA = await fetch(`${baseUrl}/api/v1/agents/10/tools`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -164,7 +164,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
       const materializedABody = await materializedA.json() as { tools: Array<{ name: string }> };
       expect(materializedABody.tools.map((tool) => tool.name)).toEqual(['Tenant A Shared Slug']);
 
-      setActiveTenant(2);
+      await setActiveTenant(2);
       const listB = await fetch(`${baseUrl}/api/v1/tools`);
       expect(listB.status).toBe(200);
       const listBBody = await listB.json() as Array<{ id: number; tenant_id: number }>;
@@ -177,13 +177,13 @@ describe('tenant-owned skills and tools capability inventory', () => {
 
   it('lists and reads only skills for the active tenant', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO skills (tenant_id, name, description, content) VALUES (1, 'shared-name', 'Tenant A skill', '# A')`).run();
-    db.prepare(`INSERT INTO skills (tenant_id, name, description, content) VALUES (2, 'shared-name', 'Tenant B skill', '# B')`).run();
-    db.prepare(`INSERT INTO skills (tenant_id, name, description, content) VALUES (2, 'tenant-b-only', 'Tenant B only', '# B only')`).run();
+    await db.run(`INSERT INTO skills (tenant_id, name, description, content) VALUES (1, 'shared-name', 'Tenant A skill', '# A')`);
+    await db.run(`INSERT INTO skills (tenant_id, name, description, content) VALUES (2, 'shared-name', 'Tenant B skill', '# B')`);
+    await db.run(`INSERT INTO skills (tenant_id, name, description, content) VALUES (2, 'tenant-b-only', 'Tenant B only', '# B only')`);
 
     const { server, baseUrl } = await startTestServer();
     try {
-      setActiveTenant(1);
+      await setActiveTenant(1);
       const listA = await fetch(`${baseUrl}/api/v1/skills`);
       expect(listA.status).toBe(200);
       await expect(listA.json()).resolves.toEqual([
@@ -193,7 +193,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
       expect(readA.status).toBe(200);
       await expect(readA.json()).resolves.toMatchObject({ tenant_id: 1, name: 'shared-name', content: '# A' });
 
-      setActiveTenant(2);
+      await setActiveTenant(2);
       const listB = await fetch(`${baseUrl}/api/v1/skills`);
       expect(listB.status).toBe(200);
       const listBBody = await listB.json() as Array<{ tenant_id: number; name: string }>;
@@ -209,7 +209,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
   it('keeps tenant-local create/read/delete behavior for skills with reused names', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
-      setActiveTenant(1);
+      await setActiveTenant(1);
       const createA = await fetch(`${baseUrl}/api/v1/skills`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -217,7 +217,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
       });
       expect(createA.status).toBe(201);
 
-      setActiveTenant(2);
+      await setActiveTenant(2);
       const createB = await fetch(`${baseUrl}/api/v1/skills`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -229,7 +229,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
       const deleteB = await fetch(`${baseUrl}/api/v1/skills/reusable`, { method: 'DELETE' });
       expect(deleteB.status).toBe(200);
 
-      setActiveTenant(1);
+      await setActiveTenant(1);
       const readA = await fetch(`${baseUrl}/api/v1/skills/reusable`);
       expect(readA.status).toBe(200);
       await expect(readA.json()).resolves.toMatchObject({ tenant_id: 1, name: 'reusable', content: '# A' });
@@ -240,15 +240,15 @@ describe('tenant-owned skills and tools capability inventory', () => {
 
   it('keeps agent skill assignment scoped to tenant-local skill records', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, tenant_id, name, skill_names, openclaw_agent_id) VALUES (10, 1, 'Agent A', '[]', 'agent-a')`).run();
-    db.prepare(`INSERT INTO agents (id, tenant_id, name, skill_names, openclaw_agent_id) VALUES (11, 2, 'Agent B', '[]', 'agent-b')`).run();
-    db.prepare(`INSERT INTO skills (id, tenant_id, name, description, content) VALUES (100, 1, 'shared-name', 'Tenant A skill', '# A')`).run();
-    db.prepare(`INSERT INTO skills (id, tenant_id, name, description, content) VALUES (200, 2, 'shared-name', 'Tenant B skill', '# B')`).run();
-    db.prepare(`INSERT INTO skills (id, tenant_id, name, description, content) VALUES (201, 2, 'tenant-b-only', 'Tenant B only', '# B only')`).run();
+    await db.run(`INSERT INTO agents (id, tenant_id, name, skill_names, openclaw_agent_id) VALUES (10, 1, 'Agent A', '[]', 'agent-a')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, skill_names, openclaw_agent_id) VALUES (11, 2, 'Agent B', '[]', 'agent-b')`);
+    await db.run(`INSERT INTO skills (id, tenant_id, name, description, content) VALUES (100, 1, 'shared-name', 'Tenant A skill', '# A')`);
+    await db.run(`INSERT INTO skills (id, tenant_id, name, description, content) VALUES (200, 2, 'shared-name', 'Tenant B skill', '# B')`);
+    await db.run(`INSERT INTO skills (id, tenant_id, name, description, content) VALUES (201, 2, 'tenant-b-only', 'Tenant B only', '# B only')`);
 
     const { server, baseUrl } = await startTestServer();
     try {
-      setActiveTenant(1);
+      await setActiveTenant(1);
       const assignTenantBOnlyById = await fetch(`${baseUrl}/api/v1/agents/10/skills`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -275,7 +275,7 @@ describe('tenant-owned skills and tools capability inventory', () => {
         skill_names: ['shared-name'],
       });
 
-      setActiveTenant(2);
+      await setActiveTenant(2);
       const assignTenantBShared = await fetch(`${baseUrl}/api/v1/agents/11/skills`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

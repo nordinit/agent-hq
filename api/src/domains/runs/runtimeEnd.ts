@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecycle';
 import { resolveWorkflow } from '../../services/contracts/workflowContract';
 import { getCanonicalTaskRecord } from '../tasks/evidence';
@@ -7,6 +6,7 @@ import { recordRunCheckIn } from './observability';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
 import { normalizeTokenUsage } from './tokenUsage';
 import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
+import { type Db } from "../../db/adapter/types";
 
 export interface TerminalRuntimeEndEvent {
   type: string;
@@ -66,8 +66,8 @@ export function determineRuntimeEndEvidenceRecorded(
   return (canonicalRow.review_branch || canonicalRow.review_commit || canonicalRow.review_url) ? 'yes' : 'no';
 }
 
-export function markRuntimeEnded(
-  db: Database.Database,
+export async function markRuntimeEnded(
+  db: Db,
   params: {
     instanceId: number;
     nextStatus: string;
@@ -79,8 +79,8 @@ export function markRuntimeEnded(
     tokenOutput?: number | null;
     tokenTotal?: number | null;
   },
-): void {
-  db.prepare(`
+): Promise<void> {
+  await db.run(`
     UPDATE job_instances
     SET status = ?,
         started_at = COALESCE(started_at, ?),
@@ -93,23 +93,11 @@ export function markRuntimeEnded(
         token_output = COALESCE(?, token_output),
         token_total = COALESCE(?, token_total)
     WHERE id = ?
-  `).run(
-    params.nextStatus,
-    params.endedAt,
-    params.endedAt,
-    params.endedAt,
-    params.success ? 1 : 0,
-    params.error ?? null,
-    params.source,
-    params.tokenInput ?? null,
-    params.tokenOutput ?? null,
-    params.tokenTotal ?? null,
-    params.instanceId,
-  );
+  `, params.nextStatus, params.endedAt, params.endedAt, params.endedAt, params.success ? 1 : 0, params.error ?? null, params.source, params.tokenInput ?? null, params.tokenOutput ?? null, params.tokenTotal ?? null, params.instanceId);
 }
 
 export async function applyRuntimeEndToJobInstance(
-  db: Database.Database,
+  db: Db,
   params: {
     instanceId: number;
     event: TerminalRuntimeEndEvent;
@@ -118,11 +106,11 @@ export async function applyRuntimeEndToJobInstance(
     changedBy?: string | null;
   },
 ): Promise<{ changed: boolean; nextStatus?: string; missingRequiredLifecycleOutcome?: boolean }> {
-  const existing = db.prepare(`
+  const existing = await db.get(`
     SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key
     FROM job_instances
     WHERE id = ?
-  `).get(params.instanceId) as {
+  `, params.instanceId) as {
     status: string;
     lifecycle_outcome_posted_at: string | null;
     task_outcome: string | null;
@@ -131,7 +119,7 @@ export async function applyRuntimeEndToJobInstance(
   } | undefined;
   if (!existing) return { changed: false };
 
-  const requiresSemanticOutcome = taskRequiresSemanticOutcome(db, existing.task_id);
+  const requiresSemanticOutcome = await taskRequiresSemanticOutcome(db, existing.task_id);
   const runtimeEndError = params.event.error ?? (params.event.success ? null : (params.event.reason ?? 'error'));
   const runtimeEndSource = params.runtimeEndSource ?? params.event.source ?? 'instance_complete';
   const endedAt = toCanonicalTimestampOrNow(params.event.endedAt);
@@ -145,7 +133,7 @@ export async function applyRuntimeEndToJobInstance(
     requiresSemanticOutcome,
   );
 
-  const claim = db.prepare(`
+  const claim = await db.run(`
     UPDATE job_instances
     SET status = ?,
         started_at = COALESCE(started_at, ?),
@@ -160,25 +148,13 @@ export async function applyRuntimeEndToJobInstance(
     WHERE id = ?
       AND status IN ('queued', 'dispatched', 'running')
       AND runtime_ended_at IS NULL
-  `).run(
-    nextStatus,
-    endedAt,
-    endedAt,
-    endedAt,
-    params.event.success ? 1 : 0,
-    runtimeEndError,
-    runtimeEndSource,
-    tokenUsage.input,
-    tokenUsage.output,
-    tokenUsage.total,
-    params.instanceId,
-  );
+  `, nextStatus, endedAt, endedAt, endedAt, params.event.success ? 1 : 0, runtimeEndError, runtimeEndSource, tokenUsage.input, tokenUsage.output, tokenUsage.total, params.instanceId);
   if (!claim.changes) return { changed: false, nextStatus };
 
   if (existing.task_id) {
-    scheduleEndedActiveInstanceLinkageCleanup(db, existing.task_id, params.instanceId, {
-      changedBy: 'task_lifecycle',
-    });
+    await scheduleEndedActiveInstanceLinkageCleanup(db, existing.task_id, params.instanceId, {
+            changedBy: 'task_lifecycle',
+          });
   }
 
   const missingRequiredLifecycleOutcome = Boolean(
@@ -201,23 +177,23 @@ export async function applyRuntimeEndToJobInstance(
         : `${params.runtimeName} runtime failed (${params.event.reason ?? 'error'})`
       : null;
 
-  recordRunCheckIn(db, {
-    instanceId: params.instanceId,
-    stage: 'completion',
-    summary: failureSummary
-      ?? `${params.runtimeName} runtime ${params.event.type} (${params.event.reason ?? (params.event.success ? 'completed' : 'error')})`,
-    outcome: shouldPostTerminalFailureOutcome
-      ? 'failed'
-      : (params.event.reason ?? (params.event.success ? 'completed' : 'error')),
-    runtimeEndSuccess: params.event.success,
-    runtimeEndError: missingRequiredLifecycleOutcome ? failureSummary : runtimeEndError,
-    runtimeEndSource,
-    meaningfulOutput: true,
-    forceNote: true,
-  });
+  await recordRunCheckIn(db, {
+        instanceId: params.instanceId,
+        stage: 'completion',
+        summary: failureSummary
+          ?? `${params.runtimeName} runtime ${params.event.type} (${params.event.reason ?? (params.event.success ? 'completed' : 'error')})`,
+        outcome: shouldPostTerminalFailureOutcome
+          ? 'failed'
+          : (params.event.reason ?? (params.event.success ? 'completed' : 'error')),
+        runtimeEndSuccess: params.event.success,
+        runtimeEndError: missingRequiredLifecycleOutcome ? failureSummary : runtimeEndError,
+        runtimeEndSource,
+        meaningfulOutput: true,
+        forceNote: true,
+      });
 
   if (shouldPostTerminalFailureOutcome || missingRequiredLifecycleOutcome) {
-    const taskRow = db.prepare(`
+    const taskRow = await db.get(`
       SELECT ji.task_id, ji.agent_id,
              t.status AS task_status,
              t.project_id,
@@ -230,7 +206,7 @@ export async function applyRuntimeEndToJobInstance(
       LEFT JOIN tasks t ON t.id = ji.task_id
       LEFT JOIN sprints s ON s.id = t.sprint_id
       WHERE ji.id = ?
-    `).get(params.instanceId) as {
+    `, params.instanceId) as {
       task_id: number | null;
       agent_id: number | null;
       task_status: string | null;
@@ -244,31 +220,31 @@ export async function applyRuntimeEndToJobInstance(
 
     if (taskRow?.task_id) {
       const canonicalTaskRow = getCanonicalTaskRecord(taskRow as unknown as Record<string, unknown>);
-      const resolvedWorkflow = taskRow.task_status ? resolveWorkflow({
-        taskStatus: taskRow.task_status,
-        taskType: taskRow.task_type,
-        sprintId: taskRow.sprint_id,
-        sprintType: taskRow.sprint_type,
-        db,
-      }) : null;
+      const resolvedWorkflow = taskRow.task_status ? await resolveWorkflow({
+              taskStatus: taskRow.task_status,
+              taskType: taskRow.task_type,
+              sprintId: taskRow.sprint_id,
+              sprintType: taskRow.sprint_type,
+              db,
+            }) : null;
       const changedBy = params.changedBy ?? (taskRow.agent_id ? `agent:${taskRow.agent_id}` : `${params.event.source ?? params.runtimeName.toLowerCase()}-runtime`);
 
       if (missingRequiredLifecycleOutcome) {
-        markTaskNeedsAttentionForMissingSemanticHandoff(db, {
-          taskId: taskRow.task_id,
-          instanceId: params.instanceId,
-          changedBy,
-          workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
-          priorTaskStatus: taskRow.task_status ?? existing.status,
-          sessionKey: existing.session_key,
-          reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, canonicalTaskRow),
-          runtimeEnd: {
-            source: runtimeEndSource,
-            success: params.event.success,
-            endedAt,
-            error: failureSummary,
-          },
-        });
+        await markTaskNeedsAttentionForMissingSemanticHandoff(db, {
+                    taskId: taskRow.task_id,
+                    instanceId: params.instanceId,
+                    changedBy,
+                    workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
+                    priorTaskStatus: taskRow.task_status ?? existing.status,
+                    sessionKey: existing.session_key,
+                    reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, canonicalTaskRow),
+                    runtimeEnd: {
+                      source: runtimeEndSource,
+                      success: params.event.success,
+                      endedAt,
+                      error: failureSummary,
+                    },
+                  });
       } else if (shouldPostTerminalFailureOutcome) {
         await applyConfiguredRuntimeFailedEvent(db, {
           taskId: taskRow.task_id,

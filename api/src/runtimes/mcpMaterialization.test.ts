@@ -22,8 +22,8 @@ function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-function createRegistryTables(): void {
-  getDb().exec(`
+async function createRegistryTables(): Promise<void> {
+  await getDb().exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -85,19 +85,19 @@ describe('materializeAgentMcpConfig', () => {
     resetDb();
   });
 
-  it('does not materialize assigned capability tools as an OpenClaw MCP bridge', () => {
-    createRegistryTables();
-    getDb().prepare(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`).run();
-    getDb().prepare(`INSERT INTO tools (id, name, slug, implementation_type, implementation_body) VALUES (10, 'Tool', 'custom_tool', 'bash', 'echo ok')`).run();
-    getDb().prepare(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (1, 10)`).run();
+  it('does not materialize assigned capability tools as an OpenClaw MCP bridge', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`);
+    await getDb().run(`INSERT INTO tools (id, name, slug, implementation_type, implementation_body) VALUES (10, 'Tool', 'custom_tool', 'bash', 'echo ok')`);
+    await getDb().run(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (1, 10)`);
     const workingDirectory = makeTempDir('agent-hq-mcp-tools-');
 
-    const result = materializeAgentMcpConfig({
-      db: getDb(),
-      agentId: 1,
-      workingDirectory,
-      materializeOpenClawGlobalConfig: true,
-    });
+    const result = await materializeAgentMcpConfig({
+          db: getDb(),
+          agentId: 1,
+          workingDirectory,
+          materializeOpenClawGlobalConfig: true,
+        });
 
     expect(result.ok).toBe(true);
     expect(result.count).toBe(0);
@@ -109,13 +109,13 @@ describe('materializeAgentMcpConfig', () => {
     }
   });
 
-  it('materializes explicitly assigned MCP servers into workspace bundle files and Codex-scoped OpenClaw config', () => {
-    createRegistryTables();
-    getDb().prepare(`INSERT INTO agents (id, name, session_key, openclaw_agent_id) VALUES (1, 'Agent', 'agent:cinder-backend:main', 'cinder-backend')`).run();
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (31, 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', '["--config","config/environments.json"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 31)`).run();
+  it('materializes explicitly assigned MCP servers into workspace bundle files and Codex-scoped OpenClaw config', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id) VALUES (1, 'Agent', 'agent:cinder-backend:main', 'cinder-backend')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (31, 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', '["--config","config/environments.json"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 31)`);
     const workingDirectory = makeTempDir('agent-hq-mcp-servers-');
     fs.mkdirSync(path.dirname(process.env.OPENCLAW_CONFIG_PATH!), { recursive: true });
     fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({
@@ -127,12 +127,12 @@ describe('materializeAgentMcpConfig', () => {
       },
     }), 'utf8');
 
-    const result = materializeAgentMcpConfig({
-      db: getDb(),
-      agentId: 1,
-      workingDirectory,
-      materializeOpenClawGlobalConfig: true,
-    });
+    const result = await materializeAgentMcpConfig({
+          db: getDb(),
+          agentId: 1,
+          workingDirectory,
+          materializeOpenClawGlobalConfig: true,
+        });
     const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
     const bundleConfig = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
     const bundleManifest = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.openclaw', 'extensions', 'agent-hq-mcp', '.claude-plugin', 'plugin.json'), 'utf8'));
@@ -169,8 +169,8 @@ describe('materializeAgentMcpConfig', () => {
     expect(openClawConfig.mcp?.servers['custom__agent-1']).toBeDefined();
   });
 
-  it('applies CRM MCP assignment override allowlists exactly for each role', () => {
-    createRegistryTables();
+  it('applies CRM MCP assignment override allowlists exactly for each role', async () => {
+    await createRegistryTables();
     const crmToolsByRole = {
       salesAgent: [
         'crm_search_accounts',
@@ -222,22 +222,22 @@ describe('materializeAgentMcpConfig', () => {
       { id: 103, name: 'Sales Ops', assignmentId: 79888, tools: crmToolsByRole.salesOps },
       { id: 104, name: 'Development QA', assignmentId: 79889, tools: crmToolsByRole.developmentQa },
     ];
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]')`).run();
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]')`);
     const effectiveToolsByRole = new Map<string, string[]>();
 
     for (const agent of agents) {
-      getDb().prepare(`INSERT INTO agents (id, name) VALUES (?, ?)`).run(agent.id, agent.name);
-      getDb().prepare(`
+      await getDb().run(`INSERT INTO agents (id, name) VALUES (?, ?)`, agent.id, agent.name);
+      await getDb().run(`
         INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id, overrides)
         VALUES (?, ?, 40, ?)
-      `).run(agent.assignmentId, agent.id, JSON.stringify({ allowed_tools: agent.tools }));
+      `, agent.assignmentId, agent.id, JSON.stringify({ allowed_tools: agent.tools }));
       const workingDirectory = makeTempDir(`agent-hq-crm-${agent.id}-`);
 
-      const result = materializeAgentMcpConfig({
-        db: getDb(),
-        agentId: agent.id,
-        workingDirectory,
-      });
+      const result = await materializeAgentMcpConfig({
+              db: getDb(),
+              agentId: agent.id,
+              workingDirectory,
+            });
       const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
       const server = config.mcpServers[`agency-crm__agent-${agent.id}`];
       effectiveToolsByRole.set(agent.name, server.toolFilter.include);
@@ -273,20 +273,20 @@ describe('materializeAgentMcpConfig', () => {
     ]));
   });
 
-  it('fails closed for non-Agent-HQ MCP assignments with missing or malformed tool allowlists', () => {
-    createRegistryTables();
-    getDb().prepare(`INSERT INTO agents (id, name) VALUES (1, 'Missing'), (2, 'Malformed')`).run();
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (1, 40, '{}')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (2, 40, '{"allowed_tools":"crm_search_leads"}')`).run();
+  it('fails closed for non-Agent-HQ MCP assignments with missing or malformed tool allowlists', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id, name) VALUES (1, 'Missing'), (2, 'Malformed')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (1, 40, '{}')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (2, 40, '{"allowed_tools":"crm_search_leads"}')`);
 
     for (const agentId of [1, 2]) {
       const workingDirectory = makeTempDir(`agent-hq-crm-fail-closed-${agentId}-`);
-      const result = materializeAgentMcpConfig({
-        db: getDb(),
-        agentId,
-        workingDirectory,
-      });
+      const result = await materializeAgentMcpConfig({
+              db: getDb(),
+              agentId,
+              workingDirectory,
+            });
       const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
       const server = config.mcpServers[`agency-crm__agent-${agentId}`];
 
@@ -302,51 +302,51 @@ describe('materializeAgentMcpConfig', () => {
     }
   });
 
-  it('does not materialize disabled MCP assignments or disabled MCP servers', () => {
-    createRegistryTables();
-    getDb().prepare(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`).run();
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args, enabled) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]', 1)`).run();
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args, enabled) VALUES (41, 'disabled-crm', 'node', '["crm-mcp.js"]', 0)`).run();
-    getDb().prepare(`
+  it('does not materialize disabled MCP assignments or disabled MCP servers', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args, enabled) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]', 1)`);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args, enabled) VALUES (41, 'disabled-crm', 'node', '["crm-mcp.js"]', 0)`);
+    await getDb().run(`
       INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
       VALUES
         (1, 40, '{"allowed_tools":["crm_search_leads"]}', 0),
         (1, 41, '{"allowed_tools":["crm_search_leads"]}', 1)
-    `).run();
+    `);
     const workingDirectory = makeTempDir('agent-hq-crm-disabled-');
 
-    const result = materializeAgentMcpConfig({
-      db: getDb(),
-      agentId: 1,
-      workingDirectory,
-    });
+    const result = await materializeAgentMcpConfig({
+          db: getDb(),
+          agentId: 1,
+          workingDirectory,
+        });
 
     expect(result.ok).toBe(true);
     expect(result.count).toBe(0);
     expect(fs.existsSync(path.join(workingDirectory, '.mcp.json'))).toBe(false);
   });
 
-  it('reuses an existing valid materialized Agent HQ MCP key for the same agent', () => {
-    createRegistryTables();
-    getDb().prepare(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`).run();
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+  it('reuses an existing valid materialized Agent HQ MCP key for the same agent', async () => {
+    await createRegistryTables();
+    await getDb().run(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
     const workingDirectory = makeTempDir('agent-hq-mcp-reuse-');
 
-    const first = materializeAgentMcpConfig({
-      db: getDb(),
-      agentId: 1,
-      workingDirectory,
-      materializeOpenClawGlobalConfig: true,
-    });
+    const first = await materializeAgentMcpConfig({
+          db: getDb(),
+          agentId: 1,
+          workingDirectory,
+          materializeOpenClawGlobalConfig: true,
+        });
     const firstConfig = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
     const firstKey = firstConfig.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY;
-    const second = materializeAgentMcpConfig({
-      db: getDb(),
-      agentId: 1,
-      workingDirectory,
-      materializeOpenClawGlobalConfig: true,
-    });
+    const second = await materializeAgentMcpConfig({
+          db: getDb(),
+          agentId: 1,
+          workingDirectory,
+          materializeOpenClawGlobalConfig: true,
+        });
     const secondConfig = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8'));
 
     expect(first.ok).toBe(true);
@@ -357,24 +357,24 @@ describe('materializeAgentMcpConfig', () => {
       : {};
     expect(openClawConfig.mcp?.servers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY).toBe(firstKey);
     expect(openClawConfig.mcp?.servers['agent-hq__agent-1'].codex.agents).toEqual(['agent']);
-    const keyCount = getDb().prepare(`SELECT COUNT(*) as count FROM mcp_api_keys WHERE agent_id = 1`).get() as { count: number };
+    const keyCount = await getDb().get(`SELECT COUNT(*) as count FROM mcp_api_keys WHERE agent_id = 1`) as { count: number };
     expect(keyCount.count).toBe(1);
   });
 
-  it('syncs OpenClaw MCP config into the agent workspace without touching global config by default', () => {
-    createRegistryTables();
+  it('syncs OpenClaw MCP config into the agent workspace without touching global config by default', async () => {
+    await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-openclaw-workspace-');
     const taskWorktreeDirectory = path.join(workspaceDirectory, 'task-449');
     fs.mkdirSync(taskWorktreeDirectory, { recursive: true });
-    getDb().prepare(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Agent', 'agent:cinder-backend:main', 'cinder-backend', 'openclaw', ?)`).run(workspaceDirectory);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', '["--config","config/environments.json"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Agent', 'agent:cinder-backend:main', 'cinder-backend', 'openclaw', ?)`, workspaceDirectory);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', '["--config","config/environments.json"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-      workingDirectory: taskWorktreeDirectory,
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+          workingDirectory: taskWorktreeDirectory,
+        });
 
     expect(result.ok).toBe(true);
     expect(result.workingDirectory).toBe(workspaceDirectory);
@@ -391,12 +391,12 @@ describe('materializeAgentMcpConfig', () => {
     expect(openClawConfig.mcp?.servers).toBeUndefined();
   });
 
-  it('refreshes the OpenClaw plugin registry once after successful OpenClaw MCP sync', () => {
-    createRegistryTables();
+  it('refreshes the OpenClaw plugin registry once after successful OpenClaw MCP sync', async () => {
+    await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-openclaw-refresh-');
-    getDb().prepare(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?)`).run(workspaceDirectory);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?)`, workspaceDirectory);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
       command: 'openclaw',
@@ -404,12 +404,12 @@ describe('materializeAgentMcpConfig', () => {
       status: 0,
     }));
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-      materializeOpenClawGlobalConfig: true,
-      refreshOpenClawPluginRegistry,
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+          materializeOpenClawGlobalConfig: true,
+          refreshOpenClawPluginRegistry,
+        });
 
     expect(result.ok).toBe(true);
     expect(refreshOpenClawPluginRegistry).toHaveBeenCalledTimes(1);
@@ -420,10 +420,10 @@ describe('materializeAgentMcpConfig', () => {
     }));
   });
 
-  it('does not refresh the OpenClaw plugin registry for failed or no-op syncs', () => {
-    createRegistryTables();
+  it('does not refresh the OpenClaw plugin registry for failed or no-op syncs', async () => {
+    await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-openclaw-noop-');
-    getDb().prepare(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?), (2, 'No Workspace', 'openclaw', NULL)`).run(workspaceDirectory);
+    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?), (2, 'No Workspace', 'openclaw', NULL)`, workspaceDirectory);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
       command: 'openclaw',
@@ -431,16 +431,16 @@ describe('materializeAgentMcpConfig', () => {
       status: 0,
     }));
 
-    const noop = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-      refreshOpenClawPluginRegistry,
-    });
-    const failed = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 2,
-      refreshOpenClawPluginRegistry,
-    });
+    const noop = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+          refreshOpenClawPluginRegistry,
+        });
+    const failed = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 2,
+          refreshOpenClawPluginRegistry,
+        });
 
     expect(noop.ok).toBe(true);
     expect(noop.count).toBe(0);
@@ -449,8 +449,8 @@ describe('materializeAgentMcpConfig', () => {
     expect(refreshOpenClawPluginRegistry).not.toHaveBeenCalled();
   });
 
-  it('keeps the workspace bundle plugin enabled even when an OpenClaw global sync has zero assigned MCP servers', () => {
-    createRegistryTables();
+  it('keeps the workspace bundle plugin enabled even when an OpenClaw global sync has zero assigned MCP servers', async () => {
+    await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-openclaw-zero-count-');
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -462,7 +462,7 @@ describe('materializeAgentMcpConfig', () => {
         },
       },
     }), 'utf8');
-    getDb().prepare(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?)`).run(workspaceDirectory);
+    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?)`, workspaceDirectory);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
       command: 'openclaw',
@@ -470,12 +470,12 @@ describe('materializeAgentMcpConfig', () => {
       status: 0,
     }));
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-      materializeOpenClawGlobalConfig: true,
-      refreshOpenClawPluginRegistry,
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+          materializeOpenClawGlobalConfig: true,
+          refreshOpenClawPluginRegistry,
+        });
     const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
     expect(result.ok).toBe(true);
@@ -487,12 +487,12 @@ describe('materializeAgentMcpConfig', () => {
     expect(refreshOpenClawPluginRegistry).not.toHaveBeenCalled();
   });
 
-  it('surfaces OpenClaw plugin registry refresh failures as sync failures with actionable context', () => {
-    createRegistryTables();
+  it('surfaces OpenClaw plugin registry refresh failures as sync failures with actionable context', async () => {
+    await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-openclaw-refresh-fail-');
-    getDb().prepare(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?)`).run(workspaceDirectory);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?)`, workspaceDirectory);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: false,
       command: 'openclaw',
@@ -502,12 +502,12 @@ describe('materializeAgentMcpConfig', () => {
       error: 'registry locked',
     }));
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-      materializeOpenClawGlobalConfig: true,
-      refreshOpenClawPluginRegistry,
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+          materializeOpenClawGlobalConfig: true,
+          refreshOpenClawPluginRegistry,
+        });
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain('OpenClaw plugin registry refresh failed');
@@ -516,13 +516,13 @@ describe('materializeAgentMcpConfig', () => {
     expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('registry locked')]));
   });
 
-  it('does not refresh the OpenClaw plugin registry for a workspace-only multi-agent server sync batch', () => {
-    createRegistryTables();
+  it('does not refresh the OpenClaw plugin registry for a workspace-only multi-agent server sync batch', async () => {
+    await createRegistryTables();
     const firstWorkspace = makeTempDir('agent-hq-openclaw-batch-one-');
     const secondWorkspace = makeTempDir('agent-hq-openclaw-batch-two-');
-    getDb().prepare(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'One', 'openclaw', ?), (2, 'Two', 'openclaw', ?)`).run(firstWorkspace, secondWorkspace);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (2, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'One', 'openclaw', ?), (2, 'Two', 'openclaw', ?)`, firstWorkspace, secondWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (2, 30)`);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
       command: 'openclaw',
@@ -530,36 +530,36 @@ describe('materializeAgentMcpConfig', () => {
       status: 0,
     }));
 
-    const results = syncAssignedMcpForServer({
-      db: getDb(),
-      mcpServerId: 30,
-      refreshOpenClawPluginRegistry,
-    });
+    const results = await syncAssignedMcpForServer({
+          db: getDb(),
+          mcpServerId: 30,
+          refreshOpenClawPluginRegistry,
+        });
 
     expect(results).toHaveLength(2);
     expect(results.every(result => result.ok)).toBe(true);
     expect(refreshOpenClawPluginRegistry).not.toHaveBeenCalled();
   });
 
-  it('keeps assigned MCP entries isolated in each workspace and Codex-scoped in shared OpenClaw config', () => {
-    createRegistryTables();
+  it('keeps assigned MCP entries isolated in each workspace and Codex-scoped in shared OpenClaw config', async () => {
+    await createRegistryTables();
     const firstWorkspace = makeTempDir('agent-hq-mcp-agent-one-');
     const secondWorkspace = makeTempDir('agent-hq-mcp-agent-two-');
-    getDb().prepare(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Cinder', 'agent:cinder-backend:main', 'cinder-backend', 'openclaw', ?)`).run(firstWorkspace);
-    getDb().prepare(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (2, 'Beacon', 'agent:beacon-pm:main', 'beacon-pm', 'openclaw', ?)`).run(secondWorkspace);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (2, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Cinder', 'agent:cinder-backend:main', 'cinder-backend', 'openclaw', ?)`, firstWorkspace);
+    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (2, 'Beacon', 'agent:beacon-pm:main', 'beacon-pm', 'openclaw', ?)`, secondWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (2, 30)`);
 
-    const first = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-      materializeOpenClawGlobalConfig: true,
-    });
-    const second = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 2,
-      materializeOpenClawGlobalConfig: true,
-    });
+    const first = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+          materializeOpenClawGlobalConfig: true,
+        });
+    const second = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 2,
+          materializeOpenClawGlobalConfig: true,
+        });
     const openClawConfig = fs.existsSync(process.env.OPENCLAW_CONFIG_PATH!)
       ? JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'))
       : {};
@@ -583,34 +583,34 @@ describe('materializeAgentMcpConfig', () => {
     expect(secondOpenClawServer.codex.agents).toEqual(['beacon-pm']);
   });
 
-  it('projects only the active Agent HQ and lease-manager MCP servers for each OpenClaw agent workspace', () => {
-    createRegistryTables();
+  it('projects only the active Agent HQ and lease-manager MCP servers for each OpenClaw agent workspace', async () => {
+    await createRegistryTables();
     const agents = [
       { id: 94, name: 'Cinder', slug: 'cinder-backend' },
       { id: 95, name: 'Prism', slug: 'prism-frontend' },
       { id: 96, name: 'Talon', slug: 'talon-qa' },
       { id: 97, name: 'Anchor', slug: 'anchor-devops' },
     ];
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (31, 'dev-environment-lease-manager', 'dev-env-lease-mcp', '["--stdio"]')`).run();
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (31, 'dev-environment-lease-manager', 'dev-env-lease-mcp', '["--stdio"]')`);
 
     const workspaces = new Map<number, string>();
     for (const agent of agents) {
       const workspace = makeTempDir(`agent-hq-${agent.slug}-`);
       workspaces.set(agent.id, workspace);
-      getDb().prepare(`
+      await getDb().run(`
         INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
         VALUES (?, ?, ?, ?, 'openclaw', ?)
-      `).run(agent.id, agent.name, `agent:${agent.slug}:main`, agent.slug, workspace);
-      getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (?, 30), (?, 31)`).run(agent.id, agent.id);
+      `, agent.id, agent.name, `agent:${agent.slug}:main`, agent.slug, workspace);
+      await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (?, 30), (?, 31)`, agent.id, agent.id);
     }
 
     for (const agent of agents) {
-      const result = syncAssignedMcpForAgent({
-        db: getDb(),
-        agentId: agent.id,
-        materializeOpenClawGlobalConfig: true,
-      });
+      const result = await syncAssignedMcpForAgent({
+              db: getDb(),
+              agentId: agent.id,
+              materializeOpenClawGlobalConfig: true,
+            });
       expect(result.ok).toBe(true);
       const workspace = workspaces.get(agent.id)!;
       const bundleConfig = JSON.parse(fs.readFileSync(path.join(workspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
@@ -673,19 +673,19 @@ describe('materializeAgentMcpConfig', () => {
     expect(openClawConfig.mcp.servers.operator).toBeDefined();
   });
 
-  it('syncs Hermes MCP config into the prepared runtime directory with an Agent HQ key', () => {
-    createRegistryTables();
+  it('syncs Hermes MCP config into the prepared runtime directory with an Agent HQ key', async () => {
+    await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-hermes-workspace-');
     const hermesProfileDirectory = makeTempDir('agent-hq-hermes-profile-');
-    getDb().prepare(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Hermes Agent', 'hermes', ?)`).run(workspaceDirectory);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Hermes Agent', 'hermes', ?)`, workspaceDirectory);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-      workingDirectory: hermesProfileDirectory,
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+          workingDirectory: hermesProfileDirectory,
+        });
 
     expect(result.ok).toBe(true);
     expect(result.runtimeType).toBe('hermes');
@@ -700,8 +700,8 @@ describe('materializeAgentMcpConfig', () => {
     }
   });
 
-  it('removes stale scoped global OpenClaw MCP entries when an agent no longer uses OpenClaw runtime', () => {
-    createRegistryTables();
+  it('removes stale scoped global OpenClaw MCP entries when an agent no longer uses OpenClaw runtime', async () => {
+    await createRegistryTables();
     const configPath = process.env.OPENCLAW_CONFIG_PATH!;
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify({
@@ -714,15 +714,15 @@ describe('materializeAgentMcpConfig', () => {
       },
     }), 'utf8');
     const hermesHome = makeTempDir('agent-hq-hermes-cleanup-');
-    getDb().prepare(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'hermes', ?)`).run(hermesHome);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'hermes', ?)`, hermesHome);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-      materializeOpenClawGlobalConfig: true,
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+          materializeOpenClawGlobalConfig: true,
+        });
     const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
     expect(result.ok).toBe(true);
@@ -732,8 +732,8 @@ describe('materializeAgentMcpConfig', () => {
     expect(openClawConfig.mcp.servers['agent-hq__agent-2']).toMatchObject({ command: 'node', args: ['other.js'] });
   });
 
-  it('materializes assigned MCP servers into Hermes config.yaml while preserving external servers', () => {
-    createRegistryTables();
+  it('materializes assigned MCP servers into Hermes config.yaml while preserving external servers', async () => {
+    await createRegistryTables();
     const hermesHome = makeTempDir('agent-hq-hermes-native-');
     const configPath = path.join(hermesHome, 'config.yaml');
     fs.writeFileSync(configPath, [
@@ -748,16 +748,16 @@ describe('materializeAgentMcpConfig', () => {
       '  - agent-hq__agent-1',
       '',
     ].join('\n'), 'utf8');
-    getDb().prepare("INSERT INTO agents (id, name, runtime_type) VALUES (1, 'Hermes Agent', 'hermes')").run();
-    getDb().prepare("INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '[\"server.js\"]')").run();
-    getDb().prepare("INSERT INTO mcp_servers (id, slug, command, args) VALUES (31, 'dev-environment-lease-manager', 'dev-env-lease-mcp', '[\"--stdio\"]')").run();
-    getDb().prepare("INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (1, 31)").run();
+    await getDb().run("INSERT INTO agents (id, name, runtime_type) VALUES (1, 'Hermes Agent', 'hermes')");
+    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '[\"server.js\"]')");
+    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args) VALUES (31, 'dev-environment-lease-manager', 'dev-env-lease-mcp', '[\"--stdio\"]')");
+    await getDb().run("INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (1, 31)");
 
-    const result = materializeHermesMcpConfig({
-      db: getDb(),
-      agentId: 1,
-      hermesHome,
-    });
+    const result = await materializeHermesMcpConfig({
+          db: getDb(),
+          agentId: 1,
+          hermesHome,
+        });
     const yaml = fs.readFileSync(configPath, 'utf8');
 
     expect(result.ok).toBe(true);
@@ -777,21 +777,19 @@ describe('materializeAgentMcpConfig', () => {
     expect(yaml).not.toContain('stale-node');
   });
 
-  it('resolves relative path-style Hermes MCP command and args against cwd', () => {
-    createRegistryTables();
+  it('resolves relative path-style Hermes MCP command and args against cwd', async () => {
+    await createRegistryTables();
     const hermesHome = makeTempDir('agent-hq-hermes-relcmd-');
     const leaseDir = makeTempDir('agent-hq-lease-mgr-');
     const absoluteArg = path.join(leaseDir, 'already-absolute.json');
-    getDb().prepare("INSERT INTO agents (id, name, runtime_type) VALUES (1, 'Hermes Agent', 'hermes')").run();
+    await getDb().run("INSERT INTO agents (id, name, runtime_type) VALUES (1, 'Hermes Agent', 'hermes')");
     // Relative path-style command (would fail with ENOENT in Hermes) plus a cwd...
-    getDb().prepare(
-      "INSERT INTO mcp_servers (id, slug, command, args, cwd) VALUES (31, 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', ?, ?)",
-    ).run(JSON.stringify(['--config', 'config/environments.json', '--stdio', 'bare-value', absoluteArg]), leaseDir);
+    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args, cwd) VALUES (31, 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', ?, ?)", JSON.stringify(['--config', 'config/environments.json', '--stdio', 'bare-value', absoluteArg]), leaseDir);
     // ...and a bare PATH-resolved command which must be left untouched.
-    getDb().prepare("INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '[\"server.js\"]')").run();
-    getDb().prepare("INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (1, 31)").run();
+    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '[\"server.js\"]')");
+    await getDb().run("INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (1, 31)");
 
-    materializeHermesMcpConfig({ db: getDb(), agentId: 1, hermesHome });
+    await materializeHermesMcpConfig({ db: getDb(), agentId: 1, hermesHome });
     const yaml = fs.readFileSync(path.join(hermesHome, 'config.yaml'), 'utf8');
 
     expect(yaml).toContain(`"command": ${JSON.stringify(path.join(leaseDir, '.venv/bin/dev-env-lease-mcp'))}`);
@@ -806,16 +804,14 @@ describe('materializeAgentMcpConfig', () => {
     expect(yaml).toContain('"command": "node"');
   });
 
-  it('rewrites the Agent HQ MCP node binary, entrypoint, and cwd to the running process', () => {
-    createRegistryTables();
+  it('rewrites the Agent HQ MCP node binary, entrypoint, and cwd to the running process', async () => {
+    await createRegistryTables();
     const hermesHome = makeTempDir('agent-hq-hermes-portable-');
-    getDb().prepare("INSERT INTO agents (id, name, runtime_type) VALUES (1, 'Hermes Agent', 'hermes')").run();
-    getDb().prepare(
-      "INSERT INTO mcp_servers (id, slug, command, args, cwd) VALUES (30, 'agent-hq', '/fake/host/bin/node', '[\"/fake/host/agent-hq/api/dist/mcp/server.js\"]', '/fake/host/agent-hq/api')",
-    ).run();
-    getDb().prepare("INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)").run();
+    await getDb().run("INSERT INTO agents (id, name, runtime_type) VALUES (1, 'Hermes Agent', 'hermes')");
+    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args, cwd) VALUES (30, 'agent-hq', '/fake/host/bin/node', '[\"/fake/host/agent-hq/api/dist/mcp/server.js\"]', '/fake/host/agent-hq/api')");
+    await getDb().run("INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)");
 
-    materializeHermesMcpConfig({ db: getDb(), agentId: 1, hermesHome });
+    await materializeHermesMcpConfig({ db: getDb(), agentId: 1, hermesHome });
     const yaml = fs.readFileSync(path.join(hermesHome, 'config.yaml'), 'utf8');
 
     // Host-specific node binary -> the node running this process.
@@ -880,8 +876,8 @@ describe('materializeAgentMcpConfig', () => {
     expect(fs.existsSync(configPath)).toBe(false);
   });
 
-  it('materializes the OpenClaw bundle into the workspace configured for the dispatch slug', () => {
-    createRegistryTables();
+  it('materializes the OpenClaw bundle into the workspace configured for the dispatch slug', async () => {
+    await createRegistryTables();
     const root = makeTempDir('agent-hq-openclaw-dispatch-slug-');
     const openClawWorkspace = path.join(root, 'ws-lumen');
     const staleWorkspace = path.join(root, 'ws-stale');
@@ -898,18 +894,16 @@ describe('materializeAgentMcpConfig', () => {
         ],
       },
     }), 'utf8');
-    getDb().prepare(
-      `INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-       VALUES (1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`,
-    ).run(staleWorkspace);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
+       VALUES (1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`, staleWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-      dispatchAgentSlug: 'lumen-frontend',
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+          dispatchAgentSlug: 'lumen-frontend',
+        });
 
     expect(result.ok).toBe(true);
     expect(result.workingDirectory).toBe(openClawWorkspace);
@@ -920,8 +914,8 @@ describe('materializeAgentMcpConfig', () => {
     ]));
   });
 
-  it('reconciles scoped global MCP config for assigned OpenClaw agents outside dispatch', () => {
-    createRegistryTables();
+  it('reconciles scoped global MCP config for assigned OpenClaw agents outside dispatch', async () => {
+    await createRegistryTables();
     const root = makeTempDir('agent-hq-openclaw-routed-bundle-');
     const openClawWorkspace = path.join(root, 'ws-harlow');
     const storedWorkspace = path.join(root, 'stored-harlow');
@@ -948,12 +942,10 @@ describe('materializeAgentMcpConfig', () => {
         },
       },
     }), 'utf8');
-    getDb().prepare(
-      `INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-       VALUES (99974444, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'openclaw', ?)`,
-    ).run(storedWorkspace);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (99974444, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
+       VALUES (99974444, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'openclaw', ?)`, storedWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (99974444, 30)`);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
       command: 'openclaw',
@@ -961,12 +953,12 @@ describe('materializeAgentMcpConfig', () => {
       status: 0,
     }));
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 99974444,
-      materializeOpenClawGlobalConfig: true,
-      refreshOpenClawPluginRegistry,
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 99974444,
+          materializeOpenClawGlobalConfig: true,
+          refreshOpenClawPluginRegistry,
+        });
     const bundleConfig = JSON.parse(fs.readFileSync(path.join(openClawWorkspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'), 'utf8'));
     const openClawConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
@@ -992,8 +984,8 @@ describe('materializeAgentMcpConfig', () => {
     }));
   });
 
-  it('falls back to the session-key agent slug when openclaw_agent_id is not a configured OpenClaw agent', () => {
-    createRegistryTables();
+  it('falls back to the session-key agent slug when openclaw_agent_id is not a configured OpenClaw agent', async () => {
+    await createRegistryTables();
     const root = makeTempDir('agent-hq-openclaw-slug-fallback-');
     const openClawWorkspace = path.join(root, 'ws-lumen');
     fs.mkdirSync(openClawWorkspace, { recursive: true });
@@ -1005,36 +997,32 @@ describe('materializeAgentMcpConfig', () => {
         list: [{ id: 'lumen-frontend', workspace: openClawWorkspace }],
       },
     }), 'utf8');
-    getDb().prepare(
-      `INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-       VALUES (1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`,
-    ).run(openClawWorkspace);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
+       VALUES (1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`, openClawWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+        });
 
     expect(result.ok).toBe(true);
     expect(result.workingDirectory).toBe(openClawWorkspace);
     expect(fs.existsSync(path.join(openClawWorkspace, '.openclaw', 'extensions', 'agent-hq-mcp', '.mcp.json'))).toBe(true);
   });
 
-  it('fails closed instead of materializing an OpenClaw bundle into a workspace shared by another agent', () => {
-    createRegistryTables();
+  it('fails closed instead of materializing an OpenClaw bundle into a workspace shared by another agent', async () => {
+    await createRegistryTables();
     const sharedWorkspace = makeTempDir('agent-hq-openclaw-shared-');
-    getDb().prepare(
-      `INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'One', 'openclaw', ?), (2, 'Two', 'openclaw', ?)`,
-    ).run(sharedWorkspace, sharedWorkspace);
-    getDb().prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`).run();
-    getDb().prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`).run();
+    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'One', 'openclaw', ?), (2, 'Two', 'openclaw', ?)`, sharedWorkspace, sharedWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
-    const result = syncAssignedMcpForAgent({
-      db: getDb(),
-      agentId: 1,
-    });
+    const result = await syncAssignedMcpForAgent({
+          db: getDb(),
+          agentId: 1,
+        });
 
     expect(result.ok).toBe(false);
     expect(result.skipped).toBe('shared_workspace');

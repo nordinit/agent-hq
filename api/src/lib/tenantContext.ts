@@ -26,6 +26,7 @@ import {
 import { applyDefaultInstallPackage } from './defaultInstallPackage';
 import { seedSprintTypeTaskStatuses } from '../domains/routing/policy/seed';
 import { pruneUnexpectedStarterWorkflowRelationshipTypes, seedStarterWorkflowRelationshipTypes } from './taskRelationshipTypes';
+import { type Db } from "../db/adapter/types";
 
 export const DEFAULT_TENANT_SLUG = 'default';
 export const DEFAULT_TENANT_NAME = 'Default Tenant';
@@ -307,138 +308,138 @@ const WORKFLOW_DEFINITION_CONFIG_TABLES = [
   'sprint_workflow_templates',
 ] as const;
 
-const ensuredTenantSchemaDbs = new WeakSet<Database.Database>();
-const verifiedTenantSchemaDbs = new WeakSet<Database.Database>();
+const ensuredTenantSchemaDbs = new WeakSet<Db>();
+const verifiedTenantSchemaDbs = new WeakSet<Db>();
 
 // Foreign-key enforcement helpers live in db/foreignKeyGuard.ts so that schema.ts,
 // this module and db/startupVerifier.ts can all share them without an import cycle.
 // Re-exported here because this is where migration code already reaches for them.
 export { foreignKeysEnabled, withForeignKeysDisabled };
 
-function tableExists(db: Database.Database, table: string): boolean {
-  return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(table) as { name?: string } | undefined)?.name);
+async function tableExists(db: Db, table: string): Promise<boolean> {
+  return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table) as { name?: string } | undefined)?.name);
 }
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
-  if (!tableExists(db, table)) return false;
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
+  if (!await tableExists(db, table)) return false;
+  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
 }
 
-function columnExpression(db: Database.Database, table: string, column: string, fallbackSql: string): string {
-  return tableHasColumn(db, table, column) ? column : fallbackSql;
+async function columnExpression(db: Db, table: string, column: string, fallbackSql: string): Promise<string> {
+  return await tableHasColumn(db, table, column) ? column : fallbackSql;
 }
 
-function backfillOperationalTenantOwnership(db: Database.Database): void {
-  if (tableExists(db, 'job_instances') && tableHasColumn(db, 'job_instances', 'tenant_id')) {
-    if (tableHasColumn(db, 'tasks', 'tenant_id')) {
-      db.prepare(`
+async function backfillOperationalTenantOwnership(db: Db): Promise<void> {
+  if (await tableExists(db, 'job_instances') && await tableHasColumn(db, 'job_instances', 'tenant_id')) {
+    if (await tableHasColumn(db, 'tasks', 'tenant_id')) {
+      await db.run(`
         UPDATE job_instances
         SET tenant_id = (SELECT t.tenant_id FROM tasks t WHERE t.id = job_instances.task_id)
         WHERE tenant_id IS NULL
           AND task_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = job_instances.task_id AND t.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
-    if (tableHasColumn(db, 'agents', 'tenant_id')) {
-      db.prepare(`
+    if (await tableHasColumn(db, 'agents', 'tenant_id')) {
+      await db.run(`
         UPDATE job_instances
         SET tenant_id = (SELECT a.tenant_id FROM agents a WHERE a.id = job_instances.agent_id)
         WHERE tenant_id IS NULL
           AND agent_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM agents a WHERE a.id = job_instances.agent_id AND a.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
   }
 
   for (const table of ['task_history', 'task_notes', 'task_creation_events', 'task_outcome_metrics']) {
-    if (!tableHasColumn(db, table, 'tenant_id') || !tableHasColumn(db, 'tasks', 'tenant_id')) continue;
-    db.prepare(`
+    if (!await tableHasColumn(db, table, 'tenant_id') || !await tableHasColumn(db, 'tasks', 'tenant_id')) continue;
+    await db.run(`
       UPDATE ${table}
       SET tenant_id = (SELECT t.tenant_id FROM tasks t WHERE t.id = ${table}.task_id)
       WHERE tenant_id IS NULL
         AND task_id IS NOT NULL
         AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = ${table}.task_id AND t.tenant_id IS NOT NULL)
-    `).run();
+    `);
   }
 
-  if (tableHasColumn(db, 'sessions', 'tenant_id')) {
-    if (tableHasColumn(db, 'tasks', 'tenant_id')) {
-      db.prepare(`
+  if (await tableHasColumn(db, 'sessions', 'tenant_id')) {
+    if (await tableHasColumn(db, 'tasks', 'tenant_id')) {
+      await db.run(`
         UPDATE sessions
         SET tenant_id = (SELECT t.tenant_id FROM tasks t WHERE t.id = sessions.task_id)
         WHERE tenant_id IS NULL
           AND task_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = sessions.task_id AND t.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
-    if (tableHasColumn(db, 'agents', 'tenant_id')) {
-      db.prepare(`
+    if (await tableHasColumn(db, 'agents', 'tenant_id')) {
+      await db.run(`
         UPDATE sessions
         SET tenant_id = (SELECT a.tenant_id FROM agents a WHERE a.id = sessions.agent_id)
         WHERE tenant_id IS NULL
           AND agent_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM agents a WHERE a.id = sessions.agent_id AND a.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
-    if (tableHasColumn(db, 'projects', 'tenant_id')) {
-      db.prepare(`
+    if (await tableHasColumn(db, 'projects', 'tenant_id')) {
+      await db.run(`
         UPDATE sessions
         SET tenant_id = (SELECT p.tenant_id FROM projects p WHERE p.id = sessions.project_id)
         WHERE tenant_id IS NULL
           AND project_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM projects p WHERE p.id = sessions.project_id AND p.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
-    if (tableHasColumn(db, 'job_instances', 'tenant_id')) {
-      db.prepare(`
+    if (await tableHasColumn(db, 'job_instances', 'tenant_id')) {
+      await db.run(`
         UPDATE sessions
         SET tenant_id = (SELECT ji.tenant_id FROM job_instances ji WHERE ji.id = sessions.instance_id)
         WHERE tenant_id IS NULL
           AND instance_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM job_instances ji WHERE ji.id = sessions.instance_id AND ji.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
   }
 
-  if (tableHasColumn(db, 'chat_messages', 'tenant_id')) {
-    if (tableHasColumn(db, 'job_instances', 'tenant_id')) {
-      db.prepare(`
+  if (await tableHasColumn(db, 'chat_messages', 'tenant_id')) {
+    if (await tableHasColumn(db, 'job_instances', 'tenant_id')) {
+      await db.run(`
         UPDATE chat_messages
         SET tenant_id = (SELECT ji.tenant_id FROM job_instances ji WHERE ji.id = chat_messages.instance_id)
         WHERE tenant_id IS NULL
           AND instance_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM job_instances ji WHERE ji.id = chat_messages.instance_id AND ji.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
-    if (tableHasColumn(db, 'agents', 'tenant_id')) {
-      db.prepare(`
+    if (await tableHasColumn(db, 'agents', 'tenant_id')) {
+      await db.run(`
         UPDATE chat_messages
         SET tenant_id = (SELECT a.tenant_id FROM agents a WHERE a.id = chat_messages.agent_id)
         WHERE tenant_id IS NULL
           AND agent_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM agents a WHERE a.id = chat_messages.agent_id AND a.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
   }
 
-  if (tableHasColumn(db, 'logs', 'tenant_id')) {
-    if (tableHasColumn(db, 'logs', 'instance_id') && tableHasColumn(db, 'job_instances', 'tenant_id')) {
-      db.prepare(`
+  if (await tableHasColumn(db, 'logs', 'tenant_id')) {
+    if (await tableHasColumn(db, 'logs', 'instance_id') && await tableHasColumn(db, 'job_instances', 'tenant_id')) {
+      await db.run(`
         UPDATE logs
         SET tenant_id = (SELECT ji.tenant_id FROM job_instances ji WHERE ji.id = logs.instance_id)
         WHERE tenant_id IS NULL
           AND instance_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM job_instances ji WHERE ji.id = logs.instance_id AND ji.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
-    if (tableHasColumn(db, 'logs', 'agent_id') && tableHasColumn(db, 'agents', 'tenant_id')) {
-      db.prepare(`
+    if (await tableHasColumn(db, 'logs', 'agent_id') && await tableHasColumn(db, 'agents', 'tenant_id')) {
+      await db.run(`
         UPDATE logs
         SET tenant_id = (SELECT a.tenant_id FROM agents a WHERE a.id = logs.agent_id)
         WHERE tenant_id IS NULL
           AND agent_id IS NOT NULL
           AND EXISTS (SELECT 1 FROM agents a WHERE a.id = logs.agent_id AND a.tenant_id IS NOT NULL)
-      `).run();
+      `);
     }
   }
 }
@@ -472,40 +473,40 @@ export function tenantScopedParams(tenantId: number, params: unknown[] = []): un
   return [...params, tenantId];
 }
 
-export function listTenantScopedRows<T = Record<string, unknown>>(db: Database.Database, options: TenantScopedListOptions): T[] {
-  return db.prepare(`${options.sql} ${tenantScopedWhere(options)}`).all(...tenantScopedParams(options.tenantId, options.params)) as T[];
+export async function listTenantScopedRows<T = Record<string, unknown>>(db: Db, options: TenantScopedListOptions): Promise<T[]> {
+  return await db.all(`${options.sql} ${tenantScopedWhere(options)}`, ...tenantScopedParams(options.tenantId, options.params)) as T[];
 }
 
-export function getTenantScopedRow<T = Record<string, unknown>>(db: Database.Database, options: TenantScopedListOptions): T | undefined {
-  return db.prepare(`${options.sql} ${tenantScopedWhere(options)} LIMIT 1`).get(...tenantScopedParams(options.tenantId, options.params)) as T | undefined;
+export async function getTenantScopedRow<T = Record<string, unknown>>(db: Db, options: TenantScopedListOptions): Promise<T | undefined> {
+  return await db.get(`${options.sql} ${tenantScopedWhere(options)} LIMIT 1`, ...tenantScopedParams(options.tenantId, options.params)) as T | undefined;
 }
 
-export function checkTenantOwnedRow(
-  db: Database.Database,
+export async function checkTenantOwnedRow(
+  db: Db,
   table: string,
   id: number | string,
   tenantId: number,
   idColumn = 'id',
-): TenantOwnedRowCheck {
+): Promise<TenantOwnedRowCheck> {
   assertSafeSqlIdentifier(table, 'tenant-owned table');
   assertSafeSqlIdentifier(idColumn, 'tenant-owned id column');
-  if (!tableHasColumn(db, table, 'tenant_id')) {
+  if (!await tableHasColumn(db, table, 'tenant_id')) {
     throw new Error(`Table ${table} is not directly tenant-scoped`);
   }
-  const row = db.prepare(`SELECT tenant_id FROM ${table} WHERE ${idColumn} = ? LIMIT 1`).get(id) as { tenant_id: number | null } | undefined;
+  const row = await db.get(`SELECT tenant_id FROM ${table} WHERE ${idColumn} = ? LIMIT 1`, id) as { tenant_id: number | null } | undefined;
   if (!row) return { visibility: 'not_found', tenant_id: null };
   if (row.tenant_id === tenantId) return { visibility: 'visible', tenant_id: row.tenant_id };
   return { visibility: 'forbidden', tenant_id: row.tenant_id };
 }
 
-export function requireTenantOwnedRow(
-  db: Database.Database,
+export async function requireTenantOwnedRow(
+  db: Db,
   table: string,
   id: number | string,
   tenantId: number,
   options: TenantRouteGuardOptions & { idColumn?: string } = {},
-): void {
-  const check = checkTenantOwnedRow(db, table, id, tenantId, options.idColumn ?? 'id');
+): Promise<void> {
+  const check = await checkTenantOwnedRow(db, table, id, tenantId, options.idColumn ?? 'id');
   if (check.visibility === 'visible') return;
   const notFoundMessage = options.notFoundMessage ?? 'Record not found';
   if (check.visibility === 'forbidden' && options.revealForbidden) {
@@ -514,22 +515,22 @@ export function requireTenantOwnedRow(
   throw routeTenantGuardError(notFoundMessage, 404, 'tenant_scoped_not_found');
 }
 
-export function runTenantScopedDelete(db: Database.Database, options: TenantScopedMutationOptions): Database.RunResult {
+export async function runTenantScopedDelete(db: Db, options: TenantScopedMutationOptions): Promise<Database.RunResult> {
   assertSafeSqlIdentifier(options.table, 'tenant-owned table');
   assertSafeSqlIdentifier(options.idColumn ?? 'id', 'tenant-owned id column');
-  return db.prepare(`DELETE FROM ${options.table} WHERE ${options.idColumn ?? 'id'} = ? AND tenant_id = ?`).run(options.id, options.tenantId);
+  return await db.run(`DELETE FROM ${options.table} WHERE ${options.idColumn ?? 'id'} = ? AND tenant_id = ?`, options.id, options.tenantId);
 }
 
-export function runTenantScopedInsert(db: Database.Database, options: TenantScopedInsertOptions): Database.RunResult {
+export async function runTenantScopedInsert(db: Db, options: TenantScopedInsertOptions): Promise<Database.RunResult> {
   assertSafeSqlIdentifier(options.table, 'tenant-owned table');
   const values: Record<string, unknown> = { ...options.values, tenant_id: options.tenantId };
   const columns = Object.keys(values);
   for (const column of columns) assertSafeSqlIdentifier(column, 'tenant-owned insert column');
   const placeholders = columns.map(() => '?').join(', ');
-  return db.prepare(`INSERT INTO ${options.table} (${columns.join(', ')}) VALUES (${placeholders})`).run(...columns.map((column) => values[column]));
+  return await db.run(`INSERT INTO ${options.table} (${columns.join(', ')}) VALUES (${placeholders})`, ...columns.map((column) => values[column]));
 }
 
-export function runTenantScopedUpdate(db: Database.Database, options: TenantScopedUpdateOptions): Database.RunResult {
+export async function runTenantScopedUpdate(db: Db, options: TenantScopedUpdateOptions): Promise<Database.RunResult> {
   assertSafeSqlIdentifier(options.table, 'tenant-owned table');
   assertSafeSqlIdentifier(options.idColumn ?? 'id', 'tenant-owned id column');
   const columns = Object.keys(options.values);
@@ -541,21 +542,17 @@ export function runTenantScopedUpdate(db: Database.Database, options: TenantScop
     throw new Error('runTenantScopedUpdate requires at least one value');
   }
   const setSql = columns.map((column) => `${column} = ?`).join(', ');
-  return db.prepare(`UPDATE ${options.table} SET ${setSql} WHERE ${options.idColumn ?? 'id'} = ? AND tenant_id = ?`).run(
-    ...columns.map((column) => options.values[column]),
-    options.id,
-    options.tenantId,
-  );
+  return await db.run(`UPDATE ${options.table} SET ${setSql} WHERE ${options.idColumn ?? 'id'} = ? AND tenant_id = ?`, ...columns.map((column) => options.values[column]), options.id, options.tenantId);
 }
 
-function deleteByTenantId(db: Database.Database, table: string, tenantId: number): number {
-  if (!tableHasColumn(db, table, 'tenant_id')) return 0;
-  return db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).run(tenantId).changes;
+async function deleteByTenantId(db: Db, table: string, tenantId: number): Promise<number> {
+  if (!await tableHasColumn(db, table, 'tenant_id')) return 0;
+  return (await db.run(`DELETE FROM ${table} WHERE tenant_id = ?`, tenantId)).changes;
 }
 
-function deleteWhere(db: Database.Database, table: string, whereSql: string, params: unknown[], countKey = table): Record<string, number> {
-  if (!tableExists(db, table)) return {};
-  const changes = db.prepare(`DELETE FROM ${table} WHERE ${whereSql}`).run(...params).changes;
+async function deleteWhere(db: Db, table: string, whereSql: string, params: unknown[], countKey = table): Promise<Record<string, number>> {
+  if (!await tableExists(db, table)) return {};
+  const changes = (await db.run(`DELETE FROM ${table} WHERE ${whereSql}`, ...params)).changes;
   return changes > 0 ? { [countKey]: changes } : { [countKey]: 0 };
 }
 
@@ -567,12 +564,12 @@ function addCounts(counts: Record<string, number>, updates: Record<string, numbe
   for (const [key, value] of Object.entries(updates)) addCount(counts, key, value);
 }
 
-function deleteTenantRows(db: Database.Database, table: string, tenantId: number, counts: Record<string, number>): void {
-  addCount(counts, table, deleteByTenantId(db, table, tenantId));
+async function deleteTenantRows(db: Db, table: string, tenantId: number, counts: Record<string, number>): Promise<void> {
+  addCount(counts, table, await deleteByTenantId(db, table, tenantId));
 }
 
-function ensureAppSettingsTable(db: Database.Database): void {
-  db.exec(`
+async function ensureAppSettingsTable(db: Db): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key        TEXT PRIMARY KEY,
       value      TEXT NOT NULL DEFAULT '',
@@ -581,16 +578,16 @@ function ensureAppSettingsTable(db: Database.Database): void {
   `);
 }
 
-function getSetting(db: Database.Database, key: string): string | null {
-  return (db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(key) as { value?: string } | undefined)?.value ?? null;
+async function getSetting(db: Db, key: string): Promise<string | null> {
+  return (await db.get(`SELECT value FROM app_settings WHERE key = ?`, key) as { value?: string } | undefined)?.value ?? null;
 }
 
-function setSetting(db: Database.Database, key: string, value: string): void {
-  db.prepare(`
+async function setSetting(db: Db, key: string, value: string): Promise<void> {
+  await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `).run(key, value);
+  `, key, value);
 }
 
 function tenantMigrationRequired(message: string): Error & { code?: string } {
@@ -599,14 +596,14 @@ function tenantMigrationRequired(message: string): Error & { code?: string } {
   return error;
 }
 
-function requireCurrentDefaultTenantId(db: Database.Database): number {
-  if (!tableExists(db, 'app_settings')) {
+async function requireCurrentDefaultTenantId(db: Db): Promise<number> {
+  if (!await tableExists(db, 'app_settings')) {
     throw tenantMigrationRequired('app_settings table is missing; run the database migration/tenant bootstrap command before starting the API');
   }
-  if (!tableExists(db, 'tenants')) {
+  if (!await tableExists(db, 'tenants')) {
     throw tenantMigrationRequired('tenants table is missing; run the database migration/tenant bootstrap command before starting the API');
   }
-  const rawDefaultTenantId = getSetting(db, DEFAULT_TENANT_SETTING_KEY);
+  const rawDefaultTenantId = await getSetting(db, DEFAULT_TENANT_SETTING_KEY);
   if (!rawDefaultTenantId) {
     throw tenantMigrationRequired(`${DEFAULT_TENANT_SETTING_KEY} is missing from app_settings`);
   }
@@ -614,32 +611,32 @@ function requireCurrentDefaultTenantId(db: Database.Database): number {
   if (!Number.isInteger(defaultTenantId) || defaultTenantId <= 0) {
     throw tenantMigrationRequired(`${DEFAULT_TENANT_SETTING_KEY} is not a positive integer`);
   }
-  const defaultTenant = db.prepare(`
+  const defaultTenant = await db.get(`
     SELECT id
     FROM tenants
     WHERE id = ? AND is_default = 1
     LIMIT 1
-  `).get(defaultTenantId) as { id: number } | undefined;
+  `, defaultTenantId) as { id: number } | undefined;
   if (!defaultTenant) {
     throw tenantMigrationRequired(`${DEFAULT_TENANT_SETTING_KEY} does not point at an existing default tenant`);
   }
-  const activeTenantId = Number(getSetting(db, ACTIVE_TENANT_SETTING_KEY) ?? '');
+  const activeTenantId = Number((await getSetting(db, ACTIVE_TENANT_SETTING_KEY)) ?? '');
   if (!Number.isInteger(activeTenantId) || activeTenantId <= 0) {
     throw tenantMigrationRequired(`${ACTIVE_TENANT_SETTING_KEY} is missing or invalid in app_settings`);
   }
-  const activeTenant = db.prepare(`SELECT id FROM tenants WHERE id = ? LIMIT 1`).get(activeTenantId) as { id: number } | undefined;
+  const activeTenant = await db.get(`SELECT id FROM tenants WHERE id = ? LIMIT 1`, activeTenantId) as { id: number } | undefined;
   if (!activeTenant) {
     throw tenantMigrationRequired(`${ACTIVE_TENANT_SETTING_KEY} does not point at an existing tenant`);
   }
   return defaultTenantId;
 }
 
-function assertNoNullTenantOwnership(db: Database.Database, table: string): void {
-  if (!tableExists(db, table)) return;
-  if (!tableHasColumn(db, table, 'tenant_id')) {
+async function assertNoNullTenantOwnership(db: Db, table: string): Promise<void> {
+  if (!await tableExists(db, table)) return;
+  if (!await tableHasColumn(db, table, 'tenant_id')) {
     throw tenantMigrationRequired(`${table}.tenant_id is missing`);
   }
-  const nullTenantRow = db.prepare(`SELECT 1 FROM ${table} WHERE tenant_id IS NULL LIMIT 1`).get();
+  const nullTenantRow = await db.get(`SELECT 1 FROM ${table} WHERE tenant_id IS NULL LIMIT 1`);
   if (nullTenantRow) {
     throw tenantMigrationRequired(`${table} contains rows without tenant ownership`);
   }
@@ -655,65 +652,65 @@ function assertNoNullTenantOwnership(db: Database.Database, table: string): void
  * log is better than taking the API down. The strict, throwing assertion lives in
  * verifyStartupSchemaCurrent().
  */
-function assertForeignKeysStillEnforced(db: Database.Database): void {
+function assertForeignKeysStillEnforced(db: Db): void {
   assertForeignKeyEnforcementEnabled(db, 'tenant ownership migrations', {
     throwOnViolation: false,
     restore: true,
   });
 }
 
-export function verifyTenantSchemaForStartup(db: Database.Database): number {
-  if (verifiedTenantSchemaDbs.has(db)) return requireCurrentDefaultTenantId(db);
-  const defaultTenantId = requireCurrentDefaultTenantId(db);
+export async function verifyTenantSchemaForStartup(db: Db): Promise<number> {
+  if (verifiedTenantSchemaDbs.has(db)) return await requireCurrentDefaultTenantId(db);
+  const defaultTenantId = await requireCurrentDefaultTenantId(db);
   for (const table of TENANT_OWNED_TABLES) {
-    assertNoNullTenantOwnership(db, table);
+    await assertNoNullTenantOwnership(db, table);
   }
-  if (tableExists(db, 'sprint_types')) {
-    assertNoNullTenantOwnership(db, 'sprint_types');
-    const primaryKeyColumns = tablePrimaryKeyColumns(db, 'sprint_types');
+  if (await tableExists(db, 'sprint_types')) {
+    await assertNoNullTenantOwnership(db, 'sprint_types');
+    const primaryKeyColumns = await tablePrimaryKeyColumns(db, 'sprint_types');
     if (primaryKeyColumns.length === 1 && primaryKeyColumns[0] === 'key') {
       throw tenantMigrationRequired('sprint_types still uses legacy global keys; run tenant ownership repair before starting the API');
     }
   }
   for (const table of WORKFLOW_DEFINITION_CONFIG_TABLES) {
-    assertNoNullTenantOwnership(db, table);
+    await assertNoNullTenantOwnership(db, table);
   }
   verifiedTenantSchemaDbs.add(db);
   return defaultTenantId;
 }
 
-function backfillDefaultTenantForNullTenantRows(db: Database.Database, defaultTenantId: number): void {
+async function backfillDefaultTenantForNullTenantRows(db: Db, defaultTenantId: number): Promise<void> {
   for (const table of TENANT_OWNED_TABLES) {
-    if (!tableHasColumn(db, table, 'tenant_id')) continue;
-    const hasNullTenant = db.prepare(`SELECT 1 FROM ${table} WHERE tenant_id IS NULL LIMIT 1`).get();
+    if (!await tableHasColumn(db, table, 'tenant_id')) continue;
+    const hasNullTenant = await db.get(`SELECT 1 FROM ${table} WHERE tenant_id IS NULL LIMIT 1`);
     if (!hasNullTenant) continue;
-    db.prepare(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL`).run(defaultTenantId);
+    await db.run(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL`, defaultTenantId);
   }
 }
 
-function ensureTenantOwnedTableColumns(db: Database.Database, defaultTenantId: number): void {
+async function ensureTenantOwnedTableColumns(db: Db, defaultTenantId: number): Promise<void> {
   for (const table of TENANT_OWNED_TABLES) {
-    if (!tableExists(db, table)) continue;
-    if (!tableHasColumn(db, table, 'tenant_id')) {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE`);
+    if (!await tableExists(db, table)) continue;
+    if (!await tableHasColumn(db, table, 'tenant_id')) {
+      await db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE`);
     }
-    db.prepare(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL`).run(defaultTenantId);
+    await db.run(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL`, defaultTenantId);
     try {
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_tenant ON ${table}(tenant_id)`);
+      await db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_tenant ON ${table}(tenant_id)`);
     } catch {
       // Index creation can fail on minimal legacy tables with incompatible state; the column/backfill is the critical migration.
     }
   }
 }
 
-function ensureMcpServersTenantLocalSlugSchema(db: Database.Database, defaultTenantId: number): void {
-  if (!tableExists(db, 'mcp_servers') || !tableHasColumn(db, 'mcp_servers', 'tenant_id')) return;
-  const ddl = (db.prepare(`
+async function ensureMcpServersTenantLocalSlugSchema(db: Db, defaultTenantId: number): Promise<void> {
+  if (!await tableExists(db, 'mcp_servers') || !await tableHasColumn(db, 'mcp_servers', 'tenant_id')) return;
+  const ddl = (await db.get(`
     SELECT sql
     FROM sqlite_master
     WHERE type = 'table' AND name = 'mcp_servers'
-  `).get() as { sql?: string } | undefined)?.sql ?? '';
-  const hasTenantSlugUnique = Boolean(db.prepare(`
+  `) as { sql?: string } | undefined)?.sql ?? '';
+  const hasTenantSlugUnique = Boolean(await db.get(`
     SELECT 1
     FROM sqlite_master
     WHERE type = 'index'
@@ -723,14 +720,14 @@ function ensureMcpServersTenantLocalSlugSchema(db: Database.Database, defaultTen
       AND lower(sql) LIKE '%tenant_id%'
       AND lower(sql) LIKE '%slug%'
     LIMIT 1
-  `).get());
+  `));
   const hasGlobalSlugUnique = /slug\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(ddl);
   if (!hasGlobalSlugUnique && hasTenantSlugUnique) return;
-  if (!tableHasColumn(db, 'mcp_servers', 'id') || !tableHasColumn(db, 'mcp_servers', 'slug') || !tableHasColumn(db, 'mcp_servers', 'command')) return;
+  if (!await tableHasColumn(db, 'mcp_servers', 'id') || !await tableHasColumn(db, 'mcp_servers', 'slug') || !await tableHasColumn(db, 'mcp_servers', 'command')) return;
 
-  const migrate = db.transaction(() => {
-    db.exec(`DROP TABLE IF EXISTS mcp_servers_tenant_local`);
-    db.exec(`
+  const migrate = db.transaction(async () => {
+    await db.exec(`DROP TABLE IF EXISTS mcp_servers_tenant_local`);
+    await db.exec(`
       CREATE TABLE mcp_servers_tenant_local (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant_id     INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -748,30 +745,30 @@ function ensureMcpServersTenantLocalSlugSchema(db: Database.Database, defaultTen
         UNIQUE(tenant_id, slug)
       )
     `);
-    db.prepare(`
+    await db.run(`
       INSERT OR IGNORE INTO mcp_servers_tenant_local (
         id, tenant_id, name, slug, description, transport, command, args, env, cwd, enabled, created_at, updated_at
       )
       SELECT
         id,
         COALESCE(tenant_id, ?),
-        ${columnExpression(db, 'mcp_servers', 'name', 'slug')},
+        ${await columnExpression(db, 'mcp_servers', 'name', 'slug')},
         slug,
-        ${columnExpression(db, 'mcp_servers', 'description', "''")},
-        CASE WHEN ${columnExpression(db, 'mcp_servers', 'transport', "'stdio'")} = 'stdio' THEN 'stdio' ELSE 'stdio' END,
+        ${await columnExpression(db, 'mcp_servers', 'description', "''")},
+        CASE WHEN ${await columnExpression(db, 'mcp_servers', 'transport', "'stdio'")} = 'stdio' THEN 'stdio' ELSE 'stdio' END,
         command,
-        ${columnExpression(db, 'mcp_servers', 'args', "'[]'")},
-        ${columnExpression(db, 'mcp_servers', 'env', "'{}'")},
-        ${columnExpression(db, 'mcp_servers', 'cwd', 'NULL')},
-        ${columnExpression(db, 'mcp_servers', 'enabled', '1')},
-        ${columnExpression(db, 'mcp_servers', 'created_at', "datetime('now')")},
-        ${columnExpression(db, 'mcp_servers', 'updated_at', "datetime('now')")}
+        ${await columnExpression(db, 'mcp_servers', 'args', "'[]'")},
+        ${await columnExpression(db, 'mcp_servers', 'env', "'{}'")},
+        ${await columnExpression(db, 'mcp_servers', 'cwd', 'NULL')},
+        ${await columnExpression(db, 'mcp_servers', 'enabled', '1')},
+        ${await columnExpression(db, 'mcp_servers', 'created_at', "datetime('now')")},
+        ${await columnExpression(db, 'mcp_servers', 'updated_at', "datetime('now')")}
       FROM mcp_servers
       ORDER BY id ASC
-    `).run(defaultTenantId);
-    db.exec(`DROP TABLE mcp_servers`);
-    db.exec(`ALTER TABLE mcp_servers_tenant_local RENAME TO mcp_servers`);
-    db.exec(`
+    `, defaultTenantId);
+    await db.exec(`DROP TABLE mcp_servers`);
+    await db.exec(`ALTER TABLE mcp_servers_tenant_local RENAME TO mcp_servers`);
+    await db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_tenant_slug ON mcp_servers(tenant_id, slug);
       CREATE INDEX IF NOT EXISTS idx_mcp_servers_tenant ON mcp_servers(tenant_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_servers_slug ON mcp_servers(slug);
@@ -782,31 +779,31 @@ function ensureMcpServersTenantLocalSlugSchema(db: Database.Database, defaultTen
   withForeignKeysDisabled(db, migrate);
 }
 
-function tablePrimaryKeyColumns(db: Database.Database, table: string): string[] {
-  if (!tableExists(db, table)) return [];
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string; pk: number }>)
+async function tablePrimaryKeyColumns(db: Db, table: string): Promise<string[]> {
+  if (!await tableExists(db, table)) return [];
+  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string; pk: number }>)
     .filter((column) => Number(column.pk) > 0)
     .sort((a, b) => Number(a.pk) - Number(b.pk))
     .map((column) => column.name);
 }
 
-function rebuildSprintTypesForTenantLocalKeys(db: Database.Database, defaultTenantId: number): void {
-  if (!tableExists(db, 'sprint_types')) return;
-  const hasTenantId = tableHasColumn(db, 'sprint_types', 'tenant_id');
-  const primaryKeyColumns = tablePrimaryKeyColumns(db, 'sprint_types');
-  const inferredTenantExpr = tableExists(db, 'sprints') && tableHasColumn(db, 'sprints', 'tenant_id')
+async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: number): Promise<void> {
+  if (!await tableExists(db, 'sprint_types')) return;
+  const hasTenantId = await tableHasColumn(db, 'sprint_types', 'tenant_id');
+  const primaryKeyColumns = await tablePrimaryKeyColumns(db, 'sprint_types');
+  const inferredTenantExpr = await tableExists(db, 'sprints') && await tableHasColumn(db, 'sprints', 'tenant_id')
     ? `(SELECT s.tenant_id FROM sprints s WHERE s.sprint_type = sprint_types.key AND s.tenant_id IS NOT NULL ORDER BY s.tenant_id ASC LIMIT 1)`
     : 'NULL';
   if (hasTenantId && !(primaryKeyColumns.length === 1 && primaryKeyColumns[0] === 'key')) {
     // This is the steady-state path: it runs on every ensureTenantSchema() call, which
     // means on every request. It must never leave enforcement disabled behind it.
-    withForeignKeysDisabled(db, () => {
-      db.prepare(`
+    withForeignKeysDisabled(db, async () => {
+      await db.run(`
         UPDATE sprint_types
         SET tenant_id = COALESCE(${inferredTenantExpr}, ?)
         WHERE tenant_id IS NULL
-      `).run(defaultTenantId);
-      db.exec(`
+      `, defaultTenantId);
+      await db.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key);
         CREATE INDEX IF NOT EXISTS idx_sprint_types_system ON sprint_types(is_system);
       `);
@@ -814,8 +811,8 @@ function rebuildSprintTypesForTenantLocalKeys(db: Database.Database, defaultTena
     return;
   }
 
-  const migrate = db.transaction(() => {
-    db.exec(`
+  const migrate = db.transaction(async () => {
+    await db.exec(`
       CREATE TABLE sprint_types_tenant_local (
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant_id        INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id) ON DELETE CASCADE,
@@ -829,17 +826,17 @@ function rebuildSprintTypesForTenantLocalKeys(db: Database.Database, defaultTena
         UNIQUE(tenant_id, key)
       );
     `);
-    const columns = new Set((db.prepare(`PRAGMA table_info(sprint_types)`).all() as Array<{ name: string }>).map((column) => column.name));
-    db.prepare(`
+    const columns = new Set((await db.all(`PRAGMA table_info(sprint_types)`) as Array<{ name: string }>).map((column) => column.name));
+    await db.run(`
       INSERT OR IGNORE INTO sprint_types_tenant_local (
         tenant_id, key, name, description, is_system, status_seeded_at, created_at, updated_at
       )
       SELECT
         COALESCE(${columns.has('tenant_id') ? 'tenant_id' : 'NULL'}, ${
-          tableExists(db, 'sprints') && tableHasColumn(db, 'sprints', 'tenant_id')
-            ? '(SELECT s.tenant_id FROM sprints s WHERE s.sprint_type = sprint_types.key AND s.tenant_id IS NOT NULL ORDER BY s.tenant_id ASC LIMIT 1)'
-            : 'NULL'
-        }, ?),
+                await tableExists(db, 'sprints') && await tableHasColumn(db, 'sprints', 'tenant_id')
+                  ? '(SELECT s.tenant_id FROM sprints s WHERE s.sprint_type = sprint_types.key AND s.tenant_id IS NOT NULL ORDER BY s.tenant_id ASC LIMIT 1)'
+                  : 'NULL'
+              }, ?),
         key,
         name,
         COALESCE(${columns.has('description') ? 'description' : "''"}, ''),
@@ -848,18 +845,18 @@ function rebuildSprintTypesForTenantLocalKeys(db: Database.Database, defaultTena
         COALESCE(${columns.has('created_at') ? 'created_at' : 'NULL'}, datetime('now')),
         COALESCE(${columns.has('updated_at') ? 'updated_at' : 'NULL'}, datetime('now'))
       FROM sprint_types
-    `).run(defaultTenantId);
-    db.exec(`DROP TABLE sprint_types`);
-    db.exec(`ALTER TABLE sprint_types_tenant_local RENAME TO sprint_types`);
+    `, defaultTenantId);
+    await db.exec(`DROP TABLE sprint_types`);
+    await db.exec(`ALTER TABLE sprint_types_tenant_local RENAME TO sprint_types`);
   });
   // Legacy routing tables could still contain single-column REFERENCES sprint_types(key)
   // while the tenant-local parent key is (tenant_id, key), so FK checks stay off for the
   // rebuild and the trailing compatibility DDL. Those legacy references are stripped by
   // initSchema's rebuildWithoutSprintTypeKeyForeignKey pass; enforcement is restored to
   // its prior state here regardless, because this connection is process-wide.
-  withForeignKeysDisabled(db, () => {
+  withForeignKeysDisabled(db, async () => {
     migrate();
-    db.exec(`
+    await db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key);
       CREATE INDEX IF NOT EXISTS idx_sprint_types_system ON sprint_types(is_system);
     `);
@@ -969,17 +966,17 @@ function workflowConfigTableDefinition(table: string): string | null {
   }
 }
 
-function migrateWorkflowConfigTable(db: Database.Database, table: string, defaultTenantId: number): void {
-  if (!tableExists(db, table)) return;
+async function migrateWorkflowConfigTable(db: Db, table: string, defaultTenantId: number): Promise<void> {
+  if (!await tableExists(db, table)) return;
   const definition = workflowConfigTableDefinition(table);
   if (!definition) return;
-  const columns = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
+  const columns = new Set((await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).map((column) => column.name));
   const hasTenantId = columns.has('tenant_id');
   const hasNullTenantRows = hasTenantId
-    ? ((db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id IS NULL`).get() as { n: number }).n > 0)
+    ? ((await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id IS NULL`) as { n: number }).n > 0)
     : false;
   const tenantColumn = hasTenantId
-    ? (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string; notnull: number }>).find((column) => column.name === 'tenant_id')
+    ? (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string; notnull: number }>).find((column) => column.name === 'tenant_id')
     : undefined;
   const needsRebuild = !hasTenantId || hasNullTenantRows || tenantColumn?.notnull !== 1;
   if (!needsRebuild) {
@@ -987,62 +984,62 @@ function migrateWorkflowConfigTable(db: Database.Database, table: string, defaul
   }
 
   const oldTable = `${table}_legacy_global`;
-  const migrate = db.transaction(() => {
-    db.exec(`ALTER TABLE ${table} RENAME TO ${oldTable}`);
-    db.exec(`CREATE TABLE ${table} (${definition})`);
-    const nextColumns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name).filter((column) => column !== 'id');
+  const migrate = db.transaction(async () => {
+    await db.exec(`ALTER TABLE ${table} RENAME TO ${oldTable}`);
+    await db.exec(`CREATE TABLE ${table} (${definition})`);
+    const nextColumns = (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).map((column) => column.name).filter((column) => column !== 'id');
     const selectExpr = nextColumns.map((column) => {
       if (column === 'tenant_id') return `COALESCE(${hasTenantId ? 'legacy.tenant_id,' : ''} st.tenant_id, ?) AS tenant_id`;
       return columns.has(column) ? `legacy.${column}` : `NULL AS ${column}`;
     }).join(', ');
-    db.prepare(`
+    await db.run(`
       INSERT OR IGNORE INTO ${table} (${nextColumns.join(', ')})
       SELECT ${selectExpr}
       FROM ${oldTable} legacy
       LEFT JOIN sprint_types st ON st.key = legacy.sprint_type_key
-    `).run(defaultTenantId);
-    db.exec(`DROP TABLE ${oldTable}`);
+    `, defaultTenantId);
+    await db.exec(`DROP TABLE ${oldTable}`);
   });
   // Previously this restored 'OFF' instead of the prior value — a copy-paste bug that
   // disabled enforcement for the rest of the process lifetime.
   withForeignKeysDisabled(db, migrate);
 }
 
-function ensureWorkflowDefinitionConfigTenantScope(db: Database.Database, defaultTenantId: number): void {
-  if (!tableExists(db, 'sprint_types')) return;
+async function ensureWorkflowDefinitionConfigTenantScope(db: Db, defaultTenantId: number): Promise<void> {
+  if (!await tableExists(db, 'sprint_types')) return;
   for (const table of WORKFLOW_DEFINITION_CONFIG_TABLES) {
-    migrateWorkflowConfigTable(db, table, defaultTenantId);
+    await migrateWorkflowConfigTable(db, table, defaultTenantId);
   }
-  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key)`);
-  if (tableExists(db, 'task_field_schemas')) db.exec(`CREATE INDEX IF NOT EXISTS idx_task_field_schemas_lookup ON task_field_schemas(tenant_id, sprint_type_key, task_type)`);
-  if (tableExists(db, 'sprint_type_task_types')) db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_task_types_lookup ON sprint_type_task_types(tenant_id, sprint_type_key, task_type)`);
-  if (tableExists(db, 'sprint_type_task_statuses')) db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_task_statuses_lookup ON sprint_type_task_statuses(tenant_id, sprint_type_key, status_key)`);
-  if (tableExists(db, 'sprint_type_outcomes')) db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_outcomes_lookup ON sprint_type_outcomes(tenant_id, sprint_type_key, task_type, enabled, stage_order)`);
-  if (tableExists(db, 'sprint_type_relationship_types')) db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_relationship_types_lookup ON sprint_type_relationship_types(tenant_id, sprint_type_key, key)`);
-  if (tableExists(db, 'sprint_workflow_templates')) db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_workflow_templates_lookup ON sprint_workflow_templates(tenant_id, sprint_type_key, is_default)`);
+  await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key)`);
+  if (await tableExists(db, 'task_field_schemas')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_task_field_schemas_lookup ON task_field_schemas(tenant_id, sprint_type_key, task_type)`);
+  if (await tableExists(db, 'sprint_type_task_types')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_task_types_lookup ON sprint_type_task_types(tenant_id, sprint_type_key, task_type)`);
+  if (await tableExists(db, 'sprint_type_task_statuses')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_task_statuses_lookup ON sprint_type_task_statuses(tenant_id, sprint_type_key, status_key)`);
+  if (await tableExists(db, 'sprint_type_outcomes')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_outcomes_lookup ON sprint_type_outcomes(tenant_id, sprint_type_key, task_type, enabled, stage_order)`);
+  if (await tableExists(db, 'sprint_type_relationship_types')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_relationship_types_lookup ON sprint_type_relationship_types(tenant_id, sprint_type_key, key)`);
+  if (await tableExists(db, 'sprint_workflow_templates')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_workflow_templates_lookup ON sprint_workflow_templates(tenant_id, sprint_type_key, is_default)`);
 }
 
-function copyWorkflowDefinitionConfig(db: Database.Database, sourceKey: string, targetKey: string): void {
+async function copyWorkflowDefinitionConfig(db: Db, sourceKey: string, targetKey: string): Promise<void> {
   if (sourceKey === targetKey) return;
 
-  if (tableExists(db, 'task_field_schemas')) {
-    db.prepare(`
+  if (await tableExists(db, 'task_field_schemas')) {
+    await db.run(`
       INSERT OR IGNORE INTO task_field_schemas (sprint_type_key, task_type, schema_json, is_system, created_at, updated_at)
       SELECT ?, task_type, schema_json, is_system, datetime('now'), datetime('now')
       FROM task_field_schemas
       WHERE sprint_type_key = ?
-    `).run(targetKey, sourceKey);
+    `, targetKey, sourceKey);
   }
-  if (tableExists(db, 'sprint_type_task_types')) {
-    db.prepare(`
+  if (await tableExists(db, 'sprint_type_task_types')) {
+    await db.run(`
       INSERT OR IGNORE INTO sprint_type_task_types (sprint_type_key, task_type, is_system, created_at, updated_at)
       SELECT ?, task_type, is_system, datetime('now'), datetime('now')
       FROM sprint_type_task_types
       WHERE sprint_type_key = ?
-    `).run(targetKey, sourceKey);
+    `, targetKey, sourceKey);
   }
-  if (tableExists(db, 'sprint_type_outcomes')) {
-    db.prepare(`
+  if (await tableExists(db, 'sprint_type_outcomes')) {
+    await db.run(`
       INSERT OR IGNORE INTO sprint_type_outcomes (
         sprint_type_key, task_type, outcome_key, label, description, enabled, behavior,
         badge_variant, stage_order, is_system, metadata_json, created_at, updated_at
@@ -1051,10 +1048,10 @@ function copyWorkflowDefinitionConfig(db: Database.Database, sourceKey: string, 
         badge_variant, stage_order, is_system, metadata_json, datetime('now'), datetime('now')
       FROM sprint_type_outcomes
       WHERE sprint_type_key = ?
-    `).run(targetKey, sourceKey);
+    `, targetKey, sourceKey);
   }
-  if (tableExists(db, 'sprint_type_relationship_types')) {
-    db.prepare(`
+  if (await tableExists(db, 'sprint_type_relationship_types')) {
+    await db.run(`
       INSERT OR IGNORE INTO sprint_type_relationship_types (
         sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
         direction_semantics, active_statuses_json, resolved_statuses_json,
@@ -1067,10 +1064,10 @@ function copyWorkflowDefinitionConfig(db: Database.Database, sourceKey: string, 
         is_system, metadata_json, datetime('now'), datetime('now')
       FROM sprint_type_relationship_types
       WHERE sprint_type_key = ?
-    `).run(targetKey, sourceKey);
+    `, targetKey, sourceKey);
   }
-  if (tableExists(db, 'sprint_type_task_statuses')) {
-    db.prepare(`
+  if (await tableExists(db, 'sprint_type_task_statuses')) {
+    await db.run(`
       INSERT OR IGNORE INTO sprint_type_task_statuses (
         sprint_type_key, status_key, label, color, terminal, is_system,
         allowed_transitions_json, stage_order, is_default_entry, metadata_json,
@@ -1081,26 +1078,26 @@ function copyWorkflowDefinitionConfig(db: Database.Database, sourceKey: string, 
         datetime('now'), datetime('now')
       FROM sprint_type_task_statuses
       WHERE sprint_type_key = ?
-    `).run(targetKey, sourceKey);
+    `, targetKey, sourceKey);
   }
-  if (tableExists(db, 'sprint_workflow_templates')) {
-    const templates = db.prepare(`
+  if (await tableExists(db, 'sprint_workflow_templates')) {
+    const templates = await db.all(`
       SELECT id, key, name, description, is_default, is_system
       FROM sprint_workflow_templates
       WHERE sprint_type_key = ?
       ORDER BY id ASC
-    `).all(sourceKey) as Array<{ id: number; key: string; name: string; description: string; is_default: number; is_system: number }>;
+    `, sourceKey) as Array<{ id: number; key: string; name: string; description: string; is_default: number; is_system: number }>;
     for (const template of templates) {
-      const result = db.prepare(`
+      const result = await db.run(`
         INSERT OR IGNORE INTO sprint_workflow_templates (sprint_type_key, key, name, description, is_default, is_system, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `).run(targetKey, template.key, template.name, template.description, template.is_default, template.is_system);
-      const targetTemplate = db.prepare(`
+      `, targetKey, template.key, template.name, template.description, template.is_default, template.is_system);
+      const targetTemplate = await db.get(`
         SELECT id FROM sprint_workflow_templates WHERE sprint_type_key = ? AND key = ? LIMIT 1
-      `).get(targetKey, template.key) as { id: number } | undefined;
+      `, targetKey, template.key) as { id: number } | undefined;
       if (!targetTemplate) continue;
-      if (tableExists(db, 'sprint_workflow_statuses')) {
-        db.prepare(`
+      if (await tableExists(db, 'sprint_workflow_statuses')) {
+        await db.run(`
           INSERT OR IGNORE INTO sprint_workflow_statuses (
             template_id, status_key, label, color, stage_order, terminal,
             is_default_entry, metadata_json, created_at, updated_at
@@ -1109,10 +1106,10 @@ function copyWorkflowDefinitionConfig(db: Database.Database, sourceKey: string, 
             is_default_entry, metadata_json, datetime('now'), datetime('now')
           FROM sprint_workflow_statuses
           WHERE template_id = ?
-        `).run(targetTemplate.id, template.id);
+        `, targetTemplate.id, template.id);
       }
-      if (tableExists(db, 'sprint_workflow_transitions')) {
-        db.prepare(`
+      if (await tableExists(db, 'sprint_workflow_transitions')) {
+        await db.run(`
           INSERT OR IGNORE INTO sprint_workflow_transitions (
             template_id, from_status_key, to_status_key, transition_key, label,
             outcome, stage_order, is_system, metadata_json, created_at, updated_at
@@ -1121,14 +1118,14 @@ function copyWorkflowDefinitionConfig(db: Database.Database, sourceKey: string, 
             outcome, stage_order, is_system, metadata_json, datetime('now'), datetime('now')
           FROM sprint_workflow_transitions
           WHERE template_id = ?
-        `).run(targetTemplate.id, template.id);
+        `, targetTemplate.id, template.id);
       }
       void result;
     }
   }
 }
 
-function rewriteWorkflowDefinitionReferences(db: Database.Database, tenantId: number, fromKey: string, toKey: string): void {
+async function rewriteWorkflowDefinitionReferences(db: Db, tenantId: number, fromKey: string, toKey: string): Promise<void> {
   if (fromKey === toKey) return;
   const scopedTables = [
     'sprints',
@@ -1138,89 +1135,89 @@ function rewriteWorkflowDefinitionReferences(db: Database.Database, tenantId: nu
     'story_point_model_routing',
   ];
   for (const table of scopedTables) {
-    if (!tableExists(db, table) || !tableHasColumn(db, table, 'sprint_type')) continue;
-    if (tableHasColumn(db, table, 'tenant_id')) {
-      db.prepare(`UPDATE ${table} SET sprint_type = ? WHERE tenant_id = ? AND sprint_type = ?`).run(toKey, tenantId, fromKey);
+    if (!await tableExists(db, table) || !await tableHasColumn(db, table, 'sprint_type')) continue;
+    if (await tableHasColumn(db, table, 'tenant_id')) {
+      await db.run(`UPDATE ${table} SET sprint_type = ? WHERE tenant_id = ? AND sprint_type = ?`, toKey, tenantId, fromKey);
       continue;
     }
-    if (tableHasColumn(db, table, 'project_id') && tableExists(db, 'projects')) {
-      db.prepare(`
+    if (await tableHasColumn(db, table, 'project_id') && await tableExists(db, 'projects')) {
+      await db.run(`
         UPDATE ${table}
         SET sprint_type = ?
         WHERE sprint_type = ?
           AND project_id IN (SELECT id FROM projects WHERE tenant_id = ?)
-      `).run(toKey, fromKey, tenantId);
+      `, toKey, fromKey, tenantId);
     }
   }
 }
 
-function createWorkflowDefinitionCopy(db: Database.Database, sourceKey: string, targetKey: string, tenantId: number): void {
-  const source = db.prepare(`SELECT key, name, description, is_system FROM sprint_types WHERE key = ? ORDER BY tenant_id IS NOT NULL ASC LIMIT 1`).get(sourceKey) as { key: string; name: string; description: string; is_system: number } | undefined;
+async function createWorkflowDefinitionCopy(db: Db, sourceKey: string, targetKey: string, tenantId: number): Promise<void> {
+  const source = await db.get(`SELECT key, name, description, is_system FROM sprint_types WHERE key = ? ORDER BY tenant_id IS NOT NULL ASC LIMIT 1`, sourceKey) as { key: string; name: string; description: string; is_system: number } | undefined;
   if (!source) return;
-  db.prepare(`
+  await db.run(`
     INSERT OR IGNORE INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-  `).run(tenantId, targetKey, source.name, source.description, source.is_system);
-  copyWorkflowDefinitionConfig(db, sourceKey, targetKey);
+  `, tenantId, targetKey, source.name, source.description, source.is_system);
+  await copyWorkflowDefinitionConfig(db, sourceKey, targetKey);
 }
 
-function ensureTenantDefaultWorkflowDefinitions(db: Database.Database, tenantId: number): void {
-  if (!tableExists(db, 'sprint_types') || !tableHasColumn(db, 'sprint_types', 'tenant_id')) return;
+async function ensureTenantDefaultWorkflowDefinitions(db: Db, tenantId: number): Promise<void> {
+  if (!await tableExists(db, 'sprint_types') || !await tableHasColumn(db, 'sprint_types', 'tenant_id')) return;
   for (const starter of STARTER_SPRINT_TYPE_SEEDS) {
-    seedSprintTypeTaskStatuses(db, starter.key, { tenantId });
+    await seedSprintTypeTaskStatuses(db, starter.key, { tenantId });
   }
-  pruneUnexpectedStarterWorkflowRelationshipTypes(db, { tenantId });
+  await pruneUnexpectedStarterWorkflowRelationshipTypes(db, { tenantId });
 
   const seededMarkerKey = `tenant_workflow_defaults_seeded:${tenantId}`;
-  if (getSetting(db, seededMarkerKey) === '1') return;
+  if (await getSetting(db, seededMarkerKey) === '1') return;
 
   for (const starter of STARTER_SPRINT_TYPE_SEEDS) {
     const baseKey = starter.key;
-    const owned = db.prepare(`
+    const owned = await db.get(`
       SELECT key
       FROM sprint_types
       WHERE tenant_id = ?
         AND key = ?
       LIMIT 1
-    `).get(tenantId, baseKey) as { key: string } | undefined;
+    `, tenantId, baseKey) as { key: string } | undefined;
     if (owned) continue;
     const targetKey = baseKey;
-    const source = db.prepare(`SELECT key FROM sprint_types WHERE key = ? ORDER BY tenant_id IS NOT NULL ASC LIMIT 1`).get(baseKey) as { key: string } | undefined;
+    const source = await db.get(`SELECT key FROM sprint_types WHERE key = ? ORDER BY tenant_id IS NOT NULL ASC LIMIT 1`, baseKey) as { key: string } | undefined;
     if (source) {
-      createWorkflowDefinitionCopy(db, baseKey, targetKey, tenantId);
+      await createWorkflowDefinitionCopy(db, baseKey, targetKey, tenantId);
     } else {
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at)
         VALUES (?, ?, ?, ?, 1, datetime('now'), datetime('now'))
-      `).run(tenantId, targetKey, starter.name, starter.description);
+      `, tenantId, targetKey, starter.name, starter.description);
     }
   }
-  seedStarterWorkflowRelationshipTypes(db, { tenantId });
-  setSetting(db, seededMarkerKey, '1');
+  await seedStarterWorkflowRelationshipTypes(db, { tenantId });
+  await setSetting(db, seededMarkerKey, '1');
 }
 
-function backfillWorkflowDefinitionOwnership(db: Database.Database, defaultTenantId: number): void {
-  if (!tableExists(db, 'sprint_types') || !tableHasColumn(db, 'sprint_types', 'tenant_id')) return;
-  const nullOwned = db.prepare(`SELECT key FROM sprint_types WHERE tenant_id IS NULL ORDER BY key ASC`).all() as Array<{ key: string }>;
-  const tenantRefsStmt = tableExists(db, 'sprints') && tableHasColumn(db, 'sprints', 'tenant_id')
+async function backfillWorkflowDefinitionOwnership(db: Db, defaultTenantId: number): Promise<void> {
+  if (!await tableExists(db, 'sprint_types') || !await tableHasColumn(db, 'sprint_types', 'tenant_id')) return;
+  const nullOwned = await db.all(`SELECT key FROM sprint_types WHERE tenant_id IS NULL ORDER BY key ASC`) as Array<{ key: string }>;
+  const tenantRefsStmt = await tableExists(db, 'sprints') && await tableHasColumn(db, 'sprints', 'tenant_id')
     ? db.prepare(`SELECT DISTINCT tenant_id FROM sprints WHERE sprint_type = ? AND tenant_id IS NOT NULL ORDER BY tenant_id ASC`)
     : null;
-  const tx = db.transaction(() => {
+  const tx = db.transaction(async () => {
     for (const row of nullOwned) {
       const tenantRefs = tenantRefsStmt
         ? tenantRefsStmt.all(row.key).map((entry) => (entry as { tenant_id: number }).tenant_id)
         : [];
       const ownerTenantId = tenantRefs[0] ?? defaultTenantId;
-      db.prepare(`UPDATE sprint_types SET tenant_id = ?, updated_at = datetime('now') WHERE key = ? AND tenant_id IS NULL`).run(ownerTenantId, row.key);
+      await db.run(`UPDATE sprint_types SET tenant_id = ?, updated_at = datetime('now') WHERE key = ? AND tenant_id IS NULL`, ownerTenantId, row.key);
       for (const tenantId of tenantRefs.slice(1)) {
         const copiedKey = row.key;
-        createWorkflowDefinitionCopy(db, row.key, copiedKey, tenantId);
-        rewriteWorkflowDefinitionReferences(db, tenantId, row.key, copiedKey);
+        await createWorkflowDefinitionCopy(db, row.key, copiedKey, tenantId);
+        await rewriteWorkflowDefinitionReferences(db, tenantId, row.key, copiedKey);
       }
     }
-    const tenants = db.prepare(`SELECT id FROM tenants ORDER BY id ASC`).all() as Array<{ id: number }>;
+    const tenants = await db.all(`SELECT id FROM tenants ORDER BY id ASC`) as Array<{ id: number }>;
     for (const tenant of tenants) {
-      ensureTenantDefaultWorkflowDefinitions(db, tenant.id);
+      await ensureTenantDefaultWorkflowDefinitions(db, tenant.id);
     }
   });
   tx();
@@ -1231,11 +1228,11 @@ function slugifyTenantName(name: string): string {
   return slug || 'tenant';
 }
 
-function uniqueTenantSlug(db: Database.Database, requested: string): string {
+async function uniqueTenantSlug(db: Db, requested: string): Promise<string> {
   const base = slugifyTenantName(requested);
   let slug = base;
   let suffix = 2;
-  while (db.prepare(`SELECT id FROM tenants WHERE slug = ? LIMIT 1`).get(slug)) {
+  while (await db.get(`SELECT id FROM tenants WHERE slug = ? LIMIT 1`, slug)) {
     slug = `${base}-${suffix}`;
     suffix += 1;
   }
@@ -1297,16 +1294,16 @@ function ensureStarterAgentWorkspaceDocs(workspacePath: string, definition: type
   }
 }
 
-function ensureTenantDefaultAtlasAgent(db: Database.Database, tenantId: number, projectId: number): number {
-  const tenant = db.prepare(`SELECT slug FROM tenants WHERE id = ? LIMIT 1`).get(tenantId) as { slug: string } | undefined;
+async function ensureTenantDefaultAtlasAgent(db: Db, tenantId: number, projectId: number): Promise<number> {
+  const tenant = await db.get(`SELECT slug FROM tenants WHERE id = ? LIMIT 1`, tenantId) as { slug: string } | undefined;
   const tenantSlug = tenant?.slug ?? `tenant-${tenantId}`;
   const runtimeSlug = buildTenantAtlasRuntimeSlug(tenantSlug);
   const sessionKey = buildTenantAtlasSessionKey(tenantSlug);
   const workspacePath = buildTenantAtlasWorkspacePath(tenantSlug);
   ensureTenantAtlasWorkspaceDocs(workspacePath);
 
-  const deletedFilter = tableHasColumn(db, 'agents', 'deleted_at') ? 'AND deleted_at IS NULL' : '';
-  const existing = db.prepare(`
+  const deletedFilter = await tableHasColumn(db, 'agents', 'deleted_at') ? 'AND deleted_at IS NULL' : '';
+  const existing = await db.get(`
     SELECT id
     FROM agents
     WHERE tenant_id = ?
@@ -1319,11 +1316,11 @@ function ensureTenantDefaultAtlasAgent(db: Database.Database, tenantId: number, 
       ${deletedFilter}
     ORDER BY CASE WHEN system_role = ? THEN 0 ELSE 1 END, id ASC
     LIMIT 1
-  `).get(tenantId, ATLAS_SYSTEM_ROLE, sessionKey, runtimeSlug, ATLAS_AGENT_NAME, ATLAS_SYSTEM_ROLE) as { id: number } | undefined;
+  `, tenantId, ATLAS_SYSTEM_ROLE, sessionKey, runtimeSlug, ATLAS_AGENT_NAME, ATLAS_SYSTEM_ROLE) as { id: number } | undefined;
 
   if (existing) {
-    const hasJobInstructions = tableHasColumn(db, 'agents', 'job_instructions');
-    db.prepare(`
+    const hasJobInstructions = await tableHasColumn(db, 'agents', 'job_instructions');
+    await db.run(`
       UPDATE agents
       SET project_id = COALESCE(project_id, ?),
           role = CASE WHEN role IS NULL OR trim(role) = '' THEN ? ELSE role END,
@@ -1335,11 +1332,9 @@ function ensureTenantDefaultAtlasAgent(db: Database.Database, tenantId: number, 
           ${hasJobInstructions ? `job_instructions = CASE WHEN job_instructions IS NULL OR trim(job_instructions) = '' THEN ? ELSE job_instructions END,` : ''}
           last_active = datetime('now')
       WHERE id = ?
-    `).run(
-      ...(hasJobInstructions
-        ? [projectId, TENANT_ATLAS_ROLE, TENANT_ATLAS_ROLE, ATLAS_SYSTEM_ROLE, runtimeSlug, workspacePath, TENANT_ATLAS_JOB_INSTRUCTIONS, existing.id]
-        : [projectId, TENANT_ATLAS_ROLE, TENANT_ATLAS_ROLE, ATLAS_SYSTEM_ROLE, runtimeSlug, workspacePath, existing.id]),
-    );
+    `, ...(hasJobInstructions
+              ? [projectId, TENANT_ATLAS_ROLE, TENANT_ATLAS_ROLE, ATLAS_SYSTEM_ROLE, runtimeSlug, workspacePath, TENANT_ATLAS_JOB_INSTRUCTIONS, existing.id]
+              : [projectId, TENANT_ATLAS_ROLE, TENANT_ATLAS_ROLE, ATLAS_SYSTEM_ROLE, runtimeSlug, workspacePath, existing.id]));
     return existing.id;
   }
 
@@ -1368,24 +1363,24 @@ function ensureTenantDefaultAtlasAgent(db: Database.Database, tenantId: number, 
     '[]',
     '[]',
   ];
-  if (tableHasColumn(db, 'agents', 'job_instructions')) {
+  if (await tableHasColumn(db, 'agents', 'job_instructions')) {
     columns.push('job_instructions');
     values.push(TENANT_ATLAS_JOB_INSTRUCTIONS);
   }
   const placeholders = columns.map(() => '?').join(', ');
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO agents (${columns.join(', ')})
     VALUES (${placeholders})
-  `).run(...values);
+  `, ...values);
   return Number(result.lastInsertRowid);
 }
 
-function buildStarterAgentRuntimeConfig(
-  db: Database.Database,
+async function buildStarterAgentRuntimeConfig(
+  db: Db,
   definition: typeof STARTER_AGENT_DEFINITIONS[number],
   workspacePath: string,
   openclawAgentId: string,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   return {
     provisioning_state: 'provisioned',
     provisioning_template: {
@@ -1405,12 +1400,12 @@ function buildStarterAgentRuntimeConfig(
       skill_names: definition.skillNames,
       requirements: definition.requirements,
     },
-    ...buildRuntimeConfigDefaults(db),
+    ...await buildRuntimeConfigDefaults(db),
   };
 }
 
-function ensureStarterToolCatalogRows(db: Database.Database, tenantId: number): void {
-  if (!tableExists(db, 'tools')) return;
+async function ensureStarterToolCatalogRows(db: Db, tenantId: number): Promise<void> {
+  if (!await tableExists(db, 'tools')) return;
   const insertTool = db.prepare(`
     INSERT OR IGNORE INTO tools (
       tenant_id, name, slug, description, implementation_type, implementation_body,
@@ -1433,12 +1428,12 @@ function ensureStarterToolCatalogRows(db: Database.Database, tenantId: number): 
   }
 }
 
-function ensureStarterAgentToolAssignments(
-  db: Database.Database,
+async function ensureStarterAgentToolAssignments(
+  db: Db,
   agentId: number,
   toolSlugs: readonly string[],
-): void {
-  if (!tableExists(db, 'tools') || !tableExists(db, 'agent_tool_assignments')) return;
+): Promise<void> {
+  if (!await tableExists(db, 'tools') || !await tableExists(db, 'agent_tool_assignments')) return;
   const insertAssignment = db.prepare(`
     INSERT OR IGNORE INTO agent_tool_assignments (agent_id, tool_id, overrides, enabled)
     SELECT ?, id, '{}', 1
@@ -1450,14 +1445,14 @@ function ensureStarterAgentToolAssignments(
   for (const slug of toolSlugs) insertAssignment.run(agentId, agentId, slug);
 }
 
-export function ensureTenantAgentHqMcpServer(db: Database.Database, tenantId: number): number | null {
-  if (!tableExists(db, 'mcp_servers') || !tableHasColumn(db, 'mcp_servers', 'tenant_id')) return null;
-  const existing = db.prepare(`
+export async function ensureTenantAgentHqMcpServer(db: Db, tenantId: number): Promise<number | null> {
+  if (!await tableExists(db, 'mcp_servers') || !await tableHasColumn(db, 'mcp_servers', 'tenant_id')) return null;
+  const existing = await db.get(`
     SELECT id
     FROM mcp_servers
     WHERE tenant_id = ? AND slug = ?
     LIMIT 1
-  `).get(tenantId, AGENT_HQ_MCP_SERVER_SLUG) as { id: number } | undefined;
+  `, tenantId, AGENT_HQ_MCP_SERVER_SLUG) as { id: number } | undefined;
 
   if (existing) {
     return existing.id;
@@ -1469,26 +1464,17 @@ export function ensureTenantAgentHqMcpServer(db: Database.Database, tenantId: nu
   const env = JSON.stringify({ AGENT_HQ_API_URL: 'http://127.0.0.1:3501' });
   const cwd = path.resolve(__dirname, '../..');
 
-  const inserted = db.prepare(`
+  const inserted = await db.run(`
     INSERT INTO mcp_servers (tenant_id, name, slug, description, transport, command, args, env, cwd, enabled)
     VALUES (?, ?, ?, ?, 'stdio', ?, ?, ?, ?, 1)
-  `).run(
-    tenantId,
-    'Agent HQ MCP Server',
-    AGENT_HQ_MCP_SERVER_SLUG,
-    'Tenant-local stdio MCP server exposing Agent HQ projects, sprints, tasks, and agents.',
-    nodeExecutable,
-    args,
-    env,
-    cwd,
-  );
+  `, tenantId, 'Agent HQ MCP Server', AGENT_HQ_MCP_SERVER_SLUG, 'Tenant-local stdio MCP server exposing Agent HQ projects, sprints, tasks, and agents.', nodeExecutable, args, env, cwd);
   return Number(inserted.lastInsertRowid);
 }
 
-export function repairAgentMcpAssignmentsForTenant(db: Database.Database, tenantId: number, agentId: number): void {
-  if (!tableExists(db, 'mcp_servers') || !tableExists(db, 'agent_mcp_assignments')) return;
-  if (!tableHasColumn(db, 'mcp_servers', 'tenant_id')) return;
-  db.prepare(`
+export async function repairAgentMcpAssignmentsForTenant(db: Db, tenantId: number, agentId: number): Promise<void> {
+  if (!await tableExists(db, 'mcp_servers') || !await tableExists(db, 'agent_mcp_assignments')) return;
+  if (!await tableHasColumn(db, 'mcp_servers', 'tenant_id')) return;
+  await db.run(`
     DELETE FROM agent_mcp_assignments
     WHERE agent_id = ?
       AND mcp_server_id IN (
@@ -1496,19 +1482,19 @@ export function repairAgentMcpAssignmentsForTenant(db: Database.Database, tenant
         FROM mcp_servers
         WHERE tenant_id != ?
       )
-  `).run(agentId, tenantId);
+  `, agentId, tenantId);
 }
 
-function repairTenantAgentHqMcpServersAndAssignments(db: Database.Database): void {
-  if (!tableExists(db, 'tenants') || !tableExists(db, 'agents') || !tableExists(db, 'mcp_servers') || !tableExists(db, 'agent_mcp_assignments')) return;
-  if (!tableHasColumn(db, 'agents', 'tenant_id') || !tableHasColumn(db, 'mcp_servers', 'tenant_id')) return;
+async function repairTenantAgentHqMcpServersAndAssignments(db: Db): Promise<void> {
+  if (!await tableExists(db, 'tenants') || !await tableExists(db, 'agents') || !await tableExists(db, 'mcp_servers') || !await tableExists(db, 'agent_mcp_assignments')) return;
+  if (!await tableHasColumn(db, 'agents', 'tenant_id') || !await tableHasColumn(db, 'mcp_servers', 'tenant_id')) return;
 
-  const tenantIds = db.prepare(`SELECT id FROM tenants ORDER BY id ASC`).all() as Array<{ id: number }>;
+  const tenantIds = await db.all(`SELECT id FROM tenants ORDER BY id ASC`) as Array<{ id: number }>;
   for (const tenant of tenantIds) {
-    ensureTenantAgentHqMcpServer(db, tenant.id);
+    await ensureTenantAgentHqMcpServer(db, tenant.id);
   }
 
-  const staleAssignments = db.prepare(`
+  const staleAssignments = await db.all(`
     SELECT
       ama.id AS assignment_id,
       ama.agent_id,
@@ -1521,7 +1507,7 @@ function repairTenantAgentHqMcpServersAndAssignments(db: Database.Database): voi
     WHERE s.slug = ?
       AND s.tenant_id != a.tenant_id
     ORDER BY ama.id ASC
-  `).all(AGENT_HQ_MCP_SERVER_SLUG) as Array<{
+  `, AGENT_HQ_MCP_SERVER_SLUG) as Array<{
     assignment_id: number;
     agent_id: number;
     agent_tenant_id: number;
@@ -1552,7 +1538,7 @@ function repairTenantAgentHqMcpServersAndAssignments(db: Database.Database): voi
   for (const assignment of staleAssignments) {
     let localServerId = localServerByTenant.get(assignment.agent_tenant_id);
     if (!localServerId) {
-      const ensuredLocalServerId = ensureTenantAgentHqMcpServer(db, assignment.agent_tenant_id);
+      const ensuredLocalServerId = await ensureTenantAgentHqMcpServer(db, assignment.agent_tenant_id);
       if (!ensuredLocalServerId) continue;
       localServerId = ensuredLocalServerId;
       localServerByTenant.set(assignment.agent_tenant_id, localServerId);
@@ -1569,16 +1555,16 @@ function repairTenantAgentHqMcpServersAndAssignments(db: Database.Database): voi
   }
 }
 
-function ensureStarterAgentMcpAssignments(
-  db: Database.Database,
+async function ensureStarterAgentMcpAssignments(
+  db: Db,
   tenantId: number,
   agentId: number,
   mcpServerSlugs: readonly string[],
-): void {
-  if (!tableExists(db, 'mcp_servers') || !tableExists(db, 'agent_mcp_assignments')) return;
-  repairAgentMcpAssignmentsForTenant(db, tenantId, agentId);
+): Promise<void> {
+  if (!await tableExists(db, 'mcp_servers') || !await tableExists(db, 'agent_mcp_assignments')) return;
+  await repairAgentMcpAssignmentsForTenant(db, tenantId, agentId);
   if (mcpServerSlugs.includes(AGENT_HQ_MCP_SERVER_SLUG)) {
-    ensureTenantAgentHqMcpServer(db, tenantId);
+    await ensureTenantAgentHqMcpServer(db, tenantId);
   }
   const insertAssignment = db.prepare(`
     INSERT OR IGNORE INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
@@ -1586,20 +1572,20 @@ function ensureStarterAgentMcpAssignments(
     FROM mcp_servers
     WHERE slug = ?
       AND enabled = 1
-      AND (${tableHasColumn(db, 'mcp_servers', 'tenant_id') ? 'tenant_id = ?' : '1 = 1'})
+      AND (${await tableHasColumn(db, 'mcp_servers', 'tenant_id') ? 'tenant_id = ?' : '1 = 1'})
   `);
   for (const slug of mcpServerSlugs) {
-    if (tableHasColumn(db, 'mcp_servers', 'tenant_id')) insertAssignment.run(agentId, slug, tenantId);
+    if (await tableHasColumn(db, 'mcp_servers', 'tenant_id')) insertAssignment.run(agentId, slug, tenantId);
     else insertAssignment.run(agentId, slug);
   }
 }
 
-function replaceStarterAgentMcpPermissionPolicy(
-  db: Database.Database,
+async function replaceStarterAgentMcpPermissionPolicy(
+  db: Db,
   agentId: number,
   enabledCapabilityKeys: readonly string[],
-): void {
-  db.exec(`
+): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS agent_mcp_capability_policies (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id       INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -1612,7 +1598,7 @@ function replaceStarterAgentMcpPermissionPolicy(
     CREATE INDEX IF NOT EXISTS idx_agent_mcp_capability_policies_agent
       ON agent_mcp_capability_policies(agent_id);
   `);
-  db.prepare(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`).run(agentId);
+  await db.run(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`, agentId);
   const insert = db.prepare(`
     INSERT INTO agent_mcp_capability_policies (agent_id, capability_key, enabled)
     VALUES (?, ?, 1)
@@ -1622,16 +1608,16 @@ function replaceStarterAgentMcpPermissionPolicy(
   }
 }
 
-function ensureTenantStarterAgents(db: Database.Database, tenantId: number, projectId: number, tenantSlug: string): number[] {
+async function ensureTenantStarterAgents(db: Db, tenantId: number, projectId: number, tenantSlug: string): Promise<number[]> {
   const agentIds: number[] = [];
-  const hasJobInstructions = tableHasColumn(db, 'agents', 'job_instructions');
-  const hasEnabled = tableHasColumn(db, 'agents', 'enabled');
-  const hasSkillNames = tableHasColumn(db, 'agents', 'skill_names');
-  const hasSortRules = tableHasColumn(db, 'agents', 'sort_rules');
-  const hasTimeoutSeconds = tableHasColumn(db, 'agents', 'timeout_seconds');
-  const deletedFilter = tableHasColumn(db, 'agents', 'deleted_at') ? 'AND deleted_at IS NULL' : '';
+  const hasJobInstructions = await tableHasColumn(db, 'agents', 'job_instructions');
+  const hasEnabled = await tableHasColumn(db, 'agents', 'enabled');
+  const hasSkillNames = await tableHasColumn(db, 'agents', 'skill_names');
+  const hasSortRules = await tableHasColumn(db, 'agents', 'sort_rules');
+  const hasTimeoutSeconds = await tableHasColumn(db, 'agents', 'timeout_seconds');
+  const deletedFilter = await tableHasColumn(db, 'agents', 'deleted_at') ? 'AND deleted_at IS NULL' : '';
 
-  ensureStarterToolCatalogRows(db, tenantId);
+  await ensureStarterToolCatalogRows(db, tenantId);
 
   for (const definition of STARTER_AGENT_DEFINITIONS) {
     const openclawAgentId = buildStarterAgentRuntimeSlug(tenantSlug, definition);
@@ -1643,8 +1629,8 @@ function ensureTenantStarterAgents(db: Database.Database, tenantId: number, proj
       agentName: definition.name,
       role: definition.jobTitle,
     });
-    const runtimeConfig = buildStarterAgentRuntimeConfig(db, definition, workspacePath, openclawAgentId);
-    const existing = db.prepare(`
+    const runtimeConfig = await buildStarterAgentRuntimeConfig(db, definition, workspacePath, openclawAgentId);
+    const existing = await db.get(`
       SELECT id
       FROM agents
       WHERE tenant_id = ?
@@ -1656,7 +1642,7 @@ function ensureTenantStarterAgents(db: Database.Database, tenantId: number, proj
         ${deletedFilter}
       ORDER BY CASE WHEN system_role = ? THEN 0 ELSE 1 END, id ASC
       LIMIT 1
-    `).get(tenantId, definition.systemRole, sessionKey, definition.name, definition.systemRole) as { id: number } | undefined;
+    `, tenantId, definition.systemRole, sessionKey, definition.name, definition.systemRole) as { id: number } | undefined;
 
     if (existing) {
       const setParts = [
@@ -1700,14 +1686,14 @@ function ensureTenantStarterAgents(db: Database.Database, tenantId: number, proj
         params.push(JSON.stringify(definition.skillNames));
       }
       params.push(existing.id);
-      db.prepare(`
+      await db.run(`
         UPDATE agents
         SET ${setParts.join(', ')}
         WHERE id = ?
-      `).run(...params);
-      replaceStarterAgentMcpPermissionPolicy(db, existing.id, definition.mcpCapabilities);
-      ensureStarterAgentToolAssignments(db, existing.id, definition.toolSlugs);
-      ensureStarterAgentMcpAssignments(db, tenantId, existing.id, definition.mcpServerSlugs);
+      `, ...params);
+      await replaceStarterAgentMcpPermissionPolicy(db, existing.id, definition.mcpCapabilities);
+      await ensureStarterAgentToolAssignments(db, existing.id, definition.toolSlugs);
+      await ensureStarterAgentMcpAssignments(db, tenantId, existing.id, definition.mcpServerSlugs);
       agentIds.push(existing.id);
       continue;
     }
@@ -1753,21 +1739,21 @@ function ensureTenantStarterAgents(db: Database.Database, tenantId: number, proj
       values.push(definition.role);
     }
     const placeholders = columns.map(() => '?').join(', ');
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO agents (${columns.join(', ')})
       VALUES (${placeholders})
-    `).run(...values);
+    `, ...values);
     const agentId = Number(result.lastInsertRowid);
-    replaceStarterAgentMcpPermissionPolicy(db, agentId, definition.mcpCapabilities);
-    ensureStarterAgentToolAssignments(db, agentId, definition.toolSlugs);
-    ensureStarterAgentMcpAssignments(db, tenantId, agentId, definition.mcpServerSlugs);
+    await replaceStarterAgentMcpPermissionPolicy(db, agentId, definition.mcpCapabilities);
+    await ensureStarterAgentToolAssignments(db, agentId, definition.toolSlugs);
+    await ensureStarterAgentMcpAssignments(db, tenantId, agentId, definition.mcpServerSlugs);
     agentIds.push(agentId);
   }
 
   return agentIds;
 }
 
-function repairProvisionedTenantOwnership(db: Database.Database, tenantId: number, projectId: number, agentId: number): void {
+async function repairProvisionedTenantOwnership(db: Db, tenantId: number, projectId: number, agentId: number): Promise<void> {
   for (const table of [
     'sprint_task_routing_rules',
     'sprint_task_transitions',
@@ -1775,110 +1761,105 @@ function repairProvisionedTenantOwnership(db: Database.Database, tenantId: numbe
     'story_point_model_routing',
     'external_event_mappings',
   ]) {
-    if (!tableHasColumn(db, table, 'tenant_id')) continue;
-    if (tableHasColumn(db, table, 'project_id')) {
-      db.prepare(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL AND project_id = ?`).run(tenantId, projectId);
+    if (!await tableHasColumn(db, table, 'tenant_id')) continue;
+    if (await tableHasColumn(db, table, 'project_id')) {
+      await db.run(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL AND project_id = ?`, tenantId, projectId);
     }
-    if (tableHasColumn(db, table, 'agent_id')) {
-      db.prepare(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL AND agent_id = ?`).run(tenantId, agentId);
+    if (await tableHasColumn(db, table, 'agent_id')) {
+      await db.run(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL AND agent_id = ?`, tenantId, agentId);
     }
   }
 }
 
-function provisionTenantDefaultWorkspace(db: Database.Database, tenantId: number, options: { seedWorkflowEvents?: boolean } = {}): void {
+async function provisionTenantDefaultWorkspace(db: Db, tenantId: number, options: { seedWorkflowEvents?: boolean } = {}): Promise<void> {
   const seedWorkflowEvents = options.seedWorkflowEvents !== false;
-  applyDefaultInstallPackage(db, tenantId);
-  const tenant = db.prepare(`SELECT slug FROM tenants WHERE id = ? LIMIT 1`).get(tenantId) as { slug: string } | undefined;
+  await applyDefaultInstallPackage(db, tenantId);
+  const tenant = await db.get(`SELECT slug FROM tenants WHERE id = ? LIMIT 1`, tenantId) as { slug: string } | undefined;
   const tenantSlug = tenant?.slug ?? `tenant-${tenantId}`;
-  const existingProject = db.prepare(`
+  const existingProject = await db.get(`
     SELECT id, name
     FROM projects
     WHERE tenant_id = ? AND lower(name) IN (lower(?), lower(?))
     ORDER BY CASE WHEN lower(name) = lower(?) THEN 0 ELSE 1 END, id ASC
     LIMIT 1
-  `).get(tenantId, DEFAULT_PROJECT_NAME, LEGACY_STARTER_PROJECT_NAME, DEFAULT_PROJECT_NAME) as { id: number; name: string } | undefined;
-  const projectId = existingProject?.id ?? Number(db.prepare(`
+  `, tenantId, DEFAULT_PROJECT_NAME, LEGACY_STARTER_PROJECT_NAME, DEFAULT_PROJECT_NAME) as { id: number; name: string } | undefined;
+  const projectId = existingProject?.id ?? Number((await db.run(`
     INSERT INTO projects (tenant_id, name, description, context_md)
     VALUES (?, ?, ?, ?)
-  `).run(
-    tenantId,
-    DEFAULT_PROJECT_NAME,
-    'Reusable starter workspace project.',
-    'Clean starter workspace for this tenant.',
-  ).lastInsertRowid);
+  `, tenantId, DEFAULT_PROJECT_NAME, 'Reusable starter workspace project.', 'Clean starter workspace for this tenant.')).lastInsertRowid);
   if (existingProject?.name === LEGACY_STARTER_PROJECT_NAME) {
-    db.prepare(`
+    await db.run(`
       UPDATE projects
       SET name = ?,
           description = CASE WHEN description = '' OR description = ? THEN ? ELSE description END
       WHERE id = ?
-    `).run(DEFAULT_PROJECT_NAME, 'Default Agent HQ workspace project.', 'Reusable starter workspace project.', projectId);
+    `, DEFAULT_PROJECT_NAME, 'Default Agent HQ workspace project.', 'Reusable starter workspace project.', projectId);
   }
-  ensureTenantDefaultWorkflowDefinitions(db, tenantId);
-  ensureProjectBacklogSprint(db, projectId);
-  const agentId = ensureTenantDefaultAtlasAgent(db, tenantId, projectId);
-  ensureStarterAgentMcpAssignments(db, tenantId, agentId, [AGENT_HQ_MCP_SERVER_SLUG]);
-  const starterAgentIds = ensureTenantStarterAgents(db, tenantId, projectId, tenantSlug);
-  syncStarterRoutingForProject(db, projectId);
-  repairProvisionedTenantOwnership(db, tenantId, projectId, agentId);
+  await ensureTenantDefaultWorkflowDefinitions(db, tenantId);
+  await ensureProjectBacklogSprint(db, projectId);
+  const agentId = await ensureTenantDefaultAtlasAgent(db, tenantId, projectId);
+  await ensureStarterAgentMcpAssignments(db, tenantId, agentId, [AGENT_HQ_MCP_SERVER_SLUG]);
+  const starterAgentIds = await ensureTenantStarterAgents(db, tenantId, projectId, tenantSlug);
+  await syncStarterRoutingForProject(db, projectId);
+  await repairProvisionedTenantOwnership(db, tenantId, projectId, agentId);
   for (const starterAgentId of starterAgentIds) {
-    repairProvisionedTenantOwnership(db, tenantId, projectId, starterAgentId);
+    await repairProvisionedTenantOwnership(db, tenantId, projectId, starterAgentId);
   }
   if (seedWorkflowEvents) {
-    seedTenantDefaultWorkflowEventMappings(db, tenantId);
+    await seedTenantDefaultWorkflowEventMappings(db, tenantId);
   }
 }
 
-function canProvisionTenantDefaultWorkspace(db: Database.Database): boolean {
-  return tableExists(db, 'projects')
-    && tableExists(db, 'agents')
+async function canProvisionTenantDefaultWorkspace(db: Db): Promise<boolean> {
+  return await tableExists(db, 'projects')
+    && await tableExists(db, 'agents')
     // applyDefaultInstallPackage provisions skills, workflow types, statuses,
     // routing, and field schemas — all of these must exist before it can run.
-    && tableExists(db, 'skills')
-    && tableExists(db, 'sprints')
-    && tableExists(db, 'sprint_types')
-    && tableExists(db, 'sprint_type_task_types')
-    && tableExists(db, 'sprint_type_outcomes')
-    && tableExists(db, 'sprint_task_transitions')
-    && tableExists(db, 'sprint_task_routing_rules')
-    && tableExists(db, 'task_field_schemas')
-    && tableExists(db, 'story_point_model_routing')
-    && tableHasColumn(db, 'projects', 'tenant_id')
-    && tableHasColumn(db, 'projects', 'description')
-    && tableHasColumn(db, 'projects', 'context_md')
-    && tableHasColumn(db, 'agents', 'project_id')
-    && tableHasColumn(db, 'agents', 'system_role')
-    && tableHasColumn(db, 'agents', 'runtime_type')
-    && tableHasColumn(db, 'agents', 'runtime_config')
-    && tableHasColumn(db, 'agents', 'preferred_provider')
-    && tableHasColumn(db, 'agents', 'model')
-    && tableHasColumn(db, 'agents', 'job_title');
+    && await tableExists(db, 'skills')
+    && await tableExists(db, 'sprints')
+    && await tableExists(db, 'sprint_types')
+    && await tableExists(db, 'sprint_type_task_types')
+    && await tableExists(db, 'sprint_type_outcomes')
+    && await tableExists(db, 'sprint_task_transitions')
+    && await tableExists(db, 'sprint_task_routing_rules')
+    && await tableExists(db, 'task_field_schemas')
+    && await tableExists(db, 'story_point_model_routing')
+    && await tableHasColumn(db, 'projects', 'tenant_id')
+    && await tableHasColumn(db, 'projects', 'description')
+    && await tableHasColumn(db, 'projects', 'context_md')
+    && await tableHasColumn(db, 'agents', 'project_id')
+    && await tableHasColumn(db, 'agents', 'system_role')
+    && await tableHasColumn(db, 'agents', 'runtime_type')
+    && await tableHasColumn(db, 'agents', 'runtime_config')
+    && await tableHasColumn(db, 'agents', 'preferred_provider')
+    && await tableHasColumn(db, 'agents', 'model')
+    && await tableHasColumn(db, 'agents', 'job_title');
 }
 
-export function repairTenantOwnershipForMigration(db: Database.Database): number {
+export async function repairTenantOwnershipForMigration(db: Db): Promise<number> {
   verifiedTenantSchemaDbs.delete(db);
   if (ensuredTenantSchemaDbs.has(db)) {
-    const rawDefaultTenantId = getSetting(db, DEFAULT_TENANT_SETTING_KEY);
+    const rawDefaultTenantId = await getSetting(db, DEFAULT_TENANT_SETTING_KEY);
     const defaultTenantId = rawDefaultTenantId ? Number(rawDefaultTenantId) : NaN;
     const defaultTenant = Number.isInteger(defaultTenantId) && defaultTenantId > 0
-      ? db.prepare(`SELECT id FROM tenants WHERE id = ? LIMIT 1`).get(defaultTenantId)
+      ? await db.get(`SELECT id FROM tenants WHERE id = ? LIMIT 1`, defaultTenantId)
       : null;
     if (defaultTenant) {
-      ensureTenantOwnedTableColumns(db, defaultTenantId);
-      ensureMcpServersTenantLocalSlugSchema(db, defaultTenantId);
-      backfillDefaultTenantForNullTenantRows(db, defaultTenantId);
-      rebuildSprintTypesForTenantLocalKeys(db, defaultTenantId);
-      ensureWorkflowDefinitionConfigTenantScope(db, defaultTenantId);
-      backfillWorkflowDefinitionOwnership(db, defaultTenantId);
-      repairTenantAgentHqMcpServersAndAssignments(db);
+      await ensureTenantOwnedTableColumns(db, defaultTenantId);
+      await ensureMcpServersTenantLocalSlugSchema(db, defaultTenantId);
+      await backfillDefaultTenantForNullTenantRows(db, defaultTenantId);
+      await rebuildSprintTypesForTenantLocalKeys(db, defaultTenantId);
+      await ensureWorkflowDefinitionConfigTenantScope(db, defaultTenantId);
+      await backfillWorkflowDefinitionOwnership(db, defaultTenantId);
+      await repairTenantAgentHqMcpServersAndAssignments(db);
       assertForeignKeysStillEnforced(db);
       return defaultTenantId;
     }
     ensuredTenantSchemaDbs.delete(db);
   }
 
-  ensureAppSettingsTable(db);
-  db.exec(`
+  await ensureAppSettingsTable(db);
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS tenants (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       name       TEXT NOT NULL,
@@ -1890,46 +1871,46 @@ export function repairTenantOwnershipForMigration(db: Database.Database): number
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_single_default ON tenants(is_default) WHERE is_default = 1;
   `);
 
-  let defaultTenant = db.prepare(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`).get() as { id: number } | undefined;
+  let defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id: number } | undefined;
   let createdDefaultTenant = false;
   if (!defaultTenant) {
-    const existing = db.prepare(`SELECT id FROM tenants WHERE slug = ? LIMIT 1`).get(DEFAULT_TENANT_SLUG) as { id: number } | undefined;
+    const existing = await db.get(`SELECT id FROM tenants WHERE slug = ? LIMIT 1`, DEFAULT_TENANT_SLUG) as { id: number } | undefined;
     if (existing) {
-      db.prepare(`UPDATE tenants SET is_default = 1, updated_at = datetime('now') WHERE id = ?`).run(existing.id);
+      await db.run(`UPDATE tenants SET is_default = 1, updated_at = datetime('now') WHERE id = ?`, existing.id);
       defaultTenant = existing;
     } else {
-      const result = db.prepare(`
+      const result = await db.run(`
         INSERT INTO tenants (name, slug, is_default)
         VALUES (?, ?, 1)
-      `).run(DEFAULT_TENANT_NAME, DEFAULT_TENANT_SLUG);
+      `, DEFAULT_TENANT_NAME, DEFAULT_TENANT_SLUG);
       defaultTenant = { id: Number(result.lastInsertRowid) };
       createdDefaultTenant = true;
     }
   }
-  db.prepare(`
+  await db.run(`
     UPDATE tenants
     SET name = ?, updated_at = datetime('now')
     WHERE id = ?
       AND slug = ?
       AND is_default = 1
       AND name = ?
-  `).run(DEFAULT_TENANT_NAME, defaultTenant.id, DEFAULT_TENANT_SLUG, LEGACY_DEFAULT_TENANT_NAME);
+  `, DEFAULT_TENANT_NAME, defaultTenant.id, DEFAULT_TENANT_SLUG, LEGACY_DEFAULT_TENANT_NAME);
 
-  setSetting(db, DEFAULT_TENANT_SETTING_KEY, String(defaultTenant.id));
-  if (!getSetting(db, ACTIVE_TENANT_SETTING_KEY)) {
-    setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(defaultTenant.id));
+  await setSetting(db, DEFAULT_TENANT_SETTING_KEY, String(defaultTenant.id));
+  if (!await getSetting(db, ACTIVE_TENANT_SETTING_KEY)) {
+    await setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(defaultTenant.id));
   }
 
-  ensureTenantOwnedTableColumns(db, defaultTenant.id);
-  ensureMcpServersTenantLocalSlugSchema(db, defaultTenant.id);
-  backfillOperationalTenantOwnership(db);
+  await ensureTenantOwnedTableColumns(db, defaultTenant.id);
+  await ensureMcpServersTenantLocalSlugSchema(db, defaultTenant.id);
+  await backfillOperationalTenantOwnership(db);
 
-  rebuildSprintTypesForTenantLocalKeys(db, defaultTenant.id);
-  ensureWorkflowDefinitionConfigTenantScope(db, defaultTenant.id);
-  backfillWorkflowDefinitionOwnership(db, defaultTenant.id);
-  repairTenantAgentHqMcpServersAndAssignments(db);
-  if (createdDefaultTenant && canProvisionTenantDefaultWorkspace(db)) {
-    provisionTenantDefaultWorkspace(db, defaultTenant.id, { seedWorkflowEvents: false });
+  await rebuildSprintTypesForTenantLocalKeys(db, defaultTenant.id);
+  await ensureWorkflowDefinitionConfigTenantScope(db, defaultTenant.id);
+  await backfillWorkflowDefinitionOwnership(db, defaultTenant.id);
+  await repairTenantAgentHqMcpServersAndAssignments(db);
+  if (createdDefaultTenant && await canProvisionTenantDefaultWorkspace(db)) {
+    await provisionTenantDefaultWorkspace(db, defaultTenant.id, { seedWorkflowEvents: false });
   }
 
   ensuredTenantSchemaDbs.add(db);
@@ -1938,45 +1919,45 @@ export function repairTenantOwnershipForMigration(db: Database.Database): number
   return defaultTenant.id;
 }
 
-export function ensureTenantSchema(db: Database.Database): number {
-  return repairTenantOwnershipForMigration(db);
+export async function ensureTenantSchema(db: Db): Promise<number> {
+  return await repairTenantOwnershipForMigration(db);
 }
 
-export function getDefaultTenantId(db: Database.Database): number {
-  return ensureTenantSchema(db);
+export async function getDefaultTenantId(db: Db): Promise<number> {
+  return await ensureTenantSchema(db);
 }
 
-export function getActiveTenantId(db: Database.Database): number {
-  const defaultTenantId = ensureTenantSchema(db);
-  const raw = getSetting(db, ACTIVE_TENANT_SETTING_KEY);
+export async function getActiveTenantId(db: Db): Promise<number> {
+  const defaultTenantId = await ensureTenantSchema(db);
+  const raw = await getSetting(db, ACTIVE_TENANT_SETTING_KEY);
   const id = raw ? Number(raw) : defaultTenantId;
   const tenant = Number.isInteger(id) && id > 0
-    ? db.prepare(`SELECT id FROM tenants WHERE id = ? LIMIT 1`).get(id)
+    ? await db.get(`SELECT id FROM tenants WHERE id = ? LIMIT 1`, id)
     : null;
   return tenant ? id : defaultTenantId;
 }
 
-export function setActiveTenantId(db: Database.Database, tenantId: number): TenantRecord {
-  ensureTenantSchema(db);
-  const tenant = db.prepare(`SELECT * FROM tenants WHERE id = ? LIMIT 1`).get(tenantId) as TenantRecord | undefined;
+export async function setActiveTenantId(db: Db, tenantId: number): Promise<TenantRecord> {
+  await ensureTenantSchema(db);
+  const tenant = await db.get(`SELECT * FROM tenants WHERE id = ? LIMIT 1`, tenantId) as TenantRecord | undefined;
   if (!tenant) {
     const error = new Error('Tenant not found') as Error & { status?: number };
     error.status = 404;
     throw error;
   }
-  setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(tenantId));
+  await setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(tenantId));
   return tenant;
 }
 
-export function resolveTenantIdFromRequest(db: Database.Database, req: Request): number {
-  ensureTenantSchema(db);
+export async function resolveTenantIdFromRequest(db: Db, req: Request): Promise<number> {
+  await ensureTenantSchema(db);
   const headerValue = req.header('x-agent-hq-tenant-id') ?? req.header('x-tenant-id');
   const raw = req.query.tenant_id ?? req.query.company_id ?? headerValue;
   const candidate = Array.isArray(raw) ? raw[0] : raw;
 
-  const requireTenant = (tenantId: number): void => {
+  const requireTenant = async (tenantId: number): Promise<void> => {
     const tenant = Number.isInteger(tenantId) && tenantId > 0
-      ? db.prepare(`SELECT id FROM tenants WHERE id = ? LIMIT 1`).get(tenantId)
+      ? await db.get(`SELECT id FROM tenants WHERE id = ? LIMIT 1`, tenantId)
       : null;
     if (!tenant) {
       const error = new Error('Tenant not found') as Error & { status?: number };
@@ -2037,13 +2018,13 @@ export function resolveTenantIdFromRequest(db: Database.Database, req: Request):
     return req.mcpIdentity.tenantId;
   }
 
-  const activeTenantId = getActiveTenantId(db);
+  const activeTenantId = await getActiveTenantId(db);
   enforceMcpTenantScope(activeTenantId, 'active');
   return activeTenantId;
 }
 
-export function createTenantWithDefaults(db: Database.Database, input: { name?: unknown; slug?: unknown; set_active?: unknown }): TenantRecord {
-  repairTenantOwnershipForMigration(db);
+export async function createTenantWithDefaults(db: Db, input: { name?: unknown; slug?: unknown; set_active?: unknown }): Promise<TenantRecord> {
+  await repairTenantOwnershipForMigration(db);
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!name) {
     const error = new Error('name is required') as Error & { status?: number };
@@ -2052,39 +2033,39 @@ export function createTenantWithDefaults(db: Database.Database, input: { name?: 
   }
   const requestedSlug = typeof input.slug === 'string' && input.slug.trim() ? input.slug.trim() : name;
   const normalizedRequestedSlug = slugifyTenantName(requestedSlug);
-  const existingBySlug = db.prepare(`SELECT * FROM tenants WHERE slug = ? LIMIT 1`).get(normalizedRequestedSlug) as TenantRecord | undefined;
+  const existingBySlug = await db.get(`SELECT * FROM tenants WHERE slug = ? LIMIT 1`, normalizedRequestedSlug) as TenantRecord | undefined;
   if (existingBySlug) {
-    db.transaction(() => {
+    db.transaction(async () => {
       if (input.set_active === true || input.set_active === 'true' || input.set_active === 1 || input.set_active === '1') {
-        setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(existingBySlug.id));
+        await setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(existingBySlug.id));
       }
     })();
-    return db.prepare(`SELECT * FROM tenants WHERE id = ?`).get(existingBySlug.id) as TenantRecord;
+    return await db.get(`SELECT * FROM tenants WHERE id = ?`, existingBySlug.id) as TenantRecord;
   }
-  const slug = uniqueTenantSlug(db, requestedSlug);
+  const slug = await uniqueTenantSlug(db, requestedSlug);
 
-  const tenant = db.transaction(() => {
-    const result = db.prepare(`INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 0)`).run(name, slug);
+  const tenant = db.transaction(async () => {
+    const result = await db.run(`INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 0)`, name, slug);
     const tenantId = Number(result.lastInsertRowid);
-    provisionTenantDefaultWorkspace(db, tenantId);
+    await provisionTenantDefaultWorkspace(db, tenantId);
     if (input.set_active === true || input.set_active === 'true' || input.set_active === 1 || input.set_active === '1') {
-      setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(tenantId));
+      await setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(tenantId));
     }
-    return db.prepare(`SELECT * FROM tenants WHERE id = ?`).get(tenantId) as TenantRecord;
+    return await db.get(`SELECT * FROM tenants WHERE id = ?`, tenantId) as TenantRecord;
   })();
 
   return tenant;
 }
 
-export function deleteTenant(db: Database.Database, tenantId: number, input: { confirmation?: unknown } = {}): DeleteTenantResult {
-  ensureTenantSchema(db);
+export async function deleteTenant(db: Db, tenantId: number, input: { confirmation?: unknown } = {}): Promise<DeleteTenantResult> {
+  await ensureTenantSchema(db);
   if (!Number.isInteger(tenantId) || tenantId <= 0) {
     const error = new Error('Tenant id must be a positive integer') as Error & { status?: number };
     error.status = 400;
     throw error;
   }
 
-  const tenant = db.prepare(`SELECT * FROM tenants WHERE id = ? LIMIT 1`).get(tenantId) as TenantRecord | undefined;
+  const tenant = await db.get(`SELECT * FROM tenants WHERE id = ? LIMIT 1`, tenantId) as TenantRecord | undefined;
   if (!tenant) {
     const error = new Error('Tenant not found') as Error & { status?: number };
     error.status = 404;
@@ -2103,23 +2084,23 @@ export function deleteTenant(db: Database.Database, tenantId: number, input: { c
     throw error;
   }
 
-  const replacementTenant = db.prepare(`
+  const replacementTenant = await db.get(`
     SELECT id
     FROM tenants
     WHERE id != ?
     ORDER BY is_default DESC, created_at ASC, id ASC
     LIMIT 1
-  `).get(tenantId) as { id: number } | undefined;
+  `, tenantId) as { id: number } | undefined;
   if (!replacementTenant) {
     const error = new Error('Cannot delete the only tenant') as Error & { status?: number };
     error.status = 409;
     throw error;
   }
 
-  const activeBefore = getActiveTenantId(db);
+  const activeBefore = await getActiveTenantId(db);
   const counts: Record<string, number> = {};
 
-  db.transaction(() => {
+  db.transaction(async () => {
     for (const [table, whereSql] of [
       ['session_messages', `session_id IN (SELECT id FROM sessions WHERE tenant_id = ?)`],
       ['chat_messages', `agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`],
@@ -2137,21 +2118,21 @@ export function deleteTenant(db: Database.Database, tenantId: number, input: { c
       )`],
     ] as Array<[string, string]>) {
       const params = Array((whereSql.match(/\?/g) ?? []).length).fill(tenantId);
-      addCounts(counts, deleteWhere(db, table, whereSql, params));
+      addCounts(counts, await deleteWhere(db, table, whereSql, params));
     }
 
-    addCounts(counts, deleteWhere(db, 'job_instances', `agent_id IN (SELECT id FROM agents WHERE tenant_id = ?) OR task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, [tenantId, tenantId]));
-    addCounts(counts, deleteWhere(db, 'task_relationships', `source_task_id IN (SELECT id FROM tasks WHERE tenant_id = ?) OR target_task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, [tenantId, tenantId]));
-    addCounts(counts, deleteWhere(db, 'task_dependencies', `blocked_id IN (SELECT id FROM tasks WHERE tenant_id = ?) OR blocker_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, [tenantId, tenantId]));
-    addCounts(counts, deleteWhere(db, 'recurring_task_runs', `series_id IN (SELECT id FROM recurring_task_series WHERE tenant_id = ?) OR created_task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, [tenantId, tenantId]));
+    addCounts(counts, await deleteWhere(db, 'job_instances', `agent_id IN (SELECT id FROM agents WHERE tenant_id = ?) OR task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, [tenantId, tenantId]));
+    addCounts(counts, await deleteWhere(db, 'task_relationships', `source_task_id IN (SELECT id FROM tasks WHERE tenant_id = ?) OR target_task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, [tenantId, tenantId]));
+    addCounts(counts, await deleteWhere(db, 'task_dependencies', `blocked_id IN (SELECT id FROM tasks WHERE tenant_id = ?) OR blocker_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, [tenantId, tenantId]));
+    addCounts(counts, await deleteWhere(db, 'recurring_task_runs', `series_id IN (SELECT id FROM recurring_task_series WHERE tenant_id = ?) OR created_task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, [tenantId, tenantId]));
     for (const table of ['agent_tool_assignments', 'agent_mcp_assignments', 'mcp_api_keys']) {
-      addCounts(counts, deleteWhere(db, table, `agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, [tenantId]));
+      addCounts(counts, await deleteWhere(db, table, `agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, [tenantId]));
     }
-    addCounts(counts, deleteWhere(db, 'agent_mcp_assignments', `mcp_server_id IN (SELECT id FROM mcp_servers WHERE tenant_id = ?)`, [tenantId], 'agent_mcp_assignments'));
-    addCounts(counts, deleteWhere(db, 'agent_tool_assignments', `tool_id IN (SELECT id FROM tools WHERE tenant_id = ?)`, [tenantId], 'agent_tool_assignments'));
-    addCounts(counts, deleteWhere(db, 'project_audit_log', `project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, [tenantId]));
-    addCounts(counts, deleteWhere(db, 'routing_config', `project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, [tenantId]));
-    addCounts(counts, deleteWhere(db, 'sprint_task_statuses', `sprint_id IN (SELECT id FROM sprints WHERE tenant_id = ?)`, [tenantId]));
+    addCounts(counts, await deleteWhere(db, 'agent_mcp_assignments', `mcp_server_id IN (SELECT id FROM mcp_servers WHERE tenant_id = ?)`, [tenantId], 'agent_mcp_assignments'));
+    addCounts(counts, await deleteWhere(db, 'agent_tool_assignments', `tool_id IN (SELECT id FROM tools WHERE tenant_id = ?)`, [tenantId], 'agent_tool_assignments'));
+    addCounts(counts, await deleteWhere(db, 'project_audit_log', `project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, [tenantId]));
+    addCounts(counts, await deleteWhere(db, 'routing_config', `project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, [tenantId]));
+    addCounts(counts, await deleteWhere(db, 'sprint_task_statuses', `sprint_id IN (SELECT id FROM sprints WHERE tenant_id = ?)`, [tenantId]));
 
     for (const table of [
       'sessions',
@@ -2172,13 +2153,13 @@ export function deleteTenant(db: Database.Database, tenantId: number, input: { c
       'agents',
       'projects',
     ]) {
-      deleteTenantRows(db, table, tenantId, counts);
+      await deleteTenantRows(db, table, tenantId, counts);
     }
 
-    addCount(counts, 'tenants', db.prepare(`DELETE FROM tenants WHERE id = ? AND is_default = 0`).run(tenantId).changes);
+    addCount(counts, 'tenants', (await db.run(`DELETE FROM tenants WHERE id = ? AND is_default = 0`, tenantId)).changes);
 
     if (activeBefore === tenantId) {
-      setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(replacementTenant.id));
+      await setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(replacementTenant.id));
     }
   })();
 
@@ -2192,9 +2173,9 @@ export function deleteTenant(db: Database.Database, tenantId: number, input: { c
   };
 }
 
-export function listTenants(db: Database.Database): Array<TenantRecord & { project_count: number; task_count: number; agent_count: number; is_active: number }> {
-  const activeTenantId = getActiveTenantId(db);
-  return db.prepare(`
+export async function listTenants(db: Db): Promise<Array<TenantRecord & { project_count: number; task_count: number; agent_count: number; is_active: number }>> {
+  const activeTenantId = await getActiveTenantId(db);
+  return await db.all(`
     SELECT t.*,
       CASE WHEN t.id = ? THEN 1 ELSE 0 END AS is_active,
       (SELECT COUNT(*) FROM projects p WHERE p.tenant_id = t.id) AS project_count,
@@ -2202,5 +2183,5 @@ export function listTenants(db: Database.Database): Array<TenantRecord & { proje
       (SELECT COUNT(*) FROM agents a WHERE a.tenant_id = t.id) AS agent_count
     FROM tenants t
     ORDER BY t.is_default DESC, t.created_at ASC, t.id ASC
-  `).all(activeTenantId) as Array<TenantRecord & { project_count: number; task_count: number; agent_count: number; is_active: number }>;
+  `, activeTenantId) as Array<TenantRecord & { project_count: number; task_count: number; agent_count: number; is_active: number }>;
 }

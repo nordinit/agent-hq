@@ -22,7 +22,7 @@ let baseUrl = '';
 let tenantOneAdminKey = '';
 let tenantTwoAdminKey = '';
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'integration-tenant-scope-'));
@@ -30,7 +30,7 @@ function resetDb(): void {
   process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE tenants (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -98,26 +98,20 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`)
-    .run(1, 'Default Company', 'default', 1, 2, 'Tenant Two', 'tenant-two', 0);
-  db.prepare(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`).run();
-  db.prepare(`INSERT INTO agents (id, tenant_id, name, enabled, system_role) VALUES (?, ?, ?, 1, 'admin'), (?, ?, ?, 1, 'admin')`)
-    .run(101, 1, 'Tenant One Admin', 202, 2, 'Tenant Two Admin');
-  db.prepare(`INSERT INTO provider_config (tenant_id, slug, display_name, status, config) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`)
-    .run(1, 'openai', 'Tenant One OpenAI', 'connected', '{"api_key":"tenant-one-secret"}', 2, 'openai', 'Tenant Two OpenAI', 'connected', '{"api_key":"tenant-two-secret"}');
-  db.prepare(`
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`, 1, 'Default Company', 'default', 1, 2, 'Tenant Two', 'tenant-two', 0);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(`INSERT INTO agents (id, tenant_id, name, enabled, system_role) VALUES (?, ?, ?, 1, 'admin'), (?, ?, ?, 1, 'admin')`, 101, 1, 'Tenant One Admin', 202, 2, 'Tenant Two Admin');
+  await db.run(`INSERT INTO provider_config (tenant_id, slug, display_name, status, config) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`, 1, 'openai', 'Tenant One OpenAI', 'connected', '{"api_key":"tenant-one-secret"}', 2, 'openai', 'Tenant Two OpenAI', 'connected', '{"api_key":"tenant-two-secret"}');
+  await db.run(`
     INSERT INTO github_identities (tenant_id, github_username, token, git_author_name, git_author_email, lane)
     VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)
-  `).run(
-    1, 'shared-bot', 'ghp_tenant_one_secret', 'Tenant One Bot', 'one@example.test', 'shared',
-    2, 'shared-bot', 'ghp_tenant_two_secret', 'Tenant Two Bot', 'two@example.test', 'shared',
-  );
+  `, 1, 'shared-bot', 'ghp_tenant_one_secret', 'Tenant One Bot', 'one@example.test', 'shared', 2, 'shared-bot', 'ghp_tenant_two_secret', 'Tenant Two Bot', 'two@example.test', 'shared');
 
-  ensureMcpApiKeyTable(db);
-  tenantOneAdminKey = issueMcpApiKeyForAgent(db, 101).apiKey;
-  tenantTwoAdminKey = issueMcpApiKeyForAgent(db, 202).apiKey;
-  replaceAgentMcpPermissionPolicy(db, 101, ['admin.full_access']);
-  replaceAgentMcpPermissionPolicy(db, 202, ['admin.full_access']);
+  await ensureMcpApiKeyTable(db);
+  tenantOneAdminKey = (await issueMcpApiKeyForAgent(db, 101)).apiKey;
+  tenantTwoAdminKey = (await issueMcpApiKeyForAgent(db, 202)).apiKey;
+  await replaceAgentMcpPermissionPolicy(db, 101, ['admin.full_access']);
+  await replaceAgentMcpPermissionPolicy(db, 202, ['admin.full_access']);
 }
 
 async function startTestServer(): Promise<void> {
@@ -159,7 +153,7 @@ function authHeaders(apiKey: string): Record<string, string> {
 describe('tenant scoping for integration credentials/config routes', () => {
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'integration-tenant-scope-'));
-    resetDb();
+    await resetDb();
     await startTestServer();
   });
 

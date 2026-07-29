@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { isAtlasAgentRecord } from './atlasAgent';
 import {
   STARTER_BACKLOG_SPRINT_NAME,
@@ -8,6 +7,7 @@ import {
 } from './starterCatalog';
 import { seedSprintTaskPolicy } from '../domains/routing/policy/seed';
 import { listSprintTaskStatuses } from '../domains/routing/policy/statuses';
+import { type Db } from "../db/adapter/types";
 
 type SprintRow = {
   id: number;
@@ -39,33 +39,33 @@ type StarterRoutingRule = {
   priority: number;
 };
 
-function tableHasColumn(db: Database.Database, tableName: string, columnName: string): boolean {
+async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
   try {
-    const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+    const columns = await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>;
     return columns.some((column) => column.name === columnName);
   } catch {
     return false;
   }
 }
 
-function loadSprintRow(db: Database.Database, sprintId: number): SprintRow | null {
-  return db.prepare(`
+async function loadSprintRow(db: Db, sprintId: number): Promise<SprintRow | null> {
+  return await db.get(`
     SELECT id, project_id, sprint_type
     FROM sprints
     WHERE id = ?
     LIMIT 1
-  `).get(sprintId) as SprintRow | undefined ?? null;
+  `, sprintId) as SprintRow | undefined ?? null;
 }
 
-function loadProjectAgents(db: Database.Database, projectId: number): AgentRow[] {
-  const deletedFilter = tableHasColumn(db, 'agents', 'deleted_at') ? 'AND deleted_at IS NULL' : '';
-  return db.prepare(`
+async function loadProjectAgents(db: Db, projectId: number): Promise<AgentRow[]> {
+  const deletedFilter = await tableHasColumn(db, 'agents', 'deleted_at') ? 'AND deleted_at IS NULL' : '';
+  return await db.all(`
     SELECT id, name, role, job_title, system_role, session_key, openclaw_agent_id
     FROM agents
     WHERE project_id = ?
       ${deletedFilter}
     ORDER BY id ASC
-  `).all(projectId) as AgentRow[];
+  `, projectId) as AgentRow[];
 }
 
 function buildAgentHaystack(agent: AgentRow): string {
@@ -180,77 +180,77 @@ function buildStarterRoutingRules(sprintType: string, agents: RoutedAgentSet, av
   return Array.from(rules.values());
 }
 
-export function ensureProjectBacklogSprint(db: Database.Database, projectId: number): number {
-  const project = db.prepare(`SELECT tenant_id FROM projects WHERE id = ?`).get(projectId) as { tenant_id: number | null } | undefined;
+export async function ensureProjectBacklogSprint(db: Db, projectId: number): Promise<number> {
+  const project = await db.get(`SELECT tenant_id FROM projects WHERE id = ?`, projectId) as { tenant_id: number | null } | undefined;
   const tenantSprintType = project?.tenant_id != null
-    ? (db.prepare(`
+    ? (await db.get(`
       SELECT key
       FROM sprint_types
       WHERE tenant_id = ? AND (key = 'generic' OR key LIKE ?)
       ORDER BY CASE WHEN key = 'generic' THEN 0 ELSE 1 END, key ASC
       LIMIT 1
-    `).get(project.tenant_id, '%__generic') as { key: string } | undefined)?.key ?? 'generic'
+    `, project.tenant_id, '%__generic') as { key: string } | undefined)?.key ?? 'generic'
     : 'generic';
-  const existing = db.prepare(`
+  const existing = await db.get(`
     SELECT id
     FROM sprints
     WHERE project_id = ?
       AND (lower(name) = lower(?) OR sprint_type = ?)
     ORDER BY CASE WHEN lower(name) = lower(?) THEN 0 ELSE 1 END, id ASC
     LIMIT 1
-  `).get(projectId, STARTER_BACKLOG_SPRINT_NAME, tenantSprintType, STARTER_BACKLOG_SPRINT_NAME) as { id: number } | undefined;
+  `, projectId, STARTER_BACKLOG_SPRINT_NAME, tenantSprintType, STARTER_BACKLOG_SPRINT_NAME) as { id: number } | undefined;
   if (existing) return existing.id;
 
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
     VALUES (?, ?, ?, '', ?, 'active', 'time', 'ongoing')
-  `).run(project?.tenant_id ?? null, projectId, STARTER_BACKLOG_SPRINT_NAME, tenantSprintType);
+  `, project?.tenant_id ?? null, projectId, STARTER_BACKLOG_SPRINT_NAME, tenantSprintType);
 
   const sprintId = Number(result.lastInsertRowid);
-  seedSprintTaskPolicy(db, sprintId);
-  syncStarterRoutingForSprint(db, sprintId);
+  await seedSprintTaskPolicy(db, sprintId);
+  await syncStarterRoutingForSprint(db, sprintId);
   return sprintId;
 }
 
-export function resolveDefaultProjectSprintId(db: Database.Database, projectId: number | null | undefined): number | null {
+export async function resolveDefaultProjectSprintId(db: Db, projectId: number | null | undefined): Promise<number | null> {
   if (!projectId || !Number.isFinite(projectId)) return null;
-  return ensureProjectBacklogSprint(db, projectId);
+  return await ensureProjectBacklogSprint(db, projectId);
 }
 
-export function syncStarterRoutingForProject(db: Database.Database, projectId: number | null | undefined): void {
+export async function syncStarterRoutingForProject(db: Db, projectId: number | null | undefined): Promise<void> {
   if (!projectId || !Number.isFinite(projectId)) return;
-  const sprintRows = db.prepare(`
+  const sprintRows = await db.all(`
     SELECT id
     FROM sprints
     WHERE project_id = ?
     ORDER BY id ASC
-  `).all(projectId) as Array<{ id: number }>;
+  `, projectId) as Array<{ id: number }>;
 
   for (const sprint of sprintRows) {
-    syncStarterRoutingForSprint(db, sprint.id);
+    await syncStarterRoutingForSprint(db, sprint.id);
   }
 }
 
-export function syncStarterRoutingForSprint(db: Database.Database, sprintId: number | null | undefined): void {
+export async function syncStarterRoutingForSprint(db: Db, sprintId: number | null | undefined): Promise<void> {
   if (!sprintId || !Number.isFinite(sprintId)) return;
-  const sprint = loadSprintRow(db, sprintId);
+  const sprint = await loadSprintRow(db, sprintId);
   if (!sprint) return;
-  if (!tableHasColumn(db, 'sprint_task_routing_rules', 'is_system')) return;
+  if (!await tableHasColumn(db, 'sprint_task_routing_rules', 'is_system')) return;
 
-  seedSprintTaskPolicy(db, sprintId);
+  await seedSprintTaskPolicy(db, sprintId);
 
-  const existingRuleCount = (db.prepare(`
+  const existingRuleCount = (await db.get(`
     SELECT COUNT(*) AS n
     FROM sprint_task_routing_rules
     WHERE sprint_id = ?
-  `).get(sprintId) as { n: number }).n;
+  `, sprintId) as { n: number }).n;
   if (existingRuleCount > 0) return;
 
   const starterSprintType = starterSprintTypeBaseKey(sprint.sprint_type);
   if (!starterSprintType) return;
 
-  const agents = classifyProjectAgents(loadProjectAgents(db, sprint.project_id));
-  const availableStatuses = new Set(listSprintTaskStatuses(db, sprintId).map(status => status.name));
+  const agents = classifyProjectAgents(await loadProjectAgents(db, sprint.project_id));
+  const availableStatuses = new Set((await listSprintTaskStatuses(db, sprintId)).map(status => status.name));
   const rules = buildStarterRoutingRules(starterSprintType, agents, availableStatuses);
   if (rules.length === 0) return;
 

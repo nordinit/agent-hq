@@ -1,13 +1,13 @@
-import type Database from 'better-sqlite3';
+import { type Db } from "../../db/adapter/types";
 
-export function taskTableHasColumn(db: Database.Database, column: string): boolean {
-  return (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((col) => col.name === column);
+export async function taskTableHasColumn(db: Db, column: string): Promise<boolean> {
+  return (await db.all('PRAGMA table_info(tasks)') as Array<{ name: string }>).some((col) => col.name === column);
 }
 
-export function syncTaskActiveAgentFromInstance(db: Database.Database, taskId: number): void {
-  if (!taskTableHasColumn(db, 'assigned_agent_id') || !taskTableHasColumn(db, 'agent_id') || !taskTableHasColumn(db, 'active_instance_id')) return;
+export async function syncTaskActiveAgentFromInstance(db: Db, taskId: number): Promise<void> {
+  if (!await taskTableHasColumn(db, 'assigned_agent_id') || !await taskTableHasColumn(db, 'agent_id') || !await taskTableHasColumn(db, 'active_instance_id')) return;
 
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET agent_id = (
           SELECT ji.agent_id
@@ -16,18 +16,18 @@ export function syncTaskActiveAgentFromInstance(db: Database.Database, taskId: n
         ),
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(taskId);
+  `, taskId);
 }
 
-export function syncAllTaskActiveAgentsFromInstances(db: Database.Database): void {
-  if (!taskTableHasColumn(db, 'assigned_agent_id') || !taskTableHasColumn(db, 'agent_id') || !taskTableHasColumn(db, 'active_instance_id')) return;
+export async function syncAllTaskActiveAgentsFromInstances(db: Db): Promise<void> {
+  if (!await taskTableHasColumn(db, 'assigned_agent_id') || !await taskTableHasColumn(db, 'agent_id') || !await taskTableHasColumn(db, 'active_instance_id')) return;
 
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET agent_id = (
           SELECT ji.agent_id
           FROM job_instances ji
           WHERE ji.id = tasks.active_instance_id
         )
-  `).run();
+  `);
 }

@@ -325,7 +325,7 @@ export class ClaudeCodeSessionAdapter implements SessionAdapter {
     );
 
     if (instanceLookupId) {
-      instanceCtx = db.prepare(`
+      instanceCtx = await db.get(`
         SELECT ji.id, ji.session_key, ji.status, ji.started_at, ji.completed_at,
                ji.created_at, ji.token_input, ji.token_output, ji.agent_id, ji.task_id,
                COALESCE(t.project_id, NULL) AS project_id,
@@ -334,7 +334,7 @@ export class ClaudeCodeSessionAdapter implements SessionAdapter {
         LEFT JOIN tasks t ON t.id = ji.task_id
         LEFT JOIN agents a ON a.id = ji.agent_id
         WHERE ji.id = ?
-      `).get(instanceLookupId) as typeof instanceCtx;
+      `, instanceLookupId) as typeof instanceCtx;
     }
 
     // If no JSONL, fall back to chat_messages
@@ -437,10 +437,10 @@ export class ClaudeCodeSessionAdapter implements SessionAdapter {
     },
   ): Promise<IngestResult | null> {
     const db = getDb();
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT id, role, content, timestamp, event_type, event_meta
       FROM chat_messages WHERE instance_id = ? ORDER BY timestamp ASC
-    `).all(instanceCtx.id) as Array<{
+    `, instanceCtx.id) as Array<{
       id: string; role: string; content: string; timestamp: string;
       event_type: string | null; event_meta: string | null;
     }>;

@@ -192,33 +192,33 @@ function parseConfig(row: ProviderRow): Record<string, unknown> {
 
 
 /** Count providers with status = 'connected' */
-export function countConnectedProviders(): number {
+export async function countConnectedProviders(): Promise<number> {
   const db = getDb();
-  const tenantId = getActiveTenantId(db);
-  return countConnectedProvidersForTenant(db, tenantId);
+  const tenantId = await getActiveTenantId(db);
+  return await countConnectedProvidersForTenant(db, tenantId);
 }
 
 /** The onboarding provider gate: true when at least one provider is connected */
-export function isProviderGatePassed(): boolean {
-  return countConnectedProviders() >= 1;
+export async function isProviderGatePassed(): Promise<boolean> {
+  return await countConnectedProviders() >= 1;
 }
 
-function countConnectedProvidersForTenant(db: ReturnType<typeof getDb>, tenantId: number): number {
-  const configured = db.prepare("SELECT COUNT(*) as n FROM provider_config WHERE tenant_id = ? AND status = 'connected'").get(tenantId) as { n: number };
+async function countConnectedProvidersForTenant(db: ReturnType<typeof getDb>, tenantId: number): Promise<number> {
+  const configured = await db.get("SELECT COUNT(*) as n FROM provider_config WHERE tenant_id = ? AND status = 'connected'", tenantId) as { n: number };
   let runtimeOwned = 0;
   try {
-    const row = db.prepare("SELECT COUNT(*) as n FROM provider_connections WHERE tenant_id = ? AND status = 'connected'").get(tenantId) as { n: number };
+    const row = await db.get("SELECT COUNT(*) as n FROM provider_connections WHERE tenant_id = ? AND status = 'connected'", tenantId) as { n: number };
     runtimeOwned = row.n;
   } catch { /* schema bootstrap tests may not create provider_connections */ }
   return configured.n + runtimeOwned;
 }
 
 // ─── GET /api/v1/providers ───────────────────────────────────────────────────
-router.get('/', (_req: Request, res: Response) => {
+router.get('/', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, _req);
-    const rows = db.prepare('SELECT * FROM provider_config WHERE tenant_id = ? ORDER BY created_at ASC').all(tenantId) as ProviderRow[];
+    const tenantId = await resolveTenantIdFromRequest(db, _req);
+    const rows = await db.all('SELECT * FROM provider_config WHERE tenant_id = ? ORDER BY created_at ASC', tenantId) as ProviderRow[];
     const providers = rows.map(r => ({
       id: r.id,
       slug: r.slug,
@@ -232,8 +232,8 @@ router.get('/', (_req: Request, res: Response) => {
     }));
     res.json({
       providers,
-      onboarding_provider_gate_passed: countConnectedProvidersForTenant(db, tenantId) >= 1,
-      connected_count: countConnectedProvidersForTenant(db, tenantId),
+      onboarding_provider_gate_passed: await countConnectedProvidersForTenant(db, tenantId) >= 1,
+      connected_count: await countConnectedProvidersForTenant(db, tenantId),
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -241,11 +241,11 @@ router.get('/', (_req: Request, res: Response) => {
 });
 
 // ─── GET /api/v1/providers/gate ──────────────────────────────────────────────
-router.get('/gate', (_req: Request, res: Response) => {
+router.get('/gate', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, _req);
-    const connectedCount = countConnectedProvidersForTenant(db, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, _req);
+    const connectedCount = await countConnectedProvidersForTenant(db, tenantId);
     res.json({ onboarding_provider_gate_passed: connectedCount >= 1, connected_count: connectedCount });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -253,11 +253,11 @@ router.get('/gate', (_req: Request, res: Response) => {
 });
 
 // ─── GET /api/v1/providers/:id ───────────────────────────────────────────────
-router.get('/:id', (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const row = db.prepare('SELECT * FROM provider_config WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId) as ProviderRow | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const row = await db.get('SELECT * FROM provider_config WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as ProviderRow | undefined;
     if (!row) { res.status(404).json({ error: 'Provider not found' }); return; }
     res.json({
       ...row,
@@ -300,8 +300,8 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare('SELECT id FROM provider_config WHERE slug = ? AND tenant_id = ?').get(slug, tenantId) as { id: number } | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get('SELECT id FROM provider_config WHERE slug = ? AND tenant_id = ?', slug, tenantId) as { id: number } | undefined;
     if (existing) {
       res.status(409).json({ error: `Provider '${slug}' is already configured. Use PUT to update or DELETE to remove it first.` });
       return;
@@ -311,12 +311,12 @@ router.post('/', async (req: Request, res: Response) => {
     const status = validation.ok ? 'connected' : 'failed';
     const label = display_name || (oauthProvider ? 'OpenAI Codex (OAuth)' : slug);
 
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO provider_config (tenant_id, slug, display_name, status, config, last_validated_at, validation_error)
       VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
-    `).run(tenantId, slug, label, status, JSON.stringify(effectiveConfig), validation.error || null);
+    `, tenantId, slug, label, status, JSON.stringify(effectiveConfig), validation.error || null);
 
-    const row = db.prepare('SELECT * FROM provider_config WHERE id = ?').get(result.lastInsertRowid) as ProviderRow;
+    const row = await db.get('SELECT * FROM provider_config WHERE id = ?', result.lastInsertRowid) as ProviderRow;
     const reload = await reloadOpenClawSecretsAfterProviderCredentialWrite(slug);
 
     res.status(201).json({
@@ -324,7 +324,7 @@ router.post('/', async (req: Request, res: Response) => {
       config: maskConfig(row.slug, parseConfig(row)),
       validation: { ok: validation.ok, error: validation.error || null },
       reload,
-      onboarding_provider_gate_passed: countConnectedProvidersForTenant(db, tenantId) >= 1,
+      onboarding_provider_gate_passed: await countConnectedProvidersForTenant(db, tenantId) >= 1,
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -335,8 +335,8 @@ router.post('/', async (req: Request, res: Response) => {
 router.put('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare('SELECT * FROM provider_config WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId) as ProviderRow | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get('SELECT * FROM provider_config WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as ProviderRow | undefined;
     if (!existing) { res.status(404).json({ error: 'Provider not found' }); return; }
 
     const { display_name, config } = req.body;
@@ -361,14 +361,14 @@ router.put('/:id', async (req: Request, res: Response) => {
     const validation = await validateProvider(slug, newConfig);
     const status = validation.ok ? 'connected' : 'failed';
 
-    db.prepare(`
+    await db.run(`
       UPDATE provider_config
       SET display_name = ?, status = ?, config = ?, last_validated_at = datetime('now'),
           validation_error = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(newLabel, status, JSON.stringify(newConfig), validation.error || null, existing.id);
+    `, newLabel, status, JSON.stringify(newConfig), validation.error || null, existing.id);
 
-    const row = db.prepare('SELECT * FROM provider_config WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId) as ProviderRow;
+    const row = await db.get('SELECT * FROM provider_config WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as ProviderRow;
     const reload = await reloadOpenClawSecretsAfterProviderCredentialWrite(slug);
 
     res.json({
@@ -376,7 +376,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       config: maskConfig(row.slug, parseConfig(row)),
       validation: { ok: validation.ok, error: validation.error || null },
       reload,
-      onboarding_provider_gate_passed: countConnectedProvidersForTenant(db, tenantId) >= 1,
+      onboarding_provider_gate_passed: await countConnectedProvidersForTenant(db, tenantId) >= 1,
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -387,8 +387,8 @@ router.put('/:id', async (req: Request, res: Response) => {
 router.post('/:id/validate', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const row = db.prepare('SELECT * FROM provider_config WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId) as ProviderRow | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const row = await db.get('SELECT * FROM provider_config WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as ProviderRow | undefined;
     if (!row) { res.status(404).json({ error: 'Provider not found' }); return; }
 
     const slug = row.slug as ProviderSlug;
@@ -396,17 +396,17 @@ router.post('/:id/validate', async (req: Request, res: Response) => {
     const validation = await validateProvider(slug, config);
     const status = validation.ok ? 'connected' : 'failed';
 
-    db.prepare(`
+    await db.run(`
       UPDATE provider_config
       SET status = ?, last_validated_at = datetime('now'), validation_error = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(status, validation.error || null, row.id);
+    `, status, validation.error || null, row.id);
 
     res.json({
       ok: validation.ok,
       status,
       error: validation.error || null,
-      onboarding_provider_gate_passed: countConnectedProvidersForTenant(db, tenantId) >= 1,
+      onboarding_provider_gate_passed: await countConnectedProvidersForTenant(db, tenantId) >= 1,
     });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -414,15 +414,15 @@ router.post('/:id/validate', async (req: Request, res: Response) => {
 });
 
 // ─── DELETE /api/v1/providers/:id ────────────────────────────────────────────
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare('SELECT id FROM provider_config WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId) as { id: number } | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get('SELECT id FROM provider_config WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as { id: number } | undefined;
     if (!existing) { res.status(404).json({ error: 'Provider not found' }); return; }
 
-    db.prepare('DELETE FROM provider_config WHERE id = ? AND tenant_id = ?').run(req.params.id, tenantId);
-    res.json({ ok: true, onboarding_provider_gate_passed: countConnectedProvidersForTenant(db, tenantId) >= 1 });
+    await db.run('DELETE FROM provider_config WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
+    res.json({ ok: true, onboarding_provider_gate_passed: await countConnectedProvidersForTenant(db, tenantId) >= 1 });
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -431,7 +431,7 @@ router.delete('/:id', (req: Request, res: Response) => {
 // ─── GET /api/v1/providers/:slug/models ──────────────────────────────────────
 // Provider-scoped assignable agent models. Dynamic providers may still be backed
 // by a known catalog when the upstream API has no model list endpoint.
-router.get('/:slug/models', (req: Request, res: Response) => {
+router.get('/:slug/models', async (req: Request, res: Response) => {
   try {
     const slug = req.params.slug as ProviderSlug;
     if (!VALID_SLUGS.includes(slug)) {
@@ -440,8 +440,8 @@ router.get('/:slug/models', (req: Request, res: Response) => {
     }
 
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const row = db.prepare("SELECT * FROM provider_config WHERE slug = ? AND tenant_id = ? AND status = 'connected'").get(slug, tenantId) as ProviderRow | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const row = await db.get("SELECT * FROM provider_config WHERE slug = ? AND tenant_id = ? AND status = 'connected'", slug, tenantId) as ProviderRow | undefined;
     if (!row) {
       res.status(404).json({ error: `Provider '${slug}' is not connected. Add it in Settings → Providers first.` });
       return;
@@ -478,10 +478,10 @@ function readJsonFile(filePath: string): Record<string, unknown> | null {
   }
 }
 
-function readOAuthProfile(slug: string): Record<string, unknown> | null {
+async function readOAuthProfile(slug: string): Promise<Record<string, unknown> | null> {
   const provider = slug as OAuthProviderSlug;
   const profileKey = getOAuthProfileKey(provider);
-  for (const filePath of collectOAuthAuthProfilePaths()) {
+  for (const filePath of await collectOAuthAuthProfilePaths()) {
     if (!fs.existsSync(filePath)) continue;
     const data = readJsonFile(filePath);
     const profiles = data?.profiles;
@@ -494,10 +494,10 @@ function readOAuthProfile(slug: string): Record<string, unknown> | null {
   return null;
 }
 
-function validateOAuthProvider(slug: string): { ok: boolean; error?: string } {
+async function validateOAuthProvider(slug: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const provider = slug as OAuthProviderSlug;
-    const profile = readOAuthProfile(slug);
+    const profile = await readOAuthProfile(slug);
     if (!profile || profile.type !== 'oauth' || profile.provider !== slug) {
       return { ok: false, error: `No OAuth profile "${getOAuthProfileKey(provider)}" found. Click "Sign in" to authenticate.` };
     }
@@ -584,10 +584,10 @@ function extractAccountIdFromJwt(accessToken: string): string | null {
   } catch { return null; }
 }
 
-function writeTokensToAuthProfiles(slug: string, tokens: OAuthTokenPayload): void {
+async function writeTokensToAuthProfiles(slug: string, tokens: OAuthTokenPayload): Promise<void> {
   const credential = oauthTokensToCredential(slug as 'openai-codex', tokens);
-  const authProfilePaths = collectOAuthAuthProfilePaths();
-  const updatedPaths = syncOAuthCredentialToAllOpenClawStores(slug as 'openai-codex', credential);
+  const authProfilePaths = await collectOAuthAuthProfilePaths();
+  const updatedPaths = await syncOAuthCredentialToAllOpenClawStores(slug as 'openai-codex', credential);
   console.log(`[providers] Wrote ${slug} OAuth tokens across ${authProfilePaths.length} OpenClaw agent credential set(s); updated ${updatedPaths.length} file(s)`);
 }
 
@@ -604,9 +604,9 @@ async function reloadOpenClawSecretsAfterProviderCredentialWrite(slug: string): 
   }
 }
 
-function persistOAuthTokens(slug: string, tokens: OAuthTokenPayload): Record<string, unknown> {
+async function persistOAuthTokens(slug: string, tokens: OAuthTokenPayload): Promise<Record<string, unknown>> {
   const config = buildStoredOAuthConfig(slug, tokens);
-  writeTokensToAuthProfiles(slug, tokens);
+  await writeTokensToAuthProfiles(slug, tokens);
   return config;
 }
 
@@ -615,7 +615,7 @@ function persistOAuthTokens(slug: string, tokens: OAuthTokenPayload): Record<str
 router.post('/:slug/oauth/initiate', async (req: Request, res: Response) => {
   const { slug } = req.params;
   if (!isOAuthProvider(slug)) { res.status(400).json({ error: `'${slug}' does not support OAuth.` }); return; }
-  const tenantId = resolveTenantIdFromRequest(getDb(), req);
+  const tenantId = await resolveTenantIdFromRequest(getDb(), req);
 
   // Clean up any previous pending OAuth flow
   if (pendingOAuth) {
@@ -676,15 +676,14 @@ router.post('/:slug/oauth/initiate', async (req: Request, res: Response) => {
           }
 
           const tokens = await tokenRes.json() as OAuthTokenPayload;
-          const storedConfig = persistOAuthTokens(slug, tokens);
-          const validation = validateOAuthProvider(slug);
+          const storedConfig = await persistOAuthTokens(slug, tokens);
+          const validation = await validateOAuthProvider(slug);
           if (!validation.ok) {
             throw new Error(validation.error || 'OAuth validation failed after token exchange.');
           }
 
           const db = getDb();
-          db.prepare("UPDATE provider_config SET status = 'connected', config = ?, validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?")
-            .run(JSON.stringify(storedConfig), validation.error || null, slug, tenantId);
+          await db.run("UPDATE provider_config SET status = 'connected', config = ?, validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", JSON.stringify(storedConfig), validation.error || null, slug, tenantId);
 
           await reloadOpenClawSecretsAfterProviderCredentialWrite(slug);
 
@@ -736,11 +735,11 @@ router.post('/:slug/oauth/initiate', async (req: Request, res: Response) => {
     // Upsert provider_config row as pending
     try {
       const db = getDb();
-      const existing = db.prepare('SELECT id FROM provider_config WHERE slug = ? AND tenant_id = ?').get(slug, tenantId) as { id: number } | undefined;
+      const existing = await db.get('SELECT id FROM provider_config WHERE slug = ? AND tenant_id = ?', slug, tenantId) as { id: number } | undefined;
       if (existing) {
-        db.prepare("UPDATE provider_config SET status = 'pending', updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?").run(slug, tenantId);
+        await db.run("UPDATE provider_config SET status = 'pending', updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", slug, tenantId);
       } else {
-        db.prepare("INSERT INTO provider_config (tenant_id, slug, display_name, status, config) VALUES (?, ?, ?, 'pending', '{}')").run(tenantId, slug, 'OpenAI Codex (OAuth)');
+        await db.run("INSERT INTO provider_config (tenant_id, slug, display_name, status, config) VALUES (?, ?, ?, 'pending', '{}')", tenantId, slug, 'OpenAI Codex (OAuth)');
       }
     } catch { /* row may exist */ }
 
@@ -750,12 +749,11 @@ router.post('/:slug/oauth/initiate', async (req: Request, res: Response) => {
     // Wait for token exchange in background so errors still mark the provider row.
     tokenPromise.then(() => {
       console.log(`[providers] OpenAI Codex OAuth completed successfully for ${slug}`);
-    }).catch((err) => {
+    }).catch(async (err) => {
       console.error(`[providers] OpenAI Codex OAuth failed:`, err instanceof Error ? err.message : err);
       try {
         const db = getDb();
-        db.prepare("UPDATE provider_config SET status = 'failed', validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?")
-          .run(err instanceof Error ? err.message : String(err), slug, tenantId);
+        await db.run("UPDATE provider_config SET status = 'failed', validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", err instanceof Error ? err.message : String(err), slug, tenantId);
       } catch { /* best effort */ }
     });
   } catch (err) {
@@ -772,7 +770,7 @@ router.post('/:slug/oauth/initiate', async (req: Request, res: Response) => {
 router.post('/:slug/oauth/exchange', async (req: Request, res: Response) => {
   const { slug } = req.params;
   if (!isOAuthProvider(slug)) { res.status(400).json({ error: `'${slug}' does not support OAuth.` }); return; }
-  const tenantId = resolveTenantIdFromRequest(getDb(), req);
+  const tenantId = await resolveTenantIdFromRequest(getDb(), req);
 
   const { callbackUrl } = req.body ?? {};
   if (!callbackUrl || typeof callbackUrl !== 'string' || !callbackUrl.trim()) {
@@ -841,15 +839,14 @@ router.post('/:slug/oauth/exchange', async (req: Request, res: Response) => {
     const tokens = await tokenRes.json() as OAuthTokenPayload;
 
     console.log(`[providers] OpenAI Codex OAuth tokens received via manual exchange — persisting local/provider auth state`);
-    const storedConfig = persistOAuthTokens(slug, tokens);
-    const validation = validateOAuthProvider(slug);
+    const storedConfig = await persistOAuthTokens(slug, tokens);
+    const validation = await validateOAuthProvider(slug);
     if (!validation.ok) {
       throw new Error(validation.error || 'OAuth validation failed after manual exchange.');
     }
 
     const db = getDb();
-    db.prepare("UPDATE provider_config SET status = 'connected', config = ?, validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?")
-      .run(JSON.stringify(storedConfig), validation.error || null, slug, tenantId);
+    await db.run("UPDATE provider_config SET status = 'connected', config = ?, validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", JSON.stringify(storedConfig), validation.error || null, slug, tenantId);
 
     const reload = await reloadOpenClawSecretsAfterProviderCredentialWrite(slug);
 
@@ -866,7 +863,7 @@ router.post('/:slug/oauth/exchange', async (req: Request, res: Response) => {
 
     try {
       const db = getDb();
-      db.prepare("UPDATE provider_config SET status = 'failed', validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?").run(msg, slug, tenantId);
+      await db.run("UPDATE provider_config SET status = 'failed', validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", msg, slug, tenantId);
     } catch { /* best effort */ }
 
     res.status(500).json({ error: msg });
@@ -878,7 +875,7 @@ router.post('/:slug/oauth/exchange', async (req: Request, res: Response) => {
 router.post('/:slug/setup-token', async (req: Request, res: Response) => {
   const { slug } = req.params;
   if (slug !== 'anthropic') { res.status(400).json({ error: `'${slug}' does not support setup-token.` }); return; }
-  const tenantId = resolveTenantIdFromRequest(getDb(), req);
+  const tenantId = await resolveTenantIdFromRequest(getDb(), req);
 
   const { token } = req.body ?? {};
   if (!token || typeof token !== 'string' || !token.trim()) {
@@ -928,19 +925,19 @@ router.post('/:slug/setup-token', async (req: Request, res: Response) => {
       validation = { ok: false, error: 'Could not verify token via OpenClaw. Check that OpenClaw is running.' };
     }
     const db = getDb();
-    const existing = db.prepare('SELECT id FROM provider_config WHERE slug = ? AND tenant_id = ?').get(slug, tenantId) as { id: number } | undefined;
+    const existing = await db.get('SELECT id FROM provider_config WHERE slug = ? AND tenant_id = ?', slug, tenantId) as { id: number } | undefined;
     const status = validation.ok ? 'connected' : 'failed';
 
     if (existing) {
-      db.prepare(`
+      await db.run(`
         UPDATE provider_config SET status = ?, config = ?, last_validated_at = datetime('now'), validation_error = ?, updated_at = datetime('now')
         WHERE id = ?
-      `).run(status, JSON.stringify({ setup_token: true }), validation.error || null, existing.id);
+      `, status, JSON.stringify({ setup_token: true }), validation.error || null, existing.id);
     } else {
-      db.prepare(`
+      await db.run(`
         INSERT INTO provider_config (tenant_id, slug, display_name, status, config, last_validated_at, validation_error)
         VALUES (?, ?, 'Anthropic', ?, ?, datetime('now'), ?)
-      `).run(tenantId, slug, status, JSON.stringify({ setup_token: true }), validation.error || null);
+      `, tenantId, slug, status, JSON.stringify({ setup_token: true }), validation.error || null);
     }
 
     const reload = await reloadOpenClawSecretsAfterProviderCredentialWrite(slug);
@@ -963,7 +960,7 @@ async function validateProvider(
   slug: ProviderSlug,
   config: Record<string, unknown>,
 ): Promise<{ ok: boolean; error?: string }> {
-  if (isOAuthProvider(slug)) return validateOAuthProvider(slug);
+  if (isOAuthProvider(slug)) return await validateOAuthProvider(slug);
 
   const spec = VALIDATION_SPECS[slug];
   if (!spec) return { ok: false, error: `Unknown provider: ${slug}` };

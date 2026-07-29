@@ -1,5 +1,5 @@
-import type Database from 'better-sqlite3';
 import { createNotificationRecord, ensureNotificationTables } from './notifications';
+import { type Db } from "../db/adapter/types";
 
 const NOTIFICATION_TYPE = 'task_dispatch_startup_failed';
 const NOTIFICATION_SOURCE = 'agent_hq_dispatcher';
@@ -31,61 +31,61 @@ interface DispatchStartupFailureTaskContext {
   workflowType: string | null;
 }
 
-function tableHasColumn(db: Database.Database, tableName: string, columnName: string): boolean {
+async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
   try {
-    const cols = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+    const cols = await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>;
     return cols.some(col => col.name === columnName);
   } catch {
     return false;
   }
 }
 
-function tableExists(db: Database.Database, tableName: string): boolean {
+async function tableExists(db: Db, tableName: string): Promise<boolean> {
   try {
-    return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(tableName) as { name?: string } | undefined)?.name);
+    return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, tableName) as { name?: string } | undefined)?.name);
   } catch {
     return false;
   }
 }
 
-function tenantExists(db: Database.Database, tenantId: number): boolean {
-  if (!tableExists(db, 'tenants')) return true;
-  const row = db.prepare(`SELECT id FROM tenants WHERE id = ? LIMIT 1`).get(tenantId) as { id?: number } | undefined;
+async function tenantExists(db: Db, tenantId: number): Promise<boolean> {
+  if (!await tableExists(db, 'tenants')) return true;
+  const row = await db.get(`SELECT id FROM tenants WHERE id = ? LIMIT 1`, tenantId) as { id?: number } | undefined;
   return Number.isInteger(row?.id);
 }
 
-function resolveNotificationTenantId(db: Database.Database, candidates: Array<number | null | undefined>): number {
+async function resolveNotificationTenantId(db: Db, candidates: Array<number | null | undefined>): Promise<number> {
   for (const candidate of candidates) {
     const tenantId = Number(candidate);
-    if (Number.isInteger(tenantId) && tenantId > 0 && tenantExists(db, tenantId)) return tenantId;
+    if (Number.isInteger(tenantId) && tenantId > 0 && await tenantExists(db, tenantId)) return tenantId;
   }
 
-  if (tableExists(db, 'tenants')) {
-    const defaultTenant = db.prepare(`SELECT id FROM tenants WHERE id = 1 LIMIT 1`).get() as { id?: number } | undefined;
+  if (await tableExists(db, 'tenants')) {
+    const defaultTenant = await db.get(`SELECT id FROM tenants WHERE id = 1 LIMIT 1`) as { id?: number } | undefined;
     if (defaultTenant?.id != null && Number.isInteger(defaultTenant.id)) return Number(defaultTenant.id);
-    const firstTenant = db.prepare(`SELECT id FROM tenants ORDER BY id LIMIT 1`).get() as { id?: number } | undefined;
+    const firstTenant = await db.get(`SELECT id FROM tenants ORDER BY id LIMIT 1`) as { id?: number } | undefined;
     if (firstTenant?.id != null && Number.isInteger(firstTenant.id)) return Number(firstTenant.id);
   }
 
   return 1;
 }
 
-function loadTaskContext(
-  db: Database.Database,
+async function loadTaskContext(
+  db: Db,
   taskId: number,
   fallbackTenantId?: number | null,
-): DispatchStartupFailureTaskContext | null {
-  const taskTenantExpr = tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL';
-  const hasProjects = tableExists(db, 'projects');
-  const hasSprints = tableExists(db, 'sprints');
+): Promise<DispatchStartupFailureTaskContext | null> {
+  const taskTenantExpr = await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL';
+  const hasProjects = await tableExists(db, 'projects');
+  const hasSprints = await tableExists(db, 'sprints');
   const projectNameExpr = hasProjects ? 'p.name' : 'NULL';
   const workflowNameExpr = hasSprints ? 's.name' : 'NULL';
-  const workflowTypeExpr = hasSprints && tableHasColumn(db, 'sprints', 'sprint_type') ? 's.sprint_type' : 'NULL';
+  const workflowTypeExpr = hasSprints && await tableHasColumn(db, 'sprints', 'sprint_type') ? 's.sprint_type' : 'NULL';
   const projectJoin = hasProjects ? 'LEFT JOIN projects p ON p.id = t.project_id' : '';
   const sprintJoin = hasSprints ? 'LEFT JOIN sprints s ON s.id = t.sprint_id' : '';
 
   try {
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT
         t.id,
         ${taskTenantExpr} AS tenant_id,
@@ -98,7 +98,7 @@ function loadTaskContext(
       ${sprintJoin}
       WHERE t.id = ?
       LIMIT 1
-    `).get(taskId) as {
+    `, taskId) as {
       id: number;
       tenant_id: number | null;
       title: string;
@@ -110,21 +110,21 @@ function loadTaskContext(
     if (!row) return null;
     return {
       id: row.id,
-      tenantId: resolveNotificationTenantId(db, [row.tenant_id, fallbackTenantId]),
+      tenantId: await resolveNotificationTenantId(db, [row.tenant_id, fallbackTenantId]),
       title: row.title,
       projectName: row.project_name ?? null,
       workflowName: row.workflow_name ?? null,
       workflowType: row.workflow_type ?? null,
     };
   } catch {
-    const row = db.prepare(`SELECT id, title FROM tasks WHERE id = ? LIMIT 1`).get(taskId) as {
+    const row = await db.get(`SELECT id, title FROM tasks WHERE id = ? LIMIT 1`, taskId) as {
       id: number;
       title: string;
     } | undefined;
     if (!row) return null;
     return {
       id: row.id,
-      tenantId: resolveNotificationTenantId(db, [fallbackTenantId]),
+      tenantId: await resolveNotificationTenantId(db, [fallbackTenantId]),
       title: row.title,
       projectName: null,
       workflowName: null,
@@ -138,14 +138,14 @@ function normalizeMappingAction(input: DispatchStartupFailureNotificationInput):
   return input.mappingActionTarget ? `${actionKind} -> ${input.mappingActionTarget}` : actionKind;
 }
 
-function alreadyRecordedRecentFailure(
-  db: Database.Database,
+async function alreadyRecordedRecentFailure(
+  db: Db,
   tenantId: number,
   taskId: number,
   failureCategory: string,
-): boolean {
-  ensureNotificationTables(db);
-  const rows = db.prepare(`
+): Promise<boolean> {
+  await ensureNotificationTables(db);
+  const rows = await db.all(`
     SELECT metadata_json
     FROM notification_records
     WHERE tenant_id = ?
@@ -154,7 +154,7 @@ function alreadyRecordedRecentFailure(
       AND datetime(created_at) >= datetime('now', ?)
     ORDER BY datetime(created_at) DESC, id DESC
     LIMIT 50
-  `).all(tenantId, NOTIFICATION_TYPE, NOTIFICATION_SOURCE, `-${DEDUP_WINDOW_MINUTES} minutes`) as Array<{ metadata_json: string }>;
+  `, tenantId, NOTIFICATION_TYPE, NOTIFICATION_SOURCE, `-${DEDUP_WINDOW_MINUTES} minutes`) as Array<{ metadata_json: string }>;
 
   return rows.some((row) => {
     try {
@@ -184,41 +184,41 @@ function buildBody(ctx: DispatchStartupFailureTaskContext, input: DispatchStartu
   return lines.join('\n');
 }
 
-export function recordDispatchStartupFailureNotification(
-  db: Database.Database,
+export async function recordDispatchStartupFailureNotification(
+  db: Db,
   input: DispatchStartupFailureNotificationInput,
-): boolean {
+): Promise<boolean> {
   try {
-    const ctx = loadTaskContext(db, input.taskId, input.tenantId);
+    const ctx = await loadTaskContext(db, input.taskId, input.tenantId);
     if (!ctx) return false;
-    if (alreadyRecordedRecentFailure(db, ctx.tenantId, input.taskId, input.failureCategory)) return false;
+    if (await alreadyRecordedRecentFailure(db, ctx.tenantId, input.taskId, input.failureCategory)) return false;
 
-    createNotificationRecord(db, {
-      tenantId: ctx.tenantId,
-      type: NOTIFICATION_TYPE,
-      title: `Task #${ctx.id} dispatch startup failed`,
-      body: buildBody(ctx, input),
-      source: NOTIFICATION_SOURCE,
-      outlet: 'agent_hq',
-      metadata: {
-        taskId: ctx.id,
-        projectName: ctx.projectName,
-        workflowName: ctx.workflowName,
-        workflowType: ctx.workflowType,
-        matchedAgentId: input.matchedAgentId ?? null,
-        matchedAgentLabel: input.matchedAgentLabel,
-        routingReason: input.routingReason,
-        failureCategory: input.failureCategory,
-        workflowEvent: 'dispatch_startup_failed',
-        mappingId: input.mappingId ?? null,
-        mappingActionKind: input.mappingActionKind ?? null,
-        mappingActionTarget: input.mappingActionTarget ?? null,
-        priorStatus: input.priorStatus,
-        resolvedStatus: input.resolvedStatus,
-        nextAction: input.nextAction,
-        nextOwner: input.nextOwner,
-      },
-    });
+    await createNotificationRecord(db, {
+            tenantId: ctx.tenantId,
+            type: NOTIFICATION_TYPE,
+            title: `Task #${ctx.id} dispatch startup failed`,
+            body: buildBody(ctx, input),
+            source: NOTIFICATION_SOURCE,
+            outlet: 'agent_hq',
+            metadata: {
+              taskId: ctx.id,
+              projectName: ctx.projectName,
+              workflowName: ctx.workflowName,
+              workflowType: ctx.workflowType,
+              matchedAgentId: input.matchedAgentId ?? null,
+              matchedAgentLabel: input.matchedAgentLabel,
+              routingReason: input.routingReason,
+              failureCategory: input.failureCategory,
+              workflowEvent: 'dispatch_startup_failed',
+              mappingId: input.mappingId ?? null,
+              mappingActionKind: input.mappingActionKind ?? null,
+              mappingActionTarget: input.mappingActionTarget ?? null,
+              priorStatus: input.priorStatus,
+              resolvedStatus: input.resolvedStatus,
+              nextAction: input.nextAction,
+              nextOwner: input.nextOwner,
+            },
+          });
     return true;
   } catch (err) {
     console.error('[dispatcher] Failed to record dispatch startup failure notification:', err);

@@ -1,6 +1,5 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type Database from 'better-sqlite3';
 import { OPENCLAW_HOME } from '../../config';
 import { normalizeChatMessageRole } from '../../lib/chatMessageRoles';
 import { extractGatewayStructuredEvents, unwrapGatewayMessage } from '../../lib/openclawMessageEvents';
@@ -18,6 +17,7 @@ import {
   timestampFromEpochMs,
   toCanonicalTimestamp,
 } from '../../lib/timestamps';
+import { type Db } from "../../db/adapter/types";
 
 interface BackfillInstanceRow {
   id: number;
@@ -103,9 +103,9 @@ const EMPTY_RESULT: OpenClawJsonlBackfillResult = {
   meaningfulOutputAt: null,
 };
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
   try {
-    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    const columns = await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>;
     return columns.some((entry) => entry.name === column);
   } catch {
     return false;
@@ -406,8 +406,8 @@ function isOpenClawAgent(agent: BackfillAgentRow): boolean {
   return !runtimeType || runtimeType === 'openclaw';
 }
 
-function ensureOpenClawTranscriptIngestSchema(db: Database.Database): void {
-  db.exec(`
+async function ensureOpenClawTranscriptIngestSchema(db: Db): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS openclaw_transcript_ingest_state (
       instance_id INTEGER PRIMARY KEY REFERENCES job_instances(id) ON DELETE CASCADE,
       session_file TEXT NOT NULL,
@@ -420,19 +420,19 @@ function ensureOpenClawTranscriptIngestSchema(db: Database.Database): void {
   `);
 }
 
-function readIngestState(db: Database.Database, instanceId: number, sessionFile: string): IngestStateRow | null {
-  ensureOpenClawTranscriptIngestSchema(db);
-  const row = db.prepare(`
+async function readIngestState(db: Db, instanceId: number, sessionFile: string): Promise<IngestStateRow | null> {
+  await ensureOpenClawTranscriptIngestSchema(db);
+  const row = await db.get(`
     SELECT instance_id, session_file, last_line_index, last_event_at,
            last_heartbeat_at, last_meaningful_output_at
       FROM openclaw_transcript_ingest_state
       WHERE instance_id = ?
-  `).get(instanceId) as IngestStateRow | undefined;
+  `, instanceId) as IngestStateRow | undefined;
   if (!row || row.session_file !== sessionFile) return null;
   return row;
 }
 
-function writeIngestState(db: Database.Database, params: {
+async function writeIngestState(db: Db, params: {
   instanceId: number;
   sessionFile: string;
   lastLineIndex: number;
@@ -440,9 +440,9 @@ function writeIngestState(db: Database.Database, params: {
   heartbeatAt: string | null;
   meaningfulOutputAt: string | null;
   now: string;
-}): void {
-  ensureOpenClawTranscriptIngestSchema(db);
-  db.prepare(`
+}): Promise<void> {
+  await ensureOpenClawTranscriptIngestSchema(db);
+  await db.run(`
     INSERT INTO openclaw_transcript_ingest_state (
       instance_id, session_file, last_line_index, last_event_at,
       last_heartbeat_at, last_meaningful_output_at, updated_at
@@ -455,15 +455,7 @@ function writeIngestState(db: Database.Database, params: {
       last_heartbeat_at = excluded.last_heartbeat_at,
       last_meaningful_output_at = excluded.last_meaningful_output_at,
       updated_at = excluded.updated_at
-  `).run(
-    params.instanceId,
-    params.sessionFile,
-    params.lastLineIndex,
-    params.latestEventAt,
-    params.heartbeatAt,
-    params.meaningfulOutputAt,
-    params.now,
-  );
+  `, params.instanceId, params.sessionFile, params.lastLineIndex, params.latestEventAt, params.heartbeatAt, params.meaningfulOutputAt, params.now);
 }
 
 function classifyEvent(role: string, eventType: string, content: string, eventMeta: Record<string, unknown>): {
@@ -486,25 +478,25 @@ function classifyEvent(role: string, eventType: string, content: string, eventMe
   return { heartbeat: false, meaningful: false };
 }
 
-function updateInstanceArtifacts(db: Database.Database, params: {
+async function updateInstanceArtifacts(db: Db, params: {
   instance: BackfillInstanceRow;
   heartbeatAt: string | null;
   meaningfulOutputAt: string | null;
   startedAt: string | null;
-}): void {
+}): Promise<void> {
   if (!params.heartbeatAt && !params.meaningfulOutputAt && !params.startedAt) return;
 
-  const existing = db.prepare(`
+  const existing = await db.get(`
     SELECT task_id, started_at, last_agent_heartbeat_at, last_meaningful_output_at
       FROM instance_artifacts
       WHERE instance_id = ?
-  `).get(params.instance.id) as ArtifactRow | undefined;
+  `, params.instance.id) as ArtifactRow | undefined;
 
   const taskId = existing?.task_id ?? params.instance.task_id;
   const startedAt = existing?.started_at ?? params.startedAt;
   const heartbeatAt = maxIso(existing?.last_agent_heartbeat_at, params.heartbeatAt);
   const meaningfulOutputAt = maxIso(existing?.last_meaningful_output_at, params.meaningfulOutputAt);
-  const hasUpdatedAt = tableHasColumn(db, 'instance_artifacts', 'updated_at');
+  const hasUpdatedAt = await tableHasColumn(db, 'instance_artifacts', 'updated_at');
 
   if (existing) {
     const sql = `
@@ -523,12 +515,12 @@ function updateInstanceArtifacts(db: Database.Database, params: {
     return;
   }
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO instance_artifacts (
       instance_id, task_id, started_at, last_agent_heartbeat_at, last_meaningful_output_at
     )
     VALUES (?, ?, ?, ?, ?)
-  `).run(params.instance.id, taskId, startedAt, heartbeatAt, meaningfulOutputAt);
+  `, params.instance.id, taskId, startedAt, heartbeatAt, meaningfulOutputAt);
 }
 
 function readJsonlLines(sessionFile: string, fromLineIndex: number, fallbackNow: Date): ParsedJsonlLine[] {
@@ -642,14 +634,14 @@ function extractTrajectoryStructuredEvents(parsed: Record<string, unknown>): Arr
   return [];
 }
 
-export function isRunChatTranscriptSparse(db: Database.Database, instanceId: number): boolean {
-  if (!tableHasColumn(db, 'chat_messages', 'instance_id')) return false;
-  const rows = db.prepare(`
+export async function isRunChatTranscriptSparse(db: Db, instanceId: number): Promise<boolean> {
+  if (!await tableHasColumn(db, 'chat_messages', 'instance_id')) return false;
+  const rows = await db.all(`
     SELECT id, role, content, event_type
       FROM chat_messages
       WHERE instance_id = ?
       ORDER BY timestamp ASC
-  `).all(instanceId) as Array<{
+  `, instanceId) as Array<{
     id: string;
     role: string;
     content: string;
@@ -666,25 +658,25 @@ export function isRunChatTranscriptSparse(db: Database.Database, instanceId: num
   });
 }
 
-export function backfillOpenClawJsonlTranscript(
-  db: Database.Database,
+export async function backfillOpenClawJsonlTranscript(
+  db: Db,
   instanceId: number,
   options: OpenClawJsonlBackfillOptions = {},
-): OpenClawJsonlBackfillResult {
-  const hasInstanceDurableRunId = tableHasColumn(db, 'job_instances', 'durable_run_id');
-  const hasRunStage = tableHasColumn(db, 'job_instances', 'run_stage');
-  const instance = db.prepare(`
+): Promise<OpenClawJsonlBackfillResult> {
+  const hasInstanceDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
+  const hasRunStage = await tableHasColumn(db, 'job_instances', 'run_stage');
+  const instance = await db.get(`
     SELECT id, agent_id, task_id, session_key, ${hasRunStage ? 'run_stage' : 'NULL AS run_stage'}${hasInstanceDurableRunId ? ', durable_run_id' : ''}
       FROM job_instances
       WHERE id = ?
-  `).get(instanceId) as BackfillInstanceRow | undefined;
+  `, instanceId) as BackfillInstanceRow | undefined;
   if (!instance) return { ...EMPTY_RESULT, reason: 'instance_not_found' };
 
-  const agent = db.prepare(`
+  const agent = await db.get(`
     SELECT id, name, runtime_type, session_key, openclaw_agent_id
       FROM agents
       WHERE id = ?
-  `).get(instance.agent_id) as BackfillAgentRow | undefined;
+  `, instance.agent_id) as BackfillAgentRow | undefined;
   if (!agent) return { ...EMPTY_RESULT, reason: 'agent_not_found' };
   if (!isOpenClawAgent(agent)) return { ...EMPTY_RESULT, reason: 'not_openclaw_agent' };
 
@@ -704,12 +696,12 @@ export function backfillOpenClawJsonlTranscript(
     };
   }
 
-  const previousState = readIngestState(db, instanceId, resolved.sessionFile);
+  const previousState = await readIngestState(db, instanceId, resolved.sessionFile);
   const fromLineIndex = options.forceFull ? 0 : previousState?.last_line_index ?? 0;
   const fallbackNow = options.now ?? new Date();
   const lines = readJsonlLines(resolved.sessionFile, fromLineIndex, fallbackNow);
 
-  const hasChatDurableRunId = tableHasColumn(db, 'chat_messages', 'durable_run_id');
+  const hasChatDurableRunId = await tableHasColumn(db, 'chat_messages', 'durable_run_id');
   const provisionalTrajectoryRowPrefix = `oc-traj-${instance.durable_run_id ?? instanceId}-%`;
   const deleteProvisionalTrajectoryRows = db.prepare(`
     DELETE FROM chat_messages
@@ -739,7 +731,7 @@ export function backfillOpenClawJsonlTranscript(
   let meaningfulOutputAt = previousState?.last_meaningful_output_at ?? null;
   let firstHeartbeatAt: string | null = null;
 
-  const transaction = db.transaction(() => {
+  const transaction = db.transaction(async () => {
     if (resolved.kind === 'jsonl') {
       deleteProvisionalTrajectoryRows.run(instanceId, provisionalTrajectoryRowPrefix);
     }
@@ -811,22 +803,22 @@ export function backfillOpenClawJsonlTranscript(
     const lastLineIndex = lines.length > 0
       ? lines[lines.length - 1]?.lineIndex ?? fromLineIndex
       : fromLineIndex;
-    writeIngestState(db, {
-      instanceId,
-      sessionFile: resolved.sessionFile,
-      lastLineIndex,
-      latestEventAt,
-      heartbeatAt,
-      meaningfulOutputAt,
-      now: timestampFromDate(fallbackNow) ?? nowTimestamp(),
-    });
+    await writeIngestState(db, {
+            instanceId,
+            sessionFile: resolved.sessionFile,
+            lastLineIndex,
+            latestEventAt,
+            heartbeatAt,
+            meaningfulOutputAt,
+            now: timestampFromDate(fallbackNow) ?? nowTimestamp(),
+          });
 
-    updateInstanceArtifacts(db, {
-      instance,
-      heartbeatAt,
-      meaningfulOutputAt,
-      startedAt: firstHeartbeatAt ?? heartbeatAt ?? meaningfulOutputAt,
-    });
+    await updateInstanceArtifacts(db, {
+            instance,
+            heartbeatAt,
+            meaningfulOutputAt,
+            startedAt: firstHeartbeatAt ?? heartbeatAt ?? meaningfulOutputAt,
+          });
   });
 
   transaction();

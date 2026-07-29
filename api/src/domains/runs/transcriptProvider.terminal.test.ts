@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-let db: Database.Database;
+let db: Db;
 const mockGatewayGetHistory = jest.fn();
 
 jest.mock('../../db/client', () => ({
@@ -20,9 +20,10 @@ jest.mock('./openclawJsonlBackfill', () => ({
 }));
 
 import { OpenClawTranscriptProvider } from './transcriptProvider';
+import { type Db } from "../../db/adapter/types";
 
-function setupSchema(): void {
-  db.exec(`
+async function setupSchema(): Promise<void> {
+  await db.exec(`
     CREATE TABLE job_instances (
       id INTEGER PRIMARY KEY, session_key TEXT, agent_id INTEGER, status TEXT,
       runtime_ended_at TEXT, run_id TEXT
@@ -33,12 +34,12 @@ function setupSchema(): void {
       role TEXT, content TEXT, timestamp TEXT, event_type TEXT, event_meta TEXT
     );
   `);
-  db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (5, 'Atlas', 'agent:atlas:main', 'openclaw')`).run();
+  await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (5, 'Atlas', 'agent:atlas:main', 'openclaw')`);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   db = new Database(':memory:');
-  setupSchema();
+  await setupSchema();
   mockGatewayGetHistory.mockReset();
 });
 
@@ -48,8 +49,8 @@ afterEach(() => {
 
 describe('OpenClawTranscriptProvider.getTranscript — terminal runs skip the gateway', () => {
   it('does not call the gateway for a done run and returns local chat_messages', async () => {
-    db.prepare(`INSERT INTO job_instances (id, session_key, agent_id, status, runtime_ended_at) VALUES (700, 'run:700:abc', 5, 'done', '2026-06-01T00:00:00Z')`).run();
-    db.prepare(`INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type) VALUES ('u1', 5, 700, 'run:700:abc', 'user', 'the prompt', '2026-06-01T00:00:00Z', 'text')`).run();
+    await db.run(`INSERT INTO job_instances (id, session_key, agent_id, status, runtime_ended_at) VALUES (700, 'run:700:abc', 5, 'done', '2026-06-01T00:00:00Z')`);
+    await db.run(`INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type) VALUES ('u1', 5, 700, 'run:700:abc', 'user', 'the prompt', '2026-06-01T00:00:00Z', 'text')`);
 
     const result = await new OpenClawTranscriptProvider().getTranscript(700);
 
@@ -58,8 +59,8 @@ describe('OpenClawTranscriptProvider.getTranscript — terminal runs skip the ga
   });
 
   it.each(['failed', 'cancelled', 'stopped'])('does not call the gateway for a %s run', async (status) => {
-    db.prepare(`INSERT INTO job_instances (id, session_key, agent_id, status) VALUES (701, 'run:701:abc', 5, ?)`).run(status);
-    db.prepare(`INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type) VALUES ('u2', 5, 701, 'run:701:abc', 'user', 'p', '2026-06-01T00:00:00Z', 'text')`).run();
+    await db.run(`INSERT INTO job_instances (id, session_key, agent_id, status) VALUES (701, 'run:701:abc', 5, ?)`, status);
+    await db.run(`INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type) VALUES ('u2', 5, 701, 'run:701:abc', 'user', 'p', '2026-06-01T00:00:00Z', 'text')`);
 
     await new OpenClawTranscriptProvider().getTranscript(701);
 
@@ -68,7 +69,7 @@ describe('OpenClawTranscriptProvider.getTranscript — terminal runs skip the ga
 
   it('still calls the gateway for a non-terminal (dispatched) run', async () => {
     mockGatewayGetHistory.mockResolvedValue({ ok: true, messages: [] } as never);
-    db.prepare(`INSERT INTO job_instances (id, session_key, agent_id, status) VALUES (702, 'run:702:abc', 5, 'dispatched')`).run();
+    await db.run(`INSERT INTO job_instances (id, session_key, agent_id, status) VALUES (702, 'run:702:abc', 5, 'dispatched')`);
 
     await new OpenClawTranscriptProvider().getTranscript(702);
 

@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { createAgentContext, destroyAgentContext } from '../../services/browserPool';
 import { resolveWorkflow } from '../../services/contracts/workflowContract';
 import { upsertCanonicalSessionForInstance } from '../../lib/canonicalSessions';
@@ -16,12 +15,13 @@ import { getCanonicalTaskRecord } from '../tasks/evidence';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
 import { nowTimestamp } from '../../lib/timestamps';
+import { type Db } from "../../db/adapter/types";
 
 const START_EVENT_LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
   try {
-    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
   } catch {
     return false;
   }
@@ -31,10 +31,10 @@ function isStartEventLiveInstanceStatus(status: string | null | undefined): bool
   return Boolean(status && START_EVENT_LIVE_INSTANCE_STATUSES.includes(status as typeof START_EVENT_LIVE_INSTANCE_STATUSES[number]));
 }
 
-function applyConfiguredStartEvent(db: Database.Database, instanceId: number, changedBy: string): void {
-  const task = db.prepare(`
+async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: string): Promise<void> {
+  const task = await db.get(`
     SELECT t.id,
-           ${tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
+           ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
            t.status, t.task_type, t.project_id, t.agent_id, t.active_instance_id,
            t.sprint_id, s.sprint_type,
            ji.status AS instance_status
@@ -43,7 +43,7 @@ function applyConfiguredStartEvent(db: Database.Database, instanceId: number, ch
     JOIN job_instances ji ON ji.task_id = t.id
     WHERE ji.id = ?
     LIMIT 1
-  `).get(instanceId) as {
+  `, instanceId) as {
     id: number;
     status: string;
     tenant_id: number | null;
@@ -61,86 +61,86 @@ function applyConfiguredStartEvent(db: Database.Database, instanceId: number, ch
   if (task.active_instance_id === null) {
     if (!isStartEventLiveInstanceStatus(task.instance_status)) return;
 
-    const result = db.prepare(`
+    const result = await db.run(`
       UPDATE tasks
       SET active_instance_id = ?, updated_at = datetime('now')
       WHERE id = ?
         AND active_instance_id IS NULL
-    `).run(instanceId, task.id);
+    `, instanceId, task.id);
 
     if (result.changes === 0) return;
     task.active_instance_id = instanceId;
-    syncTaskActiveAgentFromInstance(db, task.id);
-    writeTaskHistory(db, task.id, changedBy, 'active_instance_id', null, instanceId);
+    await syncTaskActiveAgentFromInstance(db, task.id);
+    await writeTaskHistory(db, task.id, changedBy, 'active_instance_id', null, instanceId);
   }
 
-  writeTaskHistory(db, task.id, changedBy, 'workflow_event_source', null, AGENT_HQ_RUNTIME_SOURCE, false);
-  writeTaskHistory(db, task.id, changedBy, 'workflow_event_source_kind', null, 'agent_hq_internal', false);
-  writeTaskHistory(db, task.id, changedBy, 'workflow_event_name', null, 'agent_started', false);
-  writeTaskHistory(db, task.id, changedBy, 'workflow_event_instance_id', null, instanceId, false);
+  await writeTaskHistory(db, task.id, changedBy, 'workflow_event_source', null, AGENT_HQ_RUNTIME_SOURCE, false);
+  await writeTaskHistory(db, task.id, changedBy, 'workflow_event_source_kind', null, 'agent_hq_internal', false);
+  await writeTaskHistory(db, task.id, changedBy, 'workflow_event_name', null, 'agent_started', false);
+  await writeTaskHistory(db, task.id, changedBy, 'workflow_event_instance_id', null, instanceId, false);
 
-  const mapping = resolveWorkflowEventMapping(db, {
-    source: AGENT_HQ_RUNTIME_SOURCE,
-    eventName: 'agent_started',
-    tenantId: task.tenant_id,
-    projectId: task.project_id,
-    sprintId: task.sprint_id,
-    sprintType: task.sprint_type,
-    taskType: task.task_type,
-    currentStatus: task.status,
-  }) ?? resolveWorkflowEventMapping(db, {
-    source: changedBy,
-    eventName: 'agent_started',
-    tenantId: task.tenant_id,
-    projectId: task.project_id,
-    sprintId: task.sprint_id,
-    sprintType: task.sprint_type,
-    taskType: task.task_type,
-    currentStatus: task.status,
-  }) ?? resolveWorkflowEventMapping(db, {
-    source: 'system',
-    eventName: 'agent_started',
-    tenantId: task.tenant_id,
-    projectId: task.project_id,
-    sprintId: task.sprint_id,
-    sprintType: task.sprint_type,
-    taskType: task.task_type,
-    currentStatus: task.status,
-  }) ?? resolveWorkflowEventMapping(db, {
-    source: '',
-    eventName: 'agent_started',
-    tenantId: task.tenant_id,
-    projectId: task.project_id,
-    sprintId: task.sprint_id,
-    sprintType: task.sprint_type,
-    taskType: task.task_type,
-    currentStatus: task.status,
-  });
+  const mapping = (await resolveWorkflowEventMapping(db, {
+      source: AGENT_HQ_RUNTIME_SOURCE,
+      eventName: 'agent_started',
+      tenantId: task.tenant_id,
+      projectId: task.project_id,
+      sprintId: task.sprint_id,
+      sprintType: task.sprint_type,
+      taskType: task.task_type,
+      currentStatus: task.status,
+    })) ?? (await resolveWorkflowEventMapping(db, {
+          source: changedBy,
+          eventName: 'agent_started',
+          tenantId: task.tenant_id,
+          projectId: task.project_id,
+          sprintId: task.sprint_id,
+          sprintType: task.sprint_type,
+          taskType: task.task_type,
+          currentStatus: task.status,
+        })) ?? (await resolveWorkflowEventMapping(db, {
+          source: 'system',
+          eventName: 'agent_started',
+          tenantId: task.tenant_id,
+          projectId: task.project_id,
+          sprintId: task.sprint_id,
+          sprintType: task.sprint_type,
+          taskType: task.task_type,
+          currentStatus: task.status,
+        })) ?? (await resolveWorkflowEventMapping(db, {
+          source: '',
+          eventName: 'agent_started',
+          tenantId: task.tenant_id,
+          projectId: task.project_id,
+          sprintId: task.sprint_id,
+          sprintType: task.sprint_type,
+          taskType: task.task_type,
+          currentStatus: task.status,
+        }));
 
   if (!mapping || mapping.action_kind !== 'status' || !mapping.action_target || mapping.action_target === task.status) return;
 
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET status = ?, updated_at = datetime('now')
     WHERE id = ?
-  `).run(mapping.action_target, task.id);
+  `, mapping.action_target, task.id);
 
-  writeTaskStatusChange(db, task.id, changedBy, task.status, mapping.action_target, {
-    instanceId,
-    reason: `Workflow event agent_started mapped to ${mapping.action_target}`,
-    projectId: task.project_id,
-    agentId: task.agent_id,
-  });
-  notifyTaskStatusChange(db, {
-    taskId: task.id,
-    fromStatus: task.status,
-    toStatus: mapping.action_target,
-    source: changedBy,
-  });
+  await writeTaskStatusChange(db, task.id, changedBy, task.status, mapping.action_target, {
+        instanceId,
+        reason: `Workflow event agent_started mapped to ${mapping.action_target}`,
+        projectId: task.project_id,
+        agentId: task.agent_id,
+      });
+  await notifyTaskStatusChange(db, {
+        taskId: task.id,
+        fromStatus: task.status,
+        toStatus: mapping.action_target,
+        source: changedBy,
+      });
 }
 
-function getInstanceOrThrow(db: Database.Database, instanceId: number): Record<string, unknown> {
-  const instance = db.prepare('SELECT * FROM job_instances WHERE id = ?').get(instanceId) as Record<string, unknown> | undefined;
+async function getInstanceOrThrow(db: Db, instanceId: number): Promise<Record<string, unknown>> {
+  const instance = await db.get('SELECT * FROM job_instances WHERE id = ?', instanceId) as Record<string, unknown> | undefined;
   if (!instance) {
     const error = new Error('Instance not found') as Error & { status?: number };
     error.status = 404;
@@ -149,40 +149,40 @@ function getInstanceOrThrow(db: Database.Database, instanceId: number): Record<s
   return instance;
 }
 
-export function startRunInstance(
-  db: Database.Database,
+export async function startRunInstance(
+  db: Db,
   instanceId: number,
   sessionKey: string | null,
 ) {
-  const instance = getInstanceOrThrow(db, instanceId);
-  const changedBy = db.prepare(`SELECT name FROM agents WHERE id = ?`).get(instance.agent_id) as { name?: string } | undefined;
+  const instance = await getInstanceOrThrow(db, instanceId);
+  const changedBy = await db.get(`SELECT name FROM agents WHERE id = ?`, instance.agent_id) as { name?: string } | undefined;
   const eventSource = changedBy?.name ?? 'Agent HQ';
 
-  recordRunCheckIn(db, {
-    instanceId,
-    stage: 'start',
-    sessionKey,
-    summary: 'Agent session started',
-    statusLabel: 'running',
-    forceNote: true,
-  });
+  await recordRunCheckIn(db, {
+        instanceId,
+        stage: 'start',
+        sessionKey,
+        summary: 'Agent session started',
+        statusLabel: 'running',
+        forceNote: true,
+      });
 
   if (sessionKey) {
-    insertRuntimeLog(db, {
-      instanceId,
-      agentId: instance.agent_id as number | null,
-      jobTitle: instance.agent_id as number | null,
-      level: 'info',
-      message: `Agent started — session key: ${sessionKey}`,
-    });
+    await insertRuntimeLog(db, {
+            instanceId,
+            agentId: instance.agent_id as number | null,
+            jobTitle: instance.agent_id as number | null,
+            level: 'info',
+            message: `Agent started — session key: ${sessionKey}`,
+          });
   }
 
-  const agentRow = db.prepare(`
+  const agentRow = await db.get(`
     SELECT a.session_key as agent_session_key, a.openclaw_agent_id, a.name
     FROM job_instances ji
     JOIN agents a ON a.id = ji.agent_id
     WHERE ji.id = ?
-  `).get(instanceId) as {
+  `, instanceId) as {
     agent_session_key: string | null;
     openclaw_agent_id: string | null;
     name: string | null;
@@ -198,8 +198,8 @@ export function startRunInstance(
     });
   }
 
-  upsertCanonicalSessionForInstance(db, instanceId, sessionKey);
-  applyConfiguredStartEvent(db, instanceId, eventSource);
+  await upsertCanonicalSessionForInstance(db, instanceId, sessionKey);
+  await applyConfiguredStartEvent(db, instanceId, eventSource);
 
   const durableRunId = typeof instance.durable_run_id === 'string' && instance.durable_run_id.trim()
     ? instance.durable_run_id.trim()
@@ -210,12 +210,12 @@ export function startRunInstance(
     : { ok: true, id: instanceId, session_key: sessionKey };
 }
 
-export function recordInstanceCheckIn(
-  db: Database.Database,
+export async function recordInstanceCheckIn(
+  db: Db,
   instanceId: number,
   body: Record<string, unknown>,
 ) {
-  const instance = getInstanceOrThrow(db, instanceId);
+  const instance = await getInstanceOrThrow(db, instanceId);
 
   const stage = (body.stage as 'heartbeat' | 'progress' | 'blocker' | 'completion' | undefined) ?? 'heartbeat';
   const summary = typeof body.summary === 'string' ? body.summary : undefined;
@@ -240,47 +240,47 @@ export function recordInstanceCheckIn(
   );
 
   if (tokenUsage.input !== null || tokenUsage.output !== null || tokenUsage.total !== null) {
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET token_input = COALESCE(?, token_input),
           token_output = COALESCE(?, token_output),
           token_total = COALESCE(?, token_total)
       WHERE id = ?
-    `).run(tokenUsage.input, tokenUsage.output, tokenUsage.total, instanceId);
+    `, tokenUsage.input, tokenUsage.output, tokenUsage.total, instanceId);
   }
 
-  const result = recordRunCheckIn(db, {
-    instanceId,
-    stage,
-    sessionKey,
-    summary: summary ?? null,
-    commitHash: commitHash ?? null,
-    branchName: branchName ?? null,
-    changedFiles: Array.isArray(body.changed_files) ? body.changed_files as string[] : null,
-    changedFilesCount: typeof body.changed_files_count === 'number' ? body.changed_files_count : null,
-    blockerReason: blockerReason ?? null,
-    outcome: outcome ?? null,
-    meaningfulOutput,
-  });
+  const result = await recordRunCheckIn(db, {
+      instanceId,
+      stage,
+      sessionKey,
+      summary: summary ?? null,
+      commitHash: commitHash ?? null,
+      branchName: branchName ?? null,
+      changedFiles: Array.isArray(body.changed_files) ? body.changed_files as string[] : null,
+      changedFilesCount: typeof body.changed_files_count === 'number' ? body.changed_files_count : null,
+      blockerReason: blockerReason ?? null,
+      outcome: outcome ?? null,
+      meaningfulOutput,
+    });
 
-  insertRuntimeLog(db, {
-    instanceId,
-    agentId: instance.agent_id as number | null,
-    jobTitle: instance.agent_id as number | null,
-    level: 'info',
-    message: `Agent check-in received (${stage})${summary ? ` — ${summary}` : ''}`,
-  });
+  await insertRuntimeLog(db, {
+        instanceId,
+        agentId: instance.agent_id as number | null,
+        jobTitle: instance.agent_id as number | null,
+        level: 'info',
+        message: `Agent check-in received (${stage})${summary ? ` — ${summary}` : ''}`,
+      });
 
-  upsertCanonicalSessionForInstance(db, instanceId, sessionKey);
+  await upsertCanonicalSessionForInstance(db, instanceId, sessionKey);
   return { ok: true, id: instanceId, task_id: result.taskId, note_created: result.noteCreated };
 }
 
 export async function completeRunInstance(
-  db: Database.Database,
+  db: Db,
   instanceId: number,
   body: Record<string, unknown>,
 ) {
-  const instance = getInstanceOrThrow(db, instanceId);
+  const instance = await getInstanceOrThrow(db, instanceId);
 
   const requestedStatus = typeof body.status === 'string' ? body.status : 'done';
   const finalStatus = ['done', 'failed'].includes(requestedStatus) ? requestedStatus : 'done';
@@ -289,7 +289,7 @@ export async function completeRunInstance(
   const branchName = typeof body.branch_name === 'string' ? body.branch_name : null;
   const outcome = typeof body.outcome === 'string' ? body.outcome : null;
   const taskId = Number(instance.task_id ?? null);
-  const requiresOutcome = taskRequiresSemanticOutcome(db, taskId);
+  const requiresOutcome = await taskRequiresSemanticOutcome(db, taskId);
   const runtimeEndedWithoutLifecycleOutcome = finalStatus === 'done' && requiresOutcome && !instance.lifecycle_outcome_posted_at;
   const runtimeEndError = runtimeEndedWithoutLifecycleOutcome
     ? 'Runtime ended without required lifecycle outcome'
@@ -298,14 +298,14 @@ export async function completeRunInstance(
       : null;
 
   const taskRow = taskId
-    ? db.prepare(`
-        SELECT ${tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
+    ? await db.get(`
+        SELECT ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
                t.status, t.task_type, t.project_id, t.agent_id, t.sprint_id, s.sprint_type,
-               ${tableHasColumn(db, 'tasks', 'custom_fields_json') ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
+               ${await tableHasColumn(db, 'tasks', 'custom_fields_json') ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
         FROM tasks t
         LEFT JOIN sprints s ON s.id = t.sprint_id
         WHERE t.id = ?
-      `).get(taskId) as {
+      `, taskId) as {
         status: string;
         tenant_id: number | null;
         task_type: string | null;
@@ -317,13 +317,13 @@ export async function completeRunInstance(
       } | undefined
     : undefined;
   const canonicalTaskRow = taskRow ? getCanonicalTaskRecord(taskRow as unknown as Record<string, unknown>) : undefined;
-  const resolvedWorkflow = taskRow ? resolveWorkflow({
-    taskStatus: taskRow.status,
-    taskType: taskRow.task_type,
-    sprintId: taskRow.sprint_id,
-    sprintType: taskRow.sprint_type,
-    db,
-  }) : null;
+  const resolvedWorkflow = taskRow ? await resolveWorkflow({
+      taskStatus: taskRow.status,
+      taskType: taskRow.task_type,
+      sprintId: taskRow.sprint_id,
+      sprintType: taskRow.sprint_type,
+      db,
+    }) : null;
   const evidenceRecorded = determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, canonicalTaskRow);
 
   const tokenUsage = normalizeTokenUsage(
@@ -337,7 +337,7 @@ export async function completeRunInstance(
     instance.response ? (() => { try { return JSON.parse(String(instance.response)); } catch { return null; } })() : null,
   );
 
-  db.prepare(`
+  await db.run(`
     UPDATE job_instances
     SET status = ?,
         completed_at = datetime('now'),
@@ -349,57 +349,49 @@ export async function completeRunInstance(
         token_output = COALESCE(?, token_output),
         token_total = COALESCE(?, token_total)
     WHERE id = ?
-  `).run(
-    finalStatus,
-    finalStatus === 'done' ? 1 : 0,
-    runtimeEndError,
-    tokenUsage.input,
-    tokenUsage.output,
-    tokenUsage.total,
-    instanceId,
-  );
+  `, finalStatus, finalStatus === 'done' ? 1 : 0, runtimeEndError, tokenUsage.input, tokenUsage.output, tokenUsage.total, instanceId);
 
   if (taskId) {
-    scheduleEndedActiveInstanceLinkageCleanup(db, taskId, instanceId, {
-      changedBy: 'task_lifecycle',
-    });
+    await scheduleEndedActiveInstanceLinkageCleanup(db, taskId, instanceId, {
+            changedBy: 'task_lifecycle',
+          });
   }
 
-  recordRunCheckIn(db, {
-    instanceId,
-    stage: 'completion',
-    summary,
-    commitHash,
-    branchName,
-    changedFiles: Array.isArray(body.changed_files) ? body.changed_files as string[] : null,
-    changedFilesCount: typeof body.changed_files_count === 'number' ? body.changed_files_count : null,
-    outcome: outcome ?? finalStatus,
-    meaningfulOutput: true,
-    statusLabel: finalStatus,
-    forceNote: !runtimeEndedWithoutLifecycleOutcome,
-    runtimeEndSuccess: finalStatus === 'done',
-    runtimeEndError: runtimeEndedWithoutLifecycleOutcome
-      ? 'Runtime ended without required lifecycle outcome'
-      : runtimeEndError,
-    runtimeEndSource: 'instance_complete',
-  });
+  await recordRunCheckIn(db, {
+        instanceId,
+        stage: 'completion',
+        summary,
+        commitHash,
+        branchName,
+        changedFiles: Array.isArray(body.changed_files) ? body.changed_files as string[] : null,
+        changedFilesCount: typeof body.changed_files_count === 'number' ? body.changed_files_count : null,
+        outcome: outcome ?? finalStatus,
+        meaningfulOutput: true,
+        statusLabel: finalStatus,
+        forceNote: !runtimeEndedWithoutLifecycleOutcome,
+        runtimeEndSuccess: finalStatus === 'done',
+        runtimeEndError: runtimeEndedWithoutLifecycleOutcome
+          ? 'Runtime ended without required lifecycle outcome'
+          : runtimeEndError,
+        runtimeEndSource: 'instance_complete',
+      });
 
   if (runtimeEndedWithoutLifecycleOutcome && instance.task_id) {
-    markTaskNeedsAttentionForMissingSemanticHandoff(db, {
-      taskId,
-      instanceId,
-      changedBy: instance.agent_id ? `agent:${instance.agent_id}` : 'system',
-      workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
-      priorTaskStatus: taskRow?.status ?? String(instance.status ?? ''),
-      sessionKey: typeof instance.session_key === 'string' ? instance.session_key : null,
-      reviewQaDeployEvidenceRecorded: evidenceRecorded,
-      runtimeEnd: {
-        source: 'instance_complete',
-        success: true,
-        endedAt: nowTimestamp(),
-        error: 'Runtime ended without required lifecycle outcome',
-      },
-    });
+    await markTaskNeedsAttentionForMissingSemanticHandoff(db, {
+            taskId,
+            instanceId,
+            changedBy: instance.agent_id ? `agent:${instance.agent_id}` : 'system',
+            workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
+            priorTaskStatus: taskRow?.status ?? String(instance.status ?? ''),
+            sessionKey: typeof instance.session_key === 'string' ? instance.session_key : null,
+            reviewQaDeployEvidenceRecorded: evidenceRecorded,
+            runtimeEnd: {
+              source: 'instance_complete',
+              success: true,
+              endedAt: nowTimestamp(),
+              error: 'Runtime ended without required lifecycle outcome',
+            },
+          });
   }
 
   if (finalStatus === 'failed' && taskId && taskRow && !runtimeEndedWithoutLifecycleOutcome) {
@@ -421,29 +413,29 @@ export async function completeRunInstance(
   }
 
   if (summary) {
-    insertRuntimeLog(db, {
-      instanceId,
-      agentId: instance.agent_id as number | null,
-      jobTitle: instance.agent_id as number | null,
-      level: 'info',
-      message: `Agent completion report: ${summary}`,
-    });
+    await insertRuntimeLog(db, {
+            instanceId,
+            agentId: instance.agent_id as number | null,
+            jobTitle: instance.agent_id as number | null,
+            level: 'info',
+            message: `Agent completion report: ${summary}`,
+          });
   }
 
-  insertRuntimeLog(db, {
-    instanceId,
-    agentId: instance.agent_id as number | null,
-    jobTitle: instance.agent_id as number | null,
-    level: 'info',
-    message: `Job instance ${instanceId} marked ${finalStatus} via agent callback`,
-  });
+  await insertRuntimeLog(db, {
+        instanceId,
+        agentId: instance.agent_id as number | null,
+        jobTitle: instance.agent_id as number | null,
+        level: 'info',
+        message: `Job instance ${instanceId} marked ${finalStatus} via agent callback`,
+      });
 
-  const completedAgentRow = db.prepare(`
+  const completedAgentRow = await db.get(`
     SELECT a.session_key as agent_session_key, a.openclaw_agent_id, a.name
     FROM job_instances ji
     JOIN agents a ON a.id = ji.agent_id
     WHERE ji.id = ?
-  `).get(instanceId) as {
+  `, instanceId) as {
     agent_session_key: string | null;
     openclaw_agent_id: string | null;
     name: string | null;
@@ -461,6 +453,6 @@ export async function completeRunInstance(
 
   console.log(`[instances] Instance ${instanceId} marked ${finalStatus}${summary ? ` — ${summary}` : ''}`);
 
-  upsertCanonicalSessionForInstance(db, instanceId, instance.session_key as string | null);
+  await upsertCanonicalSessionForInstance(db, instanceId, instance.session_key as string | null);
   return { ok: true, id: instanceId, status: finalStatus };
 }

@@ -435,13 +435,11 @@ export class OpenClawRuntime implements AgentRuntime {
    * Use the stored short hook:* session key first; current OpenClaw gateway
    * history/subscription resolution is keyed on that form for Agent HQ runs.
    */
-  private startCapture(params: DispatchParams, runId?: string, routedSessionKey?: string): void {
+  private async startCapture(params: DispatchParams, runId?: string, routedSessionKey?: string): Promise<void> {
     if (params.instanceId == null) return;
     try {
       const db = getDb();
-      const instRow = db
-        .prepare('SELECT agent_id, session_key FROM job_instances WHERE id = ?')
-        .get(params.instanceId) as { agent_id: number; session_key: string | null } | undefined;
+      const instRow = await db.get('SELECT agent_id, session_key FROM job_instances WHERE id = ?', params.instanceId) as { agent_id: number; session_key: string | null } | undefined;
       if (!instRow) return;
 
       const agentId = instRow.agent_id;
@@ -459,14 +457,14 @@ export class OpenClawRuntime implements AgentRuntime {
 
       const timeoutSeconds = (params.timeoutSeconds ?? 900) + 120;
       const timeoutMs = timeoutSeconds * 1000;
-      startTranscriptCapture(params.instanceId, agentId, captureSessionKey, {
-        timeoutMs,
-        forceHistoryRefresh: Boolean(runId),
-        runId,
-        onTurnEnd: (event) => {
-          void this.handleTurnEnd(params.instanceId!, event, params.onRuntimeEnd);
-        },
-      });
+      await startTranscriptCapture(params.instanceId, agentId, captureSessionKey, {
+                timeoutMs,
+                forceHistoryRefresh: Boolean(runId),
+                runId,
+                onTurnEnd: (event) => {
+                  void this.handleTurnEnd(params.instanceId!, event, params.onRuntimeEnd);
+                },
+              });
       startRawSessionTerminalPoll({
         instanceId: params.instanceId,
         sessionKey: routedSessionKey ?? captureSessionKey,
@@ -487,16 +485,16 @@ export class OpenClawRuntime implements AgentRuntime {
    * persistUserPrompt — write the dispatched prompt as a user-role chat_messages
    * row so the Chats tab shows what was sent to the agent.
    */
-  private persistUserPrompt(params: DispatchParams, promptContent = params.message): number | null {
+  private async persistUserPrompt(params: DispatchParams, promptContent = params.message): Promise<number | null> {
     try {
       if (params.instanceId == null) return null;
       const db = getDb();
-      const hasJobInstanceDurableRunId = tableHasColumn(db, 'job_instances', 'durable_run_id');
-      const instRow = db.prepare(`
+      const hasJobInstanceDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
+      const instRow = await db.get(`
         SELECT agent_id, session_key${hasJobInstanceDurableRunId ? ', durable_run_id' : ''}
         FROM job_instances
         WHERE id = ?
-      `).get(params.instanceId) as {
+      `, params.instanceId) as {
         agent_id: number;
         session_key?: string | null;
         durable_run_id?: string | null;
@@ -506,11 +504,11 @@ export class OpenClawRuntime implements AgentRuntime {
 
       const identityColumns: string[] = [];
       const identityValues: unknown[] = [];
-      if (tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
+      if (await tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
         identityColumns.push('durable_run_id');
         identityValues.push(instRow?.durable_run_id ?? null);
       }
-      if (tableHasColumn(db, 'chat_messages', 'session_key')) {
+      if (await tableHasColumn(db, 'chat_messages', 'session_key')) {
         identityColumns.push('session_key');
         identityValues.push(instRow?.session_key ?? params.sessionKey ?? null);
       }
@@ -518,10 +516,10 @@ export class OpenClawRuntime implements AgentRuntime {
       const identityValueSql = identityColumns.length ? `${identityColumns.map(() => '?').join(', ')}, ` : '';
 
       const now = nowTimestamp();
-      db.prepare(`
+      await db.run(`
         INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, ${identityColumnSql}role, content, timestamp, event_type, event_meta)
         VALUES (?, ?, ?, ${identityValueSql}'user', ?, ?, 'text', '{}')
-      `).run(`oc-user-${params.instanceId}`, agentId, params.instanceId, ...identityValues, promptContent, now);
+      `, `oc-user-${params.instanceId}`, agentId, params.instanceId, ...identityValues, promptContent, now);
       return agentId;
     } catch (err) {
       console.warn(

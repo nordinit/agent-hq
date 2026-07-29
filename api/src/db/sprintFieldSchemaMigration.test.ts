@@ -17,8 +17,8 @@ function resetDb(): void {
   process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
 }
 
-function defaultTenantId(): number {
-  const row = getDb().prepare(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`).get() as { id: number } | undefined;
+async function defaultTenantId(): Promise<number> {
+  const row = await getDb().get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id: number } | undefined;
   if (!row) throw new Error('default tenant missing');
   return row.id;
 }
@@ -36,16 +36,16 @@ describe('sprint field schema migration', () => {
     tempDir = '';
   });
 
-  it('seeds dev sprint fields as unified task fields', () => {
-    initSchema();
+  it('seeds dev sprint fields as unified task fields', async () => {
+    await initSchema();
     const db = getDb();
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT schema_json
       FROM task_field_schemas
       WHERE sprint_type_key = 'dev' AND task_type IS NULL
       LIMIT 1
-    `).get() as { schema_json: string };
+    `) as { schema_json: string };
 
     const schema = JSON.parse(row.schema_json) as { fields: Array<Record<string, unknown>> };
     expect(schema.fields).toEqual(expect.arrayContaining([
@@ -63,21 +63,21 @@ describe('sprint field schema migration', () => {
     expect(schema.fields.filter(field => field.system === true).map(field => field.key)).toEqual([]);
   });
 
-  it('resolves dev task workflow metadata from sprint task policy', () => {
-    initSchema();
+  it('resolves dev task workflow metadata from sprint task policy', async () => {
+    await initSchema();
     const db = getDb();
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, description, context_md, created_at)
       VALUES (910, 'Agent HQ', '', '', datetime('now'))
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
       VALUES (9101, 910, 'Dev Sprint', '', 'dev', 'active', 'time', '2w', datetime('now'))
-    `).run();
-    seedSprintTaskPolicy(db, 9101);
+    `);
+    await seedSprintTaskPolicy(db, 9101);
 
-    const metadata = resolveWorkflowMetadata(db, { sprintId: 9101, taskType: 'backend' });
+    const metadata = await resolveWorkflowMetadata(db, { sprintId: 9101, taskType: 'backend' });
 
     expect(metadata.statuses.map(status => status.name)).toEqual([
       'todo',
@@ -112,20 +112,20 @@ describe('sprint field schema migration', () => {
     expect(metadata.non_failure_outcomes).not.toContain('failed');
   });
 
-  it('filters stale starter transitions out of custom workflow metadata readbacks', () => {
-    initSchema();
+  it('filters stale starter transitions out of custom workflow metadata readbacks', async () => {
+    await initSchema();
     const db = getDb();
-    const tenantId = defaultTenantId();
+    const tenantId = await defaultTenantId();
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md, created_at)
       VALUES (990, ?, 'Agency', '', '', datetime('now'))
-    `).run(tenantId);
-    db.prepare(`
+    `, tenantId);
+    await db.run(`
       INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, task_policy_seeded_at, length_kind, length_value, created_at)
       VALUES (9901, ?, 990, 'Lead Generation', '', 'lead_generation', 'active', datetime('now'), 'time', 'ongoing', datetime('now'))
-    `).run(tenantId);
-    db.prepare(`
+    `, tenantId);
+    await db.run(`
       INSERT INTO sprint_task_statuses (
         sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
       ) VALUES
@@ -136,8 +136,8 @@ describe('sprint field schema migration', () => {
         (9901, 'approved', 'Approved', 'emerald', 0, 0, '["submitted"]', 4, 0, '{}'),
         (9901, 'submitted', 'Submitted', 'cyan', 0, 0, '["closed"]', 5, 0, '{}'),
         (9901, 'closed', 'Closed', 'green', 1, 0, '[]', 6, 0, '{}')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprint_task_transitions (
         tenant_id, sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
       ) VALUES
@@ -146,9 +146,9 @@ describe('sprint field schema migration', () => {
         (?, 9901, 990, 'lead_generation', NULL, 'review', 'qa_pass', 'qa_pass', 1, 18, 0, datetime('now'), datetime('now')),
         (?, 9901, 990, 'lead_generation', NULL, 'ready_to_merge', 'deployed_live', 'deployed', 1, 17, 0, datetime('now'), datetime('now')),
         (?, 9901, 990, 'lead_generation', NULL, 'submitted', 'disabled_close', 'closed', 0, 16, 0, datetime('now'), datetime('now'))
-    `).run(tenantId, tenantId, tenantId, tenantId, tenantId);
+    `, tenantId, tenantId, tenantId, tenantId, tenantId);
 
-    const metadata = resolveWorkflowMetadata(db, { sprintId: 9901, taskType: 'lead' });
+    const metadata = await resolveWorkflowMetadata(db, { sprintId: 9901, taskType: 'lead' });
 
     expect(metadata.statuses.map(status => status.name)).toEqual([
       'todo',
@@ -168,40 +168,40 @@ describe('sprint field schema migration', () => {
     expect(metadata.transitions.map(transition => transition.from_status)).not.toContain('ready_to_merge');
   });
 
-  it('seeds only generic, dev, and ops sprint types', () => {
-    initSchema();
+  it('seeds only generic, dev, and ops sprint types', async () => {
+    await initSchema();
     const db = getDb();
 
-    const keys = db.prepare(`
+    const keys = await db.all(`
       SELECT key
       FROM sprint_types
       WHERE key IN ('generic', 'dev', 'ops', 'bugs', 'enhancements', 'pm')
       ORDER BY key ASC
-    `).all() as Array<{ key: string }>;
+    `) as Array<{ key: string }>;
 
     expect(keys.map(row => row.key)).toEqual(['dev', 'generic', 'ops']);
   });
 
-  it('seeds simplified generic workflow definitions and preserves them on rerun', () => {
-    initSchema();
+  it('seeds simplified generic workflow definitions and preserves them on rerun', async () => {
+    await initSchema();
     const db = getDb();
-    const tenantId = defaultTenantId();
+    const tenantId = await defaultTenantId();
 
-    const genericStatuses = db.prepare(`
+    const genericStatuses = await db.all(`
       SELECT status_key, label
       FROM sprint_type_task_statuses
       WHERE tenant_id = ? AND sprint_type_key = 'generic'
       ORDER BY stage_order ASC
-    `).all(tenantId) as Array<{ status_key: string; label: string }>;
+    `, tenantId) as Array<{ status_key: string; label: string }>;
     expect(genericStatuses.map(row => row.status_key)).toEqual(['todo', 'ready', 'in_progress', 'review', 'done']);
     expect(genericStatuses.map(row => row.label)).toEqual(['Todo', 'Ready', 'In Progress', 'Review', 'Done']);
 
-    const genericRelationships = db.prepare(`
+    const genericRelationships = await db.all(`
       SELECT key, category, affects_dispatch_eligibility, direction_semantics
       FROM sprint_type_relationship_types
       WHERE tenant_id = ? AND sprint_type_key = 'generic'
       ORDER BY key ASC
-    `).all(tenantId) as Array<{
+    `, tenantId) as Array<{
       key: string;
       category: string;
       affects_dispatch_eligibility: number;
@@ -216,37 +216,37 @@ describe('sprint field schema migration', () => {
       },
     ]);
 
-    db.prepare(`
+    await db.run(`
       UPDATE sprint_type_task_statuses
       SET label = 'Doing'
       WHERE tenant_id = ? AND sprint_type_key = 'generic' AND status_key = 'in_progress'
-    `).run(tenantId);
-    db.prepare(`
+    `, tenantId);
+    await db.run(`
       DELETE FROM sprint_type_relationship_types
       WHERE tenant_id = ? AND sprint_type_key = 'generic' AND key = 'blocked_by'
-    `).run(tenantId);
+    `, tenantId);
 
     closeDb();
-    initSchema();
+    await initSchema();
     const reopened = getDb();
-    expect(reopened.prepare(`
+    expect(await reopened.get(`
       SELECT label
       FROM sprint_type_task_statuses
       WHERE tenant_id = ? AND sprint_type_key = 'generic' AND status_key = 'in_progress'
-    `).get(tenantId)).toEqual({ label: 'Doing' });
-    expect((reopened.prepare(`
+    `, tenantId)).toEqual({ label: 'Doing' });
+    expect((await reopened.get(`
       SELECT COUNT(*) AS n
       FROM sprint_type_relationship_types
       WHERE tenant_id = ? AND sprint_type_key = 'generic'
-    `).get(tenantId) as { n: number }).n).toBe(0);
+    `, tenantId) as { n: number }).n).toBe(0);
   });
 
-  it('reconciles stale seeded generic and ops starter rows on existing installs', () => {
-    initSchema();
+  it('reconciles stale seeded generic and ops starter rows on existing installs', async () => {
+    await initSchema();
     const db = getDb();
-    const tenantId = defaultTenantId();
+    const tenantId = await defaultTenantId();
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_type_task_statuses (
         tenant_id, sprint_type_key, status_key, label, color, terminal, is_system,
         allowed_transitions_json, stage_order, is_default_entry, metadata_json
@@ -261,8 +261,8 @@ describe('sprint field schema migration', () => {
         (?, 'generic', 'stalled', 'Stalled', 'orange', 0, 1, '[]', 17, 0, '{}'),
         (?, 'generic', 'failed', 'Failed', 'red', 1, 1, '[]', 18, 0, '{}'),
         (?, 'generic', 'blocked', 'Blocked', 'rose', 0, 1, '[]', 19, 0, '{}')
-    `).run(tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId);
-    db.prepare(`
+    `, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId);
+    await db.run(`
       INSERT INTO sprint_type_relationship_types (
         tenant_id, sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
         direction_semantics, active_statuses_json, resolved_statuses_json, allow_create_related_task,
@@ -272,8 +272,8 @@ describe('sprint field schema migration', () => {
         (?, 'generic', 'defect_of', 'Defect of', 'Has defect', 'quality', 0, 'informational', '[]', '[]', 1, 'backend', 'todo', 1, '{}'),
         (?, 'generic', 'follow_up_to', 'Follow-up to', 'Has follow-up', 'continuity', 0, 'informational', '[]', '[]', 1, NULL, 'todo', 1, '{}'),
         (?, 'generic', 'duplicate_of', 'Duplicate of', 'Has duplicate', 'dedupe', 0, 'informational', '[]', '[]', 0, NULL, NULL, 1, '{}')
-    `).run(tenantId, tenantId, tenantId, tenantId);
-    db.prepare(`
+    `, tenantId, tenantId, tenantId, tenantId);
+    await db.run(`
       INSERT INTO sprint_type_relationship_types (
         tenant_id, sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
         direction_semantics, active_statuses_json, resolved_statuses_json, allow_create_related_task,
@@ -283,8 +283,8 @@ describe('sprint field schema migration', () => {
         (?, 'ops', 'defect_of', 'Defect of', 'Has defect', 'quality', 0, 'informational', '[]', '[]', 1, 'backend', 'todo', 1, '{}'),
         (?, 'ops', 'follow_up_to', 'Follow-up to', 'Has follow-up', 'continuity', 0, 'informational', '[]', '[]', 1, NULL, 'todo', 1, '{}'),
         (?, 'ops', 'duplicate_of', 'Duplicate of', 'Has duplicate', 'dedupe', 0, 'informational', '[]', '[]', 0, NULL, NULL, 1, '{}')
-    `).run(tenantId, tenantId, tenantId, tenantId);
-    db.prepare(`
+    `, tenantId, tenantId, tenantId, tenantId);
+    await db.run(`
       INSERT INTO sprint_type_outcomes (
         tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior,
         badge_variant, stage_order, is_system, metadata_json, created_at, updated_at
@@ -293,37 +293,37 @@ describe('sprint field schema migration', () => {
         (?, 'generic', NULL, 'blocked', 'Blocked duplicate 2', 'Duplicate generic blocker', 1, 'base', 'stalled', 1, 1, '{"blocked_like":true}', datetime('now'), datetime('now')),
         (?, 'ops', NULL, 'infra_failed', 'Infra failed duplicate', 'Duplicate ops infra failure', 1, 'base', 'failed', 5, 1, '{"failure_like":true}', datetime('now'), datetime('now')),
         (?, 'ops', NULL, 'infra_failed', 'Infra failed duplicate 2', 'Duplicate ops infra failure', 1, 'base', 'failed', 5, 1, '{"failure_like":true}', datetime('now'), datetime('now'))
-    `).run(tenantId, tenantId, tenantId, tenantId);
+    `, tenantId, tenantId, tenantId, tenantId);
 
     closeDb();
-    initSchema();
+    await initSchema();
     const reopened = getDb();
 
-    const genericStatuses = reopened.prepare(`
+    const genericStatuses = await reopened.all(`
       SELECT status_key
       FROM sprint_type_task_statuses
       WHERE tenant_id = ? AND sprint_type_key = 'generic'
       ORDER BY stage_order ASC
-    `).all(tenantId) as Array<{ status_key: string }>;
+    `, tenantId) as Array<{ status_key: string }>;
     expect(genericStatuses.map(row => row.status_key)).toEqual(['todo', 'ready', 'in_progress', 'review', 'done']);
 
-    const genericRelationships = reopened.prepare(`
+    const genericRelationships = await reopened.all(`
       SELECT key
       FROM sprint_type_relationship_types
       WHERE tenant_id = ? AND sprint_type_key = 'generic'
       ORDER BY key ASC
-    `).all(tenantId) as Array<{ key: string }>;
+    `, tenantId) as Array<{ key: string }>;
     expect(genericRelationships.map(row => row.key)).toEqual(['blocked_by']);
 
-    const opsRelationships = reopened.prepare(`
+    const opsRelationships = await reopened.all(`
       SELECT key
       FROM sprint_type_relationship_types
       WHERE tenant_id = ? AND sprint_type_key = 'ops'
       ORDER BY key ASC
-    `).all(tenantId) as Array<{ key: string }>;
+    `, tenantId) as Array<{ key: string }>;
     expect(opsRelationships.map(row => row.key)).toEqual(['blocked_by']);
 
-    const outcomeDuplicates = reopened.prepare(`
+    const outcomeDuplicates = await reopened.all(`
       SELECT sprint_type_key, outcome_key, COUNT(*) AS n
       FROM sprint_type_outcomes
       WHERE tenant_id = ?
@@ -331,21 +331,21 @@ describe('sprint field schema migration', () => {
         AND outcome_key IN ('blocked', 'infra_failed')
       GROUP BY sprint_type_key, COALESCE(task_type, ''), outcome_key
       HAVING COUNT(*) > 1
-    `).all(tenantId) as Array<{ sprint_type_key: string; outcome_key: string; n: number }>;
+    `, tenantId) as Array<{ sprint_type_key: string; outcome_key: string; n: number }>;
     expect(outcomeDuplicates).toEqual([]);
   });
 
-  it('seeds ops as a distinct operational workflow', () => {
-    initSchema();
+  it('seeds ops as a distinct operational workflow', async () => {
+    await initSchema();
     const db = getDb();
-    const tenantId = defaultTenantId();
+    const tenantId = await defaultTenantId();
 
-    const opsStatuses = db.prepare(`
+    const opsStatuses = await db.all(`
       SELECT status_key
       FROM sprint_type_task_statuses
       WHERE tenant_id = ? AND sprint_type_key = 'ops'
       ORDER BY stage_order ASC
-    `).all(tenantId) as Array<{ status_key: string }>;
+    `, tenantId) as Array<{ status_key: string }>;
     expect(opsStatuses.map(row => row.status_key)).toEqual([
       'todo',
       'intake',
@@ -360,17 +360,17 @@ describe('sprint field schema migration', () => {
       'done',
     ]);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, description, context_md, created_at)
       VALUES (920, 'Ops Project', '', '', datetime('now'))
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
       VALUES (9201, 920, 'Ops Sprint', '', 'ops', 'active', 'time', '2w', datetime('now'))
-    `).run();
-    seedSprintTaskPolicy(db, 9201);
+    `);
+    await seedSprintTaskPolicy(db, 9201);
 
-    const metadata = resolveWorkflowMetadata(db, { sprintId: 9201, taskType: 'ops' });
+    const metadata = await resolveWorkflowMetadata(db, { sprintId: 9201, taskType: 'ops' });
     expect(metadata.statuses.map(status => status.name)).toEqual([
       'todo',
       'intake',
@@ -393,12 +393,12 @@ describe('sprint field schema migration', () => {
       'infra_failed',
     ]));
 
-    const transitions = db.prepare(`
+    const transitions = await db.all(`
       SELECT from_status, outcome, to_status
       FROM sprint_task_transitions
       WHERE sprint_id = ?
       ORDER BY from_status ASC, outcome ASC
-    `).all(9201) as Array<{ from_status: string; outcome: string; to_status: string }>;
+    `, 9201) as Array<{ from_status: string; outcome: string; to_status: string }>;
     expect(transitions).toEqual(expect.arrayContaining([
       { from_status: 'action_plan', outcome: 'completed', to_status: 'stakeholder_update' },
       { from_status: 'stakeholder_update', outcome: 'completed', to_status: 'human_approval' },
@@ -413,47 +413,47 @@ describe('sprint field schema migration', () => {
     ]));
   });
 
-  it('does not repair or add workflow relationship type config on API restart', () => {
-    initSchema();
+  it('does not repair or add workflow relationship type config on API restart', async () => {
+    await initSchema();
     const db = getDb();
-    const tenantId = defaultTenantId();
+    const tenantId = await defaultTenantId();
 
-    db.prepare(`
+    await db.run(`
       UPDATE sprint_type_relationship_types
       SET label = 'Custom Blocked By', updated_at = '2026-01-01T00:00:00Z'
       WHERE tenant_id = ? AND sprint_type_key = 'dev' AND key = 'blocked_by'
-    `).run(tenantId);
-    db.prepare(`
+    `, tenantId);
+    await db.run(`
       DELETE FROM sprint_type_relationship_types
       WHERE tenant_id = ? AND sprint_type_key = 'dev' AND key = 'duplicate_of'
-    `).run(tenantId);
-    db.prepare(`
+    `, tenantId);
+    await db.run(`
       INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
       VALUES (?, 'custom_workflow', 'Custom Workflow', 'Operator-owned workflow', 0)
-    `).run(tenantId);
+    `, tenantId);
 
-    initSchema();
+    await initSchema();
 
-    expect(db.prepare(`
+    expect(await db.get(`
       SELECT label
       FROM sprint_type_relationship_types
       WHERE tenant_id = ? AND sprint_type_key = 'dev' AND key = 'blocked_by'
-    `).get(tenantId)).toEqual({ label: 'Custom Blocked By' });
-    expect((db.prepare(`
+    `, tenantId)).toEqual({ label: 'Custom Blocked By' });
+    expect((await db.get(`
       SELECT COUNT(*) AS n
       FROM sprint_type_relationship_types
       WHERE tenant_id = ? AND sprint_type_key = 'dev' AND key = 'duplicate_of'
-    `).get(tenantId) as { n: number }).n).toBe(0);
-    expect((db.prepare(`
+    `, tenantId) as { n: number }).n).toBe(0);
+    expect((await db.get(`
       SELECT COUNT(*) AS n
       FROM sprint_type_relationship_types
       WHERE tenant_id = ? AND sprint_type_key = 'custom_workflow'
-    `).get(tenantId) as { n: number }).n).toBe(0);
+    `, tenantId) as { n: number }).n).toBe(0);
   });
 
-  it('adds tenant-local sprint type key uniqueness before starter sprint type upserts', () => {
+  it('adds tenant-local sprint type key uniqueness before starter sprint type upserts', async () => {
     const legacyDb = new Database(process.env.AGENT_HQ_DB_PATH!);
-    legacyDb.exec(`
+    await legacyDb.exec(`
       CREATE TABLE sprint_types (
         key TEXT,
         name TEXT NOT NULL,
@@ -469,29 +469,29 @@ describe('sprint field schema migration', () => {
     `);
     legacyDb.close();
 
-    expect(() => initSchema()).not.toThrow();
+    expect(async () => await initSchema()).not.toThrow();
 
     const db = getDb();
-    const duplicateCount = db.prepare(`SELECT COUNT(*) AS n FROM sprint_types WHERE key = 'custom_dupe'`).get() as { n: number };
-    const customRow = db.prepare(`SELECT name, is_system FROM sprint_types WHERE key = 'custom_dupe'`).get() as { name: string; is_system: number };
-    const tenantKeyIndex = db.prepare(`PRAGMA index_list(sprint_types)`).all()
+    const duplicateCount = await db.get(`SELECT COUNT(*) AS n FROM sprint_types WHERE key = 'custom_dupe'`) as { n: number };
+    const customRow = await db.get(`SELECT name, is_system FROM sprint_types WHERE key = 'custom_dupe'`) as { name: string; is_system: number };
+    const tenantKeyIndex = (await db.all(`PRAGMA index_list(sprint_types)`))
       .find(index => (index as { name: string }).name === 'idx_sprint_types_tenant_key') as { unique: number } | undefined;
-    const tenantColumn = db.prepare(`PRAGMA table_info(sprint_types)`).all()
+    const tenantColumn = (await db.all(`PRAGMA table_info(sprint_types)`))
       .find(column => (column as { name: string }).name === 'tenant_id') as { notnull: number } | undefined;
 
     expect(duplicateCount.n).toBe(1);
     expect(customRow).toEqual({ name: 'Custom Tenant', is_system: 0 });
     expect(tenantKeyIndex?.unique).toBe(1);
     expect(tenantColumn?.notnull).toBe(1);
-    expect(() => {
-      db.prepare(`INSERT INTO sprint_types (key, name, description, is_system) VALUES ('custom_dupe', 'Duplicate', '', 0)`).run();
+    expect(async () => {
+      await db.run(`INSERT INTO sprint_types (key, name, description, is_system) VALUES ('custom_dupe', 'Duplicate', '', 0)`);
     }).toThrow();
   });
 
-  it('removes stale sprint type key foreign keys when sprint types are tenant-scoped', () => {
+  it('removes stale sprint type key foreign keys when sprint types are tenant-scoped', async () => {
     const legacyDb = new Database(process.env.AGENT_HQ_DB_PATH!);
     legacyDb.pragma('foreign_keys = OFF');
-    legacyDb.exec(`
+    await legacyDb.exec(`
       CREATE TABLE tenants (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
@@ -540,22 +540,22 @@ describe('sprint field schema migration', () => {
     `);
     legacyDb.close();
 
-    expect(() => initSchema()).not.toThrow();
+    expect(async () => await initSchema()).not.toThrow();
 
     const db = getDb();
-    const sprintTypeRows = db.prepare(`SELECT COUNT(*) AS n FROM sprint_types WHERE key = 'dev'`).get() as { n: number };
-    const requirementsDdl = (db.prepare(`
+    const sprintTypeRows = await db.get(`SELECT COUNT(*) AS n FROM sprint_types WHERE key = 'dev'`) as { n: number };
+    const requirementsDdl = (await db.get(`
       SELECT sql
       FROM sqlite_master
       WHERE type = 'table' AND name = 'sprint_task_transition_requirements'
-    `).get() as { sql: string }).sql;
-    const globalUniqueIndex = db.prepare(`PRAGMA index_list(sprint_types)`).all()
+    `) as { sql: string }).sql;
+    const globalUniqueIndex = (await db.all(`PRAGMA index_list(sprint_types)`))
       .find(index => (index as { name: string }).name === 'idx_sprint_types_key_unique');
-    const requirementRow = db.prepare(`
+    const requirementRow = await db.get(`
       SELECT sprint_type, outcome, field_name
       FROM sprint_task_transition_requirements
       WHERE outcome = 'completed_for_review'
-    `).get();
+    `);
 
     expect(sprintTypeRows.n).toBe(2);
     expect(requirementsDdl).not.toContain('REFERENCES sprint_types(key)');
@@ -567,39 +567,27 @@ describe('sprint field schema migration', () => {
     });
   });
 
-  it('removes deprecated runtime lifecycle config from existing agents', () => {
-    initSchema();
+  it('removes deprecated runtime lifecycle config from existing agents', async () => {
+    await initSchema();
     const db = getDb();
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, name, session_key, runtime_type, runtime_config)
       VALUES (?, ?, ?, ?, ?)
-    `).run(
-      910,
-      'Webhook Legacy',
-      'agent:webhook-legacy:main',
-      'webhook',
-      JSON.stringify({ dispatchUrl: 'https://remote.example/dispatch', lifecycleProxy: true }),
-    );
-    db.prepare(`
+    `, 910, 'Webhook Legacy', 'agent:webhook-legacy:main', 'webhook', JSON.stringify({ dispatchUrl: 'https://remote.example/dispatch', lifecycleProxy: true }));
+    await db.run(`
       INSERT INTO agents (id, name, session_key, runtime_type, runtime_config)
       VALUES (?, ?, ?, ?, ?)
-    `).run(
-      911,
-      'Hermes Legacy',
-      'agent:hermes-legacy:main',
-      'hermes',
-      JSON.stringify({ profile: 'agent-hq-cinder', lifecycleMode: 'proxy' }),
-    );
+    `, 911, 'Hermes Legacy', 'agent:hermes-legacy:main', 'hermes', JSON.stringify({ profile: 'agent-hq-cinder', lifecycleMode: 'proxy' }));
 
-    initSchema();
+    await initSchema();
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT id, runtime_config
       FROM agents
       WHERE id IN (910, 911)
       ORDER BY id ASC
-    `).all() as Array<{ id: number; runtime_config: string }>;
+    `) as Array<{ id: number; runtime_config: string }>;
 
     expect(rows.map(row => JSON.parse(row.runtime_config))).toEqual([
       { dispatchUrl: 'https://remote.example/dispatch' },
@@ -607,70 +595,70 @@ describe('sprint field schema migration', () => {
     ]);
   });
 
-  it('migrates deprecated bug, enhancement, and pm sprint types to dev and removes their type rows', () => {
-    initSchema();
+  it('migrates deprecated bug, enhancement, and pm sprint types to dev and removes their type rows', async () => {
+    await initSchema();
     const db = getDb();
-    const tenantId = defaultTenantId();
-    db.prepare(`
+    const tenantId = await defaultTenantId();
+    await db.run(`
       INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
       VALUES (?, 'bugs', 'Bugs', '', 0), (?, 'enhancements', 'Enhancements', '', 0), (?, 'pm', 'PM', '', 0)
-    `).run(tenantId, tenantId, tenantId);
-    db.prepare(`
+    `, tenantId, tenantId, tenantId);
+    await db.run(`
       INSERT INTO projects (id, name, description, context_md, created_at)
       VALUES (901, 'Custom Project', '', '', datetime('now'))
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, goal, sprint_type, workflow_template_key, status, length_kind, length_value, created_at)
       VALUES
         (9011, 901, 'Bug Sprint', '', 'bugs', NULL, 'active', 'time', '2w', datetime('now')),
         (9012, 901, 'Enhancement Sprint', '', 'enhancements', NULL, 'paused', 'time', '2w', datetime('now')),
         (9013, 901, 'PM Sprint', '', 'pm', NULL, 'active', 'time', '2w', datetime('now'))
-    `).run();
+    `);
 
-    initSchema();
+    await initSchema();
 
-    const sprints = db.prepare(`
+    const sprints = await db.all(`
       SELECT id, sprint_type, workflow_template_key
       FROM sprints
       WHERE id IN (9011, 9012, 9013)
       ORDER BY id ASC
-    `).all() as Array<{ id: number; sprint_type: string; workflow_template_key: string | null }>;
+    `) as Array<{ id: number; sprint_type: string; workflow_template_key: string | null }>;
     expect(sprints).toEqual([
       { id: 9011, sprint_type: 'dev', workflow_template_key: null },
       { id: 9012, sprint_type: 'dev', workflow_template_key: null },
       { id: 9013, sprint_type: 'dev', workflow_template_key: null },
     ]);
 
-    const deprecated = db.prepare(`
+    const deprecated = await db.all(`
       SELECT key
       FROM sprint_types
       WHERE key IN ('bugs', 'enhancements', 'pm')
-    `).all();
+    `);
     expect(deprecated).toEqual([]);
   });
 
-  it('migrates active Agent HQ sprints to the dev sprint type only', () => {
-    initSchema();
+  it('migrates active Agent HQ sprints to the dev sprint type only', async () => {
+    await initSchema();
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, description, context_md, created_at)
       VALUES (900, 'Agent HQ', '', '', datetime('now'))
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, goal, sprint_type, workflow_template_key, status, length_kind, length_value, created_at)
       VALUES
         (9001, 900, 'Active Bugs', '', 'generic', NULL, 'active', 'time', '2w', datetime('now')),
         (9002, 900, 'Completed Work', '', 'generic', NULL, 'complete', 'time', '2w', datetime('now'))
-    `).run();
+    `);
 
-    initSchema();
+    await initSchema();
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT id, sprint_type, workflow_template_key
       FROM sprints
       WHERE id IN (9001, 9002)
       ORDER BY id ASC
-    `).all() as Array<{ id: number; sprint_type: string; workflow_template_key: string | null }>;
+    `) as Array<{ id: number; sprint_type: string; workflow_template_key: string | null }>;
 
     expect(rows).toEqual([
       { id: 9001, sprint_type: 'dev', workflow_template_key: null },
@@ -678,155 +666,155 @@ describe('sprint field schema migration', () => {
     ]);
   });
 
-  it('does not recreate deleted or customized starter sprint-definition rows on reopen', () => {
-    initSchema();
+  it('does not recreate deleted or customized starter sprint-definition rows on reopen', async () => {
+    await initSchema();
     const db = getDb();
 
-    const seededType = db.prepare(`
+    const seededType = await db.get(`
       SELECT key
       FROM sprint_types
       WHERE key = 'ops'
       ORDER BY key ASC
       LIMIT 1
-    `).get() as { key: string } | undefined;
+    `) as { key: string } | undefined;
     expect(seededType).toBeDefined();
 
-    const seededFieldSchema = db.prepare(`
+    const seededFieldSchema = await db.get(`
       SELECT id
       FROM task_field_schemas
       ORDER BY id ASC
       LIMIT 1
-    `).get() as { id: number } | undefined;
+    `) as { id: number } | undefined;
     expect(seededFieldSchema).toBeDefined();
 
-    const seededOutcome = db.prepare(`
+    const seededOutcome = await db.get(`
       SELECT id
       FROM sprint_type_outcomes
       ORDER BY id ASC
       LIMIT 1
-    `).get() as { id: number } | undefined;
+    `) as { id: number } | undefined;
     expect(seededOutcome).toBeDefined();
 
-    const seededSprintTypeStatus = db.prepare(`
+    const seededSprintTypeStatus = await db.get(`
       SELECT sprint_type_key, status_key
       FROM sprint_type_task_statuses
       WHERE sprint_type_key = 'dev'
       ORDER BY id ASC
       LIMIT 1
-    `).get() as { sprint_type_key: string; status_key: string } | undefined;
+    `) as { sprint_type_key: string; status_key: string } | undefined;
     expect(seededSprintTypeStatus).toBeDefined();
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO projects (id, name, description, context_md, created_at)
       VALUES (990, 'Starter Project', '', '', datetime('now'))
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
       VALUES (9901, 990, 'Starter Sprint', '', 'dev', 'active', 'time', '2w', datetime('now'))
-    `).run();
-    seedSprintTaskPolicy(db, 9901);
-    const seededSprintStatus = db.prepare(`
+    `);
+    await seedSprintTaskPolicy(db, 9901);
+    const seededSprintStatus = await db.get(`
       SELECT status_key
       FROM sprint_task_statuses
       WHERE sprint_id = ?
       ORDER BY id ASC
       LIMIT 1
-    `).get(9901) as { status_key: string } | undefined;
+    `, 9901) as { status_key: string } | undefined;
     expect(seededSprintStatus).toBeDefined();
 
-    db.prepare(`DELETE FROM sprint_types WHERE key = ?`).run(seededType!.key);
-    db.prepare(`DELETE FROM task_field_schemas WHERE id = ?`).run(seededFieldSchema!.id);
-    db.prepare(`UPDATE sprint_type_outcomes SET label = 'Customized starter outcome' WHERE id = ?`).run(seededOutcome!.id);
-    db.prepare(`DELETE FROM sprint_type_task_statuses WHERE sprint_type_key = ? AND status_key = ?`).run(seededSprintTypeStatus!.sprint_type_key, seededSprintTypeStatus!.status_key);
-    db.prepare(`DELETE FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`).run(9901, seededSprintStatus!.status_key);
+    await db.run(`DELETE FROM sprint_types WHERE key = ?`, seededType!.key);
+    await db.run(`DELETE FROM task_field_schemas WHERE id = ?`, seededFieldSchema!.id);
+    await db.run(`UPDATE sprint_type_outcomes SET label = 'Customized starter outcome' WHERE id = ?`, seededOutcome!.id);
+    await db.run(`DELETE FROM sprint_type_task_statuses WHERE sprint_type_key = ? AND status_key = ?`, seededSprintTypeStatus!.sprint_type_key, seededSprintTypeStatus!.status_key);
+    await db.run(`DELETE FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`, 9901, seededSprintStatus!.status_key);
 
     closeDb();
-    initSchema();
+    await initSchema();
 
     const reopened = getDb();
-    const deletedType = reopened.prepare(`SELECT key FROM sprint_types WHERE key = ?`).get(seededType!.key);
+    const deletedType = await reopened.get(`SELECT key FROM sprint_types WHERE key = ?`, seededType!.key);
     expect(deletedType).toBeUndefined();
 
-    const deletedFieldSchema = reopened.prepare(`SELECT id FROM task_field_schemas WHERE id = ?`).get(seededFieldSchema!.id);
+    const deletedFieldSchema = await reopened.get(`SELECT id FROM task_field_schemas WHERE id = ?`, seededFieldSchema!.id);
     expect(deletedFieldSchema).toBeUndefined();
 
-    const customizedOutcome = reopened.prepare(`SELECT label FROM sprint_type_outcomes WHERE id = ?`).get(seededOutcome!.id) as { label: string } | undefined;
+    const customizedOutcome = await reopened.get(`SELECT label FROM sprint_type_outcomes WHERE id = ?`, seededOutcome!.id) as { label: string } | undefined;
     expect(customizedOutcome).toEqual({ label: 'Customized starter outcome' });
 
-    const deletedSprintTypeStatus = reopened.prepare(`
+    const deletedSprintTypeStatus = await reopened.get(`
       SELECT id
       FROM sprint_type_task_statuses
       WHERE sprint_type_key = ? AND status_key = ?
-    `).get(seededSprintTypeStatus!.sprint_type_key, seededSprintTypeStatus!.status_key);
+    `, seededSprintTypeStatus!.sprint_type_key, seededSprintTypeStatus!.status_key);
     expect(deletedSprintTypeStatus).toBeUndefined();
 
-    const deletedSprintStatus = reopened.prepare(`
+    const deletedSprintStatus = await reopened.get(`
       SELECT id
       FROM sprint_task_statuses
       WHERE sprint_id = ? AND status_key = ?
-    `).get(9901, seededSprintStatus!.status_key);
+    `, 9901, seededSprintStatus!.status_key);
     expect(deletedSprintStatus).toBeUndefined();
   });
 
-  it('preserves custom workflow and sprint statuses across startup schema checks', () => {
-    initSchema();
+  it('preserves custom workflow and sprint statuses across startup schema checks', async () => {
+    await initSchema();
     const db = getDb();
 
-    const tenantId = defaultTenantId();
-    db.prepare(`
+    const tenantId = await defaultTenantId();
+    await db.run(`
       INSERT INTO sprint_types (tenant_id, key, name, description, is_system, status_seeded_at)
       VALUES (?, 'federal_preconstruction', 'Federal Preconstruction', 'Custom tenant workflow', 0, NULL)
-    `).run(tenantId);
-    db.prepare(`
+    `, tenantId);
+    await db.run(`
       INSERT INTO sprint_type_task_statuses (
         tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
       ) VALUES
         (?, 'federal_preconstruction', 'estimating', 'Estimating', 'purple', 0, 0, '["permit_review"]', 0, 1, '{}'),
         (?, 'federal_preconstruction', 'permit_review', 'Permit Review', 'amber', 0, 0, '["awarded"]', 1, 0, '{}'),
         (?, 'federal_preconstruction', 'awarded', 'Awarded', 'green', 1, 0, '[]', 2, 0, '{}')
-    `).run(tenantId, tenantId, tenantId);
-    db.prepare(`
+    `, tenantId, tenantId, tenantId);
+    await db.run(`
       INSERT INTO projects (id, name, description, context_md, created_at)
       VALUES (991, 'Elevation Build', '', '', datetime('now'))
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, task_policy_seeded_at, length_kind, length_value, created_at)
       VALUES (9911, 991, 'Federal Package', '', 'federal_preconstruction', 'active', datetime('now'), 'time', 'ongoing', datetime('now'))
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprint_task_statuses (
         sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
       ) VALUES
         (9911, 'estimating', 'Estimating', 'purple', 0, 0, '["permit_review"]', 0, 1, '{}'),
         (9911, 'permit_review', 'Permit Review', 'amber', 0, 0, '["awarded"]', 1, 0, '{}'),
         (9911, 'awarded', 'Awarded', 'green', 1, 0, '[]', 2, 0, '{}')
-    `).run();
+    `);
 
     closeDb();
-    initSchema();
+    await initSchema();
 
     const reopened = getDb();
-    const sprintType = reopened.prepare(`
+    const sprintType = await reopened.get(`
       SELECT status_seeded_at
       FROM sprint_types
       WHERE key = 'federal_preconstruction'
-    `).get() as { status_seeded_at: string | null };
+    `) as { status_seeded_at: string | null };
     expect(sprintType.status_seeded_at).toBeNull();
 
-    const typeStatuses = reopened.prepare(`
+    const typeStatuses = await reopened.all(`
       SELECT status_key
       FROM sprint_type_task_statuses
       WHERE sprint_type_key = 'federal_preconstruction'
       ORDER BY stage_order ASC
-    `).all() as Array<{ status_key: string }>;
+    `) as Array<{ status_key: string }>;
     expect(typeStatuses.map((row) => row.status_key)).toEqual(['estimating', 'permit_review', 'awarded']);
 
-    const sprintStatuses = reopened.prepare(`
+    const sprintStatuses = await reopened.all(`
       SELECT status_key
       FROM sprint_task_statuses
       WHERE sprint_id = 9911
       ORDER BY stage_order ASC
-    `).all() as Array<{ status_key: string }>;
+    `) as Array<{ status_key: string }>;
     expect(sprintStatuses.map((row) => row.status_key)).toEqual(['estimating', 'permit_review', 'awarded']);
   });
 });

@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import type Database from 'better-sqlite3';
 import type { NextFunction, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import {
@@ -11,6 +10,7 @@ import {
 } from './atlasAgent';
 import { resolveRuntimeAgentSlug } from './sessionKeys';
 import { ensureTenantSchema, resolveTenantIdFromRequest, verifyTenantSchemaForStartup } from './tenantContext';
+import { type Db } from "../db/adapter/types";
 
 export interface McpApiIdentity {
   keyId: number;
@@ -43,18 +43,18 @@ export class McpApiAuthError extends Error {
   }
 }
 
-function hasTable(db: Database.Database, table: string): boolean {
+async function hasTable(db: Db, table: string): Promise<boolean> {
   try {
-    const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) as { name: string } | undefined;
+    const row = await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table) as { name: string } | undefined;
     return Boolean(row);
   } catch {
     return false;
   }
 }
 
-function hasColumn(db: Database.Database, table: string, column: string): boolean {
+async function hasColumn(db: Db, table: string, column: string): Promise<boolean> {
   try {
-    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
   } catch {
     return false;
   }
@@ -88,8 +88,8 @@ export function createMcpApiKeyValue(): string {
   return `ahq_mcp_${crypto.randomBytes(32).toString('base64url')}`;
 }
 
-export function ensureMcpApiKeyTable(db: Database.Database): void {
-  db.exec(`
+export async function ensureMcpApiKeyTable(db: Db): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS mcp_api_keys (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id     INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -106,23 +106,23 @@ export function ensureMcpApiKeyTable(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_mcp_api_keys_enabled ON mcp_api_keys(enabled);
   `);
 
-  if (!hasColumn(db, 'mcp_api_keys', 'tenant_id')) {
+  if (!await hasColumn(db, 'mcp_api_keys', 'tenant_id')) {
     // Do not add a REFERENCES constraint here: initSchema may call this helper before
     // the tenants table exists in fresh/test databases. Tenant scope is enforced in
     // MCP auth, and tenant rows are validated through tenantContext at request time.
-    db.exec(`ALTER TABLE mcp_api_keys ADD COLUMN tenant_id INTEGER`);
+    await db.exec(`ALTER TABLE mcp_api_keys ADD COLUMN tenant_id INTEGER`);
   }
-  if (!hasColumn(db, 'mcp_api_keys', 'global_admin')) {
-    db.exec(`ALTER TABLE mcp_api_keys ADD COLUMN global_admin INTEGER NOT NULL DEFAULT 0`);
-  }
-
-  const agentsTableReady = hasTable(db, 'agents');
-  if (agentsTableReady && !hasColumn(db, 'agents', 'global_mcp_admin')) {
-    db.exec(`ALTER TABLE agents ADD COLUMN global_mcp_admin INTEGER NOT NULL DEFAULT 0`);
+  if (!await hasColumn(db, 'mcp_api_keys', 'global_admin')) {
+    await db.exec(`ALTER TABLE mcp_api_keys ADD COLUMN global_admin INTEGER NOT NULL DEFAULT 0`);
   }
 
-  if (agentsTableReady && hasColumn(db, 'agents', 'tenant_id')) {
-    db.prepare(`
+  const agentsTableReady = await hasTable(db, 'agents');
+  if (agentsTableReady && !await hasColumn(db, 'agents', 'global_mcp_admin')) {
+    await db.exec(`ALTER TABLE agents ADD COLUMN global_mcp_admin INTEGER NOT NULL DEFAULT 0`);
+  }
+
+  if (agentsTableReady && await hasColumn(db, 'agents', 'tenant_id')) {
+    await db.run(`
       UPDATE mcp_api_keys
       SET tenant_id = (
         SELECT a.tenant_id
@@ -136,9 +136,9 @@ export function ensureMcpApiKeyTable(db: Database.Database): void {
           WHERE a.id = mcp_api_keys.agent_id
             AND a.tenant_id IS NOT NULL
         )
-    `).run();
+    `);
   }
-  db.exec(`
+  await db.exec(`
     CREATE INDEX IF NOT EXISTS idx_mcp_api_keys_tenant ON mcp_api_keys(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_mcp_api_keys_global_admin ON mcp_api_keys(global_admin);
   `);
@@ -641,8 +641,8 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
   'mcp_capability_policies.read',
 ]);
 
-function ensureAgentMcpCapabilityPolicyTable(db: Database.Database): void {
-  db.exec(`
+async function ensureAgentMcpCapabilityPolicyTable(db: Db): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS agent_mcp_capability_policies (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id       INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -698,18 +698,18 @@ function resolveAgentMcpDefaultPolicy(isTrusted: boolean): AgentMcpDefaultPolicy
   return isTrusted ? 'trusted_admin' : 'scoped_runtime';
 }
 
-function loadAgentPermissionContext(db: Database.Database, agentId: number): {
+async function loadAgentPermissionContext(db: Db, agentId: number): Promise<{
   agentId: number;
   agentName: string;
   agentSlug: string;
   defaultPolicy: AgentMcpDefaultPolicy;
-} {
-  const hasAgentSlug = hasColumn(db, 'agents', 'slug');
-  const hasOpenClawAgentId = hasColumn(db, 'agents', 'openclaw_agent_id');
-  const hasSessionKey = hasColumn(db, 'agents', 'session_key');
-  const hasSystemRole = hasColumn(db, 'agents', 'system_role');
+}> {
+  const hasAgentSlug = await hasColumn(db, 'agents', 'slug');
+  const hasOpenClawAgentId = await hasColumn(db, 'agents', 'openclaw_agent_id');
+  const hasSessionKey = await hasColumn(db, 'agents', 'session_key');
+  const hasSystemRole = await hasColumn(db, 'agents', 'system_role');
 
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT
       a.id AS agent_id,
       a.name AS agent_name,
@@ -720,7 +720,7 @@ function loadAgentPermissionContext(db: Database.Database, agentId: number): {
     FROM agents a
     WHERE a.id = ?
     LIMIT 1
-  `).get(agentId) as Record<string, unknown> | undefined;
+  `, agentId) as Record<string, unknown> | undefined;
 
   if (!row) {
     throw new Error(`Agent #${agentId} not found`);
@@ -735,21 +735,21 @@ function loadAgentPermissionContext(db: Database.Database, agentId: number): {
   };
 }
 
-function loadExplicitAgentMcpCapabilityRows(db: Database.Database, agentId: number): Array<{ capability_key: string; enabled: number; updated_at: string | null }> {
-  ensureAgentMcpCapabilityPolicyTable(db);
-  return db.prepare(`
+async function loadExplicitAgentMcpCapabilityRows(db: Db, agentId: number): Promise<Array<{ capability_key: string; enabled: number; updated_at: string | null }>> {
+  await ensureAgentMcpCapabilityPolicyTable(db);
+  return await db.all(`
     SELECT capability_key, enabled, updated_at
     FROM agent_mcp_capability_policies
     WHERE agent_id = ?
     ORDER BY capability_key ASC
-  `).all(agentId) as Array<{ capability_key: string; enabled: number; updated_at: string | null }>;
+  `, agentId) as Array<{ capability_key: string; enabled: number; updated_at: string | null }>;
 }
 
-function buildAgentMcpPermissionPolicySnapshot(
-  db: Database.Database,
+async function buildAgentMcpPermissionPolicySnapshot(
+  db: Db,
   context: { agentId: number; agentName: string; agentSlug: string; defaultPolicy: AgentMcpDefaultPolicy },
-): AgentMcpPermissionPolicySnapshot {
-  const explicitRows = loadExplicitAgentMcpCapabilityRows(db, context.agentId);
+): Promise<AgentMcpPermissionPolicySnapshot> {
+  const explicitRows = await loadExplicitAgentMcpCapabilityRows(db, context.agentId);
   const hasExplicitPolicy = explicitRows.length > 0;
   const explicitMap = new Map<AgentMcpCapabilityKey, boolean>();
   let updatedAt: string | null = null;
@@ -782,14 +782,14 @@ function buildAgentMcpPermissionPolicySnapshot(
   };
 }
 
-function hasExplicitAgentMcpCapability(db: Database.Database, agentId: number, capability: AgentMcpCapabilityKey): boolean {
-  if (!hasTable(db, 'agent_mcp_capability_policies')) return false;
-  const row = db.prepare(`
+async function hasExplicitAgentMcpCapability(db: Db, agentId: number, capability: AgentMcpCapabilityKey): Promise<boolean> {
+  if (!await hasTable(db, 'agent_mcp_capability_policies')) return false;
+  const row = await db.get(`
     SELECT enabled
     FROM agent_mcp_capability_policies
     WHERE agent_id = ? AND capability_key = ?
     LIMIT 1
-  `).get(agentId, capability) as { enabled: number } | undefined;
+  `, agentId, capability) as { enabled: number } | undefined;
   return Number(row?.enabled ?? 0) === 1;
 }
 
@@ -820,14 +820,14 @@ function parseToolAllowlistOverrides(raw: unknown): string[] {
  * agent_mcp_assignments.overrides rather than the capability policy table, so
  * they need their own read/write path to be editable outside direct SQL.
  */
-export function getAgentMcpServerToolAllowlists(db: Database.Database, agentId: number): AgentMcpServerToolAllowlist[] {
-  const rows = db.prepare(`
+export async function getAgentMcpServerToolAllowlists(db: Db, agentId: number): Promise<AgentMcpServerToolAllowlist[]> {
+  const rows = await db.all(`
     SELECT a.mcp_server_id, a.overrides, a.enabled, s.name AS server_name, s.slug AS server_slug
     FROM agent_mcp_assignments a
     LEFT JOIN mcp_servers s ON s.id = a.mcp_server_id
     WHERE a.agent_id = ?
     ORDER BY COALESCE(s.name, ''), a.mcp_server_id
-  `).all(agentId) as Array<{
+  `, agentId) as Array<{
     mcp_server_id: number;
     overrides: string | null;
     enabled: number | null;
@@ -853,15 +853,15 @@ export function getAgentMcpServerToolAllowlists(db: Database.Database, agentId: 
  * restriction, which is how an unrestricted assignment is represented; other
  * override keys on the row are preserved.
  */
-export function replaceAgentMcpServerToolAllowlist(
-  db: Database.Database,
+export async function replaceAgentMcpServerToolAllowlist(
+  db: Db,
   agentId: number,
   mcpServerId: number,
   toolAllowlist: string[],
-): AgentMcpServerToolAllowlist[] {
-  const row = db.prepare(`
+): Promise<AgentMcpServerToolAllowlist[]> {
+  const row = await db.get(`
     SELECT overrides FROM agent_mcp_assignments WHERE agent_id = ? AND mcp_server_id = ?
-  `).get(agentId, mcpServerId) as { overrides: string | null } | undefined;
+  `, agentId, mcpServerId) as { overrides: string | null } | undefined;
   if (!row) {
     const error = new Error(`MCP server assignment not found for agent ${agentId}`) as Error & { status?: number };
     error.status = 404;
@@ -884,25 +884,25 @@ export function replaceAgentMcpServerToolAllowlist(
   if (cleaned.length === 0) delete overrides.tool_allowlist;
   else overrides.tool_allowlist = cleaned;
 
-  db.prepare(`
+  await db.run(`
     UPDATE agent_mcp_assignments SET overrides = ? WHERE agent_id = ? AND mcp_server_id = ?
-  `).run(JSON.stringify(overrides), agentId, mcpServerId);
+  `, JSON.stringify(overrides), agentId, mcpServerId);
 
-  return getAgentMcpServerToolAllowlists(db, agentId);
+  return await getAgentMcpServerToolAllowlists(db, agentId);
 }
 
-export function getAgentMcpPermissionPolicy(db: Database.Database, agentId: number): AgentMcpPermissionPolicySnapshot {
-  const context = loadAgentPermissionContext(db, agentId);
-  return buildAgentMcpPermissionPolicySnapshot(db, context);
+export async function getAgentMcpPermissionPolicy(db: Db, agentId: number): Promise<AgentMcpPermissionPolicySnapshot> {
+  const context = await loadAgentPermissionContext(db, agentId);
+  return await buildAgentMcpPermissionPolicySnapshot(db, context);
 }
 
-export function replaceAgentMcpPermissionPolicy(
-  db: Database.Database,
+export async function replaceAgentMcpPermissionPolicy(
+  db: Db,
   agentId: number,
   enabledCapabilityKeys: readonly string[],
-): AgentMcpPermissionPolicySnapshot {
-  const context = loadAgentPermissionContext(db, agentId);
-  ensureAgentMcpCapabilityPolicyTable(db);
+): Promise<AgentMcpPermissionPolicySnapshot> {
+  const context = await loadAgentPermissionContext(db, agentId);
+  await ensureAgentMcpCapabilityPolicyTable(db);
   const normalized = new Set<AgentMcpCapabilityKey>();
 
   for (const rawKey of enabledCapabilityKeys) {
@@ -915,8 +915,8 @@ export function replaceAgentMcpPermissionPolicy(
     normalized.add(rawKey as AgentMcpCapabilityKey);
   }
 
-  const save = db.transaction(() => {
-    db.prepare(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`).run(agentId);
+  const save = db.transaction(async () => {
+    await db.run(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`, agentId);
     const insert = db.prepare(`
       INSERT INTO agent_mcp_capability_policies (agent_id, capability_key, enabled)
       VALUES (?, ?, ?)
@@ -927,27 +927,27 @@ export function replaceAgentMcpPermissionPolicy(
   });
   save();
 
-  return buildAgentMcpPermissionPolicySnapshot(db, context);
+  return await buildAgentMcpPermissionPolicySnapshot(db, context);
 }
 
-export function resetAgentMcpPermissionPolicy(db: Database.Database, agentId: number): AgentMcpPermissionPolicySnapshot {
-  const context = loadAgentPermissionContext(db, agentId);
-  ensureAgentMcpCapabilityPolicyTable(db);
-  db.prepare(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`).run(agentId);
-  return buildAgentMcpPermissionPolicySnapshot(db, context);
+export async function resetAgentMcpPermissionPolicy(db: Db, agentId: number): Promise<AgentMcpPermissionPolicySnapshot> {
+  const context = await loadAgentPermissionContext(db, agentId);
+  await ensureAgentMcpCapabilityPolicyTable(db);
+  await db.run(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`, agentId);
+  return await buildAgentMcpPermissionPolicySnapshot(db, context);
 }
 
-function resolveEffectiveAgentMcpPermissionState(db: Database.Database, identity: McpApiIdentity): {
+async function resolveEffectiveAgentMcpPermissionState(db: Db, identity: McpApiIdentity): Promise<{
   policyMode: 'default' | 'explicit';
   defaultPolicy: AgentMcpDefaultPolicy;
   enabledCapabilities: Set<AgentMcpCapabilityKey>;
-} {
-  const snapshot = buildAgentMcpPermissionPolicySnapshot(db, {
-    agentId: identity.agentId,
-    agentName: identity.agentName,
-    agentSlug: identity.agentSlug,
-    defaultPolicy: resolveAgentMcpDefaultPolicy(isTrustedMcpIdentity(identity)),
-  });
+}> {
+  const snapshot = await buildAgentMcpPermissionPolicySnapshot(db, {
+      agentId: identity.agentId,
+      agentName: identity.agentName,
+      agentSlug: identity.agentSlug,
+      defaultPolicy: resolveAgentMcpDefaultPolicy(isTrustedMcpIdentity(identity)),
+    });
 
   return {
     policyMode: snapshot.policy_mode,
@@ -960,7 +960,7 @@ function resolveEffectiveAgentMcpPermissionState(db: Database.Database, identity
   };
 }
 
-function shapeIdentity(db: Database.Database, row: Record<string, unknown>): McpApiIdentity {
+async function shapeIdentity(db: Db, row: Record<string, unknown>): Promise<McpApiIdentity> {
   const { agentName, agentSlug, systemRole, isTrusted, isGlobalAdmin } = resolveAgentIdentityFields(row);
   const tenantId = parsePositiveInt(row.key_tenant_id) ?? parsePositiveInt(row.agent_tenant_id);
   if (!tenantId) {
@@ -974,34 +974,34 @@ function shapeIdentity(db: Database.Database, row: Record<string, unknown>): Mcp
     agentName,
     agentSlug,
     systemRole,
-    globalAdminAccess: isGlobalAdmin || hasExplicitAgentMcpCapability(db, Number(row.agent_id), 'admin.cross_tenant'),
+    globalAdminAccess: isGlobalAdmin || await hasExplicitAgentMcpCapability(db, Number(row.agent_id), 'admin.cross_tenant'),
     auditActor: agentSlug,
     authorityActor: isTrusted ? ATLAS_AGENT_NAME : agentSlug,
   };
 }
 
-export function resolveMcpApiIdentityForKey(
-  db: Database.Database,
+export async function resolveMcpApiIdentityForKey(
+  db: Db,
   apiKey: string,
   options: { updateLastUsed?: boolean } = {},
-): McpApiIdentity {
-  ensureMcpApiKeyTable(db);
-  ensureTenantSchema(db);
+): Promise<McpApiIdentity> {
+  await ensureMcpApiKeyTable(db);
+  await ensureTenantSchema(db);
   const normalizedKey = apiKey.trim();
   if (!normalizedKey) {
     throw new McpApiAuthError('MCP API key is required', 401, 'mcp_api_key_missing');
   }
 
-  const hasAgentSlug = hasColumn(db, 'agents', 'slug');
-  const hasOpenClawAgentId = hasColumn(db, 'agents', 'openclaw_agent_id');
-  const hasSessionKey = hasColumn(db, 'agents', 'session_key');
-  const hasSystemRole = hasColumn(db, 'agents', 'system_role');
-  const hasAgentEnabled = hasColumn(db, 'agents', 'enabled');
-  const hasDeletedAt = hasColumn(db, 'agents', 'deleted_at');
-  const hasAgentTenant = hasColumn(db, 'agents', 'tenant_id');
-  const hasAgentGlobalMcpAdmin = hasColumn(db, 'agents', 'global_mcp_admin');
+  const hasAgentSlug = await hasColumn(db, 'agents', 'slug');
+  const hasOpenClawAgentId = await hasColumn(db, 'agents', 'openclaw_agent_id');
+  const hasSessionKey = await hasColumn(db, 'agents', 'session_key');
+  const hasSystemRole = await hasColumn(db, 'agents', 'system_role');
+  const hasAgentEnabled = await hasColumn(db, 'agents', 'enabled');
+  const hasDeletedAt = await hasColumn(db, 'agents', 'deleted_at');
+  const hasAgentTenant = await hasColumn(db, 'agents', 'tenant_id');
+  const hasAgentGlobalMcpAdmin = await hasColumn(db, 'agents', 'global_mcp_admin');
 
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT
       k.id AS key_id,
       k.agent_id AS agent_id,
@@ -1022,7 +1022,7 @@ export function resolveMcpApiIdentityForKey(
     LEFT JOIN agents a ON a.id = k.agent_id
     WHERE k.key_hash = ?
     LIMIT 1
-  `).get(hashMcpApiKey(normalizedKey)) as Record<string, unknown> | undefined;
+  `, hashMcpApiKey(normalizedKey)) as Record<string, unknown> | undefined;
 
   if (!row) {
     throw new McpApiAuthError('Invalid MCP API key', 401, 'mcp_api_key_invalid');
@@ -1044,35 +1044,35 @@ export function resolveMcpApiIdentityForKey(
   }
 
   if (!rowTenantId && agentTenantId) {
-    db.prepare(`UPDATE mcp_api_keys SET tenant_id = ?, updated_at = datetime('now') WHERE id = ?`).run(agentTenantId, row.key_id);
+    await db.run(`UPDATE mcp_api_keys SET tenant_id = ?, updated_at = datetime('now') WHERE id = ?`, agentTenantId, row.key_id);
     row.key_tenant_id = agentTenantId;
   }
 
   if (options.updateLastUsed !== false) {
-    db.prepare(`UPDATE mcp_api_keys SET last_used_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(row.key_id);
+    await db.run(`UPDATE mcp_api_keys SET last_used_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`, row.key_id);
   }
 
-  return shapeIdentity(db, row);
+  return await shapeIdentity(db, row);
 }
 
-export function issueMcpApiKeyForAgent(
-  db: Database.Database,
+export async function issueMcpApiKeyForAgent(
+  db: Db,
   agentId: number,
   name = 'Agent HQ MCP',
-): { apiKey: string; keyId: number; keyPrefix: string } {
-  ensureMcpApiKeyTable(db);
-  ensureTenantSchema(db);
-  const agent = db.prepare(`SELECT id, tenant_id FROM agents WHERE id = ?`).get(agentId) as { id: number; tenant_id: number | null } | undefined;
+): Promise<{ apiKey: string; keyId: number; keyPrefix: string }> {
+  await ensureMcpApiKeyTable(db);
+  await ensureTenantSchema(db);
+  const agent = await db.get(`SELECT id, tenant_id FROM agents WHERE id = ?`, agentId) as { id: number; tenant_id: number | null } | undefined;
   if (!agent) throw new Error(`Cannot issue MCP API key: agent #${agentId} not found`);
   const tenantId = parsePositiveInt(agent.tenant_id);
   if (!tenantId) throw new Error(`Cannot issue MCP API key: agent #${agentId} is not bound to a tenant`);
 
   const apiKey = createMcpApiKeyValue();
   const keyPrefix = apiKey.slice(0, 16);
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash)
     VALUES (?, ?, ?, ?, ?)
-  `).run(agentId, tenantId, name, keyPrefix, hashMcpApiKey(apiKey));
+  `, agentId, tenantId, name, keyPrefix, hashMcpApiKey(apiKey));
 
   return {
     apiKey,
@@ -1081,82 +1081,82 @@ export function issueMcpApiKeyForAgent(
   };
 }
 
-function findAgentIdForConfiguredRuntimeKey(
-  db: Database.Database,
+async function findAgentIdForConfiguredRuntimeKey(
+  db: Db,
   env: NodeJS.ProcessEnv,
-): number | null {
+): Promise<number | null> {
   const explicitId = Number.parseInt(env.AGENT_HQ_MCP_API_KEY_AGENT_ID ?? '', 10);
   if (Number.isInteger(explicitId) && explicitId > 0) {
-    const row = db.prepare(`SELECT id FROM agents WHERE id = ? LIMIT 1`).get(explicitId) as { id: number } | undefined;
+    const row = await db.get(`SELECT id FROM agents WHERE id = ? LIMIT 1`, explicitId) as { id: number } | undefined;
     if (row?.id) return Number(row.id);
   }
 
-  const hasAgentSlug = hasColumn(db, 'agents', 'slug');
-  const hasOpenClawAgentId = hasColumn(db, 'agents', 'openclaw_agent_id');
-  const hasSessionKey = hasColumn(db, 'agents', 'session_key');
-  const hasSystemRole = hasColumn(db, 'agents', 'system_role');
+  const hasAgentSlug = await hasColumn(db, 'agents', 'slug');
+  const hasOpenClawAgentId = await hasColumn(db, 'agents', 'openclaw_agent_id');
+  const hasSessionKey = await hasColumn(db, 'agents', 'session_key');
+  const hasSystemRole = await hasColumn(db, 'agents', 'system_role');
 
   const configuredSlug = env.AGENT_HQ_MCP_API_KEY_AGENT_SLUG?.trim();
   if (hasAgentSlug && configuredSlug) {
-    const row = db.prepare(`SELECT id FROM agents WHERE slug = ? LIMIT 1`).get(configuredSlug) as { id: number } | undefined;
+    const row = await db.get(`SELECT id FROM agents WHERE slug = ? LIMIT 1`, configuredSlug) as { id: number } | undefined;
     if (row?.id) return Number(row.id);
   }
 
   const configuredOpenClawAgentId = env.AGENT_HQ_MCP_API_KEY_AGENT_OPENCLAW_ID?.trim();
   if (hasOpenClawAgentId && configuredOpenClawAgentId) {
-    const row = db.prepare(`SELECT id FROM agents WHERE openclaw_agent_id = ? LIMIT 1`).get(configuredOpenClawAgentId) as { id: number } | undefined;
+    const row = await db.get(`SELECT id FROM agents WHERE openclaw_agent_id = ? LIMIT 1`, configuredOpenClawAgentId) as { id: number } | undefined;
     if (row?.id) return Number(row.id);
   }
 
   const configuredSessionKey = env.AGENT_HQ_MCP_API_KEY_AGENT_SESSION_KEY?.trim();
   if (hasSessionKey && configuredSessionKey) {
-    const row = db.prepare(`SELECT id FROM agents WHERE session_key = ? LIMIT 1`).get(configuredSessionKey) as { id: number } | undefined;
+    const row = await db.get(`SELECT id FROM agents WHERE session_key = ? LIMIT 1`, configuredSessionKey) as { id: number } | undefined;
     if (row?.id) return Number(row.id);
   }
 
   if (hasSystemRole) {
-    const atlasBySystemRole = db.prepare(`SELECT id FROM agents WHERE system_role = ? ORDER BY id ASC LIMIT 1`).get(ATLAS_SYSTEM_ROLE) as { id: number } | undefined;
+    const atlasBySystemRole = await db.get(`SELECT id FROM agents WHERE system_role = ? ORDER BY id ASC LIMIT 1`, ATLAS_SYSTEM_ROLE) as { id: number } | undefined;
     if (atlasBySystemRole?.id) return Number(atlasBySystemRole.id);
   }
 
   if (hasOpenClawAgentId) {
-    const atlasByOpenClawId = db.prepare(`SELECT id FROM agents WHERE openclaw_agent_id = ? ORDER BY id ASC LIMIT 1`).get(ATLAS_AGENT_SLUG) as { id: number } | undefined;
+    const atlasByOpenClawId = await db.get(`SELECT id FROM agents WHERE openclaw_agent_id = ? ORDER BY id ASC LIMIT 1`, ATLAS_AGENT_SLUG) as { id: number } | undefined;
     if (atlasByOpenClawId?.id) return Number(atlasByOpenClawId.id);
   }
 
   if (hasSessionKey) {
-    const atlasBySessionKey = db.prepare(`SELECT id FROM agents WHERE session_key = ? ORDER BY id ASC LIMIT 1`).get(ATLAS_SESSION_KEY) as { id: number } | undefined;
+    const atlasBySessionKey = await db.get(`SELECT id FROM agents WHERE session_key = ? ORDER BY id ASC LIMIT 1`, ATLAS_SESSION_KEY) as { id: number } | undefined;
     if (atlasBySessionKey?.id) return Number(atlasBySessionKey.id);
   }
 
-  const atlasByName = db.prepare(`SELECT id FROM agents WHERE name = ? ORDER BY id ASC LIMIT 1`).get(ATLAS_AGENT_NAME) as { id: number } | undefined;
+  const atlasByName = await db.get(`SELECT id FROM agents WHERE name = ? ORDER BY id ASC LIMIT 1`, ATLAS_AGENT_NAME) as { id: number } | undefined;
   if (atlasByName?.id) return Number(atlasByName.id);
 
   if (hasSessionKey) {
-    const legacyAtlas = db.prepare(`SELECT id FROM agents WHERE session_key = ? ORDER BY id ASC LIMIT 1`).get(LEGACY_ATLAS_SESSION_KEY) as { id: number } | undefined;
+    const legacyAtlas = await db.get(`SELECT id FROM agents WHERE session_key = ? ORDER BY id ASC LIMIT 1`, LEGACY_ATLAS_SESSION_KEY) as { id: number } | undefined;
     if (legacyAtlas?.id) return Number(legacyAtlas.id);
   }
 
   return null;
 }
 
-export function ensureConfiguredRuntimeMcpApiKey(
-  db: Database.Database = getDb(),
+export async function ensureConfiguredRuntimeMcpApiKey(
+  db: Db = getDb(),
   env: NodeJS.ProcessEnv = process.env,
   options: { tenantMode?: 'repair' | 'verify' } = {},
-): { status: 'missing' | 'reused' | 'created'; agentId?: number; keyId?: number; keyPrefix?: string } {
-  ensureMcpApiKeyTable(db);
+): Promise<{ status: 'missing' | 'reused' | 'created'; agentId?: number; keyId?: number; keyPrefix?: string }> {
+  await ensureMcpApiKeyTable(db);
   if (options.tenantMode === 'verify') {
-    verifyTenantSchemaForStartup(db);
+    await verifyTenantSchemaForStartup(db);
   } else {
-    ensureTenantSchema(db);
+    await ensureTenantSchema(db);
   }
 
   const configuredApiKey = env.AGENT_HQ_MCP_API_KEY?.trim();
   if (!configuredApiKey) return { status: 'missing' };
 
   try {
-    const identity = resolveMcpApiIdentityForKey(db, configuredApiKey, { updateLastUsed: false });
+    const identity = await resolveMcpApiIdentityForKey(db, configuredApiKey, { updateLastUsed: false });
     return {
       status: 'reused',
       agentId: identity.agentId,
@@ -1169,23 +1169,23 @@ export function ensureConfiguredRuntimeMcpApiKey(
     }
   }
 
-  const agentId = findAgentIdForConfiguredRuntimeKey(db, env);
+  const agentId = await findAgentIdForConfiguredRuntimeKey(db, env);
   if (!agentId) {
     throw new Error('Configured AGENT_HQ_MCP_API_KEY could not be materialized because no bootstrap agent was found in the current database');
   }
 
   const keyPrefix = configuredApiKey.slice(0, 16);
-  const agent = db.prepare(`SELECT tenant_id FROM agents WHERE id = ?`).get(agentId) as { tenant_id: number | null } | undefined;
+  const agent = await db.get(`SELECT tenant_id FROM agents WHERE id = ?`, agentId) as { tenant_id: number | null } | undefined;
   const tenantId = parsePositiveInt(agent?.tenant_id);
   if (!tenantId) {
     throw new Error(`Configured AGENT_HQ_MCP_API_KEY could not be materialized because bootstrap agent #${agentId} is not bound to a tenant`);
   }
   const globalAdmin = ['1', 'true', 'yes', 'on'].includes(String(env.AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN ?? '').trim().toLowerCase()) ? 1 : 0;
 
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, global_admin)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(agentId, tenantId, 'Configured runtime MCP API key', keyPrefix, hashMcpApiKey(configuredApiKey), globalAdmin);
+  `, agentId, tenantId, 'Configured runtime MCP API key', keyPrefix, hashMcpApiKey(configuredApiKey), globalAdmin);
 
   return {
     status: 'created',
@@ -1195,16 +1195,16 @@ export function ensureConfiguredRuntimeMcpApiKey(
   };
 }
 
-export function ensureMaterializedMcpApiKeyForAgent(params: {
-  db: Database.Database;
+export async function ensureMaterializedMcpApiKeyForAgent(params: {
+  db: Db;
   agentId: number;
   existingApiKey?: string | null;
   name?: string;
-}): { apiKey: string; reused: boolean; keyId?: number; keyPrefix?: string } {
+}): Promise<{ apiKey: string; reused: boolean; keyId?: number; keyPrefix?: string }> {
   const existingApiKey = params.existingApiKey?.trim();
   if (existingApiKey) {
     try {
-      const identity = resolveMcpApiIdentityForKey(params.db, existingApiKey, { updateLastUsed: false });
+      const identity = await resolveMcpApiIdentityForKey(params.db, existingApiKey, { updateLastUsed: false });
       if (identity.agentId === params.agentId) {
         return {
           apiKey: existingApiKey,
@@ -1217,7 +1217,7 @@ export function ensureMaterializedMcpApiKeyForAgent(params: {
     }
   }
 
-  const issued = issueMcpApiKeyForAgent(params.db, params.agentId, params.name);
+  const issued = await issueMcpApiKeyForAgent(params.db, params.agentId, params.name);
   return {
     apiKey: issued.apiKey,
     reused: false,
@@ -1258,8 +1258,8 @@ function parsePositiveInt(value: unknown): number | null {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function getScopedTaskContexts(db: Database.Database, identity: McpApiIdentity): ScopedTaskContext[] {
-  return db.prepare(`
+async function getScopedTaskContexts(db: Db, identity: McpApiIdentity): Promise<ScopedTaskContext[]> {
+  return (await db.all(`
     SELECT DISTINCT
       t.id AS task_id,
       t.project_id AS project_id,
@@ -1278,7 +1278,7 @@ function getScopedTaskContexts(db: Database.Database, identity: McpApiIdentity):
           AND ji.agent_id = ?
           AND ji.status IN ('queued', 'dispatched', 'running')
       )
-  `).all(identity.agentId, identity.agentId).map((row) => {
+  `, identity.agentId, identity.agentId)).map((row) => {
     const record = row as Record<string, unknown>;
     return {
       taskId: Number(record.task_id),
@@ -1289,8 +1289,8 @@ function getScopedTaskContexts(db: Database.Database, identity: McpApiIdentity):
   });
 }
 
-function getScopedInstanceContexts(db: Database.Database, identity: McpApiIdentity): ScopedInstanceContext[] {
-  return db.prepare(`
+async function getScopedInstanceContexts(db: Db, identity: McpApiIdentity): Promise<ScopedInstanceContext[]> {
+  return (await db.all(`
     SELECT DISTINCT
       ji.id AS instanceId,
       ji.task_id AS taskId,
@@ -1303,7 +1303,7 @@ function getScopedInstanceContexts(db: Database.Database, identity: McpApiIdenti
         ji.status IN ('queued', 'dispatched', 'running')
         OR t.active_instance_id = ji.id
       )
-  `).all(identity.agentId).map((row) => ({
+  `, identity.agentId)).map((row) => ({
     instanceId: Number((row as Record<string, unknown>).instanceId),
     taskId: parsePositiveInt((row as Record<string, unknown>).taskId),
     status: typeof (row as Record<string, unknown>).status === 'string' ? String((row as Record<string, unknown>).status) : null,
@@ -1311,33 +1311,33 @@ function getScopedInstanceContexts(db: Database.Database, identity: McpApiIdenti
   }));
 }
 
-function getCanonicalAgentProjectId(db: Database.Database, identity: McpApiIdentity): number | null {
-  if (!hasColumn(db, 'agents', 'project_id')) return null;
-  const row = db.prepare(`SELECT project_id FROM agents WHERE id = ? AND tenant_id = ? LIMIT 1`).get(identity.agentId, identity.tenantId) as { project_id: number | null } | undefined;
+async function getCanonicalAgentProjectId(db: Db, identity: McpApiIdentity): Promise<number | null> {
+  if (!await hasColumn(db, 'agents', 'project_id')) return null;
+  const row = await db.get(`SELECT project_id FROM agents WHERE id = ? AND tenant_id = ? LIMIT 1`, identity.agentId, identity.tenantId) as { project_id: number | null } | undefined;
   return parsePositiveInt(row?.project_id);
 }
 
-function getTenantAgentProjectId(db: Database.Database, identity: McpApiIdentity, agentId: number): number | null | undefined {
-  if (!hasColumn(db, 'agents', 'tenant_id') || !hasColumn(db, 'agents', 'project_id')) return undefined;
-  const row = db.prepare(`SELECT project_id FROM agents WHERE id = ? AND tenant_id = ? LIMIT 1`).get(agentId, identity.tenantId) as { project_id: number | null } | undefined;
+async function getTenantAgentProjectId(db: Db, identity: McpApiIdentity, agentId: number): Promise<number | null | undefined> {
+  if (!await hasColumn(db, 'agents', 'tenant_id') || !await hasColumn(db, 'agents', 'project_id')) return undefined;
+  const row = await db.get(`SELECT project_id FROM agents WHERE id = ? AND tenant_id = ? LIMIT 1`, agentId, identity.tenantId) as { project_id: number | null } | undefined;
   if (!row) return undefined;
   return parsePositiveInt(row.project_id);
 }
 
-function taskBelongsToProject(db: Database.Database, identity: McpApiIdentity, taskId: number, projectId: number): boolean {
-  const row = db.prepare(`SELECT tenant_id, project_id FROM tasks WHERE id = ? LIMIT 1`).get(taskId) as { tenant_id: number | null; project_id: number | null } | undefined;
+async function taskBelongsToProject(db: Db, identity: McpApiIdentity, taskId: number, projectId: number): Promise<boolean> {
+  const row = await db.get(`SELECT tenant_id, project_id FROM tasks WHERE id = ? LIMIT 1`, taskId) as { tenant_id: number | null; project_id: number | null } | undefined;
   return parsePositiveInt(row?.tenant_id) === identity.tenantId && parsePositiveInt(row?.project_id) === projectId;
 }
 
-function relationshipBelongsToProject(
-  db: Database.Database,
+async function relationshipBelongsToProject(
+  db: Db,
   identity: McpApiIdentity,
   relationshipId: number,
   sourceTaskId: number,
   projectId: number,
-): boolean {
-  if (!hasTable(db, 'task_relationships')) return false;
-  const row = db.prepare(`
+): Promise<boolean> {
+  if (!await hasTable(db, 'task_relationships')) return false;
+  const row = await db.get(`
     SELECT
       source.tenant_id AS source_tenant_id,
       source.project_id AS source_project_id,
@@ -1348,7 +1348,7 @@ function relationshipBelongsToProject(
     JOIN tasks target ON target.id = tr.target_task_id
     WHERE tr.id = ? AND tr.source_task_id = ?
     LIMIT 1
-  `).get(relationshipId, sourceTaskId) as Record<string, unknown> | undefined;
+  `, relationshipId, sourceTaskId) as Record<string, unknown> | undefined;
   if (!row) return false;
   return parsePositiveInt(row.source_tenant_id) === identity.tenantId
     && parsePositiveInt(row.target_tenant_id) === identity.tenantId
@@ -1356,16 +1356,16 @@ function relationshipBelongsToProject(
     && parsePositiveInt(row.target_project_id) === projectId;
 }
 
-function sprintBelongsToProject(db: Database.Database, identity: McpApiIdentity, sprintId: number, projectId: number): boolean {
-  if (!hasTable(db, 'sprints')) return false;
-  const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
-  const row = db.prepare(`
+async function sprintBelongsToProject(db: Db, identity: McpApiIdentity, sprintId: number, projectId: number): Promise<boolean> {
+  if (!await hasTable(db, 'sprints')) return false;
+  const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+  const row = await db.get(`
     SELECT project_id
     FROM sprints
     WHERE id = ?
       ${hasSprintTenant ? 'AND tenant_id = ?' : ''}
     LIMIT 1
-  `).get(sprintId, ...(hasSprintTenant ? [identity.tenantId] : [])) as { project_id: number | null } | undefined;
+  `, sprintId, ...(hasSprintTenant ? [identity.tenantId] : [])) as { project_id: number | null } | undefined;
   return parsePositiveInt(row?.project_id) === projectId;
 }
 
@@ -1375,25 +1375,25 @@ function requestBodyRecord(body: unknown): Record<string, unknown> {
     : {};
 }
 
-function validateProjectTaskCrudRequestScope(
-  db: Database.Database,
+async function validateProjectTaskCrudRequestScope(
+  db: Db,
   identity: McpApiIdentity,
   body: Record<string, unknown>,
   projectId: number,
-): { ok: true } | { ok: false; reason: string } {
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   const requestedProjectId = parsePositiveInt(body.project_id);
   if (requestedProjectId != null && requestedProjectId !== projectId) {
     return { ok: false, reason: `Requested project_id ${requestedProjectId} is outside the assigned project for ${identity.agentSlug}.` };
   }
 
   const requestedSprintId = parsePositiveInt(firstPresent(body.sprint_id, body.workflow_id));
-  if (requestedSprintId != null && !sprintBelongsToProject(db, identity, requestedSprintId, projectId)) {
+  if (requestedSprintId != null && !await sprintBelongsToProject(db, identity, requestedSprintId, projectId)) {
     return { ok: false, reason: `Requested sprint/workflow #${requestedSprintId} is outside the assigned project for ${identity.agentSlug}.` };
   }
 
   const requestedAgentId = parsePositiveInt(body.agent_id);
   if (requestedAgentId != null) {
-    const targetAgentProjectId = getTenantAgentProjectId(db, identity, requestedAgentId);
+    const targetAgentProjectId = await getTenantAgentProjectId(db, identity, requestedAgentId);
     if (targetAgentProjectId === undefined) {
       return { ok: false, reason: `Requested agent #${requestedAgentId} is outside the MCP key tenant or does not exist.` };
     }
@@ -1413,8 +1413,8 @@ function extractRequestedMcpPolicyCapabilities(body: unknown): string[] | null {
   return value;
 }
 
-function taskIdForInstance(db: Database.Database, instanceId: number): number | null {
-  const row = db.prepare(`SELECT task_id FROM job_instances WHERE id = ?`).get(instanceId) as { task_id: number | null } | undefined;
+async function taskIdForInstance(db: Db, instanceId: number): Promise<number | null> {
+  const row = await db.get(`SELECT task_id FROM job_instances WHERE id = ?`, instanceId) as { task_id: number | null } | undefined;
   return row?.task_id ?? null;
 }
 
@@ -1443,17 +1443,17 @@ function firstPresent(...values: unknown[]): unknown {
   return values.find((value) => value !== undefined && value !== null && value !== '');
 }
 
-function getRoutingRuleScopeFromRuleId(
-  db: Database.Database,
+async function getRoutingRuleScopeFromRuleId(
+  db: Db,
   ruleId: number,
   tenantId: number,
-): RoutingRuleScopeContext | null {
-  if (!hasTable(db, 'sprint_task_routing_rules')) return null;
-  const hasRoutingProject = hasColumn(db, 'sprint_task_routing_rules', 'project_id');
-  const hasRoutingSprintType = hasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
-  const hasRoutingTenant = hasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
-  const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
-  const row = db.prepare(`
+): Promise<RoutingRuleScopeContext | null> {
+  if (!await hasTable(db, 'sprint_task_routing_rules')) return null;
+  const hasRoutingProject = await hasColumn(db, 'sprint_task_routing_rules', 'project_id');
+  const hasRoutingSprintType = await hasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
+  const hasRoutingTenant = await hasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
+  const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+  const row = await db.get(`
     SELECT
       trr.id,
       ${hasRoutingProject ? 'trr.project_id' : 'NULL'} AS routing_project_id,
@@ -1467,7 +1467,7 @@ function getRoutingRuleScopeFromRuleId(
       ${hasRoutingTenant ? 'AND trr.tenant_id = ?' : ''}
       ${!hasRoutingTenant && hasSprintTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
     LIMIT 1
-  `).get(ruleId, ...((hasRoutingTenant || (!hasRoutingTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  `, ruleId, ...((hasRoutingTenant || (!hasRoutingTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
     projectId: parsePositiveInt(row.routing_project_id) ?? parsePositiveInt(row.sprint_project_id),
@@ -1477,25 +1477,25 @@ function getRoutingRuleScopeFromRuleId(
   };
 }
 
-function getRoutingRuleScopeFromRequest(
-  db: Database.Database,
+async function getRoutingRuleScopeFromRequest(
+  db: Db,
   input: Record<string, unknown>,
   tenantId: number,
-): RoutingRuleScopeContext | null {
+): Promise<RoutingRuleScopeContext | null> {
   const sprintId = parsePositiveInt(firstPresent(input.sprint_id, input.workflow_id));
   const requestedProjectId = parsePositiveInt(input.project_id);
   const requestedSprintType = normalizeScopeString(firstPresent(input.sprint_type, input.workflow_type));
 
   if (sprintId != null) {
-    if (!hasTable(db, 'sprints')) return { projectId: requestedProjectId, sprintId, sprintType: requestedSprintType, source: 'request' };
-    const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
-    const sprint = db.prepare(`
+    if (!await hasTable(db, 'sprints')) return { projectId: requestedProjectId, sprintId, sprintType: requestedSprintType, source: 'request' };
+    const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+    const sprint = await db.get(`
       SELECT id, project_id, sprint_type
       FROM sprints
       WHERE id = ?
         ${hasSprintTenant ? 'AND tenant_id = ?' : ''}
       LIMIT 1
-    `).get(sprintId, ...(hasSprintTenant ? [tenantId] : [])) as { id: number; project_id: number | null; sprint_type: string | null } | undefined;
+    `, sprintId, ...(hasSprintTenant ? [tenantId] : [])) as { id: number; project_id: number | null; sprint_type: string | null } | undefined;
     if (!sprint) return { projectId: null, sprintId, sprintType: requestedSprintType, source: 'request' };
     return {
       projectId: parsePositiveInt(sprint.project_id),
@@ -1519,17 +1519,17 @@ function routingRuleScopeMatchesAssignedProject(scope: RoutingRuleScopeContext |
     && scope.projectId === canonicalAgentProjectId;
 }
 
-function getRoutingTransitionScopeFromTransitionId(
-  db: Database.Database,
+async function getRoutingTransitionScopeFromTransitionId(
+  db: Db,
   transitionId: number,
   tenantId: number,
-): RoutingTransitionScopeContext | null {
-  if (!hasTable(db, 'sprint_task_transitions')) return null;
-  const hasTransitionProject = hasColumn(db, 'sprint_task_transitions', 'project_id');
-  const hasTransitionSprintType = hasColumn(db, 'sprint_task_transitions', 'sprint_type');
-  const hasTransitionTenant = hasColumn(db, 'sprint_task_transitions', 'tenant_id');
-  const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
-  const row = db.prepare(`
+): Promise<RoutingTransitionScopeContext | null> {
+  if (!await hasTable(db, 'sprint_task_transitions')) return null;
+  const hasTransitionProject = await hasColumn(db, 'sprint_task_transitions', 'project_id');
+  const hasTransitionSprintType = await hasColumn(db, 'sprint_task_transitions', 'sprint_type');
+  const hasTransitionTenant = await hasColumn(db, 'sprint_task_transitions', 'tenant_id');
+  const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+  const row = await db.get(`
     SELECT
       stt.id,
       ${hasTransitionProject ? 'stt.project_id' : 'NULL'} AS transition_project_id,
@@ -1543,7 +1543,7 @@ function getRoutingTransitionScopeFromTransitionId(
       ${hasTransitionTenant ? 'AND stt.tenant_id = ?' : ''}
       ${!hasTransitionTenant && hasSprintTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
     LIMIT 1
-  `).get(transitionId, ...((hasTransitionTenant || (!hasTransitionTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  `, transitionId, ...((hasTransitionTenant || (!hasTransitionTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
     projectId: parsePositiveInt(row.transition_project_id) ?? parsePositiveInt(row.sprint_project_id),
@@ -1553,12 +1553,12 @@ function getRoutingTransitionScopeFromTransitionId(
   };
 }
 
-function getRoutingTransitionScopeFromRequest(
-  db: Database.Database,
+async function getRoutingTransitionScopeFromRequest(
+  db: Db,
   input: Record<string, unknown>,
   tenantId: number,
-): RoutingTransitionScopeContext | null {
-  const ruleScope = getRoutingRuleScopeFromRequest(db, input, tenantId);
+): Promise<RoutingTransitionScopeContext | null> {
+  const ruleScope = await getRoutingRuleScopeFromRequest(db, input, tenantId);
   if (!ruleScope) return null;
   return {
     projectId: ruleScope.projectId,
@@ -1580,21 +1580,21 @@ type WorkflowDefinitionScopeContext = {
   source: 'request' | 'existing_definition';
 };
 
-function getWorkflowDefinitionScopeFromKey(
-  db: Database.Database,
+async function getWorkflowDefinitionScopeFromKey(
+  db: Db,
   workflowDefinitionKey: string,
   tenantId: number,
-): WorkflowDefinitionScopeContext | null {
-  if (!hasTable(db, 'sprint_types')) return null;
-  const hasTenant = hasColumn(db, 'sprint_types', 'tenant_id');
-  const hasProject = hasColumn(db, 'sprint_types', 'project_id');
-  const row = db.prepare(`
+): Promise<WorkflowDefinitionScopeContext | null> {
+  if (!await hasTable(db, 'sprint_types')) return null;
+  const hasTenant = await hasColumn(db, 'sprint_types', 'tenant_id');
+  const hasProject = await hasColumn(db, 'sprint_types', 'project_id');
+  const row = await db.get(`
     SELECT key, ${hasProject ? 'project_id' : 'NULL'} AS project_id
     FROM sprint_types
     WHERE key = ?
       ${hasTenant ? 'AND tenant_id = ?' : ''}
     LIMIT 1
-  `).get(workflowDefinitionKey, ...(hasTenant ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  `, workflowDefinitionKey, ...(hasTenant ? [tenantId] : [])) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
     projectId: parsePositiveInt(row.project_id),
@@ -1635,9 +1635,9 @@ function isActiveCustomFieldsOnlyUpdate(body: Record<string, unknown>): boolean 
   return keys.every((key) => ACTIVE_CUSTOM_FIELD_WRITE_ALLOWED_BODY_KEYS.has(key));
 }
 
-function getRecurringTaskSeriesProjectId(db: Database.Database, seriesId: number): number | null {
+async function getRecurringTaskSeriesProjectId(db: Db, seriesId: number): Promise<number | null> {
   try {
-    const row = db.prepare(`SELECT project_id FROM recurring_task_series WHERE id = ?`).get(seriesId) as
+    const row = await db.get(`SELECT project_id FROM recurring_task_series WHERE id = ?`, seriesId) as
       { project_id: number | null } | undefined;
     const projectId = Number(row?.project_id);
     return Number.isInteger(projectId) && projectId > 0 ? projectId : null;
@@ -1659,17 +1659,17 @@ type TransitionRequirementScopeContext = {
   source: 'request' | 'existing_requirement';
 };
 
-function getTransitionRequirementScopeFromRequirementId(
-  db: Database.Database,
+async function getTransitionRequirementScopeFromRequirementId(
+  db: Db,
   requirementId: number,
   tenantId: number,
-): TransitionRequirementScopeContext | null {
-  if (!hasTable(db, 'sprint_task_transition_requirements')) return null;
-  const hasRequirementProject = hasColumn(db, 'sprint_task_transition_requirements', 'project_id');
-  const hasRequirementSprintType = hasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
-  const hasRequirementTenant = hasColumn(db, 'sprint_task_transition_requirements', 'tenant_id');
-  const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
-  const row = db.prepare(`
+): Promise<TransitionRequirementScopeContext | null> {
+  if (!await hasTable(db, 'sprint_task_transition_requirements')) return null;
+  const hasRequirementProject = await hasColumn(db, 'sprint_task_transition_requirements', 'project_id');
+  const hasRequirementSprintType = await hasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
+  const hasRequirementTenant = await hasColumn(db, 'sprint_task_transition_requirements', 'tenant_id');
+  const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+  const row = await db.get(`
     SELECT
       req.id,
       ${hasRequirementProject ? 'req.project_id' : 'NULL'} AS requirement_project_id,
@@ -1683,7 +1683,7 @@ function getTransitionRequirementScopeFromRequirementId(
       ${hasRequirementTenant ? 'AND req.tenant_id = ?' : ''}
       ${!hasRequirementTenant && hasSprintTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
     LIMIT 1
-  `).get(requirementId, ...((hasRequirementTenant || (!hasRequirementTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  `, requirementId, ...((hasRequirementTenant || (!hasRequirementTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
     projectId: parsePositiveInt(row.requirement_project_id) ?? parsePositiveInt(row.sprint_project_id),
@@ -1693,25 +1693,25 @@ function getTransitionRequirementScopeFromRequirementId(
   };
 }
 
-function getTransitionRequirementScopeFromRequest(
-  db: Database.Database,
+async function getTransitionRequirementScopeFromRequest(
+  db: Db,
   input: Record<string, unknown>,
   tenantId: number,
-): TransitionRequirementScopeContext | null {
+): Promise<TransitionRequirementScopeContext | null> {
   const sprintId = parsePositiveInt(firstPresent(input.sprint_id, input.workflow_id));
   const requestedProjectId = parsePositiveInt(input.project_id);
   const requestedSprintType = normalizeScopeString(firstPresent(input.sprint_type, input.workflow_type));
 
   if (sprintId != null) {
-    if (!hasTable(db, 'sprints')) return { projectId: requestedProjectId, sprintId, sprintType: requestedSprintType, source: 'request' };
-    const hasSprintTenant = hasColumn(db, 'sprints', 'tenant_id');
-    const sprint = db.prepare(`
+    if (!await hasTable(db, 'sprints')) return { projectId: requestedProjectId, sprintId, sprintType: requestedSprintType, source: 'request' };
+    const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+    const sprint = await db.get(`
       SELECT id, project_id, sprint_type
       FROM sprints
       WHERE id = ?
         ${hasSprintTenant ? 'AND tenant_id = ?' : ''}
       LIMIT 1
-    `).get(sprintId, ...(hasSprintTenant ? [tenantId] : [])) as { id: number; project_id: number | null; sprint_type: string | null } | undefined;
+    `, sprintId, ...(hasSprintTenant ? [tenantId] : [])) as { id: number; project_id: number | null; sprint_type: string | null } | undefined;
     if (!sprint) return { projectId: null, sprintId, sprintType: requestedSprintType, source: 'request' };
     return {
       projectId: parsePositiveInt(sprint.project_id),
@@ -1737,24 +1737,20 @@ function transitionRequirementScopeMatchesAssignedProject(scope: TransitionRequi
     && scope.sprintType != null;
 }
 
-function insertMcpScopeDeniedNote(db: Database.Database, params: {
+async function insertMcpScopeDeniedNote(db: Db, params: {
   taskId: number | null;
   identity: McpApiIdentity;
   reason: string;
-}): void {
+}): Promise<void> {
   if (!params.taskId) return;
-  db.prepare(`
+  await db.run(`
     INSERT INTO task_notes (task_id, author, content)
     VALUES (?, ?, ?)
-  `).run(
-    params.taskId,
-    'agent-hq-mcp-auth',
-    `Scoped MCP write refused for ${params.identity.auditActor}: ${params.reason}`,
-  );
+  `, params.taskId, 'agent-hq-mcp-auth', `Scoped MCP write refused for ${params.identity.auditActor}: ${params.reason}`);
 }
 
-function sendMcpScopeDenied(res: Response, params: {
-  db: Database.Database;
+async function sendMcpScopeDenied(res: Response, params: {
+  db: Db;
   identity: McpApiIdentity;
   reason: string;
   requiredCapability: AgentMcpCapabilityKey;
@@ -1764,12 +1760,12 @@ function sendMcpScopeDenied(res: Response, params: {
   taskId?: number | null;
   instanceId?: number | null;
   path: string;
-}): void {
-  insertMcpScopeDeniedNote(params.db, {
-    taskId: params.taskId ?? (params.instanceId ? taskIdForInstance(params.db, params.instanceId) : null),
-    identity: params.identity,
-    reason: params.reason,
-  });
+}): Promise<void> {
+  await insertMcpScopeDeniedNote(params.db, {
+        taskId: params.taskId ?? (params.instanceId ? await taskIdForInstance(params.db, params.instanceId) : null),
+        identity: params.identity,
+        reason: params.reason,
+      });
 
   res.status(403).json({
     error: params.reason,
@@ -1812,7 +1808,7 @@ function sendMcpTenantScopeDenied(res: Response, params: {
   });
 }
 
-export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, next: NextFunction): void {
+export async function authorizeMcpApiRequestIfPresent(req: Request, res: Response, next: NextFunction): Promise<void> {
   const identity = getMcpIdentityFromRequest(req);
   if (!identity) return next();
 
@@ -1821,7 +1817,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
   const requestPath = req.path;
 
   try {
-    const resolvedTenantId = resolveTenantIdFromRequest(db, req);
+    const resolvedTenantId = await resolveTenantIdFromRequest(db, req);
     if (identity.globalAdminAccess && resolvedTenantId !== identity.tenantId) {
       console.warn(
         `[mcp-auth] super-admin cross-tenant allowed ${identity.agentSlug} ${method} ${requestPath} (key tenant=${identity.tenantId}; requested tenant=${resolvedTenantId}; capability=admin.cross_tenant)`,
@@ -1849,38 +1845,38 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     throw err;
   }
 
-  const permissionState = resolveEffectiveAgentMcpPermissionState(db, identity);
-  const taskScopes = getScopedTaskContexts(db, identity);
-  const instanceScopes = getScopedInstanceContexts(db, identity);
+  const permissionState = await resolveEffectiveAgentMcpPermissionState(db, identity);
+  const taskScopes = await getScopedTaskContexts(db, identity);
+  const instanceScopes = await getScopedInstanceContexts(db, identity);
   const scopedTaskIds = new Set(taskScopes.map((row) => row.taskId));
   const scopedProjectIds = new Set(taskScopes.map((row) => row.projectId).filter((value): value is number => value != null));
   const scopedSprintIds = new Set(taskScopes.map((row) => row.sprintId).filter((value): value is number => value != null));
   const scopedInstanceIds = new Set(instanceScopes.map((row) => row.instanceId));
-  const canonicalAgentProjectId = getCanonicalAgentProjectId(db, identity);
+  const canonicalAgentProjectId = await getCanonicalAgentProjectId(db, identity);
 
   if (permissionState.enabledCapabilities.has('admin.full_access')) return next();
 
-  const deny = (params: {
+  const deny = async (params: {
     reason: string;
     requiredCapability: AgentMcpCapabilityKey;
     taskId?: number | null;
     instanceId?: number | null;
-  }): void => {
+  }): Promise<void> => {
     console.warn(
       `[mcp-auth] denied ${identity.agentSlug} ${method} ${requestPath} (requires ${params.requiredCapability}; policy=${permissionState.policyMode}/${permissionState.defaultPolicy})`,
     );
-    sendMcpScopeDenied(res, {
-      db,
-      identity,
-      path: requestPath,
-      reason: params.reason,
-      requiredCapability: params.requiredCapability,
-      policyMode: permissionState.policyMode,
-      defaultPolicy: permissionState.defaultPolicy,
-      allowedCapabilities: permissionState.enabledCapabilities,
-      taskId: params.taskId,
-      instanceId: params.instanceId,
-    });
+    await sendMcpScopeDenied(res, {
+            db,
+            identity,
+            path: requestPath,
+            reason: params.reason,
+            requiredCapability: params.requiredCapability,
+            policyMode: permissionState.policyMode,
+            defaultPolicy: permissionState.defaultPolicy,
+            allowedCapabilities: permissionState.enabledCapabilities,
+            taskId: params.taskId,
+            instanceId: params.instanceId,
+          });
   };
 
   const requireCapability = (
@@ -1964,7 +1960,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
         requiredCapability,
       });
     }
-    const scope = validateProjectTaskCrudRequestScope(db, identity, body, canonicalAgentProjectId);
+    const scope = await validateProjectTaskCrudRequestScope(db, identity, body, canonicalAgentProjectId);
     if (!scope.ok) {
       return deny({
         reason: scope.reason,
@@ -1989,7 +1985,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       `MCP capability policy ${isWrite ? 'mutation' : 'readback'} is disabled for ${identity.agentSlug}.`,
     )) return;
 
-    const targetProjectId = getTenantAgentProjectId(db, identity, targetAgentId);
+    const targetProjectId = await getTenantAgentProjectId(db, identity, targetAgentId);
     if (targetProjectId === undefined) {
       return deny({
         reason: `Agent #${targetAgentId} is outside the MCP key tenant or does not exist.`,
@@ -2068,7 +2064,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       });
     }
     if (hasActiveRead && scopedTaskIds.has(taskId)) return next();
-    if (hasProjectRead && canonicalAgentProjectId != null && taskBelongsToProject(db, identity, taskId, canonicalAgentProjectId)) {
+    if (hasProjectRead && canonicalAgentProjectId != null && await taskBelongsToProject(db, identity, taskId, canonicalAgentProjectId)) {
       return next();
     }
     if (hasProjectRead && canonicalAgentProjectId == null) {
@@ -2154,7 +2150,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
           taskId,
         });
       }
-      if (!taskBelongsToProject(db, identity, taskId, canonicalAgentProjectId)) {
+      if (!await taskBelongsToProject(db, identity, taskId, canonicalAgentProjectId)) {
         return deny({
           reason: `Task #${taskId} is outside the assigned project for ${identity.agentSlug}.`,
           requiredCapability,
@@ -2162,7 +2158,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
         });
       }
       if (method === 'PUT') {
-        const scope = validateProjectTaskCrudRequestScope(db, identity, requestBodyRecord(req.body), canonicalAgentProjectId);
+        const scope = await validateProjectTaskCrudRequestScope(db, identity, requestBodyRecord(req.body), canonicalAgentProjectId);
         if (!scope.ok) {
           return deny({
             reason: scope.reason,
@@ -2173,7 +2169,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       }
       if (relationshipCrudAllowed && method === 'POST') {
         const targetTaskId = parsePositiveInt(requestBodyRecord(req.body).target_task_id);
-        if (targetTaskId != null && !taskBelongsToProject(db, identity, targetTaskId, canonicalAgentProjectId)) {
+        if (targetTaskId != null && !await taskBelongsToProject(db, identity, targetTaskId, canonicalAgentProjectId)) {
           return deny({
             reason: `Relationship target task #${targetTaskId} is outside the assigned project for ${identity.agentSlug}.`,
             requiredCapability,
@@ -2183,7 +2179,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       }
       if (relationshipCrudAllowed && method === 'DELETE') {
         const relationshipId = parsePositiveInt(taskRelationshipMutationMatch?.[2]);
-        if (relationshipId == null || !relationshipBelongsToProject(db, identity, relationshipId, taskId, canonicalAgentProjectId)) {
+        if (relationshipId == null || !await relationshipBelongsToProject(db, identity, relationshipId, taskId, canonicalAgentProjectId)) {
           return deny({
             reason: `Relationship #${relationshipId ?? 'unknown'} is outside the assigned project for ${identity.agentSlug}.`,
             requiredCapability,
@@ -2307,7 +2303,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       : {};
     const requestInput = { ...req.query, ...body } as Record<string, unknown>;
     const ruleId = parsePositiveInt(routingRuleMatch[1]);
-    const existingScope = ruleId != null ? getRoutingRuleScopeFromRuleId(db, ruleId, identity.tenantId) : null;
+    const existingScope = ruleId != null ? await getRoutingRuleScopeFromRuleId(db, ruleId, identity.tenantId) : null;
     const requestHasScope = firstPresent(
       requestInput.project_id,
       requestInput.sprint_id,
@@ -2315,7 +2311,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       requestInput.sprint_type,
       requestInput.workflow_type,
     ) !== undefined;
-    const requestedScope = requestHasScope ? getRoutingRuleScopeFromRequest(db, requestInput, identity.tenantId) : null;
+    const requestedScope = requestHasScope ? await getRoutingRuleScopeFromRequest(db, requestInput, identity.tenantId) : null;
     const scopesToAuthorize = [
       ...(existingScope ? [existingScope] : []),
       ...(requestedScope ? [requestedScope] : []),
@@ -2372,7 +2368,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       : {};
     const requestInput = { ...req.query, ...body } as Record<string, unknown>;
     const transitionId = parsePositiveInt(routingTransitionMatch[1]);
-    const existingScope = transitionId != null ? getRoutingTransitionScopeFromTransitionId(db, transitionId, identity.tenantId) : null;
+    const existingScope = transitionId != null ? await getRoutingTransitionScopeFromTransitionId(db, transitionId, identity.tenantId) : null;
     const requestHasScope = firstPresent(
       requestInput.project_id,
       requestInput.sprint_id,
@@ -2380,7 +2376,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       requestInput.sprint_type,
       requestInput.workflow_type,
     ) !== undefined;
-    const requestedScope = requestHasScope ? getRoutingTransitionScopeFromRequest(db, requestInput, identity.tenantId) : null;
+    const requestedScope = requestHasScope ? await getRoutingTransitionScopeFromRequest(db, requestInput, identity.tenantId) : null;
     const scopesToAuthorize = [
       ...(existingScope ? [existingScope] : []),
       ...(requestedScope ? [requestedScope] : []),
@@ -2440,7 +2436,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     const requestInput = { ...req.query, ...body } as Record<string, unknown>;
     const encodedKey = workflowDefinitionMatch[1];
     const workflowDefinitionKey = encodedKey ? decodeURIComponent(encodedKey) : null;
-    const existingScope = workflowDefinitionKey ? getWorkflowDefinitionScopeFromKey(db, workflowDefinitionKey, identity.tenantId) : null;
+    const existingScope = workflowDefinitionKey ? await getWorkflowDefinitionScopeFromKey(db, workflowDefinitionKey, identity.tenantId) : null;
     const requestScope = getWorkflowDefinitionScopeFromRequest(requestInput);
     const scopesToAuthorize = [
       ...(existingScope ? [existingScope] : []),
@@ -2515,8 +2511,8 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       : {};
     const requestInput = { ...req.query, ...body } as Record<string, unknown>;
     const requirementId = parsePositiveInt(transitionRequirementMatch[1]);
-    const existingScope = requirementId != null ? getTransitionRequirementScopeFromRequirementId(db, requirementId, identity.tenantId) : null;
-    const requestScope = getTransitionRequirementScopeFromRequest(db, requestInput, identity.tenantId);
+    const existingScope = requirementId != null ? await getTransitionRequirementScopeFromRequirementId(db, requirementId, identity.tenantId) : null;
+    const requestScope = await getTransitionRequirementScopeFromRequest(db, requestInput, identity.tenantId);
     const isCollectionRead = method === 'GET' && requirementId == null;
 
     if (requirementId != null && existingScope == null) {
@@ -2601,7 +2597,7 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
     // anything the caller supplied. For list/create the caller must name the
     // project explicitly so a scoped key can never enumerate other projects.
     const scopedProjectId = seriesId != null
-      ? getRecurringTaskSeriesProjectId(db, seriesId)
+      ? await getRecurringTaskSeriesProjectId(db, seriesId)
       : parsePositiveInt(body.project_id ?? req.query.project_id);
 
     if (scopedProjectId == null) {
@@ -2629,13 +2625,13 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
   });
 }
 
-export function authenticateMcpApiKeyIfPresent(req: Request, res: Response, next: NextFunction): void {
+export async function authenticateMcpApiKeyIfPresent(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { key, presented } = extractMcpApiKeyFromRequest(req);
     if (!presented) return next();
     if (!key) throw new McpApiAuthError('MCP API key is required', 401, 'mcp_api_key_missing');
 
-    req.mcpIdentity = resolveMcpApiIdentityForKey(getDb(), key);
+    req.mcpIdentity = await resolveMcpApiIdentityForKey(getDb(), key);
     next();
   } catch (err) {
     const authErr = err instanceof McpApiAuthError

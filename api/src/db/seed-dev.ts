@@ -41,12 +41,12 @@ function seedIfEmpty(table: string, checkSql: string, insertFn: () => void): voi
 seedIfEmpty(
   'projects',
   `SELECT COUNT(*) AS cnt FROM projects WHERE tenant_id = ${defaultTenantId} AND name IN ('Agency', 'Agent HQ')`,
-  () => {
-    db.prepare(`
+  async () => {
+    await db.run(`
       INSERT INTO projects (tenant_id, name, description, context_md) VALUES
         (?, 'Agency', 'Dev sandbox: General IT agency work bucket', '## Agency (dev)\nDev environment — safe to mutate.'),
         (?, 'Agent HQ', 'Dev sandbox: Agent HQ internal platform project', '## Agent HQ (dev)\nDev environment — safe to mutate.')
-    `).run(defaultTenantId, defaultTenantId);
+    `, defaultTenantId, defaultTenantId);
   }
 );
 
@@ -101,22 +101,22 @@ provisionDefaultMcpRegistry();
 seedIfEmpty(
   'sprints',
   `SELECT COUNT(*) AS cnt FROM sprints WHERE tenant_id = ${defaultTenantId} AND name IN ('Dev Sprint 1', 'Agent HQ Enhancements (dev)')`,
-  () => {
+  async () => {
     // We need a project id — get first agency project
-    const agencyProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`).get(defaultTenantId) as { id: number } | undefined;
-    const atlasProject  = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agent HQ' LIMIT 1`).get(defaultTenantId) as { id: number } | undefined;
+    const agencyProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
+    const atlasProject  = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agent HQ' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
 
     if (agencyProject) {
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value) VALUES
           (?, ?, 'Dev Sprint 1', 'Validate dev environment isolation and seed data', 'dev', 'active', 'time', '2w')
-      `).run(defaultTenantId, agencyProject.id);
+      `, defaultTenantId, agencyProject.id);
     }
     if (atlasProject) {
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value) VALUES
           (?, ?, 'Agent HQ Enhancements (dev)', 'Test Agent HQ feature work in isolation', 'dev', 'active', 'time', '2w')
-      `).run(defaultTenantId, atlasProject.id);
+      `, defaultTenantId, atlasProject.id);
     }
   }
 );
@@ -132,25 +132,18 @@ seedIfEmpty(
 seedIfEmpty(
   'tasks',
   `SELECT COUNT(*) AS cnt FROM tasks WHERE tenant_id = ${defaultTenantId}`,
-  () => {
-    const agencyProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`).get(defaultTenantId) as { id: number } | undefined;
-    const sprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? AND name = 'Dev Sprint 1' LIMIT 1`).get(defaultTenantId) as { id: number } | undefined;
-    const forgeAgent = db.prepare(`SELECT id FROM agents WHERE tenant_id = ? AND session_key = 'agent:agency-backend:main' LIMIT 1`).get(defaultTenantId) as { id: number } | undefined;
+  async () => {
+    const agencyProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
+    const sprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? AND name = 'Dev Sprint 1' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
+    const forgeAgent = await db.get(`SELECT id FROM agents WHERE tenant_id = ? AND session_key = 'agent:agency-backend:main' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
 
     if (agencyProject) {
-      db.prepare(`
+      await db.run(`
         INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, sprint_id, assigned_agent_id) VALUES
           (?, 'Sample dev task — todo', 'A representative task in todo state for dev/test use', 'todo', 'medium', ?, ?, ?),
           (?, 'Sample dev task — in_progress', 'A representative task in in_progress state for dev/test use', 'in_progress', 'high', ?, ?, ?),
           (?, 'Sample dev task — review', 'A representative task in review state for dev/test use', 'review', 'low', ?, ?, ?)
-      `).run(
-        defaultTenantId,
-        agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null,
-        defaultTenantId,
-        agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null,
-        defaultTenantId,
-        agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null
-      );
+      `, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null);
     }
   }
 );

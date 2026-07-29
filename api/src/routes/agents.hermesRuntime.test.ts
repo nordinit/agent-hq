@@ -11,7 +11,7 @@ let dbPath: string;
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 const ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-hermes-runtime-'));
@@ -21,7 +21,7 @@ function resetDb(): void {
   process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = '1';
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -130,7 +130,7 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`).run('openai', 'connected');
+  await db.run(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`, 'openai', 'connected');
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -153,10 +153,10 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('agents Hermes runtime CRUD support', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-hermes-runtime-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
-    resetDb();
+    await resetDb();
   });
 
   afterEach(() => {
@@ -173,8 +173,7 @@ describe('agents Hermes runtime CRUD support', () => {
     const db = getDb();
     const workspacePath = path.join(tempDir, 'workspace-hermes-full');
     const hermesHome = path.join(tempDir, 'hermes-home');
-    db.prepare(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (?, ?, ?, ?)`)
-      .run(30, 'agent-hq', 'node', '["server.js"]');
+    await db.run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (?, ?, ?, ?)`, 30, 'agent-hq', 'node', '["server.js"]');
 
     const runtimeConfig = {
       profile: 'agent-hq-hermes-full',
@@ -211,8 +210,7 @@ describe('agents Hermes runtime CRUD support', () => {
       expect(body.report.auth.status).toBe('skipped');
       expect(body.report.auth.details.runtime_auth_providers_synced).toEqual([]);
 
-      const row = db.prepare(`SELECT runtime_type, runtime_config, openclaw_agent_id, workspace_path FROM agents WHERE session_key = ?`)
-        .get('agent:hermes-full:main') as {
+      const row = await db.get(`SELECT runtime_type, runtime_config, openclaw_agent_id, workspace_path FROM agents WHERE session_key = ?`, 'agent:hermes-full:main') as {
           runtime_type: string;
           runtime_config: string | null;
           openclaw_agent_id: string | null;
@@ -249,19 +247,19 @@ describe('agents Hermes runtime CRUD support', () => {
     const workspacePath = path.join(tempDir, 'workspace-hermes-codex-auth');
     const hermesHome = path.join(tempDir, 'hermes-home-codex-auth');
     const expiresAt = Date.now() + 60 * 60 * 1000;
-    db.prepare(`
+    await db.run(`
       INSERT INTO provider_config (slug, display_name, status, config)
       VALUES (?, ?, ?, ?)
-    `).run('openai-codex', 'OpenAI Codex (OAuth)', 'connected', JSON.stringify({
-      auth_type: 'oauth',
-      provider: 'openai-codex',
-      expires_at: expiresAt,
-      tokens: {
-        access_token: 'test-access-token',
-        refresh_token: 'test-refresh-token',
-        account_id: 'acct-test',
-      },
-    }));
+    `, 'openai-codex', 'OpenAI Codex (OAuth)', 'connected', JSON.stringify({
+            auth_type: 'oauth',
+            provider: 'openai-codex',
+            expires_at: expiresAt,
+            tokens: {
+              access_token: 'test-access-token',
+              refresh_token: 'test-refresh-token',
+              account_id: 'acct-test',
+            },
+          }));
 
     const runtimeConfig = {
       profile: 'agent-hq-hermes-codex-auth',
@@ -321,10 +319,10 @@ describe('agents Hermes runtime CRUD support', () => {
     const db = getDb();
     const workspacePath = path.join(tempDir, 'workspace-hermes-missing-codex-auth');
     const hermesHome = path.join(tempDir, 'hermes-home-missing-codex-auth');
-    db.prepare(`
+    await db.run(`
       INSERT INTO provider_config (slug, display_name, status, config)
       VALUES (?, ?, ?, ?)
-    `).run('openai-codex', 'OpenAI Codex (OAuth)', 'connected', '{}');
+    `, 'openai-codex', 'OpenAI Codex (OAuth)', 'connected', '{}');
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -464,7 +462,7 @@ describe('agents Hermes runtime CRUD support', () => {
       expect(createdBody.runtime_type).toBe('hermes');
       expect(createdBody.runtime_config).toEqual(hermesConfig);
 
-      const createdRow = db.prepare(`SELECT id, runtime_type, runtime_config FROM agents WHERE session_key = ?`).get('agent:hermes-worker:main') as {
+      const createdRow = await db.get(`SELECT id, runtime_type, runtime_config FROM agents WHERE session_key = ?`, 'agent:hermes-worker:main') as {
         id: number;
         runtime_type: string;
         runtime_config: string | null;
@@ -485,7 +483,7 @@ describe('agents Hermes runtime CRUD support', () => {
 
   it('creates Hermes agents when preferred_provider is omitted and no providers are connected', async () => {
     const db = getDb();
-    db.prepare(`DELETE FROM provider_config`).run();
+    await db.run(`DELETE FROM provider_config`);
 
     const hermesConfig = {
       profile: 'agent-hq-hermes-qa',
@@ -513,7 +511,7 @@ describe('agents Hermes runtime CRUD support', () => {
       expect(createdBody.runtime_config).toEqual(hermesConfig);
       expect(createdBody.preferred_provider).toBe('anthropic');
 
-      const createdRow = db.prepare(`SELECT preferred_provider, model FROM agents WHERE session_key = ?`).get('agent:hermes-qa-fixture:main') as {
+      const createdRow = await db.get(`SELECT preferred_provider, model FROM agents WHERE session_key = ?`, 'agent:hermes-qa-fixture:main') as {
         preferred_provider: string;
         model: string | null;
       };
@@ -526,20 +524,11 @@ describe('agents Hermes runtime CRUD support', () => {
 
   it('updates existing agents to Hermes and preserves the new config on subsequent reads', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (
         id, name, role, session_key, runtime_type, runtime_config, preferred_provider, project_id
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      94,
-      'Cinder',
-      'Backend Engineer',
-      'agent:cinder:main',
-      'webhook',
-      JSON.stringify({ dispatchUrl: 'http://localhost:3900/hook' }),
-      'openai',
-      null,
-    );
+    `, 94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', JSON.stringify({ dispatchUrl: 'http://localhost:3900/hook' }), 'openai', null);
 
     const hermesConfig = {
       profile: 'agent-hq-cinder-backend',
@@ -565,7 +554,7 @@ describe('agents Hermes runtime CRUD support', () => {
       expect(updatedBody.runtime_type).toBe('hermes');
       expect(updatedBody.runtime_config).toEqual(hermesConfig);
 
-      const stored = db.prepare(`SELECT runtime_type, runtime_config, preferred_provider, model FROM agents WHERE id = 94`).get() as {
+      const stored = await db.get(`SELECT runtime_type, runtime_config, preferred_provider, model FROM agents WHERE id = 94`) as {
         runtime_type: string;
         runtime_config: string | null;
         preferred_provider: string;
@@ -589,8 +578,7 @@ describe('agents Hermes runtime CRUD support', () => {
 
   it('rejects invalid Hermes runtime_config during create and update validation', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, name, role, session_key, runtime_type, preferred_provider) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run(94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 'openai');
+    await db.run(`INSERT INTO agents (id, name, role, session_key, runtime_type, preferred_provider) VALUES (?, ?, ?, ?, ?, ?)`, 94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 'openai');
 
     const { server, baseUrl } = await startTestServer();
     try {

@@ -1,5 +1,5 @@
-import type Database from 'better-sqlite3';
 import { resolveSprintOutcomeMap, type SprintOutcomeDefinition, getLegacyOutcomeMeta } from '../domains/sprint-definitions/outcomes';
+import { type Db } from "../db/adapter/types";
 
 export const RUNTIME_FAILED_OUTCOME = 'runtime_failed';
 export const BACKEND_SYSTEM_OUTCOMES = new Set([RUNTIME_FAILED_OUTCOME]);
@@ -58,17 +58,17 @@ export function isTerminalInstanceOutcome(outcomeKey: string): boolean {
   return Boolean(outcomeKey);
 }
 
-export function resolveTaskOutcomeCatalog(
-  db: Database.Database,
+export async function resolveTaskOutcomeCatalog(
+  db: Db,
   options: { sprintId?: number | null; sprintType?: string | null; taskType?: string | null; fallbackOutcomes?: string[] },
-): ResolvedTaskOutcomeCatalogEntry[] {
+): Promise<ResolvedTaskOutcomeCatalogEntry[]> {
   const taskType = normalizeTaskType(options.taskType);
-  return Array.from(resolveSprintOutcomeMap(db, {
-    sprintId: options.sprintId,
-    sprintType: options.sprintType,
-    taskType,
-    fallbackOutcomes: options.fallbackOutcomes,
-  }).values()).map((entry) => ({
+  return Array.from((await resolveSprintOutcomeMap(db, {
+          sprintId: options.sprintId,
+          sprintType: options.sprintType,
+          taskType,
+          fallbackOutcomes: options.fallbackOutcomes,
+        })).values()).map((entry) => ({
     ...entry,
     workflowPhaseHint: inferWorkflowPhaseHint(entry.outcome_key, taskType),
     terminalForInstance: isTerminalInstanceOutcome(entry.outcome_key),
@@ -77,11 +77,11 @@ export function resolveTaskOutcomeCatalog(
   }));
 }
 
-export function resolveTaskOutcomeCatalogEntries(
-  db: Database.Database,
+export async function resolveTaskOutcomeCatalogEntries(
+  db: Db,
   options: { sprintId?: number | null; sprintType?: string | null; taskType?: string | null; fallbackOutcomes?: string[] },
-): ResolvedTaskOutcomeCatalogEntry[] {
-  return resolveTaskOutcomeCatalog(db, options);
+): Promise<ResolvedTaskOutcomeCatalogEntry[]> {
+  return await resolveTaskOutcomeCatalog(db, options);
 }
 
 export function getOutcomeDisplayMeta(outcomeKey: string, configured?: Pick<SprintOutcomeDefinition, 'label' | 'description' | 'badge_variant'> | null) {

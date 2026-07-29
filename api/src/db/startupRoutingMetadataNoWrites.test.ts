@@ -30,9 +30,9 @@ describe('API startup routing metadata and workflow-event defaults', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('preserves task_statuses and routing_transitions rows exactly when schema startup reruns', () => {
+  it('preserves task_statuses and routing_transitions rows exactly when schema startup reruns', async () => {
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       CREATE TABLE task_statuses (
         name                TEXT PRIMARY KEY,
         label               TEXT NOT NULL,
@@ -55,39 +55,39 @@ describe('API startup routing metadata and workflow-event defaults', () => {
         is_protected INTEGER NOT NULL DEFAULT 0
       );
     `);
-    db.prepare(`
+    await db.run(`
       INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
       VALUES ('ready', 'Custom Ready', 'pink', 0, 0, '["custom_next"]')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO routing_transitions (
         id, project_id, from_status, outcome, to_status, enabled, created_at, task_type, priority, is_protected
       ) VALUES (9, NULL, 'ready', 'custom_outcome', 'custom_next', 1, '2026-06-04 09:00:00', 'backend', 77, 1)
-    `).run();
+    `);
 
     const statusBefore = rows(`SELECT * FROM task_statuses ORDER BY name`);
     const transitionsBefore = rows(`SELECT * FROM routing_transitions ORDER BY id`);
 
-    initSchema();
+    await initSchema();
 
     expect(rows(`SELECT * FROM task_statuses ORDER BY name`)).toEqual(statusBefore);
     expect(rows(`SELECT * FROM routing_transitions ORDER BY id`)).toEqual(transitionsBefore);
   });
 
-  it('preserves customized and deleted workflow-event mappings when schema startup reruns', () => {
-    initSchema();
-    bootstrapRoutingAndWorkflowDefaults(getDb());
+  it('preserves customized and deleted workflow-event mappings when schema startup reruns', async () => {
+    await initSchema();
+    await bootstrapRoutingAndWorkflowDefaults(getDb());
 
     const db = getDb();
-    const deleted = db.prepare(`
+    const deleted = await db.get(`
       SELECT id
       FROM external_event_mappings
       WHERE project_id IS NULL
       ORDER BY id ASC
       LIMIT 1
-    `).get() as { id: number };
-    db.prepare(`DELETE FROM external_event_mappings WHERE id = ?`).run(deleted.id);
-    db.prepare(`
+    `) as { id: number };
+    await db.run(`DELETE FROM external_event_mappings WHERE id = ?`, deleted.id);
+    await db.run(`
       UPDATE external_event_mappings
       SET enabled = 0, priority = priority + 123, updated_at = '2026-06-04 09:15:00'
       WHERE id = (
@@ -97,27 +97,27 @@ describe('API startup routing metadata and workflow-event defaults', () => {
         ORDER BY id ASC
         LIMIT 1
       )
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO external_event_mappings (
         tenant_id, project_id, source, event_name, task_type,
         status_includes_json, status_excludes_json, action_kind, action_target,
         apply_review_evidence, apply_failure_detail, enabled, priority, created_at, updated_at
       ) VALUES (1, NULL, 'custom-source', 'custom-event', NULL, '[]', '[]', 'ignore', NULL, 0, 0, 1, 999, '2026-06-04 09:20:00', '2026-06-04 09:20:00')
-    `).run();
+    `);
 
     const before = rows(`SELECT * FROM external_event_mappings ORDER BY id`);
 
-    initSchema();
+    await initSchema();
 
     expect(rows(`SELECT * FROM external_event_mappings ORDER BY id`)).toEqual(before);
   });
 
-  it('creates routing and workflow-event defaults only through explicit bootstrap', () => {
-    initSchema();
+  it('creates routing and workflow-event defaults only through explicit bootstrap', async () => {
+    await initSchema();
     expect(rows(`SELECT * FROM external_event_mappings`)).toEqual([]);
 
-    bootstrapRoutingAndWorkflowDefaults(getDb());
+    await bootstrapRoutingAndWorkflowDefaults(getDb());
 
     expect(rows(`SELECT * FROM task_statuses`)).not.toEqual([]);
     expect(rows(`SELECT * FROM external_event_mappings`)).not.toEqual([]);

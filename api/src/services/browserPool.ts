@@ -133,14 +133,14 @@ async function pickBrowser(): Promise<BrowserEntry> {
   const connected = browsers.filter(b => b.browser.isConnected());
 
   if (connected.length === 0) {
-    return launchBrowser();
+    return await launchBrowser();
   }
 
   connected.sort((a, b) => a.contextCount - b.contextCount);
 
   // If we have room for more browsers and the least-loaded has contexts, launch another
   if (connected.length < MAX_BROWSERS && connected[0].contextCount > 0) {
-    return launchBrowser();
+    return await launchBrowser();
   }
 
   return connected[0];

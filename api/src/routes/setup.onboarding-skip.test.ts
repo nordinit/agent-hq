@@ -11,11 +11,11 @@ import setupRouter from './setup';
 const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 let tempDir = '';
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-setup-skip-'));
   process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-  initSchema();
+  await initSchema();
 }
 
 function cleanup(): void {
@@ -50,7 +50,7 @@ describe('POST /api/v1/setup/onboarding/skip', () => {
     const { server, baseUrl } = await startServer();
     try {
       // Fresh installs seed an Atlas DB record (unprovisioned at the runtime level)
-      expect(getAtlasAgentRecord()).not.toBeNull();
+      expect(await getAtlasAgentRecord()).not.toBeNull();
 
       const res = await fetch(`${baseUrl}/api/v1/setup/onboarding/skip`, { method: 'POST' });
       expect(res.status).toBe(200);
@@ -61,10 +61,10 @@ describe('POST /api/v1/setup/onboarding/skip', () => {
       expect(body.onboarding_provider_gate_passed).toBe(false);
 
       const db = getDb();
-      const setting = db.prepare(`SELECT value FROM app_settings WHERE key = 'onboarding_completed'`).get() as { value: string } | undefined;
+      const setting = await db.get(`SELECT value FROM app_settings WHERE key = 'onboarding_completed'`) as { value: string } | undefined;
       expect(setting?.value).toBe('true');
 
-      const count = (db.prepare(`SELECT COUNT(*) as n FROM agents WHERE system_role = ?`).get(ATLAS_SYSTEM_ROLE) as { n: number }).n;
+      const count = (await db.get(`SELECT COUNT(*) as n FROM agents WHERE system_role = ?`, ATLAS_SYSTEM_ROLE) as { n: number }).n;
       expect(count).toBe(1);
 
       const statusRes = await fetch(`${baseUrl}/api/v1/setup/status`);
@@ -80,8 +80,8 @@ describe('POST /api/v1/setup/onboarding/skip', () => {
     const { server, baseUrl } = await startServer();
     try {
       const db = getDb();
-      db.prepare(`DELETE FROM agents WHERE system_role = ?`).run(ATLAS_SYSTEM_ROLE);
-      expect(getAtlasAgentRecord()).toBeNull();
+      await db.run(`DELETE FROM agents WHERE system_role = ?`, ATLAS_SYSTEM_ROLE);
+      expect(await getAtlasAgentRecord()).toBeNull();
 
       const res = await fetch(`${baseUrl}/api/v1/setup/onboarding/skip`, { method: 'POST' });
       expect(res.status).toBe(200);
@@ -89,7 +89,7 @@ describe('POST /api/v1/setup/onboarding/skip', () => {
       expect(body.ok).toBe(true);
       expect(body.atlas_created).toBe(true);
 
-      const atlas = getAtlasAgentRecord();
+      const atlas = await getAtlasAgentRecord();
       expect(atlas).not.toBeNull();
       expect(atlas?.system_role).toBe(ATLAS_SYSTEM_ROLE);
       expect(atlas?.session_key).toBe(ATLAS_SESSION_KEY);

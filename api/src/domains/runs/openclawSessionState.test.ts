@@ -61,11 +61,11 @@ describe('OpenClaw raw session state', () => {
     }
   });
 
-  it('defers terminal evaluation while a durable run session is not indexed', () => {
+  it('defers terminal evaluation while a durable run session is not indexed', async () => {
     const db = new Database(':memory:');
     const openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-session-state-'));
     try {
-      db.exec(`
+      await db.exec(`
         CREATE TABLE agents (
           id INTEGER PRIMARY KEY,
           name TEXT,
@@ -81,14 +81,14 @@ describe('OpenClaw raw session state', () => {
           durable_run_id TEXT
         );
       `);
-      db.prepare(`
+      await db.run(`
         INSERT INTO agents (id, name, runtime_type, session_key, openclaw_agent_id)
         VALUES (94, 'Cinder', 'openclaw', 'agent:cinder-backend:main', 'cinder-backend')
-      `).run();
-      db.prepare(`
+      `);
+      await db.run(`
         INSERT INTO job_instances (id, agent_id, task_id, session_key, durable_run_id)
         VALUES (77, 94, 491, 'run:77:current-run', 'current-run')
-      `).run();
+      `);
 
       const sessionsDir = path.join(openclawHome, 'agents', 'cinder-backend', 'sessions');
       fs.mkdirSync(sessionsDir, { recursive: true });
@@ -109,11 +109,11 @@ describe('OpenClaw raw session state', () => {
         }),
       );
 
-      const result = evaluateOpenClawInstanceSessionState(db, 77, {
-        openclawHome,
-        now,
-        terminalQuiescenceMs: 5000,
-      });
+      const result = await evaluateOpenClawInstanceSessionState(db, 77, {
+              openclawHome,
+              now,
+              terminalQuiescenceMs: 5000,
+            });
 
       expect(result).toMatchObject({
         state: null,

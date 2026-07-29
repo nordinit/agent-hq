@@ -1,23 +1,10 @@
-/**
- * runtimes/toolInjection.ts — Fetch agent tool assignments and convert them
- * into SDK-compatible MCP tool definitions for runtime injection.
- *
- * Task #559: Runtime injection — fetch agent tool assignments and inject
- * into Claude SDK dispatch.
- *
- * The module provides:
- *   - fetchAgentTools(): reads tool assignments from the DB
- *   - createAgentToolServer(): creates an in-process MCP server with the tools
- *   - executeToolImplementation(): runs a tool's implementation (bash/function)
- */
-
-import type Database from 'better-sqlite3';
 import { execFileSync, execSync } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod/v4';
+import { type Db } from "../db/adapter/types";
 
 const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
 
@@ -47,8 +34,8 @@ export interface AgentToolRecord {
  * fetchAgentTools — query the DB for all enabled tools assigned to an agent.
  * Returns only tools where both the tool and the assignment are enabled.
  */
-export function fetchAgentTools(db: Database.Database, agentId: number): AgentToolRecord[] {
-  const rows = db.prepare(`
+export async function fetchAgentTools(db: Db, agentId: number): Promise<AgentToolRecord[]> {
+  const rows = await db.all(`
     SELECT ata.id as assignment_id, ata.overrides, ata.enabled as assignment_enabled,
            a.tenant_id as agent_tenant_id,
            t.*
@@ -59,10 +46,10 @@ export function fetchAgentTools(db: Database.Database, agentId: number): AgentTo
       AND ata.enabled = 1
       AND t.enabled = 1
     ORDER BY t.name ASC
-  `).all(agentId) as AgentToolRecord[];
+  `, agentId) as AgentToolRecord[];
 
   try {
-    const stale = db.prepare(`
+    const stale = await db.get(`
       SELECT COUNT(*) AS count
       FROM agent_tool_assignments ata
       JOIN agents a ON a.id = ata.agent_id
@@ -71,7 +58,7 @@ export function fetchAgentTools(db: Database.Database, agentId: number): AgentTo
         AND ata.enabled = 1
         AND t.enabled = 1
         AND t.tenant_id <> a.tenant_id
-    `).get(agentId) as { count?: number } | undefined;
+    `, agentId) as { count?: number } | undefined;
     const count = Number(stale?.count ?? 0);
     if (count > 0) {
       console.warn(`[toolInjection] Suppressed ${count} cross-tenant tool assignment(s) for agent #${agentId}`);

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type Database from 'better-sqlite3';
+import { type Db } from "../../db/adapter/types";
 
 export type RuntimeProviderKind = 'openclaw' | 'hermes';
 
@@ -226,24 +226,24 @@ function parseRuntimeConfig(value: unknown): Record<string, unknown> {
   return {};
 }
 
-export function resolveRuntimeProviderDispatchSelection(input: {
-  db: Database.Database;
+export async function resolveRuntimeProviderDispatchSelection(input: {
+  db: Db;
   tenantId: number;
   runtimeType: string;
   providerConnectionId?: number | null;
   preferredProvider?: string | null;
   model?: string | null;
   runtimeConfig?: unknown;
-}): RuntimeDispatchSelection {
+}): Promise<RuntimeDispatchSelection> {
   const runtimeConfig = parseRuntimeConfig(input.runtimeConfig);
   if (!input.providerConnectionId) {
     return { provider: input.preferredProvider ?? '', model: input.model ?? null, runtimeConfig };
   }
-  const connection = input.db.prepare(`
+  const connection = await input.db.get(`
     SELECT id, tenant_id, provider_slug, auth_mode, runtime_type, external_ref, status, metadata
     FROM provider_connections
     WHERE id = ? AND tenant_id = ?
-  `).get(input.providerConnectionId, input.tenantId) as ProviderConnectionRow | undefined;
+  `, input.providerConnectionId, input.tenantId) as ProviderConnectionRow | undefined;
   if (!connection) throw new Error(`Provider connection #${input.providerConnectionId} was not found for this tenant.`);
   if (connection.status !== 'connected') throw new Error(`Provider connection #${connection.id} is ${connection.status}.`);
   if (connection.runtime_type !== input.runtimeType) {

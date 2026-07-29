@@ -137,14 +137,14 @@ export const CONTRACT_PLACEHOLDER_DEFINITIONS: ContractPlaceholderDefinition[] =
   { key: 'transportMode', description: 'Dispatch transport mode, such as local or remote-direct, which affects how the agent reaches Agent HQ.' },
 ];
 
-export function buildContractInstructions(ctx: TransportContext): string {
-  const workflow = resolveWorkflow({
-    taskStatus: ctx.taskStatus,
-    taskType: ctx.taskType,
-    sprintId: ctx.sprintId,
-    sprintType: ctx.sprintType,
-    db: ctx.db,
-  });
+export async function buildContractInstructions(ctx: TransportContext): Promise<string> {
+  const workflow = await resolveWorkflow({
+      taskStatus: ctx.taskStatus,
+      taskType: ctx.taskType,
+      sprintId: ctx.sprintId,
+      sprintType: ctx.sprintType,
+      db: ctx.db,
+    });
   const template = readSprintTypeContractTemplate(ctx.sprintType);
   return renderLoadedContractTemplate(template, buildTemplateValues(ctx, workflow));
 }

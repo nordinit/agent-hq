@@ -154,10 +154,10 @@ export function persistGatewayHistory(instanceId: number, agentId: number, messa
   }
 }
 
-function isInstanceStillActive(instanceId: number): boolean {
+async function isInstanceStillActive(instanceId: number): Promise<boolean> {
   try {
     const db = getDb();
-    const row = db.prepare('SELECT status FROM job_instances WHERE id = ?').get(instanceId) as { status?: string } | undefined;
+    const row = await db.get('SELECT status FROM job_instances WHERE id = ?', instanceId) as { status?: string } | undefined;
     return row?.status === 'dispatched' || row?.status === 'running';
   } catch {
     return false;
@@ -291,10 +291,10 @@ export function startRawSessionTerminalPoll(params: {
     timer = setTimeout(tick, delayMs);
   };
 
-  const tick = () => {
+  const tick = async () => {
     if (stopped) return;
     try {
-      if (!isInstanceStillActive(params.instanceId)) {
+      if (!await isInstanceStillActive(params.instanceId)) {
         stop();
         return;
       }
@@ -304,7 +304,7 @@ export function startRawSessionTerminalPoll(params: {
       }
 
       const db = getDb();
-      const evaluation = evaluateOpenClawInstanceSessionState(db, params.instanceId);
+      const evaluation = await evaluateOpenClawInstanceSessionState(db, params.instanceId);
       if (evaluation.decision?.terminal) {
         params.onTurnEnd({
           type: 'runEnded',

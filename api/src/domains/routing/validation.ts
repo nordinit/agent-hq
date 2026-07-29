@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import {
   getGateRequirementFieldDefinitions,
   resolveTaskFieldSchemaForSprint,
@@ -7,21 +6,22 @@ import {
 } from '../sprint-definitions/config';
 import { listSprintTaskStatuses, listSprintTypeTaskStatuses } from './policy/statuses';
 import { SprintRecord, tableHasColumn, withStatus } from './scope';
+import { type Db } from "../../db/adapter/types";
 
-export function requireRoutingRuleStatusForSprint(db: Database.Database, sprintId: number, status: string): void {
-  const statuses = listSprintTaskStatuses(db, sprintId);
+export async function requireRoutingRuleStatusForSprint(db: Db, sprintId: number, status: string): Promise<void> {
+  const statuses = await listSprintTaskStatuses(db, sprintId);
   if (statuses.some((entry) => entry.name === status)) return;
   throw withStatus(`Status "${status}" is not configured for sprint ${sprintId}`, 400);
 }
 
-export function requireRoutingRuleStatusForSprintType(db: Database.Database, sprintType: string, status: string): void {
-  const statuses = listSprintTypeTaskStatuses(db, sprintType);
+export async function requireRoutingRuleStatusForSprintType(db: Db, sprintType: string, status: string): Promise<void> {
+  const statuses = await listSprintTypeTaskStatuses(db, sprintType);
   if (statuses.some((entry) => entry.name === status)) return;
   throw withStatus(`Status "${status}" is not configured for sprint type "${sprintType}"`, 400);
 }
 
-export function requireRoutingRuleTaskTypeForSprint(db: Database.Database, sprintId: number, taskType: string): void {
-  const workflow = resolveTaskWorkflowContext(db, { sprintId, taskType });
+export async function requireRoutingRuleTaskTypeForSprint(db: Db, sprintId: number, taskType: string): Promise<void> {
+  const workflow = await resolveTaskWorkflowContext(db, { sprintId, taskType });
   if (workflow.allowedTaskTypes.length === 0 || workflow.allowedTaskTypes.includes(taskType)) return;
   throw withStatus(
     `task_type "${taskType}" is not allowed for sprint type "${workflow.sprintType}". Allowed: ${workflow.allowedTaskTypes.join(', ')}`,
@@ -29,8 +29,8 @@ export function requireRoutingRuleTaskTypeForSprint(db: Database.Database, sprin
   );
 }
 
-export function requireRoutingRuleTaskTypeForSprintType(db: Database.Database, sprintType: string, taskType: string): void {
-  const workflow = resolveTaskWorkflowContext(db, { sprintType, taskType });
+export async function requireRoutingRuleTaskTypeForSprintType(db: Db, sprintType: string, taskType: string): Promise<void> {
+  const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType });
   if (workflow.allowedTaskTypes.length === 0 || workflow.allowedTaskTypes.includes(taskType)) return;
   throw withStatus(
     `task_type "${taskType}" is not allowed for sprint type "${workflow.sprintType}". Allowed: ${workflow.allowedTaskTypes.join(', ')}`,
@@ -38,48 +38,47 @@ export function requireRoutingRuleTaskTypeForSprintType(db: Database.Database, s
   );
 }
 
-export function requireTransitionRequirementFieldsForScope(
-  db: Database.Database,
+export async function requireTransitionRequirementFieldsForScope(
+  db: Db,
   scope: { sprintId?: number | null; sprintType?: string | null },
   taskType: unknown,
   fieldName: unknown,
   matchField: unknown,
   requirementType: unknown,
-): void {
+): Promise<void> {
   const context = scope.sprintId != null ? { sprintId: scope.sprintId } : { sprintType: scope.sprintType };
-  validateRequirementFieldExpression(db, {
-    ...context,
-    taskType,
-    fieldName,
-    fieldRole: 'field_name',
-  });
+  await validateRequirementFieldExpression(db, {
+        ...context,
+        taskType,
+        fieldName,
+        fieldRole: 'field_name',
+      });
   if (requirementType === 'match') {
-    validateRequirementFieldExpression(db, {
-      ...context,
-      taskType,
-      fieldName: matchField,
-      fieldRole: 'match_field',
-    });
+    await validateRequirementFieldExpression(db, {
+            ...context,
+            taskType,
+            fieldName: matchField,
+            fieldRole: 'match_field',
+          });
   }
 }
 
-export function requireTransitionRequirementFieldsForSprint(
-  db: Database.Database,
+export async function requireTransitionRequirementFieldsForSprint(
+  db: Db,
   sprintId: number,
   taskType: unknown,
   fieldName: unknown,
   matchField: unknown,
   requirementType: unknown,
-): void {
-  requireTransitionRequirementFieldsForScope(db, { sprintId }, taskType, fieldName, matchField, requirementType);
+): Promise<void> {
+  await requireTransitionRequirementFieldsForScope(db, { sprintId }, taskType, fieldName, matchField, requirementType);
 }
 
-export function requireAgentInSprintProject(db: Database.Database, sprint: SprintRecord, agentId: number, tenantId?: number | null): void {
-  if (!tableHasColumn(db, 'agents', 'project_id')) return;
+export async function requireAgentInSprintProject(db: Db, sprint: SprintRecord, agentId: number, tenantId?: number | null): Promise<void> {
+  if (!await tableHasColumn(db, 'agents', 'project_id')) return;
 
-  const hasTenant = tableHasColumn(db, 'agents', 'tenant_id');
-  const agent = db.prepare(`SELECT id, name, project_id${hasTenant ? ', tenant_id' : ''} FROM agents WHERE id = ?${hasTenant && tenantId != null ? ' AND tenant_id = ?' : ''} LIMIT 1`)
-    .get(...(hasTenant && tenantId != null ? [agentId, tenantId] : [agentId])) as
+  const hasTenant = await tableHasColumn(db, 'agents', 'tenant_id');
+  const agent = await db.get(`SELECT id, name, project_id${hasTenant ? ', tenant_id' : ''} FROM agents WHERE id = ?${hasTenant && tenantId != null ? ' AND tenant_id = ?' : ''} LIMIT 1`, ...(hasTenant && tenantId != null ? [agentId, tenantId] : [agentId])) as
     | { id: number; name?: string | null; project_id?: number | null; tenant_id?: number | null }
     | undefined;
   if (!agent) {

@@ -1,5 +1,5 @@
-import Database from 'better-sqlite3';
 import { listSprintTaskStatuses, listSprintTaskTransitions } from '../domains/routing/policy/statuses';
+import { type Db } from "../db/adapter/types";
 
 export interface ResolvedSprintWorkflowStatus {
   statusName: string;
@@ -28,16 +28,16 @@ function normalizeSprintType(value: string | null | undefined): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
-function resolveSprintType(db: Database.Database, sprintId: number | null | undefined): string | null {
+async function resolveSprintType(db: Db, sprintId: number | null | undefined): Promise<string | null> {
   if (typeof sprintId !== 'number' || !Number.isFinite(sprintId)) return null;
 
   try {
-    const sprint = db.prepare(`
+    const sprint = await db.get(`
       SELECT sprint_type
       FROM sprints
       WHERE id = ?
       LIMIT 1
-    `).get(sprintId) as { sprint_type: string | null } | undefined;
+    `, sprintId) as { sprint_type: string | null } | undefined;
     return normalizeSprintType(sprint?.sprint_type);
   } catch {
     return null;
@@ -58,19 +58,19 @@ function dedupeTransitions(transitions: ResolvedSprintWorkflowTransition[]): Res
   return deduped;
 }
 
-export function resolveSprintWorkflow(
-  db: Database.Database,
+export async function resolveSprintWorkflow(
+  db: Db,
   sprintId?: number | null,
   sprintTypeHint?: string | null,
-): ResolvedSprintWorkflow {
+): Promise<ResolvedSprintWorkflow> {
   const resolvedSprintId = typeof sprintId === 'number' && Number.isFinite(sprintId) ? sprintId : null;
-  const resolvedSprintType = resolveSprintType(db, resolvedSprintId) ?? normalizeSprintType(sprintTypeHint) ?? 'generic';
-  const statuses = listSprintTaskStatuses(db, resolvedSprintId).map((status, index) => ({
+  const resolvedSprintType = (await resolveSprintType(db, resolvedSprintId)) ?? normalizeSprintType(sprintTypeHint) ?? 'generic';
+  const statuses = (await listSprintTaskStatuses(db, resolvedSprintId)).map((status, index) => ({
     statusName: status.name,
     isVisibleOnBoard: true,
     columnOrder: index,
   }));
-  const transitions = listSprintTaskTransitions(db, resolvedSprintId)
+  const transitions = (await listSprintTaskTransitions(db, resolvedSprintId))
     .filter((transition) => transition.enabled !== 0)
     .map((transition) => ({
       fromStatus: transition.from_status,

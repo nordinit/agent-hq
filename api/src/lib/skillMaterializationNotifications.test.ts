@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3';
 import type { MaterializationResult } from '../runtimes/skillMaterialization';
 import { recordSkillMaterializationIssues } from './skillMaterializationNotifications';
+import { type Db } from "../db/adapter/types";
 
-function makeDb(): Database.Database {
+async function makeDb(): Promise<Db> {
   const db = new Database(':memory:');
-  db.exec(`
+  await db.exec(`
     CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '');
     INSERT INTO tenants (id, name) VALUES (1, 'Default');
   `);
@@ -32,8 +33,8 @@ function okResult(): MaterializationResult {
   };
 }
 
-function listRecords(db: Database.Database) {
-  return db.prepare(`SELECT * FROM notification_records ORDER BY id`).all() as Array<{
+async function listRecords(db: Db) {
+  return await db.all(`SELECT * FROM notification_records ORDER BY id`) as Array<{
     tenant_id: number;
     type: string;
     title: string;
@@ -44,24 +45,24 @@ function listRecords(db: Database.Database) {
 }
 
 describe('recordSkillMaterializationIssues', () => {
-  it('does not record a notification for a fully successful materialization', () => {
-    const db = makeDb();
-    expect(recordSkillMaterializationIssues(db, okResult(), baseContext())).toBe(false);
+  it('does not record a notification for a fully successful materialization', async () => {
+    const db = await makeDb();
+    expect(await recordSkillMaterializationIssues(db, okResult(), baseContext())).toBe(false);
   });
 
-  it('does not treat benign already-correct skips as failures', () => {
-    const db = makeDb();
+  it('does not treat benign already-correct skips as failures', async () => {
+    const db = await makeDb();
     const result: MaterializationResult = {
       ok: true,
       count: 1,
       details: [{ skill: 'ui-ux-pro-max-skill', action: 'skipped', reason: 'already correct' }],
       warnings: [],
     };
-    expect(recordSkillMaterializationIssues(db, result, baseContext())).toBe(false);
+    expect(await recordSkillMaterializationIssues(db, result, baseContext())).toBe(false);
   });
 
-  it('records a notification when a skill has no resolvable source', () => {
-    const db = makeDb();
+  it('records a notification when a skill has no resolvable source', async () => {
+    const db = await makeDb();
     const result: MaterializationResult = {
       ok: true,
       count: 0,
@@ -69,9 +70,9 @@ describe('recordSkillMaterializationIssues', () => {
       warnings: ['[hermes] skill "ui-ux-pro-max-skill" not found in system path or DB — skipping'],
     };
 
-    expect(recordSkillMaterializationIssues(db, result, baseContext())).toBe(true);
+    expect(await recordSkillMaterializationIssues(db, result, baseContext())).toBe(true);
 
-    const records = listRecords(db);
+    const records = await listRecords(db);
     expect(records).toHaveLength(1);
     expect(records[0].tenant_id).toBe(1);
     expect(records[0].type).toBe('skill_materialization_failure');
@@ -83,8 +84,8 @@ describe('recordSkillMaterializationIssues', () => {
     expect(metadata.agentId).toBe(114);
   });
 
-  it('records a notification for per-skill materialization errors', () => {
-    const db = makeDb();
+  it('records a notification for per-skill materialization errors', async () => {
+    const db = await makeDb();
     const result: MaterializationResult = {
       ok: true,
       count: 0,
@@ -92,13 +93,13 @@ describe('recordSkillMaterializationIssues', () => {
       warnings: ['[hermes] skill "ui-ux-pro-max-skill" materialization error: EACCES: permission denied'],
     };
 
-    expect(recordSkillMaterializationIssues(db, result, baseContext())).toBe(true);
-    const metadata = JSON.parse(listRecords(db)[0].metadata_json);
+    expect(await recordSkillMaterializationIssues(db, result, baseContext())).toBe(true);
+    const metadata = JSON.parse((await listRecords(db))[0].metadata_json);
     expect(metadata.erroredSkills).toEqual(['ui-ux-pro-max-skill']);
   });
 
-  it('records a notification for fatal materialization failures', () => {
-    const db = makeDb();
+  it('records a notification for fatal materialization failures', async () => {
+    const db = await makeDb();
     const result: MaterializationResult = {
       ok: false,
       count: 0,
@@ -107,12 +108,12 @@ describe('recordSkillMaterializationIssues', () => {
       error: 'Failed to create skills dir /nope: EACCES',
     };
 
-    expect(recordSkillMaterializationIssues(db, result, baseContext())).toBe(true);
-    expect(listRecords(db)[0].body).toContain('Failed to create skills dir');
+    expect(await recordSkillMaterializationIssues(db, result, baseContext())).toBe(true);
+    expect((await listRecords(db))[0].body).toContain('Failed to create skills dir');
   });
 
-  it('records a notification when requested skills are skipped entirely', () => {
-    const db = makeDb();
+  it('records a notification when requested skills are skipped entirely', async () => {
+    const db = await makeDb();
     const result: MaterializationResult = {
       ok: true,
       count: 0,
@@ -120,14 +121,14 @@ describe('recordSkillMaterializationIssues', () => {
       warnings: ['[hermes] skillsBasePath is not set and no DB provided — skipping skill materialization'],
     };
 
-    expect(recordSkillMaterializationIssues(db, result, baseContext())).toBe(true);
-    const metadata = JSON.parse(listRecords(db)[0].metadata_json);
+    expect(await recordSkillMaterializationIssues(db, result, baseContext())).toBe(true);
+    const metadata = JSON.parse((await listRecords(db))[0].metadata_json);
     expect(metadata.requestedSkills).toEqual(['ui-ux-pro-max-skill']);
   });
 
-  it('does not record anything when no skills were requested', () => {
-    const db = makeDb();
+  it('does not record anything when no skills were requested', async () => {
+    const db = await makeDb();
     const result: MaterializationResult = { ok: true, count: 0, details: [], warnings: [] };
-    expect(recordSkillMaterializationIssues(db, result, { ...baseContext(), requestedSkillNames: [] })).toBe(false);
+    expect(await recordSkillMaterializationIssues(db, result, { ...baseContext(), requestedSkillNames: [] })).toBe(false);
   });
 });

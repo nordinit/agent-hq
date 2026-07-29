@@ -15,7 +15,7 @@ describe('Hermes transcript provider mapping', () => {
     mockGet.mockReset();
   });
 
-  it('uses the chat-message-backed remote transcript provider for Hermes agents', () => {
+  it('uses the chat-message-backed remote transcript provider for Hermes agents', async () => {
     mockGet.mockReturnValue({
       id: 41,
       name: 'Hermes Agent',
@@ -26,7 +26,7 @@ describe('Hermes transcript provider mapping', () => {
       openclaw_agent_id: null,
     });
 
-    const provider = resolveTranscriptProviderByAgent(41);
+    const provider = await resolveTranscriptProviderByAgent(41);
     expect(provider).toBeInstanceOf(RemoteTranscriptProvider);
     expect(provider.getTranscriptSource()).toBe('remote-hermes');
   });

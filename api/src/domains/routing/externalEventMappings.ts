@@ -1,9 +1,9 @@
-import type Database from 'better-sqlite3';
 import { STARTER_SPRINT_OUTCOME_SEEDS } from '../../lib/starterCatalog';
 import { isValidTaskType } from '../../lib/taskTypes';
 import { RUNTIME_FAILED_OUTCOME } from '../../lib/outcomeCatalog';
 import { WORKFLOW_EVENT_ACTION_KINDS } from '../../lib/workflowVocabulary';
 import { listSprintTaskStatuses, listSprintTypeTaskStatuses } from './policy';
+import { type Db } from "../../db/adapter/types";
 
 export const AGENT_HQ_RUNTIME_SOURCE = 'agent_hq_runtime';
 export const AGENT_HQ_DISPATCHER_SOURCE = 'agent_hq_dispatcher';
@@ -239,9 +239,9 @@ export const DEFAULT_TENANT_WORKFLOW_EVENT_MAPPINGS = DEFAULT_WORKFLOW_EVENT_MAP
   DEFAULT_TENANT_WORKFLOW_EVENT_SOURCES.includes(mapping.source as typeof DEFAULT_TENANT_WORKFLOW_EVENT_SOURCES[number])
 ));
 
-function tableHasColumn(db: Database.Database, tableName: string, columnName: string): boolean {
+async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
   try {
-    return (db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).some((column) => column.name === columnName);
+    return (await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>).some((column) => column.name === columnName);
   } catch {
     return false;
   }
@@ -259,18 +259,18 @@ function parseJsonStringList(value: string | null | undefined): string[] {
 }
 
 
-function migrateAgentStartedWorkflowEventSource(db: Database.Database): void {
-  const wildcardRows = db.prepare(`
+async function migrateAgentStartedWorkflowEventSource(db: Db): Promise<void> {
+  const wildcardRows = await db.all(`
     SELECT id
     FROM external_event_mappings
     WHERE event_name = 'agent_started'
       AND source IS NULL
       AND action_kind = 'status'
       AND action_target = 'in_progress'
-  `).all() as Array<{ id: number }>;
+  `) as Array<{ id: number }>;
   if (wildcardRows.length === 0) return;
 
-  const explicit = db.prepare(`
+  const explicit = await db.get(`
     SELECT id
     FROM external_event_mappings
     WHERE event_name = 'agent_started'
@@ -278,25 +278,25 @@ function migrateAgentStartedWorkflowEventSource(db: Database.Database): void {
       AND action_kind = 'status'
       AND action_target = 'in_progress'
     LIMIT 1
-  `).get(AGENT_HQ_RUNTIME_SOURCE) as { id: number } | undefined;
+  `, AGENT_HQ_RUNTIME_SOURCE) as { id: number } | undefined;
   if (explicit) return;
 
-  db.prepare(`
+  await db.run(`
     UPDATE external_event_mappings
     SET source = ?, updated_at = datetime('now')
     WHERE id = ?
-  `).run(AGENT_HQ_RUNTIME_SOURCE, wildcardRows[0].id);
+  `, AGENT_HQ_RUNTIME_SOURCE, wildcardRows[0].id);
 }
 
-function ensureAgentStartedBlockedGuard(db: Database.Database): void {
-  const rows = db.prepare(`
+async function ensureAgentStartedBlockedGuard(db: Db): Promise<void> {
+  const rows = await db.all(`
     SELECT id, status_excludes_json
     FROM external_event_mappings
     WHERE event_name = 'agent_started'
       AND action_kind = 'status'
       AND action_target = 'in_progress'
       AND enabled = 1
-  `).all() as Array<{ id: number; status_excludes_json: string | null }>;
+  `) as Array<{ id: number; status_excludes_json: string | null }>;
 
   const update = db.prepare(`
     UPDATE external_event_mappings
@@ -408,11 +408,11 @@ function parseStatusListJson(raw: string | null | undefined): string[] {
   }
 }
 
-function listKnownStatusKeys(db: Database.Database): Set<string> {
-  const keys = new Set(listSprintTaskStatuses(db).map((status) => status.name));
+async function listKnownStatusKeys(db: Db): Promise<Set<string>> {
+  const keys = new Set((await listSprintTaskStatuses(db)).map((status) => status.name));
 
   try {
-    const sprintRows = db.prepare(`SELECT DISTINCT status_key FROM sprint_task_statuses`).all() as Array<{ status_key: string }>;
+    const sprintRows = await db.all(`SELECT DISTINCT status_key FROM sprint_task_statuses`) as Array<{ status_key: string }>;
     for (const row of sprintRows) {
       if (typeof row.status_key === 'string' && row.status_key.trim()) keys.add(row.status_key);
     }
@@ -421,7 +421,7 @@ function listKnownStatusKeys(db: Database.Database): Set<string> {
   }
 
   try {
-    const sprintTypeRows = db.prepare(`SELECT DISTINCT status_key FROM sprint_type_task_statuses`).all() as Array<{ status_key: string }>;
+    const sprintTypeRows = await db.all(`SELECT DISTINCT status_key FROM sprint_type_task_statuses`) as Array<{ status_key: string }>;
     for (const row of sprintTypeRows) {
       if (typeof row.status_key === 'string' && row.status_key.trim()) keys.add(row.status_key);
     }
@@ -432,24 +432,24 @@ function listKnownStatusKeys(db: Database.Database): Set<string> {
   return keys;
 }
 
-function listWorkflowContextStatusKeys(
-  db: Database.Database,
+async function listWorkflowContextStatusKeys(
+  db: Db,
   context: { sprintId: number | null; sprintType: string | null; tenantId: number | null },
-): Set<string> | null {
+): Promise<Set<string> | null> {
   if (context.sprintId) {
-    if (context.tenantId != null && tableHasColumn(db, 'sprints', 'tenant_id')) {
-      const sprint = db.prepare(`SELECT id FROM sprints WHERE id = ? AND tenant_id = ? LIMIT 1`).get(context.sprintId, context.tenantId) as { id: number } | undefined;
+    if (context.tenantId != null && await tableHasColumn(db, 'sprints', 'tenant_id')) {
+      const sprint = await db.get(`SELECT id FROM sprints WHERE id = ? AND tenant_id = ? LIMIT 1`, context.sprintId, context.tenantId) as { id: number } | undefined;
       if (!sprint) return new Set();
     }
-    return new Set(listSprintTaskStatuses(db, context.sprintId).map((status) => status.name));
+    return new Set((await listSprintTaskStatuses(db, context.sprintId)).map((status) => status.name));
   }
   if (context.sprintType) {
-    return new Set(listSprintTypeTaskStatuses(db, context.sprintType, { tenantId: context.tenantId }).map((status) => status.name));
+    return new Set((await listSprintTypeTaskStatuses(db, context.sprintType, { tenantId: context.tenantId })).map((status) => status.name));
   }
   return null;
 }
 
-function listKnownOutcomeKeys(db: Database.Database): Set<string> {
+async function listKnownOutcomeKeys(db: Db): Promise<Set<string>> {
   const keys = new Set<string>([RUNTIME_FAILED_OUTCOME]);
   for (const seed of STARTER_SPRINT_OUTCOME_SEEDS) {
     for (const outcome of seed.outcomes) {
@@ -460,10 +460,10 @@ function listKnownOutcomeKeys(db: Database.Database): Set<string> {
   }
 
   try {
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT DISTINCT outcome_key, enabled, behavior
       FROM sprint_type_outcomes
-    `).all() as Array<{ outcome_key: string; enabled: number; behavior: string | null }>;
+    `) as Array<{ outcome_key: string; enabled: number; behavior: string | null }>;
     for (const row of rows) {
       if (row.enabled === 1 && row.behavior !== 'disable') keys.add(row.outcome_key);
     }
@@ -474,28 +474,28 @@ function listKnownOutcomeKeys(db: Database.Database): Set<string> {
   return keys;
 }
 
-function validateProjectExists(db: Database.Database, projectId: number | null): void {
+async function validateProjectExists(db: Db, projectId: number | null): Promise<void> {
   if (!projectId) return;
-  const exists = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId) as { id: number } | undefined;
+  const exists = await db.get('SELECT id FROM projects WHERE id = ?', projectId) as { id: number } | undefined;
   if (!exists) throw withStatus(`Project ${projectId} not found`, 404);
 }
 
-function validateTenantExists(db: Database.Database, tenantId: number | null): void {
-  if (!tenantId || !tableHasColumn(db, 'external_event_mappings', 'tenant_id')) return;
-  const exists = db.prepare('SELECT id FROM tenants WHERE id = ?').get(tenantId) as { id: number } | undefined;
+async function validateTenantExists(db: Db, tenantId: number | null): Promise<void> {
+  if (!tenantId || !await tableHasColumn(db, 'external_event_mappings', 'tenant_id')) return;
+  const exists = await db.get('SELECT id FROM tenants WHERE id = ?', tenantId) as { id: number } | undefined;
   if (!exists) throw withStatus(`Tenant ${tenantId} not found`, 404);
 }
 
-function resolveTenantIdForProject(db: Database.Database, projectId: number | null): number | null {
-  if (!projectId || !tableHasColumn(db, 'projects', 'tenant_id')) return null;
-  return (db.prepare('SELECT tenant_id FROM projects WHERE id = ?').get(projectId) as { tenant_id?: number | null } | undefined)?.tenant_id ?? null;
+async function resolveTenantIdForProject(db: Db, projectId: number | null): Promise<number | null> {
+  if (!projectId || !await tableHasColumn(db, 'projects', 'tenant_id')) return null;
+  return (await db.get('SELECT tenant_id FROM projects WHERE id = ?', projectId) as { tenant_id?: number | null } | undefined)?.tenant_id ?? null;
 }
 
-function resolveWorkflowEventScope(
-  db: Database.Database,
+async function resolveWorkflowEventScope(
+  db: Db,
   input: Record<string, unknown>,
   existing?: MappingRecord | null,
-): { projectId: number | null; sprintId: number | null; sprintType: string | null; tenantId: number | null } {
+): Promise<{ projectId: number | null; sprintId: number | null; sprintType: string | null; tenantId: number | null }> {
   const inputProjectId = input.project_id !== undefined ? parseOptionalProjectId(input.project_id) : existing?.project_id ?? null;
   const inputSprintId = input.sprint_id !== undefined || input.workflow_id !== undefined
     ? parseOptionalSprintId(input.sprint_id ?? input.workflow_id)
@@ -505,16 +505,16 @@ function resolveWorkflowEventScope(
     : existing?.sprint_type ?? null;
   const inputTenantId = input.tenant_id !== undefined
     ? parseOptionalTenantId(input.tenant_id)
-    : existing?.tenant_id ?? resolveTenantIdForProject(db, inputProjectId);
+    : existing?.tenant_id ?? (await resolveTenantIdForProject(db, inputProjectId));
 
   if (inputSprintId != null) {
-    const hasTenantId = tableHasColumn(db, 'sprints', 'tenant_id');
-    const sprint = db.prepare(`
+    const hasTenantId = await tableHasColumn(db, 'sprints', 'tenant_id');
+    const sprint = await db.get(`
       SELECT id, project_id, sprint_type${hasTenantId ? ', tenant_id' : ''}
       FROM sprints
       WHERE id = ?${hasTenantId && inputTenantId != null ? ' AND tenant_id = ?' : ''}
       LIMIT 1
-    `).get(...(hasTenantId && inputTenantId != null ? [inputSprintId, inputTenantId] : [inputSprintId])) as {
+    `, ...(hasTenantId && inputTenantId != null ? [inputSprintId, inputTenantId] : [inputSprintId])) as {
       id: number;
       project_id: number | null;
       sprint_type: string | null;
@@ -535,7 +535,7 @@ function resolveWorkflowEventScope(
     };
   }
 
-  validateProjectExists(db, inputProjectId);
+  await validateProjectExists(db, inputProjectId);
   return {
     projectId: inputProjectId,
     sprintId: null,
@@ -544,8 +544,8 @@ function resolveWorkflowEventScope(
   };
 }
 
-function ensureMappingVisibleToTenant(db: Database.Database, row: MappingRecord, tenantId: number | null): void {
-  if (tenantId == null || !tableHasColumn(db, 'external_event_mappings', 'tenant_id')) return;
+async function ensureMappingVisibleToTenant(db: Db, row: MappingRecord, tenantId: number | null): Promise<void> {
+  if (tenantId == null || !await tableHasColumn(db, 'external_event_mappings', 'tenant_id')) return;
   if (row.tenant_id === tenantId) return;
   throw withStatus('Workflow event mapping not found', 404);
 }
@@ -624,7 +624,7 @@ function buildConflictMap(rows: MappingRecord[]): Map<number, number[]> {
   return conflictMap;
 }
 
-function ensureNoConflicts(db: Database.Database, candidate: {
+async function ensureNoConflicts(db: Db, candidate: {
   id?: number;
   tenant_id?: number | null;
   project_id: number | null;
@@ -637,12 +637,12 @@ function ensureNoConflicts(db: Database.Database, candidate: {
   status_excludes: string[];
   enabled: boolean;
   priority: number;
-}): void {
+}): Promise<void> {
   if (!candidate.enabled) return;
-  const hasTenantId = tableHasColumn(db, 'external_event_mappings', 'tenant_id');
-  const hasWorkflowScope = tableHasColumn(db, 'external_event_mappings', 'sprint_id')
-    && tableHasColumn(db, 'external_event_mappings', 'sprint_type');
-  const rows = db.prepare(`
+  const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
+  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'sprint_id')
+    && await tableHasColumn(db, 'external_event_mappings', 'sprint_type');
+  const rows = await db.all(`
     SELECT *
     FROM external_event_mappings
     WHERE event_name = ?
@@ -655,20 +655,7 @@ function ensureNoConflicts(db: Database.Database, candidate: {
       AND priority = ?
       AND enabled = 1
       ${candidate.id ? 'AND id != ?' : ''}
-  `).all(
-    candidate.event_name,
-    ...(hasTenantId ? [candidate.tenant_id ?? null, candidate.tenant_id ?? null] : []),
-    candidate.project_id,
-    candidate.project_id,
-    ...(hasWorkflowScope ? [candidate.sprint_id ?? null, candidate.sprint_id ?? null] : []),
-    ...(hasWorkflowScope ? [candidate.sprint_type ?? null, candidate.sprint_type ?? null] : []),
-    candidate.source,
-    candidate.source,
-    candidate.task_type,
-    candidate.task_type,
-    candidate.priority,
-    ...(candidate.id ? [candidate.id] : []),
-  ) as MappingRecord[];
+  `, candidate.event_name, ...(hasTenantId ? [candidate.tenant_id ?? null, candidate.tenant_id ?? null] : []), candidate.project_id, candidate.project_id, ...(hasWorkflowScope ? [candidate.sprint_id ?? null, candidate.sprint_id ?? null] : []), ...(hasWorkflowScope ? [candidate.sprint_type ?? null, candidate.sprint_type ?? null] : []), candidate.source, candidate.source, candidate.task_type, candidate.task_type, candidate.priority, ...(candidate.id ? [candidate.id] : [])) as MappingRecord[];
 
   for (const row of rows) {
     if (statusesOverlap(
@@ -693,9 +680,9 @@ function normalizeActionKind(value: unknown): 'ignore' | 'outcome' | 'status' {
   throw withStatus(`action_kind must be one of: ${WORKFLOW_EVENT_ACTION_KINDS.join(', ')}`, 400);
 }
 
-function normalizePayload(db: Database.Database, input: Record<string, unknown>, existing?: MappingRecord | null) {
-  const { projectId, sprintId, sprintType, tenantId } = resolveWorkflowEventScope(db, input, existing);
-  validateTenantExists(db, tenantId);
+async function normalizePayload(db: Db, input: Record<string, unknown>, existing?: MappingRecord | null) {
+  const { projectId, sprintId, sprintType, tenantId } = await resolveWorkflowEventScope(db, input, existing);
+  await validateTenantExists(db, tenantId);
 
   const source = input.source !== undefined
     ? normalizeOptionalString(input.source)
@@ -719,8 +706,8 @@ function normalizePayload(db: Database.Database, input: Record<string, unknown>,
     ? normalizeStatusList(input.status_excludes, 'status_excludes')
     : parseStatusListJson(existing?.status_excludes_json);
 
-  const contextualStatusKeys = listWorkflowContextStatusKeys(db, { sprintId, sprintType, tenantId });
-  const validStatusKeys = contextualStatusKeys ?? listKnownStatusKeys(db);
+  const contextualStatusKeys = await listWorkflowContextStatusKeys(db, { sprintId, sprintType, tenantId });
+  const validStatusKeys = contextualStatusKeys ?? (await listKnownStatusKeys(db));
   const invalidGuardStatus = [...statusIncludes, ...statusExcludes].find((status) => !validStatusKeys.has(status));
   if (invalidGuardStatus) {
     throw withStatus(
@@ -754,7 +741,7 @@ function normalizePayload(db: Database.Database, input: Record<string, unknown>,
       400,
     );
   }
-  if (actionKind === 'outcome' && actionTarget && !listKnownOutcomeKeys(db).has(actionTarget)) {
+  if (actionKind === 'outcome' && actionTarget && !(await listKnownOutcomeKeys(db)).has(actionTarget)) {
     throw withStatus(`Unknown outcome action_target "${actionTarget}"`, 400);
   }
 
@@ -788,17 +775,17 @@ function normalizePayload(db: Database.Database, input: Record<string, unknown>,
   };
 }
 
-function getDefaultTenantIdIfAvailable(db: Database.Database): number | null {
+async function getDefaultTenantIdIfAvailable(db: Db): Promise<number | null> {
   try {
-    const tenant = db.prepare(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`).get() as { id: number } | undefined;
+    const tenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id: number } | undefined;
     return tenant?.id ?? null;
   } catch {
     return null;
   }
 }
 
-export function repairDuplicateWorkflowEventMappings(db: Database.Database): { deleted: number } {
-  const hasTenantId = tableHasColumn(db, 'external_event_mappings', 'tenant_id');
+export async function repairDuplicateWorkflowEventMappings(db: Db): Promise<{ deleted: number }> {
+  const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
   const selectKeyColumns = [
     ...(hasTenantId ? ['COALESCE(tenant_id, 0) AS tenant_key'] : []),
     'COALESCE(project_id, 0) AS project_key',
@@ -829,7 +816,7 @@ export function repairDuplicateWorkflowEventMappings(db: Database.Database): { d
     'enabled',
     'priority',
   ].join(', ');
-  const result = db.prepare(`
+  const result = await db.run(`
     DELETE FROM external_event_mappings
     WHERE id IN (
       SELECT duplicate.id
@@ -858,17 +845,17 @@ export function repairDuplicateWorkflowEventMappings(db: Database.Database): { d
        AND duplicate.enabled = grouped.enabled
        AND duplicate.priority = grouped.priority
     )
-  `).run();
+  `);
   return { deleted: result.changes };
 }
-function ensureWorkflowEventMappingUniqueIndex(db: Database.Database): void {
-  const hasTenantId = tableHasColumn(db, 'external_event_mappings', 'tenant_id');
-  db.exec(`
+async function ensureWorkflowEventMappingUniqueIndex(db: Db): Promise<void> {
+  const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
+  await db.exec(`
     DROP INDEX IF EXISTS idx_external_event_mappings_effective_unique_no_tenant;
     DROP INDEX IF EXISTS idx_external_event_mappings_effective_unique_tenant;
   `);
   if (hasTenantId) {
-    db.exec(`
+    await db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_external_event_mappings_effective_unique_tenant
         ON external_event_mappings(
           COALESCE(tenant_id, 0),
@@ -887,7 +874,7 @@ function ensureWorkflowEventMappingUniqueIndex(db: Database.Database): void {
         );
     `);
   } else {
-    db.exec(`
+    await db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_external_event_mappings_effective_unique_no_tenant
         ON external_event_mappings(
           COALESCE(project_id, 0),
@@ -907,9 +894,9 @@ function ensureWorkflowEventMappingUniqueIndex(db: Database.Database): void {
   }
 }
 
-function insertDefaultWorkflowEventMappings(db: Database.Database, mappings: readonly typeof DEFAULT_WORKFLOW_EVENT_MAPPINGS[number][], tenantId: number | null): void {
-  const hasTenantId = tableHasColumn(db, 'external_event_mappings', 'tenant_id');
-  const defaultTenantId = hasTenantId && tenantId == null ? getDefaultTenantIdIfAvailable(db) : null;
+async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typeof DEFAULT_WORKFLOW_EVENT_MAPPINGS[number][], tenantId: number | null): Promise<void> {
+  const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
+  const defaultTenantId = hasTenantId && tenantId == null ? await getDefaultTenantIdIfAvailable(db) : null;
   const effectiveTenantId = tenantId ?? defaultTenantId;
   const tenantScoped = hasTenantId && effectiveTenantId != null;
   const tenantPredicate = hasTenantId
@@ -991,29 +978,29 @@ function insertDefaultWorkflowEventMappings(db: Database.Database, mappings: rea
   }
 }
 
-export function seedDefaultWorkflowEventMappings(db: Database.Database): void {
-  db.transaction(() => {
-    migrateAgentStartedWorkflowEventSource(db);
-    ensureAgentStartedBlockedGuard(db);
-    repairDuplicateWorkflowEventMappings(db);
-    ensureWorkflowEventMappingUniqueIndex(db);
-    insertDefaultWorkflowEventMappings(db, DEFAULT_WORKFLOW_EVENT_MAPPINGS, null);
+export function seedDefaultWorkflowEventMappings(db: Db): void {
+  db.transaction(async () => {
+    await migrateAgentStartedWorkflowEventSource(db);
+    await ensureAgentStartedBlockedGuard(db);
+    await repairDuplicateWorkflowEventMappings(db);
+    await ensureWorkflowEventMappingUniqueIndex(db);
+    await insertDefaultWorkflowEventMappings(db, DEFAULT_WORKFLOW_EVENT_MAPPINGS, null);
   })();
 }
 
-export function seedTenantDefaultWorkflowEventMappings(db: Database.Database, tenantId: number): void {
-  validateTenantExists(db, tenantId);
-  db.transaction(() => {
-    ensureAgentStartedBlockedGuard(db);
-    repairDuplicateWorkflowEventMappings(db);
-    ensureWorkflowEventMappingUniqueIndex(db);
-    insertDefaultWorkflowEventMappings(db, DEFAULT_TENANT_WORKFLOW_EVENT_MAPPINGS, tenantId);
+export async function seedTenantDefaultWorkflowEventMappings(db: Db, tenantId: number): Promise<void> {
+  await validateTenantExists(db, tenantId);
+  db.transaction(async () => {
+    await ensureAgentStartedBlockedGuard(db);
+    await repairDuplicateWorkflowEventMappings(db);
+    await ensureWorkflowEventMappingUniqueIndex(db);
+    await insertDefaultWorkflowEventMappings(db, DEFAULT_TENANT_WORKFLOW_EVENT_MAPPINGS, tenantId);
   })();
 }
 
-export function removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant(db: Database.Database, tenantId: number): { deleted: number } {
-  validateTenantExists(db, tenantId);
-  if (!tableHasColumn(db, 'external_event_mappings', 'tenant_id')) return { deleted: 0 };
+export async function removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant(db: Db, tenantId: number): Promise<{ deleted: number }> {
+  await validateTenantExists(db, tenantId);
+  if (!await tableHasColumn(db, 'external_event_mappings', 'tenant_id')) return { deleted: 0 };
 
   const deleteStmt = db.prepare(`
     DELETE FROM external_event_mappings
@@ -1039,28 +1026,28 @@ export function removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant(d
   return { deleted };
 }
 
-export function removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForNonDefaultTenants(db: Database.Database): { deleted: number; tenants: number } {
-  if (!tableHasColumn(db, 'external_event_mappings', 'tenant_id')) return { deleted: 0, tenants: 0 };
-  const tenants = db.prepare(`
+export async function removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForNonDefaultTenants(db: Db): Promise<{ deleted: number; tenants: number }> {
+  if (!await tableHasColumn(db, 'external_event_mappings', 'tenant_id')) return { deleted: 0, tenants: 0 };
+  const tenants = await db.all(`
     SELECT id
     FROM tenants
     WHERE is_default = 0
     ORDER BY id ASC
-  `).all() as Array<{ id: number }>;
+  `) as Array<{ id: number }>;
   let deleted = 0;
   for (const tenant of tenants) {
-    deleted += removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant(db, tenant.id).deleted;
+    deleted += (await removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant(db, tenant.id)).deleted;
   }
   return { deleted, tenants: tenants.length };
 }
 
-export function listWorkflowEventMappings(db: Database.Database, input: { tenant_id?: unknown; project_id?: unknown; sprint_id?: unknown; workflow_id?: unknown; sprint_type?: unknown; workflow_type?: unknown; source?: unknown; event_name?: unknown; task_type?: unknown }) {
+export async function listWorkflowEventMappings(db: Db, input: { tenant_id?: unknown; project_id?: unknown; sprint_id?: unknown; workflow_id?: unknown; sprint_type?: unknown; workflow_type?: unknown; source?: unknown; event_name?: unknown; task_type?: unknown }) {
   const tenantId = parseOptionalTenantId(input.tenant_id);
   const projectId = parseOptionalProjectId(input.project_id);
   const sprintId = parseOptionalSprintId(input.sprint_id ?? input.workflow_id);
   const sprintType = normalizeOptionalSprintType(input.sprint_type ?? input.workflow_type);
-  const hasWorkflowScope = tableHasColumn(db, 'external_event_mappings', 'sprint_id')
-    && tableHasColumn(db, 'external_event_mappings', 'sprint_type');
+  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'sprint_id')
+    && await tableHasColumn(db, 'external_event_mappings', 'sprint_type');
   const source = normalizeOptionalString(input.source);
   const eventName = normalizeOptionalString(input.event_name);
   const taskType = normalizeOptionalString(input.task_type);
@@ -1070,7 +1057,7 @@ export function listWorkflowEventMappings(db: Database.Database, input: { tenant
 
   const clauses: string[] = [];
   const params: unknown[] = [];
-  if (tenantId != null && tableHasColumn(db, 'external_event_mappings', 'tenant_id')) {
+  if (tenantId != null && await tableHasColumn(db, 'external_event_mappings', 'tenant_id')) {
     clauses.push('tenant_id = ?');
     params.push(tenantId);
   }
@@ -1119,19 +1106,19 @@ export function listWorkflowEventMappings(db: Database.Database, input: { tenant
   };
 }
 
-export function getWorkflowEventMapping(db: Database.Database, input: { id: unknown; tenant_id?: unknown }) {
+export async function getWorkflowEventMapping(db: Db, input: { id: unknown; tenant_id?: unknown }) {
   const id = parseId(input.id, 'id');
   const tenantId = parseOptionalTenantId(input.tenant_id);
-  const row = db.prepare('SELECT * FROM external_event_mappings WHERE id = ?').get(id) as MappingRecord | undefined;
+  const row = await db.get('SELECT * FROM external_event_mappings WHERE id = ?', id) as MappingRecord | undefined;
   if (!row) throw withStatus('Workflow event mapping not found', 404);
-  ensureMappingVisibleToTenant(db, row, tenantId);
+  await ensureMappingVisibleToTenant(db, row, tenantId);
   const conflictMap = buildConflictMap([row]);
   return serializeMappingRow(row, conflictMap.get(row.id) ?? []);
 }
 
-export function createWorkflowEventMapping(db: Database.Database, input: Record<string, unknown>) {
-  const normalized = normalizePayload(db, input);
-  ensureNoConflicts(db, normalized);
+export async function createWorkflowEventMapping(db: Db, input: Record<string, unknown>) {
+  const normalized = await normalizePayload(db, input);
+  await ensureNoConflicts(db, normalized);
 
   const insertValues: Record<string, unknown> = {
     project_id: normalized.project_id,
@@ -1147,39 +1134,39 @@ export function createWorkflowEventMapping(db: Database.Database, input: Record<
     enabled: normalized.enabled ? 1 : 0,
     priority: normalized.priority,
   };
-  if (tableHasColumn(db, 'external_event_mappings', 'sprint_id')) {
+  if (await tableHasColumn(db, 'external_event_mappings', 'sprint_id')) {
     insertValues.sprint_id = normalized.sprint_id;
   }
-  if (tableHasColumn(db, 'external_event_mappings', 'sprint_type')) {
+  if (await tableHasColumn(db, 'external_event_mappings', 'sprint_type')) {
     insertValues.sprint_type = normalized.sprint_type;
   }
-  if (tableHasColumn(db, 'external_event_mappings', 'tenant_id')) {
+  if (await tableHasColumn(db, 'external_event_mappings', 'tenant_id')) {
     insertValues.tenant_id = normalized.tenant_id;
   }
   const columns = Object.keys(insertValues);
   const placeholders = columns.map(() => '?').join(', ');
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO external_event_mappings (${columns.join(', ')}, created_at, updated_at)
     VALUES (${placeholders}, datetime('now'), datetime('now'))
-  `).run(...columns.map((column) => insertValues[column]));
+  `, ...columns.map((column) => insertValues[column]));
 
-  const row = db.prepare('SELECT * FROM external_event_mappings WHERE id = ?').get(result.lastInsertRowid) as MappingRecord;
+  const row = await db.get('SELECT * FROM external_event_mappings WHERE id = ?', result.lastInsertRowid) as MappingRecord;
   return serializeMappingRow(row);
 }
 
-export function updateWorkflowEventMapping(db: Database.Database, input: Record<string, unknown> & { id: unknown }) {
+export async function updateWorkflowEventMapping(db: Db, input: Record<string, unknown> & { id: unknown }) {
   const id = parseId(input.id, 'id');
-  const existing = db.prepare('SELECT * FROM external_event_mappings WHERE id = ?').get(id) as MappingRecord | undefined;
+  const existing = await db.get('SELECT * FROM external_event_mappings WHERE id = ?', id) as MappingRecord | undefined;
   if (!existing) throw withStatus('Workflow event mapping not found', 404);
-  ensureMappingVisibleToTenant(db, existing, parseOptionalTenantId(input.tenant_id));
+  await ensureMappingVisibleToTenant(db, existing, parseOptionalTenantId(input.tenant_id));
 
-  const normalized = normalizePayload(db, input, existing);
-  ensureNoConflicts(db, { id, ...normalized });
+  const normalized = await normalizePayload(db, input, existing);
+  await ensureNoConflicts(db, { id, ...normalized });
 
-  const hasTenantId = tableHasColumn(db, 'external_event_mappings', 'tenant_id');
-  const hasSprintId = tableHasColumn(db, 'external_event_mappings', 'sprint_id');
-  const hasSprintType = tableHasColumn(db, 'external_event_mappings', 'sprint_type');
-  db.prepare(`
+  const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
+  const hasSprintId = await tableHasColumn(db, 'external_event_mappings', 'sprint_id');
+  const hasSprintType = await tableHasColumn(db, 'external_event_mappings', 'sprint_type');
+  await db.run(`
     UPDATE external_event_mappings
     SET ${hasTenantId ? 'tenant_id = ?,' : ''}
         project_id = ?,
@@ -1198,44 +1185,27 @@ export function updateWorkflowEventMapping(db: Database.Database, input: Record<
         priority = ?,
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(
-    ...(hasTenantId ? [normalized.tenant_id] : []),
-    normalized.project_id,
-    ...(hasSprintId ? [normalized.sprint_id] : []),
-    ...(hasSprintType ? [normalized.sprint_type] : []),
-    normalized.source,
-    normalized.event_name,
-    normalized.task_type,
-    JSON.stringify(normalized.status_includes),
-    JSON.stringify(normalized.status_excludes),
-    normalized.action_kind,
-    normalized.action_target,
-    normalized.apply_review_evidence ? 1 : 0,
-    normalized.apply_failure_detail ? 1 : 0,
-    normalized.enabled ? 1 : 0,
-    normalized.priority,
-    id,
-  );
+  `, ...(hasTenantId ? [normalized.tenant_id] : []), normalized.project_id, ...(hasSprintId ? [normalized.sprint_id] : []), ...(hasSprintType ? [normalized.sprint_type] : []), normalized.source, normalized.event_name, normalized.task_type, JSON.stringify(normalized.status_includes), JSON.stringify(normalized.status_excludes), normalized.action_kind, normalized.action_target, normalized.apply_review_evidence ? 1 : 0, normalized.apply_failure_detail ? 1 : 0, normalized.enabled ? 1 : 0, normalized.priority, id);
 
-  const row = db.prepare('SELECT * FROM external_event_mappings WHERE id = ?').get(id) as MappingRecord;
+  const row = await db.get('SELECT * FROM external_event_mappings WHERE id = ?', id) as MappingRecord;
   return serializeMappingRow(row);
 }
 
-export function deleteWorkflowEventMapping(db: Database.Database, input: { id: unknown; tenant_id?: unknown }) {
+export async function deleteWorkflowEventMapping(db: Db, input: { id: unknown; tenant_id?: unknown }) {
   const id = parseId(input.id, 'id');
-  const existing = db.prepare('SELECT * FROM external_event_mappings WHERE id = ?').get(id) as MappingRecord | undefined;
+  const existing = await db.get('SELECT * FROM external_event_mappings WHERE id = ?', id) as MappingRecord | undefined;
   if (!existing) throw withStatus('Workflow event mapping not found', 404);
-  ensureMappingVisibleToTenant(db, existing, parseOptionalTenantId(input.tenant_id));
-  db.prepare('DELETE FROM external_event_mappings WHERE id = ?').run(id);
+  await ensureMappingVisibleToTenant(db, existing, parseOptionalTenantId(input.tenant_id));
+  await db.run('DELETE FROM external_event_mappings WHERE id = ?', id);
   return { ok: true, deleted: true, id };
 }
 
-export function resolveWorkflowEventMapping(db: Database.Database, context: ExternalEventContext): ExternalEventMapping | null {
-  const tenantId = context.tenantId ?? resolveTenantIdForProject(db, context.projectId);
-  const hasTenantId = tableHasColumn(db, 'external_event_mappings', 'tenant_id');
-  const hasWorkflowScope = tableHasColumn(db, 'external_event_mappings', 'sprint_id')
-    && tableHasColumn(db, 'external_event_mappings', 'sprint_type');
-  const rows = db.prepare(`
+export async function resolveWorkflowEventMapping(db: Db, context: ExternalEventContext): Promise<ExternalEventMapping | null> {
+  const tenantId = context.tenantId ?? (await resolveTenantIdForProject(db, context.projectId));
+  const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
+  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'sprint_id')
+    && await tableHasColumn(db, 'external_event_mappings', 'sprint_type');
+  const rows = await db.all(`
     SELECT em.*
     FROM external_event_mappings em
     WHERE em.enabled = 1
@@ -1254,20 +1224,7 @@ export function resolveWorkflowEventMapping(db: Database.Database, context: Exte
       CASE WHEN em.task_type = ? THEN 1 ELSE 0 END DESC,
       em.priority DESC,
       em.id ASC
-  `).all(
-    context.eventName,
-    ...(hasTenantId && tenantId != null ? [tenantId] : []),
-    context.source,
-    context.projectId,
-    ...(hasWorkflowScope && context.sprintType ? [context.sprintType] : []),
-    ...(hasWorkflowScope && context.sprintId != null ? [context.sprintId] : []),
-    context.taskType,
-    context.source,
-    ...(hasWorkflowScope ? [context.sprintId ?? null] : []),
-    ...(hasWorkflowScope ? [context.sprintType ?? null] : []),
-    context.projectId,
-    context.taskType,
-  ) as MappingRecord[];
+  `, context.eventName, ...(hasTenantId && tenantId != null ? [tenantId] : []), context.source, context.projectId, ...(hasWorkflowScope && context.sprintType ? [context.sprintType] : []), ...(hasWorkflowScope && context.sprintId != null ? [context.sprintId] : []), context.taskType, context.source, ...(hasWorkflowScope ? [context.sprintId ?? null] : []), ...(hasWorkflowScope ? [context.sprintType ?? null] : []), context.projectId, context.taskType) as MappingRecord[];
 
   for (const row of rows) {
     const mapping = serializeMappingRow(row, [], context.sprintId ?? null);

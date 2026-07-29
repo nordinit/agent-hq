@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import type { DispatchParams, RuntimeEndEvent } from '../types';
 import { getDb } from '../../db/client';
 import { ensureCanonicalSessionForInstance } from '../../lib/canonicalSessions';
@@ -18,11 +17,12 @@ import {
 } from '../../domains/runs/openclawSessionState';
 import { stopOpenClawRawSessionTerminalPoll } from './transcript';
 import { nowTimestamp } from '../../lib/timestamps';
+import { type Db } from "../../db/adapter/types";
 
 const deferredRuntimeEndRetries = new Map<number, NodeJS.Timeout>();
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
+  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
 }
 
 function isOpenClawPreReplyFailure(content: string): boolean {
@@ -42,15 +42,15 @@ function trimRuntimeError(content: string): string {
   return trimProviderLimitFailureText(content);
 }
 
-export function detectOpenClawPreReplyFailure(db: Database.Database, instanceId: number): string | null {
-  const rows = db.prepare(`
+export async function detectOpenClawPreReplyFailure(db: Db, instanceId: number): Promise<string | null> {
+  const rows = await db.all(`
     SELECT content
     FROM chat_messages
     WHERE instance_id = ?
       AND role = 'assistant'
     ORDER BY timestamp DESC
     LIMIT 8
-  `).all(instanceId) as Array<{ content: string | null }>;
+  `, instanceId) as Array<{ content: string | null }>;
 
   for (const row of rows) {
     const content = row.content ?? '';
@@ -84,12 +84,12 @@ function scheduleDeferredRuntimeEndRetry(
   deferredRuntimeEndRetries.set(instanceId, timer);
 }
 
-export function evaluateRawSessionEndCandidate(
-  db: Database.Database,
+export async function evaluateRawSessionEndCandidate(
+  db: Db,
   instanceId: number,
-): OpenClawInstanceSessionStateResult | null {
+): Promise<OpenClawInstanceSessionStateResult | null> {
   try {
-    const evaluation = evaluateOpenClawInstanceSessionState(db, instanceId);
+    const evaluation = await evaluateOpenClawInstanceSessionState(db, instanceId);
     if (!evaluation.state || !evaluation.decision) return null;
     return evaluation;
   } catch (err) {
@@ -129,11 +129,11 @@ export async function handleOpenClawRuntimeEnd(
 ): Promise<void> {
   try {
     const db = getDb();
-    const existing = db.prepare(`
+    const existing = await db.get(`
         SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key
         FROM job_instances
         WHERE id = ?
-      `).get(instanceId) as {
+      `, instanceId) as {
       status: string;
       lifecycle_outcome_posted_at: string | null;
       task_outcome: string | null;
@@ -142,7 +142,7 @@ export async function handleOpenClawRuntimeEnd(
     } | undefined;
     if (!existing) return;
 
-    const rawEvaluation = evaluateRawSessionEndCandidate(db, instanceId);
+    const rawEvaluation = await evaluateRawSessionEndCandidate(db, instanceId);
     if (rawEvaluation?.decision && !rawEvaluation.decision.terminal) {
       const retryAfterMs = rawEvaluation.decision.retryAfterMs ?? OPENCLAW_TERMINAL_QUIESCENCE_MS;
       console.info(
@@ -154,10 +154,10 @@ export async function handleOpenClawRuntimeEnd(
       return;
     }
 
-    const requiresSemanticOutcome = taskRequiresSemanticOutcome(db, existing.task_id);
+    const requiresSemanticOutcome = await taskRequiresSemanticOutcome(db, existing.task_id);
     let normalizedEvent = applyRawSessionTerminalDecision(event, rawEvaluation);
     if (normalizedEvent.success) {
-      const failureText = detectOpenClawPreReplyFailure(db, instanceId);
+      const failureText = await detectOpenClawPreReplyFailure(db, instanceId);
       if (failureText) {
         normalizedEvent = {
           ...normalizedEvent,
@@ -186,7 +186,7 @@ export async function handleOpenClawRuntimeEnd(
       normalizedEvent.success,
       requiresSemanticOutcome,
     );
-    const claim = db.prepare(`
+    const claim = await db.run(`
         UPDATE job_instances
         SET status = ?,
             started_at = COALESCE(started_at, ?),
@@ -201,19 +201,7 @@ export async function handleOpenClawRuntimeEnd(
         WHERE id = ?
           AND status IN ('running', 'dispatched')
           AND runtime_ended_at IS NULL
-      `).run(
-      nextStatus,
-      nowIso,
-      nowIso,
-      nowIso,
-      normalizedEvent.success ? 1 : 0,
-      runtimeEndError,
-      runtimeEndSource,
-      tokenUsage.input,
-      tokenUsage.output,
-      tokenUsage.total,
-      instanceId,
-    );
+      `, nextStatus, nowIso, nowIso, nowIso, normalizedEvent.success ? 1 : 0, runtimeEndError, runtimeEndSource, tokenUsage.input, tokenUsage.output, tokenUsage.total, instanceId);
     if (!claim.changes) {
       return;
     }
@@ -221,13 +209,13 @@ export async function handleOpenClawRuntimeEnd(
     stopOpenClawRawSessionTerminalPoll(instanceId);
 
     if (existing.task_id) {
-      scheduleEndedActiveInstanceLinkageCleanup(db, existing.task_id, instanceId, {
-        changedBy: 'task_lifecycle',
-      });
+      await scheduleEndedActiveInstanceLinkageCleanup(db, existing.task_id, instanceId, {
+                changedBy: 'task_lifecycle',
+              });
     }
 
     const eventId = `oc-turn-end-${instanceId}`;
-    db.prepare(`
+    await db.run(`
         INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
         SELECT ?, agent_id, id, 'system', ?, ?, 'turn_end', ?
         FROM job_instances
@@ -237,21 +225,15 @@ export async function handleOpenClawRuntimeEnd(
           timestamp = excluded.timestamp,
           event_type = excluded.event_type,
           event_meta = excluded.event_meta
-      `).run(
-      eventId,
-      `Run ${normalizedEvent.reason ?? (normalizedEvent.success ? 'completed' : 'ended')}`,
-      normalizedEvent.endedAt,
-      JSON.stringify({
-        runtime_end_type: normalizedEvent.type,
-        terminal_reason: normalizedEvent.reason ?? (normalizedEvent.success ? 'completed' : 'error'),
-        session_key: normalizedEvent.sessionKey,
-        run_id: normalizedEvent.runId ?? null,
-        success: normalizedEvent.success,
-        error: normalizedEvent.error ?? null,
-        ...(normalizedEvent.metadata ?? {}),
-      }),
-      instanceId,
-    );
+      `, eventId, `Run ${normalizedEvent.reason ?? (normalizedEvent.success ? 'completed' : 'ended')}`, normalizedEvent.endedAt, JSON.stringify({
+              runtime_end_type: normalizedEvent.type,
+              terminal_reason: normalizedEvent.reason ?? (normalizedEvent.success ? 'completed' : 'error'),
+              session_key: normalizedEvent.sessionKey,
+              run_id: normalizedEvent.runId ?? null,
+              success: normalizedEvent.success,
+              error: normalizedEvent.error ?? null,
+              ...(normalizedEvent.metadata ?? {}),
+            }), instanceId);
 
     try {
       await ensureCanonicalSessionForInstance(instanceId, {
@@ -284,29 +266,29 @@ export async function handleOpenClawRuntimeEnd(
           : `OpenClaw runtime failed (${normalizedEvent.reason ?? 'error'})`;
     }
 
-    recordRunCheckIn(db, {
-      instanceId,
-      stage: 'completion',
-      summary: failureSummary
-        ?? `OpenClaw runtime ${normalizedEvent.type} (${normalizedEvent.reason ?? (normalizedEvent.success ? 'completed' : 'error')})`,
-      outcome: shouldPostTerminalFailureOutcome
-        ? 'failed'
-        : (normalizedEvent.reason ?? (normalizedEvent.success ? 'completed' : 'error')),
-      runtimeEndSuccess: normalizedEvent.success,
-      runtimeEndError: missingRequiredLifecycleOutcome ? failureSummary : runtimeEndError,
-      runtimeEndSource,
-      meaningfulOutput: true,
-      forceNote: true,
-    });
+    await recordRunCheckIn(db, {
+            instanceId,
+            stage: 'completion',
+            summary: failureSummary
+              ?? `OpenClaw runtime ${normalizedEvent.type} (${normalizedEvent.reason ?? (normalizedEvent.success ? 'completed' : 'error')})`,
+            outcome: shouldPostTerminalFailureOutcome
+              ? 'failed'
+              : (normalizedEvent.reason ?? (normalizedEvent.success ? 'completed' : 'error')),
+            runtimeEndSuccess: normalizedEvent.success,
+            runtimeEndError: missingRequiredLifecycleOutcome ? failureSummary : runtimeEndError,
+            runtimeEndSource,
+            meaningfulOutput: true,
+            forceNote: true,
+          });
 
-    db.prepare(`
+    await db.run(`
         UPDATE job_instances
         SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
         WHERE id = ?
-      `).run(JSON.stringify(normalizedEvent), instanceId);
+      `, JSON.stringify(normalizedEvent), instanceId);
 
     if (shouldPostTerminalFailureOutcome || missingRequiredLifecycleOutcome) {
-      const taskRow = db.prepare(`
+      const taskRow = await db.get(`
           SELECT ji.task_id, ji.agent_id,
                  t.status AS task_status,
                  t.project_id,
@@ -314,12 +296,12 @@ export async function handleOpenClawRuntimeEnd(
                  t.task_type,
                  t.sprint_id,
                  s.sprint_type,
-                 ${tableHasColumn(db, 'tasks', 'custom_fields_json') ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
+                 ${await tableHasColumn(db, 'tasks', 'custom_fields_json') ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
           FROM job_instances ji
           LEFT JOIN tasks t ON t.id = ji.task_id
           LEFT JOIN sprints s ON s.id = t.sprint_id
           WHERE ji.id = ?
-        `).get(instanceId) as {
+        `, instanceId) as {
         task_id: number | null;
         agent_id: number | null;
         task_status: string | null;
@@ -331,34 +313,34 @@ export async function handleOpenClawRuntimeEnd(
         custom_fields_json: string | null;
       } | undefined;
       if (taskRow?.task_id) {
-        const resolvedWorkflow = taskRow.task_status ? resolveWorkflow({
-          taskStatus: taskRow.task_status,
-          taskType: taskRow.task_type,
-          sprintId: taskRow.sprint_id,
-          sprintType: taskRow.sprint_type,
-          db,
-        }) : null;
+        const resolvedWorkflow = taskRow.task_status ? await resolveWorkflow({
+                  taskStatus: taskRow.task_status,
+                  taskType: taskRow.task_type,
+                  sprintId: taskRow.sprint_id,
+                  sprintType: taskRow.sprint_type,
+                  db,
+                }) : null;
         const evidenceRecorded = determineRuntimeEndEvidenceRecorded(
           resolvedWorkflow?.workflowPhase ?? null,
           getCanonicalTaskRecord(taskRow as unknown as Record<string, unknown>),
         );
         if (missingRequiredLifecycleOutcome) {
           console.warn(`[OpenClawRuntime] Missing lifecycle outcome after runtime end, quarantining task #${taskRow.task_id} instance #${instanceId}`);
-          markTaskNeedsAttentionForMissingSemanticHandoff(db, {
-            taskId: taskRow.task_id,
-            instanceId,
-            changedBy: taskRow.agent_id ? `agent:${taskRow.agent_id}` : 'openclaw-runtime',
-            workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
-            priorTaskStatus: taskRow.task_status ?? existing.status,
-            sessionKey: existing.session_key,
-            reviewQaDeployEvidenceRecorded: evidenceRecorded,
-            runtimeEnd: {
-              source: runtimeEndSource,
-              success: normalizedEvent.success,
-              endedAt: normalizedEvent.endedAt,
-              error: failureSummary,
-            },
-          });
+          await markTaskNeedsAttentionForMissingSemanticHandoff(db, {
+                        taskId: taskRow.task_id,
+                        instanceId,
+                        changedBy: taskRow.agent_id ? `agent:${taskRow.agent_id}` : 'openclaw-runtime',
+                        workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
+                        priorTaskStatus: taskRow.task_status ?? existing.status,
+                        sessionKey: existing.session_key,
+                        reviewQaDeployEvidenceRecorded: evidenceRecorded,
+                        runtimeEnd: {
+                          source: runtimeEndSource,
+                          success: normalizedEvent.success,
+                          endedAt: normalizedEvent.endedAt,
+                          error: failureSummary,
+                        },
+                      });
         }
         if (!missingRequiredLifecycleOutcome) {
           await applyConfiguredRuntimeFailedEvent(db, {

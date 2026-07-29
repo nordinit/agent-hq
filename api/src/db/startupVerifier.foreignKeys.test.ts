@@ -5,8 +5,9 @@ import {
   ForeignKeyEnforcementDisabledError,
   assertForeignKeyEnforcementEnabled,
 } from './startupVerifier';
+import { type Db } from "./adapter/types";
 
-let db: Database.Database;
+let db: Db;
 let errorSpy: ReturnType<typeof jest.spyOn>;
 
 const fkState = (): number => Number(db.pragma('foreign_keys', { simple: true }));

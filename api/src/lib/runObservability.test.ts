@@ -2,9 +2,9 @@ import Database from 'better-sqlite3';
 import { recordRunCheckIn } from './runObservability';
 
 describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
-  it('does not write the generic completion note for missing lifecycle handoff completions when the runtime end error uses the canonical text', () => {
+  it('does not write the generic completion note for missing lifecycle handoff completions when the runtime end error uses the canonical text', async () => {
     const db = new Database(':memory:');
-    db.exec(`
+    await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
         task_id INTEGER,
@@ -71,31 +71,31 @@ describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
       );
     `);
 
-    db.prepare(`INSERT INTO tasks (id, status) VALUES (403, 'review')`).run();
-    db.prepare(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`).run();
-    db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2030, 403, 96, 'running', 'run:2030')`).run();
+    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
+    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
+    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2030, 403, 96, 'running', 'run:2030')`);
 
-    const result = recordRunCheckIn(db, {
-      instanceId: 2030,
-      stage: 'completion',
-      summary: 'OpenClaw runtime ended without required lifecycle outcome',
-      outcome: 'failed',
-      meaningfulOutput: true,
-      statusLabel: 'failed',
-      forceNote: true,
-      runtimeEndSuccess: false,
-      runtimeEndError: 'Runtime ended without required lifecycle outcome',
-      runtimeEndSource: 'instance_complete',
-    });
+    const result = await recordRunCheckIn(db, {
+          instanceId: 2030,
+          stage: 'completion',
+          summary: 'OpenClaw runtime ended without required lifecycle outcome',
+          outcome: 'failed',
+          meaningfulOutput: true,
+          statusLabel: 'failed',
+          forceNote: true,
+          runtimeEndSuccess: false,
+          runtimeEndError: 'Runtime ended without required lifecycle outcome',
+          runtimeEndSource: 'instance_complete',
+        });
 
     expect(result.noteCreated).toBe(false);
-    const notes = db.prepare(`SELECT content FROM task_notes WHERE task_id = 403`).all() as Array<{ content: string }>;
+    const notes = await db.all(`SELECT content FROM task_notes WHERE task_id = 403`) as Array<{ content: string }>;
     expect(notes).toHaveLength(0);
   });
 
-  it('does not write the generic completion note for missing lifecycle handoff completions when the runtime end error is a longer failure summary', () => {
+  it('does not write the generic completion note for missing lifecycle handoff completions when the runtime end error is a longer failure summary', async () => {
     const db = new Database(':memory:');
-    db.exec(`
+    await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
         task_id INTEGER,
@@ -162,31 +162,31 @@ describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
       );
     `);
 
-    db.prepare(`INSERT INTO tasks (id, status) VALUES (403, 'review')`).run();
-    db.prepare(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`).run();
-    db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2031, 403, 96, 'running', 'run:2031')`).run();
+    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
+    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
+    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2031, 403, 96, 'running', 'run:2031')`);
 
-    const result = recordRunCheckIn(db, {
-      instanceId: 2031,
-      stage: 'completion',
-      summary: 'OpenClaw runtime ended without required lifecycle outcome',
-      outcome: 'failed',
-      meaningfulOutput: true,
-      statusLabel: 'failed',
-      forceNote: true,
-      runtimeEndSuccess: false,
-      runtimeEndError: 'OpenClaw runtime ended without required lifecycle outcome after stale reconciler fallback fix',
-      runtimeEndSource: 'instance_complete',
-    });
+    const result = await recordRunCheckIn(db, {
+          instanceId: 2031,
+          stage: 'completion',
+          summary: 'OpenClaw runtime ended without required lifecycle outcome',
+          outcome: 'failed',
+          meaningfulOutput: true,
+          statusLabel: 'failed',
+          forceNote: true,
+          runtimeEndSuccess: false,
+          runtimeEndError: 'OpenClaw runtime ended without required lifecycle outcome after stale reconciler fallback fix',
+          runtimeEndSource: 'instance_complete',
+        });
 
     expect(result.noteCreated).toBe(false);
-    const notes = db.prepare(`SELECT content FROM task_notes WHERE task_id = 403`).all() as Array<{ content: string }>;
+    const notes = await db.all(`SELECT content FROM task_notes WHERE task_id = 403`) as Array<{ content: string }>;
     expect(notes).toHaveLength(0);
   });
 
-  it('does not write the generic completion note for missing lifecycle handoff completions when runtime success is still true before quarantine handling normalizes it', () => {
+  it('does not write the generic completion note for missing lifecycle handoff completions when runtime success is still true before quarantine handling normalizes it', async () => {
     const db = new Database(':memory:');
-    db.exec(`
+    await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
         task_id INTEGER,
@@ -253,31 +253,31 @@ describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
       );
     `);
 
-    db.prepare(`INSERT INTO tasks (id, status) VALUES (403, 'review')`).run();
-    db.prepare(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`).run();
-    db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2032, 403, 96, 'running', 'run:2032')`).run();
+    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
+    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
+    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2032, 403, 96, 'running', 'run:2032')`);
 
-    const result = recordRunCheckIn(db, {
-      instanceId: 2032,
-      stage: 'completion',
-      summary: 'OpenClaw runtime ended without required lifecycle outcome',
-      outcome: 'failed',
-      meaningfulOutput: true,
-      statusLabel: 'done',
-      forceNote: true,
-      runtimeEndSuccess: true,
-      runtimeEndError: 'OpenClaw runtime ended without required lifecycle outcome after stale short-note suppression fix',
-      runtimeEndSource: 'instance_complete',
-    });
+    const result = await recordRunCheckIn(db, {
+          instanceId: 2032,
+          stage: 'completion',
+          summary: 'OpenClaw runtime ended without required lifecycle outcome',
+          outcome: 'failed',
+          meaningfulOutput: true,
+          statusLabel: 'done',
+          forceNote: true,
+          runtimeEndSuccess: true,
+          runtimeEndError: 'OpenClaw runtime ended without required lifecycle outcome after stale short-note suppression fix',
+          runtimeEndSource: 'instance_complete',
+        });
 
     expect(result.noteCreated).toBe(false);
-    const notes = db.prepare(`SELECT content FROM task_notes WHERE task_id = 403`).all() as Array<{ content: string }>;
+    const notes = await db.all(`SELECT content FROM task_notes WHERE task_id = 403`) as Array<{ content: string }>;
     expect(notes).toHaveLength(0);
   });
 
-  it('does not write the generic completion note when the summary says the runtime ended without posting a lifecycle outcome', () => {
+  it('does not write the generic completion note when the summary says the runtime ended without posting a lifecycle outcome', async () => {
     const db = new Database(':memory:');
-    db.exec(`
+    await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
         task_id INTEGER,
@@ -344,33 +344,33 @@ describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
       );
     `);
 
-    db.prepare(`INSERT INTO tasks (id, status) VALUES (403, 'review')`).run();
-    db.prepare(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`).run();
-    db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2033, 403, 96, 'running', 'run:2033')`).run();
+    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
+    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
+    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2033, 403, 96, 'running', 'run:2033')`);
 
-    const result = recordRunCheckIn(db, {
-      instanceId: 2033,
-      stage: 'completion',
-      summary: 'QA simulation: runtime ended without posting lifecycle outcome after the latest control-plane patch.',
-      outcome: 'done',
-      meaningfulOutput: true,
-      statusLabel: 'done',
-      forceNote: true,
-      runtimeEndSuccess: true,
-      runtimeEndError: 'Runtime ended without required lifecycle outcome',
-      runtimeEndSource: 'instance_complete',
-    });
+    const result = await recordRunCheckIn(db, {
+          instanceId: 2033,
+          stage: 'completion',
+          summary: 'QA simulation: runtime ended without posting lifecycle outcome after the latest control-plane patch.',
+          outcome: 'done',
+          meaningfulOutput: true,
+          statusLabel: 'done',
+          forceNote: true,
+          runtimeEndSuccess: true,
+          runtimeEndError: 'Runtime ended without required lifecycle outcome',
+          runtimeEndSource: 'instance_complete',
+        });
 
     expect(result.noteCreated).toBe(false);
-    const notes = db.prepare(`SELECT content FROM task_notes WHERE task_id = 403`).all() as Array<{ content: string }>;
+    const notes = await db.all(`SELECT content FROM task_notes WHERE task_id = 403`) as Array<{ content: string }>;
     expect(notes).toHaveLength(0);
   });
 });
 
 describe('recordRunCheckIn preserves runtime completion state when lifecycle handoff is missing', () => {
-  it('does not force the instance status to failed solely because the lifecycle outcome is still missing', () => {
+  it('does not force the instance status to failed solely because the lifecycle outcome is still missing', async () => {
     const db = new Database(':memory:');
-    db.exec(`
+    await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
         task_id INTEGER,
@@ -437,24 +437,24 @@ describe('recordRunCheckIn preserves runtime completion state when lifecycle han
       );
     `);
 
-    db.prepare(`INSERT INTO tasks (id, status) VALUES (403, 'review')`).run();
-    db.prepare(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`).run();
-    db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2034, 403, 96, 'running', 'run:2034')`).run();
+    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
+    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
+    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2034, 403, 96, 'running', 'run:2034')`);
 
-    recordRunCheckIn(db, {
-      instanceId: 2034,
-      stage: 'completion',
-      summary: 'Runtime ended without required lifecycle outcome',
-      outcome: 'done',
-      meaningfulOutput: true,
-      statusLabel: 'done',
-      forceNote: true,
-      runtimeEndSuccess: true,
-      runtimeEndError: 'Runtime ended without required lifecycle outcome',
-      runtimeEndSource: 'instance_complete',
-    });
+    await recordRunCheckIn(db, {
+            instanceId: 2034,
+            stage: 'completion',
+            summary: 'Runtime ended without required lifecycle outcome',
+            outcome: 'done',
+            meaningfulOutput: true,
+            statusLabel: 'done',
+            forceNote: true,
+            runtimeEndSuccess: true,
+            runtimeEndError: 'Runtime ended without required lifecycle outcome',
+            runtimeEndSource: 'instance_complete',
+          });
 
-    const instance = db.prepare(`SELECT status, runtime_end_success, runtime_end_error FROM job_instances WHERE id = 2034`).get() as {
+    const instance = await db.get(`SELECT status, runtime_end_success, runtime_end_error FROM job_instances WHERE id = 2034`) as {
       status: string;
       runtime_end_success: number;
       runtime_end_error: string | null;

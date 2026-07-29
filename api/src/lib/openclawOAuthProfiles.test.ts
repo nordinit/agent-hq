@@ -25,26 +25,26 @@ describe('OpenClaw OAuth profile synchronization', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('writes Agent HQ Codex OAuth credentials into the current OpenClaw SQLite profile', () => {
+  it('writes Agent HQ Codex OAuth credentials into the current OpenClaw SQLite profile', async () => {
     const storePath = path.join(tempDir, 'openclaw-agent.sqlite');
     const db = new Database(storePath);
-    db.exec(`
+    await db.exec(`
       CREATE TABLE auth_profile_store (
         store_key TEXT NOT NULL PRIMARY KEY,
         store_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
     `);
-    db.prepare(`
+    await db.run(`
       INSERT INTO auth_profile_store (store_key, store_json, updated_at)
       VALUES ('primary', ?, 1)
-    `).run(JSON.stringify({
-      version: 1,
-      profiles: {
-        'anthropic:default': { type: 'token', provider: 'anthropic', token: 'keep-me' },
-        'openai:default': { type: 'api_key', provider: 'openai', key: 'stale', displayName: 'Existing profile' },
-      },
-    }));
+    `, JSON.stringify({
+            version: 1,
+            profiles: {
+              'anthropic:default': { type: 'token', provider: 'anthropic', token: 'keep-me' },
+              'openai:default': { type: 'api_key', provider: 'openai', key: 'stale', displayName: 'Existing profile' },
+            },
+          }));
     db.close();
 
     const credential: OpenClawOAuthCredential = {
@@ -63,15 +63,15 @@ describe('OpenClaw OAuth profile synchronization', () => {
       expires: 2_000_000_000_000,
     };
 
-    expect(upsertOAuthProfileStore(storePath, 'openai-codex', credential)).toBe(true);
-    expect(upsertOAuthProfileStore(storePath, 'openai-codex', credential)).toBe(false);
+    expect(await upsertOAuthProfileStore(storePath, 'openai-codex', credential)).toBe(true);
+    expect(await upsertOAuthProfileStore(storePath, 'openai-codex', credential)).toBe(false);
 
     const verifyDb = new Database(storePath, { readonly: true });
-    const row = verifyDb.prepare(`
+    const row = await verifyDb.get(`
       SELECT store_json
       FROM auth_profile_store
       WHERE store_key = 'primary'
-    `).get() as { store_json: string };
+    `) as { store_json: string };
     verifyDb.close();
     const document = JSON.parse(row.store_json);
 

@@ -1,4 +1,3 @@
-import Database from 'better-sqlite3';
 import { OpenClawRuntime } from './OpenClawRuntime';
 import { recordRunCheckIn } from '../domains/runs/observability';
 import { markTaskNeedsAttentionForMissingSemanticHandoff } from '../domains/runs/lifecycleHandoff';
@@ -6,6 +5,7 @@ import { applyConfiguredRuntimeFailedEvent } from '../domains/runs/runtimeFailur
 import { evaluateOpenClawInstanceSessionState } from '../domains/runs/openclawSessionState';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../lib/taskLifecycle';
 import { ensureCanonicalSessionForInstance } from '../lib/canonicalSessions';
+import { type Db } from "../db/adapter/types";
 
 jest.mock('../db/client', () => ({
   getDb: jest.fn(),
@@ -86,7 +86,7 @@ function normalizeSql(sql: string): string {
 }
 
 describe('OpenClawRuntime terminal failure handling', () => {
-  let db: Pick<Database.Database, 'prepare'>;
+  let db: Pick<Db, 'prepare'>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -221,7 +221,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
         if (!stmt) throw new Error(`Unexpected SQL: ${sql}`);
         return stmt;
       }),
-    } as unknown as Pick<Database.Database, 'prepare'>;
+    } as unknown as Pick<Db, 'prepare'>;
 
     const { getDb } = jest.requireMock('../db/client') as { getDb: jest.Mock };
     getDb.mockReturnValue(db);

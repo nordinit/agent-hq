@@ -87,28 +87,28 @@ function sendRouteError(res: Response, err: unknown): Response {
   });
 }
 
-function resolveWorkflowScope(
+async function resolveWorkflowScope(
   db: ReturnType<typeof getDb>,
   params: { projectId?: string; workflowId?: string; id?: string },
   tenantId: number,
-): WorkflowScope | undefined {
+): Promise<WorkflowScope | undefined> {
   const projectId = params.projectId ?? params.id;
   const workflowId = params.workflowId;
   if (!projectId || !workflowId) return undefined;
-  return db.prepare(`
+  return await db.get(`
     SELECT s.tenant_id, s.project_id, s.id AS workflow_id
     FROM sprints s
     JOIN projects p ON p.id = s.project_id
     WHERE s.id = ? AND s.project_id = ? AND p.tenant_id = ? AND COALESCE(s.tenant_id, p.tenant_id) = p.tenant_id
-  `).get(workflowId, projectId, tenantId) as WorkflowScope | undefined;
+  `, workflowId, projectId, tenantId) as WorkflowScope | undefined;
 }
 
-function getWorkflowFileForTenant(
+async function getWorkflowFileForTenant(
   db: ReturnType<typeof getDb>,
   scope: WorkflowScope,
   fileId: string | number,
-): WorkflowFileRow | undefined {
-  return db.prepare(`
+): Promise<WorkflowFileRow | undefined> {
+  return await db.get(`
     SELECT
       wf.id, wf.tenant_id, wf.project_id, wf.workflow_id, wf.filename, wf.original_name,
       wf.mime_type, wf.size_bytes, wf.file_path, wf.uploaded_by, wf.created_at,
@@ -116,10 +116,10 @@ function getWorkflowFileForTenant(
       'workflow' AS scope
     FROM workflow_files wf
     WHERE wf.id = ? AND wf.tenant_id = ? AND wf.project_id = ? AND wf.workflow_id = ?
-  `).get(fileId, scope.tenant_id, scope.project_id, scope.workflow_id) as WorkflowFileRow | undefined;
+  `, fileId, scope.tenant_id, scope.project_id, scope.workflow_id) as WorkflowFileRow | undefined;
 }
 
-function insertWorkflowFileVersion(
+async function insertWorkflowFileVersion(
   db: ReturnType<typeof getDb>,
   input: {
     scope: WorkflowScope;
@@ -130,28 +130,14 @@ function insertWorkflowFileVersion(
     timestamp: string;
     changeSource: string;
   },
-): number | bigint {
-  const result = db.prepare(`
+): Promise<number | bigint> {
+  const result = await db.run(`
     INSERT INTO workflow_file_versions (
       tenant_id, project_id, workflow_id, file_id, version_number, filename, original_name,
       mime_type, size_bytes, file_path, created_by, created_at, change_source
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    input.scope.tenant_id,
-    input.scope.project_id,
-    input.scope.workflow_id,
-    input.fileId,
-    input.versionNumber,
-    input.file.filename,
-    input.file.originalname,
-    input.file.mimetype,
-    input.file.size,
-    input.file.path,
-    input.actor,
-    input.timestamp,
-    input.changeSource,
-  );
+  `, input.scope.tenant_id, input.scope.project_id, input.scope.workflow_id, input.fileId, input.versionNumber, input.file.filename, input.file.originalname, input.file.mimetype, input.file.size, input.file.path, input.actor, input.timestamp, input.changeSource);
   return result.lastInsertRowid;
 }
 
@@ -164,19 +150,19 @@ function cleanupUploadedFile(file: Express.Multer.File | undefined): void {
   }
 }
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const scope = resolveWorkflowScope(db, req.params, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const scope = await resolveWorkflowScope(db, req.params, tenantId);
     if (!scope) return res.status(404).json({ error: 'Workflow not found' });
 
-    const files = db.prepare(`
+    const files = await db.all(`
       SELECT ${WORKFLOW_FILE_RESPONSE_SELECT}
       FROM workflow_files
       WHERE tenant_id = ? AND project_id = ? AND workflow_id = ?
       ORDER BY updated_at DESC, created_at DESC
-    `).all(scope.tenant_id, scope.project_id, scope.workflow_id);
+    `, scope.tenant_id, scope.project_id, scope.workflow_id);
 
     return res.json(files);
   } catch (err) {
@@ -184,11 +170,11 @@ router.get('/', (req: Request, res: Response) => {
   }
 });
 
-router.post('/', upload.single('file'), (req: Request, res: Response) => {
+router.post('/', upload.single('file'), async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const scope = resolveWorkflowScope(db, req.params, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const scope = await resolveWorkflowScope(db, req.params, tenantId);
     if (!scope) {
       cleanupUploadedFile(req.file);
       return res.status(404).json({ error: 'Workflow not found' });
@@ -199,42 +185,29 @@ router.post('/', upload.single('file'), (req: Request, res: Response) => {
     const uploadedBy = (req.body as { uploaded_by?: string }).uploaded_by ?? 'manual';
     const now = nowTimestamp();
 
-    const result = db.transaction(() => {
-      const insertFile = db.prepare(`
+    const result = db.transaction(async () => {
+      const insertFile = await db.run(`
         INSERT INTO workflow_files (
           tenant_id, project_id, workflow_id, filename, original_name, mime_type, size_bytes,
           file_path, uploaded_by, created_at, updated_by, updated_at, current_version
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-      `).run(
-        scope.tenant_id,
-        scope.project_id,
-        scope.workflow_id,
-        req.file!.filename,
-        req.file!.originalname,
-        req.file!.mimetype,
-        req.file!.size,
-        req.file!.path,
-        uploadedBy,
-        now,
-        uploadedBy,
-        now,
-      );
+      `, scope.tenant_id, scope.project_id, scope.workflow_id, req.file!.filename, req.file!.originalname, req.file!.mimetype, req.file!.size, req.file!.path, uploadedBy, now, uploadedBy, now);
 
-      const versionId = insertWorkflowFileVersion(db, {
-        scope,
-        fileId: insertFile.lastInsertRowid,
-        versionNumber: 1,
-        file: req.file!,
-        actor: uploadedBy,
-        timestamp: now,
-        changeSource: 'api_upload',
-      });
-      db.prepare('UPDATE workflow_files SET current_version_id = ? WHERE id = ?').run(versionId, insertFile.lastInsertRowid);
+      const versionId = await insertWorkflowFileVersion(db, {
+              scope,
+              fileId: insertFile.lastInsertRowid,
+              versionNumber: 1,
+              file: req.file!,
+              actor: uploadedBy,
+              timestamp: now,
+              changeSource: 'api_upload',
+            });
+      await db.run('UPDATE workflow_files SET current_version_id = ? WHERE id = ?', versionId, insertFile.lastInsertRowid);
       return insertFile;
     })();
 
-    const record = db.prepare(`SELECT ${WORKFLOW_FILE_RESPONSE_SELECT} FROM workflow_files WHERE id = ?`).get(result.lastInsertRowid);
+    const record = await db.get(`SELECT ${WORKFLOW_FILE_RESPONSE_SELECT} FROM workflow_files WHERE id = ?`, result.lastInsertRowid);
     return res.status(201).json(record);
   } catch (err) {
     cleanupUploadedFile(req.file);
@@ -242,13 +215,13 @@ router.post('/', upload.single('file'), (req: Request, res: Response) => {
   }
 });
 
-router.get('/:fileId', (req: Request, res: Response) => {
+router.get('/:fileId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const scope = resolveWorkflowScope(db, req.params, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const scope = await resolveWorkflowScope(db, req.params, tenantId);
     if (!scope) return res.status(404).json({ error: 'Workflow not found' });
-    const file = getWorkflowFileForTenant(db, scope, req.params.fileId);
+    const file = await getWorkflowFileForTenant(db, scope, req.params.fileId);
     if (!file) return res.status(404).json({ error: 'File not found' });
     return res.json(file);
   } catch (err) {
@@ -256,13 +229,13 @@ router.get('/:fileId', (req: Request, res: Response) => {
   }
 });
 
-router.get('/:fileId/download', (req: Request, res: Response) => {
+router.get('/:fileId/download', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const scope = resolveWorkflowScope(db, req.params, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const scope = await resolveWorkflowScope(db, req.params, tenantId);
     if (!scope) return res.status(404).json({ error: 'Workflow not found' });
-    const file = getWorkflowFileForTenant(db, scope, req.params.fileId);
+    const file = await getWorkflowFileForTenant(db, scope, req.params.fileId);
     if (!file) return res.status(404).json({ error: 'File not found' });
     if (!fs.existsSync(file.file_path)) return res.status(404).json({ error: 'File not found on disk' });
 
@@ -274,21 +247,21 @@ router.get('/:fileId/download', (req: Request, res: Response) => {
   }
 });
 
-router.get('/:fileId/versions', (req: Request, res: Response) => {
+router.get('/:fileId/versions', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const scope = resolveWorkflowScope(db, req.params, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const scope = await resolveWorkflowScope(db, req.params, tenantId);
     if (!scope) return res.status(404).json({ error: 'Workflow not found' });
-    const file = getWorkflowFileForTenant(db, scope, req.params.fileId);
+    const file = await getWorkflowFileForTenant(db, scope, req.params.fileId);
     if (!file) return res.status(404).json({ error: 'File not found' });
 
-    const versions = db.prepare(`
+    const versions = await db.all(`
       SELECT ${WORKFLOW_FILE_VERSION_SELECT}
       FROM workflow_file_versions
       WHERE tenant_id = ? AND project_id = ? AND workflow_id = ? AND file_id = ?
       ORDER BY version_number DESC
-    `).all(scope.tenant_id, scope.project_id, scope.workflow_id, req.params.fileId);
+    `, scope.tenant_id, scope.project_id, scope.workflow_id, req.params.fileId);
 
     return res.json(versions);
   } catch (err) {
@@ -296,18 +269,18 @@ router.get('/:fileId/versions', (req: Request, res: Response) => {
   }
 });
 
-router.put('/:fileId', upload.single('file'), (req: Request, res: Response) => {
+router.put('/:fileId', upload.single('file'), async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const scope = resolveWorkflowScope(db, req.params, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const scope = await resolveWorkflowScope(db, req.params, tenantId);
     if (!scope) {
       cleanupUploadedFile(req.file);
       return res.status(404).json({ error: 'Workflow not found' });
     }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded (field name must be "file")' });
 
-    const file = getWorkflowFileForTenant(db, scope, req.params.fileId);
+    const file = await getWorkflowFileForTenant(db, scope, req.params.fileId);
     if (!file) {
       cleanupUploadedFile(req.file);
       return res.status(404).json({ error: 'File not found' });
@@ -319,40 +292,26 @@ router.put('/:fileId', upload.single('file'), (req: Request, res: Response) => {
     const now = nowTimestamp();
     const nextVersion = Number(file.current_version ?? 1) + 1;
 
-    db.transaction(() => {
-      const versionId = insertWorkflowFileVersion(db, {
-        scope,
-        fileId: file.id,
-        versionNumber: nextVersion,
-        file: req.file!,
-        actor: updatedBy,
-        timestamp: now,
-        changeSource: 'api_replace',
-      });
+    db.transaction(async () => {
+      const versionId = await insertWorkflowFileVersion(db, {
+              scope,
+              fileId: file.id,
+              versionNumber: nextVersion,
+              file: req.file!,
+              actor: updatedBy,
+              timestamp: now,
+              changeSource: 'api_replace',
+            });
 
-      db.prepare(`
+      await db.run(`
         UPDATE workflow_files
         SET filename = ?, original_name = ?, mime_type = ?, size_bytes = ?, file_path = ?,
           updated_by = ?, updated_at = ?, current_version = ?, current_version_id = ?
         WHERE id = ? AND tenant_id = ? AND project_id = ? AND workflow_id = ?
-      `).run(
-        req.file!.filename,
-        req.file!.originalname,
-        req.file!.mimetype,
-        req.file!.size,
-        req.file!.path,
-        updatedBy,
-        now,
-        nextVersion,
-        versionId,
-        file.id,
-        scope.tenant_id,
-        scope.project_id,
-        scope.workflow_id,
-      );
+      `, req.file!.filename, req.file!.originalname, req.file!.mimetype, req.file!.size, req.file!.path, updatedBy, now, nextVersion, versionId, file.id, scope.tenant_id, scope.project_id, scope.workflow_id);
     })();
 
-    const record = db.prepare(`SELECT ${WORKFLOW_FILE_RESPONSE_SELECT} FROM workflow_files WHERE id = ?`).get(file.id);
+    const record = await db.get(`SELECT ${WORKFLOW_FILE_RESPONSE_SELECT} FROM workflow_files WHERE id = ?`, file.id);
     return res.json(record);
   } catch (err) {
     cleanupUploadedFile(req.file);
@@ -360,20 +319,20 @@ router.put('/:fileId', upload.single('file'), (req: Request, res: Response) => {
   }
 });
 
-router.delete('/:fileId', (req: Request, res: Response) => {
+router.delete('/:fileId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const scope = resolveWorkflowScope(db, req.params, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const scope = await resolveWorkflowScope(db, req.params, tenantId);
     if (!scope) return res.status(404).json({ error: 'Workflow not found' });
-    const file = getWorkflowFileForTenant(db, scope, req.params.fileId);
+    const file = await getWorkflowFileForTenant(db, scope, req.params.fileId);
     if (!file) return res.status(404).json({ error: 'File not found' });
 
     try {
-      const versions = db.prepare(`
+      const versions = await db.all(`
         SELECT file_path FROM workflow_file_versions
         WHERE tenant_id = ? AND project_id = ? AND workflow_id = ? AND file_id = ?
-      `).all(scope.tenant_id, scope.project_id, scope.workflow_id, req.params.fileId) as Array<{ file_path: string }>;
+      `, scope.tenant_id, scope.project_id, scope.workflow_id, req.params.fileId) as Array<{ file_path: string }>;
       const paths = new Set([file.file_path, ...versions.map((version) => version.file_path)]);
       for (const filePath of paths) {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -382,8 +341,7 @@ router.delete('/:fileId', (req: Request, res: Response) => {
       console.warn('[workflow-files] Failed to delete from disk:', fsErr);
     }
 
-    db.prepare('DELETE FROM workflow_files WHERE id = ? AND tenant_id = ? AND project_id = ? AND workflow_id = ?')
-      .run(file.id, scope.tenant_id, scope.project_id, scope.workflow_id);
+    await db.run('DELETE FROM workflow_files WHERE id = ? AND tenant_id = ? AND project_id = ? AND workflow_id = ?', file.id, scope.tenant_id, scope.project_id, scope.workflow_id);
     return res.json({ ok: true });
   } catch (err) {
     return sendRouteError(res, err);

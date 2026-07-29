@@ -1,18 +1,3 @@
-/**
- * contracts/workflowContract.ts — Shared workflow semantics for all agent dispatches.
- *
- * This is the SINGLE SOURCE OF TRUTH for the Agent HQ task lifecycle model.
- * It defines WHAT an agent must do (start, progress, outcome, evidence) without
- * specifying HOW (curl commands, HTTP calls, structured JSON blocks, etc.).
- *
- * Runtime-specific transport adapters (local, remote-direct)
- * consume these semantics and produce the concrete instructions appropriate
- * for each agent's execution environment.
- *
- * Transport adapters consume these semantics and render runtime-specific instructions.
- */
-
-import Database from 'better-sqlite3';
 import {
   resolveSprintWorkflow,
   type ResolvedSprintWorkflow,
@@ -21,7 +6,7 @@ import {
 import { resolveSprintOutcomeMap, getLegacyOutcomeMeta, type SprintOutcomeDefinition } from '../../domains/sprint-definitions/outcomes';
 import { loadSprintTaskTransitionRequirements } from '../../domains/routing/policy/statuses';
 import { isBackendSystemOutcome, isBlockerLikeOutcome, isFailureLikeOutcome } from '../../lib/outcomeCatalog';
-
+import { type Db } from "../../db/adapter/types";
 
 // ── Workflow resolution ──────────────────────────────────────────────────────
 
@@ -47,7 +32,7 @@ export interface WorkflowResolutionContext {
   taskType?: string | null;
   sprintId?: number | null;
   sprintType?: string | null;
-  db?: Database.Database | null;
+  db?: Db | null;
   resolvedWorkflow?: ResolvedSprintWorkflow | null;
 }
 
@@ -226,12 +211,12 @@ function inferWorkflowPhase(
   return 'implementation';
 }
 
-function resolveWorkflowFromResolvedWorkflow(
-  db: Database.Database | null | undefined,
+async function resolveWorkflowFromResolvedWorkflow(
+  db: Db | null | undefined,
   taskStatus: string,
   taskType: string | null | undefined,
   workflow: ResolvedSprintWorkflow,
-): ResolvedWorkflow | null {
+): Promise<ResolvedWorkflow | null> {
   const transitions = getApplicableWorkflowTransitions(workflow, taskStatus, taskType);
   if (transitions.length === 0) return null;
 
@@ -241,7 +226,7 @@ function resolveWorkflowFromResolvedWorkflow(
   const hasBlockedRoute = validOutcomeSet.has('blocked');
   const hasFailedRoute = validOutcomeSet.has('failed');
   const outcomeMeta: Map<string, SprintOutcomeDefinition> = db
-    ? resolveSprintOutcomeMap(db, { sprintType: workflow.sprintType, taskType, fallbackOutcomes: transitionOutcomes })
+    ? await resolveSprintOutcomeMap(db, { sprintType: workflow.sprintType, taskType, fallbackOutcomes: transitionOutcomes })
     : new Map<string, SprintOutcomeDefinition>();
 
   if (hasBlockedRoute || hasFailedRoute) {
@@ -281,20 +266,20 @@ function resolveWorkflowFromResolvedWorkflow(
  *
  * The result contains NO transport details — no URLs, no curl, no JSON blocks.
  */
-export function resolveWorkflow(
+export async function resolveWorkflow(
   taskStatusOrContext: string | WorkflowResolutionContext,
   taskType?: string | null,
-): ResolvedWorkflow {
+): Promise<ResolvedWorkflow> {
   const ctx: WorkflowResolutionContext = typeof taskStatusOrContext === 'string'
     ? { taskStatus: taskStatusOrContext, taskType }
     : taskStatusOrContext;
 
   const normalizedSprintType = normalizeSprintType(ctx.sprintType);
   const resolvedWorkflow = ctx.resolvedWorkflow
-    ?? (ctx.db ? resolveSprintWorkflow(ctx.db, ctx.sprintId ?? null, normalizedSprintType) : null);
+    ?? (ctx.db ? await resolveSprintWorkflow(ctx.db, ctx.sprintId ?? null, normalizedSprintType) : null);
 
   if (resolvedWorkflow) {
-    const workflowResolved = resolveWorkflowFromResolvedWorkflow(ctx.db ?? null, ctx.taskStatus, ctx.taskType, resolvedWorkflow);
+    const workflowResolved = await resolveWorkflowFromResolvedWorkflow(ctx.db ?? null, ctx.taskStatus, ctx.taskType, resolvedWorkflow);
     if (workflowResolved) return workflowResolved;
   }
 
@@ -364,13 +349,13 @@ function formatFieldExpression(fieldName: string): string {
   return parseFieldExpression(fieldName).join(' or ') || fieldName;
 }
 
-function loadConfiguredGateRequirements(
-  db: Database.Database,
+async function loadConfiguredGateRequirements(
+  db: Db,
   outcome: string,
   sprintId?: number | null,
   taskType?: string | null,
-): ContractGateRequirement[] {
-  const sprintRows = loadSprintTaskTransitionRequirements(db, sprintId ?? null, outcome, taskType);
+): Promise<ContractGateRequirement[]> {
+  const sprintRows = await loadSprintTaskTransitionRequirements(db, sprintId ?? null, outcome, taskType);
   if (sprintRows.length > 0) {
     return sprintRows.map((row) => ({
       outcome,
@@ -384,21 +369,21 @@ function loadConfiguredGateRequirements(
 
   try {
     if (taskType) {
-      const typeRows = db.prepare(`
+      const typeRows = await db.all(`
         SELECT field_name, requirement_type, match_field, severity, message
         FROM transition_requirements
         WHERE task_type = ? AND outcome = ? AND enabled = 1
         ORDER BY priority DESC, id ASC
-      `).all(taskType, outcome) as Array<Omit<ContractGateRequirement, 'outcome'>>;
+      `, taskType, outcome) as Array<Omit<ContractGateRequirement, 'outcome'>>;
       if (typeRows.length > 0) return typeRows.map((row) => ({ ...row, outcome }));
     }
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT field_name, requirement_type, match_field, severity, message
       FROM transition_requirements
       WHERE task_type IS NULL AND outcome = ? AND enabled = 1
       ORDER BY priority DESC, id ASC
-    `).all(outcome) as Array<Omit<ContractGateRequirement, 'outcome'>>;
+    `, outcome) as Array<Omit<ContractGateRequirement, 'outcome'>>;
     return rows.map((row) => ({ ...row, outcome }));
   } catch {
     return [];
@@ -406,7 +391,7 @@ function loadConfiguredGateRequirements(
 }
 
 export function resolveEvidenceRequirements(options: {
-  db?: Database.Database | null;
+  db?: Db | null;
   taskType?: string | null;
   sprintId?: number | null;
   outcomes?: string[];
@@ -425,12 +410,12 @@ export function resolveEvidenceRequirements(options: {
     };
   }
 
-  const requirements = outcomes.flatMap((outcome) => loadConfiguredGateRequirements(
-    options.db as Database.Database,
-    outcome,
-    options.sprintId ?? null,
-    options.taskType ?? null,
-  ));
+  const requirements = outcomes.flatMap(async (outcome) => await loadConfiguredGateRequirements(
+      options.db as Db,
+      outcome,
+      options.sprintId ?? null,
+      options.taskType ?? null,
+    ));
 
   const blockingRequirements = requirements.filter((requirement) => requirement.severity !== 'warn');
   const fieldExpressions = new Set<string>();
@@ -471,20 +456,20 @@ export function resolveEvidenceRequirements(options: {
   };
 }
 
-export function getAllowedTaskTypesForSprintType(
-  db: Database.Database,
+export async function getAllowedTaskTypesForSprintType(
+  db: Db,
   sprintType: string | null | undefined,
-): string[] {
+): Promise<string[]> {
   const normalizedSprintType = normalizeSprintType(sprintType);
   if (!normalizedSprintType) return [];
 
   try {
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT task_type
       FROM sprint_type_task_types
       WHERE sprint_type_key = ?
       ORDER BY task_type ASC
-    `).all(normalizedSprintType) as Array<{ task_type: string | null }>;
+    `, normalizedSprintType) as Array<{ task_type: string | null }>;
 
     return rows
       .map(row => typeof row.task_type === 'string' ? row.task_type.trim() : '')
@@ -494,17 +479,17 @@ export function getAllowedTaskTypesForSprintType(
   }
 }
 
-export function isTaskTypeAllowedForSprintType(
-  db: Database.Database,
+export async function isTaskTypeAllowedForSprintType(
+  db: Db,
   sprintType: string | null | undefined,
   taskType: string | null | undefined,
-): boolean {
+): Promise<boolean> {
   const normalizedSprintType = normalizeSprintType(sprintType);
   const normalizedTaskType = typeof taskType === 'string' ? taskType.trim() : '';
 
   if (!normalizedSprintType || !normalizedTaskType) return true;
 
-  const allowedTaskTypes = getAllowedTaskTypesForSprintType(db, normalizedSprintType);
+  const allowedTaskTypes = await getAllowedTaskTypesForSprintType(db, normalizedSprintType);
   if (allowedTaskTypes.length === 0) return true;
 
   return allowedTaskTypes.includes(normalizedTaskType);

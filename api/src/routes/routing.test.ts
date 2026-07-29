@@ -14,7 +14,7 @@ let dbPath: string;
 const originalContractRoot = process.env.AGENT_CONTRACT_ROOT;
 const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   jest.resetModules();
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -28,7 +28,7 @@ function resetDb(): void {
   fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'enhancements.md'), '## Agent HQ enhancement contract for this dispatched instance\nREQUIRED OUTPUTS FOR ENHANCEMENTS\n');
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE task_statuses (
       name TEXT PRIMARY KEY,
       label TEXT NOT NULL,
@@ -215,7 +215,7 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
     VALUES
       ('todo', 'To Do', 'slate', 0, 1, '["ready","cancelled"]'),
@@ -232,24 +232,24 @@ function resetDb(): void {
       ('done', 'Done', 'green', 1, 1, '["todo"]'),
       ('cancelled', 'Cancelled', 'red', 1, 1, '["todo"]'),
       ('failed', 'Failed', 'red', 1, 1, '["todo","ready"]')
-  `).run();
-  db.prepare(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ'), (2, 'Other Project')`).run();
-  db.prepare(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1), ('bugs', 'Bugs', 1), ('enhancements', 'Enhancements', 1), ('dev', 'Development', 1)`).run();
-  db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Bugs', 'bugs')`).run();
-  db.prepare(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('bugs', 'backend'), ('bugs', 'qa')`).run();
-  db.prepare(`
+  `);
+  await db.run(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ'), (2, 'Other Project')`);
+  await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1), ('bugs', 'Bugs', 1), ('enhancements', 'Enhancements', 1), ('dev', 'Development', 1)`);
+  await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Bugs', 'bugs')`);
+  await db.run(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('bugs', 'backend'), ('bugs', 'qa')`);
+  await db.run(`
     INSERT INTO task_field_schemas (sprint_type_key, task_type, schema_json)
     VALUES ('bugs', NULL, ?)
-  `).run(JSON.stringify({
-    fields: [
-      { key: 'review_branch', label: 'Review Branch', type: 'text', source: 'task_column', gate_requirement: true },
-      { key: 'review_commit', label: 'Review Commit', type: 'text', source: 'task_column', gate_requirement: true },
-      { key: 'status', label: 'Status', type: 'text', source: 'task_column', gate_requirement: true },
-      { key: 'reproduction_steps', label: 'Reproduction Steps', type: 'textarea', source: 'custom_fields', gate_requirement: false },
-    ],
-  }));
-  db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (7, 'Cinder', 'Backend Engineer', 1, 1), (8, 'Other', 'Other Engineer', 2, 1)`).run();
-  db.exec(`
+  `, JSON.stringify({
+        fields: [
+          { key: 'review_branch', label: 'Review Branch', type: 'text', source: 'task_column', gate_requirement: true },
+          { key: 'review_commit', label: 'Review Commit', type: 'text', source: 'task_column', gate_requirement: true },
+          { key: 'status', label: 'Status', type: 'text', source: 'task_column', gate_requirement: true },
+          { key: 'reproduction_steps', label: 'Reproduction Steps', type: 'textarea', source: 'custom_fields', gate_requirement: false },
+        ],
+      }));
+  await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (7, 'Cinder', 'Backend Engineer', 1, 1), (8, 'Other', 'Other Engineer', 2, 1)`);
+  await db.exec(`
     CREATE TABLE system_policies (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       policy_key TEXT NOT NULL UNIQUE,
@@ -291,10 +291,10 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('routing rules API', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = '';
     dbPath = '';
-    resetDb();
+    await resetDb();
   });
 
   afterEach(() => {
@@ -310,34 +310,34 @@ describe('routing rules API', () => {
     const tenantContext = await import('../lib/tenantContext');
     const db = getDb();
     const defaultTenantId = tenantContext.ensureTenantSchema(db);
-    const betaTenantId = Number(db.prepare(`
+    const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Company', 'beta-company', 0)
-    `).run().lastInsertRowid);
-    db.prepare(`UPDATE projects SET tenant_id = ? WHERE id = 2`).run(betaTenantId);
-    db.prepare(`UPDATE sprints SET tenant_id = ? WHERE id = 10`).run(defaultTenantId);
-    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`).run(betaTenantId);
-    db.prepare(`UPDATE agents SET tenant_id = ? WHERE id = 8`).run(betaTenantId);
+    `)).lastInsertRowid);
+    await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
+    await db.run(`UPDATE sprints SET tenant_id = ? WHERE id = 10`, defaultTenantId);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
+    await db.run(`UPDATE agents SET tenant_id = ? WHERE id = 8`, betaTenantId);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'ready', 8, 50)
-    `).run(betaTenantId);
-    const betaRuleId = Number((db.prepare(`SELECT id FROM sprint_task_routing_rules WHERE tenant_id = ?`).get(betaTenantId) as { id: number }).id);
-    db.prepare(`
+    `, betaTenantId);
+    const betaRuleId = Number((await db.get(`SELECT id FROM sprint_task_routing_rules WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    await db.run(`
       INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'ready', 'start_beta', 'in_progress', 10)
-    `).run(betaTenantId);
-    const betaTransitionId = Number((db.prepare(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`).get(betaTenantId) as { id: number }).id);
-    db.prepare(`
+    `, betaTenantId);
+    const betaTransitionId = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    await db.run(`
       INSERT INTO sprint_task_transition_requirements (tenant_id, project_id, sprint_type, sprint_id, task_type, outcome, field_name, requirement_type, severity, message, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'start_beta', 'review_commit', 'required', 'block', 'Beta only', 10)
-    `).run(betaTenantId);
-    const betaRequirementId = Number((db.prepare(`SELECT id FROM sprint_task_transition_requirements WHERE tenant_id = ?`).get(betaTenantId) as { id: number }).id);
+    `, betaTenantId);
+    const betaRequirementId = Number((await db.get(`SELECT id FROM sprint_task_transition_requirements WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
 
     const { server, baseUrl } = await startTestServer();
     try {
-      db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run(String(defaultTenantId));
+      await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(defaultTenantId));
 
       const alphaRules = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_id=10`);
       expect(alphaRules.status).toBe(200);
@@ -351,7 +351,7 @@ describe('routing rules API', () => {
       const alphaResolve = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
       expect(alphaResolve.status).toBe(200);
       await expect(alphaResolve.json()).resolves.toEqual(expect.objectContaining({ matched: false }));
-      expect(resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: null });
+      expect(await resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: null });
 
       const alphaCreateForeign = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
@@ -360,7 +360,7 @@ describe('routing rules API', () => {
       });
       expect(alphaCreateForeign.status).toBe(404);
 
-      db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run(String(betaTenantId));
+      await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(betaTenantId));
       const betaRules = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=2&sprint_id=20`);
       expect(betaRules.status).toBe(200);
       const betaRulesBody = await betaRules.json() as { rules: Array<{ id: number; tenant_id: number; agent_id: number }> };
@@ -373,7 +373,7 @@ describe('routing rules API', () => {
       await expect(betaRequirements.json()).resolves.toEqual(expect.objectContaining({
         transition_requirements: [expect.objectContaining({ id: betaRequirementId, tenant_id: betaTenantId })],
       }));
-      expect(resolveSprintTaskRoutingAssignment(db, 20, 'backend', 'ready')).toEqual({ agent_id: 8 });
+      expect(await resolveSprintTaskRoutingAssignment(db, 20, 'backend', 'ready')).toEqual({ agent_id: 8 });
     } finally {
       await stopTestServer(server);
     }
@@ -383,35 +383,35 @@ describe('routing rules API', () => {
     const tenantContext = await import('../lib/tenantContext');
     const db = getDb();
     const defaultTenantId = tenantContext.ensureTenantSchema(db);
-    const betaTenantId = Number(db.prepare(`
+    const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Company', 'beta-company', 0)
-    `).run().lastInsertRowid);
-    db.prepare(`UPDATE projects SET tenant_id = ? WHERE id = 2`).run(betaTenantId);
-    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`).run(betaTenantId);
-    db.prepare(`UPDATE agents SET tenant_id = ? WHERE id = 8`).run(betaTenantId);
+    `)).lastInsertRowid);
+    await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
+    await db.run(`UPDATE agents SET tenant_id = ? WHERE id = 8`, betaTenantId);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'ready', 8, 50)
-    `).run(betaTenantId);
-    const betaRuleId = Number((db.prepare(`SELECT id FROM sprint_task_routing_rules WHERE tenant_id = ?`).get(betaTenantId) as { id: number }).id);
-    db.prepare(`
+    `, betaTenantId);
+    const betaRuleId = Number((await db.get(`SELECT id FROM sprint_task_routing_rules WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    await db.run(`
       INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'ready', 'start_beta', 'in_progress', 10)
-    `).run(betaTenantId);
-    const betaTransitionId = Number((db.prepare(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`).get(betaTenantId) as { id: number }).id);
-    db.prepare(`
+    `, betaTenantId);
+    const betaTransitionId = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    await db.run(`
       INSERT INTO sprint_task_transition_requirements (tenant_id, project_id, sprint_type, sprint_id, task_type, outcome, field_name, requirement_type, severity, message, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'start_beta', 'review_commit', 'required', 'block', 'Beta only', 10)
-    `).run(betaTenantId);
-    const betaRequirementId = Number((db.prepare(`SELECT id FROM sprint_task_transition_requirements WHERE tenant_id = ?`).get(betaTenantId) as { id: number }).id);
+    `, betaTenantId);
+    const betaRequirementId = Number((await db.get(`SELECT id FROM sprint_task_transition_requirements WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
 
-    db.prepare(`INSERT INTO agents (id, tenant_id, name, job_title, project_id, enabled) VALUES (9, ?, 'Super Admin', 'Backend Engineer', 1, 1)`).run(defaultTenantId);
-    const regularKey = issueMcpApiKeyForAgent(db, 7, 'regular tenant key').apiKey;
-    const superAdminKey = issueMcpApiKeyForAgent(db, 9, 'super-admin tenant selector key').apiKey;
-    replaceAgentMcpPermissionPolicy(db, 9, ['admin.full_access', 'admin.cross_tenant']);
-    db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run(String(defaultTenantId));
+    await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, project_id, enabled) VALUES (9, ?, 'Super Admin', 'Backend Engineer', 1, 1)`, defaultTenantId);
+    const regularKey = (await issueMcpApiKeyForAgent(db, 7, 'regular tenant key')).apiKey;
+    const superAdminKey = (await issueMcpApiKeyForAgent(db, 9, 'super-admin tenant selector key')).apiKey;
+    await replaceAgentMcpPermissionPolicy(db, 9, ['admin.full_access', 'admin.cross_tenant']);
+    await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(defaultTenantId));
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -536,10 +536,10 @@ describe('routing rules API', () => {
   it('previews high-blast-radius config writes without persisting rows', async () => {
     const db = getDb();
     const before = {
-      rules: (db.prepare('SELECT COUNT(*) AS count FROM sprint_task_routing_rules').get() as { count: number }).count,
-      transitions: (db.prepare('SELECT COUNT(*) AS count FROM sprint_task_transitions').get() as { count: number }).count,
-      requirements: (db.prepare('SELECT COUNT(*) AS count FROM sprint_task_transition_requirements').get() as { count: number }).count,
-      mappings: (db.prepare('SELECT COUNT(*) AS count FROM external_event_mappings').get() as { count: number }).count,
+      rules: (await db.get('SELECT COUNT(*) AS count FROM sprint_task_routing_rules') as { count: number }).count,
+      transitions: (await db.get('SELECT COUNT(*) AS count FROM sprint_task_transitions') as { count: number }).count,
+      requirements: (await db.get('SELECT COUNT(*) AS count FROM sprint_task_transition_requirements') as { count: number }).count,
+      mappings: (await db.get('SELECT COUNT(*) AS count FROM external_event_mappings') as { count: number }).count,
     };
     const { server, baseUrl } = await startTestServer();
     try {
@@ -574,10 +574,10 @@ describe('routing rules API', () => {
         expect(body.preview?.affected).toBeTruthy();
       }
 
-      expect((db.prepare('SELECT COUNT(*) AS count FROM sprint_task_routing_rules').get() as { count: number }).count).toBe(before.rules);
-      expect((db.prepare('SELECT COUNT(*) AS count FROM sprint_task_transitions').get() as { count: number }).count).toBe(before.transitions);
-      expect((db.prepare('SELECT COUNT(*) AS count FROM sprint_task_transition_requirements').get() as { count: number }).count).toBe(before.requirements);
-      expect((db.prepare('SELECT COUNT(*) AS count FROM external_event_mappings').get() as { count: number }).count).toBe(before.mappings);
+      expect((await db.get('SELECT COUNT(*) AS count FROM sprint_task_routing_rules') as { count: number }).count).toBe(before.rules);
+      expect((await db.get('SELECT COUNT(*) AS count FROM sprint_task_transitions') as { count: number }).count).toBe(before.transitions);
+      expect((await db.get('SELECT COUNT(*) AS count FROM sprint_task_transition_requirements') as { count: number }).count).toBe(before.requirements);
+      expect((await db.get('SELECT COUNT(*) AS count FROM external_event_mappings') as { count: number }).count).toBe(before.mappings);
     } finally {
       await stopTestServer(server);
     }
@@ -656,12 +656,12 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 2, 'Other Bugs', 'bugs')`).run();
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 2, 'Other Bugs', 'bugs')`);
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
         VALUES (NULL, 'bugs', NULL, 'backend', 'ready', 7, 0, 0)
-      `).run();
+      `);
 
       const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=56&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
@@ -678,7 +678,7 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`).run();
+      await db.run(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`);
 
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
@@ -706,7 +706,7 @@ describe('routing rules API', () => {
         scope: expect.objectContaining({ project_id: 1, sprint_type: 'dev', sprint_id: null }),
       }));
 
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Development', 'dev')`).run();
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Development', 'dev')`);
       const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=56&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
       await expect(resolveResponse.json()).resolves.toEqual(expect.objectContaining({
@@ -773,7 +773,7 @@ describe('routing rules API', () => {
       expect(response.status).toBe(201);
 
       const db = getDb();
-      db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Specific Agent', 'Backend Engineer', 1, 1)`).run();
+      await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Specific Agent', 'Backend Engineer', 1, 1)`);
       response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -803,7 +803,7 @@ describe('routing rules API', () => {
       expect(response.status).toBe(201);
 
       const db = getDb();
-      db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`).run();
+      await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`);
       response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -826,7 +826,7 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`).run();
+      await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`);
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -956,7 +956,7 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (11, 1, 'Dev', 'dev')`).run();
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (11, 1, 'Dev', 'dev')`);
 
       const createResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
         method: 'POST',
@@ -1010,7 +1010,7 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (11, 1, 'Dev', 'dev')`).run();
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (11, 1, 'Dev', 'dev')`);
 
       for (const field_name of ['review_branch', 'review_commit']) {
         const createResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
@@ -1063,15 +1063,15 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Bugs 56', 'dev'), (57, 1, 'Bugs 57', 'dev'), (65, 1, 'Bugs 65', 'dev')`).run();
-      db.prepare(`
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Bugs 56', 'dev'), (57, 1, 'Bugs 57', 'dev'), (65, 1, 'Bugs 65', 'dev')`);
+      await db.run(`
         INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
         VALUES
           (56, 'backend', 'ready', 'start_work', 'in_progress', 1, 100, 0),
           (56, NULL, 'review', 'qa_pass', 'ready_to_merge', 1, 90, 0),
           (57, 'backend', 'ready', 'start_work', 'blocked', 1, 80, 0),
           (65, NULL, 'review', 'ship_it', 'done', 1, 70, 0)
-      `).run();
+      `);
 
       const response = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&sprint_type=dev&sprint_id=56`);
       expect(response.status).toBe(200);
@@ -1096,26 +1096,26 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Bugs 56', 'dev'), (57, 1, 'Bugs 57', 'dev'), (65, 1, 'Bugs 65', 'dev')`).run();
-      db.prepare(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`).run();
-      db.prepare(`
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Bugs 56', 'dev'), (57, 1, 'Bugs 57', 'dev'), (65, 1, 'Bugs 65', 'dev')`);
+      await db.run(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`);
+      await db.run(`
         INSERT INTO task_field_schemas (sprint_type_key, task_type, schema_json)
         VALUES ('dev', NULL, ?)
-      `).run(JSON.stringify({
-        fields: [
-          { key: 'review_branch', label: 'Review Branch', type: 'text', source: 'task_column', gate_requirement: true },
-          { key: 'review_commit', label: 'Review Commit', type: 'text', source: 'task_column', gate_requirement: true },
-          { key: 'qa_verified_commit', label: 'QA Verified Commit', type: 'text', source: 'task_column', gate_requirement: true },
-        ],
-      }));
-      db.prepare(`
+      `, JSON.stringify({
+                fields: [
+                  { key: 'review_branch', label: 'Review Branch', type: 'text', source: 'task_column', gate_requirement: true },
+                  { key: 'review_commit', label: 'Review Commit', type: 'text', source: 'task_column', gate_requirement: true },
+                  { key: 'qa_verified_commit', label: 'QA Verified Commit', type: 'text', source: 'task_column', gate_requirement: true },
+                ],
+              }));
+      await db.run(`
         INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
         VALUES
           (56, NULL, 'completed_for_review', 'review_branch', 'required', 'block', 'review branch required', 1, 100),
           (56, NULL, 'completed_for_review', 'review_commit', 'required', 'block', 'review commit required', 1, 90),
           (57, NULL, 'completed_for_review', 'review_branch', 'required', 'block', 'wrong sibling row', 1, 80),
           (65, NULL, 'qa_pass', 'qa_verified_commit', 'required', 'block', 'wrong sibling row 2', 1, 70)
-      `).run();
+      `);
 
       const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&sprint_type=dev&sprint_id=56`);
       expect(response.status).toBe(200);
@@ -1140,18 +1140,18 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type, task_policy_seeded_at) VALUES (56, 1, 'Bugs 56', 'dev', datetime('now')), (57, 1, 'Bugs 57', 'dev', datetime('now'))`).run();
-      db.prepare(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`).run();
-      db.prepare(`
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type, task_policy_seeded_at) VALUES (56, 1, 'Bugs 56', 'dev', datetime('now')), (57, 1, 'Bugs 57', 'dev', datetime('now'))`);
+      await db.run(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`);
+      await db.run(`
         INSERT INTO task_field_schemas (sprint_type_key, task_type, schema_json)
         VALUES ('dev', NULL, ?)
-      `).run(JSON.stringify({
-        fields: [
-          { key: 'review_branch', label: 'Review Branch', type: 'text', source: 'task_column', gate_requirement: true },
-          { key: 'review_commit', label: 'Review Commit', type: 'text', source: 'task_column', gate_requirement: true },
-          { key: 'qa_verified_commit', label: 'QA Verified Commit', type: 'text', source: 'task_column', gate_requirement: true },
-        ],
-      }));
+      `, JSON.stringify({
+                fields: [
+                  { key: 'review_branch', label: 'Review Branch', type: 'text', source: 'task_column', gate_requirement: true },
+                  { key: 'review_commit', label: 'Review Commit', type: 'text', source: 'task_column', gate_requirement: true },
+                  { key: 'qa_verified_commit', label: 'QA Verified Commit', type: 'text', source: 'task_column', gate_requirement: true },
+                ],
+              }));
 
       const createDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&sprint_type=dev`, {
         method: 'POST',
@@ -1162,12 +1162,12 @@ describe('routing rules API', () => {
       const defaultRow = await createDefault.json() as { id: number; sprint_id: number | null; project_id: number; sprint_type: string; field_name: string };
       expect(defaultRow).toEqual(expect.objectContaining({ sprint_id: null, project_id: 1, sprint_type: 'dev', field_name: 'review_branch' }));
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_task_transition_requirements (sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
         VALUES
           (56, 1, 'dev', NULL, 'completed_for_review', 'review_commit', 'required', 'block', 'sprint commit required', 1, 90),
           (57, 1, 'dev', NULL, 'completed_for_review', 'qa_verified_commit', 'required', 'block', 'sibling should not leak', 1, 80)
-      `).run();
+      `);
 
       const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&sprint_type=dev&sprint_id=56`);
       expect(response.status).toBe(200);
@@ -1189,15 +1189,15 @@ describe('routing rules API', () => {
     const { server } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type, task_policy_seeded_at) VALUES (56, 1, 'Bugs 56', 'dev', datetime('now')), (57, 1, 'Bugs 57', 'dev', datetime('now'))`).run();
-      db.prepare(`
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type, task_policy_seeded_at) VALUES (56, 1, 'Bugs 56', 'dev', datetime('now')), (57, 1, 'Bugs 57', 'dev', datetime('now'))`);
+      await db.run(`
         INSERT INTO sprint_task_transition_requirements (sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
         VALUES
           (NULL, 1, 'dev', NULL, 'completed_for_review', 'review_branch', 'required', 'block', 'default branch required', 1, 100),
           (57, 1, 'dev', NULL, 'completed_for_review', 'review_commit', 'required', 'block', 'sibling should not leak', 1, 90)
-      `).run();
+      `);
 
-      const requirements = loadSprintTaskTransitionRequirements(db, 56, 'completed_for_review', 'backend');
+      const requirements = await loadSprintTaskTransitionRequirements(db, 56, 'completed_for_review', 'backend');
       expect(requirements.map((row) => row.field_name)).toEqual(['review_branch']);
       expect(requirements.every((row) => row.sprint_id === null)).toBe(true);
     } finally {
@@ -1209,25 +1209,25 @@ describe('routing rules API', () => {
     const { server } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type, task_policy_seeded_at) VALUES (56, 1, 'Bugs 56', 'dev', datetime('now'))`).run();
-      db.prepare(`
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type, task_policy_seeded_at) VALUES (56, 1, 'Bugs 56', 'dev', datetime('now'))`);
+      await db.run(`
         INSERT INTO sprint_task_transitions (sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority)
         VALUES
           (56, 1, 'dev', NULL, 'in_progress', 'completed_for_review', 'review', 0, 100),
           (56, 1, 'dev', NULL, 'in_progress', 'completed_for_review', 'dev_deploy_queued', 1, 50)
-      `).run();
-      db.prepare(`
+      `);
+      await db.run(`
         INSERT INTO sprint_task_transition_requirements (sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
         VALUES
           (56, 1, 'dev', NULL, 'completed_for_review', 'disabled_field', 'required', 'block', '', 0, 100),
           (56, 1, 'dev', NULL, 'completed_for_review', 'enabled_field', 'required', 'block', '', 1, 50)
-      `).run();
+      `);
 
-      expect(resolveSprintTaskTransition(db, 56, 'in_progress', 'completed_for_review', null)).toEqual(expect.objectContaining({
+      expect(await resolveSprintTaskTransition(db, 56, 'in_progress', 'completed_for_review', null)).toEqual(expect.objectContaining({
         to_status: 'dev_deploy_queued',
         enabled: 1,
       }));
-      expect(loadSprintTaskTransitionRequirements(db, 56, 'completed_for_review', null).map((row) => row.field_name)).toEqual(['enabled_field']);
+      expect((await loadSprintTaskTransitionRequirements(db, 56, 'completed_for_review', null)).map((row) => row.field_name)).toEqual(['enabled_field']);
     } finally {
       await stopTestServer(server);
     }
@@ -1327,7 +1327,7 @@ describe('routing rules API', () => {
       });
       expect(defaultResponse.status).toBe(201);
 
-      db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`).run();
+      await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`);
       const overrideResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1371,7 +1371,7 @@ describe('routing rules API', () => {
       });
       expect(defaultResponse.status).toBe(201);
 
-      db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`).run();
+      await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`);
       const overrideResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1408,7 +1408,7 @@ describe('routing rules API', () => {
       });
       expect(defaultResponse.status).toBe(201);
 
-      db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`).run();
+      await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`);
       const overrideResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1472,9 +1472,9 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`).run();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Development', 'dev')`).run();
-      db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (108, 'Vulcan', 'Backend Engineer', 1, 1)`).run();
+      await db.run(`INSERT INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`);
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Development', 'dev')`);
+      await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (108, 'Vulcan', 'Backend Engineer', 1, 1)`);
 
       const createPrimary = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
@@ -1502,7 +1502,7 @@ describe('routing rules API', () => {
         { agent_id: 7, priority: 0 },
         { agent_id: 108, priority: -10 },
       ]);
-      expect(resolveSprintTaskRoutingAssignment(db, 56, 'backend', 'ready')).toEqual({ agent_id: 7 });
+      expect(await resolveSprintTaskRoutingAssignment(db, 56, 'backend', 'ready')).toEqual({ agent_id: 7 });
     } finally {
       await stopTestServer(server);
     }
@@ -1512,9 +1512,9 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Primary', 'Backend Engineer', 1, 1), (108, 'Vulcan', 'Backend Engineer', 1, 1)`).run();
-      db.prepare(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
-        VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 100, 0)`).run();
+      await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Primary', 'Backend Engineer', 1, 1), (108, 'Vulcan', 'Backend Engineer', 1, 1)`);
+      await db.run(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+        VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 100, 0)`);
 
       const createPrimary = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
@@ -1551,10 +1551,10 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
-        VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`).run();
-      db.prepare(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
-        VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`).run();
+      await db.run(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+        VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`);
+      await db.run(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+        VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`);
 
       const response = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_id=10&include_effective=1`);
       expect(response.status).toBe(200);
@@ -1575,32 +1575,32 @@ describe('routing rules API', () => {
     }
   });
 
-  it('policy helpers resolve sprint-type defaults for runtime routing decisions', () => {
+  it('policy helpers resolve sprint-type defaults for runtime routing decisions', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
-      VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`).run();
+    await db.run(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+      VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`);
 
-    expect(resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: 7 });
+    expect(await resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: 7 });
 
-    const listed = listSprintTaskRoutingRules(db, 10);
+    const listed = await listSprintTaskRoutingRules(db, 10);
     expect(listed[0]).toEqual(expect.objectContaining({ sprint_id: null, task_type: 'backend', status: 'ready', agent_id: 7 }));
 
-    db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`).run();
-    db.prepare(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
-      VALUES (1, 'bugs', 10, 'backend', 'ready', 9, 10, 0)`).run();
+    await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`);
+    await db.run(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+      VALUES (1, 'bugs', 10, 'backend', 'ready', 9, 10, 0)`);
 
-    expect(resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: 9 });
+    expect(await resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: 9 });
   });
 
-  it('keeps disabled routing rules visible but excludes them from runtime assignment', () => {
+  it('keeps disabled routing rules visible but excludes them from runtime assignment', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Disabled Route Agent', 'Backend Engineer', 1, 1)`).run();
-    db.prepare(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, enabled, priority, is_system)
-      VALUES (1, 'bugs', NULL, 'backend', 'ready', 9, 0, 50, 0)`).run();
+    await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Disabled Route Agent', 'Backend Engineer', 1, 1)`);
+    await db.run(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, enabled, priority, is_system)
+      VALUES (1, 'bugs', NULL, 'backend', 'ready', 9, 0, 50, 0)`);
 
-    expect(resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: null });
+    expect(await resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: null });
 
-    const listed = listSprintTaskRoutingRules(db, 10);
+    const listed = await listSprintTaskRoutingRules(db, 10);
     expect(listed).toEqual(expect.arrayContaining([
       expect.objectContaining({ task_type: 'backend', status: 'ready', agent_id: 9, enabled: 0 }),
     ]));
@@ -1610,8 +1610,8 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
-        VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`).run();
+      await db.run(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+        VALUES (1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`);
 
       let response = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
       expect(response.status).toBe(200);
@@ -1620,9 +1620,9 @@ describe('routing rules API', () => {
         rule: expect.objectContaining({ sprint_id: null, agent_id: 7, scope_kind: 'sprint_type_default' }),
       }));
 
-      db.prepare(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`).run();
-      db.prepare(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
-        VALUES (1, 'bugs', 10, 'backend', 'ready', 9, 10, 0)`).run();
+      await db.run(`INSERT INTO agents (id, name, job_title, project_id, enabled) VALUES (9, 'Override Agent', 'Backend Engineer', 1, 1)`);
+      await db.run(`INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+        VALUES (1, 'bugs', 10, 'backend', 'ready', 9, 10, 0)`);
 
       response = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
       expect(response.status).toBe(200);
@@ -1702,8 +1702,8 @@ describe('routing rules API', () => {
     const tenantContext = await import('../lib/tenantContext');
     const db = getDb();
     tenantContext.ensureTenantSchema(db);
-    const apiKey = issueMcpApiKeyForAgent(db, 7, 'transition manager key').apiKey;
-    replaceAgentMcpPermissionPolicy(db, 7, ['discovery.read_catalog', 'routing_transitions.manage_project_scope']);
+    const apiKey = (await issueMcpApiKeyForAgent(db, 7, 'transition manager key')).apiKey;
+    await replaceAgentMcpPermissionPolicy(db, 7, ['discovery.read_catalog', 'routing_transitions.manage_project_scope']);
     const authHeaders = {
       Authorization: `Bearer ${apiKey}`,
       'x-agent-hq-mcp-client': 'agent-hq-mcp',
@@ -1792,34 +1792,34 @@ describe('routing rules API', () => {
     const tenantContext = await import('../lib/tenantContext');
     const db = getDb();
     const defaultTenantId = tenantContext.ensureTenantSchema(db);
-    const betaTenantId = Number(db.prepare(`
+    const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Company', 'beta-company', 0)
-    `).run().lastInsertRowid);
-    db.prepare(`UPDATE projects SET tenant_id = ? WHERE id = 2`).run(betaTenantId);
-    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`).run(betaTenantId);
-    db.prepare(`UPDATE agents SET tenant_id = ? WHERE id = 8`).run(betaTenantId);
-    db.prepare(`
+    `)).lastInsertRowid);
+    await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
+    await db.run(`UPDATE agents SET tenant_id = ? WHERE id = 8`, betaTenantId);
+    await db.run(`
       INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'in_progress', 'completed_for_review', 'review')
-    `).run(betaTenantId);
-    const betaTransitionId = Number((db.prepare(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`).get(betaTenantId) as { id: number }).id);
+    `, betaTenantId);
+    const betaTransitionId = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
 
-    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (3, ?, 'Same Tenant Other Project')`).run(defaultTenantId);
-    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (30, ?, 3, 'Other Bugs', 'bugs')`).run(defaultTenantId);
-    db.prepare(`
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (3, ?, 'Same Tenant Other Project')`, defaultTenantId);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (30, ?, 3, 'Other Bugs', 'bugs')`, defaultTenantId);
+    await db.run(`
       INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status)
       VALUES (?, 3, 'bugs', NULL, 'backend', 'in_progress', 'completed_for_review', 'review')
-    `).run(defaultTenantId);
-    const otherProjectTransitionId = Number((db.prepare(`SELECT id FROM sprint_task_transitions WHERE project_id = 3`).get() as { id: number }).id);
+    `, defaultTenantId);
+    const otherProjectTransitionId = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE project_id = 3`) as { id: number }).id);
 
-    const apiKey = issueMcpApiKeyForAgent(db, 7, 'transition manager key').apiKey;
-    replaceAgentMcpPermissionPolicy(db, 7, ['routing_transitions.manage_project_scope']);
+    const apiKey = (await issueMcpApiKeyForAgent(db, 7, 'transition manager key')).apiKey;
+    await replaceAgentMcpPermissionPolicy(db, 7, ['routing_transitions.manage_project_scope']);
     const authHeaders = {
       Authorization: `Bearer ${apiKey}`,
       'x-agent-hq-mcp-client': 'agent-hq-mcp',
     };
-    db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run(String(defaultTenantId));
+    await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(defaultTenantId));
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -1872,11 +1872,11 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
         VALUES (10, NULL, 'in_progress', 'completed_for_review', 'review', 1, 0, 1)
-      `).run();
-      const id = Number((db.prepare(`SELECT id FROM sprint_task_transitions WHERE sprint_id = 10 LIMIT 1`).get() as { id: number }).id);
+      `);
+      const id = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE sprint_id = 10 LIMIT 1`) as { id: number }).id);
 
       const updateResponse = await fetch(`${baseUrl}/api/v1/routing/transitions/${id}?project_id=1&sprint_id=10`, {
         method: 'PUT',
@@ -1906,7 +1906,7 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (11, 1, 'Dev', 'dev')`).run();
+      await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (11, 1, 'Dev', 'dev')`);
 
       const listResponse = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&sprint_id=11`);
       expect(listResponse.status).toBe(200);
@@ -1937,11 +1937,11 @@ describe('routing rules API', () => {
       }));
 
       const db = getDb();
-      const row = db.prepare(`
+      const row = await db.get(`
         SELECT metadata_json
         FROM sprint_task_statuses
         WHERE sprint_id = ? AND status_key = ?
-      `).get(10, 'blocked') as { metadata_json: string } | undefined;
+      `, 10, 'blocked') as { metadata_json: string } | undefined;
       expect(row).toBeDefined();
       expect(JSON.parse(row?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🟡' }));
 
@@ -1991,7 +1991,7 @@ describe('routing rules API', () => {
   });
 
   it('allows deleting seeded sprint-scoped statuses without recreating them on later reads', async () => {
-    seedSprintTaskPolicy(getDb(), 10);
+    await seedSprintTaskPolicy(getDb(), 10);
     const { server, baseUrl } = await startTestServer();
     try {
       const initialListResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?sprint_id=10`);
@@ -2006,11 +2006,11 @@ describe('routing rules API', () => {
       await expect(deleteResponse.json()).resolves.toEqual(expect.objectContaining({ ok: true, deleted: 'review', sprint_id: 10 }));
 
       const db = getDb();
-      const deletedRow = db.prepare(`
+      const deletedRow = await db.get(`
         SELECT id
         FROM sprint_task_statuses
         WHERE sprint_id = ? AND status_key = ?
-      `).get(10, 'review');
+      `, 10, 'review');
       expect(deletedRow).toBeUndefined();
 
       const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?sprint_id=10`);
@@ -2024,11 +2024,11 @@ describe('routing rules API', () => {
 
   it('does not seed sprint status policy while listing statuses', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
       VALUES ('legacy_global_only', 'Legacy Global Only', 'pink', 0, 0, '[]')
-    `).run();
-    db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (11, 1, 'Fresh Generic', 'generic')`).run();
+    `);
+    await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (11, 1, 'Fresh Generic', 'generic')`);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -2039,32 +2039,32 @@ describe('routing rules API', () => {
       expect(body.statuses.some((status) => status.name === 'legacy_global_only')).toBe(false);
       expect(body.statuses).toEqual([]);
 
-      const sprintRows = db.prepare(`SELECT status_key FROM sprint_task_statuses WHERE sprint_id = ? ORDER BY stage_order ASC`).all(11) as Array<{ status_key: string }>;
+      const sprintRows = await db.all(`SELECT status_key FROM sprint_task_statuses WHERE sprint_id = ? ORDER BY stage_order ASC`, 11) as Array<{ status_key: string }>;
       expect(sprintRows).toEqual([]);
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('preserves custom workflow definition statuses during status backfill', () => {
+  it('preserves custom workflow definition statuses during status backfill', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO sprint_types (key, name, is_system, status_seeded_at) VALUES ('custom_workflow', 'Custom Workflow', 0, datetime('now'))`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO sprint_types (key, name, is_system, status_seeded_at) VALUES ('custom_workflow', 'Custom Workflow', 0, datetime('now'))`);
+    await db.run(`
       INSERT INTO sprint_type_task_statuses (
         sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
       ) VALUES
         ('custom_workflow', 'intake', 'Intake', 'slate', 0, 0, '["done"]', 0, 1, '{}'),
         ('custom_workflow', 'done', 'Done', 'green', 1, 0, '[]', 1, 0, '{}')
-    `).run();
+    `);
 
-    seedSprintTypeTaskStatuses(db, 'custom_workflow');
+    await seedSprintTypeTaskStatuses(db, 'custom_workflow');
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT status_key
       FROM sprint_type_task_statuses
       WHERE sprint_type_key = ?
       ORDER BY stage_order ASC
-    `).all('custom_workflow') as Array<{ status_key: string }>;
+    `, 'custom_workflow') as Array<{ status_key: string }>;
     expect(rows.map((row) => row.status_key)).toEqual(['intake', 'done']);
   });
 
@@ -2072,15 +2072,15 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprints (id, project_id, name, sprint_type, task_policy_seeded_at)
         VALUES (12, 1, 'Custom Sprint', 'generic', datetime('now'))
-      `).run();
-      db.prepare(`
+      `);
+      await db.run(`
         INSERT INTO sprint_task_statuses (
           sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
         ) VALUES (12, 'only_status', 'Only Status', 'amber', 0, 1, '[]', 0, 1, '{}')
-      `).run();
+      `);
 
       const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/only_status?sprint_id=12`, {
         method: 'DELETE',
@@ -2099,8 +2099,8 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO projects (id, name) VALUES (86, 'Agent HQ')`).run();
-      db.prepare(`INSERT OR IGNORE INTO sprint_types (key, name, is_system) VALUES ('dev', 'Development', 1)`).run();
+      await db.run(`INSERT INTO projects (id, name) VALUES (86, 'Agent HQ')`);
+      await db.run(`INSERT OR IGNORE INTO sprint_types (key, name, is_system) VALUES ('dev', 'Development', 1)`);
 
       const policy = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
       const externalEvents = require('../domains/routing/externalEventMappings') as typeof import('../domains/routing/externalEventMappings');
@@ -2170,10 +2170,10 @@ describe('routing rules API', () => {
 
       policy.seedSprintTaskPolicy(db, 57, { force: true });
 
-      const sprintRows = db.prepare(`SELECT status_key FROM sprint_task_statuses WHERE sprint_id = ? ORDER BY stage_order ASC`).all(57) as Array<{ status_key: string }>;
+      const sprintRows = await db.all(`SELECT status_key FROM sprint_task_statuses WHERE sprint_id = ? ORDER BY stage_order ASC`, 57) as Array<{ status_key: string }>;
       expect(sprintRows.map((row) => row.status_key)).not.toContain('dispatched');
 
-      const rawTransitionRows = db.prepare(`SELECT outcome FROM sprint_task_transitions WHERE sprint_id = ? ORDER BY id ASC`).all(57) as Array<{ outcome: string }>;
+      const rawTransitionRows = await db.all(`SELECT outcome FROM sprint_task_transitions WHERE sprint_id = ? ORDER BY id ASC`, 57) as Array<{ outcome: string }>;
       expect(rawTransitionRows.map((row) => row.outcome)).not.toContain('approved_for_merge');
     } finally {
       await stopTestServer(server);
@@ -2238,13 +2238,13 @@ describe('routing rules API', () => {
       expect(updated.action_target).toBe('dev_deploying');
       expect(updated.apply_failure_detail).toBe(1);
       expect(updated.enabled).toBe(0);
-      expect(resolveWorkflowEventMapping(getDb(), {
-        source: 'dev_environment_lease_manager',
-        eventName: 'review_ready',
-        projectId: 1,
-        taskType: 'backend',
-        currentStatus: 'in_progress',
-      })).toBeNull();
+      expect(await resolveWorkflowEventMapping(getDb(), {
+                  source: 'dev_environment_lease_manager',
+                  eventName: 'review_ready',
+                  projectId: 1,
+                  taskType: 'backend',
+                  currentStatus: 'in_progress',
+                })).toBeNull();
 
       const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings/${created.id}`, {
         method: 'DELETE',
@@ -2263,9 +2263,9 @@ describe('routing rules API', () => {
       const db = getDb();
       const tenantContext = require('../lib/tenantContext') as typeof import('../lib/tenantContext');
       tenantContext.ensureTenantSchema(db);
-      db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'EcoPool', 'ecopool', 0)`).run();
-      db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (91, 2, 'Pool Client Import')`).run();
-      db.prepare(`
+      await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'EcoPool', 'ecopool', 0)`);
+      await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (91, 2, 'Pool Client Import')`);
+      await db.run(`
         INSERT INTO external_event_mappings (
           tenant_id, project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
           action_kind, action_target, enabled, priority
@@ -2274,9 +2274,9 @@ describe('routing rules API', () => {
           (1, NULL, 'agent_hq_runtime', 'default_only_event', NULL, '[]', '[]', 'status', 'in_progress', 1, 50),
           (2, NULL, 'agent_hq_runtime', 'ecopool_global_event', NULL, '[]', '[]', 'status', 'ready', 1, 50),
           (2, 91, 'agent_hq_runtime', 'ecopool_project_event', NULL, '[]', '[]', 'outcome', 'completed_for_review', 1, 60)
-      `).run();
+      `);
 
-      db.prepare(`UPDATE app_settings SET value = '2' WHERE key = 'active_tenant_id'`).run();
+      await db.run(`UPDATE app_settings SET value = '2' WHERE key = 'active_tenant_id'`);
       const response = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings?project_id=91`);
       expect(response.status).toBe(200);
       const body = await response.json() as { mappings: ExternalEventMapping[] };
@@ -2286,7 +2286,7 @@ describe('routing rules API', () => {
       ]));
       expect(body.mappings.map((mapping) => mapping.event_name)).not.toContain('default_only_event');
 
-      const defaultMapping = db.prepare(`SELECT id FROM external_event_mappings WHERE event_name = 'default_only_event'`).get() as { id: number };
+      const defaultMapping = await db.get(`SELECT id FROM external_event_mappings WHERE event_name = 'default_only_event'`) as { id: number };
       await expect(fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings/${defaultMapping.id}`)).resolves.toMatchObject({ status: 404 });
     } finally {
       await stopTestServer(server);
@@ -2395,8 +2395,8 @@ describe('routing rules API', () => {
 
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO sprint_types (key, name, is_system, status_seeded_at) VALUES ('elevation_build', 'Elevation Build', 0, datetime('now'))`).run();
-      db.prepare(`
+      await db.run(`INSERT INTO sprint_types (key, name, is_system, status_seeded_at) VALUES ('elevation_build', 'Elevation Build', 0, datetime('now'))`);
+      await db.run(`
         INSERT INTO sprint_type_task_statuses (
           sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
         )
@@ -2404,7 +2404,7 @@ describe('routing rules API', () => {
           ('elevation_build', 'intake', 'Intake', 'cyan', 0, 0, '["framing"]', 0, 1, '{}'),
           ('elevation_build', 'framing', 'Framing', 'amber', 0, 0, '["complete"]', 1, 0, '{}'),
           ('elevation_build', 'complete', 'Complete', 'green', 1, 0, '[]', 2, 0, '{}')
-      `).run();
+      `);
 
       const validResponse = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings`, {
         method: 'POST',
@@ -2480,12 +2480,12 @@ describe('routing rules API', () => {
 
     try {
       const db = getDb();
-      db.exec(`
+      await db.exec(`
         ALTER TABLE external_event_mappings ADD COLUMN sprint_id INTEGER;
         ALTER TABLE external_event_mappings ADD COLUMN sprint_type TEXT;
       `);
-      db.prepare(`INSERT INTO sprints (id, name, project_id, sprint_type) VALUES (501, 'Scoped Workflow', 1, 'generic')`).run();
-      seedSprintTaskPolicy(db, 501);
+      await db.run(`INSERT INTO sprints (id, name, project_id, sprint_type) VALUES (501, 'Scoped Workflow', 1, 'generic')`);
+      await seedSprintTaskPolicy(db, 501);
 
       const defaultResponse = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings`, {
         method: 'POST',
@@ -2538,28 +2538,28 @@ describe('routing rules API', () => {
         expect.objectContaining({ id: overrideMapping.id, scope_kind: 'sprint_override', is_inherited: false, is_override: true }),
       ]));
 
-      const backendMatch = resolveWorkflowEventMapping(db, {
-        source: 'construction_events',
-        eventName: 'vendor_ready',
-        tenantId: null,
-        projectId: 1,
-        sprintId: 501,
-        sprintType: 'generic',
-        taskType: 'backend',
-        currentStatus: 'ready',
-      });
+      const backendMatch = await resolveWorkflowEventMapping(db, {
+              source: 'construction_events',
+              eventName: 'vendor_ready',
+              tenantId: null,
+              projectId: 1,
+              sprintId: 501,
+              sprintType: 'generic',
+              taskType: 'backend',
+              currentStatus: 'ready',
+            });
       expect(backendMatch).toEqual(expect.objectContaining({ id: overrideMapping.id, action_kind: 'outcome' }));
 
-      const frontendMatch = resolveWorkflowEventMapping(db, {
-        source: 'construction_events',
-        eventName: 'vendor_ready',
-        tenantId: null,
-        projectId: 1,
-        sprintId: 501,
-        sprintType: 'generic',
-        taskType: 'frontend',
-        currentStatus: 'ready',
-      });
+      const frontendMatch = await resolveWorkflowEventMapping(db, {
+              source: 'construction_events',
+              eventName: 'vendor_ready',
+              tenantId: null,
+              projectId: 1,
+              sprintId: 501,
+              sprintType: 'generic',
+              taskType: 'frontend',
+              currentStatus: 'ready',
+            });
       expect(frontendMatch).toEqual(expect.objectContaining({ id: defaultMapping.id, action_kind: 'status' }));
     } finally {
       await stopTestServer(server);

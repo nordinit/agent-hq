@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import type Database from 'better-sqlite3';
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { validateReviewEvidence } from '../lib/evidenceValidation';
@@ -13,6 +12,7 @@ import {
   resolveWorkflowEventMapping,
   type WorkflowEventMapping,
 } from '../domains/routing/externalEventMappings';
+import { type Db } from "../db/adapter/types";
 
 export { DEV_ENV_LEASE_MANAGER_SOURCE };
 
@@ -80,9 +80,9 @@ type ExternalTaskEventReceiptRow = {
   task_title: string | null;
 };
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
   try {
-    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
   } catch {
     return false;
   }
@@ -232,13 +232,13 @@ function isUniqueConstraintError(error: unknown, table: string, column: string):
   return message.includes('UNIQUE constraint failed') && message.includes(`${table}.${column}`);
 }
 
-function insertReceipt(
-  db: Database.Database,
+async function insertReceipt(
+  db: Db,
   event: NormalizedExternalTaskEvent,
   fingerprint: string,
   changedBy: string,
   requestMetadata: Record<string, unknown>,
-): number {
+): Promise<number> {
   const columns = [
     'fingerprint',
     'source',
@@ -253,8 +253,8 @@ function insertReceipt(
     'message',
     'payload_json',
     'received_by',
-    ...(tableHasColumn(db, 'external_task_event_receipts', 'processing_state') ? ['processing_state'] : []),
-    ...(tableHasColumn(db, 'external_task_event_receipts', 'request_metadata_json') ? ['request_metadata_json'] : []),
+    ...(await tableHasColumn(db, 'external_task_event_receipts', 'processing_state') ? ['processing_state'] : []),
+    ...(await tableHasColumn(db, 'external_task_event_receipts', 'request_metadata_json') ? ['request_metadata_json'] : []),
   ];
   const values = [
     fingerprint,
@@ -270,61 +270,61 @@ function insertReceipt(
     event.message,
     JSON.stringify(event),
     changedBy,
-    ...(tableHasColumn(db, 'external_task_event_receipts', 'processing_state') ? ['received'] : []),
-    ...(tableHasColumn(db, 'external_task_event_receipts', 'request_metadata_json') ? [JSON.stringify(requestMetadata)] : []),
+    ...(await tableHasColumn(db, 'external_task_event_receipts', 'processing_state') ? ['received'] : []),
+    ...(await tableHasColumn(db, 'external_task_event_receipts', 'request_metadata_json') ? [JSON.stringify(requestMetadata)] : []),
   ];
 
   const placeholders = columns.map(() => '?').join(', ');
-  const insertResult = db.prepare(`
+  const insertResult = await db.run(`
     INSERT INTO external_task_event_receipts (${columns.join(', ')})
     VALUES (${placeholders})
-  `).run(...values);
+  `, ...values);
   return Number(insertResult.lastInsertRowid);
 }
 
-function loadReceiptByFingerprint(db: Database.Database, fingerprint: string): ExistingReceiptRow | null {
-  const processingStateSelect = tableHasColumn(db, 'external_task_event_receipts', 'processing_state')
+async function loadReceiptByFingerprint(db: Db, fingerprint: string): Promise<ExistingReceiptRow | null> {
+  const processingStateSelect = await tableHasColumn(db, 'external_task_event_receipts', 'processing_state')
     ? 'processing_state'
     : 'NULL AS processing_state';
-  return db.prepare(`
+  return await db.get(`
     SELECT id, ${processingStateSelect}
     FROM external_task_event_receipts
     WHERE fingerprint = ?
     LIMIT 1
-  `).get(fingerprint) as ExistingReceiptRow | undefined ?? null;
+  `, fingerprint) as ExistingReceiptRow | undefined ?? null;
 }
 
-function markReceiptRetrying(db: Database.Database, receiptId: number): void {
+async function markReceiptRetrying(db: Db, receiptId: number): Promise<void> {
   const assignments: string[] = [];
-  if (tableHasColumn(db, 'external_task_event_receipts', 'processing_state')) {
+  if (await tableHasColumn(db, 'external_task_event_receipts', 'processing_state')) {
     assignments.push(`processing_state = 'received'`);
   }
-  if (tableHasColumn(db, 'external_task_event_receipts', 'processing_error')) {
+  if (await tableHasColumn(db, 'external_task_event_receipts', 'processing_error')) {
     assignments.push(`processing_error = NULL`);
   }
-  if (tableHasColumn(db, 'external_task_event_receipts', 'processed_at')) {
+  if (await tableHasColumn(db, 'external_task_event_receipts', 'processed_at')) {
     assignments.push(`processed_at = NULL`);
   }
   if (assignments.length === 0) return;
 
-  db.prepare(`
+  await db.run(`
     UPDATE external_task_event_receipts
     SET ${assignments.join(', ')}
     WHERE id = ?
-  `).run(receiptId);
+  `, receiptId);
 }
 
-function markReceiptProcessed(
-  db: Database.Database,
+async function markReceiptProcessed(
+  db: Db,
   receiptId: number,
   state: ReceiptProcessingState,
   mapping: WorkflowEventMapping | null,
   error: unknown = null,
-): void {
+): Promise<void> {
   const assignments = ['processed_at = datetime(\'now\')'];
   const values: unknown[] = [];
-  const maybeAssign = (column: string, value: unknown): void => {
-    if (!tableHasColumn(db, 'external_task_event_receipts', column)) return;
+  const maybeAssign = async (column: string, value: unknown): Promise<void> => {
+    if (!await tableHasColumn(db, 'external_task_event_receipts', column)) return;
     assignments.push(`${column} = ?`);
     values.push(value);
   };
@@ -335,26 +335,26 @@ function markReceiptProcessed(
   maybeAssign('mapping_action_kind', mapping?.action_kind ?? null);
   maybeAssign('mapping_action_target', mapping?.action_target ?? null);
 
-  db.prepare(`
+  await db.run(`
     UPDATE external_task_event_receipts
     SET ${assignments.join(', ')}
     WHERE id = ?
-  `).run(...values, receiptId);
+  `, ...values, receiptId);
 }
 
-function addTaskNote(taskId: number, author: string, content: string): void {
+async function addTaskNote(taskId: number, author: string, content: string): Promise<void> {
   const db = getDb();
-  db.prepare(`
+  await db.run(`
     INSERT INTO task_notes (task_id, author, content)
     VALUES (?, ?, ?)
-  `).run(taskId, author, content);
+  `, taskId, author, content);
 }
 
-function updateTaskEvidence(taskId: number, changedBy: string, updates: Record<string, unknown>): void {
+async function updateTaskEvidence(taskId: number, changedBy: string, updates: Record<string, unknown>): Promise<void> {
   const db = getDb();
-  const existing = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(taskId) as Record<string, unknown> | undefined;
+  const existing = await db.get(`SELECT * FROM tasks WHERE id = ?`, taskId) as Record<string, unknown> | undefined;
   if (!existing) throw new Error('Task not found');
-  const taskColumns = new Set((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map(col => col.name));
+  const taskColumns = new Set((await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).map(col => col.name));
   const existingCustomFields = taskColumns.has('custom_fields_json') ? getCanonicalTaskCustomFields(existing) : {};
 
   const requestedKeys = Object.keys(updates).filter((key) => updates[key] !== undefined);
@@ -376,7 +376,7 @@ function updateTaskEvidence(taskId: number, changedBy: string, updates: Record<s
     const oldValue = Object.prototype.hasOwnProperty.call(existingCustomFields, key)
       ? existingCustomFields[key]
       : existing[key];
-    writeTaskHistory(db, taskId, changedBy, key, oldValue, updates[key]);
+    await writeTaskHistory(db, taskId, changedBy, key, oldValue, updates[key]);
   }
 
   const nextCustomFields = { ...existingCustomFields };
@@ -395,21 +395,18 @@ function updateTaskEvidence(taskId: number, changedBy: string, updates: Record<s
     ...shadowColumnKeys.map((key) => updates[key]),
   ];
   if (!assignments) return;
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET ${assignments}, updated_at = datetime('now')
     WHERE id = ?
-  `).run(
-    ...values,
-    taskId,
-  );
+  `, ...values, taskId);
 }
 
-function loadTask(taskId: number): TaskRow {
+async function loadTask(taskId: number): Promise<TaskRow> {
   const db = getDb();
-  const task = db.prepare(`
+  const task = await db.get(`
     SELECT tasks.id,
-           ${tableHasColumn(db, 'tasks', 'tenant_id') ? 'tasks.tenant_id' : 'NULL'} AS tenant_id,
+           ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 'tasks.tenant_id' : 'NULL'} AS tenant_id,
            tasks.status,
            tasks.task_type,
            tasks.project_id,
@@ -420,21 +417,21 @@ function loadTask(taskId: number): TaskRow {
     FROM tasks
     LEFT JOIN sprints s ON s.id = tasks.sprint_id
     WHERE tasks.id = ?
-  `).get(taskId) as TaskRow | undefined;
+  `, taskId) as TaskRow | undefined;
   if (!task) throw new Error('Task not found');
   return task;
 }
 
-function getAssignedProjectId(db: Database.Database, identity: McpApiIdentity): number | null {
-  if (!tableHasColumn(db, 'agents', 'project_id')) return null;
-  const hasTenantId = tableHasColumn(db, 'agents', 'tenant_id');
-  const row = db.prepare(`
+async function getAssignedProjectId(db: Db, identity: McpApiIdentity): Promise<number | null> {
+  if (!await tableHasColumn(db, 'agents', 'project_id')) return null;
+  const hasTenantId = await tableHasColumn(db, 'agents', 'tenant_id');
+  const row = await db.get(`
     SELECT project_id
     FROM agents
     WHERE id = ?
       ${hasTenantId ? 'AND tenant_id = ?' : ''}
     LIMIT 1
-  `).get(identity.agentId, ...(hasTenantId ? [identity.tenantId] : [])) as { project_id: number | null } | undefined;
+  `, identity.agentId, ...(hasTenantId ? [identity.tenantId] : [])) as { project_id: number | null } | undefined;
   const parsed = typeof row?.project_id === 'number' ? row.project_id : Number(row?.project_id);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
@@ -483,7 +480,7 @@ function serializeReceipt(row: ExternalTaskEventReceiptRow): Record<string, unkn
   };
 }
 
-function buildReceiptSelect(db: Database.Database): string {
+async function buildReceiptSelect(db: Db): Promise<string> {
   return `
     SELECT
       r.id,
@@ -500,16 +497,16 @@ function buildReceiptSelect(db: Database.Database): string {
       r.message,
       r.payload_json,
       r.received_by,
-      ${tableHasColumn(db, 'external_task_event_receipts', 'processing_state') ? 'r.processing_state' : 'NULL'} AS processing_state,
-      ${tableHasColumn(db, 'external_task_event_receipts', 'processing_error') ? 'r.processing_error' : 'NULL'} AS processing_error,
-      ${tableHasColumn(db, 'external_task_event_receipts', 'mapping_id') ? 'r.mapping_id' : 'NULL'} AS mapping_id,
-      ${tableHasColumn(db, 'external_task_event_receipts', 'mapping_action_kind') ? 'r.mapping_action_kind' : 'NULL'} AS mapping_action_kind,
-      ${tableHasColumn(db, 'external_task_event_receipts', 'mapping_action_target') ? 'r.mapping_action_target' : 'NULL'} AS mapping_action_target,
-      ${tableHasColumn(db, 'external_task_event_receipts', 'request_metadata_json') ? 'r.request_metadata_json' : 'NULL'} AS request_metadata_json,
+      ${await tableHasColumn(db, 'external_task_event_receipts', 'processing_state') ? 'r.processing_state' : 'NULL'} AS processing_state,
+      ${await tableHasColumn(db, 'external_task_event_receipts', 'processing_error') ? 'r.processing_error' : 'NULL'} AS processing_error,
+      ${await tableHasColumn(db, 'external_task_event_receipts', 'mapping_id') ? 'r.mapping_id' : 'NULL'} AS mapping_id,
+      ${await tableHasColumn(db, 'external_task_event_receipts', 'mapping_action_kind') ? 'r.mapping_action_kind' : 'NULL'} AS mapping_action_kind,
+      ${await tableHasColumn(db, 'external_task_event_receipts', 'mapping_action_target') ? 'r.mapping_action_target' : 'NULL'} AS mapping_action_target,
+      ${await tableHasColumn(db, 'external_task_event_receipts', 'request_metadata_json') ? 'r.request_metadata_json' : 'NULL'} AS request_metadata_json,
       r.created_at,
-      ${tableHasColumn(db, 'external_task_event_receipts', 'processed_at') ? 'r.processed_at' : 'NULL'} AS processed_at,
+      ${await tableHasColumn(db, 'external_task_event_receipts', 'processed_at') ? 'r.processed_at' : 'NULL'} AS processed_at,
       t.project_id AS task_project_id,
-      ${tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS task_tenant_id,
+      ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS task_tenant_id,
       t.status AS task_status,
       t.title AS task_title
     FROM external_task_event_receipts r
@@ -517,17 +514,17 @@ function buildReceiptSelect(db: Database.Database): string {
   `;
 }
 
-function scopedReceiptWhere(db: Database.Database, identity: McpApiIdentity, assignedProjectId: number): { clauses: string[]; params: unknown[] } {
+async function scopedReceiptWhere(db: Db, identity: McpApiIdentity, assignedProjectId: number): Promise<{ clauses: string[]; params: unknown[] }> {
   const clauses = ['t.project_id = ?'];
   const params: unknown[] = [assignedProjectId];
-  if (tableHasColumn(db, 'tasks', 'tenant_id')) {
+  if (await tableHasColumn(db, 'tasks', 'tenant_id')) {
     clauses.push('t.tenant_id = ?');
     params.push(identity.tenantId);
   }
   return { clauses, params };
 }
 
-function writeWorkflowEventHistory(taskId: number, changedBy: string, event: NormalizedExternalTaskEvent, mapping: WorkflowEventMapping | null): void {
+async function writeWorkflowEventHistory(taskId: number, changedBy: string, event: NormalizedExternalTaskEvent, mapping: WorkflowEventMapping | null): Promise<void> {
   const db = getDb();
   const historyEntries: Array<[string, string | number | null]> = [
     ['external_event_source', event.source],
@@ -547,7 +544,7 @@ function writeWorkflowEventHistory(taskId: number, changedBy: string, event: Nor
   ];
 
   for (const [field, value] of historyEntries) {
-    writeTaskHistory(db, taskId, changedBy, field, null, value, false);
+    await writeTaskHistory(db, taskId, changedBy, field, null, value, false);
   }
 }
 
@@ -577,36 +574,36 @@ function buildEventNote(event: NormalizedExternalTaskEvent, mapping: WorkflowEve
   return lines.join('\n');
 }
 
-function applyExternalTaskStatus(
+async function applyExternalTaskStatus(
   task: TaskRow,
   nextStatus: string,
   changedBy: string,
   reason: string,
-): boolean {
+): Promise<boolean> {
   if (task.status === nextStatus) return false;
 
   const db = getDb();
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET status = ?,
         failure_detail = NULL,
         previous_status = NULL,
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(nextStatus, task.id);
+  `, nextStatus, task.id);
 
-  writeTaskStatusChange(db, task.id, changedBy, task.status, nextStatus, {
-    instanceId: task.active_instance_id,
-    reason,
-    projectId: task.project_id,
-    agentId: task.agent_id,
-  });
-  notifyTaskStatusChange(db, {
-    taskId: task.id,
-    fromStatus: task.status,
-    toStatus: nextStatus,
-    source: changedBy,
-  });
+  await writeTaskStatusChange(db, task.id, changedBy, task.status, nextStatus, {
+        instanceId: task.active_instance_id,
+        reason,
+        projectId: task.project_id,
+        agentId: task.agent_id,
+      });
+  await notifyTaskStatusChange(db, {
+        taskId: task.id,
+        fromStatus: task.status,
+        toStatus: nextStatus,
+        source: changedBy,
+      });
 
   return true;
 }
@@ -637,13 +634,13 @@ function validateReviewEvidenceForMapping(event: NormalizedExternalTaskEvent): v
   }
 }
 
-router.get('/task-events/receipts', (req: Request, res: Response) => {
+router.get('/task-events/receipts', async (req: Request, res: Response) => {
   try {
     const identity = getMcpIdentityFromRequest(req);
     if (!identity) return res.status(401).json({ error: 'MCP API key is required', code: 'mcp_api_key_missing' });
 
     const db = getDb();
-    const assignedProjectId = getAssignedProjectId(db, identity);
+    const assignedProjectId = await getAssignedProjectId(db, identity);
     if (!assignedProjectId) {
       return res.status(403).json({
         error: `${identity.agentSlug} does not have an assigned project for external task-event management.`,
@@ -656,7 +653,7 @@ router.get('/task-events/receipts', (req: Request, res: Response) => {
       });
     }
 
-    const { clauses, params } = scopedReceiptWhere(db, identity, assignedProjectId);
+    const { clauses, params } = await scopedReceiptWhere(db, identity, assignedProjectId);
     const taskId = req.query.task_id !== undefined ? normalizeTaskId(req.query.task_id) : null;
     if (taskId) {
       clauses.push('r.task_id = ?');
@@ -673,7 +670,7 @@ router.get('/task-events/receipts', (req: Request, res: Response) => {
       params.push(event);
     }
     const processingState = normalizeOptionalString(req.query.processing_state);
-    if (processingState && tableHasColumn(db, 'external_task_event_receipts', 'processing_state')) {
+    if (processingState && await tableHasColumn(db, 'external_task_event_receipts', 'processing_state')) {
       clauses.push('r.processing_state = ?');
       params.push(processingState);
     }
@@ -681,18 +678,18 @@ router.get('/task-events/receipts', (req: Request, res: Response) => {
     const limit = normalizeLimit(req.query.limit);
     const offset = normalizeOffset(req.query.offset);
     const where = `WHERE ${clauses.join(' AND ')}`;
-    const receipts = db.prepare(`
-      ${buildReceiptSelect(db)}
+    const receipts = await db.all(`
+      ${await buildReceiptSelect(db)}
       ${where}
       ORDER BY r.id DESC
       LIMIT ? OFFSET ?
-    `).all(...params, limit, offset) as ExternalTaskEventReceiptRow[];
-    const total = db.prepare(`
+    `, ...params, limit, offset) as ExternalTaskEventReceiptRow[];
+    const total = await db.get(`
       SELECT COUNT(*) AS count
       FROM external_task_event_receipts r
       JOIN tasks t ON t.id = r.task_id
       ${where}
-    `).get(...params) as { count: number };
+    `, ...params) as { count: number };
 
     return res.json({
       ok: true,
@@ -710,13 +707,13 @@ router.get('/task-events/receipts', (req: Request, res: Response) => {
   }
 });
 
-router.get('/task-events/receipts/:receiptId', (req: Request, res: Response) => {
+router.get('/task-events/receipts/:receiptId', async (req: Request, res: Response) => {
   try {
     const identity = getMcpIdentityFromRequest(req);
     if (!identity) return res.status(401).json({ error: 'MCP API key is required', code: 'mcp_api_key_missing' });
 
     const db = getDb();
-    const assignedProjectId = getAssignedProjectId(db, identity);
+    const assignedProjectId = await getAssignedProjectId(db, identity);
     if (!assignedProjectId) {
       return res.status(403).json({
         error: `${identity.agentSlug} does not have an assigned project for external task-event management.`,
@@ -730,21 +727,21 @@ router.get('/task-events/receipts/:receiptId', (req: Request, res: Response) => 
     }
 
     const receiptId = normalizeTaskId(req.params.receiptId);
-    const { clauses, params } = scopedReceiptWhere(db, identity, assignedProjectId);
+    const { clauses, params } = await scopedReceiptWhere(db, identity, assignedProjectId);
     clauses.push('r.id = ?');
     params.push(receiptId);
-    const receipt = db.prepare(`
-      ${buildReceiptSelect(db)}
+    const receipt = await db.get(`
+      ${await buildReceiptSelect(db)}
       WHERE ${clauses.join(' AND ')}
       LIMIT 1
-    `).get(...params) as ExternalTaskEventReceiptRow | undefined;
+    `, ...params) as ExternalTaskEventReceiptRow | undefined;
 
     if (!receipt) {
-      const existing = db.prepare(`
-        ${buildReceiptSelect(db)}
+      const existing = await db.get(`
+        ${await buildReceiptSelect(db)}
         WHERE r.id = ?
         LIMIT 1
-      `).get(receiptId) as ExternalTaskEventReceiptRow | undefined;
+      `, receiptId) as ExternalTaskEventReceiptRow | undefined;
       if (existing) {
         return res.status(403).json({
           error: `External task-event receipt #${receiptId} is outside the assigned project for ${identity.agentSlug}.`,
@@ -784,18 +781,18 @@ router.post('/task-events', async (req: Request, res: Response) => {
     const changedBy = identity.auditActor;
     const fingerprint = buildFingerprint(normalized);
     const db = getDb();
-    const task = loadTask(normalized.taskId);
+    const task = await loadTask(normalized.taskId);
     let receiptId = 0;
     let reprocessingRejectedReceipt = false;
     try {
-      receiptId = insertReceipt(db, normalized, fingerprint, changedBy, buildRequestMetadata(req));
+      receiptId = await insertReceipt(db, normalized, fingerprint, changedBy, buildRequestMetadata(req));
     } catch (error) {
       if (isUniqueConstraintError(error, 'external_task_event_receipts', 'fingerprint')) {
-        const existing = loadReceiptByFingerprint(db, fingerprint);
+        const existing = await loadReceiptByFingerprint(db, fingerprint);
         if (existing?.processing_state === 'rejected') {
           receiptId = existing.id;
           reprocessingRejectedReceipt = true;
-          markReceiptRetrying(db, receiptId);
+          await markReceiptRetrying(db, receiptId);
         } else {
           return res.json({
             ok: true,
@@ -816,16 +813,16 @@ router.post('/task-events', async (req: Request, res: Response) => {
     let mapping: WorkflowEventMapping | null = null;
 
     try {
-      mapping = resolveWorkflowEventMapping(db, {
-        source: normalized.source,
-        eventName: normalized.event,
-        tenantId: task.tenant_id,
-        projectId: task.project_id,
-        sprintId: task.sprint_id,
-        sprintType: task.sprint_type,
-        taskType: task.task_type,
-        currentStatus: task.status,
-      });
+      mapping = await resolveWorkflowEventMapping(db, {
+              source: normalized.source,
+              eventName: normalized.event,
+              tenantId: task.tenant_id,
+              projectId: task.project_id,
+              sprintId: task.sprint_id,
+              sprintType: task.sprint_type,
+              taskType: task.task_type,
+              currentStatus: task.status,
+            });
 
       if (mapping?.apply_review_evidence) {
         validateReviewEvidenceForMapping(normalized);
@@ -837,24 +834,24 @@ router.post('/task-events', async (req: Request, res: Response) => {
 
       await db.exec('BEGIN');
       try {
-        writeWorkflowEventHistory(normalized.taskId, changedBy, normalized, mapping);
-        addTaskNote(normalized.taskId, changedBy, buildEventNote(normalized, mapping));
+        await writeWorkflowEventHistory(normalized.taskId, changedBy, normalized, mapping);
+        await addTaskNote(normalized.taskId, changedBy, buildEventNote(normalized, mapping));
 
         if (mapping?.apply_review_evidence) {
-          updateTaskEvidence(normalized.taskId, changedBy, {
-            review_branch: normalized.branch,
-            review_commit: normalized.commitSha,
-            review_url: normalized.reviewUrl,
-          });
+          await updateTaskEvidence(normalized.taskId, changedBy, {
+                        review_branch: normalized.branch,
+                        review_commit: normalized.commitSha,
+                        review_url: normalized.reviewUrl,
+                      });
         }
 
         if (mapping?.action_kind === 'status' && mapping.action_target) {
-          actionApplied = applyExternalTaskStatus(
-            task,
-            mapping.action_target,
-            changedBy,
-            `Workflow event ${normalized.event} via ${normalized.source}. ${normalized.message}`,
-          );
+          actionApplied = await applyExternalTaskStatus(
+                      task,
+                      mapping.action_target,
+                      changedBy,
+                      `Workflow event ${normalized.event} via ${normalized.source}. ${normalized.message}`,
+                    );
           nextStatus = actionApplied ? mapping.action_target : task.status;
         } else if (mapping?.action_kind === 'outcome' && mapping.action_target) {
           outcome = mapping.action_target;
@@ -874,9 +871,9 @@ router.post('/task-events', async (req: Request, res: Response) => {
         }
 
         if (mapping?.apply_failure_detail && mapping.action_kind !== 'outcome') {
-          updateTaskEvidence(normalized.taskId, changedBy, {
-            failure_detail: buildFailureDetail(normalized),
-          });
+          await updateTaskEvidence(normalized.taskId, changedBy, {
+                        failure_detail: buildFailureDetail(normalized),
+                      });
         }
 
         await db.exec('COMMIT');
@@ -889,7 +886,7 @@ router.post('/task-events', async (req: Request, res: Response) => {
         throw error;
       }
 
-      markReceiptProcessed(db, receiptId, 'processed', mapping);
+      await markReceiptProcessed(db, receiptId, 'processed', mapping);
       return res.json({
         ok: true,
         duplicate: false,
@@ -912,7 +909,7 @@ router.post('/task-events', async (req: Request, res: Response) => {
         next_status: nextStatus,
       });
     } catch (error) {
-      markReceiptProcessed(db, receiptId, 'rejected', mapping, error);
+      await markReceiptProcessed(db, receiptId, 'rejected', mapping, error);
 
       const message = error instanceof Error ? error.message : String(error);
       if (

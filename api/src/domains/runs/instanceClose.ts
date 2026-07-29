@@ -1,18 +1,10 @@
-/**
- * instanceClose.ts — shared helper for closing a job instance and terminating
- * the associated agent session.
- *
- * Extracted from PUT /instances/:id/complete so the same logic can be called
- * atomically from POST /tasks/:id/outcome when the outcome is terminal.
- */
-
-import type Database from 'better-sqlite3';
 import { abortChatRunBySessionKey } from '../../runtimes/OpenClawRuntime';
 import { destroyAgentContext } from '../../services/browserPool';
 import { recordRunCheckIn } from './observability';
 import { isTerminalInstanceOutcome } from '../../lib/outcomeCatalog';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../../lib/taskLifecycle';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
+import { type Db } from "../../db/adapter/types";
 
 /**
  * Terminal outcomes that should automatically close the instance and terminate
@@ -26,7 +18,7 @@ export function isTerminalOutcome(outcome: string): boolean {
 }
 
 export interface CloseInstanceOptions {
-  db: Database.Database;
+  db: Db;
   instanceId: number;
   /** Final status to stamp on the instance. Defaults to 'done'. */
   status?: 'done' | 'failed';
@@ -48,7 +40,7 @@ const ACTIVE_INSTANCE_STATUSES = new Set(['queued', 'dispatched', 'running']);
 const TERMINAL_INSTANCE_STATUSES = new Set(['done', 'failed', 'cancelled']);
 
 export interface CloseActiveInstanceAfterSemanticHandoffOptions {
-  db: Database.Database;
+  db: Db;
   taskId: number;
   /** If omitted, the helper resolves tasks.active_instance_id for taskId. */
   instanceId?: number | null;
@@ -90,11 +82,11 @@ export async function closeActiveInstanceAfterSemanticHandoff(
   const { db, taskId, outcome } = opts;
   const explicitInstanceId = normalizePositiveInteger(opts.instanceId ?? null);
 
-  const task = db.prepare(`
+  const task = await db.get(`
     SELECT id, active_instance_id
     FROM tasks
     WHERE id = ?
-  `).get(taskId) as { id: number; active_instance_id: number | null } | undefined;
+  `, taskId) as { id: number; active_instance_id: number | null } | undefined;
 
   if (!task) {
     return { closed: false, reason: 'no_active_instance' };
@@ -105,11 +97,11 @@ export async function closeActiveInstanceAfterSemanticHandoff(
     return { closed: false, reason: 'no_active_instance' };
   }
 
-  const instance = db.prepare(`
+  const instance = await db.get(`
     SELECT id, task_id, status, runtime_ended_at, completed_at
     FROM job_instances
     WHERE id = ?
-  `).get(resolvedInstanceId) as {
+  `, resolvedInstanceId) as {
     id: number;
     task_id: number | null;
     status: string | null;
@@ -178,7 +170,7 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
   // Use a simple SELECT on job_instances only first — avoids SQLITE_ERROR if
   // schema is minimal (e.g. in tests). Richer fields are fetched below only
   // if we actually proceed with closing.
-  const basicInstance = db.prepare(`SELECT id, status FROM job_instances WHERE id = ?`).get(instanceId) as { id: number; status: string } | undefined;
+  const basicInstance = await db.get(`SELECT id, status FROM job_instances WHERE id = ?`, instanceId) as { id: number; status: string } | undefined;
   if (!basicInstance) {
     return { closed: false, reason: 'not_found' };
   }
@@ -190,12 +182,12 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
   // Fetch full instance row with agent details (best-effort; may fail if schema is minimal)
   let instance: Record<string, unknown> | undefined;
   try {
-    instance = db.prepare(`
+    instance = await db.get(`
       SELECT ji.*, a.session_key AS agent_session_key, a.repo_path AS agent_repo_path, a.repo_access_mode AS agent_repo_access_mode
       FROM job_instances ji
       LEFT JOIN agents a ON a.id = ji.agent_id
       WHERE ji.id = ?
-    `).get(instanceId) as Record<string, unknown> | undefined;
+    `, instanceId) as Record<string, unknown> | undefined;
   } catch {
     instance = basicInstance as Record<string, unknown>;
   }
@@ -207,7 +199,7 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
   // Use a graceful UPDATE: try with completed_at first; fall back to status-only
   // if the column doesn't exist (e.g. minimal test schemas).
   try {
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET status = ?,
           completed_at = datetime('now'),
@@ -216,10 +208,10 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
           runtime_end_error = COALESCE(runtime_end_error, ?),
           runtime_end_source = COALESCE(runtime_end_source, 'task_outcome_auto_close')
       WHERE id = ?
-    `).run(finalStatus, finalStatus === 'done' ? 1 : 0, finalStatus === 'failed' ? (summary ?? `Terminal outcome: ${outcome ?? finalStatus}`) : null, instanceId);
+    `, finalStatus, finalStatus === 'done' ? 1 : 0, finalStatus === 'failed' ? (summary ?? `Terminal outcome: ${outcome ?? finalStatus}`) : null, instanceId);
   } catch {
     try {
-      db.prepare(`UPDATE job_instances SET status = ? WHERE id = ?`).run(finalStatus, instanceId);
+      await db.run(`UPDATE job_instances SET status = ? WHERE id = ?`, finalStatus, instanceId);
     } catch (e2) {
       console.warn(`[instanceClose] Could not update instance ${instanceId} status (non-fatal):`, e2 instanceof Error ? e2.message : e2);
     }
@@ -227,19 +219,19 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
 
   // ── 2. Record completion check-in (best-effort — may fail in minimal schemas) ─
   try {
-    recordRunCheckIn(db, {
-      instanceId,
-      stage: 'completion',
-      summary: summary ?? null,
-      outcome: outcome ?? finalStatus,
-      meaningfulOutput: true,
-      statusLabel: finalStatus,
-      forceNote: true,
-      suppressNote: !recordCompletionNote,
-      runtimeEndSuccess: finalStatus === 'done',
-      runtimeEndError: finalStatus === 'failed' ? (summary ?? `Terminal outcome: ${outcome ?? finalStatus}`) : null,
-      runtimeEndSource: 'task_outcome_auto_close',
-    });
+    await recordRunCheckIn(db, {
+            instanceId,
+            stage: 'completion',
+            summary: summary ?? null,
+            outcome: outcome ?? finalStatus,
+            meaningfulOutput: true,
+            statusLabel: finalStatus,
+            forceNote: true,
+            suppressNote: !recordCompletionNote,
+            runtimeEndSuccess: finalStatus === 'done',
+            runtimeEndError: finalStatus === 'failed' ? (summary ?? `Terminal outcome: ${outcome ?? finalStatus}`) : null,
+            runtimeEndSource: 'task_outcome_auto_close',
+          });
   } catch {
     // Non-fatal in minimal-schema environments (e.g. tests without instance_artifacts)
   }
@@ -251,9 +243,9 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
         ? Number(instance.task_id)
         : null;
     if (taskId != null) {
-      scheduleEndedActiveInstanceLinkageCleanup(db, taskId, instanceId, {
-        changedBy: 'task_outcome_auto_close',
-      });
+      await scheduleEndedActiveInstanceLinkageCleanup(db, taskId, instanceId, {
+                changedBy: 'task_outcome_auto_close',
+              });
     }
   } catch {
     // Non-fatal in minimal-schema environments.
@@ -262,27 +254,27 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
   try {
     // Resolve agent name for log entries
     const agentNameRow = instance.agent_id
-      ? db.prepare(`SELECT name, job_title FROM agents WHERE id = ?`).get(instance.agent_id) as { name: string; job_title: string | null } | undefined
+      ? await db.get(`SELECT name, job_title FROM agents WHERE id = ?`, instance.agent_id) as { name: string; job_title: string | null } | undefined
       : undefined;
     const logJobTitle = agentNameRow?.job_title || agentNameRow?.name || String(instance.agent_id ?? 'unknown');
 
     if (summary) {
-      insertRuntimeLog(db, {
-        instanceId,
-        agentId: instance.agent_id as number | null,
-        jobTitle: logJobTitle,
-        level: 'info',
-        message: `Agent completion report (auto-close): ${summary}`,
-      });
+      await insertRuntimeLog(db, {
+                instanceId,
+                agentId: instance.agent_id as number | null,
+                jobTitle: logJobTitle,
+                level: 'info',
+                message: `Agent completion report (auto-close): ${summary}`,
+              });
     }
 
-    insertRuntimeLog(db, {
-      instanceId,
-      agentId: instance.agent_id as number | null,
-      jobTitle: logJobTitle,
-      level: 'info',
-      message: `Job instance ${instanceId} auto-closed by terminal outcome (${outcome ?? finalStatus})`,
-    });
+    await insertRuntimeLog(db, {
+            instanceId,
+            agentId: instance.agent_id as number | null,
+            jobTitle: logJobTitle,
+            level: 'info',
+            message: `Job instance ${instanceId} auto-closed by terminal outcome (${outcome ?? finalStatus})`,
+          });
   } catch {
     // Non-fatal in minimal-schema environments
   }

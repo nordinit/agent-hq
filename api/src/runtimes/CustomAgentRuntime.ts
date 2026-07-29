@@ -202,8 +202,7 @@ export class CustomAgentRuntime implements AgentRuntime {
       if (params.instanceId != null && sessionId) {
         try {
           const db = getDb();
-          db.prepare(`UPDATE job_instances SET run_id = ? WHERE id = ?`)
-            .run(sessionId, params.instanceId);
+          await db.run(`UPDATE job_instances SET run_id = ? WHERE id = ?`, sessionId, params.instanceId);
           console.log(
             `[CustomAgentRuntime] Persisted Custom session ID ${sessionId} as run_id for instance ${params.instanceId}`,
           );
@@ -290,8 +289,7 @@ export class CustomAgentRuntime implements AgentRuntime {
       const instanceId = Number(syntheticMatch[1]);
       try {
         const db = getDb();
-        const row = db.prepare('SELECT run_id FROM job_instances WHERE id = ?')
-          .get(instanceId) as { run_id: string | null } | undefined;
+        const row = await db.get('SELECT run_id FROM job_instances WHERE id = ?', instanceId) as { run_id: string | null } | undefined;
         if (row?.run_id && !row.run_id.startsWith('veri-')) {
           sessionId = row.run_id;
           console.log(
@@ -442,8 +440,7 @@ export class CustomAgentRuntime implements AgentRuntime {
 
     // Look up agent_id for this instance
     const db = getDb();
-    const instRow = db.prepare('SELECT agent_id FROM job_instances WHERE id = ?')
-      .get(instanceId) as { agent_id: number } | undefined;
+    const instRow = await db.get('SELECT agent_id FROM job_instances WHERE id = ?', instanceId) as { agent_id: number } | undefined;
     const agentId = instRow?.agent_id ?? null;
     if (agentId == null) return;
 
@@ -747,19 +744,18 @@ export class CustomAgentRuntime implements AgentRuntime {
    * full accumulated content (not just the delta). This avoids duplicating
    * message rows while keeping the content fresh.
    */
-  private appendTranscriptChunk(
+  private async appendTranscriptChunk(
     params: DispatchParams,
     content: string,
     runId: string,
     events?: SSEEvent[],
-  ): void {
+  ): Promise<void> {
     try {
       const db = getDb();
 
       let agentId: number | null = null;
       if (params.instanceId != null) {
-        const row = db.prepare(`SELECT agent_id FROM job_instances WHERE id = ?`)
-          .get(params.instanceId) as { agent_id: number } | undefined;
+        const row = await db.get(`SELECT agent_id FROM job_instances WHERE id = ?`, params.instanceId) as { agent_id: number } | undefined;
         agentId = row?.agent_id ?? null;
       }
       if (agentId == null) return;
@@ -769,11 +765,11 @@ export class CustomAgentRuntime implements AgentRuntime {
       const msgId = `veri-asst-${instanceId}`;
 
       // Upsert the rolling assistant message (backward compat)
-      db.prepare(`
+      await db.run(`
         INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
         VALUES (?, ?, ?, 'assistant', ?, ?, 'text', '{}')
         ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp
-      `).run(msgId, agentId, instanceId, content, now);
+      `, msgId, agentId, instanceId, content, now);
 
       // Persist individual structured event rows (task #532)
       if (events && events.length > 0) {
@@ -791,17 +787,16 @@ export class CustomAgentRuntime implements AgentRuntime {
    * persistUserPrompt — write the user prompt row at run start so the Chats
    * tab immediately shows what task was dispatched, before any response arrives.
    */
-  private persistUserPrompt(
+  private async persistUserPrompt(
     params: DispatchParams,
     runId: string,
-  ): void {
+  ): Promise<void> {
     try {
       const db = getDb();
 
       let agentId: number | null = null;
       if (params.instanceId != null) {
-        const row = db.prepare(`SELECT agent_id FROM job_instances WHERE id = ?`)
-          .get(params.instanceId) as { agent_id: number } | undefined;
+        const row = await db.get(`SELECT agent_id FROM job_instances WHERE id = ?`, params.instanceId) as { agent_id: number } | undefined;
         agentId = row?.agent_id ?? null;
       }
       if (agentId == null) return;
@@ -809,10 +804,10 @@ export class CustomAgentRuntime implements AgentRuntime {
       const instanceId = params.instanceId ?? 0;
       const now = nowTimestamp();
 
-      db.prepare(`
+      await db.run(`
         INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
         VALUES (?, ?, ?, 'user', ?, ?)
-      `).run(`veri-user-${instanceId}`, agentId, instanceId, params.message, now);
+      `, `veri-user-${instanceId}`, agentId, instanceId, params.message, now);
 
       console.log(`[CustomAgentRuntime] Run ${runId} — persisted user prompt at run start`);
     } catch (err) {
@@ -827,19 +822,18 @@ export class CustomAgentRuntime implements AgentRuntime {
    * persistTranscript — save the user prompt and assistant response to
    * the chat_messages table so the Chats tab can display Custom run transcripts.
    */
-  private persistTranscript(
+  private async persistTranscript(
     params: DispatchParams,
     assistantMessage: string,
     runId: string,
-  ): void {
+  ): Promise<void> {
     try {
       const db = getDb();
 
       // Look up the agent_id from the job instance
       let agentId: number | null = null;
       if (params.instanceId != null) {
-        const row = db.prepare(`SELECT agent_id FROM job_instances WHERE id = ?`)
-          .get(params.instanceId) as { agent_id: number } | undefined;
+        const row = await db.get(`SELECT agent_id FROM job_instances WHERE id = ?`, params.instanceId) as { agent_id: number } | undefined;
         agentId = row?.agent_id ?? null;
       }
       if (agentId == null) return;
@@ -848,18 +842,18 @@ export class CustomAgentRuntime implements AgentRuntime {
       const now = nowTimestamp();
 
       // Save the dispatched prompt as a "user" message
-      db.prepare(`
+      await db.run(`
         INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
         VALUES (?, ?, ?, 'user', ?, ?)
-      `).run(`veri-user-${instanceId}`, agentId, instanceId, params.message, now);
+      `, `veri-user-${instanceId}`, agentId, instanceId, params.message, now);
 
       // Save the final assistant response (upsert to replace any partial streaming content)
       if (assistantMessage) {
-        db.prepare(`
+        await db.run(`
           INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
           VALUES (?, ?, ?, 'assistant', ?, ?)
           ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp
-        `).run(`veri-asst-${instanceId}`, agentId, instanceId, assistantMessage, now);
+        `, `veri-asst-${instanceId}`, agentId, instanceId, assistantMessage, now);
       }
 
       console.log(
@@ -873,10 +867,10 @@ export class CustomAgentRuntime implements AgentRuntime {
     }
   }
 
-  private persistRuntimeEndEvent(instanceId: number, event: RuntimeEndEvent): void {
+  private async persistRuntimeEndEvent(instanceId: number, event: RuntimeEndEvent): Promise<void> {
     try {
       const db = getDb();
-      db.prepare(`
+      await db.run(`
         INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
         SELECT ?, agent_id, id, 'system', ?, ?, 'turn_end', ?
         FROM job_instances
@@ -886,27 +880,21 @@ export class CustomAgentRuntime implements AgentRuntime {
           timestamp = excluded.timestamp,
           event_type = excluded.event_type,
           event_meta = excluded.event_meta
-      `).run(
-        `veri-runtime-end-${instanceId}`,
-        `Runtime ${event.type} (${event.reason ?? (event.success ? 'completed' : 'error')})`,
-        event.endedAt,
-        JSON.stringify({
-          runtime_end_type: event.type,
-          terminal_reason: event.reason ?? (event.success ? 'completed' : 'error'),
-          session_key: event.sessionKey,
-          run_id: event.runId ?? null,
-          success: event.success,
-          error: event.error ?? null,
-          ...(event.metadata ?? {}),
-        }),
-        instanceId,
-      );
+      `, `veri-runtime-end-${instanceId}`, `Runtime ${event.type} (${event.reason ?? (event.success ? 'completed' : 'error')})`, event.endedAt, JSON.stringify({
+                  runtime_end_type: event.type,
+                  terminal_reason: event.reason ?? (event.success ? 'completed' : 'error'),
+                  session_key: event.sessionKey,
+                  run_id: event.runId ?? null,
+                  success: event.success,
+                  error: event.error ?? null,
+                  ...(event.metadata ?? {}),
+                }), instanceId);
 
-      db.prepare(`
+      await db.run(`
         UPDATE job_instances
         SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
         WHERE id = ?
-      `).run(JSON.stringify(event), instanceId);
+      `, JSON.stringify(event), instanceId);
     } catch (err) {
       console.warn(
         `[CustomAgentRuntime] Failed to persist runtime end for instance ${instanceId}:`,

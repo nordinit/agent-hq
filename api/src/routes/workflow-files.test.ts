@@ -33,21 +33,15 @@ describe('workflow file versions', () => {
     process.env.AGENT_HQ_WORKFLOW_UPLOADS_DIR = path.join(tempDir, 'uploads');
     closeDb();
 
-    initSchema();
+    await initSchema();
     const db = getDb();
-    db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
-      .run(101, 'Tenant One', 'tenant-one', 0, 202, 'Tenant Two', 'tenant-two', 0);
-    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?)`)
-      .run(700, 101, 'Tenant One Project', 800, 202, 'Tenant Two Project');
-    db.prepare(`
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`, 101, 'Tenant One', 'tenant-one', 0, 202, 'Tenant Two', 'tenant-two', 0);
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?)`, 700, 101, 'Tenant One Project', 800, 202, 'Tenant Two Project');
+    await db.run(`
       INSERT INTO sprints (id, tenant_id, project_id, name, goal, status)
       VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)
-    `).run(
-      900, 101, 700, 'Tenant One Workflow', '', 'active',
-      901, 101, 700, 'Other Tenant One Workflow', '', 'active',
-      902, 202, 800, 'Tenant Two Workflow', '', 'active',
-    );
-    db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run('101');
+    `, 900, 101, 700, 'Tenant One Workflow', '', 'active', 901, 101, 700, 'Other Tenant One Workflow', '', 'active', 902, 202, 800, 'Tenant Two Workflow', '', 'active');
+    await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, '101');
 
     const app = express();
     app.use('/api/v1/projects/:projectId/workflows/:workflowId/files', workflowFilesRouter);
@@ -163,7 +157,7 @@ describe('workflow file versions', () => {
     const wrongProject = await fetch(`${baseUrl}/api/v1/projects/800/workflows/900/files/${uploaded.id}`);
     expect(wrongProject.status).toBe(404);
 
-    getDb().prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run('202');
+    await getDb().run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, '202');
 
     const crossTenantReplace = await fetch(`${baseUrl}/api/v1/projects/700/workflows/900/files/${uploaded.id}`, {
       method: 'PUT',

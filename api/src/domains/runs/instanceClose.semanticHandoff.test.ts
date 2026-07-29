@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { closeActiveInstanceAfterSemanticHandoff } from './instanceClose';
+import { type Db } from "../../db/adapter/types";
 
 jest.mock('../../runtimes/OpenClawRuntime', () => ({
   abortChatRunBySessionKey: jest.fn(() => ({ ok: true, status: 'aborted' })),
@@ -9,9 +10,9 @@ jest.mock('../../services/browserPool', () => ({
   destroyAgentContext: jest.fn(() => Promise.resolve()),
 }));
 
-function setupDb(): Database.Database {
+async function setupDb(): Promise<Db> {
   const db = new Database(':memory:');
-  db.exec(`
+  await db.exec(`
     CREATE TABLE tasks (
       id INTEGER PRIMARY KEY,
       title TEXT NOT NULL,
@@ -97,11 +98,11 @@ function setupDb(): Database.Database {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
-  db.prepare(`INSERT INTO agents (id, name, job_title, session_key) VALUES (7, 'Vulcan', 'Backend', 'agent:vulcan-backend:local')`).run();
+  await db.run(`INSERT INTO agents (id, name, job_title, session_key) VALUES (7, 'Vulcan', 'Backend', 'agent:vulcan-backend:local')`);
   return db;
 }
 
-function seedTaskAndInstance(db: Database.Database, options?: {
+async function seedTaskAndInstance(db: Db, options?: {
   taskId?: number;
   instanceId?: number;
   instanceTaskId?: number;
@@ -109,23 +110,22 @@ function seedTaskAndInstance(db: Database.Database, options?: {
   instanceStatus?: string;
   activeInstanceId?: number | null;
   runtimeEndedAt?: string | null;
-}): void {
+}): Promise<void> {
   const taskId = options?.taskId ?? 731;
   const instanceId = options?.instanceId ?? 4702;
   const activeInstanceId = options?.activeInstanceId === undefined ? instanceId : options.activeInstanceId;
-  db.prepare(`INSERT INTO tasks (id, title, status, agent_id, active_instance_id, updated_at) VALUES (?, 'Task', ?, 7, ?, datetime('now'))`)
-    .run(taskId, options?.taskStatus ?? 'review', activeInstanceId);
-  db.prepare(`
+  await db.run(`INSERT INTO tasks (id, title, status, agent_id, active_instance_id, updated_at) VALUES (?, 'Task', ?, 7, ?, datetime('now'))`, taskId, options?.taskStatus ?? 'review', activeInstanceId);
+  await db.run(`
     INSERT INTO job_instances (id, task_id, agent_id, status, session_key, runtime_ended_at, started_at)
     VALUES (?, ?, 7, ?, NULL, ?, datetime('now'))
-  `).run(instanceId, options?.instanceTaskId ?? taskId, options?.instanceStatus ?? 'running', options?.runtimeEndedAt ?? null);
+  `, instanceId, options?.instanceTaskId ?? taskId, options?.instanceStatus ?? 'running', options?.runtimeEndedAt ?? null);
 }
 
 describe('closeActiveInstanceAfterSemanticHandoff', () => {
-  let db: Database.Database;
+  let db: Db;
 
-  beforeEach(() => {
-    db = setupDb();
+  beforeEach(async () => {
+    db = await setupDb();
   });
 
   afterEach(() => {
@@ -134,7 +134,7 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
   });
 
   it('closes the same-task active instance by reusing closeInstance behavior without changing task status', async () => {
-    seedTaskAndInstance(db, { instanceStatus: 'running' });
+    await seedTaskAndInstance(db, { instanceStatus: 'running' });
 
     const result = await closeActiveInstanceAfterSemanticHandoff({
       db,
@@ -146,7 +146,7 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
     });
 
     expect(result).toEqual({ closed: true, reason: 'closed', instanceId: 4702 });
-    const instance = db.prepare(`SELECT status, runtime_ended_at, runtime_end_success, runtime_end_source FROM job_instances WHERE id = 4702`).get() as {
+    const instance = await db.get(`SELECT status, runtime_ended_at, runtime_end_success, runtime_end_source FROM job_instances WHERE id = 4702`) as {
       status: string;
       runtime_ended_at: string | null;
       runtime_end_success: number | null;
@@ -157,17 +157,17 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
     expect(instance.runtime_end_success).toBe(1);
     expect(instance.runtime_end_source).toBe('task_outcome_auto_close');
 
-    const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 731`).get() as { status: string; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 731`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('review');
     expect(task.active_instance_id).toBe(4702);
 
-    const note = db.prepare(`SELECT content FROM task_notes WHERE task_id = 731 ORDER BY id DESC LIMIT 1`).get() as { content: string };
+    const note = await db.get(`SELECT content FROM task_notes WHERE task_id = 731 ORDER BY id DESC LIMIT 1`) as { content: string };
     expect(note.content).toContain('Agent check-in: Run completed');
     expect(note.content).toContain('Outcome: completed_for_review');
   });
 
   it('refuses to close an instance that belongs to a different task', async () => {
-    seedTaskAndInstance(db, { taskId: 731, instanceId: 4702, instanceTaskId: 999, activeInstanceId: 4702 });
+    await seedTaskAndInstance(db, { taskId: 731, instanceId: 4702, instanceTaskId: 999, activeInstanceId: 4702 });
 
     const result = await closeActiveInstanceAfterSemanticHandoff({
       db,
@@ -177,12 +177,12 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
     });
 
     expect(result).toEqual({ closed: false, reason: 'cross_task_instance', instanceId: 4702 });
-    const instance = db.prepare(`SELECT status FROM job_instances WHERE id = 4702`).get() as { status: string };
+    const instance = await db.get(`SELECT status FROM job_instances WHERE id = 4702`) as { status: string };
     expect(instance.status).toBe('running');
   });
 
   it.each(['done', 'failed', 'cancelled'])('is idempotent when the instance is already %s', async (status) => {
-    seedTaskAndInstance(db, { instanceStatus: status });
+    await seedTaskAndInstance(db, { instanceStatus: status });
 
     const result = await closeActiveInstanceAfterSemanticHandoff({
       db,
@@ -192,13 +192,13 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
     });
 
     expect(result).toEqual({ closed: false, reason: 'already_terminal', instanceId: 4702 });
-    const instance = db.prepare(`SELECT status, runtime_ended_at FROM job_instances WHERE id = 4702`).get() as { status: string; runtime_ended_at: string | null };
+    const instance = await db.get(`SELECT status, runtime_ended_at FROM job_instances WHERE id = 4702`) as { status: string; runtime_ended_at: string | null };
     expect(instance.status).toBe(status);
     expect(instance.runtime_ended_at).toBeNull();
   });
 
   it('is idempotent when the runtime already ended before instance status changed', async () => {
-    seedTaskAndInstance(db, { instanceStatus: 'running', runtimeEndedAt: '2026-06-03T03:42:50.931Z' });
+    await seedTaskAndInstance(db, { instanceStatus: 'running', runtimeEndedAt: '2026-06-03T03:42:50.931Z' });
 
     const result = await closeActiveInstanceAfterSemanticHandoff({
       db,
@@ -207,12 +207,12 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
     });
 
     expect(result).toEqual({ closed: false, reason: 'runtime_already_ended', instanceId: 4702 });
-    const instance = db.prepare(`SELECT status FROM job_instances WHERE id = 4702`).get() as { status: string };
+    const instance = await db.get(`SELECT status FROM job_instances WHERE id = 4702`) as { status: string };
     expect(instance.status).toBe('running');
   });
 
   it('returns no-op when the task has no active instance and no instance id is provided', async () => {
-    seedTaskAndInstance(db, { activeInstanceId: null });
+    await seedTaskAndInstance(db, { activeInstanceId: null });
 
     const result = await closeActiveInstanceAfterSemanticHandoff({
       db,
@@ -221,7 +221,7 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
     });
 
     expect(result).toEqual({ closed: false, reason: 'no_active_instance' });
-    const instance = db.prepare(`SELECT status FROM job_instances WHERE id = 4702`).get() as { status: string };
+    const instance = await db.get(`SELECT status FROM job_instances WHERE id = 4702`) as { status: string };
     expect(instance.status).toBe('running');
   });
 });

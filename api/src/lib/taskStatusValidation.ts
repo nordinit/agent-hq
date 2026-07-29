@@ -1,7 +1,7 @@
-import type Database from 'better-sqlite3';
 import { listSprintTaskStatuses, listSprintTypeTaskStatuses } from '../domains/routing/policy/statuses';
 import { resolveSprintTypeForSprintId } from '../domains/sprint-definitions/config';
 import { RELEASE_TASK_STATUSES } from './taskStatuses';
+import { type Db } from "../db/adapter/types";
 
 export interface TaskStatusWorkflowScope {
   sprintId?: number | null;
@@ -63,31 +63,31 @@ function normalizeStatus(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-export function listAllowedTaskStatusesForWorkflow(
-  db: Database.Database,
+export async function listAllowedTaskStatusesForWorkflow(
+  db: Db,
   scope: TaskStatusWorkflowScope,
-): string[] {
+): Promise<string[]> {
   const sprintStatuses = typeof scope.sprintId === 'number' && Number.isFinite(scope.sprintId)
-    ? listSprintTaskStatuses(db, scope.sprintId).map((status) => status.name)
+    ? (await listSprintTaskStatuses(db, scope.sprintId)).map((status) => status.name)
     : [];
   if (sprintStatuses.length > 0) return [...new Set([...sprintStatuses, ...RELEASE_TASK_STATUSES])];
 
-  const sprintType = normalizeStatus(scope.sprintType) ?? resolveSprintTypeForSprintId(db, scope.sprintId ?? null);
-  const sprintTypeStatuses = listSprintTypeTaskStatuses(db, sprintType).map((status) => status.name);
+  const sprintType = normalizeStatus(scope.sprintType) ?? (await resolveSprintTypeForSprintId(db, scope.sprintId ?? null));
+  const sprintTypeStatuses = (await listSprintTypeTaskStatuses(db, sprintType)).map((status) => status.name);
   if (sprintTypeStatuses.length > 0) return [...new Set([...sprintTypeStatuses, ...RELEASE_TASK_STATUSES])];
 
   return [...RELEASE_TASK_STATUSES];
 }
 
-export function assertTaskStatusDefinedForWorkflow(
-  db: Database.Database,
+export async function assertTaskStatusDefinedForWorkflow(
+  db: Db,
   status: unknown,
   scope: TaskStatusWorkflowScope,
-): void {
+): Promise<void> {
   const normalized = normalizeStatus(status);
   if (!normalized) throw new Error('status is required');
 
-  const allowedStatuses = listAllowedTaskStatusesForWorkflow(db, scope);
+  const allowedStatuses = await listAllowedTaskStatusesForWorkflow(db, scope);
   if (!allowedStatuses.includes(normalized)) {
     throw new WorkflowAllowedValuesError({
       message: `"${normalized}" is not a valid task status for this workflow. Valid values: ${allowedStatuses.join(', ')}`,

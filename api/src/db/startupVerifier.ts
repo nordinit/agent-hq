@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import { getDb, getDbPath } from './client';
 import { foreignKeyEnforcementIntentionallyDisabled } from './foreignKeyGuard';
+import { type Db } from "./adapter/types";
 
 export const STARTUP_SCHEMA_LEDGER_ID = 'init_schema';
 export const STARTUP_SCHEMA_LEDGER_CHECKSUM = 'initSchema';
@@ -43,7 +44,7 @@ export interface ForeignKeyEnforcementOptions {
  * error, optionally forces enforcement back on, and (by default) throws.
  */
 export function assertForeignKeyEnforcementEnabled(
-  db: Database.Database = getDb(),
+  db: Db = getDb(),
   context = 'startup',
   options: ForeignKeyEnforcementOptions = {},
 ): boolean {
@@ -91,34 +92,34 @@ function migrationRequired(message: string): SchemaMigrationRequiredError {
   );
 }
 
-function hasTable(db: Database.Database, tableName: string): boolean {
-  const row = db.prepare(`
+async function hasTable(db: Db, tableName: string): Promise<boolean> {
+  const row = await db.get(`
     SELECT 1 AS found
     FROM sqlite_master
     WHERE type = 'table'
       AND name = ?
     LIMIT 1
-  `).get(tableName) as { found?: number } | undefined;
+  `, tableName) as { found?: number } | undefined;
   return row?.found === 1;
 }
 
-export function verifyStartupSchemaCurrent(dbPath: string = getDbPath()): void {
+export async function verifyStartupSchemaCurrent(dbPath: string = getDbPath()): Promise<void> {
   if (!fs.existsSync(dbPath)) {
     throw migrationRequired(`Agent HQ database does not exist at ${dbPath}.`);
   }
 
   const db = new Database(dbPath, { readonly: true, fileMustExist: true });
   try {
-    if (!hasTable(db, 'schema_migrations')) {
+    if (!await hasTable(db, 'schema_migrations')) {
       throw migrationRequired(`Agent HQ database at ${dbPath} has no schema_migrations ledger.`);
     }
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT id, checksum
       FROM schema_migrations
       WHERE id = ?
       LIMIT 1
-    `).get(STARTUP_SCHEMA_LEDGER_ID) as { id: string; checksum: string } | undefined;
+    `, STARTUP_SCHEMA_LEDGER_ID) as { id: string; checksum: string } | undefined;
 
     if (!row) {
       throw migrationRequired(`Agent HQ database at ${dbPath} is missing required schema migration '${STARTUP_SCHEMA_LEDGER_ID}'.`);
@@ -130,7 +131,7 @@ export function verifyStartupSchemaCurrent(dbPath: string = getDbPath()): void {
       );
     }
 
-    const integrity = db.prepare(`PRAGMA integrity_check`).pluck().get();
+    const integrity = await db.value(`PRAGMA integrity_check`);
     if (integrity !== 'ok') {
       throw new Error(`Agent HQ database integrity check failed for ${dbPath}: ${String(integrity)}`);
     }

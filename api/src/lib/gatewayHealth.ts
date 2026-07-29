@@ -68,7 +68,7 @@ export async function probeGateway(wsUrl: string): Promise<GatewayProbeResult> {
       }
     });
 
-    ws.on('message', (raw) => {
+    ws.on('message', async (raw) => {
       let frame: Record<string, unknown>;
       try {
         frame = JSON.parse(raw.toString());
@@ -81,7 +81,7 @@ export async function probeGateway(wsUrl: string): Promise<GatewayProbeResult> {
         const nonce = (payload?.nonce as string) ?? '';
         const role = 'operator';
         const scopes = ['operator.read', 'operator.write', 'operator.admin'];
-        const token = getGatewayAuthToken();
+        const token = await getGatewayAuthToken();
         const deviceIdentity = loadGatewayDeviceIdentity();
         const signedAtMs = Date.now();
         const device = deviceIdentity

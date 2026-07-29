@@ -1,6 +1,6 @@
 import * as fs from 'fs';
-import type Database from 'better-sqlite3';
 import { backfillOpenClawJsonlTranscript } from './openclawJsonlBackfill';
+import { type Db } from "../../db/adapter/types";
 
 export const OPENCLAW_TERMINAL_QUIESCENCE_MS = 3 * 60 * 1000;
 export const OPENCLAW_TOOL_USE_TIMEOUT_MS = 3 * 60 * 1000;
@@ -569,8 +569,8 @@ export function decideOpenClawSessionTerminal(
   };
 }
 
-export function evaluateOpenClawInstanceSessionState(
-  db: Database.Database,
+export async function evaluateOpenClawInstanceSessionState(
+  db: Db,
   instanceId: number,
   options: {
     now?: Date;
@@ -579,12 +579,12 @@ export function evaluateOpenClawInstanceSessionState(
     terminalQuiescenceMs?: number;
     toolUseTimeoutMs?: number;
   } = {},
-): OpenClawInstanceSessionStateResult {
-  const backfill = backfillOpenClawJsonlTranscript(db, instanceId, {
-    now: options.now,
-    openclawHome: options.openclawHome,
-    forceFull: options.forceFull,
-  });
+): Promise<OpenClawInstanceSessionStateResult> {
+  const backfill = await backfillOpenClawJsonlTranscript(db, instanceId, {
+      now: options.now,
+      openclawHome: options.openclawHome,
+      forceFull: options.forceFull,
+    });
 
   if (!backfill.sessionFile) {
     if (backfill.reason === 'durable_session_file_not_found') {

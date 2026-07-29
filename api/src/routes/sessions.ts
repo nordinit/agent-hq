@@ -31,10 +31,10 @@ function parsePositiveInt(value: unknown, fallback: number, max?: number): numbe
 router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const filters: string[] = [];
     const params: unknown[] = [];
-    const tenantScope = sessionTenantScope(db, 's', tenantId);
+    const tenantScope = await sessionTenantScope(db, 's', tenantId);
     filters.push(tenantScope.sql);
     params.push(...tenantScope.params);
 
@@ -56,7 +56,7 @@ router.get('/', async (req: Request, res: Response) => {
     params.push(limit, offset);
 
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-    const sessions = db.prepare(`
+    const sessions = await db.all(`
       SELECT
         s.*,
         a.name AS agent_name,
@@ -69,7 +69,7 @@ router.get('/', async (req: Request, res: Response) => {
       ${where}
       ORDER BY COALESCE(s.started_at, s.created_at) DESC, s.id DESC
       LIMIT ? OFFSET ?
-    `).all(...params) as Array<Record<string, unknown>>;
+    `, ...params) as Array<Record<string, unknown>>;
 
     if (String(req.query.include_messages ?? '') === 'true') {
       const msgStmt = db.prepare(`
@@ -94,11 +94,11 @@ router.get('/', async (req: Request, res: Response) => {
 router.get('/by-key/:externalKey', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const session = await ensureCanonicalSessionByExternalKey(req.params.externalKey);
     if (!session) return res.status(404).json({ error: 'Session not found' });
-    const scope = sessionTenantScope(db, 's', tenantId);
-    const visible = db.prepare(`SELECT id FROM sessions s WHERE s.id = ? AND ${scope.sql}`).get(session.id, ...scope.params);
+    const scope = await sessionTenantScope(db, 's', tenantId);
+    const visible = await db.get(`SELECT id FROM sessions s WHERE s.id = ? AND ${scope.sql}`, session.id, ...scope.params);
     if (!visible) return res.status(404).json({ error: 'Session not found' });
     return res.json(session);
   } catch (err) {
@@ -113,17 +113,17 @@ router.get('/by-key/:externalKey', async (req: Request, res: Response) => {
 // GET /api/v1/sessions/for-agent/:agentId
 // Summary of all sessions for an agent, ordered by most recent first.
 // Query params: limit (default 50, max 500)
-router.get('/for-agent/:agentId', (req: Request, res: Response) => {
+router.get('/for-agent/:agentId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const agentId = Number(req.params.agentId);
     if (!Number.isFinite(agentId)) return res.status(400).json({ error: 'Invalid agent id' });
-    const visible = db.prepare(`SELECT id FROM agents WHERE id = ? AND tenant_id = ?`).get(agentId, tenantId);
+    const visible = await db.get(`SELECT id FROM agents WHERE id = ? AND tenant_id = ?`, agentId, tenantId);
     if (!visible) return res.status(404).json({ error: 'Agent not found' });
 
     const limit = parsePositiveInt(req.query.limit, 50, 500);
-    const rows = buildAgentReflectionSummary(agentId, limit);
+    const rows = await buildAgentReflectionSummary(agentId, limit);
     return res.json(rows);
   } catch (err) {
     return res.status(500).json({ error: String(err) });
@@ -133,16 +133,16 @@ router.get('/for-agent/:agentId', (req: Request, res: Response) => {
 // GET /api/v1/sessions/for-task/:taskId
 // All sessions/run instances for a task, ordered by most recent first.
 // Useful for reflection: inspect how a task evolved across retries and handoffs.
-router.get('/for-task/:taskId', (req: Request, res: Response) => {
+router.get('/for-task/:taskId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const taskId = Number(req.params.taskId);
     if (!Number.isFinite(taskId)) return res.status(400).json({ error: 'Invalid task id' });
-    const visible = db.prepare(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`).get(taskId, tenantId);
+    const visible = await db.get(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`, taskId, tenantId);
     if (!visible) return res.status(404).json({ error: 'Task not found' });
 
-    const rows = buildTaskSessionHistory(taskId);
+    const rows = await buildTaskSessionHistory(taskId);
     return res.json(rows);
   } catch (err) {
     return res.status(500).json({ error: String(err) });
@@ -153,10 +153,10 @@ router.get('/for-task/:taskId', (req: Request, res: Response) => {
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
-    const tenantScope = sessionTenantScope(db, 's', tenantId);
-    const session = db.prepare(`
+    const tenantScope = await sessionTenantScope(db, 's', tenantId);
+    const session = await db.get(`
       SELECT
         s.*,
         a.name AS agent_name,
@@ -167,7 +167,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       LEFT JOIN tasks t ON t.id = s.task_id
       LEFT JOIN projects p ON p.id = s.project_id
       WHERE s.id = ? AND ${tenantScope.sql}
-    `).get(id, ...tenantScope.params) as Record<string, unknown> | undefined;
+    `, id, ...tenantScope.params) as Record<string, unknown> | undefined;
 
     if (!session) return res.status(404).json({ error: 'Session not found' });
     return res.json(session);
@@ -182,10 +182,10 @@ router.get('/:id', async (req: Request, res: Response) => {
 router.get('/:id/messages', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
-    const tenantScope = sessionTenantScope(db, 'sessions', tenantId);
-    const session = db.prepare(`SELECT id, status, instance_id, external_key FROM sessions WHERE id = ? AND ${tenantScope.sql}`).get(id, ...tenantScope.params) as {
+    const tenantScope = await sessionTenantScope(db, 'sessions', tenantId);
+    const session = await db.get(`SELECT id, status, instance_id, external_key FROM sessions WHERE id = ? AND ${tenantScope.sql}`, id, ...tenantScope.params) as {
       id: number; status: string; instance_id: number | null; external_key: string;
     } | undefined;
     if (!session) return res.status(404).json({ error: 'Session not found' });
@@ -197,33 +197,31 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
     if (session.status === 'active') {
       try {
         if (session.instance_id != null) {
-          syncSessionMessagesFromChatMessages(db, session.id, session.instance_id);
+          await syncSessionMessagesFromChatMessages(db, session.id, session.instance_id);
         } else {
-          const newRows = db.prepare(`
+          const newRows = await db.all(`
               SELECT cm.id, cm.role, cm.content, cm.timestamp, cm.event_type, cm.event_meta
               FROM chat_messages cm
               WHERE cm.instance_id IS NULL
                 AND cm.session_key = ?
-                AND ${chatMessageTenantScope(db, 'cm', tenantId).sql}
+                AND ${(await chatMessageTenantScope(db, 'cm', tenantId)).sql}
               ORDER BY cm.timestamp ASC, cm.id ASC
-            `).all(session.external_key, ...chatMessageTenantScope(db, 'cm', tenantId).params) as Array<{
+            `, session.external_key, ...(await chatMessageTenantScope(db, 'cm', tenantId)).params) as Array<{
             id: string; role: string; content: string; timestamp: string;
             event_type: string | null; event_meta: string | null;
           }>;
 
           if (newRows.length > 0) {
-            const existingRows = db.prepare(`
+            const existingRows = await db.all(`
               SELECT raw_payload, ordinal
               FROM session_messages
               WHERE session_id = ? AND raw_payload IS NOT NULL
-            `).all(session.id) as Array<{ raw_payload: string; ordinal: number }>;
+            `, session.id) as Array<{ raw_payload: string; ordinal: number }>;
             const ordinalByRawPayload = new Map(
               existingRows.map((row) => [String(row.raw_payload), row.ordinal] as const),
             );
 
-            const maxOrdinalRow = db.prepare(
-              'SELECT COALESCE(MAX(ordinal), -1) AS max_ord FROM session_messages WHERE session_id = ?'
-            ).get(session.id) as { max_ord: number };
+            const maxOrdinalRow = await db.get('SELECT COALESCE(MAX(ordinal), -1) AS max_ord FROM session_messages WHERE session_id = ?', session.id) as { max_ord: number };
 
             const insert = db.prepare(`
               INSERT INTO session_messages (session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at)
@@ -254,12 +252,12 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
             });
             tx();
 
-            db.prepare(`
+            await db.run(`
               UPDATE sessions
               SET message_count = (SELECT COUNT(*) FROM session_messages WHERE session_id = ?),
                   updated_at = datetime('now')
               WHERE id = ?
-            `).run(session.id, session.id);
+            `, session.id, session.id);
           }
         }
       } catch (syncErr) {
@@ -280,13 +278,13 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
     const offset = parsePositiveInt(req.query.offset, 0);
     params.push(limit, offset);
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT id, session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
       FROM session_messages
       WHERE ${filters.join(' AND ')}
       ORDER BY ordinal ASC
       LIMIT ? OFFSET ?
-    `).all(...params);
+    `, ...params);
 
     return res.json(rows);
   } catch (err) {
@@ -304,25 +302,25 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
 //   message_limit     — max messages (default 200, max 500)
 //   include_raw       — include raw_payload column (default false)
 //   run_history_limit — max run history entries (default 20, max 100)
-router.get('/:id/context', (req: Request, res: Response) => {
+router.get('/:id/context', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid session id' });
-    const scope = sessionTenantScope(db, 's', tenantId);
-    const visible = db.prepare(`SELECT id FROM sessions s WHERE s.id = ? AND ${scope.sql}`).get(id, ...scope.params);
+    const scope = await sessionTenantScope(db, 's', tenantId);
+    const visible = await db.get(`SELECT id FROM sessions s WHERE s.id = ? AND ${scope.sql}`, id, ...scope.params);
     if (!visible) return res.status(404).json({ error: 'Session not found' });
 
     const eventTypesParam = String(req.query.event_types ?? '').trim();
     const eventTypes = eventTypesParam ? eventTypesParam.split(',').map(s => s.trim()).filter(Boolean) : undefined;
 
-    const ctx = buildReflectionContext(id, {
-      eventTypes,
-      messageLimit: parsePositiveInt(req.query.message_limit, 200, 500),
-      includeRaw: String(req.query.include_raw ?? '') === 'true',
-      runHistoryLimit: parsePositiveInt(req.query.run_history_limit, 20, 100),
-    });
+    const ctx = await buildReflectionContext(id, {
+          eventTypes,
+          messageLimit: parsePositiveInt(req.query.message_limit, 200, 500),
+          includeRaw: String(req.query.include_raw ?? '') === 'true',
+          runHistoryLimit: parsePositiveInt(req.query.run_history_limit, 20, 100),
+        });
 
     if (!ctx) return res.status(404).json({ error: 'Session not found' });
     return res.json(ctx);
@@ -336,10 +334,10 @@ router.get('/:id/context', (req: Request, res: Response) => {
 router.post('/import/instance/:instanceId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const instanceId = Number(req.params.instanceId);
-    const scope = instanceTenantScope(db, 'ji', tenantId);
-    const visible = db.prepare(`SELECT id FROM job_instances ji WHERE ji.id = ? AND ${scope.sql}`).get(instanceId, ...scope.params);
+    const scope = await instanceTenantScope(db, 'ji', tenantId);
+    const visible = await db.get(`SELECT id FROM job_instances ji WHERE ji.id = ? AND ${scope.sql}`, instanceId, ...scope.params);
     if (!visible) return res.status(404).json({ error: 'Instance/session not found' });
     const session = await ensureCanonicalSessionForInstance(Number(req.params.instanceId), {
       forceIngest: Boolean((req.body as { force?: boolean } | undefined)?.force),
@@ -357,7 +355,7 @@ router.post('/import/instance/:instanceId', async (req: Request, res: Response) 
 router.post('/ingest', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const body = req.body as {
       external_key?: string;
       instance_id?: number;
@@ -386,8 +384,8 @@ router.post('/ingest', async (req: Request, res: Response) => {
     if (!session) {
       return res.status(404).json({ error: 'Session not found or could not be ingested', external_key: body.external_key });
     }
-    const scope = sessionTenantScope(db, 's', tenantId);
-    const visible = db.prepare(`SELECT id FROM sessions s WHERE s.id = ? AND ${scope.sql}`).get(session.id, ...scope.params);
+    const scope = await sessionTenantScope(db, 's', tenantId);
+    const visible = await db.get(`SELECT id FROM sessions s WHERE s.id = ? AND ${scope.sql}`, session.id, ...scope.params);
     if (!visible) return res.status(404).json({ error: 'Session not found or could not be ingested', external_key: body.external_key });
 
     return res.json(session);

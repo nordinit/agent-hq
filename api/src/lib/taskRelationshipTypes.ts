@@ -1,23 +1,23 @@
-import type Database from 'better-sqlite3';
 import {
   STARTER_RELATIONSHIP_TYPE_SEEDS,
   STARTER_SPRINT_TYPE_SEEDS,
 } from './starterCatalog';
+import { type Db } from "../db/adapter/types";
 
-function tableExists(db: Database.Database, table: string): boolean {
-  return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(table) as { name?: string } | undefined)?.name);
+async function tableExists(db: Db, table: string): Promise<boolean> {
+  return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table) as { name?: string } | undefined)?.name);
 }
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
-  if (!tableExists(db, table)) return false;
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
+  if (!await tableExists(db, table)) return false;
+  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
 }
 
-function pruneUnexpectedStarterRelationshipTypes(
-  db: Database.Database,
+async function pruneUnexpectedStarterRelationshipTypes(
+  db: Db,
   sprintTypeKey: string,
   options: { tenantId?: number | null; relationshipTypesHasTenantId: boolean },
-): void {
+): Promise<void> {
   const allowedKeys = STARTER_RELATIONSHIP_TYPE_SEEDS
     .filter((seed) => seed.sprintTypes.includes(sprintTypeKey as typeof seed.sprintTypes[number]))
     .map((seed) => seed.key);
@@ -25,79 +25,79 @@ function pruneUnexpectedStarterRelationshipTypes(
 
   const tenantSql = options.relationshipTypesHasTenantId ? ' AND tenant_id = ?' : '';
   const tenantParams = options.relationshipTypesHasTenantId ? [options.tenantId] : [];
-  db.prepare(`
+  await db.run(`
     DELETE FROM sprint_type_relationship_types
     WHERE sprint_type_key = ?
       ${tenantSql}
       AND COALESCE(is_system, 0) = 1
       AND key NOT IN (${allowedKeys.map(() => '?').join(', ')})
-  `).run(sprintTypeKey, ...tenantParams, ...allowedKeys);
+  `, sprintTypeKey, ...tenantParams, ...allowedKeys);
 }
 
-export function pruneUnexpectedStarterWorkflowRelationshipTypes(
-  db: Database.Database,
+export async function pruneUnexpectedStarterWorkflowRelationshipTypes(
+  db: Db,
   options: { tenantId?: number | null } = {},
-): void {
-  if (!tableExists(db, 'sprint_type_relationship_types') || !tableExists(db, 'sprint_types')) return;
+): Promise<void> {
+  if (!await tableExists(db, 'sprint_type_relationship_types') || !await tableExists(db, 'sprint_types')) return;
 
-  const relationshipTypesHasTenantId = tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
-  const sprintTypesHasTenantId = tableHasColumn(db, 'sprint_types', 'tenant_id');
+  const relationshipTypesHasTenantId = await tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
+  const sprintTypesHasTenantId = await tableHasColumn(db, 'sprint_types', 'tenant_id');
   const tenantId = options.tenantId ?? null;
   if (relationshipTypesHasTenantId && (!Number.isInteger(tenantId) || Number(tenantId) <= 0)) return;
 
   const starterKeys = STARTER_SPRINT_TYPE_SEEDS.map((starter) => starter.key);
   const sprintTypes = sprintTypesHasTenantId && Number.isInteger(tenantId) && Number(tenantId) > 0
-    ? db.prepare(`
+    ? await db.all(`
       SELECT key
       FROM sprint_types
       WHERE tenant_id = ?
         AND key IN (${starterKeys.map(() => '?').join(', ')})
       ORDER BY key ASC
-    `).all(tenantId, ...starterKeys) as Array<{ key: string }>
-    : db.prepare(`
+    `, tenantId, ...starterKeys) as Array<{ key: string }>
+    : await db.all(`
       SELECT key
       FROM sprint_types
       WHERE key IN (${starterKeys.map(() => '?').join(', ')})
       ORDER BY key ASC
-    `).all(...starterKeys) as Array<{ key: string }>;
+    `, ...starterKeys) as Array<{ key: string }>;
 
-  const tx = db.transaction(() => {
+  const tx = db.transaction(async () => {
     for (const sprintType of sprintTypes) {
-      pruneUnexpectedStarterRelationshipTypes(db, sprintType.key, {
-        tenantId,
-        relationshipTypesHasTenantId,
-      });
+      await pruneUnexpectedStarterRelationshipTypes(db, sprintType.key, {
+                tenantId,
+                relationshipTypesHasTenantId,
+              });
     }
   });
   tx();
 }
 
-export function seedStarterWorkflowRelationshipTypes(
-  db: Database.Database,
+export async function seedStarterWorkflowRelationshipTypes(
+  db: Db,
   options: { tenantId?: number | null } = {},
-): void {
-  if (!tableExists(db, 'sprint_type_relationship_types') || !tableExists(db, 'sprint_types')) return;
+): Promise<void> {
+  if (!await tableExists(db, 'sprint_type_relationship_types') || !await tableExists(db, 'sprint_types')) return;
 
-  const relationshipTypesHasTenantId = tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
-  const sprintTypesHasTenantId = tableHasColumn(db, 'sprint_types', 'tenant_id');
+  const relationshipTypesHasTenantId = await tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
+  const sprintTypesHasTenantId = await tableHasColumn(db, 'sprint_types', 'tenant_id');
   const tenantId = options.tenantId ?? null;
   if (relationshipTypesHasTenantId && (!Number.isInteger(tenantId) || Number(tenantId) <= 0)) return;
 
   const starterKeys = STARTER_SPRINT_TYPE_SEEDS.map((starter) => starter.key);
   const sprintTypes = sprintTypesHasTenantId && Number.isInteger(tenantId) && Number(tenantId) > 0
-    ? db.prepare(`
+    ? await db.all(`
       SELECT key
       FROM sprint_types
       WHERE tenant_id = ?
         AND key IN (${starterKeys.map(() => '?').join(', ')})
       ORDER BY key ASC
-    `).all(tenantId, ...starterKeys) as Array<{ key: string }>
-    : db.prepare(`
+    `, tenantId, ...starterKeys) as Array<{ key: string }>
+    : await db.all(`
       SELECT key
       FROM sprint_types
       WHERE key IN (${starterKeys.map(() => '?').join(', ')})
       ORDER BY key ASC
-    `).all(...starterKeys) as Array<{ key: string }>;
+    `, ...starterKeys) as Array<{ key: string }>;
 
   const insertRelationshipType = db.prepare(relationshipTypesHasTenantId
     ? `
@@ -115,12 +115,12 @@ export function seedStarterWorkflowRelationshipTypes(
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '{}')
     `);
 
-  const seedTx = db.transaction(() => {
+  const seedTx = db.transaction(async () => {
     for (const sprintType of sprintTypes) {
-      pruneUnexpectedStarterRelationshipTypes(db, sprintType.key, {
-        tenantId,
-        relationshipTypesHasTenantId,
-      });
+      await pruneUnexpectedStarterRelationshipTypes(db, sprintType.key, {
+                tenantId,
+                relationshipTypesHasTenantId,
+              });
       for (const seed of STARTER_RELATIONSHIP_TYPE_SEEDS) {
         if (!seed.sprintTypes.includes(sprintType.key as typeof seed.sprintTypes[number])) continue;
         const params = [

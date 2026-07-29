@@ -50,38 +50,33 @@ function authHeaders(apiKey: string): Record<string, string> {
   };
 }
 
-function seedProjectTaskSearchFixture(): { agencyKey: string; otherProjectKey: string; otherTenantKey: string } {
+async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; otherProjectKey: string; otherTenantKey: string }> {
   const db = getDb();
 
-  db.prepare(`INSERT OR IGNORE INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`)
-    .run(1, 'Default Tenant', 'default', 1, 2, 'Other Tenant', 'other', 0);
-  db.prepare(`
+  await db.run(`INSERT OR IGNORE INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`, 1, 'Default Tenant', 'default', 1, 2, 'Other Tenant', 'other', 0);
+  await db.run(`
     INSERT INTO app_settings (key, value)
     VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run();
+  `);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO projects (id, tenant_id, name, description, context_md)
     VALUES (?, ?, ?, '', ''), (?, ?, ?, '', ''), (?, ?, ?, '', '')
-  `).run(99, 1, 'Agency', 100, 1, 'Other Project', 200, 2, 'Tenant Two Project');
-  db.prepare(`
+  `, 99, 1, 'Agency', 100, 1, 'Other Project', 200, 2, 'Tenant Two Project');
+  await db.run(`
     INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
     VALUES (?, ?, ?, ?, '', 'lead_generation', 'active'),
            (?, ?, ?, ?, '', 'lead_generation', 'active'),
            (?, ?, ?, ?, '', 'lead_generation', 'active')
-  `).run(501, 1, 99, 'Lead Generation', 502, 1, 100, 'Other Leads', 601, 2, 200, 'Tenant Two Leads');
-  db.prepare(`
+  `, 501, 1, 99, 'Lead Generation', 502, 1, 100, 'Other Leads', 601, 2, 200, 'Tenant Two Leads');
+  await db.run(`
     INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'running'),
            (?, ?, ?, ?, ?, ?, ?, 'running'),
            (?, ?, ?, ?, ?, ?, ?, 'running')
-  `).run(
-    7, 1, 99, 'James', 'Agency Worker', 'agent:james:test', '/tmp/james',
-    8, 1, 100, 'Other Worker', 'Other Worker', 'agent:other:test', '/tmp/other',
-    9, 2, 200, 'Tenant Two Worker', 'Tenant Two Worker', 'agent:tenant-two:test', '/tmp/tenant-two',
-  );
-  db.prepare(`
+  `, 7, 1, 99, 'James', 'Agency Worker', 'agent:james:test', '/tmp/james', 8, 1, 100, 'Other Worker', 'Other Worker', 'agent:other:test', '/tmp/other', 9, 2, 200, 'Tenant Two Worker', 'Tenant Two Worker', 'agent:tenant-two:test', '/tmp/tenant-two');
+  await db.run(`
     INSERT INTO tasks (
       id, tenant_id, title, description, status, priority, project_id, sprint_id, agent_id,
       task_type, custom_fields_json, updated_at
@@ -92,22 +87,16 @@ function seedProjectTaskSearchFixture(): { agencyKey: string; otherProjectKey: s
       (?, ?, ?, '', ?, 'medium', ?, ?, ?, ?, ?, ?),
       (?, ?, ?, '', ?, 'medium', ?, ?, ?, ?, ?, ?),
       (?, ?, ?, '', ?, 'medium', ?, ?, ?, ?, ?, ?)
-  `).run(
-    9101, 1, 'Follow up Acme lead', 'in_progress', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 10:00:00',
-    9102, 1, 'Completed Acme lead', 'done', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 09:00:00',
-    9103, 1, 'Other project Acme lead', 'in_progress', 100, 502, 8, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 11:00:00',
-    9104, 2, 'Other tenant Acme lead', 'in_progress', 200, 601, 9, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 12:00:00',
-    9105, 1, 'Different Agency lead', 'review', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-999', external_project_id: 'ext-999' }), '2026-07-20 13:00:00',
-  );
+  `, 9101, 1, 'Follow up Acme lead', 'in_progress', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 10:00:00', 9102, 1, 'Completed Acme lead', 'done', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 09:00:00', 9103, 1, 'Other project Acme lead', 'in_progress', 100, 502, 8, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 11:00:00', 9104, 2, 'Other tenant Acme lead', 'in_progress', 200, 601, 9, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 12:00:00', 9105, 1, 'Different Agency lead', 'review', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-999', external_project_id: 'ext-999' }), '2026-07-20 13:00:00');
 
-  const agencyKey = issueMcpApiKeyForAgent(db, 7).apiKey;
-  const otherProjectKey = issueMcpApiKeyForAgent(db, 8).apiKey;
-  const otherTenantKey = issueMcpApiKeyForAgent(db, 9).apiKey;
+  const agencyKey = (await issueMcpApiKeyForAgent(db, 7)).apiKey;
+  const otherProjectKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
+  const otherTenantKey = (await issueMcpApiKeyForAgent(db, 9)).apiKey;
   for (const agentId of [7, 8, 9]) {
-    replaceAgentMcpPermissionPolicy(db, agentId, [
-      'discovery.read_catalog',
-      'tasks.search_project_tasks',
-    ]);
+    await replaceAgentMcpPermissionPolicy(db, agentId, [
+            'discovery.read_catalog',
+            'tasks.search_project_tasks',
+          ]);
   }
 
   return { agencyKey, otherProjectKey, otherTenantKey };
@@ -125,8 +114,8 @@ describe('POST /api/v1/tasks/project-search', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-project-search-'));
     process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
     closeDb();
-    initSchema();
-    ({ agencyKey, otherProjectKey, otherTenantKey } = seedProjectTaskSearchFixture());
+    await initSchema();
+    ({ agencyKey, otherProjectKey, otherTenantKey } = await seedProjectTaskSearchFixture());
     ({ server, baseUrl } = await startServer());
   });
 

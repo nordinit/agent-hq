@@ -18,25 +18,25 @@ describe('verifyStartupSchemaCurrent', () => {
   it('fails without creating a missing database', () => {
     const { dir, dbPath } = tempDbPath('agent-hq-missing-schema-');
     try {
-      expect(() => verifyStartupSchemaCurrent(dbPath)).toThrow(SchemaMigrationRequiredError);
+      expect(async () => await verifyStartupSchemaCurrent(dbPath)).toThrow(SchemaMigrationRequiredError);
       expect(fs.existsSync(dbPath)).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('fails against a legacy database without mutating schema or ledger state', () => {
+  it('fails against a legacy database without mutating schema or ledger state', async () => {
     const { dir, dbPath } = tempDbPath('agent-hq-legacy-schema-');
     try {
       const db = new Database(dbPath);
-      db.exec(`CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);`);
-      const beforeTables = db.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all();
+      await db.exec(`CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);`);
+      const beforeTables = await db.all(`SELECT name, sql FROM sqlite_master ORDER BY name`);
       db.close();
 
-      expect(() => verifyStartupSchemaCurrent(dbPath)).toThrow(/schema_migrations/);
+      expect(async () => await verifyStartupSchemaCurrent(dbPath)).toThrow(/schema_migrations/);
 
       const after = new Database(dbPath, { readonly: true, fileMustExist: true });
-      const afterTables = after.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all();
+      const afterTables = await after.all(`SELECT name, sql FROM sqlite_master ORDER BY name`);
       after.close();
       expect(afterTables).toEqual(beforeTables);
     } finally {
@@ -44,11 +44,11 @@ describe('verifyStartupSchemaCurrent', () => {
     }
   });
 
-  it('passes when the explicit migration ledger is current', () => {
+  it('passes when the explicit migration ledger is current', async () => {
     const { dir, dbPath } = tempDbPath('agent-hq-current-schema-');
     try {
       const db = new Database(dbPath);
-      db.exec(`
+      await db.exec(`
         CREATE TABLE schema_migrations (
           id         TEXT PRIMARY KEY,
           checksum   TEXT NOT NULL,
@@ -57,13 +57,10 @@ describe('verifyStartupSchemaCurrent', () => {
           app_commit TEXT NOT NULL DEFAULT ''
         );
       `);
-      db.prepare(`INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)`).run(
-        STARTUP_SCHEMA_LEDGER_ID,
-        STARTUP_SCHEMA_LEDGER_CHECKSUM,
-      );
+      await db.run(`INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)`, STARTUP_SCHEMA_LEDGER_ID, STARTUP_SCHEMA_LEDGER_CHECKSUM);
       db.close();
 
-      expect(() => verifyStartupSchemaCurrent(dbPath)).not.toThrow();
+      expect(async () => await verifyStartupSchemaCurrent(dbPath)).not.toThrow();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

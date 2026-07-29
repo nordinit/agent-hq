@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { getNeedsAttentionEligibleStatuses, setNeedsAttentionEligibleStatuses } from '../../lib/reconcilerConfig';
 import {
   CONTRACT_PLACEHOLDER_DEFINITIONS,
@@ -7,6 +6,7 @@ import {
   readSprintTypeContractTemplate,
   writeSprintTypeContractTemplate,
 } from '../../services/contracts';
+import { type Db } from "../../db/adapter/types";
 
 function parseSortRules(value: unknown): string[] {
   try {
@@ -17,26 +17,26 @@ function parseSortRules(value: unknown): string[] {
   }
 }
 
-export function getReconcilerRoutingConfig(db: Database.Database) {
+export async function getReconcilerRoutingConfig(db: Db) {
   return {
-    needs_attention_eligible_statuses: getNeedsAttentionEligibleStatuses(db),
+    needs_attention_eligible_statuses: await getNeedsAttentionEligibleStatuses(db),
   };
 }
 
-export function updateReconcilerRoutingConfig(db: Database.Database, input: Record<string, unknown>) {
+export async function updateReconcilerRoutingConfig(db: Db, input: Record<string, unknown>) {
   return {
-    needs_attention_eligible_statuses: setNeedsAttentionEligibleStatuses(db, input.needs_attention_eligible_statuses),
+    needs_attention_eligible_statuses: await setNeedsAttentionEligibleStatuses(db, input.needs_attention_eligible_statuses),
   };
 }
 
-export function listAgentRoutingConfigs(db: Database.Database) {
-  const configs = db.prepare(`
+export async function listAgentRoutingConfigs(db: Db) {
+  const configs = await db.all(`
     SELECT a.id as agent_id, a.name as agent_name,
            a.stall_threshold_min, a.max_retries, a.sort_rules
     FROM agents a
     WHERE a.enabled = 1
     ORDER BY a.id
-  `).all() as Array<Record<string, unknown>>;
+  `) as Array<Record<string, unknown>>;
 
   return {
     configs: configs.map((config) => ({
@@ -46,13 +46,13 @@ export function listAgentRoutingConfigs(db: Database.Database) {
   };
 }
 
-export function getAgentRoutingConfig(db: Database.Database, rawId: unknown) {
+export async function getAgentRoutingConfig(db: Db, rawId: unknown) {
   const id = Number(rawId);
-  const agent = db.prepare(`
+  const agent = await db.get(`
     SELECT id as agent_id, name as agent_name,
            stall_threshold_min, max_retries, sort_rules
     FROM agents WHERE id = ?
-  `).get(id) as Record<string, unknown> | undefined;
+  `, id) as Record<string, unknown> | undefined;
 
   if (!agent) {
     const error = new Error(`No routing config for id=${id}`) as Error & { status?: number };
@@ -66,13 +66,13 @@ export function getAgentRoutingConfig(db: Database.Database, rawId: unknown) {
   };
 }
 
-export function updateAgentRoutingConfig(
-  db: Database.Database,
+export async function updateAgentRoutingConfig(
+  db: Db,
   rawId: unknown,
   input: Record<string, unknown>,
 ) {
   const id = Number(rawId);
-  const agent = db.prepare('SELECT id FROM agents WHERE id = ?').get(id) as { id: number } | undefined;
+  const agent = await db.get('SELECT id FROM agents WHERE id = ?', id) as { id: number } | undefined;
   if (!agent) {
     const error = new Error(`Agent or job ${id} not found`) as Error & { status?: number };
     error.status = 404;
@@ -102,17 +102,17 @@ export function updateAgentRoutingConfig(
 
   sets.push("last_active = datetime('now')");
   values.push(agent.id);
-  db.prepare(`UPDATE agents SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  await db.run(`UPDATE agents SET ${sets.join(', ')} WHERE id = ?`, ...values);
 
-  return getAgentRoutingConfig(db, agent.id);
+  return await getAgentRoutingConfig(db, agent.id);
 }
 
 export function normalizeSprintTypeKey(raw: unknown): string {
   return normalizeContractTemplateKey(typeof raw === 'string' ? raw : null);
 }
 
-export function ensureSprintTypeExists(db: Database.Database, sprintTypeKey: string): void {
-  const row = db.prepare(`SELECT key FROM sprint_types WHERE key = ? LIMIT 1`).get(sprintTypeKey) as { key: string } | undefined;
+export async function ensureSprintTypeExists(db: Db, sprintTypeKey: string): Promise<void> {
+  const row = await db.get(`SELECT key FROM sprint_types WHERE key = ? LIMIT 1`, sprintTypeKey) as { key: string } | undefined;
   if (!row) {
     const error = new Error(`Unknown sprint type "${sprintTypeKey}"`) as Error & { status?: number };
     error.status = 404;
@@ -120,9 +120,9 @@ export function ensureSprintTypeExists(db: Database.Database, sprintTypeKey: str
   }
 }
 
-export function readAgentContract(db: Database.Database, rawSprintTypeKey: unknown) {
+export async function readAgentContract(db: Db, rawSprintTypeKey: unknown) {
   const sprintTypeKey = normalizeSprintTypeKey(rawSprintTypeKey);
-  ensureSprintTypeExists(db, sprintTypeKey);
+  await ensureSprintTypeExists(db, sprintTypeKey);
   const contract = readSprintTypeContractTemplate(sprintTypeKey);
   return {
     sprint_type: sprintTypeKey,
@@ -135,13 +135,13 @@ export function readAgentContract(db: Database.Database, rawSprintTypeKey: unkno
   };
 }
 
-export function writeAgentContract(
-  db: Database.Database,
+export async function writeAgentContract(
+  db: Db,
   rawSprintTypeKey: unknown,
   content: unknown,
 ) {
   const sprintTypeKey = normalizeSprintTypeKey(rawSprintTypeKey);
-  ensureSprintTypeExists(db, sprintTypeKey);
+  await ensureSprintTypeExists(db, sprintTypeKey);
   if (typeof content !== 'string') {
     const error = new Error('`content` (string) is required') as Error & { status?: number };
     error.status = 400;

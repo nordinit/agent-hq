@@ -2,7 +2,6 @@ import { spawn } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import type Database from "better-sqlite3";
 import type {
   AgentRuntime,
   DispatchParams,
@@ -38,6 +37,7 @@ import {
   type ProcessExitResult,
 } from "./abort";
 import { nowTimestamp } from '../../lib/timestamps';
+import { type Db } from "../../db/adapter/types";
 
 const HERMES_TRANSCRIPT_POLL_INTERVAL_MS = 2_000;
 
@@ -336,10 +336,7 @@ export class HermesRuntime implements AgentRuntime {
 
     if (params.instanceId != null) {
       this.activeRuns.set(params.instanceId, processState);
-      db?.prepare("UPDATE job_instances SET run_id = ? WHERE id = ?").run(
-        runId,
-        params.instanceId,
-      );
+      await db.run("UPDATE job_instances SET run_id = ? WHERE id = ?", runId, params.instanceId);
       if (db && agentId != null) {
         processState.transcriptPoller = this.startTranscriptPoller({
           db,
@@ -421,7 +418,7 @@ export class HermesRuntime implements AgentRuntime {
     params: DispatchParams;
     config: NormalizedHermesRuntimeConfig;
     runId: string;
-    db: Database.Database | null;
+    db: Db | null;
     state: ActiveHermesRun;
     exited: Promise<ProcessExitResult>;
     getStdout: () => string;
@@ -590,7 +587,7 @@ export class HermesRuntime implements AgentRuntime {
   }
 
   private async handleRuntimeEnd(
-    db: Database.Database | null,
+    db: Db | null,
     instanceId: number,
     event: RuntimeEndEvent,
   ): Promise<void> {
@@ -606,30 +603,30 @@ export class HermesRuntime implements AgentRuntime {
   }
 
 
-  private materializeMcpConfigForRun(
-    db: Database.Database | null,
+  private async materializeMcpConfigForRun(
+    db: Db | null,
     instanceId: number | null,
     cwd: string,
     hermesProfileHome: string,
-  ): number | null {
+  ): Promise<number | null> {
     if (!db || instanceId == null) return null;
     const agentId = this.lookupAgentId(db, instanceId);
     if (agentId == null) return null;
 
     const targets = Array.from(new Set([cwd, hermesProfileHome].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
     for (const workingDirectory of targets) {
-      const result = materializeAgentMcpConfig({ db, agentId, workingDirectory });
+      const result = await materializeAgentMcpConfig({ db, agentId, workingDirectory });
       if (!result.ok) {
         console.warn(`[hermes-runtime] MCP materialization failed for ${workingDirectory}: ${result.error ?? 'unknown error'}`);
       }
       for (const warning of result.warnings) console.warn(`[hermes-runtime] ${warning}`);
     }
 
-    const hermesConfig = materializeHermesMcpConfig({
-      db,
-      agentId,
-      hermesHome: hermesProfileHome,
-    });
+    const hermesConfig = await materializeHermesMcpConfig({
+          db,
+          agentId,
+          hermesHome: hermesProfileHome,
+        });
     if (!hermesConfig.ok) {
       console.warn(`[hermes-runtime] Hermes MCP config materialization failed for ${hermesConfig.path}: ${hermesConfig.error ?? 'unknown error'}`);
     }
@@ -638,7 +635,7 @@ export class HermesRuntime implements AgentRuntime {
   }
 
   private startTranscriptPoller(args: {
-    db: Database.Database;
+    db: Db;
     agentId: number;
     instanceId: number;
     durableRunId: string | null;
@@ -660,8 +657,8 @@ export class HermesRuntime implements AgentRuntime {
     return timer;
   }
 
-  private ingestTranscriptOnce(
-    db: Database.Database | null,
+  private async ingestTranscriptOnce(
+    db: Db | null,
     instanceId: number | null,
     config: NormalizedHermesRuntimeConfig,
     identity: {
@@ -669,95 +666,78 @@ export class HermesRuntime implements AgentRuntime {
       durableRunId?: string | null;
       sessionKey?: string | null;
     },
-  ): void {
+  ): Promise<void> {
     if (!db || instanceId == null) return;
     const agentId = identity.agentId ?? this.lookupAgentId(db, instanceId);
     if (agentId == null) return;
     try {
-      ingestHermesTranscriptForRun({
-        db,
-        agentId,
-        instanceId,
-        durableRunId: identity.durableRunId ?? null,
-        sessionKey: identity.sessionKey ?? '',
-        profile: config.profile,
-        hermesHome: config.hermesHome ?? null,
-      });
+      await ingestHermesTranscriptForRun({
+                db,
+                agentId,
+                instanceId,
+                durableRunId: identity.durableRunId ?? null,
+                sessionKey: identity.sessionKey ?? '',
+                profile: config.profile,
+                hermesHome: config.hermesHome ?? null,
+              });
     } catch (err) {
       console.warn('[hermes-runtime] Hermes transcript ingest failed:', err instanceof Error ? err.message : String(err));
     }
   }
 
-  private hasHermesJsonTranscriptRows(
-    db: Database.Database | null,
+  private async hasHermesJsonTranscriptRows(
+    db: Db | null,
     instanceId: number | null,
-  ): boolean {
+  ): Promise<boolean> {
     if (!db || instanceId == null) return false;
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT 1 AS found
       FROM chat_messages
       WHERE instance_id = ? AND id LIKE ?
       LIMIT 1
-    `).get(instanceId, `hermes-json-${instanceId}-%`) as { found?: number } | undefined;
+    `, instanceId, `hermes-json-${instanceId}-%`) as { found?: number } | undefined;
     return Boolean(row?.found);
   }
 
-  private persistUserPrompt(
-    db: Database.Database | null,
+  private async persistUserPrompt(
+    db: Db | null,
     instanceId: number | null,
     prompt: string,
-  ): void {
+  ): Promise<void> {
     if (!db || instanceId == null) return;
     const agentId = this.lookupAgentId(db, instanceId);
     if (agentId == null) return;
 
-    db.prepare(
-      `
+    await db.run(`
       INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
       VALUES (?, ?, ?, 'user', ?, ?)
-    `,
-    ).run(
-      `hermes-user-${instanceId}`,
-      agentId,
-      instanceId,
-      prompt,
-      nowTimestamp(),
-    );
+    `, `hermes-user-${instanceId}`, agentId, instanceId, prompt, nowTimestamp());
   }
 
-  private persistAssistantMessage(
-    db: Database.Database | null,
+  private async persistAssistantMessage(
+    db: Db | null,
     instanceId: number | null,
     content: string,
-  ): void {
+  ): Promise<void> {
     if (!db || instanceId == null || !content) return;
     const agentId = this.lookupAgentId(db, instanceId);
     if (agentId == null) return;
 
-    db.prepare(
-      `
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
       VALUES (?, ?, ?, 'assistant', ?, ?)
       ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp
-    `,
-    ).run(
-      `hermes-asst-${instanceId}`,
-      agentId,
-      instanceId,
-      content,
-      nowTimestamp(),
-    );
+    `, `hermes-asst-${instanceId}`, agentId, instanceId, content, nowTimestamp());
   }
 
-  private persistRuntimeEndEvent(
-    db: Database.Database | null,
+  private async persistRuntimeEndEvent(
+    db: Db | null,
     instanceId: number,
     event: RuntimeEndEvent,
-  ): void {
+  ): Promise<void> {
     if (!db) return;
 
-    db.prepare(
-      `
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
       SELECT ?, agent_id, id, 'system', ?, ?, 'turn_end', ?
       FROM job_instances
@@ -767,40 +747,29 @@ export class HermesRuntime implements AgentRuntime {
         timestamp = excluded.timestamp,
         event_type = excluded.event_type,
         event_meta = excluded.event_meta
-    `,
-    ).run(
-      `hermes-runtime-end-${instanceId}`,
-      `Runtime ${event.type} (${event.reason ?? (event.success ? "completed" : "error")})`,
-      event.endedAt,
-      JSON.stringify({
-        runtime_end_type: event.type,
-        terminal_reason:
-          event.reason ?? (event.success ? "completed" : "error"),
-        session_key: event.sessionKey,
-        run_id: event.runId ?? null,
-        success: event.success,
-        error: event.error ?? null,
-        ...(event.metadata ?? {}),
-      }),
-      instanceId,
-    );
+    `, `hermes-runtime-end-${instanceId}`, `Runtime ${event.type} (${event.reason ?? (event.success ? "completed" : "error")})`, event.endedAt, JSON.stringify({
+              runtime_end_type: event.type,
+              terminal_reason:
+                event.reason ?? (event.success ? "completed" : "error"),
+              session_key: event.sessionKey,
+              run_id: event.runId ?? null,
+              success: event.success,
+              error: event.error ?? null,
+              ...(event.metadata ?? {}),
+            }), instanceId);
 
-    db.prepare(
-      `
+    await db.run(`
       UPDATE job_instances
       SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
       WHERE id = ?
-    `,
-    ).run(JSON.stringify(event), instanceId);
+    `, JSON.stringify(event), instanceId);
   }
 
-  private lookupAgentId(
-    db: Database.Database,
+  private async lookupAgentId(
+    db: Db,
     instanceId: number,
-  ): number | null {
-    const row = db
-      .prepare("SELECT agent_id FROM job_instances WHERE id = ?")
-      .get(instanceId) as { agent_id?: number } | undefined;
+  ): Promise<number | null> {
+    const row = await db.get("SELECT agent_id FROM job_instances WHERE id = ?", instanceId) as { agent_id?: number } | undefined;
     return typeof row?.agent_id === "number" ? row.agent_id : null;
   }
 }

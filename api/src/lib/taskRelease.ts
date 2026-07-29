@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
 import { resolveSprintTypeForSprintId, resolveTaskWorkflowContext } from '../domains/sprint-definitions/config';
 import { getCanonicalTaskRecord } from '../domains/tasks/evidence';
@@ -7,6 +6,7 @@ import {
   loadSprintTaskTransitionRequirements,
   resolveSprintTaskTransition,
 } from '../domains/routing/policy/statuses';
+import { type Db } from "../db/adapter/types";
 
 export type IntegrityState =
   | 'clean'
@@ -120,13 +120,13 @@ function buildTaskRecord(task: TaskReleaseRecord): Record<string, unknown> {
   return getCanonicalTaskRecord(task as unknown as Record<string, unknown>);
 }
 
-function loadTransitionRequirements(
-  db: Database.Database,
+async function loadTransitionRequirements(
+  db: Db,
   outcome: string,
   sprintId?: number | null,
   taskType?: string | null,
-): TransitionRequirementRow[] {
-  const sprintRows = loadSprintTaskTransitionRequirements(db, sprintId ?? null, outcome, taskType);
+): Promise<TransitionRequirementRow[]> {
+  const sprintRows = await loadSprintTaskTransitionRequirements(db, sprintId ?? null, outcome, taskType);
   if (sprintRows.length > 0) {
     return sprintRows.map((row) => ({
       field_name: row.field_name,
@@ -138,50 +138,50 @@ function loadTransitionRequirements(
   }
 
   if (taskType) {
-    const typeReqs = db.prepare(`
+    const typeReqs = await db.all(`
       SELECT field_name, requirement_type, match_field, severity, message
       FROM transition_requirements
       WHERE task_type = ? AND outcome = ? AND enabled = 1
       ORDER BY priority DESC, id ASC
-    `).all(taskType, outcome) as TransitionRequirementRow[];
+    `, taskType, outcome) as TransitionRequirementRow[];
 
     if (typeReqs.length > 0) return typeReqs;
   }
 
-  return db.prepare(`
+  return await db.all(`
     SELECT field_name, requirement_type, match_field, severity, message
     FROM transition_requirements
     WHERE task_type IS NULL AND outcome = ? AND enabled = 1
     ORDER BY priority DESC, id ASC
-  `).all(outcome) as TransitionRequirementRow[];
+  `, outcome) as TransitionRequirementRow[];
 }
 
-function statusRequiresQaEvidence(
-  db: Database.Database | undefined,
+async function statusRequiresQaEvidence(
+  db: Db | undefined,
   task: ({ status?: string | null; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null } & Partial<TaskReleaseEvidence>),
-): boolean {
+): Promise<boolean> {
   const status = task.status ?? null;
   if (status !== 'ready_to_merge') return false;
   if (!db) return false;
 
   try {
-    const reqs = loadTransitionRequirements(db, 'qa_pass', task.sprint_id ?? null, task.task_type);
+    const reqs = await loadTransitionRequirements(db, 'qa_pass', task.sprint_id ?? null, task.task_type);
     return reqs.some(req => req.severity !== 'warn' && parseFieldExpression(req.field_name).includes('qa_verified_commit'));
   } catch {
     return false;
   }
 }
 
-function doneStatusRequiresDeployLiveEvidence(
-  db: Database.Database | undefined,
+async function doneStatusRequiresDeployLiveEvidence(
+  db: Db | undefined,
   task: { task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null },
-): boolean {
+): Promise<boolean> {
   if (!db) return true;
 
   try {
-    const sprintType = task.sprint_type ?? resolveSprintTypeForSprintId(db, task.sprint_id ?? null);
-    const workflow = resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
-    const sprintTransitions = listSprintTaskTransitions(db, task.sprint_id ?? null)
+    const sprintType = task.sprint_type ?? (await resolveSprintTypeForSprintId(db, task.sprint_id ?? null));
+    const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
+    const sprintTransitions = (await listSprintTaskTransitions(db, task.sprint_id ?? null))
       .filter(transition => transition.enabled !== 0)
       .filter(transition => transition.task_type == null || transition.task_type === workflow.taskType);
 
@@ -200,18 +200,18 @@ function doneStatusRequiresDeployLiveEvidence(
   }
 }
 
-export function evaluateTaskIntegrity(
+export async function evaluateTaskIntegrity(
   task: { status?: string | null; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null } & Partial<TaskReleaseEvidence>,
-  db?: Database.Database,
-): IntegrityEvaluation {
+  db?: Db,
+): Promise<IntegrityEvaluation> {
   const warnings: string[] = [];
   const status = task.status ?? null;
   const reviewOk = hasImplementationEvidence(task);
   const qaOk = hasQaEvidence(task);
   const deployOk = hasDeployEvidence(task);
   const liveOk = hasLiveVerification(task);
-  const requiresQaEvidence = statusRequiresQaEvidence(db, task);
-  const requiresDoneDeployLiveEvidence = status === 'done' && doneStatusRequiresDeployLiveEvidence(db, task);
+  const requiresQaEvidence = await statusRequiresQaEvidence(db, task);
+  const requiresDoneDeployLiveEvidence = status === 'done' && await doneStatusRequiresDeployLiveEvidence(db, task);
 
   let integrityState: IntegrityState = 'clean';
 
@@ -291,16 +291,16 @@ export interface ReleaseGateResult {
  * Returns {errors, warnings} instead of throwing, so callers can handle
  * warnings vs blocking errors.
  */
-export function requireReleaseGate(
-  db: Database.Database,
+export async function requireReleaseGate(
+  db: Db,
   task: TaskReleaseRecord,
   outcome: string,
   taskType?: string | null,
-): ReleaseGateResult {
+): Promise<ReleaseGateResult> {
   let reqs: TransitionRequirementRow[];
 
   try {
-    reqs = loadTransitionRequirements(db, outcome, task.sprint_id ?? null, taskType);
+    reqs = await loadTransitionRequirements(db, outcome, task.sprint_id ?? null, taskType);
   } catch {
     return { errors: [], warnings: [] };
   }
@@ -417,19 +417,19 @@ type SprintWorkflowRouteResolution = {
   allowedOutcomes: string[];
 };
 
-export function resolveSprintWorkflowOutcome(
-  db: Database.Database,
+export async function resolveSprintWorkflowOutcome(
+  db: Db,
   task: { status: string; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null },
   outcome: string,
-): SprintWorkflowRouteResolution | null {
-  const sprintType = task.sprint_type ?? resolveSprintTypeForSprintId(db, task.sprint_id ?? null);
-  const workflow = resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
+): Promise<SprintWorkflowRouteResolution | null> {
+  const sprintType = task.sprint_type ?? (await resolveSprintTypeForSprintId(db, task.sprint_id ?? null));
+  const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
 
   if (workflow.taskType && workflow.allowedTaskTypes.length > 0 && !workflow.allowedTaskTypes.includes(workflow.taskType)) {
     throw new Error(`Cannot move task because task_type "${workflow.taskType}" is not allowed for sprint type "${workflow.sprintType}". Allowed task types: ${workflow.allowedTaskTypes.join(', ')}`);
   }
 
-  const sprintTransitions = listSprintTaskTransitions(db, task.sprint_id ?? null);
+  const sprintTransitions = await listSprintTaskTransitions(db, task.sprint_id ?? null);
   const matchingTransitions = sprintTransitions
     .filter((transition) => transition.enabled !== 0)
     .map((transition) => ({
@@ -477,14 +477,14 @@ export function resolveSprintWorkflowOutcome(
   };
 }
 
-function resolveConfiguredOutcomeForDirectStatus(
-  db: Database.Database,
+async function resolveConfiguredOutcomeForDirectStatus(
+  db: Db,
   task: { status: string; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null },
   targetStatus: string,
-): { outcome: string | null; allowedOutcomes: string[]; allowedStatuses: string[] } {
-  const sprintType = task.sprint_type ?? resolveSprintTypeForSprintId(db, task.sprint_id ?? null);
-  const workflow = resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
-  const sprintTransitions = listSprintTaskTransitions(db, task.sprint_id ?? null);
+): Promise<{ outcome: string | null; allowedOutcomes: string[]; allowedStatuses: string[] }> {
+  const sprintType = task.sprint_type ?? (await resolveSprintTypeForSprintId(db, task.sprint_id ?? null));
+  const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
+  const sprintTransitions = await listSprintTaskTransitions(db, task.sprint_id ?? null);
 
   const configuredSprintTransitions = sprintTransitions
     .filter((transition) => transition.enabled !== 0)
@@ -515,21 +515,21 @@ function resolveConfiguredOutcomeForDirectStatus(
   };
 }
 
-export function assertAtlasDirectStatusGate(
-  db: Database.Database,
+export async function assertAtlasDirectStatusGate(
+  db: Db,
   task: TaskReleaseRecord & { task_type?: string | null; sprint_id?: number | null },
   nextStatus: string | null | undefined,
-): void {
+): Promise<void> {
   if (!nextStatus || nextStatus === task.status) return;
 
-  const sprintType = resolveSprintTypeForSprintId(db, task.sprint_id ?? null);
-  const workflow = resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
+  const sprintType = await resolveSprintTypeForSprintId(db, task.sprint_id ?? null);
+  const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
 
   if (workflow.taskType && workflow.allowedTaskTypes.length > 0 && !workflow.allowedTaskTypes.includes(workflow.taskType)) {
     throw new Error(`Cannot move task to "${nextStatus}" because task_type "${workflow.taskType}" is not allowed for sprint type "${workflow.sprintType}". Allowed task types: ${workflow.allowedTaskTypes.join(', ')}`);
   }
 
-  assertTaskStatusDefinedForWorkflow(db, nextStatus, { sprintId: task.sprint_id, sprintType });
+  await assertTaskStatusDefinedForWorkflow(db, nextStatus, { sprintId: task.sprint_id, sprintType });
 }
 
 /**
@@ -541,18 +541,18 @@ export function assertAtlasDirectStatusGate(
  * Resolution order:
  *  1. sprint_task_transitions for the active sprint (authoritative)
  */
-export function canonicalOutcomeRoute(
-  db: Database.Database,
+export async function canonicalOutcomeRoute(
+  db: Db,
   priorStatus: string,
   outcome: string,
   taskType?: string | null,
   sprintId?: number | null,
   sprintType?: string | null,
-): string | null {
-  const workflow = resolveTaskWorkflowContext(db, { sprintType: sprintType ?? null, taskType });
+): Promise<string | null> {
+  const workflow = await resolveTaskWorkflowContext(db, { sprintType: sprintType ?? null, taskType });
 
   try {
-    const sprintTransition = resolveSprintTaskTransition(db, sprintId ?? null, priorStatus, outcome, workflow.taskType);
+    const sprintTransition = await resolveSprintTaskTransition(db, sprintId ?? null, priorStatus, outcome, workflow.taskType);
     if (sprintTransition) return sprintTransition.to_status;
 
   } catch {

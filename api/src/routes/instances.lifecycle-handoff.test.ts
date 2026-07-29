@@ -8,10 +8,10 @@ jest.mock('../services/browserPool', () => ({
   destroyAgentContext: jest.fn(() => Promise.resolve()),
 }));
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL DEFAULT '',
@@ -200,9 +200,9 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO projects (id, name) VALUES (86, 'Agent HQ')`).run();
-  db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (96, 'Talon (QA)', 'agency-qa', 'openclaw')`).run();
-  db.prepare(`
+  await db.run(`INSERT INTO projects (id, name) VALUES (86, 'Agent HQ')`);
+  await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (96, 'Talon (QA)', 'agency-qa', 'openclaw')`);
+  await db.run(`
     INSERT INTO tasks (
       id, title, status, task_type, project_id, agent_id, active_instance_id,
       review_branch, review_commit, review_url, updated_at
@@ -220,13 +220,13 @@ function resetDb(): void {
       'http://localhost:3510/tasks/403',
       datetime('now')
     )
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO job_instances (
       id, agent_id, task_id, status, session_key, dispatched_at, started_at
     )
     VALUES (2045, 96, 403, 'running', 'run:2045', datetime('now'), datetime('now'))
-  `).run();
+  `);
 }
 
 function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -272,17 +272,17 @@ describe('instance completion lifecycle handoff recovery', () => {
       await expect(response.json()).resolves.toEqual({ ok: true, id: 2045, status: 'done' });
 
       const db = getDb();
-      const task = db.prepare(`SELECT status, previous_status FROM tasks WHERE id = 403`).get() as {
+      const task = await db.get(`SELECT status, previous_status FROM tasks WHERE id = 403`) as {
         status: string;
         previous_status: string | null;
       };
       expect(task).toEqual({ status: 'review', previous_status: null });
 
-      const instance = db.prepare(`
+      const instance = await db.get(`
         SELECT status, runtime_end_success, runtime_end_error, lifecycle_handoff_status, semantic_outcome_missing, lifecycle_outcome_posted_at, task_outcome
         FROM job_instances
         WHERE id = 2045
-      `).get() as {
+      `) as {
         status: string;
         runtime_end_success: number | null;
         runtime_end_error: string | null;
@@ -301,7 +301,7 @@ describe('instance completion lifecycle handoff recovery', () => {
         task_outcome: null,
       });
 
-      const notes = db.prepare(`SELECT author, content FROM task_notes WHERE task_id = 403 ORDER BY id`).all() as Array<{
+      const notes = await db.all(`SELECT author, content FROM task_notes WHERE task_id = 403 ORDER BY id`) as Array<{
         author: string;
         content: string;
       }>;
@@ -317,11 +317,11 @@ describe('instance completion lifecycle handoff recovery', () => {
       expect(notes[0].content).toContain('Recommended next action: inspect the missing lifecycle outcome, then choose an explicit routed move or outcome');
       expect(notes[0].content).not.toContain('Moved to Needs Attention because the runtime ended without a semantic lifecycle outcome.');
 
-      const event = db.prepare(`
+      const event = await db.get(`
         SELECT anomaly_type, instance_id, detail
         FROM integrity_events
         WHERE task_id = 403
-      `).get() as { anomaly_type: string; instance_id: number; detail: string };
+      `) as { anomaly_type: string; instance_id: number; detail: string };
       expect(event).toEqual({
         anomaly_type: 'missing_lifecycle_handoff',
         instance_id: 2045,

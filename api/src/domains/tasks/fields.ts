@@ -40,14 +40,14 @@ export function parseCustomFields(raw: unknown): Record<string, unknown> {
   throw new Error('custom_fields must be an object');
 }
 
-export function resolveSprintTypeForTask(sprintId: unknown): string {
+export async function resolveSprintTypeForTask(sprintId: unknown): Promise<string> {
   const db = getDb();
-  return resolveSprintTypeForSprintId(db, sprintId);
+  return await resolveSprintTypeForSprintId(db, sprintId);
 }
 
-export function resolveTaskFieldSchema(sprintId: unknown, taskType: unknown, sprintType?: unknown): ResolvedTaskFieldSchema {
+export async function resolveTaskFieldSchema(sprintId: unknown, taskType: unknown, sprintType?: unknown): Promise<ResolvedTaskFieldSchema> {
   const db = getDb();
-  return resolveTaskFieldSchemaForSprint(db, { sprintId, sprintType, taskType });
+  return await resolveTaskFieldSchemaForSprint(db, { sprintId, sprintType, taskType });
 }
 
 function customFieldValuesEqual(left: unknown, right: unknown): boolean {

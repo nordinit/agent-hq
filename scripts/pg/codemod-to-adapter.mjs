@@ -245,6 +245,43 @@ for (const file of files) {
   report.filesChanged.add(rel(file));
 }
 
+// ---- pass 1c: wrap declared return types in Promise<> --------------------------------
+// Marking a function async does not change its ANNOTATION, and TypeScript rejects an
+// async function whose declared return type is not a Promise (TS1064). Every function the
+// earlier passes made async therefore needs its annotation lifted. Functions with no
+// annotation are left alone: inference already produces the right Promise type.
+report.returnTypesWrapped = 0;
+
+function wrapReturnTypes(file) {
+  let changed = false;
+  const fns = [
+    ...file.getDescendantsOfKind(SyntaxKind.FunctionDeclaration),
+    ...file.getDescendantsOfKind(SyntaxKind.MethodDeclaration),
+    ...file.getDescendantsOfKind(SyntaxKind.ArrowFunction),
+    ...file.getDescendantsOfKind(SyntaxKind.FunctionExpression),
+  ];
+  for (const fn of fns) {
+    if (fn.wasForgotten() || !fn.isAsync?.()) continue;
+    const ret = fn.getReturnTypeNode?.();
+    if (!ret) continue;
+    const text = ret.getText();
+    if (/^Promise\s*</.test(text)) continue;
+    // A type predicate ("x is Foo") cannot be wrapped; an async guard is not expressible.
+    if (Node.isTypePredicate(ret)) {
+      report.skippedUnasyncable.push(`${rel(file)}:${fn.getStartLineNumber()} (type predicate)`);
+      continue;
+    }
+    ret.replaceWithText(`Promise<${text}>`);
+    report.returnTypesWrapped++;
+    changed = true;
+  }
+  return changed;
+}
+
+for (const file of allFiles) {
+  if (wrapReturnTypes(file)) report.filesChanged.add(rel(file));
+}
+
 // ---- pass 2: propagate async to callers, to a fixpoint --------------------------------
 // A function that became async returns a Promise, so every call to it must be awaited and
 // every function containing such a call must itself become async. Repeat until stable.
@@ -305,6 +342,11 @@ function propagate() {
 
 const iterations = propagate();
 
+// Propagation made further functions async, so their annotations need the same lift.
+for (const file of allFiles) {
+  if (wrapReturnTypes(file)) report.filesChanged.add(rel(file));
+}
+
 if (!dryRun) project.saveSync();
 
 console.log(`${dryRun ? 'WOULD REWRITE' : 'REWROTE'}: ${report.rewritten} call site(s)`);
@@ -313,6 +355,7 @@ for (const [k, v] of Object.entries(report.byKind).sort((a, b) => b[1] - a[1])) 
 }
 console.log(`functions made async : ${report.functionsMadeAsync}`);
 console.log(`awaits added to calls: ${report.awaitsAdded}   (propagation converged in ${iterations} pass(es))`);
+console.log(`return types wrapped : ${report.returnTypesWrapped}   (T -> Promise<T>)`);
 console.log(`handle types retyped : ${report.typesRetyped}   (Database.Database -> Db)`);
 console.log(`driver imports removed: ${report.importsRewritten}`);
 console.log(`files changed        : ${report.filesChanged.size}`);

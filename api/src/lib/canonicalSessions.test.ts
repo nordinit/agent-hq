@@ -26,11 +26,11 @@ jest.mock('../domains/runs/transcriptProvider', () => ({
   }),
 }));
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   process.env.AGENT_HQ_DB_PATH = ':memory:';
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -120,8 +120,8 @@ function resetDb(): void {
 }
 
 describe('ensureCanonicalSessionForInstance failure placeholders', () => {
-  beforeEach(() => {
-    resetDb();
+  beforeEach(async () => {
+    await resetDb();
     mockGetTranscript.mockReset();
     mockGetTranscript.mockResolvedValue({
       sessionKey: null,
@@ -137,10 +137,10 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
 
   it('creates a visible failed-run session when startup failed before transcript output', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (94, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (56, 'Agent HQ Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (715, 'Anchor recovery', 56)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (94, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (56, 'Agent HQ Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (715, 'Anchor recovery', 56)`);
+    await db.run(`
       INSERT INTO job_instances (
         id, agent_id, task_id, status, session_key, created_at, completed_at,
         runtime_ended_at, runtime_end_success, runtime_end_error, runtime_end_source
@@ -148,7 +148,7 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
         4610, 94, 715, 'failed', NULL, '2026-06-03T01:40:00.000Z', '2026-06-03T01:51:40.000Z',
         '2026-06-03T01:51:40.000Z', 0, 'Requested agent harness "codex" is not registered', 'instance_complete'
       )
-    `).run();
+    `);
 
     const session = await ensureCanonicalSessionForInstance(4610);
 
@@ -162,7 +162,7 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
       message_count: 1,
     });
 
-    const message = db.prepare(`SELECT role, event_type, content, event_meta FROM session_messages WHERE session_id = ?`).get(session!.id) as {
+    const message = await db.get(`SELECT role, event_type, content, event_meta FROM session_messages WHERE session_id = ?`, session!.id) as {
       role: string;
       event_type: string;
       content: string;
@@ -185,10 +185,10 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
 
   it('repairs a completed instance whose canonical session stayed active with zero messages', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (94, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (56, 'Agent HQ Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (732, 'Fix live transcript handoff after Task #719', 56)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (94, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (56, 'Agent HQ Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (732, 'Fix live transcript handoff after Task #719', 56)`);
+    await db.run(`
       INSERT INTO job_instances (
         id, agent_id, task_id, status, session_key, created_at, dispatched_at, started_at,
         completed_at, runtime_ended_at, runtime_end_success, runtime_end_source
@@ -197,8 +197,8 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
         '2026-06-03T02:00:00.000Z', '2026-06-03T02:00:01.000Z', '2026-06-03T02:00:02.000Z',
         '2026-06-03T02:12:00.000Z', '2026-06-03T02:12:00.000Z', 1, 'instance_complete'
       )
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sessions (
         id, external_key, runtime, agent_id, task_id, instance_id, project_id, status,
         title, started_at, message_count
@@ -206,7 +206,7 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
         12719, 'agent:cinder-backend:run:4692:durable-4692', 'openclaw', 94, 732, 4692, 56,
         'active', 'Fix live transcript handoff after Task #719', '2026-06-03T02:00:02.000Z', 0
       )
-    `).run();
+    `);
     const insertChat = db.prepare(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, 94, 4692, 'agent:cinder-backend:run:4692:durable-4692', ?, ?, ?, ?, ?)
@@ -227,12 +227,12 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
       // fixture supplies — see lib/timestamps.ts. Same instant, one format.
       ended_at: '2026-06-03 02:12:00.000',
     });
-    const messages = db.prepare(`
+    const messages = await db.all(`
       SELECT ordinal, role, event_type, content
       FROM session_messages
       WHERE session_id = ?
       ORDER BY ordinal
-    `).all(12719);
+    `, 12719);
     expect(messages).toEqual([
       { ordinal: 0, role: 'user', event_type: 'text', content: 'Start task #732' },
       { ordinal: 1, role: 'assistant', event_type: 'text', content: 'Inspecting transcript code paths' },
@@ -244,10 +244,10 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
 
   it('uses the transcript provider for completed OpenClaw sessions with only a dispatch prompt in chat_messages', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (94, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (56, 'Agent HQ Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (738, 'Fix completed OpenClaw transcripts that import only the dispatch prompt', 56)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (94, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (56, 'Agent HQ Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (738, 'Fix completed OpenClaw transcripts that import only the dispatch prompt', 56)`);
+    await db.run(`
       INSERT INTO job_instances (
         id, agent_id, task_id, status, session_key, created_at, dispatched_at, started_at,
         completed_at, runtime_ended_at, runtime_end_success, runtime_end_source
@@ -256,11 +256,11 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
         '2026-06-03T02:00:00.000Z', '2026-06-03T02:00:01.000Z', '2026-06-03T02:00:02.000Z',
         '2026-06-03T02:12:00.000Z', '2026-06-03T02:12:00.000Z', 1, 'instance_complete'
       )
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type, event_meta)
       VALUES ('oc-user-4782', 94, 4782, 'agent:cinder-backend:run:4782:durable-4782', 'user', 'Dispatch prompt only', '2026-06-03T02:00:02.000Z', 'text', '{}')
-    `).run();
+    `);
     mockGetTranscript.mockResolvedValue({
       sessionKey: 'agent:cinder-backend:run:4782:durable-4782',
       source: 'openclaw-jsonl',
@@ -300,12 +300,12 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
       status: 'completed',
       message_count: 3,
     });
-    const messages = db.prepare(`
+    const messages = await db.all(`
       SELECT ordinal, role, event_type, content, event_meta
       FROM session_messages
       WHERE session_id = ?
       ORDER BY ordinal
-    `).all(session!.id) as Array<{ ordinal: number; role: string; event_type: string; content: string; event_meta: string }>;
+    `, session!.id) as Array<{ ordinal: number; role: string; event_type: string; content: string; event_meta: string }>;
     expect(messages.map(({ ordinal, role, event_type, content }) => ({ ordinal, role, event_type, content }))).toEqual([
       { ordinal: 0, role: 'user', event_type: 'text', content: 'Dispatch prompt only' },
       { ordinal: 1, role: 'assistant', event_type: 'text', content: 'I am inspecting the raw JSONL transcript.' },
@@ -316,21 +316,21 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
 
   it('keeps active OpenClaw prompt-only sessions visible while runtime output is pending', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (94, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (56, 'Agent HQ Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (739, 'Pending OpenClaw run', 56)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (94, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (56, 'Agent HQ Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (739, 'Pending OpenClaw run', 56)`);
+    await db.run(`
       INSERT INTO job_instances (
         id, agent_id, task_id, status, session_key, created_at, dispatched_at, started_at
       ) VALUES (
         4790, 94, 739, 'running', 'agent:cinder-backend:run:4790:durable-4790',
         '2026-06-03T02:20:00.000Z', '2026-06-03T02:20:01.000Z', '2026-06-03T02:20:02.000Z'
       )
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type, event_meta)
       VALUES ('oc-user-4790', 94, 4790, 'agent:cinder-backend:run:4790:durable-4790', 'user', 'Start running task', '2026-06-03T02:20:02.000Z', 'text', '{}')
-    `).run();
+    `);
 
     const session = await ensureCanonicalSessionForInstance(4790);
 
@@ -338,12 +338,12 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
       status: 'active',
       message_count: 1,
     });
-    const messages = db.prepare(`
+    const messages = await db.all(`
       SELECT ordinal, role, event_type, content
       FROM session_messages
       WHERE session_id = ?
       ORDER BY ordinal
-    `).all(session!.id);
+    `, session!.id);
     expect(messages).toEqual([
       { ordinal: 0, role: 'user', event_type: 'text', content: 'Start running task' },
     ]);

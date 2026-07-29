@@ -1,7 +1,7 @@
 import { closeDb, getDb, getDbPath } from './client';
 import fs from 'fs';
 
-function main(): void {
+async function main(): Promise<void> {
   const dbPath = getDbPath();
   if (!fs.existsSync(dbPath)) {
     console.log(JSON.stringify({
@@ -15,20 +15,20 @@ function main(): void {
   }
 
   const db = getDb();
-  const hasMigrationsTable = Boolean(db.prepare(`
+  const hasMigrationsTable = Boolean(await db.get(`
     SELECT 1
     FROM sqlite_master
     WHERE type = 'table'
       AND name = 'schema_migrations'
-  `).get());
+  `));
   const migrations = hasMigrationsTable
-    ? db.prepare(`
+    ? await db.all(`
         SELECT id, checksum, applied_at, applied_by, app_commit
         FROM schema_migrations
         ORDER BY applied_at ASC, id ASC
-      `).all()
+      `)
     : [];
-  const integrity = db.prepare(`PRAGMA integrity_check`).pluck().get();
+  const integrity = await db.value(`PRAGMA integrity_check`);
   console.log(JSON.stringify({
     ok: integrity === 'ok',
     db_path: dbPath,

@@ -10,12 +10,12 @@ import { closeDb, getDbPath } from './client';
 import { initSchema, provisionDefaultMcpRegistry, provisionDefaultToolRegistry } from './schema';
 import { ensureConfiguredRuntimeMcpApiKey } from '../lib/mcpApiAuth';
 
-function main(): void {
-  initSchema();
-  provisionDefaultToolRegistry();
-  provisionDefaultMcpRegistry();
+async function main(): Promise<void> {
+  await initSchema();
+  await provisionDefaultToolRegistry();
+  await provisionDefaultMcpRegistry();
 
-  const runtimeMcpKey = ensureConfiguredRuntimeMcpApiKey();
+  const runtimeMcpKey = await ensureConfiguredRuntimeMcpApiKey();
 
   console.log(JSON.stringify({
     ok: true,

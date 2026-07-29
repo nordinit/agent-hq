@@ -42,7 +42,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type Database from 'better-sqlite3';
+import { type Db } from "../db/adapter/types";
 
 function resolveDefaultHermesRoot(): string {
   return process.env.HERMES_HOME?.trim() || path.join(os.homedir(), '.hermes');
@@ -74,7 +74,7 @@ export interface MaterializationContext {
    * Optional database handle — available to adapters that need to fetch
    * skill content from the Agent HQ DB (e.g. for prompt injection).
    */
-  db?: Database.Database;
+  db?: Db;
 
   /** Optional tenant scope for DB-backed skill resolution. */
   tenantId?: number | null;
@@ -255,22 +255,22 @@ export abstract class FilesystemSkillAdapter implements SkillMaterializationAdap
    * global skills directory by name, because that inventory is not tenant-owned.
    * Returns null if the skill cannot be resolved to a valid directory.
    */
-  protected resolveSkillDir(
+  protected async resolveSkillDir(
     name: string,
     skillsBasePath: string | undefined,
-    db: Database.Database | undefined,
+    db: Db | undefined,
     workingDirectory: string,
     tenantId?: number | null,
-  ): string | null {
+  ): Promise<string | null> {
     if (!db || !tenantId) return null;
 
     try {
-      const row = db.prepare(`
+      const row = await db.get(`
         SELECT fs_path, content, description, source
         FROM skills
         WHERE tenant_id = ? AND name = ?
         LIMIT 1
-      `).get(tenantId, name) as
+      `, tenantId, name) as
         | { fs_path: string | null; content: string | null; description: string | null; source: string | null }
         | undefined;
       if (!row) return null;
