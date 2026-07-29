@@ -1012,6 +1012,75 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     `).run(seriesId, projectId, sprintId);
   }
 
+  it('allows an owning agent to persist custom fields on its own active task', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'tasks.read_active_context',
+      'tasks.write_active_custom_fields',
+    ]);
+
+    const res = await fetch(`${baseUrl}/api/v1/tasks/448`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ custom_fields: { source_platform: 'freelancer' }, changed_by: 'agent' }),
+    });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('refuses non-custom-field task edits under the active custom-field capability', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'tasks.read_active_context',
+      'tasks.write_active_custom_fields',
+    ]);
+
+    // Status changes, retitles, and reassignment are task-column edits and must
+    // still require the broad project task management capability.
+    for (const body of [
+      { status: 'done' },
+      { title: 'renamed' },
+      { agent_id: 9 },
+      { custom_fields: { source_platform: 'freelancer' }, status: 'done' },
+    ]) {
+      const res = await fetch(`${baseUrl}/api/v1/tasks/448`, {
+        method: 'PUT',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(403);
+    }
+  });
+
+  it('refuses active custom-field writes to a task the agent does not actively own', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'tasks.read_active_context',
+      'tasks.write_active_custom_fields',
+    ]);
+
+    const res = await fetch(`${baseUrl}/api/v1/tasks/449`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ custom_fields: { source_platform: 'freelancer' } }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses active custom-field writes without the capability', async () => {
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'tasks.read_active_context',
+      'tasks.write_active_lifecycle',
+    ]);
+
+    const res = await fetch(`${baseUrl}/api/v1/tasks/448`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ custom_fields: { source_platform: 'freelancer' } }),
+    });
+    expect(res.status).toBe(403);
+  });
+
   it('allows project-scoped recurring task series reads and management with explicit capabilities', async () => {
     seedRecurringTaskSeries(9001, 86, 42);
     replaceAgentMcpPermissionPolicy(getDb(), 7, [

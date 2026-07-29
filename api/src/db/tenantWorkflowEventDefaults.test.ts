@@ -151,6 +151,15 @@ describe('tenant workflow-event default seeding and repair', () => {
         AND source = ?
         AND event_name = 'agent_started'
     `).run(AGENT_HQ_RUNTIME_SOURCE);
+    // The project-scoped variant below needs a real projects row: project_id carries a
+    // REFERENCES projects(id) constraint, and this fixture previously hardcoded id 1,
+    // which only inserted because foreign-key enforcement had leaked OFF during schema
+    // init. Create the parent explicitly rather than assuming an id.
+    const scopedProjectId = Number(db.prepare(`
+      INSERT INTO projects (tenant_id, name, description, context_md)
+      VALUES (1, 'Workflow event scope fixture', 'project-scoped mapping variant', '')
+    `).run().lastInsertRowid);
+
     db.prepare(`
       INSERT INTO external_event_mappings (
         tenant_id, project_id, source, event_name, task_type,
@@ -160,8 +169,8 @@ describe('tenant workflow-event default seeding and repair', () => {
         (1, NULL, ?, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 1, 100),
         (1, NULL, ?, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 0, 100),
         (1, NULL, ?, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 1, 500),
-        (1, 1, ?, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 1, 100)
-    `).run(AGENT_HQ_RUNTIME_SOURCE, AGENT_HQ_RUNTIME_SOURCE, AGENT_HQ_RUNTIME_SOURCE, AGENT_HQ_RUNTIME_SOURCE);
+        (1, ?, ?, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 1, 100)
+    `).run(AGENT_HQ_RUNTIME_SOURCE, AGENT_HQ_RUNTIME_SOURCE, AGENT_HQ_RUNTIME_SOURCE, scopedProjectId, AGENT_HQ_RUNTIME_SOURCE);
 
     expect(defaultMappingCloneCount('agent_started')).toBe(3);
     const beforeRepairTotal = workflowEventMappingCount();

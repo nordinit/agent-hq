@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
-import { getDbPath } from './client';
+import { getDb, getDbPath } from './client';
+import { foreignKeyEnforcementIntentionallyDisabled } from './foreignKeyGuard';
 
 export const STARTUP_SCHEMA_LEDGER_ID = 'init_schema';
 export const STARTUP_SCHEMA_LEDGER_CHECKSUM = 'initSchema';
@@ -12,6 +13,74 @@ export class SchemaMigrationRequiredError extends Error {
     super(message);
     this.name = 'SchemaMigrationRequiredError';
   }
+}
+
+export class ForeignKeyEnforcementDisabledError extends Error {
+  readonly code = 'FOREIGN_KEY_ENFORCEMENT_DISABLED';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForeignKeyEnforcementDisabledError';
+  }
+}
+
+export interface ForeignKeyEnforcementOptions {
+  /** Throw ForeignKeyEnforcementDisabledError when enforcement is off. Default true. */
+  throwOnViolation?: boolean;
+  /** Force enforcement back ON before reporting, stopping further orphan creation. Default false. */
+  restore?: boolean;
+}
+
+/**
+ * Asserts foreign-key enforcement is still ON for the shared application connection.
+ *
+ * The connection is a process-wide singleton, so a single leaked
+ * `PRAGMA foreign_keys = OFF` in schema/tenant migration code disables ON DELETE
+ * CASCADE for the whole process and silently accumulates orphan rows. This is the
+ * tripwire that makes such a regression impossible to miss.
+ *
+ * Returns true when enforcement is on. When it is off, it always logs an unmissable
+ * error, optionally forces enforcement back on, and (by default) throws.
+ */
+export function assertForeignKeyEnforcementEnabled(
+  db: Database.Database = getDb(),
+  context = 'startup',
+  options: ForeignKeyEnforcementOptions = {},
+): boolean {
+  const enforced = (): boolean => Number(db.pragma('foreign_keys', { simple: true })) === 1;
+  if (enforced()) return true;
+
+  // Schema and tenant migrations disable enforcement on purpose while rebuilding
+  // tables, and they re-enter this code path: initSchema() opens a disable window for
+  // its legacy workflow-policy DDL and then calls ensureTenantSchema() inside it.
+  // Reporting there would be a false alarm, and force-restoring would switch
+  // enforcement back ON in the middle of DDL that requires it OFF. Only a pragma that
+  // is off with no tracked window open is a leak.
+  if (foreignKeyEnforcementIntentionallyDisabled()) return false;
+
+  const throwOnViolation = options.throwOnViolation !== false;
+  const message =
+    `SQLite foreign-key enforcement is OFF after ${context}. ` +
+    `ON DELETE CASCADE is not running, so deletes are silently orphaning child rows. ` +
+    `A migration disabled 'PRAGMA foreign_keys' on the shared connection and never restored it — ` +
+    `route every rebuild through withForeignKeysDisabled() in api/src/lib/tenantContext.ts.`;
+
+  console.error('='.repeat(100));
+  console.error(`[db] FATAL DATA INTEGRITY DEFECT: ${message}`);
+  console.error('='.repeat(100));
+
+  if (options.restore) {
+    db.pragma('foreign_keys = ON');
+    const restored = enforced();
+    console.error(
+      restored
+        ? '[db] Foreign-key enforcement was force-restored to ON. Find and fix the leaking migration.'
+        : '[db] Foreign-key enforcement could NOT be force-restored; the connection is still unsafe.'
+    );
+  }
+
+  if (throwOnViolation) throw new ForeignKeyEnforcementDisabledError(message);
+  return false;
 }
 
 function migrationRequired(message: string): SchemaMigrationRequiredError {
@@ -67,5 +136,11 @@ export function verifyStartupSchemaCurrent(dbPath: string = getDbPath()): void {
     }
   } finally {
     db.close();
+  }
+
+  // The handle above is a throwaway read-only connection; foreign-key enforcement
+  // only matters on the shared application connection the API actually writes through.
+  if (dbPath === getDbPath()) {
+    assertForeignKeyEnforcementEnabled(getDb(), 'startup schema verification');
   }
 }

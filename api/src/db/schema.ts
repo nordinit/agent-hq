@@ -39,6 +39,7 @@ import { normalizeSprintTaskRoutingRuleTaskTypes } from '../domains/routing/poli
 import { seedSprintTypeTaskStatuses } from '../domains/routing/policy/seed';
 import { ensureMcpApiKeyTable } from '../lib/mcpApiAuth';
 import { ensureTenantSchema, verifyTenantSchemaForStartup } from '../lib/tenantContext';
+import { beginIntentionalForeignKeyDisable, endIntentionalForeignKeyDisable } from './foreignKeyGuard';
 import { tableHasColumn } from '../lib/durableRunIdentity';
 import { syncAllTaskActiveAgentsFromInstances } from '../domains/tasks/ownership';
 import { ensureNotificationTables } from '../lib/notifications';
@@ -2299,8 +2300,22 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   // declarations, which SQLite treats as foreign-key mismatches once key is no
   // longer globally unique. Keep FK checks disabled around this compatibility DDL
   // until those legacy references are rebuilt as tenant-aware/composite references.
+  //
+  // This disable MUST be undone before initSchema() returns. db/client.ts hands out a
+  // process-wide singleton connection, and `PRAGMA foreign_keys` is per-connection, so
+  // leaking OFF here disables ON DELETE CASCADE for every query the API runs afterwards.
+  // That is exactly what happened in production: deletes stopped cascading and orphan
+  // rows accumulated silently. The restore lives at the end of initSchema() — see
+  // "restore foreign-key enforcement" below. Do not narrow it to this block; the
+  // compatibility DDL that needs enforcement off continues for several hundred lines.
+  let foreignKeysDisabledForLegacyWorkflowDdl = false;
   if (tableHasColumn(db, 'sprint_types', 'tenant_id')) {
     db.pragma('foreign_keys = OFF');
+    // Register the window so the startup tripwire does not mistake this deliberate
+    // disable for a leak. It matters because initSchema() calls ensureTenantSchema()
+    // further down, still inside this window, and that path checks enforcement.
+    beginIntentionalForeignKeyDisable();
+    foreignKeysDisabledForLegacyWorkflowDdl = true;
   }
 
   db.exec(`
@@ -3089,6 +3104,24 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     ensureDefaultProjectId(db);
   } catch (err) {
     console.error('[schema] Failed to ensure default project:', err);
+  }
+
+  // Restore foreign-key enforcement disabled for the legacy workflow-policy DDL above.
+  //
+  // Before this existed, the disable leaked out of initSchema() and stayed off for the
+  // life of the process, because the only `foreign_keys = ON` after it sits inside a
+  // one-time job_instances migration that has long since run and no longer executes.
+  // Enforcement must be back on by the time the API serves its first request.
+  if (foreignKeysDisabledForLegacyWorkflowDdl) {
+    endIntentionalForeignKeyDisable();
+    db.pragma('foreign_keys = ON');
+    if (Number(db.pragma('foreign_keys', { simple: true })) !== 1) {
+      console.error(
+        '[schema] FAILED to restore PRAGMA foreign_keys = ON after schema init' +
+        `${db.inTransaction ? ' (still inside a transaction, where the pragma is a no-op)' : ''}` +
+        ' — ON DELETE CASCADE will not run and deletes will orphan child rows.'
+      );
+    }
   }
 }
 

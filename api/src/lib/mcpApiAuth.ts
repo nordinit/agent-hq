@@ -224,6 +224,19 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'tasks.write_active_custom_fields',
+    group: 'Task lifecycle',
+    label: 'Update own active task custom fields',
+    description: 'Allows an agent that owns the active dispatched run to persist supported custom fields on that task, and nothing else. The request body may carry only custom_fields (plus changed_by); any attempt to change status, title, assignment, or other task columns is refused. Workflow field-schema validation, tenant scope, and audit history still apply. Does not allow edits to any other task, cross-project or cross-tenant writes, or the broad project task management routes.',
+    endpoints: [
+      'PUT /api/v1/tasks/:id',
+    ],
+    defaultEnabled: {
+      scoped_runtime: true,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'tasks.write_active_lifecycle',
     group: 'Task lifecycle',
     label: 'Write active task lifecycle',
@@ -778,6 +791,104 @@ function hasExplicitAgentMcpCapability(db: Database.Database, agentId: number, c
     LIMIT 1
   `).get(agentId, capability) as { enabled: number } | undefined;
   return Number(row?.enabled ?? 0) === 1;
+}
+
+export interface AgentMcpServerToolAllowlist {
+  mcp_server_id: number;
+  server_name: string | null;
+  server_slug: string | null;
+  enabled: boolean;
+  /** Empty array means every tool on the server is permitted. */
+  tool_allowlist: string[];
+  unrestricted: boolean;
+}
+
+function parseToolAllowlistOverrides(raw: unknown): string[] {
+  if (typeof raw !== 'string' || raw.trim().length === 0) return [];
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const list = parsed?.tool_allowlist;
+    if (!Array.isArray(list)) return [];
+    return list.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Per-agent MCP tool allowlists, one row per assigned server. These live in
+ * agent_mcp_assignments.overrides rather than the capability policy table, so
+ * they need their own read/write path to be editable outside direct SQL.
+ */
+export function getAgentMcpServerToolAllowlists(db: Database.Database, agentId: number): AgentMcpServerToolAllowlist[] {
+  const rows = db.prepare(`
+    SELECT a.mcp_server_id, a.overrides, a.enabled, s.name AS server_name, s.slug AS server_slug
+    FROM agent_mcp_assignments a
+    LEFT JOIN mcp_servers s ON s.id = a.mcp_server_id
+    WHERE a.agent_id = ?
+    ORDER BY COALESCE(s.name, ''), a.mcp_server_id
+  `).all(agentId) as Array<{
+    mcp_server_id: number;
+    overrides: string | null;
+    enabled: number | null;
+    server_name: string | null;
+    server_slug: string | null;
+  }>;
+
+  return rows.map((row) => {
+    const allowlist = parseToolAllowlistOverrides(row.overrides);
+    return {
+      mcp_server_id: Number(row.mcp_server_id),
+      server_name: row.server_name,
+      server_slug: row.server_slug,
+      enabled: Number(row.enabled ?? 1) === 1,
+      tool_allowlist: allowlist,
+      unrestricted: allowlist.length === 0,
+    };
+  });
+}
+
+/**
+ * Replace one server's tool allowlist for an agent. An empty list clears the
+ * restriction, which is how an unrestricted assignment is represented; other
+ * override keys on the row are preserved.
+ */
+export function replaceAgentMcpServerToolAllowlist(
+  db: Database.Database,
+  agentId: number,
+  mcpServerId: number,
+  toolAllowlist: string[],
+): AgentMcpServerToolAllowlist[] {
+  const row = db.prepare(`
+    SELECT overrides FROM agent_mcp_assignments WHERE agent_id = ? AND mcp_server_id = ?
+  `).get(agentId, mcpServerId) as { overrides: string | null } | undefined;
+  if (!row) {
+    const error = new Error(`MCP server assignment not found for agent ${agentId}`) as Error & { status?: number };
+    error.status = 404;
+    throw error;
+  }
+
+  let overrides: Record<string, unknown> = {};
+  if (typeof row.overrides === 'string' && row.overrides.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(row.overrides) as Record<string, unknown>;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) overrides = parsed;
+    } catch {
+      overrides = {};
+    }
+  }
+
+  const cleaned = Array.from(new Set(
+    toolAllowlist.map((entry) => entry.trim()).filter((entry) => entry.length > 0),
+  ));
+  if (cleaned.length === 0) delete overrides.tool_allowlist;
+  else overrides.tool_allowlist = cleaned;
+
+  db.prepare(`
+    UPDATE agent_mcp_assignments SET overrides = ? WHERE agent_id = ? AND mcp_server_id = ?
+  `).run(JSON.stringify(overrides), agentId, mcpServerId);
+
+  return getAgentMcpServerToolAllowlists(db, agentId);
 }
 
 export function getAgentMcpPermissionPolicy(db: Database.Database, agentId: number): AgentMcpPermissionPolicySnapshot {
@@ -1508,6 +1619,22 @@ function getWorkflowDefinitionScopeFromRequest(input: Record<string, unknown>): 
  * null when the series does not exist, which callers treat as out of scope so
  * a missing series can never be reached through a project-scoped key.
  */
+/**
+ * True when a task update carries only supported custom fields. This is what
+ * separates "an agent recording its own run evidence" from a general task
+ * edit: anything that would move status, reassign, retitle, or otherwise
+ * change task columns falls outside the narrow active-task write capability
+ * and still requires the broad project task management grant.
+ */
+const ACTIVE_CUSTOM_FIELD_WRITE_ALLOWED_BODY_KEYS = new Set(['custom_fields', 'changed_by']);
+
+function isActiveCustomFieldsOnlyUpdate(body: Record<string, unknown>): boolean {
+  const keys = Object.keys(body);
+  if (keys.length === 0) return false;
+  if (!Object.prototype.hasOwnProperty.call(body, 'custom_fields')) return false;
+  return keys.every((key) => ACTIVE_CUSTOM_FIELD_WRITE_ALLOWED_BODY_KEYS.has(key));
+}
+
 function getRecurringTaskSeriesProjectId(db: Database.Database, seriesId: number): number | null {
   try {
     const row = db.prepare(`SELECT project_id FROM recurring_task_series WHERE id = ?`).get(seriesId) as
@@ -1980,6 +2107,21 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       && taskRelationshipMutationMatch != null
       && ((method === 'POST' && taskRelationshipMutationMatch[2] == null) || (method === 'DELETE' && taskRelationshipMutationMatch[2] != null));
     const projectCrudAllowed = suffix === '' && (method === 'PUT' || method === 'DELETE');
+
+    // An agent that owns the active dispatched run may persist supported custom
+    // fields on that task without holding the broad project-task management
+    // grant. Narrow by construction: it must be the agent's own active task,
+    // and the body may carry nothing but custom_fields. Field-schema, tenant,
+    // and audit enforcement still run downstream in the write model.
+    if (
+      suffix === ''
+      && method === 'PUT'
+      && scopedTaskIds.has(taskId)
+      && permissionState.enabledCapabilities.has('tasks.write_active_custom_fields')
+      && isActiveCustomFieldsOnlyUpdate(requestBodyRecord(req.body))
+    ) {
+      return next();
+    }
     const requiredCapability: AgentMcpCapabilityKey | null = readAllowed
       ? hasProjectTaskCrud
         ? 'tasks.manage_project_tasks'
