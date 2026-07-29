@@ -16,6 +16,7 @@ import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from '.
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
 import { nowTimestamp } from './timestamps';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export interface ApplyTaskOutcomeInput {
   taskId: number;
@@ -134,7 +135,7 @@ function withCanonicalFieldValues(task: TaskOutcomeTaskRow): TaskOutcomeTaskRow 
 }
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some(col => col.name === column);
+    return await sharedColumnExists(db, table, column);
 }
 
 async function selectTaskEvidenceColumns(db: Db): Promise<string> {

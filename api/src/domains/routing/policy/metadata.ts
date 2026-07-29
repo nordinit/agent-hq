@@ -1,6 +1,7 @@
 import { RELEASE_TASK_STATUSES, TERMINAL_TASK_STATUSES } from '../../../lib/taskStatuses';
 import type { PolicyRequirementSeed, PolicyTransitionSeed, SprintSeedRow, StarterSprintType } from './types';
 import { type Db } from "../../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../../db/introspection";
 
 const DEV_WORKFLOW_STATUSES = RELEASE_TASK_STATUSES.filter(status => status !== 'qa_pass');
 const GENERIC_WORKFLOW_STATUSES = ['todo', 'ready', 'in_progress', 'review', 'done'] as const;
@@ -152,27 +153,11 @@ export async function ensureRoutingMetadata(db: Db): Promise<void> {
 }
 
 export async function tableExists(db: Db, tableName: string): Promise<boolean> {
-  try {
-    const row = await db.get(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name = ?
-      LIMIT 1
-    `, tableName) as { name?: string } | undefined;
-    return Boolean(row?.name);
-  } catch {
-    return false;
-  }
+    return await sharedTableExists(db, tableName);
 }
 
 export async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
-  if (!await tableExists(db, tableName)) return false;
-  try {
-    const rows = await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>;
-    return rows.some((row) => row.name === columnName);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
 export async function tenantPredicate(db: Db, tableName: string, alias: string, tenantId?: number | null): Promise<{ sql: string; params: unknown[] }> {

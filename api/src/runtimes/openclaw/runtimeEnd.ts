@@ -18,11 +18,12 @@ import {
 import { stopOpenClawRawSessionTerminalPoll } from './transcript';
 import { nowTimestamp } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 const deferredRuntimeEndRetries = new Map<number, NodeJS.Timeout>();
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, table, column);
 }
 
 function isOpenClawPreReplyFailure(content: string): boolean {

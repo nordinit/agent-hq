@@ -1,6 +1,7 @@
 import { getDb } from '../../db/client';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
 import { getCanonicalTaskRecord, stripTaskLifecycleEvidenceFields } from './evidence';
+import { tableExists as sharedTableExists } from "../../db/introspection";
 
 export type TaskContextMode = 'summary' | 'full';
 
@@ -378,7 +379,7 @@ async function loadRuns(taskId: number, options: NormalizedTaskContextOptions): 
 async function loadExternalEvents(taskId: number, options: NormalizedTaskContextOptions): Promise<RecordLike[]> {
   if (!options.includeLease) return [];
   const db = getDb();
-  const tableExists = await db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='external_task_event_receipts'`) as { name: string } | undefined;
+  const tableExists = await sharedTableExists(db, 'external_task_event_receipts');
   if (!tableExists) return [];
 
   const params: unknown[] = [taskId];
@@ -847,7 +848,7 @@ async function loadDeltaMarkers(taskId: number): Promise<RecordLike> {
   const latestNote = await db.get(`SELECT id, created_at FROM task_notes WHERE task_id = ? ORDER BY id DESC LIMIT 1`, taskId) as RecordLike | undefined;
   const latestHistory = await db.get(`SELECT id, created_at FROM task_history WHERE task_id = ? ORDER BY id DESC LIMIT 1`, taskId) as RecordLike | undefined;
   const latestRun = await db.get(`SELECT id, COALESCE(runtime_completed_at, completed_at, started_at, dispatched_at, created_at) AS activity_at FROM job_instances WHERE task_id = ? ORDER BY id DESC LIMIT 1`, taskId) as RecordLike | undefined;
-  const tableExists = await db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='external_task_event_receipts'`) as { name: string } | undefined;
+  const tableExists = await sharedTableExists(db, 'external_task_event_receipts');
   const latestExternal = tableExists
     ? await db.get(`SELECT id, created_at FROM external_task_event_receipts WHERE task_id = ? ORDER BY id DESC LIMIT 1`, taskId) as RecordLike | undefined
     : undefined;

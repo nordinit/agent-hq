@@ -1,5 +1,6 @@
 import { tableHasColumn } from '../../../lib/durableRunIdentity';
 import { type Db } from "../../../db/adapter/types";
+import { columnExists as sharedColumnExists } from "../../../db/introspection";
 
 interface StoryPointRoutingRule {
   max_points: number;
@@ -77,7 +78,7 @@ export async function resolveModelFromStoryPoints(
     let scopeOrderCase = '';
     const hasSprintTypeRoutingScope = await (async () => {
       try {
-        return (await db.all(`PRAGMA table_info(story_point_model_routing)`) as Array<{ name: string }>).some((column) => column.name === 'sprint_type');
+        return await sharedColumnExists(db, 'story_point_model_routing', 'sprint_type');
       } catch {
         return false;
       }

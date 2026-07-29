@@ -2,6 +2,7 @@ import { execFileSync, type ExecFileSyncOptions } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { type Db } from "../db/adapter/types";
+import { tableColumns as sharedTableColumns , listTables as sharedListTables } from "../db/introspection";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -82,19 +83,19 @@ export async function resolveGitHubIdentity(
   agentId: number,
   tenantId?: number | null,
 ): Promise<ResolvedGitHubIdentity | null> {
-  const tables = await db.all("SELECT name FROM sqlite_master WHERE type='table'") as Array<{ name: string }>;
+  const tables = (await sharedListTables(db)).map((name) => ({ name }));
   const tableNames = new Set(tables.map(row => row.name));
   if (!tableNames.has('github_identities')) {
     return null;
   }
 
   const agentColumns = tableNames.has('agents')
-    ? (await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>).map(col => col.name)
+    ? await sharedTableColumns(db, 'agents')
     : [];
   const hasAgentGithubIdentityId = agentColumns.includes('github_identity_id');
   const hasAgentTenantId = agentColumns.includes('tenant_id');
   const identityColumns = tableNames.has('github_identities')
-    ? (await db.all(`PRAGMA table_info(github_identities)`) as Array<{ name: string }>).map(col => col.name)
+    ? await sharedTableColumns(db, 'github_identities')
     : [];
   const hasIdentityTenantId = identityColumns.includes('tenant_id');
 

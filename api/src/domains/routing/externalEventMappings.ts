@@ -4,6 +4,7 @@ import { RUNTIME_FAILED_OUTCOME } from '../../lib/outcomeCatalog';
 import { WORKFLOW_EVENT_ACTION_KINDS } from '../../lib/workflowVocabulary';
 import { listSprintTaskStatuses, listSprintTypeTaskStatuses } from './policy';
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export const AGENT_HQ_RUNTIME_SOURCE = 'agent_hq_runtime';
 export const AGENT_HQ_DISPATCHER_SOURCE = 'agent_hq_dispatcher';
@@ -240,11 +241,7 @@ export const DEFAULT_TENANT_WORKFLOW_EVENT_MAPPINGS = DEFAULT_WORKFLOW_EVENT_MAP
 ));
 
 async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
-  try {
-    return (await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>).some((column) => column.name === columnName);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
 function parseJsonStringList(value: string | null | undefined): string[] {

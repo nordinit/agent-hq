@@ -8,6 +8,7 @@ import {
 import { listExternalEventMappings } from '../routing/externalEventMappings';
 import { listRelationshipTypesForSprintType, type TaskRelationshipTypeConfig } from '../tasks/relationships';
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export interface WorkflowTaskTypeMeta {
   value: string;
@@ -87,17 +88,7 @@ function labelFromKey(value: string): string {
 }
 
 async function tableExists(db: Db, tableName: string): Promise<boolean> {
-  try {
-    const row = await db.get(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name = ?
-      LIMIT 1
-    `, tableName) as { name?: string } | undefined;
-    return Boolean(row?.name);
-  } catch {
-    return false;
-  }
+    return await sharedTableExists(db, tableName);
 }
 
 async function defaultSprintType(db: Db): Promise<string> {

@@ -18,6 +18,7 @@ import { getActiveTenantId } from '../lib/tenantContext';
 import { insertRuntimeLog } from '../lib/runtimeTenantScope';
 import { nowTimestamp, timestampFromDate, toCanonicalTimestamp } from '../lib/timestamps';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 const DEFAULT_TIMEOUT_MINUTES = 20;
 const DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MINUTES * 60_000;
@@ -77,12 +78,7 @@ const WATCHDOG_ROW_SELECT = `
 `;
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  try {
-    const columns = await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>;
-    return columns.some((entry) => entry.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 async function resolveNotificationTenantId(db: Db, taskId: number | null): Promise<number> {

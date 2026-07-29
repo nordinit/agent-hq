@@ -8,6 +8,7 @@ import { writeTaskHistory } from '../domains/tasks/history';
 import { taskTableHasColumn } from '../domains/tasks/ownership';
 import { nowTimestamp } from './timestamps';
 import { type Db } from "../db/adapter/types";
+import { columnExists as sharedColumnExists } from "../db/introspection";
 
 const LIVE_TASK_STATUSES = ['in_progress', 'dev_deploy_queued', 'dev_deploying', 'stalled'] as const;
 const LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
@@ -369,8 +370,8 @@ function resolveCleanupRepoContext(row: {
 }
 
 export async function cleanupDoneTaskWorktrees(db: Db, taskId: number): Promise<number> {
-  const hasPayloadSent = (await db.all(`PRAGMA table_info(job_instances)`) as Array<{ name: string }>).some(col => col.name === 'payload_sent');
-  const hasRepoAccessMode = (await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>).some(col => col.name === 'repo_access_mode');
+  const hasPayloadSent = await sharedColumnExists(db, 'job_instances', 'payload_sent');
+  const hasRepoAccessMode = await sharedColumnExists(db, 'agents', 'repo_access_mode');
   const rows = await db.all(`
     SELECT DISTINCT ji.worktree_path,
            ${hasPayloadSent ? 'ji.payload_sent' : 'NULL AS payload_sent'},

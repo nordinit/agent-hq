@@ -31,6 +31,7 @@ import { applyDefaultInstallPackage } from './defaultInstallPackage';
 import { seedSprintTypeTaskStatuses } from '../domains/routing/policy/seed';
 import { pruneUnexpectedStarterWorkflowRelationshipTypes, seedStarterWorkflowRelationshipTypes } from './taskRelationshipTypes';
 import { type Db, type RunResult } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export const DEFAULT_TENANT_SLUG = 'default';
 export const DEFAULT_TENANT_NAME = 'Default Tenant';
@@ -367,12 +368,11 @@ function rawConnectionFor(db: Db): Database.Database {
  */
 
 async function tableExists(db: Db, table: string): Promise<boolean> {
-  return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table) as { name?: string } | undefined)?.name);
+    return await sharedTableExists(db, table);
 }
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  if (!await tableExists(db, table)) return false;
-  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, table, column);
 }
 
 async function columnExpression(db: Db, table: string, column: string, fallbackSql: string): Promise<string> {
@@ -876,7 +876,7 @@ async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: num
 
   // Resolved BEFORE the disable window opens; sprint_types is untouched until the rebuild
   // starts, so its column set is the same inside the window.
-  const columns = new Set((await db.all(`PRAGMA table_info(sprint_types)`) as Array<{ name: string }>).map((column) => column.name));
+  const columns = new Set(await sharedTableColumns(db, 'sprint_types'));
   const copyRowsSql = `
     INSERT OR IGNORE INTO sprint_types_tenant_local (
       tenant_id, key, name, description, is_system, status_seeded_at, created_at, updated_at

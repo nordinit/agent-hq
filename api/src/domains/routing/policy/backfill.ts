@@ -1,9 +1,9 @@
 import { normalizeSprintType, starterSprintType, tableExists } from './metadata';
 import { type Db } from "../../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../../db/introspection";
 
 async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
-  return (await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>)
-    .some((column) => column.name === columnName);
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
 export async function resolvedOutcomeKeysForSprint(

@@ -18,6 +18,7 @@ import {
   toCanonicalTimestamp,
 } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 interface BackfillInstanceRow {
   id: number;
@@ -104,12 +105,7 @@ const EMPTY_RESULT: OpenClawJsonlBackfillResult = {
 };
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  try {
-    const columns = await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>;
-    return columns.some((entry) => entry.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 function normalizeOpenClawHome(optionHome?: string): string {

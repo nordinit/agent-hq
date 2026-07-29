@@ -16,15 +16,12 @@ import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
 import { nowTimestamp } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 const START_EVENT_LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 function isStartEventLiveInstanceStatus(status: string | null | undefined): boolean {

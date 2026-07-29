@@ -4,6 +4,7 @@ import { normalizeRepoConfig } from './repoConfig';
 import { writeProjectAudit } from './projectAudit';
 import { nowTimestamp } from './timestamps';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const UPLOADS_BASE = process.env.AGENT_HQ_PROJECT_UPLOADS_DIR ?? path.join(REPO_ROOT, 'uploads', 'projects');
@@ -55,12 +56,11 @@ export interface ProjectImportPreview {
 }
 
 async function tableExists(db: Db, table: string): Promise<boolean> {
-  return Boolean(await db.get(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, table));
+    return await sharedTableExists(db, table);
 }
 
 async function tableColumns(db: Db, table: string): Promise<Set<string>> {
-  if (!await tableExists(db, table)) return new Set();
-  return new Set((await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).map((column) => column.name));
+    return new Set(await sharedTableColumns(db, table));
 }
 
 async function tableHasColumns(db: Db, table: string, columns: string[]): Promise<boolean> {

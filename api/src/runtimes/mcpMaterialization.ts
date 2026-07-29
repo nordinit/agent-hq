@@ -5,6 +5,7 @@ import path from 'path';
 import { ensureMaterializedMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 import { parseAgentSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 const MANAGED_KEYS_FIELD = 'agentHqManagedMcpServers';
 const HERMES_MANAGED_KEYS_FIELD = 'agent_hq_managed_mcp_servers';
@@ -37,14 +38,7 @@ interface AgentWorkspaceRow {
 }
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  const tableExists = Boolean(await db.get(`
-    SELECT 1
-    FROM sqlite_master
-    WHERE type = 'table' AND name = ?
-    LIMIT 1
-  `, table));
-  if (!tableExists) return false;
-  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, table, column);
 }
 
 export interface McpMaterializationResult {

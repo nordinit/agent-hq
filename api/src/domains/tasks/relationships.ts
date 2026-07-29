@@ -1,5 +1,6 @@
 import { getDb } from '../../db/client';
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export type RelationshipDirectionSemantics = 'target_blocks_source' | 'source_blocks_target' | 'informational';
 
@@ -89,19 +90,11 @@ function httpError(status: number, message: string): Error & { status?: number }
 }
 
 async function tableExists(db: Db, tableName: string): Promise<boolean> {
-  try {
-    return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1`, tableName) as { name?: string } | undefined)?.name);
-  } catch {
-    return false;
-  }
+    return await sharedTableExists(db, tableName);
 }
 
 async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
-  try {
-    return (await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>).some((row) => row.name === columnName);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
 async function sprintTypeForTask(db: Db, taskId: number): Promise<string | null> {

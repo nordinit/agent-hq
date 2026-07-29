@@ -16,6 +16,7 @@ import { resolveWorkflowMetadata } from './workflowMetadata';
 import { listRelationshipTypesForSprintType } from '../tasks/relationships';
 import { resolveTenantIdFromRequest } from '../../lib/tenantContext';
 import { RELATIONSHIP_DIRECTION_SEMANTICS } from '../../lib/workflowVocabulary';
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 interface SprintTypeRow {
   key: string;
@@ -236,11 +237,7 @@ async function getSprintTypeOr404(db: ReturnType<typeof getDb>, sprintTypeKey: s
 }
 
 async function tableHasColumn(db: ReturnType<typeof getDb>, table: string, column: string): Promise<boolean> {
-  try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 async function getSprintTypeDeletionSummary(

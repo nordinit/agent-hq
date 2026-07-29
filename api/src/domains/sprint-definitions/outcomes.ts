@@ -1,4 +1,5 @@
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export type SprintOutcomeBehavior = 'base' | 'extend' | 'override' | 'disable';
 
@@ -35,11 +36,7 @@ function parseMetadata(value: string | null | undefined): Record<string, unknown
 }
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 async function tenantPredicate(db: Db, table: string, tenantId?: number | null): Promise<{ sql: string; params: unknown[] }> {

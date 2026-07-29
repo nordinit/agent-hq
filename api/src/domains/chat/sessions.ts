@@ -6,6 +6,7 @@ import {
 } from '../../lib/sessionKeys';
 import { chatMessageTenantScope, sessionTenantScope } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
+import { tableColumns as sharedTableColumns } from "../../db/introspection";
 
 function sessionSlug(sessionKey: string | null | undefined): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
@@ -112,8 +113,7 @@ export async function listChatSessions(
   const offset = readPositiveInteger(query.offset, 0, Number.MAX_SAFE_INTEGER);
   const queryLimit = limit + offset;
   const tenantId = query.tenantId;
-  const jobInstanceColumns = (await db.all('PRAGMA table_info(job_instances)') as Array<{ name: string }>)
-    .map((col) => col.name);
+  const jobInstanceColumns = await sharedTableColumns(db, 'job_instances');
   const hasJobInstanceDurableRunId = jobInstanceColumns.includes('durable_run_id');
   const canonicalFilters = [
     '(? IS NULL OR s.agent_id = ?)',
@@ -172,8 +172,7 @@ export async function listChatSessions(
 
   const rawLimit = queryLimit;
 
-  const cols = (await db.all('PRAGMA table_info(chat_messages)') as Array<{ name: string }>)
-    .map((col) => col.name);
+  const cols = await sharedTableColumns(db, 'chat_messages');
   const hasSessionKey = cols.includes('session_key');
   const hasDurableRunId = cols.includes('durable_run_id');
 
@@ -327,8 +326,7 @@ export async function listChatSessionMessages(
   const limit = Math.min(Number(query.limit ?? 200), 500);
   const offset = Math.max(Number(query.offset ?? 0), 0);
 
-  const cols = (await db.all('PRAGMA table_info(chat_messages)') as Array<{ name: string }>)
-    .map((col) => col.name);
+  const cols = await sharedTableColumns(db, 'chat_messages');
   const hasSessionKey = cols.includes('session_key');
   const hasDurableRunId = cols.includes('durable_run_id');
   const tenantId = query.tenantId;

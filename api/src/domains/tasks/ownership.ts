@@ -1,7 +1,8 @@
 import { type Db } from "../../db/adapter/types";
+import { columnExists as sharedColumnExists } from "../../db/introspection";
 
 export async function taskTableHasColumn(db: Db, column: string): Promise<boolean> {
-  return (await db.all('PRAGMA table_info(tasks)') as Array<{ name: string }>).some((col) => col.name === column);
+  return await sharedColumnExists(db, 'tasks', column);
 }
 
 export async function syncTaskActiveAgentFromInstance(db: Db, taskId: number): Promise<void> {

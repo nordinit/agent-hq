@@ -5,6 +5,7 @@ import { writeTaskHistory } from './history';
 import { getCanonicalTaskCustomFields } from './evidence';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
+import { columnExists as sharedColumnExists, tableColumns as sharedTableColumns } from "../../db/introspection";
 
 export interface TaskBlockerInput {
   task_id?: number;
@@ -29,7 +30,7 @@ export async function logHistory(
 }
 
 export async function taskTableHasColumn(db: Db, column: string): Promise<boolean> {
-  return (await db.all('PRAGMA table_info(tasks)') as Array<{ name: string }>).some((col) => col.name === column);
+  return await sharedColumnExists(db, 'tasks', column);
 }
 
 export async function addTaskNote(taskId: number, author: string, content: string): Promise<void> {
@@ -51,7 +52,7 @@ export async function updateTaskEvidence(
   const db = getDb();
   const existing = await db.get('SELECT * FROM tasks WHERE id = ?', taskId) as Record<string, unknown> | undefined;
   if (!existing) throw new Error('Task not found');
-  const taskColumns = new Set((await db.all('PRAGMA table_info(tasks)') as Array<{ name: string }>).map((col) => col.name));
+  const taskColumns = new Set(await sharedTableColumns(db, 'tasks'));
   const existingCustomFields = taskColumns.has('custom_fields_json') ? getCanonicalTaskCustomFields(existing) : {};
 
   const requestedKeys = Object.keys(updates).filter((key) => updates[key] !== undefined);

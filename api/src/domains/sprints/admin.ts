@@ -11,6 +11,7 @@ import {
 } from './lifecycle';
 import type { SprintRecord } from './readModel';
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 interface SprintCloneSource {
   id: number;
@@ -40,17 +41,7 @@ const ALLOWED_UPDATE_FIELDS = new Set([
 ]);
 
 async function tableExists(db: Db, table: string): Promise<boolean> {
-  try {
-    const row = await db.get(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name = ?
-      LIMIT 1
-    `, table) as { name: string } | undefined;
-    return Boolean(row?.name);
-  } catch {
-    return false;
-  }
+    return await sharedTableExists(db, table);
 }
 
 async function listTableColumns(db: Db, table: string): Promise<string[]> {
@@ -63,7 +54,7 @@ async function listTableColumns(db: Db, table: string): Promise<string[]> {
 }
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  return (await listTableColumns(db, table)).includes(column);
+    return await sharedColumnExists(db, table, column);
 }
 
 async function sprintRoutingJoinPredicate(db: Db): Promise<string> {

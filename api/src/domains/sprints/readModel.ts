@@ -1,4 +1,5 @@
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export interface SprintRecord {
   id: number;
@@ -18,12 +19,7 @@ export interface SprintRecord {
 }
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>)
-      .some((entry) => entry.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 async function sprintRoutingAgentCountPredicate(db: Db): Promise<string> {

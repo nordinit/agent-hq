@@ -1,12 +1,13 @@
 import { tableHasColumn } from './durableRunIdentity';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 async function tableExists(db: Db, table: string): Promise<boolean> {
-  return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table) as { name?: string } | undefined)?.name);
+    return await sharedTableExists(db, table);
 }
 
 async function hasTenantId(db: Db, table: string): Promise<boolean> {
-  return await tableExists(db, table) && await tableHasColumn(db, table, 'tenant_id');
+    return await sharedColumnExists(db, table, 'tenant_id');
 }
 
 async function pushTenantSubquery(

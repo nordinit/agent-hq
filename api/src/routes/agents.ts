@@ -51,6 +51,7 @@ import {
   resetAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 const router = Router();
 const MAX_AGENT_MODEL_LENGTH = 200;
@@ -127,12 +128,7 @@ function resolveSkillNameInput(value: unknown): string {
 }
 
 async function tableHasColumn(db: ReturnType<typeof getDb>, table: string, column: string): Promise<boolean> {
-  try {
-    const columns = await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>;
-    return columns.some((entry) => entry.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 function getStoredJobInstructions(agent: Record<string, unknown>): string {

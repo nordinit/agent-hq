@@ -1,6 +1,7 @@
 import { notifyTelegram } from '../integrations/telegram';
 import { writeTaskStatusChange } from '../domains/tasks/history';
 import { type Db } from "../db/adapter/types";
+import { columnExists as sharedColumnExists } from "../db/introspection";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -115,7 +116,7 @@ export async function resetFromQAFail(db: Db, taskId: number): Promise<'ready' |
     return 'failed';
   } else {
     const targetAgentId = task.review_owner_agent_id ?? assignedAgentId;
-    const hasAssignedAgentColumn = (await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).some((col) => col.name === 'assigned_agent_id');
+    const hasAssignedAgentColumn = await sharedColumnExists(db, 'tasks', 'assigned_agent_id');
     const assignmentColumn = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id';
     await db.run(`
       UPDATE tasks

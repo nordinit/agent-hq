@@ -10,6 +10,7 @@ import {
 import { emitIntegrityEvent, writeTaskHistory, writeTaskRuntimeEndHistory, writeTaskStatusChange } from '../tasks/history';
 import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export type LifecycleHandoffStatus = 'posted' | 'missing' | 'reconciled';
 export type HandoffEvidencePresence = 'yes' | 'no';
@@ -62,15 +63,11 @@ export async function taskRequiresSemanticOutcome(db: Db, taskId: number | null 
 }
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 async function resolveMissingOutcomeMapping(db: Db, task: { tenant_id: number | null; project_id: number | null; sprint_id?: number | null; sprint_type?: string | null; task_type: string | null; status: string }): Promise<WorkflowEventMapping | null> {
-  const mappingsTable = await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'external_event_mappings'`) as { name: string } | undefined;
+  const mappingsTable = await sharedTableExists(db, 'external_event_mappings');
   if (!mappingsTable) return null;
 
   for (const eventName of MISSING_OUTCOME_WORKFLOW_EVENTS) {
@@ -105,7 +102,7 @@ export async function markTaskNeedsAttentionForMissingSemanticHandoff(
 
   if (!params.taskId) return null;
 
-  const taskColumns = new Set((await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).map(column => column.name));
+  const taskColumns = new Set(await sharedTableColumns(db, 'tasks'));
   const task = await db.get(`
     SELECT tasks.id AS id,
            ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 'tasks.tenant_id' : 'NULL'} AS tenant_id,

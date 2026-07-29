@@ -13,6 +13,7 @@ import {
   type WorkflowEventMapping,
 } from '../domains/routing/externalEventMappings';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export { DEV_ENV_LEASE_MANAGER_SOURCE };
 
@@ -81,11 +82,7 @@ type ExternalTaskEventReceiptRow = {
 };
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 const router = Router();
@@ -354,7 +351,7 @@ async function updateTaskEvidence(taskId: number, changedBy: string, updates: Re
   const db = getDb();
   const existing = await db.get(`SELECT * FROM tasks WHERE id = ?`, taskId) as Record<string, unknown> | undefined;
   if (!existing) throw new Error('Task not found');
-  const taskColumns = new Set((await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).map(col => col.name));
+  const taskColumns = new Set(await sharedTableColumns(db, 'tasks'));
   const existingCustomFields = taskColumns.has('custom_fields_json') ? getCanonicalTaskCustomFields(existing) : {};
 
   const requestedKeys = Object.keys(updates).filter((key) => updates[key] !== undefined);

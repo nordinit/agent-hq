@@ -3,6 +3,7 @@ import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
 import { nowTimestamp } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
+import { columnExists as sharedColumnExists } from "../../db/introspection";
 
 export const START_CHECKIN_GRACE_MS = 5 * 60 * 1000;
 export const HEARTBEAT_STALE_MS = 10 * 60 * 1000;
@@ -79,7 +80,7 @@ export async function selectTaskForJob(db: Db, jobId: number): Promise<number | 
 
 export async function selectTaskForAgent(db: Db, agentId: number): Promise<number | null> {
   await cleanupImpossibleTaskLifecycleStates(db);
-  const assignmentColumn = (await db.all('PRAGMA table_info(tasks)') as Array<{ name: string }>).some((col) => col.name === 'assigned_agent_id')
+  const assignmentColumn = await sharedColumnExists(db, 'tasks', 'assigned_agent_id')
     ? 'assigned_agent_id'
     : 'agent_id';
 

@@ -8,6 +8,7 @@ import {
 import { seedSprintTaskPolicy } from '../domains/routing/policy/seed';
 import { listSprintTaskStatuses } from '../domains/routing/policy/statuses';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 type SprintRow = {
   id: number;
@@ -40,12 +41,7 @@ type StarterRoutingRule = {
 };
 
 async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
-  try {
-    const columns = await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>;
-    return columns.some((column) => column.name === columnName);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
 async function loadSprintRow(db: Db, sprintId: number): Promise<SprintRow | null> {

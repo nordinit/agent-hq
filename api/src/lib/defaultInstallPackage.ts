@@ -18,6 +18,7 @@ import { AGENT_MCP_CAPABILITY_CATALOG } from './mcpApiAuth';
 import { ensureTenantAgentHqMcpServer, repairAgentMcpAssignmentsForTenant } from './tenantContext';
 import { buildRuntimeConfigDefaults } from './runtimeOnboarding';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export const DEFAULT_INSTALL_PACKAGE_KEY = 'agent-hq-default';
 export const DEFAULT_INSTALL_PACKAGE_VERSION = 2;
@@ -199,12 +200,11 @@ const DEFAULT_AGENT_DOCS: Record<string, string> = {
 };
 
 async function tableExists(db: Db, table: string): Promise<boolean> {
-  return Boolean(await db.get(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table));
+    return await sharedTableExists(db, table);
 }
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  if (!await tableExists(db, table)) return false;
-  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, table, column);
 }
 
 function addCount(target: Record<string, number>, key: string, amount = 1): void {

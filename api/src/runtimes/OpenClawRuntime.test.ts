@@ -48,6 +48,9 @@ jest.mock('../domains/runs/openclawSessionState', () => ({
  * probes `PRAGMA table_info(tasks)` before building its task lookup, so the
  * fake db has to answer that probe with the real column set.
  */
+/** The tables this fixture models. Anything else must read as absent. */
+const MOCKED_TABLES = new Set(['tasks', 'job_instances', 'chat_messages']);
+
 const TASKS_COLUMNS = [
   'id',
   'tenant_id',
@@ -183,6 +186,23 @@ describe('OpenClawRuntime terminal failure handling', () => {
         `PRAGMA table_info(tasks)`,
         {
           all: jest.fn().mockReturnValue(TASKS_COLUMNS),
+        },
+      ],
+      [
+        // Schema introspection is now centralised in db/introspection.ts, so this probe
+        // arrives in one canonical spelling instead of the several that used to be scattered
+        // across ~40 local reimplementations. Behaviour is unchanged; only the SQL text this
+        // SQL-keyed mock has to recognise is.
+        //
+        // It must answer PER TABLE, not unconditionally. Returning a row for everything makes
+        // the runtime believe optional tables exist and walk into branches this fixture does
+        // not model — which is a fake failure, not a real one. Only the tables this mock
+        // actually answers for are reported as present.
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
+        {
+          get: jest.fn((table: string) => (
+            MOCKED_TABLES.has(table) ? { name: table } : undefined
+          )),
         },
       ],
       [

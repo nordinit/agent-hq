@@ -1,4 +1,5 @@
 import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export type StatusError = Error & { status?: number };
 export type SprintRecord = { id: number; project_id: number; name: string; sprint_type?: string | null; tenant_id?: number | null };
@@ -90,12 +91,7 @@ export function normalizeSprintTypeKey(value: unknown): string | null {
 }
 
 export async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  try {
-    const columns = await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>;
-    return columns.some((entry) => entry.name === column);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, table, column);
 }
 
 export function parseObjectJson(value: unknown): Record<string, unknown> {

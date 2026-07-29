@@ -58,6 +58,7 @@ import {
   getDispatchTaskNotesContext,
 } from './dispatch/prompt';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 function hasMaterializedAgentHqLifecycleMcp(bundlePath: string | undefined, agentId: number | null | undefined): boolean {
   if (!bundlePath || agentId == null || !fs.existsSync(bundlePath)) return false;
@@ -611,20 +612,11 @@ async function persistDispatchStartupFailure(
 }
 
 async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
-  try {
-    const cols = await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>;
-    return cols.some(col => col.name === columnName);
-  } catch {
-    return false;
-  }
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
 async function tableExists(db: Db, tableName: string): Promise<boolean> {
-  try {
-    return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, tableName) as { name?: string } | undefined)?.name);
-  } catch {
-    return false;
-  }
+    return await sharedTableExists(db, tableName);
 }
 
 async function resolveDispatchAgentSlug(

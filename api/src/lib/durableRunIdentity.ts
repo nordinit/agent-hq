@@ -1,13 +1,13 @@
 import { randomUUID } from 'crypto';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export function createDurableRunId(): string {
   return randomUUID();
 }
 
 export async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
-  return (await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>)
-    .some((col) => col.name === columnName);
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
 export async function ensureJobInstanceDurableRunId(

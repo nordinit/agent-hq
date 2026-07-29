@@ -3,14 +3,14 @@ import {
   STARTER_SPRINT_TYPE_SEEDS,
 } from './starterCatalog';
 import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 async function tableExists(db: Db, table: string): Promise<boolean> {
-  return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table) as { name?: string } | undefined)?.name);
+    return await sharedTableExists(db, table);
 }
 
 async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
-  if (!await tableExists(db, table)) return false;
-  return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, table, column);
 }
 
 async function pruneUnexpectedStarterRelationshipTypes(

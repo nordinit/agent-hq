@@ -4,6 +4,7 @@ import { TERMINAL_TASK_STATUSES } from '../../lib/taskStatuses';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
 import { getCanonicalTaskCustomFields, getCanonicalTaskRecord, stripTaskLifecycleEvidenceFields } from './evidence';
 import { getTaskRelationshipsForEnrichment } from './relationships';
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../db/introspection";
 
 export type TaskRecord = Record<string, unknown>;
 
@@ -16,7 +17,7 @@ export function stripRetiredTaskColumns(row: TaskRecord): TaskRecord {
 }
 
 async function tableHasTaskColumn(db: ReturnType<typeof getDb>, column: string): Promise<boolean> {
-  return (await db.all('PRAGMA table_info(tasks)') as Array<{ name: string }>).some((row) => row.name === column);
+  return await sharedColumnExists(db, 'tasks', column);
 }
 
 function stripPublicTaskResponseColumns(row: TaskRecord): TaskRecord {
@@ -67,7 +68,7 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
     }
   }
 
-  const hasRelationshipTable = Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_relationships' LIMIT 1`) as { name?: string } | undefined)?.name);
+  const hasRelationshipTable = await sharedTableExists(db, 'task_relationships');
   const blockers = hasRelationshipTable
     ? await db.all(`
       SELECT DISTINCT t.*, a.name as agent_name, s.name as sprint_name
@@ -587,7 +588,7 @@ export async function listTasks(
   let sql = TASK_SELECT;
   const params: unknown[] = [];
   const conditions: string[] = [];
-  const hasAssignedAgentColumn = (await db.all('PRAGMA table_info(tasks)') as Array<{ name: string }>).some((col) => col.name === 'assigned_agent_id');
+  const hasAssignedAgentColumn = await sharedColumnExists(db, 'tasks', 'assigned_agent_id');
 
   if (project_id) {
     conditions.push('t.project_id = ?');
