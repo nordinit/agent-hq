@@ -155,6 +155,60 @@ function translateDatetimeCall(modifiers: string[]): string | null {
   return `to_char(${expr}, ${SQLITE_TS_FORMAT})`;
 }
 
+/**
+ * Unwraps single-argument `datetime(<expr>)` where <expr> is not 'now'.
+ *
+ * SQLite uses this to NORMALISE a timestamp string. Every such column in Agent HQ already
+ * holds the canonical 'YYYY-MM-DD HH:MM:SS' form — lib/timestamps.ts is the single writer and
+ * scripts/normalize-timestamps.mjs rewrote the historical rows — so the call is an identity
+ * operation there. PostgreSQL has no datetime() function at all.
+ *
+ * Dropping the wrapper is therefore behaviour-preserving, and ordering survives it because the
+ * canonical format is fixed-width, so lexicographic and chronological order coincide.
+ *
+ * Hand-written rather than a regex because the argument can contain nested parentheses and
+ * commas — `datetime(COALESCE(a, b, c))` is a real call site — which a regex cannot bracket
+ * correctly. Only calls with exactly ONE top-level argument are unwrapped; a two-argument call
+ * is a modifier form and belongs to translateDatetimeCall.
+ */
+function unwrapSingleArgDatetime(sql: string): string {
+  const mask = literalMask(sql);
+  let out = '';
+  let i = 0;
+
+  while (i < sql.length) {
+    const match = /^datetime\s*\(/i.exec(sql.slice(i));
+    if (!match || mask[i]) { out += sql[i]; i++; continue; }
+
+    // Walk to the matching close paren, tracking depth and skipping string literals.
+    let depth = 0;
+    let j = i + match[0].length - 1;
+    const argStart = j + 1;
+    const commas = [];
+    for (; j < sql.length; j++) {
+      if (mask[j]) continue;
+      const ch = sql[j];
+      if (ch === '(') depth++;
+      else if (ch === ')') { depth--; if (depth === 0) break; }
+      else if (ch === ',' && depth === 1) commas.push(j);
+    }
+    if (j >= sql.length) { out += sql[i]; i++; continue; }
+
+    const arg = sql.slice(argStart, j).trim();
+    // Two or more arguments, or the 'now' form: leave it for translateDatetimeCall.
+    if (commas.length > 0 || /^'now'$/i.test(arg) || arg === '') {
+      out += sql.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+
+    out += arg;
+    i = j + 1;
+  }
+
+  return out;
+}
+
 /** Rewrites every translatable datetime('now', ...), ignoring occurrences inside literals. */
 function rewriteDatetimeCalls(sql: string): string {
   // datetime('now') plus any number of single-quoted modifier arguments.
@@ -396,7 +450,10 @@ export function applySafeRewrites(sql: string): string {
   let text = sql;
   // datetime() first: it is the only rewrite that inspects its own arguments, and running it
   // before the blanket patterns keeps the multi-argument forms intact.
+  // Modifier forms first, then unwrap the remaining single-argument calls: doing it the other
+  // way round would strip datetime('now') down to a bare 'now' string literal.
   text = rewriteDatetimeCalls(text);
+  text = unwrapSingleArgDatetime(text);
   for (const { pattern, replacement } of SAFE_REWRITES) {
     text = replaceInCode(text, pattern, replacement);
   }

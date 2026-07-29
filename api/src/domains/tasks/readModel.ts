@@ -5,6 +5,7 @@ import { parseCustomFields, resolveTaskFieldSchema } from './fields';
 import { getCanonicalTaskCustomFields, getCanonicalTaskRecord, stripTaskLifecycleEvidenceFields } from './evidence';
 import { getTaskRelationshipsForEnrichment } from './relationships';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../db/introspection";
+import { nowTimestamp, timestampFromEpochMs } from '../../lib/timestamps';
 
 export type TaskRecord = Record<string, unknown>;
 
@@ -480,7 +481,13 @@ export async function listRecentlyCompletedTasks(
   const tenantId = Number(tenantIdRaw) || null;
   const projectFilter = projectId ? 'AND t.project_id = ?' : '';
   const tenantFilter = tenantId ? 'AND t.tenant_id = ?' : '';
-  const params: unknown[] = [hours];
+  // The cutoff is computed HERE and bound as one parameter, rather than assembled in SQL as
+  // datetime('now', '-' || ? || ' hours'). That concatenation is not portable: PostgreSQL
+  // reports `function datetime(unknown, text) does not exist`, and an interval literal cannot
+  // be built by string concatenation at all. updated_at is canonical-format text, so a direct
+  // comparison against a canonical timestamp is exactly what SQLite was already doing.
+  const cutoff = timestampFromEpochMs(Date.now() - hours * 60 * 60 * 1000) ?? nowTimestamp();
+  const params: unknown[] = [cutoff];
   if (projectId) params.push(projectId);
   if (tenantId) params.push(tenantId);
   const customFieldsSelect = await tableHasTaskColumn(db, 'custom_fields_json')
@@ -533,7 +540,7 @@ export async function listRecentlyCompletedTasks(
     LEFT JOIN projects p ON p.id = t.project_id
     LEFT JOIN sprints s ON s.id = t.sprint_id
     WHERE t.status = 'done'
-      AND t.updated_at >= datetime('now', '-' || ? || ' hours')
+      AND t.updated_at >= ?
       ${projectFilter}
       ${tenantFilter}
     ORDER BY t.updated_at DESC
