@@ -87,7 +87,7 @@ router.post('/reconcile', async (_req: Request, res: Response) => {
 // Paginated dispatch audit log.
 // Query params: job_id, task_id, from, to, limit (default 50), offset
 
-router.get('/log', (req: Request, res: Response) => {
+router.get('/log', async (req: Request, res: Response) => {
   try {
     const db = getDb();
 
@@ -126,7 +126,7 @@ router.get('/log', (req: Request, res: Response) => {
     sql += ` ORDER BY dl.dispatched_at DESC LIMIT ? OFFSET ?`;
     params.push(limit, offset);
 
-    const log = (db.prepare(sql).all(...params) as any[]).map(row => ({
+    const log = (await db.all(sql, ...params) as any[]).map(row => ({
       ...row,
       candidates_skipped: (() => {
         try { return JSON.parse(row.candidates_skipped || '[]'); } catch { return []; }
@@ -141,7 +141,7 @@ router.get('/log', (req: Request, res: Response) => {
     if (from)           { countSql += ` AND dl.dispatched_at >= ?`; countParams.push(from); }
     if (to)             { countSql += ` AND dl.dispatched_at <= ?`; countParams.push(to);   }
 
-    const { n: total } = db.prepare(countSql).get(...countParams) as { n: number };
+    const { n: total } = await db.get(countSql, ...countParams) as { n: number };
 
     res.json({ log, total, limit, offset });
   } catch (err) {

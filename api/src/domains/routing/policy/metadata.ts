@@ -96,7 +96,7 @@ export async function ensureRoutingMetadata(db: Db): Promise<void> {
     { name: 'failed', label: 'Failed', color: 'red', terminal: 1, is_system: 1, allowed_transitions: ['todo', 'ready'] },
   ];
 
-  const seedTx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     for (const status of statuses) {
       await db.run(`
         INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
@@ -122,7 +122,6 @@ export async function ensureRoutingMetadata(db: Db): Promise<void> {
     `);
   });
 
-  seedTx();
   await removeQaPassFromDevelopmentStatusMetadata(db);
   await normalizeQaPassDevelopmentTransitions(db);
 
@@ -382,15 +381,14 @@ async function removeQaPassFromDevelopmentStatusMetadata(db: Db): Promise<void> 
         FROM sprint_type_task_statuses
         WHERE sprint_type_key = 'dev'
       `) as Array<{ id: number; allowed_transitions_json: string | null }>;
-      const update = db.prepare(`
-        UPDATE sprint_type_task_statuses
-        SET allowed_transitions_json = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `);
       for (const row of rows) {
         const next = parseJsonArray(row.allowed_transitions_json)
           .map(status => status === 'qa_pass' ? 'ready_to_merge' : status);
-        update.run(JSON.stringify([...new Set(next)]), row.id);
+        await db.run(`
+          UPDATE sprint_type_task_statuses
+          SET allowed_transitions_json = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `, JSON.stringify([...new Set(next)]), row.id);
       }
     }
 
@@ -406,16 +404,15 @@ async function removeQaPassFromDevelopmentStatusMetadata(db: Db): Promise<void> 
         JOIN sprints s ON s.id = sts.sprint_id
         WHERE s.sprint_type = 'dev'
       `) as Array<{ id: number; allowed_transitions_json: string | null }>;
-      const update = db.prepare(`
-        UPDATE sprint_task_statuses
-        SET allowed_transitions_json = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `);
       for (const row of rows) {
         const next = parseJsonArray(row.allowed_transitions_json)
           .map(status => status === 'qa_pass' ? 'ready_to_merge' : status)
           .filter(status => status !== 'qa_pass');
-        update.run(JSON.stringify([...new Set(next)]), row.id);
+        await db.run(`
+          UPDATE sprint_task_statuses
+          SET allowed_transitions_json = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `, JSON.stringify([...new Set(next)]), row.id);
       }
     }
   } catch {

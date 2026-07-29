@@ -319,7 +319,7 @@ export async function createTaskRelationship(db: Db, input: {
   const type = await getRelationshipTypeForTask(db, sourceTaskId, relationshipTypeKey);
   if (!type) throw httpError(400, `Relationship type "${relationshipTypeKey}" is not defined for source task sprint type`);
 
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     await db.run(`
       INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key, metadata_json, created_by, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
@@ -329,7 +329,6 @@ export async function createTaskRelationship(db: Db, input: {
     `, sourceTaskId, targetTaskId, relationshipTypeKey, JSON.stringify(metadata), createdBy);
     await mirrorDispatchDependency(db, sourceTaskId, targetTaskId, type);
   });
-  tx();
 
   const row = await db.get(`
     SELECT tr.*,
@@ -383,11 +382,10 @@ export async function deleteTaskRelationship(db: Db, relationshipId: number): Pr
   const row = await db.get(`SELECT * FROM task_relationships WHERE id = ?`, relationshipId) as Record<string, unknown> | undefined;
   if (!row) throw httpError(404, 'Relationship not found');
   const type = await getRelationshipTypeForTask(db, Number(row.source_task_id), String(row.relationship_type_key));
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     await db.run(`DELETE FROM task_relationships WHERE id = ?`, relationshipId);
     await removeDispatchDependency(db, Number(row.source_task_id), Number(row.target_task_id), type);
   });
-  tx();
   return { ok: true, deleted_id: relationshipId };
 }
 

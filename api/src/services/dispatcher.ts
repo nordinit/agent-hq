@@ -980,7 +980,7 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
       CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
       t.created_at ASC
   `;
-  const candidates = db.prepare(sql).all(...params) as CandidateTask[];
+  const candidates = await db.all(sql, ...params) as CandidateTask[];
   if (!relationshipEligibility) return candidates;
   return candidates
     .filter(task => !relationshipEligibility.blockedByTaskId.has(task.id))
@@ -1052,20 +1052,20 @@ async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<Rou
                rr.id ASC
     `, ...(hasWorkflowRepoColumns ? [task.sprint_id ?? null] : []), ...params, ...tenantParams, status, task.task_type ?? null, task.sprint_id ?? null, task.task_type ?? null) as RoutingRuleRow[];
 
-  const loadSprintScopedRules = (status: string): RoutingRuleRow[] => {
+  const loadSprintScopedRules = async (status: string): Promise<RoutingRuleRow[]> => {
     if (!task.sprint_id) return [];
     if (hasScopedRoutingColumns && task.project_id && task.sprint_type) {
-      return runRuleQuery(
+      return await runRuleQuery(
         'rr.project_id = ? AND rr.sprint_type = ? AND (rr.sprint_id = ? OR rr.sprint_id IS NULL)',
         [task.project_id, task.sprint_type, task.sprint_id],
         status,
       );
     }
-    return runRuleQuery('rr.sprint_id = ?', [task.sprint_id], status);
+    return await runRuleQuery('rr.sprint_id = ?', [task.sprint_id], status);
   };
 
   try {
-    const sprintRules = loadSprintScopedRules(task.status);
+    const sprintRules = await loadSprintScopedRules(task.status);
     if (sprintRules.length > 0) return sprintRules;
   } catch {
     // sprint-scoped tables may not exist in minimal test DBs; fall through
@@ -1073,7 +1073,7 @@ async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<Rou
 
   if (task.status === 'in_progress' && task.sprint_id) {
     try {
-      const sprintFallback = loadSprintScopedRules('ready');
+      const sprintFallback = await loadSprintScopedRules('ready');
       if (sprintFallback.length > 0) return sprintFallback;
     } catch {
       // sprint-scoped tables may not exist in minimal test DBs

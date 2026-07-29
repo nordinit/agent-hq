@@ -1,9 +1,11 @@
 import Database from 'better-sqlite3';
 import { markTaskNeedsAttentionForMissingSemanticHandoff } from './lifecycleHandoff';
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 describe('markTaskNeedsAttentionForMissingSemanticHandoff', () => {
   it('records a structured operator recovery note without auto-moving visible workflow status', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,
@@ -115,7 +117,8 @@ describe('markTaskNeedsAttentionForMissingSemanticHandoff', () => {
   });
 
   it('preserves runtime-success context in the operator note for outcome-less completions', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,
@@ -207,7 +210,8 @@ describe('markTaskNeedsAttentionForMissingSemanticHandoff', () => {
   });
 
   it('applies configured missing-outcome workflow event status actions while recording the event', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,

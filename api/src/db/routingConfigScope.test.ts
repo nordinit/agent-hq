@@ -4,6 +4,7 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import { closeDb, getDb, getDbPath } from './client';
 import { initSchema } from './schema';
+import { SqliteAdapter } from "./adapter/SqliteAdapter";
 
 describe('routing_config scoped ownership schema migration', () => {
   const originalDbPath = process.env.AGENT_HQ_DB_PATH;
@@ -285,8 +286,10 @@ describe('routing_config scoped ownership schema migration', () => {
     db.close();
     closeDb();
 
-    const migratedDb = new Database(getDbPath());
-    migratedDb.pragma('foreign_keys = ON');
+    const migratedDbRawRaw = new Database(getDbPath());
+      const migratedDbRaw = new SqliteAdapter(migratedDbRawRaw);
+      const migratedDb = new SqliteAdapter(migratedDbRaw);
+    migratedDbRawRaw.pragma('foreign_keys = ON');
     const ddlBefore = await migratedDb.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_routing_rules'`) as { sql: string };
     expect(/sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(ddlBefore.sql)).toBe(true);
 
@@ -331,7 +334,7 @@ describe('routing_config scoped ownership schema migration', () => {
       status: 'todo',
       agent_id: 94,
     });
-    migratedDb.close();
+    migratedDbRawRaw.close();
   });
 
   it('allows multiple routing candidates per scope while preserving exact candidate uniqueness', async () => {

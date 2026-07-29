@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import Database from 'better-sqlite3';
 import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 let buildContractInstructions: typeof import('./transportAdapters').buildContractInstructions;
 let buildCompletionContractInstructions: typeof import('./transportAdapters').buildCompletionContractInstructions;
@@ -64,7 +65,8 @@ afterEach(() => {
 });
 
 async function createGateDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE transition_requirements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -637,27 +637,27 @@ async function ensureStarterSprintTypeRegistry(db: Db, tenantId: number, workflo
     `, sprintType, ...taskTypeTenant.params, ...taskTypes);
   }
   const taskTypeInsert = await tenantInsert(db, 'sprint_type_task_types', tenantId);
-  const taskTypeExisting = db.prepare(`
+  const taskTypeExistingSql = `
     SELECT id, is_system
     FROM sprint_type_task_types
     WHERE sprint_type_key = ? AND task_type = ?
       ${taskTypeTenant.sql}
     LIMIT 1
-  `);
-  const taskTypeCreate = db.prepare(`
+  `;
+  const taskTypeCreateSql = `
     INSERT INTO sprint_type_task_types (${taskTypeInsert.columns}sprint_type_key, task_type, is_system, created_at, updated_at)
     VALUES (${taskTypeInsert.placeholders}?, ?, 1, datetime('now'), datetime('now'))
-  `);
-  const taskTypeUpdate = db.prepare(`
+  `;
+  const taskTypeUpdateSql = `
     UPDATE sprint_type_task_types
     SET is_system = 1, updated_at = datetime('now')
     WHERE sprint_type_key = ? AND task_type = ?
       ${taskTypeTenant.sql}
-  `);
+  `;
   for (const taskType of taskTypes) {
-    const existing = taskTypeExisting.get(sprintType, taskType, ...taskTypeTenant.params) as { id: number; is_system: number } | undefined;
-    if (!existing) taskTypeCreate.run(...taskTypeInsert.params, sprintType, taskType);
-    else if (existing.is_system === 1) taskTypeUpdate.run(sprintType, taskType, ...taskTypeTenant.params);
+    const existing = await db.get(taskTypeExistingSql, sprintType, taskType, ...taskTypeTenant.params) as { id: number; is_system: number } | undefined;
+    if (!existing) await db.run(taskTypeCreateSql, ...taskTypeInsert.params, sprintType, taskType);
+    else if (existing.is_system === 1) await db.run(taskTypeUpdateSql, sprintType, taskType, ...taskTypeTenant.params);
   }
 
   const fieldSeed = STARTER_FIELD_SCHEMA_SEEDS.find((seed) => seed.sprintType === sprintType);
@@ -694,7 +694,7 @@ async function ensureStarterSprintTypeRegistry(db: Db, tenantId: number, workflo
 
   const outcomeTenant = await tenantPredicate(db, 'sprint_type_outcomes', tenantId);
   const outcomeInsert = await tenantInsert(db, 'sprint_type_outcomes', tenantId);
-  const existingOutcome = db.prepare(`
+  const existingOutcomeSql = `
     SELECT id, is_system
     FROM sprint_type_outcomes
     WHERE sprint_type_key = ?
@@ -702,31 +702,31 @@ async function ensureStarterSprintTypeRegistry(db: Db, tenantId: number, workflo
       AND outcome_key = ?
       ${outcomeTenant.sql}
     LIMIT 1
-  `);
-  const createOutcome = db.prepare(`
+  `;
+  const createOutcomeSql = `
     INSERT INTO sprint_type_outcomes (
       ${outcomeInsert.columns}sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at
     ) VALUES (${outcomeInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))
-  `);
-  const updateOutcome = db.prepare(`
+  `;
+  const updateOutcomeSql = `
     UPDATE sprint_type_outcomes
     SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
     WHERE sprint_type_key = ?
       AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
       AND outcome_key = ?
       ${outcomeTenant.sql}
-  `);
+  `;
   for (const outcome of outcomeSeed.outcomes) {
     const taskType = outcome.task_type ?? null;
     const enabled = outcome.enabled ?? 1;
     const behavior = outcome.behavior ?? (taskType ? 'extend' : 'base');
     const badge = outcome.badge_variant ?? null;
     const metadataJson = JSON.stringify(outcome.metadata ?? {});
-    const existing = existingOutcome.get(sprintType, taskType, taskType, outcome.outcome_key, ...outcomeTenant.params) as { id: number; is_system: number } | undefined;
+    const existing = await db.get(existingOutcomeSql, sprintType, taskType, taskType, outcome.outcome_key, ...outcomeTenant.params) as { id: number; is_system: number } | undefined;
     if (!existing) {
-      createOutcome.run(...outcomeInsert.params, sprintType, taskType, outcome.outcome_key, outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson);
+      await db.run(createOutcomeSql, ...outcomeInsert.params, sprintType, taskType, outcome.outcome_key, outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson);
     } else if (existing.is_system === 1) {
-      updateOutcome.run(outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson, sprintType, taskType, taskType, outcome.outcome_key, ...outcomeTenant.params);
+      await db.run(updateOutcomeSql, outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson, sprintType, taskType, taskType, outcome.outcome_key, ...outcomeTenant.params);
     }
   }
 }
@@ -806,7 +806,7 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
     });
   }
 
-  const tx = db.transaction(async () => {
+  return await db.withTransaction(async (db) => {
     const projectId = await insertProject(db, tenantId, plan);
     const workflowIds: Record<string, number> = {};
     const agentIdsByOwner = new Map<string, number>();
@@ -830,7 +830,9 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
         if (!agentId) continue;
         routeIds.push(await insertRoutingRule(db, workflowId, projectId, workflow.workflow.sprint_type, route, agentId));
       }
-      modelRoutingIds.push(...workflow.model_routing.map(async (rule) => await insertModelRouting(db, tenantId, projectId, workflowId, rule)));
+      for (const rule of workflow.model_routing) {
+        modelRoutingIds.push(await insertModelRouting(db, tenantId, projectId, workflowId, rule));
+      }
     }
 
     return {
@@ -844,6 +846,4 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
       model_routing_ids: modelRoutingIds,
     };
   });
-
-  return tx();
 }

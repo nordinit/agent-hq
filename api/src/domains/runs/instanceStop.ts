@@ -72,7 +72,7 @@ export async function applyStopBehavior(
   const taskStatusAfter = taskStatusBefore ? nextTaskStatus(taskStatusBefore, behavior) : null;
   const clearedTaskLinkage = task?.active_instance_id === instanceId;
 
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     await db.run(`UPDATE job_instances SET task_id = NULL WHERE id = ?`, instanceId);
 
     if (!task) return;
@@ -96,8 +96,6 @@ export async function applyStopBehavior(
     // moved on to a different active instance (or no active instance at all).
     // Clear only the instance-side linkage; do not mutate the task lifecycle.
   });
-
-  tx();
 
   return {
     behavior,

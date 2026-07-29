@@ -5,6 +5,7 @@ import { cleanupTaskExecutionLinkageForStatus } from './taskLifecycle';
 import { applyTaskOutcome } from './taskOutcome';
 import { WorkflowAllowedValuesError } from './taskStatusValidation';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../domains/tasks/readModel', () => {
   const actual = jest.requireActual('../domains/tasks/readModel');
@@ -31,7 +32,8 @@ jest.mock('./taskLifecycle', () => {
 });
 
 async function createDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY,

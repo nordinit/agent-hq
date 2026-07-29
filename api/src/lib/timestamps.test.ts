@@ -15,6 +15,7 @@ import {
   toCanonicalTimestampOrNow,
   toIsoUtc,
 } from './timestamps';
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 describe('nowTimestamp emits exactly one format', () => {
   it('always matches the canonical pattern, across many samples', () => {
@@ -41,7 +42,8 @@ describe('nowTimestamp emits exactly one format', () => {
   });
 
   it('is byte-identical in shape to what SQLite datetime(\'now\') produces', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     try {
       const sqlNow = await db.get(`SELECT ${CANONICAL_TIMESTAMP_SQL} AS v`) as { v: string };
       const jsNow = nowTimestamp();
@@ -59,7 +61,7 @@ describe('nowTimestamp emits exactly one format', () => {
       );
       expect(delta).toBeLessThan(5000);
     } finally {
-      db.close();
+      dbRaw.close();
     }
   });
 
@@ -70,7 +72,8 @@ describe('nowTimestamp emits exactly one format', () => {
   });
 
   it('agrees with the SQL DEFAULT written into an actual column', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     try {
       await db.exec(`
         CREATE TABLE t (
@@ -93,7 +96,7 @@ describe('nowTimestamp emits exactly one format', () => {
       // JS-written value are indistinguishable.
       expect(allShapes.size).toBe(1);
     } finally {
-      db.close();
+      dbRaw.close();
     }
   });
 });

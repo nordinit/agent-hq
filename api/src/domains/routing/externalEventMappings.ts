@@ -298,16 +298,16 @@ async function ensureAgentStartedBlockedGuard(db: Db): Promise<void> {
       AND enabled = 1
   `) as Array<{ id: number; status_excludes_json: string | null }>;
 
-  const update = db.prepare(`
+  const updateSql = `
     UPDATE external_event_mappings
     SET status_excludes_json = ?, updated_at = datetime('now')
     WHERE id = ?
-  `);
+  `;
 
   for (const row of rows) {
     const excludes = parseJsonStringList(row.status_excludes_json);
     if (excludes.includes('blocked')) continue;
-    update.run(JSON.stringify([...excludes, 'blocked']), row.id);
+    await db.run(updateSql, JSON.stringify([...excludes, 'blocked']), row.id);
   }
 }
 
@@ -905,7 +905,7 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
       : 'tenant_id IS NULL')
     : '1 = 1';
 
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT OR IGNORE INTO external_event_mappings (
       ${hasTenantId ? 'tenant_id,' : ''}
       project_id,
@@ -923,9 +923,9 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
       created_at,
       updated_at
     ) VALUES (${hasTenantId ? '?,' : ''} ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-  `);
+  `;
 
-  const existsStmt = db.prepare(`
+  const existsSql = `
     SELECT id
     FROM external_event_mappings
     WHERE ${tenantPredicate}
@@ -942,10 +942,11 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
       AND enabled = ?
       AND priority = ?
     LIMIT 1
-  `);
+  `;
 
   for (const mapping of mappings) {
-    const exists = existsStmt.get(
+    const exists = await db.get(
+      existsSql,
       ...(tenantScoped ? [effectiveTenantId] : []),
       mapping.source,
       mapping.event_name,
@@ -960,7 +961,8 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
     ) as { id: number } | undefined;
     if (exists) continue;
 
-    insert.run(
+    await db.run(
+      insertSql,
       ...(hasTenantId ? [effectiveTenantId] : []),
       null,
       mapping.source,
@@ -978,31 +980,31 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
   }
 }
 
-export function seedDefaultWorkflowEventMappings(db: Db): void {
-  db.transaction(async () => {
+export async function seedDefaultWorkflowEventMappings(db: Db): Promise<void> {
+  await db.withTransaction(async (db) => {
     await migrateAgentStartedWorkflowEventSource(db);
     await ensureAgentStartedBlockedGuard(db);
     await repairDuplicateWorkflowEventMappings(db);
     await ensureWorkflowEventMappingUniqueIndex(db);
     await insertDefaultWorkflowEventMappings(db, DEFAULT_WORKFLOW_EVENT_MAPPINGS, null);
-  })();
+  });
 }
 
 export async function seedTenantDefaultWorkflowEventMappings(db: Db, tenantId: number): Promise<void> {
   await validateTenantExists(db, tenantId);
-  db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     await ensureAgentStartedBlockedGuard(db);
     await repairDuplicateWorkflowEventMappings(db);
     await ensureWorkflowEventMappingUniqueIndex(db);
     await insertDefaultWorkflowEventMappings(db, DEFAULT_TENANT_WORKFLOW_EVENT_MAPPINGS, tenantId);
-  })();
+  });
 }
 
 export async function removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant(db: Db, tenantId: number): Promise<{ deleted: number }> {
   await validateTenantExists(db, tenantId);
   if (!await tableHasColumn(db, 'external_event_mappings', 'tenant_id')) return { deleted: 0 };
 
-  const deleteStmt = db.prepare(`
+  const deleteSql = `
     DELETE FROM external_event_mappings
     WHERE tenant_id = ?
       AND project_id IS NULL
@@ -1011,17 +1013,18 @@ export async function removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTe
       AND task_type IS NULL
       AND action_kind = ?
       AND COALESCE(action_target, '') = COALESCE(?, '')
-  `);
+  `;
 
   let deleted = 0;
   for (const mapping of DEFAULT_WORKFLOW_EVENT_MAPPINGS.filter((row) => row.source === DEV_ENV_LEASE_MANAGER_SOURCE)) {
-    deleted += deleteStmt.run(
+    deleted += (await db.run(
+      deleteSql,
       tenantId,
       mapping.source,
       mapping.event_name,
       mapping.action_kind,
       mapping.action_target,
-    ).changes;
+    )).changes;
   }
   return { deleted };
 }
@@ -1099,7 +1102,7 @@ export async function listWorkflowEventMappings(db: Db, input: { tenant_id?: unk
     if (hasWorkflowScope) params.push(sprintId);
   }
 
-  const rows = db.prepare(query).all(...params) as MappingRecord[];
+  const rows = await db.all(query, ...params) as MappingRecord[];
   const conflictMap = buildConflictMap(rows);
   return {
     mappings: rows.map((row) => serializeMappingRow(row, conflictMap.get(row.id) ?? [], sprintId)),

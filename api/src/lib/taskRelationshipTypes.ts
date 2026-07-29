@@ -61,7 +61,7 @@ export async function pruneUnexpectedStarterWorkflowRelationshipTypes(
       ORDER BY key ASC
     `, ...starterKeys) as Array<{ key: string }>;
 
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     for (const sprintType of sprintTypes) {
       await pruneUnexpectedStarterRelationshipTypes(db, sprintType.key, {
                 tenantId,
@@ -69,7 +69,6 @@ export async function pruneUnexpectedStarterWorkflowRelationshipTypes(
               });
     }
   });
-  tx();
 }
 
 export async function seedStarterWorkflowRelationshipTypes(
@@ -99,7 +98,7 @@ export async function seedStarterWorkflowRelationshipTypes(
       ORDER BY key ASC
     `, ...starterKeys) as Array<{ key: string }>;
 
-  const insertRelationshipType = db.prepare(relationshipTypesHasTenantId
+  const insertRelationshipTypeSql = relationshipTypesHasTenantId
     ? `
       INSERT OR IGNORE INTO sprint_type_relationship_types (
         tenant_id, sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
@@ -113,9 +112,9 @@ export async function seedStarterWorkflowRelationshipTypes(
         direction_semantics, active_statuses_json, resolved_statuses_json, allow_create_related_task,
         default_related_task_type, default_related_task_status, is_system, metadata_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '{}')
-    `);
+    `;
 
-  const seedTx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     for (const sprintType of sprintTypes) {
       await pruneUnexpectedStarterRelationshipTypes(db, sprintType.key, {
                 tenantId,
@@ -138,12 +137,11 @@ export async function seedStarterWorkflowRelationshipTypes(
           seed.default_related_task_status,
         ];
         if (relationshipTypesHasTenantId) {
-          insertRelationshipType.run(tenantId, ...params);
+          await db.run(insertRelationshipTypeSql, tenantId, ...params);
         } else {
-          insertRelationshipType.run(...params);
+          await db.run(insertRelationshipTypeSql, ...params);
         }
       }
     }
   });
-  seedTx();
 }

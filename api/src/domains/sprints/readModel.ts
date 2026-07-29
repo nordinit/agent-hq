@@ -96,7 +96,7 @@ export async function listSprints(
   }
 
   sql += ` GROUP BY s.id, p.name ORDER BY s.created_at DESC`;
-  return db.prepare(sql).all(...params);
+  return await db.all(sql, ...params);
 }
 
 export async function getSprintDetail(db: Db, sprintId: number) {

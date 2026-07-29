@@ -665,7 +665,7 @@ export async function runRecurringTaskSeriesNow(
   if (!series) throw notFound('Recurring task series not found', 'series_not_found');
   await normalizeCreateInput(db, series);
   const scheduledFor = new Date().toISOString();
-  const result = db.transaction(async () => {
+  const result = await db.withTransaction(async (db) => {
     const run = await recordRecurringTaskRun(db, {
           series_id: series.id,
           scheduled_for: scheduledFor,
@@ -695,7 +695,7 @@ export async function runRecurringTaskSeriesNow(
       WHERE id = ?
     `, scheduledFor, calculateNextRunAt(series.schedule_expression, series.timezone, series.enabled), series.id);
     return { run: linkedRun, task };
-  })();
+  });
   return {
     series: (await getRecurringTaskSeries(db, series.id, tenantId)) ?? normalizeSeries(series),
     run: result.run,

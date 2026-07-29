@@ -5,7 +5,6 @@ import { getDb } from '../db/client';
 import { OPENCLAW_CONFIG_PATH } from '../config';
 import { ATLAS_AGENT_SLUG } from './atlasAgent';
 import { getActiveTenantId } from './tenantContext';
-import { type Db } from "../db/adapter/types";
 
 export type OAuthProviderSlug = 'openai-codex';
 
@@ -328,15 +327,17 @@ async function providerConfigCandidate(provider: OAuthProviderSlug): Promise<OAu
 async function profileFromAuthStore(filePath: string, provider: OAuthProviderSlug): Promise<OpenClawOAuthCredential | null> {
   if (provider !== 'openai-codex' || !fs.existsSync(filePath)) return null;
 
-  let db: Db | null = null;
+  // NOT the Agent HQ database: this is OpenClaw's own on-disk SQLite auth store,
+  // read through the raw better-sqlite3 driver. It never moves to PostgreSQL.
+  let db: Database.Database | null = null;
   try {
     db = new Database(filePath, { readonly: true, fileMustExist: true });
-    const row = await db.get(`
+    const row = db.prepare(`
       SELECT store_json
       FROM auth_profile_store
       WHERE store_key = 'primary'
       LIMIT 1
-    `) as { store_json: string } | undefined;
+    `).get() as { store_json: string } | undefined;
     if (!row) return null;
 
     const document = JSON.parse(row.store_json);
@@ -602,25 +603,28 @@ export async function upsertOAuthProfileStore(
 ): Promise<boolean> {
   if (provider !== 'openai-codex' || !fs.existsSync(filePath)) return false;
 
-  let db: Db | null = null;
+  // NOT the Agent HQ database: this is OpenClaw's own on-disk SQLite auth store.
+  // It keeps the raw better-sqlite3 driver — including PRAGMA and the synchronous
+  // db.transaction() form — because it is not part of the PostgreSQL migration.
+  let db: Database.Database | null = null;
   try {
     db = new Database(filePath, { fileMustExist: true });
     db.pragma('busy_timeout = 5000');
-    const table = await db.get(`
+    const table = db.prepare(`
       SELECT 1 AS present
       FROM sqlite_master
       WHERE type = 'table' AND name = 'auth_profile_store'
       LIMIT 1
-    `) as { present: number } | undefined;
+    `).get() as { present: number } | undefined;
     if (!table) return false;
 
-    return db.transaction(async () => {
-      const row = await db!.get(`
+    return db.transaction(() => {
+      const row = db!.prepare(`
         SELECT store_json
         FROM auth_profile_store
         WHERE store_key = 'primary'
         LIMIT 1
-      `) as { store_json: string } | undefined;
+      `).get() as { store_json: string } | undefined;
       const document = row
         ? JSON.parse(row.store_json)
         : { version: 1, profiles: {} };
@@ -638,16 +642,16 @@ export async function upsertOAuthProfileStore(
       document.profiles = profiles;
       const now = Date.now();
       if (row) {
-        await db!.run(`
+        db!.prepare(`
           UPDATE auth_profile_store
           SET store_json = ?, updated_at = ?
           WHERE store_key = 'primary'
-        `, JSON.stringify(document), now);
+        `).run(JSON.stringify(document), now);
       } else {
-        await db!.run(`
+        db!.prepare(`
           INSERT INTO auth_profile_store (store_key, store_json, updated_at)
           VALUES ('primary', ?, ?)
-        `, JSON.stringify(document), now);
+        `).run(JSON.stringify(document), now);
       }
       return true;
     })();

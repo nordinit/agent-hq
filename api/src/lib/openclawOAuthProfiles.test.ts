@@ -7,6 +7,7 @@ import {
   type OpenClawOAuthCredential,
   upsertOAuthProfileStore,
 } from './openclawOAuthProfiles';
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 function jwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
@@ -27,7 +28,8 @@ describe('OpenClaw OAuth profile synchronization', () => {
 
   it('writes Agent HQ Codex OAuth credentials into the current OpenClaw SQLite profile', async () => {
     const storePath = path.join(tempDir, 'openclaw-agent.sqlite');
-    const db = new Database(storePath);
+    const dbRaw = new Database(storePath);
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE auth_profile_store (
         store_key TEXT NOT NULL PRIMARY KEY,
@@ -45,7 +47,7 @@ describe('OpenClaw OAuth profile synchronization', () => {
               'openai:default': { type: 'api_key', provider: 'openai', key: 'stale', displayName: 'Existing profile' },
             },
           }));
-    db.close();
+    dbRaw.close();
 
     const credential: OpenClawOAuthCredential = {
       type: 'oauth',
@@ -66,13 +68,14 @@ describe('OpenClaw OAuth profile synchronization', () => {
     expect(await upsertOAuthProfileStore(storePath, 'openai-codex', credential)).toBe(true);
     expect(await upsertOAuthProfileStore(storePath, 'openai-codex', credential)).toBe(false);
 
-    const verifyDb = new Database(storePath, { readonly: true });
+    const verifyDbRaw = new Database(storePath, { readonly: true });
+      const verifyDb = new SqliteAdapter(verifyDbRaw);
     const row = await verifyDb.get(`
       SELECT store_json
       FROM auth_profile_store
       WHERE store_key = 'primary'
     `) as { store_json: string };
-    verifyDb.close();
+    verifyDbRaw.close();
     const document = JSON.parse(row.store_json);
 
     expect(document.profiles['anthropic:default']).toEqual(expect.objectContaining({ token: 'keep-me' }));

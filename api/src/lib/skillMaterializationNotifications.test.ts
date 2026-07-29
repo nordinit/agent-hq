@@ -2,9 +2,11 @@ import Database from 'better-sqlite3';
 import type { MaterializationResult } from '../runtimes/skillMaterialization';
 import { recordSkillMaterializationIssues } from './skillMaterializationNotifications';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function makeDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '');
     INSERT INTO tenants (id, name) VALUES (1, 'Default');

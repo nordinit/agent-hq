@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { stopTaskActiveInstance } from './taskStop';
 import { stopInstanceExecution } from './stopInstanceExecution';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../domains/runs/stopInstanceExecution', () => ({
   stopInstanceExecution: jest.fn(),
@@ -10,7 +11,8 @@ jest.mock('../domains/runs/stopInstanceExecution', () => ({
 const mockedStopInstanceExecution = stopInstanceExecution as jest.MockedFunction<typeof stopInstanceExecution>;
 
 async function createDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE tasks (
       id INTEGER PRIMARY KEY,

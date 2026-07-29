@@ -72,14 +72,14 @@ router.get('/', async (req: Request, res: Response) => {
     `, ...params) as Array<Record<string, unknown>>;
 
     if (String(req.query.include_messages ?? '') === 'true') {
-      const msgStmt = db.prepare(`
+      const msgSql = `
         SELECT id, session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
         FROM session_messages
         WHERE session_id = ?
         ORDER BY ordinal ASC
-      `);
+      `;
       for (const session of sessions) {
-        session.messages = msgStmt.all(session.id);
+        session.messages = await db.all(msgSql, session.id);
       }
     }
 
@@ -223,7 +223,7 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
 
             const maxOrdinalRow = await db.get('SELECT COALESCE(MAX(ordinal), -1) AS max_ord FROM session_messages WHERE session_id = ?', session.id) as { max_ord: number };
 
-            const insert = db.prepare(`
+            const insertSql = `
               INSERT INTO session_messages (session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
               ON CONFLICT(session_id, ordinal) DO UPDATE SET
@@ -231,14 +231,15 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
                 event_type = excluded.event_type,
                 event_meta = excluded.event_meta,
                 timestamp = excluded.timestamp
-            `);
+            `;
 
             let ordinal = maxOrdinalRow.max_ord + 1;
-            const tx = db.transaction(() => {
+            await db.withTransaction(async (db) => {
               for (const row of newRows) {
                 const rawPayload = String(row.id);
                 const nextOrdinal = ordinalByRawPayload.get(rawPayload) ?? ordinal++;
-                insert.run(
+                await db.run(
+                  insertSql,
                   session.id,
                   nextOrdinal,
                   normalizeChatMessageRole(row.role, row.event_type ?? 'text'),
@@ -250,7 +251,6 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
                 );
               }
             });
-            tx();
 
             await db.run(`
               UPDATE sessions

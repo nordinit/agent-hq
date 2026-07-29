@@ -1,9 +1,11 @@
 import Database from 'better-sqlite3';
 import { readNotificationPreferences, saveNotificationPreferences } from './notifications';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function createDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE app_settings (
       key TEXT PRIMARY KEY,

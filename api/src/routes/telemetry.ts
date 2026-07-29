@@ -88,11 +88,12 @@ router.get('/overview', async (req: Request, res: Response) => {
 
     const firstPassRate = (await db.get(`SELECT ROUND(AVG(first_pass_qa) * 100.0, 1) as pct FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { pct: number | null }).pct ?? 0;
 
-    const avgCycleTime = (db.prepare(
+    const avgCycleTime = (await db.get(
       `SELECT ROUND(AVG(cycle_time_hours), 2) as avg_h FROM task_outcome_metrics tom ${omWhere} AND cycle_time_hours IS NOT NULL`
         .replace('WHERE', omConditions.length ? 'WHERE' : 'WHERE')
-        .replace(/ AND cycle_time_hours/, omConditions.length ? ' AND cycle_time_hours' : ' WHERE cycle_time_hours')
-    ).get(...omParams) as { avg_h: number | null }).avg_h ?? null;
+        .replace(/ AND cycle_time_hours/, omConditions.length ? ' AND cycle_time_hours' : ' WHERE cycle_time_hours'),
+      ...omParams
+    ) as { avg_h: number | null } | undefined)?.avg_h ?? null;
 
     // Simpler version for cycle time
     const cycleParams = [...omParams];
@@ -104,10 +105,11 @@ router.get('/overview', async (req: Request, res: Response) => {
     const byQuality = await db.all(`SELECT outcome_quality, COUNT(*) as count FROM task_outcome_metrics tom ${omWhere} GROUP BY outcome_quality ORDER BY count DESC`, ...omParams) as { outcome_quality: string; count: number }[];
 
     // Top failure reasons (parse JSON arrays)
-    const rawFailureRows = db.prepare(
+    const rawFailureRows = await db.all(
       `SELECT failure_reasons FROM task_outcome_metrics tom ${omWhere} AND failure_reasons != '[]' AND failure_reasons != ''`
-        .replace(/ AND failure_reasons/, omConditions.length ? ' AND failure_reasons' : ' WHERE failure_reasons')
-    ).all(...omParams) as { failure_reasons: string }[];
+        .replace(/ AND failure_reasons/, omConditions.length ? ' AND failure_reasons' : ' WHERE failure_reasons'),
+      ...omParams
+    ) as { failure_reasons: string }[];
 
     const failureCounts: Record<string, number> = {};
     for (const row of rawFailureRows) {

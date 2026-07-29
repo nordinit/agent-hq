@@ -49,7 +49,7 @@ export async function persistHistoryMessages(ctx: SessionContext, messages: Arra
     const rowScope = contextRowScope(ctx);
     const durable = await chatMessageDurableColumns(db, ctx);
     const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
-    const stmt = db.prepare(`
+    const insertSql = `
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
@@ -60,7 +60,7 @@ export async function persistHistoryMessages(ctx: SessionContext, messages: Arra
         event_meta = excluded.event_meta,
         ${durable.updateSql}
         session_key = excluded.session_key
-    `);
+    `;
 
     await db.run('DELETE FROM chat_messages WHERE id LIKE ? OR id LIKE ?', `oc-hist-${rowScope}-%`, `oc-live-${rowScope}-%`);
 
@@ -75,7 +75,8 @@ export async function persistHistoryMessages(ctx: SessionContext, messages: Arra
       const events = extractStructuredEvents(m).filter(evt => evt.event_type !== 'text');
       for (const evt of events) {
         const rowId = `oc-hist-${rowScope}-${rowIndex++}`;
-        stmt.run(
+        await db.run(
+          insertSql,
           rowId,
           ...tenant.values,
           ctx.agentId,
@@ -105,7 +106,7 @@ export async function persistLiveStructuredMessage(ctx: SessionContext, message:
     const durable = await chatMessageDurableColumns(db, ctx);
     const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
     const ts = toCanonicalTimestampOrNow(message.timestamp);
-    const stmt = db.prepare(`
+    const insertSql = `
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
@@ -117,10 +118,11 @@ export async function persistLiveStructuredMessage(ctx: SessionContext, message:
         event_meta = excluded.event_meta,
         ${durable.updateSql}
         session_key = excluded.session_key
-    `);
+    `;
 
     for (const evt of events) {
-      stmt.run(
+      await db.run(
+        insertSql,
         `oc-live-${rowScope}-${stableLiveEventSuffix(evt)}`,
         ...tenant.values,
         ctx.agentId,

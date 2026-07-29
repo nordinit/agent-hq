@@ -250,11 +250,11 @@ async function finishAndAdvance(
   await advanceSeries(db, series, scheduledFor, { disable });
 }
 
-function processDueSeries(db: Db, series: RecurringTaskSeriesRecord): 'created' | 'skipped' | 'failed' | 'duplicate' {
+async function processDueSeries(db: Db, series: RecurringTaskSeriesRecord): Promise<'created' | 'skipped' | 'failed' | 'duplicate'> {
   const scheduledFor = series.next_run_at;
   if (!scheduledFor) return 'skipped';
 
-  const tx = db.transaction(async () => {
+  return await db.withTransaction(async (db) => {
     const fresh = await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, series.id) as RecurringTaskSeriesRecord | undefined;
     if (!fresh || fresh.enabled !== 1 || !fresh.next_run_at || fresh.next_run_at !== scheduledFor) return 'duplicate' as const;
 
@@ -322,8 +322,6 @@ function processDueSeries(db: Db, series: RecurringTaskSeriesRecord): 'created' 
       return 'failed' as const;
     }
   });
-
-  return tx();
 }
 
 export async function runRecurringTaskSchedulerTick(
@@ -343,7 +341,7 @@ export async function runRecurringTaskSchedulerTick(
 
   for (const series of dueSeries) {
     try {
-      const result = processDueSeries(db, series);
+      const result = await processDueSeries(db, series);
       if (result === 'created') summary.created += 1;
       else if (result === 'skipped') summary.skipped += 1;
       else if (result === 'failed') summary.failed += 1;

@@ -254,12 +254,12 @@ export async function syncStarterRoutingForSprint(db: Db, sprintId: number | nul
   const rules = buildStarterRoutingRules(starterSprintType, agents, availableStatuses);
   if (rules.length === 0) return;
 
-  const insertRule = db.prepare(`
+  const insertRuleSql = `
     INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority, is_system, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
-  `);
+  `;
 
   for (const rule of rules) {
-    insertRule.run(sprintId, rule.task_type, rule.status, rule.agent_id, rule.priority);
+    await db.run(insertRuleSql, sprintId, rule.task_type, rule.status, rule.agent_id, rule.priority);
   }
 }

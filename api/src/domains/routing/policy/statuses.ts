@@ -274,11 +274,11 @@ export async function loadSprintTaskTransitionRequirements(
     };
 
     if (taskType) {
-      const typeRows = loadRows(taskType);
+      const typeRows = await loadRows(taskType);
       if (typeRows.length > 0) return dedupeSprintTaskTransitionRequirementRows(typeRows);
     }
 
-    const defaultRows = loadRows(null);
+    const defaultRows = await loadRows(null);
     if (defaultRows.length > 0) return dedupeSprintTaskTransitionRequirementRows(defaultRows);
   }
 
@@ -330,7 +330,7 @@ export async function listSprintTaskTransitionRequirements(
       params.push(outcome);
     }
     query += ` ORDER BY outcome ASC, task_type IS NULL ASC, CASE WHEN sprint_id IS NULL THEN 1 ELSE 0 END, priority DESC, id ASC`;
-    return db.prepare(query).all(...params) as SprintTaskTransitionRequirementRow[];
+    return await db.all(query, ...params) as SprintTaskTransitionRequirementRow[];
   }
 
   if (!await tableExists(db, 'transition_requirements')) return [];
@@ -350,7 +350,7 @@ export async function listSprintTaskTransitionRequirements(
     params.push(outcome);
   }
   query += ` ORDER BY outcome ASC, task_type IS NULL ASC, priority DESC, id ASC`;
-  return db.prepare(query).all(...params) as SprintTaskTransitionRequirementRow[];
+  return await db.all(query, ...params) as SprintTaskTransitionRequirementRow[];
 }
 
 export async function listSprintTaskRoutingRules(

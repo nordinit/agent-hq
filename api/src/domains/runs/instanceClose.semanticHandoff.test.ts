@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { closeActiveInstanceAfterSemanticHandoff } from './instanceClose';
 import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 jest.mock('../../runtimes/OpenClawRuntime', () => ({
   abortChatRunBySessionKey: jest.fn(() => ({ ok: true, status: 'aborted' })),
@@ -11,7 +12,8 @@ jest.mock('../../services/browserPool', () => ({
 }));
 
 async function setupDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE tasks (
       id INTEGER PRIMARY KEY,

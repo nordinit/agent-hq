@@ -123,14 +123,14 @@ async function insertWorkflowFileVersion(
   db: ReturnType<typeof getDb>,
   input: {
     scope: WorkflowScope;
-    fileId: number | bigint;
+    fileId: number | null;
     versionNumber: number;
     file: Express.Multer.File;
     actor: string;
     timestamp: string;
     changeSource: string;
   },
-): Promise<number | bigint> {
+): Promise<number | null> {
   const result = await db.run(`
     INSERT INTO workflow_file_versions (
       tenant_id, project_id, workflow_id, file_id, version_number, filename, original_name,
@@ -185,7 +185,7 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
     const uploadedBy = (req.body as { uploaded_by?: string }).uploaded_by ?? 'manual';
     const now = nowTimestamp();
 
-    const result = db.transaction(async () => {
+    const result = await db.withTransaction(async (db) => {
       const insertFile = await db.run(`
         INSERT INTO workflow_files (
           tenant_id, project_id, workflow_id, filename, original_name, mime_type, size_bytes,
@@ -205,9 +205,9 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
             });
       await db.run('UPDATE workflow_files SET current_version_id = ? WHERE id = ?', versionId, insertFile.lastInsertId);
       return insertFile;
-    })();
+    });
 
-    const record = await db.get(`SELECT ${WORKFLOW_FILE_RESPONSE_SELECT} FROM workflow_files WHERE id = ?`, result.lastInsertRowid);
+    const record = await db.get(`SELECT ${WORKFLOW_FILE_RESPONSE_SELECT} FROM workflow_files WHERE id = ?`, result.lastInsertId);
     return res.status(201).json(record);
   } catch (err) {
     cleanupUploadedFile(req.file);
@@ -292,7 +292,7 @@ router.put('/:fileId', upload.single('file'), async (req: Request, res: Response
     const now = nowTimestamp();
     const nextVersion = Number(file.current_version ?? 1) + 1;
 
-    db.transaction(async () => {
+    await db.withTransaction(async (db) => {
       const versionId = await insertWorkflowFileVersion(db, {
               scope,
               fileId: file.id,
@@ -309,7 +309,7 @@ router.put('/:fileId', upload.single('file'), async (req: Request, res: Response
           updated_by = ?, updated_at = ?, current_version = ?, current_version_id = ?
         WHERE id = ? AND tenant_id = ? AND project_id = ? AND workflow_id = ?
       `, req.file!.filename, req.file!.originalname, req.file!.mimetype, req.file!.size, req.file!.path, updatedBy, now, nextVersion, versionId, file.id, scope.tenant_id, scope.project_id, scope.workflow_id);
-    })();
+    });
 
     const record = await db.get(`SELECT ${WORKFLOW_FILE_RESPONSE_SELECT} FROM workflow_files WHERE id = ?`, file.id);
     return res.json(record);

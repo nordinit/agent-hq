@@ -242,32 +242,32 @@ async function ensureDefaultSkills(db: Db, tenantId: number, result: DefaultInst
   if (!await tableExists(db, 'skills')) {
     throw new Error('Default package requires the tenant-owned skills table');
   }
-  const select = db.prepare(`
+  const selectSql = `
     SELECT id, description, content, source
     FROM skills
     WHERE tenant_id = ? AND name = ?
     LIMIT 1
-  `);
-  const insert = db.prepare(`
+  `;
+  const insertSql = `
     INSERT INTO skills (tenant_id, name, description, content, source, fs_path, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'system', NULL, datetime('now'), datetime('now'))
-  `);
-  const update = db.prepare(`
+  `;
+  const updateSql = `
     UPDATE skills
     SET description = ?, content = ?, fs_path = NULL, updated_at = datetime('now')
     WHERE id = ?
-  `);
+  `;
 
   for (const seed of DEFAULT_INSTALL_SKILL_SEEDS) {
     const packaged = readPackagedSkill(seed);
-    const existing = select.get(tenantId, seed.name) as {
+    const existing = await db.get(selectSql, tenantId, seed.name) as {
       id: number;
       description: string;
       content: string;
       source: string;
     } | undefined;
     if (!existing) {
-      insert.run(tenantId, seed.name, packaged.description, packaged.content);
+      await db.run(insertSql, tenantId, seed.name, packaged.description, packaged.content);
       addCount(result.created, 'skills');
       continue;
     }
@@ -282,7 +282,7 @@ async function ensureDefaultSkills(db: Db, tenantId: number, result: DefaultInst
       continue;
     }
     if (existing.description !== packaged.description || existing.content !== packaged.content) {
-      update.run(packaged.description, packaged.content, existing.id);
+      await db.run(updateSql, packaged.description, packaged.content, existing.id);
       addCount(result.updated, 'skills');
     }
   }
@@ -331,32 +331,32 @@ async function tenantArgs(db: Db, table: string, tenantId: number): Promise<unkn
 async function ensureWorkflowTypes(db: Db, tenantId: number, result: DefaultInstallPackageResult): Promise<void> {
   const hasTenant = await tableHasColumn(db, 'sprint_types', 'tenant_id');
   const hasRepoRequired = await tableHasColumn(db, 'sprint_types', 'repo_required');
-  const select = db.prepare(`
+  const selectSql = `
     SELECT id, name, description, is_system${hasRepoRequired ? ', repo_required' : ''}
     FROM sprint_types
     WHERE key = ?
       ${await tenantPredicate(db, 'sprint_types')}
     LIMIT 1
-  `);
-  const insert = db.prepare(hasTenant
+  `;
+  const insertSql = hasTenant
     ? `INSERT INTO sprint_types (tenant_id, key, name, description${hasRepoRequired ? ', repo_required' : ''}, is_system, created_at, updated_at) VALUES (?, ?, ?, ?${hasRepoRequired ? ', ?' : ''}, 1, datetime('now'), datetime('now'))`
-    : `INSERT INTO sprint_types (key, name, description${hasRepoRequired ? ', repo_required' : ''}, is_system, created_at, updated_at) VALUES (?, ?, ?${hasRepoRequired ? ', ?' : ''}, 1, datetime('now'), datetime('now'))`);
-  const update = db.prepare(`
+    : `INSERT INTO sprint_types (key, name, description${hasRepoRequired ? ', repo_required' : ''}, is_system, created_at, updated_at) VALUES (?, ?, ?${hasRepoRequired ? ', ?' : ''}, 1, datetime('now'), datetime('now'))`;
+  const updateSql = `
     UPDATE sprint_types
     SET name = ?, description = ?${hasRepoRequired ? ', repo_required = ?' : ''}, is_system = 1, updated_at = datetime('now')
     WHERE key = ?
       ${await tenantPredicate(db, 'sprint_types')}
-  `);
+  `;
 
   for (const seed of STARTER_SPRINT_TYPE_SEEDS) {
-    const existing = select.get(seed.key, ...await tenantArgs(db, 'sprint_types', tenantId)) as { id: number; name: string; description: string; is_system: number; repo_required?: number | null } | undefined;
+    const existing = await db.get(selectSql, seed.key, ...await tenantArgs(db, 'sprint_types', tenantId)) as { id: number; name: string; description: string; is_system: number; repo_required?: number | null } | undefined;
     if (!existing) {
-      insert.run(...(hasTenant ? [tenantId] : []), seed.key, seed.name, seed.description, ...(hasRepoRequired ? [seed.repoRequired ? 1 : 0] : []));
+      await db.run(insertSql, ...(hasTenant ? [tenantId] : []), seed.key, seed.name, seed.description, ...(hasRepoRequired ? [seed.repoRequired ? 1 : 0] : []));
       addCount(result.created, 'workflow_types');
       continue;
     }
     if (existing.is_system === 1) {
-      update.run(seed.name, seed.description, ...(hasRepoRequired ? [seed.repoRequired ? 1 : 0] : []), seed.key, ...await tenantArgs(db, 'sprint_types', tenantId));
+      await db.run(updateSql, seed.name, seed.description, ...(hasRepoRequired ? [seed.repoRequired ? 1 : 0] : []), seed.key, ...await tenantArgs(db, 'sprint_types', tenantId));
       addCount(result.updated, 'workflow_types');
     } else if (existing.name !== seed.name || existing.description !== seed.description || (hasRepoRequired && (existing.repo_required ?? 0) !== (seed.repoRequired ? 1 : 0))) {
       result.conflicts.push({ kind: 'workflow_type', key: seed.key, message: 'Tenant-authored workflow type differs from the default package; left unchanged.' });
@@ -366,31 +366,31 @@ async function ensureWorkflowTypes(db: Db, tenantId: number, result: DefaultInst
 
 async function ensureWorkflowDefinitionRows(db: Db, tenantId: number, result: DefaultInstallPackageResult): Promise<void> {
   const fieldHasTenant = await tableHasColumn(db, 'task_field_schemas', 'tenant_id');
-  const fieldSelect = db.prepare(`
+  const fieldSelectSql = `
     SELECT id, schema_json, is_system
     FROM task_field_schemas
     WHERE sprint_type_key = ? AND task_type IS NULL
       ${await tenantPredicate(db, 'task_field_schemas')}
     LIMIT 1
-  `);
-  const fieldInsert = db.prepare(fieldHasTenant
+  `;
+  const fieldInsertSql = fieldHasTenant
     ? `INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json, is_system, created_at, updated_at) VALUES (?, ?, NULL, ?, 1, datetime('now'), datetime('now'))`
-    : `INSERT INTO task_field_schemas (sprint_type_key, task_type, schema_json, is_system, created_at, updated_at) VALUES (?, NULL, ?, 1, datetime('now'), datetime('now'))`);
-  const fieldUpdate = db.prepare(`
+    : `INSERT INTO task_field_schemas (sprint_type_key, task_type, schema_json, is_system, created_at, updated_at) VALUES (?, NULL, ?, 1, datetime('now'), datetime('now'))`;
+  const fieldUpdateSql = `
     UPDATE task_field_schemas
     SET schema_json = ?, is_system = 1, updated_at = datetime('now')
     WHERE sprint_type_key = ? AND task_type IS NULL
       ${await tenantPredicate(db, 'task_field_schemas')}
-  `);
+  `;
 
   for (const seed of STARTER_FIELD_SCHEMA_SEEDS) {
     const schemaJson = JSON.stringify(seed.schema);
-    const existing = fieldSelect.get(seed.sprintType, ...await tenantArgs(db, 'task_field_schemas', tenantId)) as { id: number; schema_json: string; is_system: number } | undefined;
+    const existing = await db.get(fieldSelectSql, seed.sprintType, ...await tenantArgs(db, 'task_field_schemas', tenantId)) as { id: number; schema_json: string; is_system: number } | undefined;
     if (!existing) {
-      fieldInsert.run(...(fieldHasTenant ? [tenantId] : []), seed.sprintType, schemaJson);
+      await db.run(fieldInsertSql, ...(fieldHasTenant ? [tenantId] : []), seed.sprintType, schemaJson);
       addCount(result.created, 'field_schemas');
     } else if (existing.is_system === 1) {
-      fieldUpdate.run(schemaJson, seed.sprintType, ...await tenantArgs(db, 'task_field_schemas', tenantId));
+      await db.run(fieldUpdateSql, schemaJson, seed.sprintType, ...await tenantArgs(db, 'task_field_schemas', tenantId));
       addCount(result.updated, 'field_schemas');
     } else if (existing.schema_json !== schemaJson) {
       result.conflicts.push({ kind: 'field_schema', key: seed.sprintType, message: 'Tenant-authored field schema differs from the default package; left unchanged.' });
@@ -398,27 +398,27 @@ async function ensureWorkflowDefinitionRows(db: Db, tenantId: number, result: De
   }
 
   const taskTypeHasTenant = await tableHasColumn(db, 'sprint_type_task_types', 'tenant_id');
-  const taskTypeSelect = db.prepare(`
+  const taskTypeSelectSql = `
     SELECT id, is_system
     FROM sprint_type_task_types
     WHERE sprint_type_key = ? AND task_type = ?
       ${await tenantPredicate(db, 'sprint_type_task_types')}
     LIMIT 1
-  `);
-  const taskTypeInsert = db.prepare(taskTypeHasTenant
+  `;
+  const taskTypeInsertSql = taskTypeHasTenant
     ? `INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system, created_at, updated_at) VALUES (?, ?, ?, 1, datetime('now'), datetime('now'))`
-    : `INSERT INTO sprint_type_task_types (sprint_type_key, task_type, is_system, created_at, updated_at) VALUES (?, ?, 1, datetime('now'), datetime('now'))`);
+    : `INSERT INTO sprint_type_task_types (sprint_type_key, task_type, is_system, created_at, updated_at) VALUES (?, ?, 1, datetime('now'), datetime('now'))`;
   for (const seed of STARTER_SPRINT_TYPE_TASK_TYPE_SEEDS) {
     for (const taskType of seed.taskTypes) {
-      const existing = taskTypeSelect.get(seed.sprintType, taskType, ...await tenantArgs(db, 'sprint_type_task_types', tenantId));
+      const existing = await db.get(taskTypeSelectSql, seed.sprintType, taskType, ...await tenantArgs(db, 'sprint_type_task_types', tenantId));
       if (existing) continue;
-      taskTypeInsert.run(...(taskTypeHasTenant ? [tenantId] : []), seed.sprintType, taskType);
+      await db.run(taskTypeInsertSql, ...(taskTypeHasTenant ? [tenantId] : []), seed.sprintType, taskType);
       addCount(result.created, 'task_types');
     }
   }
 
   const outcomeHasTenant = await tableHasColumn(db, 'sprint_type_outcomes', 'tenant_id');
-  const outcomeSelect = db.prepare(`
+  const outcomeSelectSql = `
     SELECT id, is_system, label, description, enabled, behavior, badge_variant, stage_order, metadata_json
     FROM sprint_type_outcomes
     WHERE sprint_type_key = ?
@@ -426,18 +426,18 @@ async function ensureWorkflowDefinitionRows(db: Db, tenantId: number, result: De
       AND outcome_key = ?
       ${await tenantPredicate(db, 'sprint_type_outcomes')}
     LIMIT 1
-  `);
-  const outcomeInsert = db.prepare(outcomeHasTenant
+  `;
+  const outcomeInsertSql = outcomeHasTenant
     ? `INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))`
-    : `INSERT INTO sprint_type_outcomes (sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))`);
-  const outcomeUpdate = db.prepare(`
+    : `INSERT INTO sprint_type_outcomes (sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))`;
+  const outcomeUpdateSql = `
     UPDATE sprint_type_outcomes
     SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
     WHERE sprint_type_key = ?
       AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
       AND outcome_key = ?
       ${await tenantPredicate(db, 'sprint_type_outcomes')}
-  `);
+  `;
   for (const seed of STARTER_SPRINT_OUTCOME_SEEDS) {
     for (const outcome of seed.outcomes) {
       const taskType = outcome.task_type ?? null;
@@ -445,12 +445,12 @@ async function ensureWorkflowDefinitionRows(db: Db, tenantId: number, result: De
       const behavior = outcome.behavior ?? (taskType ? 'extend' : 'base');
       const badge = outcome.badge_variant ?? null;
       const metadataJson = JSON.stringify(outcome.metadata ?? {});
-      const existing = outcomeSelect.get(seed.sprintType, taskType, taskType, outcome.outcome_key, ...await tenantArgs(db, 'sprint_type_outcomes', tenantId)) as { is_system: number } | undefined;
+      const existing = await db.get(outcomeSelectSql, seed.sprintType, taskType, taskType, outcome.outcome_key, ...await tenantArgs(db, 'sprint_type_outcomes', tenantId)) as { is_system: number } | undefined;
       if (!existing) {
-        outcomeInsert.run(...(outcomeHasTenant ? [tenantId] : []), seed.sprintType, taskType, outcome.outcome_key, outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson);
+        await db.run(outcomeInsertSql, ...(outcomeHasTenant ? [tenantId] : []), seed.sprintType, taskType, outcome.outcome_key, outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson);
         addCount(result.created, 'outcomes');
       } else if (existing.is_system === 1) {
-        outcomeUpdate.run(outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson, seed.sprintType, taskType, taskType, outcome.outcome_key, ...await tenantArgs(db, 'sprint_type_outcomes', tenantId));
+        await db.run(outcomeUpdateSql, outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson, seed.sprintType, taskType, taskType, outcome.outcome_key, ...await tenantArgs(db, 'sprint_type_outcomes', tenantId));
         addCount(result.updated, 'outcomes');
       } else {
         result.conflicts.push({ kind: 'outcome', key: `${seed.sprintType}:${outcome.outcome_key}`, message: 'Tenant-authored outcome differs from the default package; left unchanged.' });
@@ -548,10 +548,10 @@ async function ensureStarterWorkflows(db: Db, tenantId: number, projectId: numbe
     lead_generation: 'Lead Generation',
   };
   const workflows = new Map<StarterSprintTypeKey, number>();
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
     VALUES (?, ?, ?, '', ?, 'active', 'time', 'ongoing')
-  `);
+  `;
 
   for (const seed of STARTER_SPRINT_TYPE_SEEDS) {
     const existing = await db.get(`
@@ -564,7 +564,8 @@ async function ensureStarterWorkflows(db: Db, tenantId: number, projectId: numbe
       LIMIT 1
     `, tenantId, projectId, seed.key, workflowNames[seed.key]) as { id: number } | undefined;
 
-    const sprintId = existing?.id ?? Number(insert.run(tenantId, projectId, workflowNames[seed.key], seed.key).lastInsertRowid);
+    const sprintId = existing?.id
+      ?? Number((await db.run(insertSql, tenantId, projectId, workflowNames[seed.key], seed.key)).lastInsertId);
     if (!existing) addCount(result.created, 'workflows');
     await seedSprintTaskPolicy(db, sprintId);
     workflows.set(seed.key, sprintId);
@@ -650,13 +651,13 @@ async function ensureAgentCapabilities(db: Db, agentId: number, seed: StarterAge
   if (!await tableExists(db, 'agent_mcp_capability_policies')) return;
   const validKeys = new Set<string>(AGENT_MCP_CAPABILITY_CATALOG.map((capability) => capability.key));
   const desired = new Set(seed.capabilityKeys.filter((key) => validKeys.has(key)));
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO agent_mcp_capability_policies (agent_id, capability_key, enabled, created_at, updated_at)
     VALUES (?, ?, ?, datetime('now'), datetime('now'))
     ON CONFLICT(agent_id, capability_key) DO NOTHING
-  `);
+  `;
   for (const capability of AGENT_MCP_CAPABILITY_CATALOG) {
-    const resultRow = insert.run(agentId, capability.key, desired.has(capability.key) ? 1 : 0);
+    const resultRow = await db.run(insertSql, agentId, capability.key, desired.has(capability.key) ? 1 : 0);
     if (resultRow.changes > 0) addCount(result.created, 'agent_capability_policies');
   }
 }
@@ -705,7 +706,7 @@ async function ensureRouting(db: Db, tenantId: number, projectId: number, agents
   }
 
   const hasTenant = await tableHasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
-  const exists = db.prepare(`
+  const existsSql = `
     SELECT id
     FROM sprint_task_routing_rules
     WHERE project_id = ?
@@ -716,8 +717,8 @@ async function ensureRouting(db: Db, tenantId: number, projectId: number, agents
       AND agent_id = ?
       ${hasTenant ? 'AND tenant_id = ?' : ''}
     LIMIT 1
-  `);
-  const insert = db.prepare(hasTenant
+  `;
+  const insertSql = hasTenant
     ? `
       INSERT OR IGNORE INTO sprint_task_routing_rules (
         tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority, is_system, created_at, updated_at
@@ -727,11 +728,11 @@ async function ensureRouting(db: Db, tenantId: number, projectId: number, agents
       INSERT OR IGNORE INTO sprint_task_routing_rules (
         sprint_id, project_id, sprint_type, task_type, status, agent_id, priority, is_system, created_at, updated_at
       ) VALUES (NULL, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
-    `);
+    `;
   for (const rule of rules) {
-    const existing = exists.get(projectId, rule.sprintType, rule.taskType, rule.status, rule.agentId, ...(hasTenant ? [tenantId] : []));
+    const existing = await db.get(existsSql, projectId, rule.sprintType, rule.taskType, rule.status, rule.agentId, ...(hasTenant ? [tenantId] : []));
     if (existing) continue;
-    const inserted = insert.run(...(hasTenant ? [tenantId] : []), projectId, rule.sprintType, rule.taskType, rule.status, rule.agentId, rule.priority);
+    const inserted = await db.run(insertSql, ...(hasTenant ? [tenantId] : []), projectId, rule.sprintType, rule.taskType, rule.status, rule.agentId, rule.priority);
     if (inserted.changes > 0) addCount(result.created, 'routing_rules');
   }
 }
@@ -740,8 +741,8 @@ async function ensureAutomaticTransitions(db: Db, tenantId: number, workflows: M
   if (!await tableExists(db, 'sprint_task_transitions')) return;
   const hasTenant = await tableHasColumn(db, 'sprint_task_transitions', 'tenant_id');
   const hasScope = await tableHasColumn(db, 'sprint_task_transitions', 'project_id') && await tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
-  const sprintRows = db.prepare(`SELECT id, project_id, sprint_type FROM sprints WHERE id = ?`);
-  const exists = db.prepare(`
+  const sprintRowSql = `SELECT id, project_id, sprint_type FROM sprints WHERE id = ?`;
+  const existsSql = `
     SELECT id
     FROM sprint_task_transitions
     WHERE sprint_id = ?
@@ -750,8 +751,8 @@ async function ensureAutomaticTransitions(db: Db, tenantId: number, workflows: M
       AND outcome = ?
       ${hasTenant ? 'AND tenant_id = ?' : ''}
     LIMIT 1
-  `);
-  const insert = db.prepare(hasTenant
+  `;
+  const insertSql = hasTenant
     ? (hasScope
       ? `INSERT INTO sprint_task_transitions (tenant_id, sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`
@@ -761,13 +762,13 @@ async function ensureAutomaticTransitions(db: Db, tenantId: number, workflows: M
       ? `INSERT INTO sprint_task_transitions (sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`
       : `INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`));
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`);
 
   for (const [sprintType, sprintId] of workflows.entries()) {
-    const sprint = sprintRows.get(sprintId) as { id: number; project_id: number; sprint_type: string } | undefined;
+    const sprint = await db.get(sprintRowSql, sprintId) as { id: number; project_id: number; sprint_type: string } | undefined;
     if (!sprint) continue;
     for (const row of policyTransitionsForSprintType(sprintType)) {
-      const existing = exists.get(sprintId, row.task_type ?? null, row.task_type ?? null, row.from_status, row.outcome, ...(hasTenant ? [tenantId] : []));
+      const existing = await db.get(existsSql, sprintId, row.task_type ?? null, row.task_type ?? null, row.from_status, row.outcome, ...(hasTenant ? [tenantId] : []));
       if (existing) continue;
       const args = hasTenant
         ? (hasScope
@@ -776,7 +777,7 @@ async function ensureAutomaticTransitions(db: Db, tenantId: number, workflows: M
         : (hasScope
           ? [sprintId, sprint.project_id, sprint.sprint_type, row.task_type ?? null, row.from_status, row.outcome, row.to_status, row.enabled, row.priority]
           : [sprintId, row.task_type ?? null, row.from_status, row.outcome, row.to_status, row.enabled, row.priority]);
-      const inserted = insert.run(...args);
+      const inserted = await db.run(insertSql, ...args);
       if (inserted.changes > 0) addCount(result.created, 'automatic_transitions');
     }
   }
@@ -791,7 +792,7 @@ async function ensureModelRouting(db: Db, tenantId: number, projectId: number, r
     { maxPoints: 5, model: 'anthropic/claude-sonnet-4-6', thinking: 'medium', fastMode: 0, label: 'Default medium work' },
     { maxPoints: 13, model: 'anthropic/claude-opus-4-6', thinking: 'high', fastMode: 0, label: 'Default large work' },
   ];
-  const exists = db.prepare(`
+  const existsSql = `
     SELECT id
     FROM story_point_model_routing
     WHERE project_id = ?
@@ -801,7 +802,7 @@ async function ensureModelRouting(db: Db, tenantId: number, projectId: number, r
       AND provider = 'anthropic'
       ${hasTenant ? 'AND tenant_id = ?' : ''}
     LIMIT 1
-  `);
+  `;
   const columns = [
     ...(hasTenant ? ['tenant_id'] : []),
     'project_id',
@@ -817,12 +818,12 @@ async function ensureModelRouting(db: Db, tenantId: number, projectId: number, r
     'created_at',
     'updated_at',
   ];
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO story_point_model_routing (${columns.join(', ')})
     VALUES (${columns.map((column) => column === 'created_at' || column === 'updated_at' ? "datetime('now')" : '?').join(', ')})
-  `);
+  `;
   for (const row of rows) {
-    if (exists.get(projectId, row.maxPoints, ...(hasTenant ? [tenantId] : []))) continue;
+    if (await db.get(existsSql, projectId, row.maxPoints, ...(hasTenant ? [tenantId] : []))) continue;
     const values = [
       ...(hasTenant ? [tenantId] : []),
       projectId,
@@ -836,7 +837,7 @@ async function ensureModelRouting(db: Db, tenantId: number, projectId: number, r
       ...(hasFastMode ? [row.fastMode] : []),
       row.label,
     ];
-    const inserted = insert.run(...values);
+    const inserted = await db.run(insertSql, ...values);
     if (inserted.changes > 0) addCount(result.created, 'model_routing');
   }
 }
@@ -859,7 +860,7 @@ export async function applyDefaultInstallPackage(
   const tenant = await db.get(`SELECT slug FROM tenants WHERE id = ? LIMIT 1`, tenantId) as { slug: string } | undefined;
   if (!tenant) throw new Error(`Tenant ${tenantId} not found`);
 
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     await ensureDefaultSkills(db, tenantId, result);
     await ensureWorkflowTypes(db, tenantId, result);
     await ensureWorkflowDefinitionRows(db, tenantId, result);
@@ -883,6 +884,5 @@ export async function applyDefaultInstallPackage(
     await seedTenantDefaultWorkflowEventMappings(db, tenantId);
     await recordLedger(db, result);
   });
-  tx();
   return result;
 }

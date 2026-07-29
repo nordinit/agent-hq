@@ -126,9 +126,9 @@ export function extractGatewayEvents(msg: Record<string, unknown>): PersistedGat
   return [{ event_type: 'text', content: plainText, event_meta: {} }];
 }
 
-export function persistGatewayHistory(instanceId: number, agentId: number, messages: Array<Record<string, unknown>>): void {
+export async function persistGatewayHistory(instanceId: number, agentId: number, messages: Array<Record<string, unknown>>): Promise<void> {
   const db = getDb();
-  const stmt = db.prepare(`
+  const insertSql = `
     INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
@@ -136,7 +136,7 @@ export function persistGatewayHistory(instanceId: number, agentId: number, messa
       timestamp = excluded.timestamp,
       event_type = excluded.event_type,
       event_meta = excluded.event_meta
-  `);
+  `;
 
   let rowIndex = 0;
   for (const m of messages) {
@@ -149,7 +149,7 @@ export function persistGatewayHistory(instanceId: number, agentId: number, messa
     for (const evt of extractGatewayEvents(m)) {
       const rowId = `oc-hist-${instanceId}-${rowIndex++}`;
       const meta = { ...evt.event_meta, ...(sourceRole !== role ? { source_role: sourceRole } : {}) };
-      stmt.run(rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(meta));
+      await db.run(insertSql, rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(meta));
     }
   }
 }

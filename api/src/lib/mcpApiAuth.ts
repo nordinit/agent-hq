@@ -915,17 +915,15 @@ export async function replaceAgentMcpPermissionPolicy(
     normalized.add(rawKey as AgentMcpCapabilityKey);
   }
 
-  const save = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     await db.run(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`, agentId);
-    const insert = db.prepare(`
-      INSERT INTO agent_mcp_capability_policies (agent_id, capability_key, enabled)
-      VALUES (?, ?, ?)
-    `);
     for (const capability of AGENT_MCP_CAPABILITY_CATALOG) {
-      insert.run(agentId, capability.key, normalized.has(capability.key) ? 1 : 0);
+      await db.run(`
+        INSERT INTO agent_mcp_capability_policies (agent_id, capability_key, enabled)
+        VALUES (?, ?, ?)
+      `, agentId, capability.key, normalized.has(capability.key) ? 1 : 0);
     }
   });
-  save();
 
   return await buildAgentMcpPermissionPolicySnapshot(db, context);
 }

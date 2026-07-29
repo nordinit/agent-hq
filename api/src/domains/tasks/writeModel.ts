@@ -263,9 +263,8 @@ export async function createTaskRecord(
     : [];
 
   if (normalizedRelationships.length > 0 && resolvedTenantId != null) {
-    const targetTenant = db.prepare('SELECT tenant_id FROM tasks WHERE id = ?').pluck();
     for (const relationship of normalizedRelationships) {
-      const targetTenantId = targetTenant.get(relationship.target_task_id) as number | null | undefined;
+      const targetTenantId = await db.value<number | null>('SELECT tenant_id FROM tasks WHERE id = ?', relationship.target_task_id);
       if (targetTenantId === undefined) throw new Error(`target_task_id ${relationship.target_task_id} does not exist`);
       requireSameTenant(targetTenantId, resolvedTenantId, `target_task_id ${relationship.target_task_id} is not in the same workspace`);
     }
@@ -276,7 +275,7 @@ export async function createTaskRecord(
     }
   }
 
-  const insertTask = db.transaction(async () => {
+  const { taskId, legacyBlockerWarnings } = await db.withTransaction(async (db) => {
     const result = await db.run(`
       INSERT INTO tasks (
         tenant_id, title, description, status, priority, project_id, assigned_agent_id, sprint_id, recurring,
@@ -313,8 +312,6 @@ export async function createTaskRecord(
 
     return { taskId, legacyBlockerWarnings };
   });
-
-  const { taskId, legacyBlockerWarnings } = insertTask();
 
   if (origin_task_id != null) {
     const existingMetrics = await db.get('SELECT id FROM task_outcome_metrics WHERE task_id = ?', origin_task_id) as { id: number } | undefined;

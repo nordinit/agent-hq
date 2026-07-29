@@ -86,7 +86,7 @@ export async function listTransitionRequirements(
 
   query += ` ORDER BY task_type NULLS LAST, outcome, priority DESC, id ASC`;
 
-  return { transition_requirements: db.prepare(query).all(...params) };
+  return { transition_requirements: await db.all(query, ...params) };
 }
 
 export async function createTransitionRequirement(db: Db, input: Record<string, unknown>) {

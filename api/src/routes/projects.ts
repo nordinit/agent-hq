@@ -140,7 +140,7 @@ router.post('/', async (req: Request, res: Response) => {
           },
         });
 
-    const newId = Number(result.lastInsertRowid);
+    const newId = Number(result.lastInsertId);
     await ensureProjectBacklogSprint(db, newId);
     await syncStarterRoutingForProject(db, newId);
     await ensureDefaultProjectId(db);
@@ -151,7 +151,7 @@ router.post('/', async (req: Request, res: Response) => {
             context_md: context_md ?? '',
           });
 
-    const project = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(newId, tenantId);
+    const project = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'),newId, tenantId);
     return res.status(201).json(project);
   } catch (err) {
     return sendRouteError(res, err);
@@ -166,7 +166,7 @@ router.get('/default', async (_req: Request, res: Response) => {
     const defaultProjectId = await ensureDefaultProjectId(db);
     if (!defaultProjectId) return res.json({ project: null, default_project_id: null });
 
-    const project = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(defaultProjectId, tenantId);
+    const project = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'),defaultProjectId, tenantId);
     return res.json({ project, default_project_id: defaultProjectId });
   } catch (err) {
     return sendRouteError(res, err);
@@ -188,7 +188,7 @@ router.put('/:id/default', async (req: Request, res: Response) => {
     const actor = extractActor(req);
     await writeProjectAudit(db, projectId, 'project', projectId, 'updated', actor, { default_project: true });
 
-    const selectedProject = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(projectId, tenantId);
+    const selectedProject = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'),projectId, tenantId);
     return res.json({ ok: true, project: selectedProject, default_project_id: projectId });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -250,7 +250,7 @@ router.post('/import', async (req: Request, res: Response) => {
           tenantId,
           actor,
         });
-    const project = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(result.project_id, tenantId);
+    const project = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'),result.project_id, tenantId);
     return res.status(201).json({ ok: true, project, ...result });
   } catch (err) {
     const withPreview = err as { status?: number; preview?: unknown; message?: string };
@@ -267,7 +267,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     await ensureDefaultProjectId(db);
-    const project = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(req.params.id, tenantId);
+    const project = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'),req.params.id, tenantId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     return res.json(project);
   } catch (err) {
@@ -327,7 +327,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     }
 
     await ensureDefaultProjectId(db);
-    const updated = db.prepare(projectSelectSqlForTenant('WHERE p.id = ?')).get(req.params.id, tenantId);
+    const updated = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'),req.params.id, tenantId);
     return res.json(updated);
   } catch (err) {
     return sendRouteError(res, err);
@@ -552,7 +552,7 @@ router.get('/:id/audit', async (req: Request, res: Response) => {
     query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
     params.push(limit, offset);
 
-    const rows = db.prepare(query).all(...params) as Array<Record<string, unknown>>;
+    const rows = await db.all(query, ...params) as Array<Record<string, unknown>>;
 
     // Parse the changes JSON for each row
     const entries = rows.map(row => ({

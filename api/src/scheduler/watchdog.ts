@@ -367,12 +367,13 @@ interface WatchdogTaskRuntimeContext {
 async function loadTaskRuntimeContext(db: Db, taskId: number | null): Promise<WatchdogTaskRuntimeContext | null> {
   if (!taskId) return null;
   try {
+    const hasCustomFields = await tableHasColumn(db, 'tasks', 'custom_fields_json');
     const row = await db.get(`
       SELECT t.status AS task_status,
              t.task_type,
              t.sprint_id,
              s.sprint_type,
-             ${((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((row) => row.name === 'custom_fields_json')) ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
+             ${hasCustomFields ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
       FROM tasks t
       LEFT JOIN sprints s ON s.id = t.sprint_id
       WHERE t.id = ?

@@ -109,7 +109,7 @@ export async function getRoutingRule(db: Db, input: { id: unknown; sprint_id?: u
   }
   query += tenant.sql;
 
-  const rule = db.prepare(query).get(...params, ...tenant.params) as RoutingRuleRow | undefined;
+  const rule = await db.get(query, ...params, ...tenant.params) as RoutingRuleRow | undefined;
   if (!rule) {
     throw withStatus('Routing rule not found', 404);
   }

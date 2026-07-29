@@ -66,18 +66,18 @@ router.post('/migrate-from-fs', async (req: Request, res: Response) => {
     const requested = Array.isArray(req.body?.skills) ? req.body.skills : [];
     const imported: string[] = [];
     const skipped: string[] = [];
-    const insert = db.prepare(`
+    const insertSql = `
       INSERT INTO skills (tenant_id, name, description, content, source)
       VALUES (?, ?, ?, ?, 'workspace')
       ON CONFLICT(tenant_id, name) DO NOTHING
-    `);
+    `;
     for (const item of requested) {
       const name = normalizeName(item?.name);
       if (!name) {
         skipped.push(String(item?.name ?? '<missing-name>'));
         continue;
       }
-      const result = insert.run(tenantId, name, item?.description ?? '', item?.content ?? '');
+      const result = await db.run(insertSql, tenantId, name, item?.description ?? '', item?.content ?? '');
       if (result.changes > 0) imported.push(name);
       else skipped.push(name);
     }

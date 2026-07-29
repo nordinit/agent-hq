@@ -305,7 +305,7 @@ function buildSinceClause(column: string, value: string | undefined, params: unk
   return ` AND datetime(${column}) >= datetime(?)`;
 }
 
-function loadNotes(taskId: number, options: NormalizedTaskContextOptions): RecordLike[] {
+async function loadNotes(taskId: number, options: NormalizedTaskContextOptions): Promise<RecordLike[]> {
   if (!options.includeNotes) return [];
   const db = getDb();
   const params: unknown[] = [taskId];
@@ -317,10 +317,10 @@ function loadNotes(taskId: number, options: NormalizedTaskContextOptions): Recor
   query += buildSinceClause('created_at', options.sinceTimestamp, params);
   query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
   params.push(options.recentNotesLimit);
-  return db.prepare(query).all(...params) as RecordLike[];
+  return await db.all(query, ...params) as RecordLike[];
 }
 
-function loadHistory(taskId: number, options: NormalizedTaskContextOptions): RecordLike[] {
+async function loadHistory(taskId: number, options: NormalizedTaskContextOptions): Promise<RecordLike[]> {
   if (!options.includeHistory) return [];
   const db = getDb();
   const params: unknown[] = [taskId];
@@ -332,10 +332,10 @@ function loadHistory(taskId: number, options: NormalizedTaskContextOptions): Rec
   query += buildSinceClause('created_at', options.sinceTimestamp, params);
   query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
   params.push(options.recentHistoryLimit);
-  return db.prepare(query).all(...params) as RecordLike[];
+  return await db.all(query, ...params) as RecordLike[];
 }
 
-function loadRuns(taskId: number, options: NormalizedTaskContextOptions): RecordLike[] {
+async function loadRuns(taskId: number, options: NormalizedTaskContextOptions): Promise<RecordLike[]> {
   if (!options.includeRuns) return [];
   const db = getDb();
   const params: unknown[] = [taskId];
@@ -368,7 +368,7 @@ function loadRuns(taskId: number, options: NormalizedTaskContextOptions): Record
   }
   query += ` ORDER BY ji.created_at DESC, ji.id DESC LIMIT ?`;
   params.push(options.recentRunsLimit);
-  const rows = db.prepare(query).all(...params) as RecordLike[];
+  const rows = await db.all(query, ...params) as RecordLike[];
   return rows.map((row) => ({
     ...stripRetiredTaskColumns(row),
     changed_files: parseChangedFiles(row.changed_files_json),
@@ -386,7 +386,7 @@ async function loadExternalEvents(taskId: number, options: NormalizedTaskContext
   query += buildSinceClause('created_at', options.sinceTimestamp, params);
   query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
   params.push(options.recentExternalEventsLimit);
-  return db.prepare(query).all(...params) as RecordLike[];
+  return await db.all(query, ...params) as RecordLike[];
 }
 
 function classifyNote(row: RecordLike): ClassifiedNote {
@@ -874,9 +874,9 @@ export async function buildTaskContext(taskId: number, mode: TaskContextMode = '
   const task = await loadTask(taskId);
   if (!task) return null;
 
-  const notes = loadNotes(taskId, normalized);
-  const history = loadHistory(taskId, normalized);
-  const runs = loadRuns(taskId, normalized);
+  const notes = await loadNotes(taskId, normalized);
+  const history = await loadHistory(taskId, normalized);
+  const runs = await loadRuns(taskId, normalized);
   const externalEvents = await loadExternalEvents(taskId, normalized);
 
   const meaningfulNotes = buildMeaningfulNotesSummary(notes);

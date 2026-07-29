@@ -400,7 +400,7 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
           // Persist the fetched history to chat_messages so subsequent loads are fast
           const agent = await getAgentRow(instance.agent_id);
           const agentId = agent?.id ?? instance.agent_id;
-          this.persistGatewayHistory(instanceId, agentId, histResult.messages);
+          await this.persistGatewayHistory(instanceId, agentId, histResult.messages);
 
           // Re-read from chat_messages to get the freshly written rows
           const refreshed = await db.all(`
@@ -454,13 +454,13 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
    * Persist gateway history messages to chat_messages, expanding multi-block
    * turns (tool calls, thoughts, tool results) into individual rows.
    */
-  private persistGatewayHistory(
+  private async persistGatewayHistory(
     instanceId: number,
     agentId: number,
     messages: Array<Record<string, unknown>>,
-  ): void {
+  ): Promise<void> {
     const db = getDb();
-    const stmt = db.prepare(`
+    const insertSql = `
       INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
@@ -468,7 +468,7 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
         timestamp = excluded.timestamp,
         event_type = excluded.event_type,
         event_meta = excluded.event_meta
-    `);
+    `;
 
     let rowIndex = 0;
     for (const m of messages) {
@@ -481,7 +481,7 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
       for (const evt of extractGatewayEvents(m)) {
         const rowId = `oc-hist-${instanceId}-${rowIndex++}`;
         const role = normalizeTranscriptRole(baseRole, evt.event_type);
-        stmt.run(rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(evt.event_meta));
+        await db.run(insertSql, rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(evt.event_meta));
       }
     }
   }

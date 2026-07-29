@@ -6,9 +6,11 @@ import {
   validateRequirementFieldExpression,
 } from './sprintTypeConfig';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function createDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE sprints (
       id INTEGER PRIMARY KEY,

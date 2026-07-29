@@ -384,8 +384,8 @@ async function syncSprintTypeStatusToExistingSprints(
     WHERE sprint_type = ?
       ${tenant.sql}
   `, sprintTypeKey, ...tenant.params) as Array<{ id: number }>;
-  const existing = db.prepare(`SELECT id FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ? LIMIT 1`);
-  const update = db.prepare(`
+  const existingSql = `SELECT id FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ? LIMIT 1`;
+  const updateSql = `
     UPDATE sprint_task_statuses
     SET label = ?,
         color = ?,
@@ -397,15 +397,16 @@ async function syncSprintTypeStatusToExistingSprints(
         metadata_json = ?,
         updated_at = datetime('now')
     WHERE sprint_id = ? AND status_key = ?
-  `);
-  const insert = db.prepare(`
+  `;
+  const insertSql = `
     INSERT INTO sprint_task_statuses (
       sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-  `);
+  `;
   for (const sprint of sprints) {
-    if (existing.get(sprint.id, row.status_key)) {
-      update.run(
+    if (await db.get(existingSql, sprint.id, row.status_key)) {
+      await db.run(
+        updateSql,
         row.label,
         row.color,
         row.terminal,
@@ -418,7 +419,8 @@ async function syncSprintTypeStatusToExistingSprints(
         row.status_key,
       );
     } else {
-      insert.run(
+      await db.run(
+        insertSql,
         sprint.id,
         row.status_key,
         row.label,
@@ -796,7 +798,7 @@ router.post('/types', async (req: Request, res: Response) => {
     if (existing) return res.status(409).json({ error: `Sprint type "${key}" already exists` });
     const tenant = await sprintTypeTenantInsertFragment(db, tenantId);
 
-    const tx = db.transaction(async () => {
+    await db.withTransaction(async (db) => {
       await db.run(`
         INSERT INTO sprint_types (${tenant.columns}${project.columns}key, name, description, is_system, created_at, updated_at)
         VALUES (${tenant.placeholders}${project.placeholders}?, ?, ?, 0, datetime('now'), datetime('now'))
@@ -805,7 +807,6 @@ router.post('/types', async (req: Request, res: Response) => {
         await seedSprintTypeTaskStatuses(db, key, { tenantId });
       }
     });
-    tx();
 
     return res.status(201).json(await getSprintTypeOr404(db, key, tenantId));
   } catch (err) {
@@ -897,20 +898,19 @@ router.put('/types/:key/task-types', async (req: Request, res: Response) => {
     const taskTypes = req.body.task_types.map((taskType: unknown, index: number) => normalizeConfigKey(taskType, `task_types[${index}]`));
     const dedupedTaskTypes = [...new Set(taskTypes)];
 
-    const tx = db.transaction(async () => {
+    await db.withTransaction(async (db) => {
       await db.run(`DELETE FROM sprint_type_task_types WHERE sprint_type_key = ?${taskTypeTenant.sql}`, sprintTypeKey, ...taskTypeTenant.params);
       const insertTenant = await configTenantInsertFragment(db, 'sprint_type_task_types', tenantId);
-      const insertStmt = db.prepare(`
+      const insertSql = `
         INSERT INTO sprint_type_task_types (${insertTenant.columns}sprint_type_key, task_type, is_system, created_at, updated_at)
         VALUES (${insertTenant.placeholders}?, ?, 0, datetime('now'), datetime('now'))
-      `);
+      `;
       for (const taskType of dedupedTaskTypes) {
-        insertStmt.run(...insertTenant.params, sprintTypeKey, taskType);
+        await db.run(insertSql, ...insertTenant.params, sprintTypeKey, taskType);
       }
       const sprintTypeTenant = await sprintTypeTenantPredicate(db, tenantId);
       await db.run(`UPDATE sprint_types SET updated_at = datetime('now') WHERE key = ?${sprintTypeTenant.sql}`, sprintTypeKey, ...sprintTypeTenant.params);
     });
-    tx();
 
     return res.json({
       sprint_type: sprintType,
@@ -957,7 +957,7 @@ router.post('/types/:key/statuses', async (req: Request, res: Response) => {
       metadata_json: JSON.stringify(metadata),
     };
 
-    const tx = db.transaction(async () => {
+    await db.withTransaction(async (db) => {
       const insertTenant = await configTenantInsertFragment(db, 'sprint_type_task_statuses', tenantId);
       await db.run(`
         INSERT INTO sprint_type_task_statuses (
@@ -967,7 +967,6 @@ router.post('/types/:key/statuses', async (req: Request, res: Response) => {
       await syncSprintTypeStatusToExistingSprints(db, sprintTypeKey, tenantId, row);
       await db.run(`UPDATE sprint_types SET updated_at = datetime('now') WHERE key = ?${(await sprintTypeTenantPredicate(db, tenantId)).sql}`, sprintTypeKey, ...(await sprintTypeTenantPredicate(db, tenantId)).params);
     });
-    tx();
 
     return res.status(201).json((await getStatusesForSprintType(db, sprintTypeKey, tenantId)).find(status => status.name === statusKey));
   } catch (err) {
@@ -1020,7 +1019,7 @@ router.put('/types/:key/statuses/:statusKey', async (req: Request, res: Response
       metadata_json: JSON.stringify(metadata),
     };
 
-    const tx = db.transaction(async () => {
+    await db.withTransaction(async (db) => {
       const statusTenant = await configTenantPredicate(db, 'sprint_type_task_statuses', tenantId);
       await db.run(`
         UPDATE sprint_type_task_statuses
@@ -1056,7 +1055,6 @@ router.put('/types/:key/statuses/:statusKey', async (req: Request, res: Response
       await syncSprintTypeStatusToExistingSprints(db, sprintTypeKey, tenantId, row);
       await db.run(`UPDATE sprint_types SET updated_at = datetime('now') WHERE key = ?${(await sprintTypeTenantPredicate(db, tenantId)).sql}`, sprintTypeKey, ...(await sprintTypeTenantPredicate(db, tenantId)).params);
     });
-    tx();
 
     return res.json((await getStatusesForSprintType(db, sprintTypeKey, tenantId)).find(status => status.name === nextStatusKey));
   } catch (err) {
@@ -1127,7 +1125,7 @@ router.delete('/types/:key/statuses/:statusKey', async (req: Request, res: Respo
       });
     }
 
-    const tx = db.transaction(async () => {
+    await db.withTransaction(async (db) => {
       await db.run(`DELETE FROM sprint_type_task_statuses WHERE sprint_type_key = ? AND status_key = ?${statusTenant.sql}`, sprintTypeKey, statusKey, ...statusTenant.params);
       await db.run(`
         DELETE FROM sprint_task_statuses
@@ -1136,7 +1134,6 @@ router.delete('/types/:key/statuses/:statusKey', async (req: Request, res: Respo
       `, statusKey, sprintTypeKey, ...sprintTenantParams);
       await db.run(`UPDATE sprint_types SET updated_at = datetime('now') WHERE key = ?${(await sprintTypeTenantPredicate(db, tenantId)).sql}`, sprintTypeKey, ...(await sprintTypeTenantPredicate(db, tenantId)).params);
     });
-    tx();
 
     return res.json({ ok: true });
   } catch (err) {

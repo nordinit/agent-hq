@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { applyRuntimeEndToJobInstance } from './runtimeEnd';
 import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 jest.mock('./observability', () => ({
   recordRunCheckIn: jest.fn(),
@@ -20,7 +21,8 @@ jest.mock('../../lib/taskLifecycle', () => ({
 }));
 
 async function createDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE job_instances (
       id INTEGER PRIMARY KEY,

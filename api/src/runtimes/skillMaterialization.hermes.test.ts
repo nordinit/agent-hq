@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { getSkillMaterializationAdapter } from './skillMaterialization';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 const TENANT_ID = 1;
 
@@ -12,7 +13,8 @@ function makeTempDir(prefix: string): string {
 }
 
 async function makeSkillsDb(skillNames: string[]): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE skills (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,7 +26,7 @@ async function makeSkillsDb(skillNames: string[]): Promise<Db> {
       source      TEXT
     );
   `);
-  const insert = db.prepare(`
+  const insert = dbRaw.prepare(`
     INSERT INTO skills (tenant_id, name, fs_path, content, description, source)
     VALUES (?, ?, NULL, NULL, '', 'system')
   `);

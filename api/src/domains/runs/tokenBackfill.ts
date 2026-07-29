@@ -194,20 +194,20 @@ async function getBackfillCandidates(db: Db): Promise<Array<{ id: number; sessio
   `) as Array<{ id: number; session_key: string | null }>;
 }
 
-function applyTokenBackfill(
+async function applyTokenBackfill(
   db: Db,
   candidates: Array<{ id: number; session_key: string | null }>,
   tokenMap: TokenMap,
-): number {
+): Promise<number> {
   if (candidates.length === 0 || tokenMap.size === 0) return 0;
 
-  const update = db.prepare(`
+  const updateSql = `
     UPDATE job_instances
     SET token_input = COALESCE(?, token_input),
         token_output = COALESCE(?, token_output),
         token_total = COALESCE(?, token_total)
     WHERE id = ?
-  `);
+  `;
 
   let updated = 0;
 
@@ -218,7 +218,7 @@ function applyTokenBackfill(
     }
     if (!tokens) continue;
 
-    const result = update.run(tokens.input, tokens.output, tokens.total, row.id);
+    const result = await db.run(updateSql, tokens.input, tokens.output, tokens.total, row.id);
     if (result.changes > 0) updated++;
   }
 
@@ -232,7 +232,7 @@ function applyTokenBackfill(
 export async function backfillInstanceTokens(db: Db = getDb()): Promise<number> {
   const candidates = await getBackfillCandidates(db);
   if (candidates.length === 0) return 0;
-  return applyTokenBackfill(db, candidates, fetchHookSessionTokens());
+  return await applyTokenBackfill(db, candidates, fetchHookSessionTokens());
 }
 
 export async function backfillInstanceTokensAsync(db: Db = getDb()): Promise<number> {
@@ -245,5 +245,5 @@ export async function backfillInstanceTokensAsync(db: Db = getDb()): Promise<num
   }
   lastBackfillFetchAtMs = now;
 
-  return applyTokenBackfill(db, candidates, await fetchHookSessionTokensAsync());
+  return await applyTokenBackfill(db, candidates, await fetchHookSessionTokensAsync());
 }

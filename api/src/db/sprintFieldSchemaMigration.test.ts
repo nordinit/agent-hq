@@ -6,6 +6,7 @@ import { closeDb, getDb } from './client';
 import { initSchema } from './schema';
 import { resolveWorkflowMetadata } from '../domains/sprint-definitions/workflowMetadata';
 import { seedSprintTaskPolicy } from '../domains/routing/policy';
+import { SqliteAdapter } from "./adapter/SqliteAdapter";
 
 let tempDir = '';
 const originalDbPath = process.env.AGENT_HQ_DB_PATH;
@@ -452,7 +453,8 @@ describe('sprint field schema migration', () => {
   });
 
   it('adds tenant-local sprint type key uniqueness before starter sprint type upserts', async () => {
-    const legacyDb = new Database(process.env.AGENT_HQ_DB_PATH!);
+    const legacyDbRaw = new Database(process.env.AGENT_HQ_DB_PATH!);
+      const legacyDb = new SqliteAdapter(legacyDbRaw);
     await legacyDb.exec(`
       CREATE TABLE sprint_types (
         key TEXT,
@@ -467,7 +469,7 @@ describe('sprint field schema migration', () => {
         ('custom_dupe', 'Custom System', '', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
         ('custom_dupe', 'Custom Tenant', '', 0, '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z');
     `);
-    legacyDb.close();
+    legacyDbRaw.close();
 
     expect(async () => await initSchema()).not.toThrow();
 
@@ -489,8 +491,9 @@ describe('sprint field schema migration', () => {
   });
 
   it('removes stale sprint type key foreign keys when sprint types are tenant-scoped', async () => {
-    const legacyDb = new Database(process.env.AGENT_HQ_DB_PATH!);
-    legacyDb.pragma('foreign_keys = OFF');
+    const legacyDbRaw = new Database(process.env.AGENT_HQ_DB_PATH!);
+      const legacyDb = new SqliteAdapter(legacyDbRaw);
+    legacyDbRaw.pragma('foreign_keys = OFF');
     await legacyDb.exec(`
       CREATE TABLE tenants (
         id INTEGER PRIMARY KEY,
@@ -538,7 +541,7 @@ describe('sprint field schema migration', () => {
       INSERT INTO sprint_task_transition_requirements (sprint_type, outcome, field_name)
       VALUES ('dev', 'completed_for_review', 'review_branch');
     `);
-    legacyDb.close();
+    legacyDbRaw.close();
 
     expect(async () => await initSchema()).not.toThrow();
 

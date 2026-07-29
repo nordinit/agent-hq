@@ -7,6 +7,7 @@ import {
   evaluateOpenClawInstanceSessionState,
   evaluateOpenClawSessionFile,
 } from './openclawSessionState';
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 function writeJsonl(lines: Array<Record<string, unknown>>): { dir: string; file: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-session-state-'));
@@ -62,7 +63,8 @@ describe('OpenClaw raw session state', () => {
   });
 
   it('defers terminal evaluation while a durable run session is not indexed', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     const openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-session-state-'));
     try {
       await db.exec(`
@@ -128,7 +130,7 @@ describe('OpenClaw raw session state', () => {
         },
       });
     } finally {
-      db.close();
+      dbRaw.close();
       fs.rmSync(openclawHome, { recursive: true, force: true });
     }
   });

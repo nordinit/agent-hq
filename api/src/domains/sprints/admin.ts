@@ -100,13 +100,13 @@ async function cloneSprintScopedRows(
 
   await db.run(`DELETE FROM ${table} WHERE sprint_id = ?`, targetSprintId);
 
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO ${table} (${columns.join(', ')})
     VALUES (${columns.map(() => '?').join(', ')})
-  `);
+  `;
 
   for (const row of sourceRows) {
-    insert.run(...columns.map((column) => {
+    await db.run(insertSql, ...columns.map((column) => {
       if (column === 'tenant_id') return targetTenantId;
       if (column === 'project_id') return targetProjectId;
       if (column === 'sprint_id') return targetSprintId;
@@ -136,13 +136,13 @@ async function cloneSprintScopedModelRoutingRules(
 
   if (sourceRows.length === 0) return 0;
 
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO story_point_model_routing (${columns.join(', ')})
     VALUES (${columns.map(() => '?').join(', ')})
-  `);
+  `;
 
   for (const row of sourceRows) {
-    insert.run(...columns.map((column) => {
+    await db.run(insertSql, ...columns.map((column) => {
       if (column === 'tenant_id') return targetTenantId;
       if (column === 'project_id') return targetProjectId;
       if (column === 'sprint_id') return targetSprintId;
@@ -250,7 +250,7 @@ export async function createSprint(
   const repoConfig = normalizeRepoConfig({ repo_access_mode, repo_path, repo_url });
   let newId = 0;
 
-  db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     const hasSprintTenantId = await tableHasColumn(db, 'sprints', 'tenant_id');
     const result = hasSprintTenantId
       ? await db.run(`
@@ -267,7 +267,7 @@ export async function createSprint(
     if (sourceSprint) {
       await cloneSprintSetup(db, sourceSprint.id, Number(project_id), newId, project.tenant_id ?? null);
     }
-  })();
+  });
 
   await writeProjectAudit(db, project_id, 'sprint', newId, 'created', actor, {
         name,
@@ -475,14 +475,14 @@ export async function deleteSprint(db: Db, sprintId: number, actor: string, tena
   `, ...params) as SprintRecord | undefined;
   if (!sprint) throw Object.assign(new Error('Sprint not found'), { status: 404 });
 
-  db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     await writeProjectAudit(db, sprint.project_id, 'sprint', sprintId, 'deleted', actor, {
             name: sprint.name,
             status: sprint.status,
           });
     await db.run('DELETE FROM tasks WHERE sprint_id = ?', sprintId);
     await db.run('DELETE FROM sprints WHERE id = ?', sprintId);
-  })();
+  });
   return { ok: true };
 }
 

@@ -511,7 +511,7 @@ async function updateInstanceArtifacts(db: Db, params: {
     const paramsList: unknown[] = [taskId, startedAt, heartbeatAt, meaningfulOutputAt];
     if (hasUpdatedAt) paramsList.push(nowTimestamp());
     paramsList.push(params.instance.id);
-    db.prepare(sql).run(...paramsList);
+    await db.run(sql, ...paramsList);
     return;
   }
 
@@ -703,12 +703,12 @@ export async function backfillOpenClawJsonlTranscript(
 
   const hasChatDurableRunId = await tableHasColumn(db, 'chat_messages', 'durable_run_id');
   const provisionalTrajectoryRowPrefix = `oc-traj-${instance.durable_run_id ?? instanceId}-%`;
-  const deleteProvisionalTrajectoryRows = db.prepare(`
+  const deleteProvisionalTrajectoryRowsSql = `
     DELETE FROM chat_messages
     WHERE instance_id = ?
       AND id LIKE ?
-  `);
-  const insert = db.prepare(`
+  `;
+  const insertSql = `
     INSERT INTO chat_messages (
       id, agent_id, instance_id, ${hasChatDurableRunId ? 'durable_run_id, ' : ''}session_key, role, content, timestamp, event_type, event_meta
     )
@@ -723,7 +723,7 @@ export async function backfillOpenClawJsonlTranscript(
       timestamp = excluded.timestamp,
       event_type = excluded.event_type,
       event_meta = excluded.event_meta
-  `);
+  `;
 
   let persistedEvents = 0;
   let latestEventAt = previousState?.last_event_at ?? null;
@@ -731,9 +731,9 @@ export async function backfillOpenClawJsonlTranscript(
   let meaningfulOutputAt = previousState?.last_meaningful_output_at ?? null;
   let firstHeartbeatAt: string | null = null;
 
-  const transaction = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     if (resolved.kind === 'jsonl') {
-      deleteProvisionalTrajectoryRows.run(instanceId, provisionalTrajectoryRowPrefix);
+      await db.run(deleteProvisionalTrajectoryRowsSql, instanceId, provisionalTrajectoryRowPrefix);
     }
 
     for (const line of lines) {
@@ -783,7 +783,7 @@ export async function backfillOpenClawJsonlTranscript(
           event.event_type,
           JSON.stringify(eventMeta),
         );
-        insert.run(...insertParams);
+        await db.run(insertSql, ...insertParams);
         persistedEvents += 1;
         latestEventAt = maxIso(latestEventAt, line.timestamp);
 
@@ -820,8 +820,6 @@ export async function backfillOpenClawJsonlTranscript(
             startedAt: firstHeartbeatAt ?? heartbeatAt ?? meaningfulOutputAt,
           });
   });
-
-  transaction();
 
   return {
     attempted: true,

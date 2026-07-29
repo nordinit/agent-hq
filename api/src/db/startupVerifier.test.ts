@@ -8,6 +8,7 @@ import {
   STARTUP_SCHEMA_LEDGER_ID,
   verifyStartupSchemaCurrent,
 } from './startupVerifier';
+import { SqliteAdapter } from "./adapter/SqliteAdapter";
 
 function tempDbPath(prefix: string): { dir: string; dbPath: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -28,16 +29,18 @@ describe('verifyStartupSchemaCurrent', () => {
   it('fails against a legacy database without mutating schema or ledger state', async () => {
     const { dir, dbPath } = tempDbPath('agent-hq-legacy-schema-');
     try {
-      const db = new Database(dbPath);
+      const dbRaw = new Database(dbPath);
+        const db = new SqliteAdapter(dbRaw);
       await db.exec(`CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);`);
       const beforeTables = await db.all(`SELECT name, sql FROM sqlite_master ORDER BY name`);
-      db.close();
+      dbRaw.close();
 
       expect(async () => await verifyStartupSchemaCurrent(dbPath)).toThrow(/schema_migrations/);
 
-      const after = new Database(dbPath, { readonly: true, fileMustExist: true });
+      const afterRaw = new Database(dbPath, { readonly: true, fileMustExist: true });
+        const after = new SqliteAdapter(afterRaw);
       const afterTables = await after.all(`SELECT name, sql FROM sqlite_master ORDER BY name`);
-      after.close();
+      afterRaw.close();
       expect(afterTables).toEqual(beforeTables);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -47,7 +50,8 @@ describe('verifyStartupSchemaCurrent', () => {
   it('passes when the explicit migration ledger is current', async () => {
     const { dir, dbPath } = tempDbPath('agent-hq-current-schema-');
     try {
-      const db = new Database(dbPath);
+      const dbRaw = new Database(dbPath);
+        const db = new SqliteAdapter(dbRaw);
       await db.exec(`
         CREATE TABLE schema_migrations (
           id         TEXT PRIMARY KEY,
@@ -58,7 +62,7 @@ describe('verifyStartupSchemaCurrent', () => {
         );
       `);
       await db.run(`INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)`, STARTUP_SCHEMA_LEDGER_ID, STARTUP_SCHEMA_LEDGER_CHECKSUM);
-      db.close();
+      dbRaw.close();
 
       expect(async () => await verifyStartupSchemaCurrent(dbPath)).not.toThrow();
     } finally {

@@ -255,24 +255,25 @@ export async function importHermesSessionJson(params: HermesTranscriptIngestPara
   ].filter((value): value is string => Boolean(value));
   const optionalSql = optionalColumns.length ? `${optionalColumns.join(', ')}, ` : '';
   const optionalValuesSql = optionalColumns.length ? `${optionalColumns.map(() => '?').join(', ')}, ` : '';
-  const stmt = params.db.prepare(`
+  const insertSql = `
     INSERT INTO chat_messages (id, agent_id, instance_id, ${optionalSql}role, content, timestamp, event_type, event_meta)
     VALUES (?, ?, ?, ${optionalValuesSql}?, ?, ?, ?, ?)
     ON CONFLICT(id) DO NOTHING
-  `);
+  `;
 
   const fallbackTimestamp = timestampFromDate(fs.statSync(params.filePath).mtime) ?? nowTimestamp();
   let imported = 0;
-  const tx = params.db.transaction(() => {
-    messages.forEach((message, messageIndex) => {
+  await params.db.withTransaction(async (db) => {
+    for (const [messageIndex, message] of messages.entries()) {
       const timestamp = timestampForMessage(message, parsed, fallbackTimestamp);
       const events = parseHermesMessageEvents(message);
-      events.forEach((event, eventIndex) => {
+      for (const [eventIndex, event] of events.entries()) {
         const rowId = `hermes-json-${params.instanceId}-${messageIndex}-${eventIndex}`;
         const optionalValues: unknown[] = [];
         if (hasDurableRunId) optionalValues.push(params.durableRunId ?? null);
         if (hasSessionKey) optionalValues.push(params.sessionKey ?? '');
-        const result = stmt.run(
+        const result = await db.run(
+          insertSql,
           rowId,
           params.agentId,
           params.instanceId,
@@ -289,10 +290,9 @@ export async function importHermesSessionJson(params: HermesTranscriptIngestPara
           }),
         );
         imported += result.changes;
-      });
-    });
+      }
+    }
   });
-  tx();
 
   return { imported, matchedFile: params.filePath, skipped: null };
 }

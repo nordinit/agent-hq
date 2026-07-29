@@ -6,6 +6,7 @@ import { recordRunCheckIn } from './observability';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
 import { normalizeTokenUsage } from './tokenUsage';
 import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
+import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { type Db } from "../../db/adapter/types";
 
 export interface TerminalRuntimeEndEvent {
@@ -193,6 +194,7 @@ export async function applyRuntimeEndToJobInstance(
       });
 
   if (shouldPostTerminalFailureOutcome || missingRequiredLifecycleOutcome) {
+    const hasTaskCustomFields = await tableHasColumn(db, 'tasks', 'custom_fields_json');
     const taskRow = await db.get(`
       SELECT ji.task_id, ji.agent_id,
              t.status AS task_status,
@@ -201,7 +203,7 @@ export async function applyRuntimeEndToJobInstance(
              t.task_type,
              t.sprint_id,
              s.sprint_type,
-             ${((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((row) => row.name === 'custom_fields_json')) ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
+             ${hasTaskCustomFields ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
       FROM job_instances ji
       LEFT JOIN tasks t ON t.id = ji.task_id
       LEFT JOIN sprints s ON s.id = t.sprint_id

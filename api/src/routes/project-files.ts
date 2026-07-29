@@ -101,14 +101,14 @@ async function insertProjectFileVersion(
   input: {
     tenantId: number;
     projectId: string | number;
-    fileId: number | bigint;
+    fileId: number | null;
     versionNumber: number;
     file: Express.Multer.File;
     actor: string;
     timestamp: string;
     changeSource: string;
   },
-): Promise<number | bigint> {
+): Promise<number | null> {
   const result = await db.run(`
     INSERT INTO project_file_versions (
       tenant_id, project_id, file_id, version_number, filename, original_name, mime_type,
@@ -168,7 +168,7 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
     const uploadedBy = (req.body as { uploaded_by?: string }).uploaded_by ?? 'manual';
     const now = nowTimestamp();
 
-    const result = db.transaction(async () => {
+    const result = await db.withTransaction(async (db) => {
       const insertFile = await db.run(`
         INSERT INTO project_files (
           project_id, filename, original_name, mime_type, size_bytes, file_path,
@@ -190,12 +190,12 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
 
       await db.run('UPDATE project_files SET current_version_id = ? WHERE id = ?', versionId, insertFile.lastInsertId);
       return insertFile;
-    })();
+    });
 
     const record = await db.get(`
       SELECT ${PROJECT_FILE_RESPONSE_SELECT}
       FROM project_files WHERE id = ?
-    `, result.lastInsertRowid);
+    `, result.lastInsertId);
 
     return res.status(201).json(record);
   } catch (err) {
@@ -299,7 +299,7 @@ router.put('/:fileId', upload.single('file'), async (req: Request, res: Response
     const now = nowTimestamp();
     const nextVersion = Number(file.current_version ?? 1) + 1;
 
-    db.transaction(async () => {
+    await db.withTransaction(async (db) => {
       const versionId = await insertProjectFileVersion(db, {
               tenantId,
               projectId: req.params.id,
@@ -317,7 +317,7 @@ router.put('/:fileId', upload.single('file'), async (req: Request, res: Response
           updated_by = ?, updated_at = ?, current_version = ?, current_version_id = ?
         WHERE id = ? AND project_id = ?
       `, req.file!.filename, req.file!.originalname, req.file!.mimetype, req.file!.size, req.file!.path, updatedBy, now, nextVersion, versionId, file.id, req.params.id);
-    })();
+    });
 
     const record = await db.get(`
       SELECT ${PROJECT_FILE_RESPONSE_SELECT}

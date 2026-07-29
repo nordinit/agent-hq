@@ -171,10 +171,10 @@ function buildArchivedSessionKey(agentId: number, existingSessionKey: unknown): 
   return existing.startsWith(`deleted:${agentId}:`) ? existing : `deleted:${agentId}:${existing}`;
 }
 
-function archiveAgentForDeletion(db: ReturnType<typeof getDb>, agent: Record<string, unknown>, referenceCounts: AgentReferenceCount[]): void {
+async function archiveAgentForDeletion(db: ReturnType<typeof getDb>, agent: Record<string, unknown>, referenceCounts: AgentReferenceCount[]): Promise<void> {
   const agentId = Number(agent.id);
   const archivedSessionKey = buildArchivedSessionKey(agentId, agent.session_key);
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     if (await tableHasColumn(db, 'agent_tool_assignments', 'agent_id')) {
       await db.run('DELETE FROM agent_tool_assignments WHERE agent_id = ?', agentId);
     }
@@ -195,7 +195,6 @@ function archiveAgentForDeletion(db: ReturnType<typeof getDb>, agent: Record<str
       WHERE id = ?
     `, archivedSessionKey, agentId);
   });
-  tx();
 
   const historicalSummary = referenceCounts
     .filter((entry) => entry.historical && entry.count > 0)
@@ -910,192 +909,190 @@ router.post('/provision-full', async (req: Request, res: Response) => {
     }
     const requestedJobInstructions = getRequestedJobInstructions(body as unknown as Record<string, unknown>) ?? '';
 
-    const tx = db.transaction(async () => {
-      agentId = await insertProvisionedAgent(db, {
-              tenantId,
-              name: body.name,
-              role: resolvedRole,
-              sessionKey,
-              workspacePath,
-              repoPath: null,
-              repoUrl: null,
-              repoAccessMode: null,
-              status: body.status ?? 'idle',
-              openclawAgentId,
-              runtimeType,
-              runtimeConfig: body.runtime_config ?? null,
-              projectId,
-              preferredProvider,
-              providerConnectionId: body.provider_connection_id ?? null,
-              model: resolvedModel,
-              systemRole: resolvedSystemRole,
-              hooksUrl: body.hooks_url ?? null,
-              hooksAuthHeader: body.hooks_auth_header ?? null,
-              osUser: body.os_user ?? null,
-              enabled: body.enabled === undefined ? 1 : (body.enabled ? 1 : 0),
-              githubIdentityId: body.github_identity_id ?? null,
-              jobTitle: '',
-              schedule,
-              jobInstructions: requestedJobInstructions,
-              skillNames: normalizeJsonArray(body.skill_names),
-              timeoutSeconds: body.timeout_seconds ?? 900,
-              startupGraceSeconds: body.startup_grace_seconds ?? null,
-              heartbeatStaleSeconds: body.heartbeat_stale_seconds ?? null,
-              stallThresholdMin: body.stall_threshold_min ?? 30,
-              maxRetries: body.max_retries ?? 3,
-              sortRules: normalizeJsonArray(body.sort_rules),
-            });
-      report.agent = {
-        ok: true,
-        status: 'created',
-        details: { agent_id: agentId, runtime_slug: runtimeSlug, session_key: sessionKey },
-      };
-
-      workspaceResult = ensureWorkspaceScaffold({
-        name: body.name,
-        role: resolvedRole,
-        projectName,
-        sessionKey,
-        runtimeSlug,
-        workspacePath,
-      });
-      report.workspace = {
-        ok: true,
-        status: workspaceExisted ? 'updated' : 'created',
-        details: {
-          workspace_path: workspaceResult.workspacePath,
-          memory_dir: workspaceResult.memoryDir,
-          docs_written: workspaceResult.docsWritten,
-        },
-      };
-
-      if (runtimeType === 'openclaw') {
-        openclawResult = await ensureOpenClawRegistration({
-                  slug: runtimeSlug,
-                  workspacePath,
-                  model: resolvedModel,
-                  restartGateway: body.restart_gateway === true,
-                });
-        report.openclaw = {
-          ok: true,
-          status: openclawResult.added ? 'created' : 'updated',
-          details: {
-            openclaw_agent_id: openclawResult.slug,
-            agent_dir: openclawResult.agentDirPath,
-            gateway_restarted: openclawResult.gatewayRestarted,
-            auth_providers_synced: openclawResult.authProvidersSynced,
-            openclaw_auth_providers_synced: openclawResult.authProvidersSynced,
-          },
-        };
-      } else {
-        fs.mkdirSync(agentDirPath, { recursive: true });
-        report.openclaw = {
-          ok: true,
-          status: 'skipped',
-          details: {
-            reason: `${runtimeType} agents are not registered as OpenClaw native agents`,
-          },
-        };
-        report.runtime = {
-          ok: true,
-          status: agentDirExisted ? 'reused' : 'created',
-          details: {
-            runtime_type: runtimeType,
-            agent_dir: agentDirPath,
-          },
-        };
-      }
-
-      const sprintRoutingStmt = db.prepare(`
-        INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-      const activeProjectSprintIds = body.project_id == null
-        ? []
-        : (await db.all(`
-            SELECT id
-            FROM sprints
-            WHERE project_id = ?
-              AND status IN ('planning', 'active', 'paused')
-          `, body.project_id)).map((row: any) => Number(row.id));
-      for (const rule of body.routing_rules ?? []) {
-        const targetSprintIds = rule.sprint_id != null
-          ? [Number(rule.sprint_id)]
-          : activeProjectSprintIds;
-        if (targetSprintIds.length === 0) {
-          throw new Error('routing_rules entries must include sprint_id or the agent project must have at least one non-closed sprint');
-        }
-        for (const sprintId of targetSprintIds) {
-          await seedSprintTaskPolicy(db, sprintId);
-          const result = sprintRoutingStmt.run(sprintId, rule.task_type, rule.status, agentId, rule.priority ?? 0);
-          createdRoutingRuleIds.push(Number(result.lastInsertRowid));
-        }
-      }
-      report.routing = {
-        ok: true,
-        status: createdRoutingRuleIds.length > 0 ? 'created' : 'skipped',
-        details: { rule_ids: createdRoutingRuleIds },
-      };
-
-      const toolStmt = db.prepare(`
-        INSERT INTO agent_tool_assignments (agent_id, tool_id, overrides, enabled)
-        VALUES (?, ?, '{}', 1)
-      `);
-      for (const toolId of toolIds) {
-        const result = toolStmt.run(agentId, toolId);
-        createdToolAssignmentIds.push(Number(result.lastInsertRowid));
-      }
-
-      const mcpStmt = db.prepare(`
-        INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
-        VALUES (?, ?, '{}', 1)
-      `);
-      for (const mcpServerId of mcpServerIds) {
-        const result = mcpStmt.run(agentId, mcpServerId);
-        createdMcpAssignmentIds.push(Number(result.lastInsertRowid));
-      }
-
-      const adapter = getSkillMaterializationAdapter(runtimeType);
-      const skillResult = adapter.materialize({
-        workingDirectory: workspacePath,
-        skillNames: normalizeJsonArray(body.skill_names),
-        skillsBasePath: OPENCLAW_SKILLS_PATH,
-        hooksUrl: body.hooks_url ?? null,
-        runtimeConfig: (body.runtime_config as Record<string, unknown> | null | undefined) ?? null,
-        db,
-        tenantId,
-      });
-      if (!skillResult.ok) {
-        throw new Error(skillResult.error ?? `${runtimeType} skill materialization failed`);
-      }
-
-      const mcpResult = await syncAssignedMcpForAgent({
-              db,
-              agentId,
-              workingDirectory: workspacePath,
-              materializeOpenClawGlobalConfig: true,
-            });
-      if (!mcpResult.ok) {
-        throw new Error(mcpResult.error ?? `${runtimeType} MCP materialization failed`);
-      }
-
-      report.capabilities = {
-        ok: true,
-        status: (createdToolAssignmentIds.length > 0 || createdMcpAssignmentIds.length > 0 || normalizeJsonArray(body.skill_names).length > 0) ? 'created' : 'skipped',
-        details: {
-          skill_names: normalizeJsonArray(body.skill_names),
-          skill_materialization_count: skillResult.count,
-          mcp_materialization_count: mcpResult.count,
-          mcp_materialization_path: mcpResult.path ?? null,
-          tool_assignment_ids: createdToolAssignmentIds,
-          mcp_assignment_ids: createdMcpAssignmentIds,
-        },
-        warnings: [...skillResult.warnings, ...mcpResult.warnings],
-      };
-    });
-
     try {
-      tx();
+      await db.withTransaction(async (db) => {
+        agentId = await insertProvisionedAgent(db, {
+                tenantId,
+                name: body.name,
+                role: resolvedRole,
+                sessionKey,
+                workspacePath,
+                repoPath: null,
+                repoUrl: null,
+                repoAccessMode: null,
+                status: body.status ?? 'idle',
+                openclawAgentId,
+                runtimeType,
+                runtimeConfig: body.runtime_config ?? null,
+                projectId,
+                preferredProvider,
+                providerConnectionId: body.provider_connection_id ?? null,
+                model: resolvedModel,
+                systemRole: resolvedSystemRole,
+                hooksUrl: body.hooks_url ?? null,
+                hooksAuthHeader: body.hooks_auth_header ?? null,
+                osUser: body.os_user ?? null,
+                enabled: body.enabled === undefined ? 1 : (body.enabled ? 1 : 0),
+                githubIdentityId: body.github_identity_id ?? null,
+                jobTitle: '',
+                schedule,
+                jobInstructions: requestedJobInstructions,
+                skillNames: normalizeJsonArray(body.skill_names),
+                timeoutSeconds: body.timeout_seconds ?? 900,
+                startupGraceSeconds: body.startup_grace_seconds ?? null,
+                heartbeatStaleSeconds: body.heartbeat_stale_seconds ?? null,
+                stallThresholdMin: body.stall_threshold_min ?? 30,
+                maxRetries: body.max_retries ?? 3,
+                sortRules: normalizeJsonArray(body.sort_rules),
+              });
+        report.agent = {
+          ok: true,
+          status: 'created',
+          details: { agent_id: agentId, runtime_slug: runtimeSlug, session_key: sessionKey },
+        };
+
+        workspaceResult = ensureWorkspaceScaffold({
+          name: body.name,
+          role: resolvedRole,
+          projectName,
+          sessionKey,
+          runtimeSlug,
+          workspacePath,
+        });
+        report.workspace = {
+          ok: true,
+          status: workspaceExisted ? 'updated' : 'created',
+          details: {
+            workspace_path: workspaceResult.workspacePath,
+            memory_dir: workspaceResult.memoryDir,
+            docs_written: workspaceResult.docsWritten,
+          },
+        };
+
+        if (runtimeType === 'openclaw') {
+          openclawResult = await ensureOpenClawRegistration({
+                    slug: runtimeSlug,
+                    workspacePath,
+                    model: resolvedModel,
+                    restartGateway: body.restart_gateway === true,
+                  });
+          report.openclaw = {
+            ok: true,
+            status: openclawResult.added ? 'created' : 'updated',
+            details: {
+              openclaw_agent_id: openclawResult.slug,
+              agent_dir: openclawResult.agentDirPath,
+              gateway_restarted: openclawResult.gatewayRestarted,
+              auth_providers_synced: openclawResult.authProvidersSynced,
+              openclaw_auth_providers_synced: openclawResult.authProvidersSynced,
+            },
+          };
+        } else {
+          fs.mkdirSync(agentDirPath, { recursive: true });
+          report.openclaw = {
+            ok: true,
+            status: 'skipped',
+            details: {
+              reason: `${runtimeType} agents are not registered as OpenClaw native agents`,
+            },
+          };
+          report.runtime = {
+            ok: true,
+            status: agentDirExisted ? 'reused' : 'created',
+            details: {
+              runtime_type: runtimeType,
+              agent_dir: agentDirPath,
+            },
+          };
+        }
+
+        const sprintRoutingSql = `
+          INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
+          VALUES (?, ?, ?, ?, ?)
+        `;
+        const activeProjectSprintIds = body.project_id == null
+          ? []
+          : (await db.all(`
+              SELECT id
+              FROM sprints
+              WHERE project_id = ?
+                AND status IN ('planning', 'active', 'paused')
+            `, body.project_id)).map((row: any) => Number(row.id));
+        for (const rule of body.routing_rules ?? []) {
+          const targetSprintIds = rule.sprint_id != null
+            ? [Number(rule.sprint_id)]
+            : activeProjectSprintIds;
+          if (targetSprintIds.length === 0) {
+            throw new Error('routing_rules entries must include sprint_id or the agent project must have at least one non-closed sprint');
+          }
+          for (const sprintId of targetSprintIds) {
+            await seedSprintTaskPolicy(db, sprintId);
+            const result = await db.run(sprintRoutingSql, sprintId, rule.task_type, rule.status, agentId, rule.priority ?? 0);
+            createdRoutingRuleIds.push(Number(result.lastInsertId));
+          }
+        }
+        report.routing = {
+          ok: true,
+          status: createdRoutingRuleIds.length > 0 ? 'created' : 'skipped',
+          details: { rule_ids: createdRoutingRuleIds },
+        };
+
+        const toolSql = `
+          INSERT INTO agent_tool_assignments (agent_id, tool_id, overrides, enabled)
+          VALUES (?, ?, '{}', 1)
+        `;
+        for (const toolId of toolIds) {
+          const result = await db.run(toolSql, agentId, toolId);
+          createdToolAssignmentIds.push(Number(result.lastInsertId));
+        }
+
+        const mcpSql = `
+          INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
+          VALUES (?, ?, '{}', 1)
+        `;
+        for (const mcpServerId of mcpServerIds) {
+          const result = await db.run(mcpSql, agentId, mcpServerId);
+          createdMcpAssignmentIds.push(Number(result.lastInsertId));
+        }
+
+        const adapter = getSkillMaterializationAdapter(runtimeType);
+        const skillResult = adapter.materialize({
+          workingDirectory: workspacePath,
+          skillNames: normalizeJsonArray(body.skill_names),
+          skillsBasePath: OPENCLAW_SKILLS_PATH,
+          hooksUrl: body.hooks_url ?? null,
+          runtimeConfig: (body.runtime_config as Record<string, unknown> | null | undefined) ?? null,
+          db,
+          tenantId,
+        });
+        if (!skillResult.ok) {
+          throw new Error(skillResult.error ?? `${runtimeType} skill materialization failed`);
+        }
+
+        const mcpResult = await syncAssignedMcpForAgent({
+                db,
+                agentId,
+                workingDirectory: workspacePath,
+                materializeOpenClawGlobalConfig: true,
+              });
+        if (!mcpResult.ok) {
+          throw new Error(mcpResult.error ?? `${runtimeType} MCP materialization failed`);
+        }
+
+        report.capabilities = {
+          ok: true,
+          status: (createdToolAssignmentIds.length > 0 || createdMcpAssignmentIds.length > 0 || normalizeJsonArray(body.skill_names).length > 0) ? 'created' : 'skipped',
+          details: {
+            skill_names: normalizeJsonArray(body.skill_names),
+            skill_materialization_count: skillResult.count,
+            mcp_materialization_count: mcpResult.count,
+            mcp_materialization_path: mcpResult.path ?? null,
+            tool_assignment_ids: createdToolAssignmentIds,
+            mcp_assignment_ids: createdMcpAssignmentIds,
+          },
+          warnings: [...skillResult.warnings, ...mcpResult.warnings],
+        };
+      });
     } catch (err) {
       if (!workspaceExisted && fs.existsSync(workspacePath)) {
         fs.rmSync(workspacePath, { recursive: true, force: true });
@@ -2435,8 +2432,25 @@ const getTenantSkillByName = async (db: ReturnType<typeof getDb>, tenantId: numb
   return (await db.get('SELECT id, name FROM skills WHERE tenant_id = ? AND name = ?', tenantId, name) as { id: number; name: string } | undefined) ?? null;
 };
 
-const filterTenantSkillNames = (db: ReturnType<typeof getDb>, tenantId: number, skillNames: string[]): string[] => {
-  return skillNames.filter((name) => Boolean(getTenantSkillByName(db, tenantId, name)));
+const filterTenantSkillNames = async (db: ReturnType<typeof getDb>, tenantId: number, skillNames: string[]): Promise<string[]> => {
+  const kept: string[] = [];
+  for (const name of skillNames) {
+    if (await getTenantSkillByName(db, tenantId, name)) kept.push(name);
+  }
+  return kept;
+};
+
+const describeTenantSkills = async (
+  db: ReturnType<typeof getDb>,
+  tenantId: number,
+  skillNames: string[],
+): Promise<Array<{ id: number; name: string }>> => {
+  const described: Array<{ id: number; name: string }> = [];
+  for (const name of skillNames) {
+    const tenantSkill = await getTenantSkillByName(db, tenantId, name);
+    described.push({ id: tenantSkill?.id ?? makeStableSkillId(name), name });
+  }
+  return described;
 };
 
 const materializeAgentSkills = (
@@ -2475,14 +2489,11 @@ router.get('/:id/skills', async (req: Request, res: Response) => {
     const agent = await db.get('SELECT id, skill_names FROM agents WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as { id: number; skill_names: string | null } | undefined;
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    const skillNames = filterTenantSkillNames(db, tenantId, resolveAgentSkillNames(agent.skill_names));
+    const skillNames = await filterTenantSkillNames(db, tenantId, resolveAgentSkillNames(agent.skill_names));
 
     return res.json({
       agent_id: agent.id,
-      skills: skillNames.map((name) => ({
-        id: getTenantSkillByName(db, tenantId, name)?.id ?? makeStableSkillId(name),
-        name,
-      })),
+      skills: await describeTenantSkills(db, tenantId, skillNames),
       skill_names: skillNames,
     });
   } catch (err) {
@@ -2502,7 +2513,7 @@ router.post('/:id/skills', async (req: Request, res: Response) => {
 
     let skillName = requestedSkillName;
     if (!skillName && requestedSkillId) {
-      skillName = resolveExistingSkillName(db, tenantId, requestedSkillId) ?? '';
+      skillName = await resolveExistingSkillName(db, tenantId, requestedSkillId) ?? '';
       if (!skillName) {
         return res.status(404).json({ error: `Skill with id '${requestedSkillId}' not found` });
       }
@@ -2512,7 +2523,7 @@ router.post('/:id/skills', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'skill_name or skill_id is required' });
     }
 
-    const tenantSkill = getTenantSkillByName(db, tenantId, skillName);
+    const tenantSkill = await getTenantSkillByName(db, tenantId, skillName);
     if (!tenantSkill) {
       return res.status(404).json({ error: `Skill '${skillName}' not found` });
     }
@@ -2532,10 +2543,7 @@ router.post('/:id/skills', async (req: Request, res: Response) => {
         id: tenantSkill.id,
         name: tenantSkill.name,
       },
-      skills: nextSkillNames.map((name) => ({
-        id: getTenantSkillByName(db, tenantId, name)?.id ?? makeStableSkillId(name),
-        name,
-      })),
+      skills: await describeTenantSkills(db, tenantId, nextSkillNames),
       skill_names: nextSkillNames,
       sync: materializeAgentSkills(db, agent, nextSkillNames),
     });
@@ -2836,7 +2844,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
     const historicalReferences = nonZeroReferences.filter((entry) => entry.historical);
 
     if (historicalReferences.length > 0) {
-      archiveAgentForDeletion(db, agent, referenceCounts);
+      await archiveAgentForDeletion(db, agent, referenceCounts);
       await syncStarterRoutingForProject(db, previousProjectId);
       return res.json({
         ok: true,

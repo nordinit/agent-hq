@@ -234,7 +234,7 @@ export async function detectDuplicateRoutingRule(
     }
     sql += tenant.sql;
     sql += ' ORDER BY id ASC LIMIT 1';
-    return db.prepare(sql).get(...params, ...tenant.params) as { id: number } | undefined;
+    return await db.get(sql, ...params, ...tenant.params) as { id: number } | undefined;
   }
 
   if (args.sprintId == null) return undefined;
@@ -255,7 +255,7 @@ export async function detectDuplicateRoutingRule(
   }
   sql += tenant.sql;
   sql += ' ORDER BY id ASC LIMIT 1';
-  return db.prepare(sql).get(...params, ...tenant.params) as { id: number } | undefined;
+  return await db.get(sql, ...params, ...tenant.params) as { id: number } | undefined;
 }
 
 export function selectSprintScopedRoutingRuleRowSql(): string {

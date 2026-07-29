@@ -3,7 +3,13 @@ import type { Request } from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { foreignKeysEnabled, withForeignKeysDisabled } from '../db/foreignKeyGuard';
+import {
+  beginIntentionalForeignKeyDisable,
+  endIntentionalForeignKeyDisable,
+  foreignKeysEnabled,
+  withForeignKeysDisabled,
+} from '../db/foreignKeyGuard';
+import { getRawDb } from '../db/client';
 import { assertForeignKeyEnforcementEnabled } from '../db/startupVerifier';
 import { NODE_BIN_DIR } from '../config';
 import { seedTenantDefaultWorkflowEventMappings } from '../domains/routing/externalEventMappings';
@@ -26,7 +32,7 @@ import {
 import { applyDefaultInstallPackage } from './defaultInstallPackage';
 import { seedSprintTypeTaskStatuses } from '../domains/routing/policy/seed';
 import { pruneUnexpectedStarterWorkflowRelationshipTypes, seedStarterWorkflowRelationshipTypes } from './taskRelationshipTypes';
-import { type Db } from "../db/adapter/types";
+import { type Db, type RunResult } from "../db/adapter/types";
 
 export const DEFAULT_TENANT_SLUG = 'default';
 export const DEFAULT_TENANT_NAME = 'Default Tenant';
@@ -316,6 +322,66 @@ const verifiedTenantSchemaDbs = new WeakSet<Db>();
 // Re-exported here because this is where migration code already reaches for them.
 export { foreignKeysEnabled, withForeignKeysDisabled };
 
+/**
+ * The raw better-sqlite3 connection behind a Db handle.
+ *
+ * `PRAGMA` is deliberately absent from the Db interface — it is SQLite-only and has no
+ * PostgreSQL equivalent — but the foreign-key guard must toggle it on the SAME connection
+ * the adapter writes through, or the toggle applies to a different connection and the
+ * rebuild runs with enforcement still on. SqliteAdapter publishes `raw` for exactly this.
+ * Every caller of this helper is a site the PostgreSQL migration still has to answer for.
+ */
+function rawConnectionFor(db: Db): Database.Database {
+  const candidate = db as unknown as { raw?: Database.Database; pragma?: unknown };
+  if (candidate.raw) return candidate.raw;
+  // Some suites still hand this module a bare better-sqlite3 connection cast to Db.
+  if (typeof candidate.pragma === 'function') return db as unknown as Database.Database;
+  return getRawDb();
+}
+
+/**
+ * Async counterpart to withForeignKeysDisabled().
+ *
+ * withForeignKeysDisabled() restores the pragma in a SYNCHRONOUS finally block, so handing
+ * it an async callback re-enables enforcement at the callback's first `await` — while the
+ * rebuild is still running. Every rebuild in this module is async now, so they go through
+ * here instead: enforcement stays off for the whole awaited body and the PRIOR pragma value
+ * (never a hardcoded ON) is restored afterwards, including on throw.
+ *
+ * SQLite treats `PRAGMA foreign_keys` as a NO-OP inside a transaction, so this must wrap
+ * withTransaction() rather than being called from inside it.
+ */
+async function withForeignKeysDisabledAsync<T>(db: Db, fn: () => Promise<T>): Promise<T> {
+  const rawDb = rawConnectionFor(db);
+  const wasEnabled = foreignKeysEnabled(rawDb);
+  if (wasEnabled) {
+    rawDb.pragma('foreign_keys = OFF');
+    if (foreignKeysEnabled(rawDb)) {
+      console.error(
+        '[db] PRAGMA foreign_keys = OFF did not take effect' +
+        `${rawDb.inTransaction ? ' (called inside a transaction, where the pragma is a no-op)' : ''}` +
+        ' — the enclosed rebuild is running WITH foreign keys enforced.'
+      );
+    }
+  }
+  beginIntentionalForeignKeyDisable();
+  try {
+    return await fn();
+  } finally {
+    endIntentionalForeignKeyDisable();
+    if (wasEnabled) {
+      rawDb.pragma('foreign_keys = ON');
+      if (!foreignKeysEnabled(rawDb)) {
+        console.error(
+          '[db] FAILED to restore PRAGMA foreign_keys = ON' +
+          `${rawDb.inTransaction ? ' (still inside a transaction, where the pragma is a no-op)' : ''}` +
+          ' — foreign-key enforcement is OFF for this connection.'
+        );
+      }
+    }
+  }
+}
+
 async function tableExists(db: Db, table: string): Promise<boolean> {
   return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table) as { name?: string } | undefined)?.name);
 }
@@ -515,13 +581,13 @@ export async function requireTenantOwnedRow(
   throw routeTenantGuardError(notFoundMessage, 404, 'tenant_scoped_not_found');
 }
 
-export async function runTenantScopedDelete(db: Db, options: TenantScopedMutationOptions): Promise<Database.RunResult> {
+export async function runTenantScopedDelete(db: Db, options: TenantScopedMutationOptions): Promise<RunResult> {
   assertSafeSqlIdentifier(options.table, 'tenant-owned table');
   assertSafeSqlIdentifier(options.idColumn ?? 'id', 'tenant-owned id column');
   return await db.run(`DELETE FROM ${options.table} WHERE ${options.idColumn ?? 'id'} = ? AND tenant_id = ?`, options.id, options.tenantId);
 }
 
-export async function runTenantScopedInsert(db: Db, options: TenantScopedInsertOptions): Promise<Database.RunResult> {
+export async function runTenantScopedInsert(db: Db, options: TenantScopedInsertOptions): Promise<RunResult> {
   assertSafeSqlIdentifier(options.table, 'tenant-owned table');
   const values: Record<string, unknown> = { ...options.values, tenant_id: options.tenantId };
   const columns = Object.keys(values);
@@ -530,7 +596,7 @@ export async function runTenantScopedInsert(db: Db, options: TenantScopedInsertO
   return await db.run(`INSERT INTO ${options.table} (${columns.join(', ')}) VALUES (${placeholders})`, ...columns.map((column) => values[column]));
 }
 
-export async function runTenantScopedUpdate(db: Db, options: TenantScopedUpdateOptions): Promise<Database.RunResult> {
+export async function runTenantScopedUpdate(db: Db, options: TenantScopedUpdateOptions): Promise<RunResult> {
   assertSafeSqlIdentifier(options.table, 'tenant-owned table');
   assertSafeSqlIdentifier(options.idColumn ?? 'id', 'tenant-owned id column');
   const columns = Object.keys(options.values);
@@ -725,9 +791,11 @@ async function ensureMcpServersTenantLocalSlugSchema(db: Db, defaultTenantId: nu
   if (!hasGlobalSlugUnique && hasTenantSlugUnique) return;
   if (!await tableHasColumn(db, 'mcp_servers', 'id') || !await tableHasColumn(db, 'mcp_servers', 'slug') || !await tableHasColumn(db, 'mcp_servers', 'command')) return;
 
-  const migrate = db.transaction(async () => {
-    await db.exec(`DROP TABLE IF EXISTS mcp_servers_tenant_local`);
-    await db.exec(`
+  // The pragma must be toggled outside the transaction: inside one it is a no-op.
+  await withForeignKeysDisabledAsync(db, async () => {
+    await db.withTransaction(async (db) => {
+      await db.exec(`DROP TABLE IF EXISTS mcp_servers_tenant_local`);
+      await db.exec(`
       CREATE TABLE mcp_servers_tenant_local (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant_id     INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -745,7 +813,7 @@ async function ensureMcpServersTenantLocalSlugSchema(db: Db, defaultTenantId: nu
         UNIQUE(tenant_id, slug)
       )
     `);
-    await db.run(`
+      await db.run(`
       INSERT OR IGNORE INTO mcp_servers_tenant_local (
         id, tenant_id, name, slug, description, transport, command, args, env, cwd, enabled, created_at, updated_at
       )
@@ -766,17 +834,16 @@ async function ensureMcpServersTenantLocalSlugSchema(db: Db, defaultTenantId: nu
       FROM mcp_servers
       ORDER BY id ASC
     `, defaultTenantId);
-    await db.exec(`DROP TABLE mcp_servers`);
-    await db.exec(`ALTER TABLE mcp_servers_tenant_local RENAME TO mcp_servers`);
-    await db.exec(`
+      await db.exec(`DROP TABLE mcp_servers`);
+      await db.exec(`ALTER TABLE mcp_servers_tenant_local RENAME TO mcp_servers`);
+      await db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_tenant_slug ON mcp_servers(tenant_id, slug);
       CREATE INDEX IF NOT EXISTS idx_mcp_servers_tenant ON mcp_servers(tenant_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_servers_slug ON mcp_servers(slug);
       CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled);
     `);
+    });
   });
-  // The pragma must be toggled outside db.transaction(): inside one it is a no-op.
-  withForeignKeysDisabled(db, migrate);
 }
 
 async function tablePrimaryKeyColumns(db: Db, table: string): Promise<string[]> {
@@ -797,7 +864,7 @@ async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: num
   if (hasTenantId && !(primaryKeyColumns.length === 1 && primaryKeyColumns[0] === 'key')) {
     // This is the steady-state path: it runs on every ensureTenantSchema() call, which
     // means on every request. It must never leave enforcement disabled behind it.
-    withForeignKeysDisabled(db, async () => {
+    await withForeignKeysDisabledAsync(db, async () => {
       await db.run(`
         UPDATE sprint_types
         SET tenant_id = COALESCE(${inferredTenantExpr}, ?)
@@ -811,8 +878,15 @@ async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: num
     return;
   }
 
-  const migrate = db.transaction(async () => {
-    await db.exec(`
+  // Legacy routing tables could still contain single-column REFERENCES sprint_types(key)
+  // while the tenant-local parent key is (tenant_id, key), so FK checks stay off for the
+  // rebuild and the trailing compatibility DDL. Those legacy references are stripped by
+  // initSchema's rebuildWithoutSprintTypeKeyForeignKey pass; enforcement is restored to
+  // its prior state here regardless, because this connection is process-wide. The pragma
+  // toggle stays outside withTransaction(): inside a transaction it is a no-op.
+  await withForeignKeysDisabledAsync(db, async () => {
+    await db.withTransaction(async (db) => {
+      await db.exec(`
       CREATE TABLE sprint_types_tenant_local (
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant_id        INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id) ON DELETE CASCADE,
@@ -826,8 +900,8 @@ async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: num
         UNIQUE(tenant_id, key)
       );
     `);
-    const columns = new Set((await db.all(`PRAGMA table_info(sprint_types)`) as Array<{ name: string }>).map((column) => column.name));
-    await db.run(`
+      const columns = new Set((await db.all(`PRAGMA table_info(sprint_types)`) as Array<{ name: string }>).map((column) => column.name));
+      await db.run(`
       INSERT OR IGNORE INTO sprint_types_tenant_local (
         tenant_id, key, name, description, is_system, status_seeded_at, created_at, updated_at
       )
@@ -846,16 +920,9 @@ async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: num
         COALESCE(${columns.has('updated_at') ? 'updated_at' : 'NULL'}, datetime('now'))
       FROM sprint_types
     `, defaultTenantId);
-    await db.exec(`DROP TABLE sprint_types`);
-    await db.exec(`ALTER TABLE sprint_types_tenant_local RENAME TO sprint_types`);
-  });
-  // Legacy routing tables could still contain single-column REFERENCES sprint_types(key)
-  // while the tenant-local parent key is (tenant_id, key), so FK checks stay off for the
-  // rebuild and the trailing compatibility DDL. Those legacy references are stripped by
-  // initSchema's rebuildWithoutSprintTypeKeyForeignKey pass; enforcement is restored to
-  // its prior state here regardless, because this connection is process-wide.
-  withForeignKeysDisabled(db, async () => {
-    migrate();
+      await db.exec(`DROP TABLE sprint_types`);
+      await db.exec(`ALTER TABLE sprint_types_tenant_local RENAME TO sprint_types`);
+    });
     await db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key);
       CREATE INDEX IF NOT EXISTS idx_sprint_types_system ON sprint_types(is_system);
@@ -984,25 +1051,27 @@ async function migrateWorkflowConfigTable(db: Db, table: string, defaultTenantId
   }
 
   const oldTable = `${table}_legacy_global`;
-  const migrate = db.transaction(async () => {
-    await db.exec(`ALTER TABLE ${table} RENAME TO ${oldTable}`);
-    await db.exec(`CREATE TABLE ${table} (${definition})`);
-    const nextColumns = (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).map((column) => column.name).filter((column) => column !== 'id');
-    const selectExpr = nextColumns.map((column) => {
-      if (column === 'tenant_id') return `COALESCE(${hasTenantId ? 'legacy.tenant_id,' : ''} st.tenant_id, ?) AS tenant_id`;
-      return columns.has(column) ? `legacy.${column}` : `NULL AS ${column}`;
-    }).join(', ');
-    await db.run(`
-      INSERT OR IGNORE INTO ${table} (${nextColumns.join(', ')})
-      SELECT ${selectExpr}
-      FROM ${oldTable} legacy
-      LEFT JOIN sprint_types st ON st.key = legacy.sprint_type_key
-    `, defaultTenantId);
-    await db.exec(`DROP TABLE ${oldTable}`);
-  });
   // Previously this restored 'OFF' instead of the prior value — a copy-paste bug that
-  // disabled enforcement for the rest of the process lifetime.
-  withForeignKeysDisabled(db, migrate);
+  // disabled enforcement for the rest of the process lifetime. The pragma toggle stays
+  // outside withTransaction(): inside a transaction it is a no-op.
+  await withForeignKeysDisabledAsync(db, async () => {
+    await db.withTransaction(async (db) => {
+      await db.exec(`ALTER TABLE ${table} RENAME TO ${oldTable}`);
+      await db.exec(`CREATE TABLE ${table} (${definition})`);
+      const nextColumns = (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).map((column) => column.name).filter((column) => column !== 'id');
+      const selectExpr = nextColumns.map((column) => {
+        if (column === 'tenant_id') return `COALESCE(${hasTenantId ? 'legacy.tenant_id,' : ''} st.tenant_id, ?) AS tenant_id`;
+        return columns.has(column) ? `legacy.${column}` : `NULL AS ${column}`;
+      }).join(', ');
+      await db.run(`
+        INSERT OR IGNORE INTO ${table} (${nextColumns.join(', ')})
+        SELECT ${selectExpr}
+        FROM ${oldTable} legacy
+        LEFT JOIN sprint_types st ON st.key = legacy.sprint_type_key
+      `, defaultTenantId);
+      await db.exec(`DROP TABLE ${oldTable}`);
+    });
+  });
 }
 
 async function ensureWorkflowDefinitionConfigTenantScope(db: Db, defaultTenantId: number): Promise<void> {
@@ -1199,13 +1268,13 @@ async function ensureTenantDefaultWorkflowDefinitions(db: Db, tenantId: number):
 async function backfillWorkflowDefinitionOwnership(db: Db, defaultTenantId: number): Promise<void> {
   if (!await tableExists(db, 'sprint_types') || !await tableHasColumn(db, 'sprint_types', 'tenant_id')) return;
   const nullOwned = await db.all(`SELECT key FROM sprint_types WHERE tenant_id IS NULL ORDER BY key ASC`) as Array<{ key: string }>;
-  const tenantRefsStmt = await tableExists(db, 'sprints') && await tableHasColumn(db, 'sprints', 'tenant_id')
-    ? db.prepare(`SELECT DISTINCT tenant_id FROM sprints WHERE sprint_type = ? AND tenant_id IS NOT NULL ORDER BY tenant_id ASC`)
+  const tenantRefsSql = await tableExists(db, 'sprints') && await tableHasColumn(db, 'sprints', 'tenant_id')
+    ? `SELECT DISTINCT tenant_id FROM sprints WHERE sprint_type = ? AND tenant_id IS NOT NULL ORDER BY tenant_id ASC`
     : null;
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     for (const row of nullOwned) {
-      const tenantRefs = tenantRefsStmt
-        ? tenantRefsStmt.all(row.key).map((entry) => (entry as { tenant_id: number }).tenant_id)
+      const tenantRefs = tenantRefsSql
+        ? (await db.all(tenantRefsSql, row.key) as Array<{ tenant_id: number }>).map((entry) => entry.tenant_id)
         : [];
       const ownerTenantId = tenantRefs[0] ?? defaultTenantId;
       await db.run(`UPDATE sprint_types SET tenant_id = ?, updated_at = datetime('now') WHERE key = ? AND tenant_id IS NULL`, ownerTenantId, row.key);
@@ -1220,7 +1289,6 @@ async function backfillWorkflowDefinitionOwnership(db: Db, defaultTenantId: numb
       await ensureTenantDefaultWorkflowDefinitions(db, tenant.id);
     }
   });
-  tx();
 }
 
 function slugifyTenantName(name: string): string {
@@ -1406,15 +1474,16 @@ async function buildStarterAgentRuntimeConfig(
 
 async function ensureStarterToolCatalogRows(db: Db, tenantId: number): Promise<void> {
   if (!await tableExists(db, 'tools')) return;
-  const insertTool = db.prepare(`
+  const insertToolSql = `
     INSERT OR IGNORE INTO tools (
       tenant_id, name, slug, description, implementation_type, implementation_body,
       input_schema, permissions, tags, enabled
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-  `);
+  `;
   for (const tool of STARTER_TOOL_CATALOG_ROWS) {
-    insertTool.run(
+    await db.run(
+      insertToolSql,
       tenantId,
       tool.name,
       tool.slug,
@@ -1434,15 +1503,15 @@ async function ensureStarterAgentToolAssignments(
   toolSlugs: readonly string[],
 ): Promise<void> {
   if (!await tableExists(db, 'tools') || !await tableExists(db, 'agent_tool_assignments')) return;
-  const insertAssignment = db.prepare(`
+  const insertAssignmentSql = `
     INSERT OR IGNORE INTO agent_tool_assignments (agent_id, tool_id, overrides, enabled)
     SELECT ?, id, '{}', 1
     FROM tools
     WHERE tenant_id = (SELECT tenant_id FROM agents WHERE id = ?)
       AND slug = ?
       AND enabled = 1
-  `);
-  for (const slug of toolSlugs) insertAssignment.run(agentId, agentId, slug);
+  `;
+  for (const slug of toolSlugs) await db.run(insertAssignmentSql, agentId, agentId, slug);
 }
 
 export async function ensureTenantAgentHqMcpServer(db: Db, tenantId: number): Promise<number | null> {
@@ -1516,23 +1585,23 @@ async function repairTenantAgentHqMcpServersAndAssignments(db: Db): Promise<void
   }>;
   if (staleAssignments.length === 0) return;
 
-  const findLocal = db.prepare(`
+  const findLocalSql = `
     SELECT id, enabled
     FROM agent_mcp_assignments
     WHERE agent_id = ? AND mcp_server_id = ?
     ORDER BY id ASC
     LIMIT 1
-  `);
-  const insertLocal = db.prepare(`
+  `;
+  const insertLocalSql = `
     INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
     VALUES (?, ?, ?, ?)
-  `);
-  const enableLocal = db.prepare(`
+  `;
+  const enableLocalSql = `
     UPDATE agent_mcp_assignments
     SET overrides = ?, enabled = 1
     WHERE id = ?
-  `);
-  const deleteStale = db.prepare(`DELETE FROM agent_mcp_assignments WHERE id = ?`);
+  `;
+  const deleteStaleSql = `DELETE FROM agent_mcp_assignments WHERE id = ?`;
   const localServerByTenant = new Map<number, number>();
 
   for (const assignment of staleAssignments) {
@@ -1543,15 +1612,15 @@ async function repairTenantAgentHqMcpServersAndAssignments(db: Db): Promise<void
       localServerId = ensuredLocalServerId;
       localServerByTenant.set(assignment.agent_tenant_id, localServerId);
     }
-    const existingLocal = findLocal.get(assignment.agent_id, localServerId) as { id: number; enabled: number } | undefined;
+    const existingLocal = await db.get(findLocalSql, assignment.agent_id, localServerId) as { id: number; enabled: number } | undefined;
     if (existingLocal) {
       if (assignment.enabled === 1 && existingLocal.enabled !== 1) {
-        enableLocal.run(assignment.overrides, existingLocal.id);
+        await db.run(enableLocalSql, assignment.overrides, existingLocal.id);
       }
     } else {
-      insertLocal.run(assignment.agent_id, localServerId, assignment.overrides, assignment.enabled);
+      await db.run(insertLocalSql, assignment.agent_id, localServerId, assignment.overrides, assignment.enabled);
     }
-    deleteStale.run(assignment.assignment_id);
+    await db.run(deleteStaleSql, assignment.assignment_id);
   }
 }
 
@@ -1566,17 +1635,18 @@ async function ensureStarterAgentMcpAssignments(
   if (mcpServerSlugs.includes(AGENT_HQ_MCP_SERVER_SLUG)) {
     await ensureTenantAgentHqMcpServer(db, tenantId);
   }
-  const insertAssignment = db.prepare(`
+  const mcpServersAreTenantScoped = await tableHasColumn(db, 'mcp_servers', 'tenant_id');
+  const insertAssignmentSql = `
     INSERT OR IGNORE INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
     SELECT ?, id, '{}', 1
     FROM mcp_servers
     WHERE slug = ?
       AND enabled = 1
-      AND (${await tableHasColumn(db, 'mcp_servers', 'tenant_id') ? 'tenant_id = ?' : '1 = 1'})
-  `);
+      AND (${mcpServersAreTenantScoped ? 'tenant_id = ?' : '1 = 1'})
+  `;
   for (const slug of mcpServerSlugs) {
-    if (await tableHasColumn(db, 'mcp_servers', 'tenant_id')) insertAssignment.run(agentId, slug, tenantId);
-    else insertAssignment.run(agentId, slug);
+    if (mcpServersAreTenantScoped) await db.run(insertAssignmentSql, agentId, slug, tenantId);
+    else await db.run(insertAssignmentSql, agentId, slug);
   }
 }
 
@@ -1599,12 +1669,12 @@ async function replaceStarterAgentMcpPermissionPolicy(
       ON agent_mcp_capability_policies(agent_id);
   `);
   await db.run(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`, agentId);
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO agent_mcp_capability_policies (agent_id, capability_key, enabled)
     VALUES (?, ?, 1)
-  `);
+  `;
   for (const capabilityKey of enabledCapabilityKeys) {
-    insert.run(agentId, capabilityKey);
+    await db.run(insertSql, agentId, capabilityKey);
   }
 }
 
@@ -2035,16 +2105,16 @@ export async function createTenantWithDefaults(db: Db, input: { name?: unknown; 
   const normalizedRequestedSlug = slugifyTenantName(requestedSlug);
   const existingBySlug = await db.get(`SELECT * FROM tenants WHERE slug = ? LIMIT 1`, normalizedRequestedSlug) as TenantRecord | undefined;
   if (existingBySlug) {
-    db.transaction(async () => {
+    await db.withTransaction(async (db) => {
       if (input.set_active === true || input.set_active === 'true' || input.set_active === 1 || input.set_active === '1') {
         await setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(existingBySlug.id));
       }
-    })();
+    });
     return await db.get(`SELECT * FROM tenants WHERE id = ?`, existingBySlug.id) as TenantRecord;
   }
   const slug = await uniqueTenantSlug(db, requestedSlug);
 
-  const tenant = db.transaction(async () => {
+  const tenant = await db.withTransaction(async (db) => {
     const result = await db.run(`INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 0)`, name, slug);
     const tenantId = Number(result.lastInsertId);
     await provisionTenantDefaultWorkspace(db, tenantId);
@@ -2052,7 +2122,7 @@ export async function createTenantWithDefaults(db: Db, input: { name?: unknown; 
       await setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(tenantId));
     }
     return await db.get(`SELECT * FROM tenants WHERE id = ?`, tenantId) as TenantRecord;
-  })();
+  });
 
   return tenant;
 }
@@ -2100,7 +2170,7 @@ export async function deleteTenant(db: Db, tenantId: number, input: { confirmati
   const activeBefore = await getActiveTenantId(db);
   const counts: Record<string, number> = {};
 
-  db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     for (const [table, whereSql] of [
       ['session_messages', `session_id IN (SELECT id FROM sessions WHERE tenant_id = ?)`],
       ['chat_messages', `agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`],
@@ -2161,7 +2231,7 @@ export async function deleteTenant(db: Db, tenantId: number, input: { confirmati
     if (activeBefore === tenantId) {
       await setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(replacementTenant.id));
     }
-  })();
+  });
 
   return {
     ok: true,

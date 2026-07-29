@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { closeDb, getDb } from './client';
 import { initSchema } from './schema';
+import { SqliteAdapter } from "./adapter/SqliteAdapter";
 
 describe('tasks.status schema migration', () => {
   const originalDbPath = process.env.AGENT_HQ_DB_PATH;
@@ -24,7 +25,8 @@ describe('tasks.status schema migration', () => {
   });
 
   it('removes the legacy hard-coded tasks.status CHECK constraint without losing task rows', async () => {
-    const legacyDb = new Database(process.env.AGENT_HQ_DB_PATH!);
+    const legacyDbRaw = new Database(process.env.AGENT_HQ_DB_PATH!);
+      const legacyDb = new SqliteAdapter(legacyDbRaw);
     await legacyDb.exec(`
       CREATE TABLE projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,7 +101,7 @@ describe('tasks.status schema migration', () => {
       INSERT INTO tasks (id, title, description, status, priority, sprint_id)
       VALUES (797, 'Elevation Build intake', '', 'todo', 'medium', 56);
     `);
-    legacyDb.close();
+    legacyDbRaw.close();
 
     await initSchema();
     const db = getDb();
@@ -120,7 +122,8 @@ describe('tasks.status schema migration', () => {
   });
 
   it('removes orphaned tasks and rebuilds sprint_id as required with cascade delete', async () => {
-    const legacyDb = new Database(process.env.AGENT_HQ_DB_PATH!);
+    const legacyDbRaw = new Database(process.env.AGENT_HQ_DB_PATH!);
+      const legacyDb = new SqliteAdapter(legacyDbRaw);
     await legacyDb.exec(`
       CREATE TABLE projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -162,7 +165,7 @@ describe('tasks.status schema migration', () => {
         (2, 'Null workflow task', 86, NULL),
         (3, 'Missing workflow task', 86, 999);
     `);
-    legacyDb.close();
+    legacyDbRaw.close();
 
     await initSchema();
     const db = getDb();

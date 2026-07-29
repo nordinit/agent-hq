@@ -258,7 +258,7 @@ export async function syncSessionMessagesFromChatMessages(db: Db, sessionId: num
      WHERE session_id = ?
   `, sessionId) as { max_ord: number };
 
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO session_messages (
       session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -269,15 +269,16 @@ export async function syncSessionMessagesFromChatMessages(db: Db, sessionId: num
       event_meta = excluded.event_meta,
       raw_payload = COALESCE(excluded.raw_payload, session_messages.raw_payload),
       timestamp = excluded.timestamp
-  `);
+  `;
 
-  const tx = db.transaction(() => {
+  await db.withTransaction(async (db) => {
     let ordinal = maxOrdinalRow.max_ord + 1;
-    rows.forEach((row) => {
+    for (const row of rows) {
       const rawPayload = String(row.id);
       const existingOrdinal = ordinalByRawPayload.get(rawPayload);
       const nextOrdinal = existingOrdinal ?? ordinal++;
-      insert.run(
+      await db.run(
+        insertSql,
         sessionId,
         nextOrdinal,
         row.role ?? 'system',
@@ -287,10 +288,9 @@ export async function syncSessionMessagesFromChatMessages(db: Db, sessionId: num
         rawPayload,
         toCanonicalTimestamp(row.timestamp),
       );
-    });
+    }
   });
 
-  tx();
   await syncSessionMessageCount(db, sessionId);
   return rows.length;
 }
@@ -375,7 +375,7 @@ export async function ensureCanonicalSessionForInstance(
     }
   }
 
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO session_messages (
       session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -386,15 +386,17 @@ export async function ensureCanonicalSessionForInstance(
       event_meta = excluded.event_meta,
       raw_payload = COALESCE(excluded.raw_payload, session_messages.raw_payload),
       timestamp = excluded.timestamp
-  `);
+  `;
   const chatMessageIds = await getChatMessageIdsForInstance(db, instanceId);
 
-  const tx = db.transaction(async () => {
-    transcript.messages.forEach((message, idx) => {
+  await db.withTransaction(async (db) => {
+    let idx = 0;
+    for (const message of transcript.messages) {
       const rawPayload = chatMessageIds.has(String(message.id)) ? String(message.id) : null;
-      insert.run(
+      await db.run(
+        insertSql,
         session.id,
-        idx,
+        idx++,
         message.role,
         message.event_type ?? 'text',
         message.content,
@@ -402,7 +404,7 @@ export async function ensureCanonicalSessionForInstance(
         rawPayload,
         toCanonicalTimestamp(message.timestamp),
       );
-    });
+    }
 
     await db.run(`
       UPDATE sessions
@@ -417,8 +419,6 @@ export async function ensureCanonicalSessionForInstance(
       WHERE id = ?
     `, session.id, transcript.in_progress ? 1 : 0, session.id);
   });
-
-  tx();
 
   await syncSessionMessagesFromChatMessages(db, session.id, instanceId);
 
@@ -495,7 +495,7 @@ export async function writeIngestResult(db: Db, result: IngestResult): Promise<C
   if (!sessionRow) return null;
 
   if (messages.length > 0) {
-    const insertMsg = db.prepare(`
+    const insertMsgSql = `
       INSERT INTO session_messages (
         session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -506,11 +506,12 @@ export async function writeIngestResult(db: Db, result: IngestResult): Promise<C
         event_meta = excluded.event_meta,
         raw_payload = COALESCE(excluded.raw_payload, session_messages.raw_payload),
         timestamp = excluded.timestamp
-    `);
+    `;
 
-    const tx = db.transaction(() => {
+    await db.withTransaction(async (db) => {
       for (const msg of messages) {
-        insertMsg.run(
+        await db.run(
+          insertMsgSql,
           sessionRow.id,
           msg.ordinal,
           msg.role,
@@ -522,7 +523,6 @@ export async function writeIngestResult(db: Db, result: IngestResult): Promise<C
         );
       }
     });
-    tx();
 
     await syncSessionMessageCount(db, sessionRow.id);
   }

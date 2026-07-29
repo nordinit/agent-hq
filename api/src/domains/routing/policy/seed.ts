@@ -84,7 +84,7 @@ export async function rememberDeletedSprintTaskTransitionRequirement(
     row.requirement_type,
     normalizeRequirementKeyValue(row.match_field),
   ] as const;
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     await db.run(`
       DELETE FROM sprint_task_transition_requirement_tombstones
       WHERE sprint_id = ?
@@ -100,7 +100,6 @@ export async function rememberDeletedSprintTaskTransitionRequirement(
       ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
     `, ...values);
   });
-  tx();
 }
 
 export async function seedSprintTaskPolicy(
@@ -131,7 +130,7 @@ export async function seedSprintTaskPolicy(
     return;
   }
 
-  const loadPolicyStatuses = async (): Promise<Array<{
+  const loadPolicyStatuses = async (db: Db): Promise<Array<{
       name: string;
       label: string;
       color: string;
@@ -180,7 +179,7 @@ export async function seedSprintTaskPolicy(
   const loadPolicyRequirements = (): PolicyRequirementSeed[] => policyRequirementsForSprintType(sprint.sprint_type);
   const loadPolicyTransitions = () => policyTransitionsForSprintType(sprint.sprint_type);
 
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     const requirementTombstones = force ? new Set<string>() : await loadRequirementTombstoneKeys(db, sprintId);
     if (force && await tableExists(db, 'sprint_task_transition_requirement_tombstones')) {
       await db.run(`DELETE FROM sprint_task_transition_requirement_tombstones WHERE sprint_id = ?`, sprintId);
@@ -188,14 +187,15 @@ export async function seedSprintTaskPolicy(
 
     if (shouldSeedStatuses) {
       await db.run(`DELETE FROM sprint_task_statuses WHERE sprint_id = ?`, sprintId);
-      const insert = db.prepare(`
+      const insertSql = `
         INSERT INTO sprint_task_statuses (
           sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `);
-      const policyStatuses = loadPolicyStatuses();
-      policyStatuses.forEach((row, index) => {
-        insert.run(
+      `;
+      const policyStatuses = await loadPolicyStatuses(db);
+      for (const [index, row] of policyStatuses.entries()) {
+        await db.run(
+          insertSql,
           sprintId,
           row.name,
           row.label,
@@ -207,7 +207,7 @@ export async function seedSprintTaskPolicy(
           index === 0 ? 1 : 0,
           row.metadata_json ?? '{}',
         );
-      });
+      }
     }
 
     const transitionScopeColumns = await tableHasColumn(db, 'sprint_task_transitions', 'project_id')
@@ -215,7 +215,7 @@ export async function seedSprintTaskPolicy(
 
     if (shouldSeedTransitions) {
       await db.run(`DELETE FROM sprint_task_transitions WHERE sprint_id = ?`, sprintId);
-      const insert = db.prepare(transitionScopeColumns ? `
+      const insertSql = transitionScopeColumns ? `
         INSERT INTO sprint_task_transitions (
           sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
@@ -223,9 +223,10 @@ export async function seedSprintTaskPolicy(
         INSERT INTO sprint_task_transitions (
           sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
-      `);
+      `;
       for (const row of loadPolicyTransitions()) {
-        insert.run(
+        await db.run(
+          insertSql,
           ...(transitionScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
           row.task_type ?? null,
           row.from_status,
@@ -236,7 +237,7 @@ export async function seedSprintTaskPolicy(
         );
       }
     } else {
-      const insertMissing = db.prepare(transitionScopeColumns ? `
+      const insertMissingSql = transitionScopeColumns ? `
         INSERT INTO sprint_task_transitions (
           sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
@@ -244,7 +245,7 @@ export async function seedSprintTaskPolicy(
         INSERT INTO sprint_task_transitions (
           sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
-      `);
+      `;
       const existingKeys = new Set(
         (await db.all(`
           SELECT COALESCE(task_type, '') AS task_type, from_status, outcome
@@ -256,7 +257,8 @@ export async function seedSprintTaskPolicy(
       for (const row of loadPolicyTransitions()) {
         const key = `${row.task_type ?? ''}\u0000${row.from_status}\u0000${row.outcome}`;
         if (existingKeys.has(key)) continue;
-        insertMissing.run(
+        await db.run(
+          insertMissingSql,
           ...(transitionScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
           row.task_type ?? null,
           row.from_status,
@@ -274,7 +276,7 @@ export async function seedSprintTaskPolicy(
 
     if (shouldSeedRequirements) {
       await db.run(`DELETE FROM sprint_task_transition_requirements WHERE sprint_id = ?`, sprintId);
-      const insert = db.prepare(requirementScopeColumns ? `
+      const insertSql = requirementScopeColumns ? `
         INSERT INTO sprint_task_transition_requirements (
           sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
@@ -282,10 +284,11 @@ export async function seedSprintTaskPolicy(
         INSERT INTO sprint_task_transition_requirements (
           sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `);
+      `;
       for (const row of loadPolicyRequirements()) {
         if (requirementTombstones.has(requirementSeedIdentityKey(row))) continue;
-        insert.run(
+        await db.run(
+          insertSql,
           ...(requirementScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
           row.task_type ?? null,
           row.outcome,
@@ -299,7 +302,7 @@ export async function seedSprintTaskPolicy(
         );
       }
     } else {
-      const insertMissing = db.prepare(requirementScopeColumns ? `
+      const insertMissingSql = requirementScopeColumns ? `
         INSERT INTO sprint_task_transition_requirements (
           sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
@@ -307,7 +310,7 @@ export async function seedSprintTaskPolicy(
         INSERT INTO sprint_task_transition_requirements (
           sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `);
+      `;
       const existingKeys = new Set(
         (await db.all(`
           SELECT COALESCE(task_type, '') AS task_type, outcome, field_name, requirement_type, COALESCE(match_field, '') AS match_field
@@ -320,7 +323,8 @@ export async function seedSprintTaskPolicy(
         const key = `${row.task_type ?? ''}\u0000${row.outcome}\u0000${row.field_name}\u0000${row.requirement_type}\u0000${row.match_field ?? ''}`;
         if (requirementTombstones.has(key)) continue;
         if (existingKeys.has(key)) continue;
-        insertMissing.run(
+        await db.run(
+          insertMissingSql,
           ...(requirementScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
           row.task_type ?? null,
           row.outcome,
@@ -341,7 +345,6 @@ export async function seedSprintTaskPolicy(
     }
   });
 
-  tx();
   await markSprintTaskPolicySeeded(db, sprintId);
 }
 
@@ -353,18 +356,18 @@ export async function backfillMissingSprintTypeStatusEmoji(db: Db, sprintType: s
     WHERE sprint_type_key = ?
   `, sprintType) as Array<{ id: number; status_key: string; metadata_json: string | null }>;
   if (rows.length === 0) return;
-  const updateEmoji = db.prepare(`
+  const updateEmojiSql = `
     UPDATE sprint_type_task_statuses
     SET metadata_json = ?, updated_at = datetime('now')
     WHERE id = ?
-  `);
+  `;
   for (const row of rows) {
     const metadata = parseJsonObject(row.metadata_json);
     const hasEmoji = typeof metadata.emoji === 'string' && metadata.emoji.trim().length > 0;
     if (hasEmoji) continue;
     const fallbackEmoji = canonicalTaskStatusEmoji(row.status_key);
     if (!fallbackEmoji) continue;
-    updateEmoji.run(JSON.stringify({ ...metadata, emoji: fallbackEmoji }), row.id);
+    await db.run(updateEmojiSql, JSON.stringify({ ...metadata, emoji: fallbackEmoji }), row.id);
   }
 }
 
@@ -408,17 +411,17 @@ async function ensureOpsIntakeStarterStatus(
   const canonical = buildCanonicalPolicyStatuses('ops').find((row) => row.name === 'intake');
   if (!canonical) return;
   const hasStatusTenantId = await tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
-  const insert = hasStatusTenantId
-    ? db.prepare(`
+  const insertSql = hasStatusTenantId
+    ? `
       INSERT OR IGNORE INTO sprint_type_task_statuses (
         tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
       ) VALUES (?, 'ops', ?, ?, ?, ?, ?, ?, 0, 1, ?, datetime('now'), datetime('now'))
-    `)
-    : db.prepare(`
+    `
+    : `
       INSERT OR IGNORE INTO sprint_type_task_statuses (
         sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
       ) VALUES ('ops', ?, ?, ?, ?, ?, ?, 0, 1, ?, datetime('now'), datetime('now'))
-    `);
+    `;
   const params = [
     canonical.name,
     canonical.label,
@@ -428,8 +431,8 @@ async function ensureOpsIntakeStarterStatus(
     canonical.allowed_transitions,
     JSON.stringify(canonical.emoji ? { emoji: canonical.emoji } : {}),
   ];
-  if (hasStatusTenantId) insert.run(options?.tenantId ?? null, ...params);
-  else insert.run(...params);
+  if (hasStatusTenantId) await db.run(insertSql, options?.tenantId ?? null, ...params);
+  else await db.run(insertSql, ...params);
 }
 
 export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintType: string): Promise<void> {
@@ -449,8 +452,8 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
   `, sprintType) as Array<{ id: number; status_key: string }>;
 
   const existingStatuses = new Set(existingRows.map((row) => row.status_key));
-  const deleteStmt = db.prepare(`DELETE FROM sprint_type_task_statuses WHERE sprint_type_key = ? AND status_key = ?`);
-  const updateStmt = db.prepare(`
+  const deleteSql = `DELETE FROM sprint_type_task_statuses WHERE sprint_type_key = ? AND status_key = ?`;
+  const updateSql = `
     UPDATE sprint_type_task_statuses
     SET label = ?,
         color = ?,
@@ -462,22 +465,23 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
         metadata_json = ?,
         updated_at = datetime('now')
     WHERE sprint_type_key = ? AND status_key = ?
-  `);
-  const insertStmt = db.prepare(`
+  `;
+  const insertSql = `
     INSERT INTO sprint_type_task_statuses (
       sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-  `);
+  `;
 
   for (const row of existingRows) {
     if (!canonicalByStatus.has(row.status_key)) {
-      deleteStmt.run(sprintType, row.status_key);
+      await db.run(deleteSql, sprintType, row.status_key);
     }
   }
 
-  canonicalStatuses.forEach((status, index) => {
+  for (const [index, status] of canonicalStatuses.entries()) {
     if (existingStatuses.has(status.name)) {
-      updateStmt.run(
+      await db.run(
+        updateSql,
         status.label,
         status.color,
         status.terminal,
@@ -489,10 +493,11 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
         sprintType,
         status.name,
       );
-      return;
+      continue;
     }
 
-    insertStmt.run(
+    await db.run(
+      insertSql,
       sprintType,
       status.name,
       status.label,
@@ -504,7 +509,7 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
       index === 0 ? 1 : 0,
       status.metadata_json,
     );
-  });
+  }
 }
 
 export async function seedSprintTypeTaskStatuses(
@@ -566,24 +571,25 @@ export async function seedSprintTypeTaskStatuses(
   }));
   const fallbackStatuses = sourceSprintType ? await listSprintTypeTaskStatuses(db, sourceSprintType, { tenantId: options?.tenantId }) : [];
   const statusesToSeed = sourceStatuses.length > 0 ? sourceStatuses : fallbackStatuses;
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     if (force) {
       await db.run(`DELETE FROM sprint_type_task_statuses WHERE sprint_type_key = ?${statusTenant.sql}`, normalizedSprintType, ...statusTenant.params);
     }
     const hasStatusTenantId = await tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
-    const insert = hasStatusTenantId
-      ? db.prepare(`
+    const insertSql = hasStatusTenantId
+      ? `
         INSERT OR IGNORE INTO sprint_type_task_statuses (
           tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `)
-      : db.prepare(`
+      `
+      : `
         INSERT OR IGNORE INTO sprint_type_task_statuses (
           sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `);
-    statusesToSeed.forEach((status, index) => {
-      insert.run(
+      `;
+    for (const [index, status] of statusesToSeed.entries()) {
+      await db.run(
+        insertSql,
         ...(hasStatusTenantId ? [options?.tenantId ?? null] : []),
         normalizedSprintType,
         status.name,
@@ -596,10 +602,9 @@ export async function seedSprintTypeTaskStatuses(
         status.is_default_entry ? 1 : 0,
         JSON.stringify(status.metadata ?? (status.emoji ? { emoji: status.emoji } : {})),
       );
-    });
+    }
 
     await backfillMissingSprintTypeStatusEmoji(db, normalizedSprintType);
   });
-  tx();
   await markSprintTypeStatusSeeded(db, normalizedSprintType, options?.tenantId);
 }

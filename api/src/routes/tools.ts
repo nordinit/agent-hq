@@ -36,7 +36,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     sql += ` ORDER BY name ASC`;
 
-    const rows = db.prepare(sql).all(...params);
+    const rows = await db.all(sql, ...params);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: String(err) });

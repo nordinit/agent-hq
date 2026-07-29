@@ -55,18 +55,17 @@ export async function normalizeSprintTaskPolicyOutcomeRows(db: Db): Promise<void
   `) as Array<{ id: number; sprint_type: string | null }>;
   const sprintTypes = new Map(sprints.map((sprint) => [sprint.id, sprint.sprint_type]));
 
-  const tx = db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     if (await tableExists(db, 'sprint_task_transitions')) {
       const rows = await db.all(`
         SELECT id, sprint_id, task_type, outcome
         FROM sprint_task_transitions
         ORDER BY id ASC
       `) as Array<{ id: number; sprint_id: number; task_type: string | null; outcome: string }>;
-      const deleteRow = db.prepare(`DELETE FROM sprint_task_transitions WHERE id = ?`);
       for (const row of rows) {
         const allowed = await resolvedOutcomeKeysForSprint(db, sprintTypes.get(row.sprint_id), row.task_type ?? null);
         if (!allowed || allowed.has(row.outcome)) continue;
-        deleteRow.run(row.id);
+        await db.run(`DELETE FROM sprint_task_transitions WHERE id = ?`, row.id);
       }
     }
 
@@ -76,16 +75,13 @@ export async function normalizeSprintTaskPolicyOutcomeRows(db: Db): Promise<void
         FROM sprint_task_transition_requirements
         ORDER BY id ASC
       `) as Array<{ id: number; sprint_id: number; task_type: string | null; outcome: string }>;
-      const deleteRow = db.prepare(`DELETE FROM sprint_task_transition_requirements WHERE id = ?`);
       for (const row of rows) {
         const allowed = await resolvedOutcomeKeysForSprint(db, sprintTypes.get(row.sprint_id), row.task_type ?? null);
         if (!allowed || allowed.has(row.outcome)) continue;
-        deleteRow.run(row.id);
+        await db.run(`DELETE FROM sprint_task_transition_requirements WHERE id = ?`, row.id);
       }
     }
   });
-
-  tx();
 }
 
 export async function normalizeSprintTaskRoutingRuleTaskTypes(db: Db): Promise<void> {
@@ -98,7 +94,7 @@ export async function normalizeSprintTaskRoutingRuleTaskTypes(db: Db): Promise<v
     && await tableHasColumn(db, 'sprint_type_task_types', 'task_type');
   if (!hasSprintRuleScope || !hasSprintTypeTaskType) return;
 
-  const deleteStrandedSprintRules = db.prepare(`
+  const deleteStrandedSprintRulesSql = `
     DELETE FROM sprint_task_routing_rules
     WHERE sprint_id IS NOT NULL
       AND task_type IS NOT NULL
@@ -121,10 +117,10 @@ export async function normalizeSprintTaskRoutingRuleTaskTypes(db: Db): Promise<v
         WHERE allowed.sprint_type_key = sp.sprint_type
           AND allowed.task_type = sprint_task_routing_rules.task_type
       )
-  `);
+  `;
 
-  const tx = db.transaction(async () => {
-    const sprintResult = deleteStrandedSprintRules.run();
+  await db.withTransaction(async (db) => {
+    const sprintResult = await db.run(deleteStrandedSprintRulesSql);
     let sprintTypeDefaultChanges = 0;
     if (hasSprintTypeRuleScope) {
       const result = await db.run(`
@@ -153,7 +149,6 @@ export async function normalizeSprintTaskRoutingRuleTaskTypes(db: Db): Promise<v
       console.log(`[schema] Removed ${total} sprint_task_routing_rules row(s) with task_type outside sprint type definitions`);
     }
   });
-  tx();
 }
 
 export function backfillAllSprintTaskPolicies(db: Db): void {

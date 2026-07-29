@@ -664,11 +664,11 @@ export async function listTasks(
     if (conditions.length > 0) {
       countQuery += ` WHERE ${conditions.join(' AND ')}`;
     }
-    const countResult = db.prepare(countQuery).get(...params) as { total: number };
+    const countResult = await db.get(countQuery, ...params) as { total: number };
     const total = countResult.total;
 
     sql += ' LIMIT ? OFFSET ?';
-    const tasks = db.prepare(sql).all(...params, lim, off) as Record<string, unknown>[];
+    const tasks = await db.all(sql, ...params, lim, off) as Record<string, unknown>[];
 
     return {
       tasks: enrichTasks(tasks),
@@ -679,7 +679,7 @@ export async function listTasks(
     };
   }
 
-  const tasks = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  const tasks = await db.all(sql, ...params) as Record<string, unknown>[];
   return enrichTasks(tasks);
 }
 

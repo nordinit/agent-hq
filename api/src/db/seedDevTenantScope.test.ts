@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { closeDb, getDb } from './client';
 import { initSchema } from './schema';
 import { createTenantWithDefaults, getDefaultTenantId } from '../lib/tenantContext';
+import { SqliteAdapter } from "./adapter/SqliteAdapter";
 
 let tempDir: string;
 let dbPath: string;
@@ -51,7 +52,8 @@ it('seeds dev fixtures into the default tenant without leaking into another tena
   expect(result.status).toBe(0);
   expect(result.stderr).toBe('');
 
-  const db = new Database(dbPath);
+  const dbRaw = new Database(dbPath);
+    const db = new SqliteAdapter(dbRaw);
   try {
     for (const table of ['projects', 'agents', 'sprints', 'tasks']) {
       const nullCount = await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id IS NULL`) as { n: number };
@@ -84,6 +86,6 @@ it('seeds dev fixtures into the default tenant without leaking into another tena
     `, defaultTenantId) as { n: number };
     expect(defaultTaskCount.n).toBe(3);
   } finally {
-    db.close();
+    dbRaw.close();
   }
 });

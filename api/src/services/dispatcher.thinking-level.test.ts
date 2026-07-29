@@ -51,6 +51,7 @@ jest.mock('../lib/agentHqBaseUrl', () => ({
 import { resolveRuntime } from '../runtimes';
 import type { AgentRuntime } from '../runtimes';
 import { dispatchInstance, resolveModelFromStoryPoints, runDispatcher } from './dispatcher';
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolveRuntime>;
 const mockedTaskNotifications = jest.requireMock('../lib/taskNotifications') as {
@@ -73,7 +74,8 @@ function mockRuntime(dispatch: jest.Mock): AgentRuntime {
 
 describe('runDispatcher thinking-level routing', () => {
   it('resolveModelFromStoryPoints returns configured thinking_level', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,11 +106,12 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'default route',
     });
 
-    db.close();
+    dbRaw.close();
   });
 
   it('resolveModelFromStoryPoints ignores disabled rules', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,11 +141,12 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'enabled route',
     }));
 
-    db.close();
+    dbRaw.close();
   });
 
   it('resolveModelFromStoryPoints prefers sprint scoped rules before project scoped rules', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -184,11 +188,12 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'project',
     });
 
-    db.close();
+    dbRaw.close();
   });
 
   it('resolveModelFromStoryPoints applies sprint-type scoped rules between sprint and project scopes', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE sprints (
         id INTEGER PRIMARY KEY,
@@ -251,11 +256,12 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'global-dev-default',
     }));
 
-    db.close();
+    dbRaw.close();
   });
 
   it('resolveModelFromStoryPoints ignores legacy global rows with no explicit scope', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -279,11 +285,12 @@ describe('runDispatcher thinking-level routing', () => {
 
     expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toBeNull();
 
-    db.close();
+    dbRaw.close();
   });
 
   it('resolveModelFromStoryPoints requires tenant-scoped routing rows to match the task tenant', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -315,11 +322,12 @@ describe('runDispatcher thinking-level routing', () => {
     }));
     expect(await resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 2, projectId: 86, sprintType: 'dev' })).toBeNull();
 
-    db.close();
+    dbRaw.close();
   });
 
   it('passes routed thinking_level into runtime dispatch and persists resolved output', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
@@ -539,11 +547,12 @@ describe('runDispatcher thinking-level routing', () => {
       effective_fast_mode: 1,
     });
 
-    db.close();
+    dbRaw.close();
   });
 
   it('makes task worktree authoritative for runtime cwd and repo-root metadata', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
@@ -768,11 +777,12 @@ describe('runDispatcher thinking-level routing', () => {
     const instance = await db.get(`SELECT worktree_path FROM job_instances LIMIT 1`) as { worktree_path: string | null };
     expect(instance.worktree_path).toBe('/Users/test/workspaces/task-375');
 
-    db.close();
+    dbRaw.close();
   });
 
   it('writes run context into the active worktree with consistent repo-root metadata', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatcher-worktree-'));
     const workspaceRoot = path.join(tempRoot, 'workspace-root');
     const worktreeRoot = path.join(workspaceRoot, 'task-375');
@@ -967,12 +977,13 @@ describe('runDispatcher thinking-level routing', () => {
       }));
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
-      db.close();
+      dbRaw.close();
     }
   });
 
   it('normalizes dispatch path inputs before making the worktree authoritative', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
@@ -1147,13 +1158,14 @@ describe('runDispatcher thinking-level routing', () => {
       }),
     }));
 
-    db.close();
+    dbRaw.close();
   });
 
   it('surfaces worktree startup failures on the task instead of leaving it silently ready', async () => {
     jest.clearAllMocks();
 
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
@@ -1325,13 +1337,14 @@ describe('runDispatcher thinking-level routing', () => {
     }));
 
     expect(mockedResolveRuntime).not.toHaveBeenCalled();
-    db.close();
+    dbRaw.close();
   });
 
   it('records a startup failure notification when workflow mapping ignores the event and status stays ready', async () => {
     jest.clearAllMocks();
 
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
@@ -1475,13 +1488,14 @@ describe('runDispatcher thinking-level routing', () => {
     expect(mockedTaskNotifications.notifyTaskStatusChange).not.toHaveBeenCalled();
     expect(mockedResolveRuntime).not.toHaveBeenCalled();
 
-    db.close();
+    dbRaw.close();
   });
 
   it('preserves runtime dispatch retries but surfaces the failure on the task', async () => {
     jest.clearAllMocks();
 
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
@@ -1593,11 +1607,12 @@ describe('runDispatcher thinking-level routing', () => {
     expect(instance.status).toBe('failed');
     expect(instance.error).toBe('Gateway connect timeout');
 
-    db.close();
+    dbRaw.close();
   });
 
   it('does not dispatch a stalled task that lacks a matching sprint routing rule, even if agent_id is set', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
@@ -1763,11 +1778,12 @@ describe('runDispatcher thinking-level routing', () => {
     );
 
     logSpy.mockRestore();
-    db.close();
+    dbRaw.close();
   });
 
   it('dispatchInstance passes routed thinking_level into runtime dispatch', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1860,6 +1876,6 @@ describe('runDispatcher thinking-level routing', () => {
       thinking: 'adaptive',
     }));
 
-    db.close();
+    dbRaw.close();
   });
 });

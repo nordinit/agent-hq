@@ -513,12 +513,12 @@ export class CustomAgentRuntime implements AgentRuntime {
         const newEvents = data.events.slice(offset);
 
         if (newEvents.length > 0) {
-          const stmt = db.prepare(`
+          const insertSql = `
             INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
             VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp,
               event_type = excluded.event_type, event_meta = excluded.event_meta
-          `);
+          `;
 
           for (let i = 0; i < newEvents.length; i++) {
             const evt = newEvents[i];
@@ -579,7 +579,8 @@ export class CustomAgentRuntime implements AgentRuntime {
                 continue;
             }
 
-            stmt.run(
+            await db.run(
+              insertSql,
               evtId,
               agentId,
               instanceId,
@@ -773,7 +774,7 @@ export class CustomAgentRuntime implements AgentRuntime {
 
       // Persist individual structured event rows (task #532)
       if (events && events.length > 0) {
-        persistEventRows(db, agentId, instanceId, events);
+        await persistEventRows(db, agentId, instanceId, events);
       }
     } catch (err) {
       console.warn(
@@ -1043,23 +1044,24 @@ function parseSSEAssistantMessage(raw: string): string {
  * Each event gets a stable ID: veri-evt-{instanceId}-{index} to allow
  * idempotent re-insertion if the stream is re-parsed.
  */
-function persistEventRows(
+async function persistEventRows(
   db: ReturnType<typeof getDb>,
   agentId: number,
   instanceId: number,
   events: SSEEvent[],
-): void {
+): Promise<void> {
   const now = nowTimestamp();
-  const stmt = db.prepare(`
+  const insertSql = `
     INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
     VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp,
       event_type = excluded.event_type, event_meta = excluded.event_meta
-  `);
+  `;
 
   for (let i = 0; i < events.length; i++) {
     const evt = events[i];
-    stmt.run(
+    await db.run(
+      insertSql,
       `veri-evt-${instanceId}-${i}`,
       agentId,
       instanceId,

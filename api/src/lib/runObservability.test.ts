@@ -1,9 +1,11 @@
 import Database from 'better-sqlite3';
 import { recordRunCheckIn } from './runObservability';
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
   it('does not write the generic completion note for missing lifecycle handoff completions when the runtime end error uses the canonical text', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
@@ -94,7 +96,8 @@ describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
   });
 
   it('does not write the generic completion note for missing lifecycle handoff completions when the runtime end error is a longer failure summary', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
@@ -185,7 +188,8 @@ describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
   });
 
   it('does not write the generic completion note for missing lifecycle handoff completions when runtime success is still true before quarantine handling normalizes it', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
@@ -276,7 +280,8 @@ describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
   });
 
   it('does not write the generic completion note when the summary says the runtime ended without posting a lifecycle outcome', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
@@ -369,7 +374,8 @@ describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
 
 describe('recordRunCheckIn preserves runtime completion state when lifecycle handoff is missing', () => {
   it('does not force the instance status to failed solely because the lifecycle outcome is still missing', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,

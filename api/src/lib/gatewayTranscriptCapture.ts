@@ -295,7 +295,7 @@ async function persistHistoryMessages(
   try {
     const db = getDb();
     const identity = await chatMessageIdentityColumns(db, ctx);
-    const stmt = db.prepare(`
+    const insertSql = `
       INSERT INTO chat_messages (id, agent_id, instance_id, ${identity.insertColumnSql}role, content, timestamp, event_type, event_meta)
       VALUES (?, ?, ?, ${identity.valueSql}?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
@@ -305,7 +305,7 @@ async function persistHistoryMessages(
         timestamp = excluded.timestamp,
         event_type = excluded.event_type,
         event_meta = excluded.event_meta
-    `);
+    `;
 
     await db.run('DELETE FROM chat_messages WHERE id LIKE ? OR id LIKE ?', `oc-hist-${ctx.instanceId}-%`, `oc-live-${ctx.instanceId}-%`);
 
@@ -321,7 +321,8 @@ async function persistHistoryMessages(
 
       for (const evt of extractStructuredEvents(m)) {
         const rowId = `oc-hist-${ctx.instanceId}-${rowIndex++}`;
-        stmt.run(
+        await db.run(
+          insertSql,
           rowId,
           ctx.agentId,
           ctx.instanceId,
@@ -397,7 +398,7 @@ async function persistLiveStructuredMessage(
     );
     if (!events.length) return rowIndex;
 
-    const stmt = db.prepare(`
+    const insertSql = `
       INSERT INTO chat_messages (id, agent_id, instance_id, ${identity.insertColumnSql}role, content, timestamp, event_type, event_meta)
       VALUES (?, ?, ?, ${identity.valueSql}?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
@@ -407,11 +408,12 @@ async function persistLiveStructuredMessage(
         timestamp = excluded.timestamp,
         event_type = excluded.event_type,
         event_meta = excluded.event_meta
-    `);
+    `;
 
     let nextIndex = rowIndex;
     for (const evt of events) {
-      stmt.run(
+      await db.run(
+        insertSql,
         `oc-live-${ctx.instanceId}-${nextIndex++}`,
         ctx.agentId,
         ctx.instanceId,

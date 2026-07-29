@@ -3,13 +3,15 @@ import { notifyTelegram } from '../integrations/telegram';
 import { saveNotificationPreferences } from './notifications';
 import { notifyTaskStatusChange } from './taskNotifications';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../integrations/telegram', () => ({
   notifyTelegram: jest.fn(),
 }));
 
 async function createDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY,

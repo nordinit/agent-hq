@@ -449,7 +449,7 @@ export async function importProjectManifest(
   const workflowIdMap: Record<string, number> = {};
   const projectName = preview.proposed_project_name;
 
-  const tx = db.transaction(async () => {
+  const project_id = await db.withTransaction(async (db) => {
     const projectId = await insertDynamic(db, 'projects', {
           tenant_id: options.tenantId ?? null,
           name: projectName,
@@ -555,13 +555,13 @@ export async function importProjectManifest(
       return next;
     };
 
-    for (const row of manifest.routing?.status_routes ?? []) await insertDynamic(db, 'routing_config', scopedRow('routing_config', row));
-    for (const row of manifest.routing?.transitions ?? []) await insertDynamic(db, 'sprint_task_transitions', scopedRow('sprint_task_transitions', row));
-    for (const row of manifest.routing?.transition_requirements ?? []) await insertDynamic(db, 'sprint_task_transition_requirements', scopedRow('sprint_task_transition_requirements', row));
-    for (const row of manifest.routing?.task_routing_rules ?? []) await insertDynamic(db, 'sprint_task_routing_rules', scopedRow('sprint_task_routing_rules', row));
-    for (const row of manifest.routing?.story_point_model_routing ?? []) await insertDynamic(db, 'story_point_model_routing', scopedRow('story_point_model_routing', row));
-    for (const row of manifest.routing?.external_event_mappings ?? []) await insertDynamic(db, 'external_event_mappings', scopedRow('external_event_mappings', row));
-    for (const row of manifest.recurring_task_templates ?? []) await insertDynamic(db, 'recurring_task_series', { ...scopedRow('recurring_task_series', row), enabled: 0, next_run_at: null, last_run_at: null });
+    for (const row of manifest.routing?.status_routes ?? []) await insertDynamic(db, 'routing_config', await scopedRow('routing_config', row));
+    for (const row of manifest.routing?.transitions ?? []) await insertDynamic(db, 'sprint_task_transitions', await scopedRow('sprint_task_transitions', row));
+    for (const row of manifest.routing?.transition_requirements ?? []) await insertDynamic(db, 'sprint_task_transition_requirements', await scopedRow('sprint_task_transition_requirements', row));
+    for (const row of manifest.routing?.task_routing_rules ?? []) await insertDynamic(db, 'sprint_task_routing_rules', await scopedRow('sprint_task_routing_rules', row));
+    for (const row of manifest.routing?.story_point_model_routing ?? []) await insertDynamic(db, 'story_point_model_routing', await scopedRow('story_point_model_routing', row));
+    for (const row of manifest.routing?.external_event_mappings ?? []) await insertDynamic(db, 'external_event_mappings', await scopedRow('external_event_mappings', row));
+    for (const row of manifest.recurring_task_templates ?? []) await insertDynamic(db, 'recurring_task_series', { ...(await scopedRow('recurring_task_series', row)), enabled: 0, next_run_at: null, last_run_at: null });
 
     if (options.importFiles) {
       const dir = path.join(UPLOADS_BASE, String(projectId));
@@ -595,7 +595,6 @@ export async function importProjectManifest(
     return projectId;
   });
 
-  const project_id = tx();
   return { project_id, preview, id_map: { agents: agentIdMap, workflows: workflowIdMap } };
 }
 
@@ -608,7 +607,7 @@ export async function repairImportedProjectTenantScope(
   const tenantId = input.tenantId !== undefined ? input.tenantId : project.tenant_id ?? null;
   const updated: Record<string, number> = {};
 
-  db.transaction(async () => {
+  await db.withTransaction(async (db) => {
     for (const table of TENANT_SCOPED_PROJECT_CONFIG_TABLES) {
       if (!await tableHasColumns(db, table, ['project_id', 'tenant_id'])) continue;
       const result = await db.run(`
@@ -619,7 +618,7 @@ export async function repairImportedProjectTenantScope(
       `, tenantId, project.id, tenantId);
       updated[table] = result.changes;
     }
-  })();
+  });
 
   return { project_id: project.id, tenant_id: tenantId, updated };
 }

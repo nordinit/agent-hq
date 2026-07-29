@@ -7,51 +7,40 @@
  *
  * This script is safe to re-run — it checks for existing rows before inserting.
  * It does NOT touch the production DB (agent-hq.db).
+ *
+ * The whole script runs inside `main()` rather than at module top level: this file is
+ * compiled as CommonJS, where top-level `await` is unavailable, and every database call
+ * is now asynchronous.
  */
 
 import os from 'os';
 import { initSchema, provisionDefaultMcpRegistry, provisionDefaultToolRegistry } from './schema';
 import { getDb } from './client';
+import type { Db } from './adapter/types';
 import { getDefaultTenantId } from '../lib/tenantContext';
 import { bootstrapRoutingAndWorkflowDefaults } from './bootstrapDefaults';
 
 const HOME = process.env.HOME ?? os.homedir();
 const OPENCLAW_DIR = process.env.WORKSPACE_PARENT ?? `${HOME}/.openclaw`;
 
-console.log(`[seed-dev] DB path: ${process.env.AGENT_HQ_DB_PATH ?? '(default)'}`);
-
-// Initialize schema first (idempotent)
-initSchema();
-
-const db = getDb();
-bootstrapRoutingAndWorkflowDefaults(db);
-const defaultTenantId = getDefaultTenantId(db);
-
-function seedIfEmpty(table: string, checkSql: string, insertFn: () => void): void {
-  const row = db.prepare(checkSql).get() as { cnt: number } | undefined;
-  if (!row || row.cnt === 0) {
-    insertFn();
+async function seedIfEmpty(
+  db: Db,
+  table: string,
+  checkSql: string,
+  insertFn: () => Promise<void>,
+): Promise<void> {
+  const row = await db.get<{ cnt: number }>(checkSql);
+  // COUNT(*) comes back as a string from the PostgreSQL driver (bigint) and as a number
+  // from SQLite, so coerce before comparing.
+  if (!row || Number(row.cnt) === 0) {
+    await insertFn();
     console.log(`[seed-dev] Seeded table: ${table}`);
   } else {
     console.log(`[seed-dev] Skipped (already seeded): ${table}`);
   }
 }
 
-// ── Projects ──────────────────────────────────────────────────────────────────
-seedIfEmpty(
-  'projects',
-  `SELECT COUNT(*) AS cnt FROM projects WHERE tenant_id = ${defaultTenantId} AND name IN ('Agency', 'Agent HQ')`,
-  async () => {
-    await db.run(`
-      INSERT INTO projects (tenant_id, name, description, context_md) VALUES
-        (?, 'Agency', 'Dev sandbox: General IT agency work bucket', '## Agency (dev)\nDev environment — safe to mutate.'),
-        (?, 'Agent HQ', 'Dev sandbox: Agent HQ internal platform project', '## Agent HQ (dev)\nDev environment — safe to mutate.')
-    `, defaultTenantId, defaultTenantId);
-  }
-);
-
 // ── Agents ────────────────────────────────────────────────────────────────────
-// Insert missing dev agents by session_key — safe to run multiple times
 // Pixel claude-code runtime config (task #306 migration)
 const pixelRuntimeConfig = JSON.stringify({
   workingDirectory: `${OPENCLAW_DIR}/workspace-agency-frontend`,
@@ -81,91 +70,142 @@ const devAgents = [
   { name: 'Vera',           role: 'QA Engineer — dev session',               session_key: 'agent:agency-qa:main',        workspace_path: `${OPENCLAW_DIR}/workspace-agency-qa`,       openclaw_agent_id: 'agency-qa',       runtime_type: 'openclaw',    runtime_config: null },
 ];
 
-const insertAgent = db.prepare(`
+const INSERT_AGENT_SQL = `
   INSERT INTO agents (tenant_id, name, role, session_key, workspace_path, openclaw_agent_id, runtime_type, runtime_config, status, system_role)
   SELECT ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?
   WHERE NOT EXISTS (SELECT 1 FROM agents WHERE session_key = ?)
-`);
-let agentsAdded = 0;
-for (const agent of devAgents) {
-  const res = insertAgent.run(defaultTenantId, agent.name, agent.role, agent.session_key, agent.workspace_path, agent.openclaw_agent_id, agent.runtime_type, agent.runtime_config, agent.system_role ?? null, agent.session_key);
-  db.prepare(`UPDATE agents SET tenant_id = COALESCE(tenant_id, ?) WHERE session_key = ?`).run(defaultTenantId, agent.session_key);
-  agentsAdded += Number(res.changes);
+`;
+
+async function main(): Promise<void> {
+  console.log(`[seed-dev] DB path: ${process.env.AGENT_HQ_DB_PATH ?? '(default)'}`);
+
+  // Initialize schema first (idempotent)
+  await initSchema();
+
+  const db = getDb();
+  await bootstrapRoutingAndWorkflowDefaults(db);
+  const defaultTenantId = await getDefaultTenantId(db);
+
+  // ── Projects ────────────────────────────────────────────────────────────────
+  await seedIfEmpty(
+    db,
+    'projects',
+    `SELECT COUNT(*) AS cnt FROM projects WHERE tenant_id = ${defaultTenantId} AND name IN ('Agency', 'Agent HQ')`,
+    async () => {
+      await db.run(`
+        INSERT INTO projects (tenant_id, name, description, context_md) VALUES
+          (?, 'Agency', 'Dev sandbox: General IT agency work bucket', '## Agency (dev)\nDev environment — safe to mutate.'),
+          (?, 'Agent HQ', 'Dev sandbox: Agent HQ internal platform project', '## Agent HQ (dev)\nDev environment — safe to mutate.')
+      `, defaultTenantId, defaultTenantId);
+    }
+  );
+
+  // ── Agents ──────────────────────────────────────────────────────────────────
+  // Insert missing dev agents by session_key — safe to run multiple times
+  let agentsAdded = 0;
+  for (const agent of devAgents) {
+    const res = await db.run(
+      INSERT_AGENT_SQL,
+      defaultTenantId,
+      agent.name,
+      agent.role,
+      agent.session_key,
+      agent.workspace_path,
+      agent.openclaw_agent_id,
+      agent.runtime_type,
+      agent.runtime_config,
+      agent.system_role ?? null,
+      agent.session_key,
+    );
+    await db.run(
+      `UPDATE agents SET tenant_id = COALESCE(tenant_id, ?) WHERE session_key = ?`,
+      defaultTenantId,
+      agent.session_key,
+    );
+    agentsAdded += Number(res.changes);
+  }
+  console.log(`[seed-dev] Agents: ${agentsAdded} added (existing skipped).`);
+
+  provisionDefaultToolRegistry();
+  await provisionDefaultMcpRegistry();
+
+  // ── Sprints ─────────────────────────────────────────────────────────────────
+  await seedIfEmpty(
+    db,
+    'sprints',
+    `SELECT COUNT(*) AS cnt FROM sprints WHERE tenant_id = ${defaultTenantId} AND name IN ('Dev Sprint 1', 'Agent HQ Enhancements (dev)')`,
+    async () => {
+      // We need a project id — get first agency project
+      const agencyProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId);
+      const atlasProject  = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agent HQ' LIMIT 1`, defaultTenantId);
+
+      if (agencyProject) {
+        await db.run(`
+          INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value) VALUES
+            (?, ?, 'Dev Sprint 1', 'Validate dev environment isolation and seed data', 'dev', 'active', 'time', '2w')
+        `, defaultTenantId, agencyProject.id);
+      }
+      if (atlasProject) {
+        await db.run(`
+          INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value) VALUES
+            (?, ?, 'Agent HQ Enhancements (dev)', 'Test Agent HQ feature work in isolation', 'dev', 'active', 'time', '2w')
+        `, defaultTenantId, atlasProject.id);
+      }
+    }
+  );
+
+  // ── Job Templates (removed — Task #579) ────────────────────────────────────
+  // job_templates table has been dropped. Agent execution config now lives on
+  // the agents table via job_instructions, schedule, routing rules, etc.
+
+  // ── Routing: task statuses ──────────────────────────────────────────────────
+  // (Routing rules are inserted by initSchema/migrations if they exist, so we skip here)
+
+  // ── Sample Tasks ────────────────────────────────────────────────────────────
+  await seedIfEmpty(
+    db,
+    'tasks',
+    `SELECT COUNT(*) AS cnt FROM tasks WHERE tenant_id = ${defaultTenantId}`,
+    async () => {
+      const agencyProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId);
+      const sprint = await db.get<{ id: number }>(`SELECT id FROM sprints WHERE tenant_id = ? AND name = 'Dev Sprint 1' LIMIT 1`, defaultTenantId);
+      const forgeAgent = await db.get<{ id: number }>(`SELECT id FROM agents WHERE tenant_id = ? AND session_key = 'agent:agency-backend:main' LIMIT 1`, defaultTenantId);
+
+      if (agencyProject) {
+        await db.run(`
+          INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, sprint_id, assigned_agent_id) VALUES
+            (?, 'Sample dev task — todo', 'A representative task in todo state for dev/test use', 'todo', 'medium', ?, ?, ?),
+            (?, 'Sample dev task — in_progress', 'A representative task in in_progress state for dev/test use', 'in_progress', 'high', ?, ?, ?),
+            (?, 'Sample dev task — review', 'A representative task in review state for dev/test use', 'review', 'low', ?, ?, ?)
+        `, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null);
+      }
+    }
+  );
+
+  // ── Routing config (minimal) ────────────────────────────────────────────────
+  // Only seed if routing_configs table exists and is empty
+  try {
+    const routingCount = await db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM routing_configs`);
+    if (routingCount && Number(routingCount.cnt) === 0) {
+      const agencyProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId);
+      if (agencyProject) {
+        await db.run(`
+          INSERT INTO routing_configs (tenant_id, project_id, from_status, outcome, to_status, enabled) VALUES
+            (?, ?, 'in_progress', 'completed_for_review', 'review', 1),
+            (?, ?, 'review', 'qa_pass', 'ready_to_merge', 1),
+            (?, ?, 'review', 'qa_fail', 'in_progress', 1)
+        `, defaultTenantId, agencyProject.id, defaultTenantId, agencyProject.id, defaultTenantId, agencyProject.id);
+        console.log('[seed-dev] Seeded table: routing_configs');
+      }
+    }
+  } catch {
+    // routing_configs table may not exist in older schemas — skip
+  }
+
+  console.log('[seed-dev] Done.');
 }
-console.log(`[seed-dev] Agents: ${agentsAdded} added (existing skipped).`);
 
-provisionDefaultToolRegistry();
-provisionDefaultMcpRegistry();
-
-// ── Sprints ───────────────────────────────────────────────────────────────────
-seedIfEmpty(
-  'sprints',
-  `SELECT COUNT(*) AS cnt FROM sprints WHERE tenant_id = ${defaultTenantId} AND name IN ('Dev Sprint 1', 'Agent HQ Enhancements (dev)')`,
-  async () => {
-    // We need a project id — get first agency project
-    const agencyProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
-    const atlasProject  = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agent HQ' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
-
-    if (agencyProject) {
-      await db.run(`
-        INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value) VALUES
-          (?, ?, 'Dev Sprint 1', 'Validate dev environment isolation and seed data', 'dev', 'active', 'time', '2w')
-      `, defaultTenantId, agencyProject.id);
-    }
-    if (atlasProject) {
-      await db.run(`
-        INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value) VALUES
-          (?, ?, 'Agent HQ Enhancements (dev)', 'Test Agent HQ feature work in isolation', 'dev', 'active', 'time', '2w')
-      `, defaultTenantId, atlasProject.id);
-    }
-  }
-);
-
-// ── Job Templates (removed — Task #579) ──────────────────────────────────────
-// job_templates table has been dropped. Agent execution config now lives on
-// the agents table via job_instructions, schedule, routing rules, etc.
-
-// ── Routing: task statuses ────────────────────────────────────────────────────
-// (Routing rules are inserted by initSchema/migrations if they exist, so we skip here)
-
-// ── Sample Tasks ──────────────────────────────────────────────────────────────
-seedIfEmpty(
-  'tasks',
-  `SELECT COUNT(*) AS cnt FROM tasks WHERE tenant_id = ${defaultTenantId}`,
-  async () => {
-    const agencyProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
-    const sprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? AND name = 'Dev Sprint 1' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
-    const forgeAgent = await db.get(`SELECT id FROM agents WHERE tenant_id = ? AND session_key = 'agent:agency-backend:main' LIMIT 1`, defaultTenantId) as { id: number } | undefined;
-
-    if (agencyProject) {
-      await db.run(`
-        INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, sprint_id, assigned_agent_id) VALUES
-          (?, 'Sample dev task — todo', 'A representative task in todo state for dev/test use', 'todo', 'medium', ?, ?, ?),
-          (?, 'Sample dev task — in_progress', 'A representative task in in_progress state for dev/test use', 'in_progress', 'high', ?, ?, ?),
-          (?, 'Sample dev task — review', 'A representative task in review state for dev/test use', 'review', 'low', ?, ?, ?)
-      `, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null);
-    }
-  }
-);
-
-// ── Routing config (minimal) ──────────────────────────────────────────────────
-// Only seed if routing_configs table exists and is empty
-try {
-  const routingCount = db.prepare(`SELECT COUNT(*) AS cnt FROM routing_configs`).get() as { cnt: number } | undefined;
-  if (routingCount && routingCount.cnt === 0) {
-    const agencyProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`).get(defaultTenantId) as { id: number } | undefined;
-    if (agencyProject) {
-      db.prepare(`
-        INSERT INTO routing_configs (tenant_id, project_id, from_status, outcome, to_status, enabled) VALUES
-          (?, ?, 'in_progress', 'completed_for_review', 'review', 1),
-          (?, ?, 'review', 'qa_pass', 'ready_to_merge', 1),
-          (?, ?, 'review', 'qa_fail', 'in_progress', 1)
-      `).run(defaultTenantId, agencyProject.id, defaultTenantId, agencyProject.id, defaultTenantId, agencyProject.id);
-      console.log('[seed-dev] Seeded table: routing_configs');
-    }
-  }
-} catch {
-  // routing_configs table may not exist in older schemas — skip
-}
-
-console.log('[seed-dev] Done.');
+main().catch((err) => {
+  console.error('[seed-dev] Failed:', err);
+  process.exitCode = 1;
+});

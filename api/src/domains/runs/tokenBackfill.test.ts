@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { spawnSync } from 'child_process';
 import { backfillInstanceTokens } from './tokenBackfill';
 import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 jest.mock('child_process', () => ({
   spawnSync: jest.fn(),
@@ -11,7 +12,8 @@ jest.mock('child_process', () => ({
 const mockSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
 
 async function createDb(): Promise<Db> {
-  const db = new Database(':memory:');
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
   await db.exec(`
     CREATE TABLE job_instances (
       id INTEGER PRIMARY KEY,

@@ -24,6 +24,7 @@ import {
   removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant,
 } from '../domains/routing/externalEventMappings';
 import { materializeAgentMcpConfig } from '../runtimes/mcpMaterialization';
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 const originalWorkspaceParent = process.env.WORKSPACE_PARENT;
@@ -95,7 +96,8 @@ describe('tenant workspace isolation', () => {
 
   it('backfills legacy tenant-owned rows into the default tenant', async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-backfill-'));
-    const db = new Database(path.join(tempDir, 'legacy.db'));
+    const dbRaw = new Database(path.join(tempDir, 'legacy.db'));
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT (datetime('now')));
       CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);
@@ -112,12 +114,13 @@ describe('tenant workspace isolation', () => {
     expect((await db.get(`SELECT tenant_id FROM projects LIMIT 1`) as { tenant_id: number }).tenant_id).toBe(defaultTenantId);
     expect((await db.get(`SELECT tenant_id FROM tasks LIMIT 1`) as { tenant_id: number }).tenant_id).toBe(defaultTenantId);
     expect((await db.get(`SELECT tenant_id FROM agents LIMIT 1`) as { tenant_id: number }).tenant_id).toBe(defaultTenantId);
-    db.close();
+    dbRaw.close();
   });
 
   it('renames the legacy default company tenant label during tenant schema repair', async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-name-repair-'));
-    const db = new Database(path.join(tempDir, 'legacy-name.db'));
+    const dbRaw = new Database(path.join(tempDir, 'legacy-name.db'));
+      const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT (datetime('now')));
       CREATE TABLE tenants (
@@ -139,7 +142,7 @@ describe('tenant workspace isolation', () => {
     expect(defaultTenantId).toBe(1);
     expect((await db.get(`SELECT name FROM tenants WHERE id = 1`) as { name: string }).name).toBe('Default Tenant');
     expect((await db.get(`SELECT name FROM tenants WHERE id = 2`) as { name: string }).name).toBe('Acme Company');
-    db.close();
+    dbRaw.close();
   });
 
   it('creates tenants with default starter data idempotently by slug', async () => {
