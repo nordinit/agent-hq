@@ -27,7 +27,14 @@ const repoRoot = __dirname;
 
 const apiPort = process.env.AGENT_HQ_PGTEST_API_PORT || '3531';
 const uiPort = process.env.AGENT_HQ_PGTEST_UI_PORT || '3530';
-const databaseUrl = process.env.AGENT_HQ_PGTEST_DATABASE_URL || 'postgresql://localhost/agent_hq_pgtest';
+// agent_hq_pgtest_LEGACY, deliberately — the one provisioned with --keep-legacy-names.
+//
+// The application's SQL still says sprint_id / sprints. Pointing this at the RENAMED database
+// (agent_hq_pgtest) would change two variables at once, and a failure could be either the
+// engine swap or the rename. The renamed database exists and is smoke-tested separately; it
+// becomes the target once the application speaks the new vocabulary.
+const databaseUrl = process.env.AGENT_HQ_PGTEST_DATABASE_URL
+  || 'postgresql://localhost/agent_hq_pgtest_legacy';
 
 const nodeBin = [
   process.env.AGENT_HQ_NODE_BIN,
