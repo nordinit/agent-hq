@@ -9,6 +9,7 @@ import {
   type AdapterSource,
 } from './sessionAdapters';
 import { resolveRuntimeTenantId, tenantInsertColumns, tenantUpsertUpdateSql } from './runtimeTenantScope';
+import { toCanonicalTimestamp } from './timestamps';
 
 export type CanonicalSessionStatus = 'active' | 'completed' | 'failed' | 'abandoned';
 
@@ -220,7 +221,9 @@ function insertFailurePlaceholderMessage(
       runtime_end_source: row.runtime_end_source,
     }),
     `job-instance-runtime-failure:${row.id}`,
-    row.runtime_ended_at ?? row.completed_at ?? row.started_at ?? row.dispatched_at ?? row.created_at,
+    toCanonicalTimestamp(
+      row.runtime_ended_at ?? row.completed_at ?? row.started_at ?? row.dispatched_at ?? row.created_at,
+    ),
   );
 
   syncSessionMessageCount(db, sessionId);
@@ -288,7 +291,7 @@ export function syncSessionMessagesFromChatMessages(db: Database.Database, sessi
         row.content ?? '',
         row.event_meta ?? JSON.stringify({ source: 'chat_messages_backfill', chat_message_id: row.id, instance_id: instanceId }),
         rawPayload,
-        row.timestamp,
+        toCanonicalTimestamp(row.timestamp),
       );
     });
   });
@@ -317,9 +320,9 @@ export function upsertCanonicalSessionForInstance(
   }) ?? row.tenant_id ?? null;
   const tenant = tenantInsertColumns(db, 'sessions', tenantId);
   const status = mapInstanceStatus(row.status);
-  const startedAt = row.started_at ?? row.dispatched_at ?? row.created_at;
+  const startedAt = toCanonicalTimestamp(row.started_at ?? row.dispatched_at ?? row.created_at);
   const endedAt = status === 'completed' || status === 'failed' || status === 'abandoned'
-    ? (row.completed_at ?? null)
+    ? toCanonicalTimestamp(row.completed_at)
     : null;
 
   db.prepare(`
@@ -418,7 +421,7 @@ export async function ensureCanonicalSessionForInstance(
         message.content,
         JSON.stringify(message.event_meta ?? {}),
         rawPayload,
-        message.timestamp,
+        toCanonicalTimestamp(message.timestamp),
       );
     });
 
@@ -517,8 +520,8 @@ export function writeIngestResult(db: Database.Database, result: IngestResult): 
     session.projectId ?? null,
     session.status,
     session.title ?? '',
-    session.startedAt ?? null,
-    session.endedAt ?? null,
+    toCanonicalTimestamp(session.startedAt),
+    toCanonicalTimestamp(session.endedAt),
     session.tokenInput ?? null,
     session.tokenOutput ?? null,
     session.metadata ? JSON.stringify(session.metadata) : '{}',
@@ -551,7 +554,7 @@ export function writeIngestResult(db: Database.Database, result: IngestResult): 
           msg.content,
           JSON.stringify(msg.eventMeta ?? {}),
           msg.rawPayload ?? null,
-          msg.timestamp,
+          toCanonicalTimestamp(msg.timestamp),
         );
       }
     });

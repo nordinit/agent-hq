@@ -286,8 +286,8 @@ describe('OpenClaw JSONL transcript backfill', () => {
     expect(result.backfilled).toBe(true);
     expect(result.sessionFile).toBe(sessionFile);
     expect(result.persistedEvents).toBe(3);
-    expect(result.heartbeatAt).toBe('2026-05-13T10:59:30.000Z');
-    expect(result.meaningfulOutputAt).toBe('2026-05-13T10:59:30.000Z');
+    expect(result.heartbeatAt).toBe('2026-05-13 10:59:30.000');
+    expect(result.meaningfulOutputAt).toBe('2026-05-13 10:59:30.000');
 
     const rows = db.prepare(`
       SELECT id, role, content, event_type, event_meta
@@ -315,9 +315,9 @@ describe('OpenClaw JSONL transcript backfill', () => {
       last_agent_heartbeat_at: string | null;
       last_meaningful_output_at: string | null;
     };
-    expect(artifact.started_at).toBe('2026-05-13T10:59:00.000Z');
-    expect(artifact.last_agent_heartbeat_at).toBe('2026-05-13T10:59:30.000Z');
-    expect(artifact.last_meaningful_output_at).toBe('2026-05-13T10:59:30.000Z');
+    expect(artifact.started_at).toBe('2026-05-13 10:59:00.000');
+    expect(artifact.last_agent_heartbeat_at).toBe('2026-05-13 10:59:30.000');
+    expect(artifact.last_meaningful_output_at).toBe('2026-05-13 10:59:30.000');
 
     const second = backfillOpenClawJsonlTranscript(db, 77, {
       openclawHome,
@@ -411,8 +411,8 @@ describe('OpenClaw JSONL transcript backfill', () => {
       backfilled: true,
       sessionFile: trajectoryFile,
       persistedEvents: 3,
-      heartbeatAt: '2026-05-13T10:59:30.000Z',
-      meaningfulOutputAt: '2026-05-13T10:59:30.000Z',
+      heartbeatAt: '2026-05-13 10:59:30.000',
+      meaningfulOutputAt: '2026-05-13 10:59:30.000',
     });
     expect(isRunChatTranscriptSparse(db, 77)).toBe(false);
 

@@ -5,6 +5,7 @@ import { emitIntegrityEvent } from '../domains/tasks/history';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { tenantInsertColumns } from '../lib/runtimeTenantScope';
 import { tableHasColumn } from '../lib/durableRunIdentity';
+import { nowTimestamp } from '../lib/timestamps';
 
 const router = Router();
 
@@ -370,7 +371,7 @@ router.put('/schema-config', (req: Request, res: Response) => {
     }
 
     const fieldsJson = JSON.stringify(fields);
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
 
     const existing = db.prepare(`SELECT id FROM telemetry_schema_config WHERE id = 1`).get();
     if (existing) {
@@ -619,7 +620,7 @@ router.put('/outcome-metrics/:task_id', (req: Request, res: Response) => {
     // Patch existing
     const updates: string[] = [];
     const vals: unknown[] = [];
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
 
     const numFields = ['reopened_count','rerouted_count','clarification_count','notes_count'];
     const boolFields = ['first_pass_qa','split_after_creation','blocked_after_creation'];
@@ -781,7 +782,7 @@ router.get('/sessions', (req: Request, res: Response) => {
       FROM sessions s
       LEFT JOIN agents a ON a.id = s.agent_id
       ${where}
-      GROUP BY s.agent_id
+      GROUP BY s.agent_id, a.name
       ORDER BY session_count DESC
       LIMIT 20
     `).all(...params) as Array<Record<string, unknown>>;
@@ -904,7 +905,7 @@ router.get('/bottlenecks', (req: Request, res: Response) => {
     try {
       reviewBounces = db.prepare(`
         SELECT te.task_id, t.title, COUNT(*) as review_count FROM task_events te JOIN tasks t ON t.id = te.task_id
-        WHERE te.to_status = 'review' GROUP BY te.task_id HAVING review_count >= 2 ORDER BY review_count DESC LIMIT 20
+        WHERE te.to_status = 'review' GROUP BY te.task_id, t.title HAVING COUNT(*) >= 2 ORDER BY review_count DESC LIMIT 20
       `).all() as Array<Record<string, unknown>>;
     } catch { /* task_events may not exist */ }
 
@@ -959,7 +960,7 @@ router.get('/failures', (req: Request, res: Response) => {
       GROUP BY COALESCE(outcome, 'unknown')
       ORDER BY count DESC
     `).all(...p);
-    const byAgent = db.prepare(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id ${w} AND t.agent_id IS NOT NULL GROUP BY t.agent_id ORDER BY fail_pct DESC LIMIT 20`).all(...p);
+    const byAgent = db.prepare(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id ${w} AND t.agent_id IS NOT NULL GROUP BY t.agent_id, a.name ORDER BY fail_pct DESC LIMIT 20`).all(...p);
     const byTaskType = db.prepare(`SELECT COALESCE(t.task_type,'unknown') as task_type, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t ${w} GROUP BY t.task_type ORDER BY fail_pct DESC`).all(...p);
     const topFailing = db.prepare(`
       SELECT
@@ -1013,8 +1014,33 @@ router.get('/integrity', (req: Request, res: Response) => {
     let trend: Array<{ date: string; count: number }> = [];
     try { trend = db.prepare(`SELECT substr(ie.created_at,1,10) as date, COUNT(*) as count FROM integrity_events ie WHERE ${[...c, "ie.created_at >= datetime('now','-30 days')"].join(' AND ')} GROUP BY date ORDER BY date ASC`).all(...p) as Array<{ date: string; count: number }>; } catch { /* non-fatal */ }
 
-    const byAgent2 = db.prepare(`SELECT ie.agent_id, a.name as agent_name, COUNT(*) as count FROM integrity_events ie LEFT JOIN agents a ON a.id=ie.agent_id ${w} AND ie.agent_id IS NOT NULL GROUP BY ie.agent_id ORDER BY count DESC LIMIT 20`).all(...p);
-    const affected = db.prepare(`SELECT t.id,t.title,t.status,t.priority,COUNT(ie.id) as anomaly_count,GROUP_CONCAT(DISTINCT ie.anomaly_type) as anomaly_types FROM integrity_events ie JOIN tasks t ON t.id=ie.task_id ${w} GROUP BY ie.task_id ORDER BY anomaly_count DESC LIMIT 20`).all(...p);
+    const byAgent2 = db.prepare(`SELECT ie.agent_id, a.name as agent_name, COUNT(*) as count FROM integrity_events ie LEFT JOIN agents a ON a.id=ie.agent_id ${w} AND ie.agent_id IS NOT NULL GROUP BY ie.agent_id, a.name ORDER BY count DESC LIMIT 20`).all(...p);
+    // GROUP_CONCAT(DISTINCT x) cannot take an explicit delimiter, so the distinct anomaly types
+    // are pre-aggregated in a CTE and concatenated with an explicit ',' separator. That keeps the
+    // delimiter identical to SQLite's implicit default and makes the Postgres port a mechanical
+    // GROUP_CONCAT -> string_agg rename. The filtered rows are materialised once so the bound
+    // parameters are unchanged.
+    const affected = db.prepare(`
+      WITH filtered AS (
+        SELECT ie.id, ie.task_id, ie.anomaly_type
+        FROM integrity_events ie
+        ${w}
+      ),
+      distinct_types AS (
+        SELECT task_id, GROUP_CONCAT(anomaly_type, ',') AS anomaly_types
+        FROM (SELECT DISTINCT task_id, anomaly_type FROM filtered) d
+        GROUP BY task_id
+      )
+      SELECT t.id, t.title, t.status, t.priority,
+             COUNT(f.id) as anomaly_count,
+             MAX(dt.anomaly_types) as anomaly_types
+      FROM filtered f
+      JOIN tasks t ON t.id = f.task_id
+      LEFT JOIN distinct_types dt ON dt.task_id = f.task_id
+      GROUP BY t.id, t.title, t.status, t.priority
+      ORDER BY anomaly_count DESC
+      LIMIT 20
+    `).all(...p);
 
     res.json({ total_anomalies: total, anomaly_counts_by_type: anomalyCounts, anomaly_rate_trend: trend, by_agent: byAgent2, affected_tasks: affected });
   } catch (err) { res.status(500).json({ error: String(err) }); }
@@ -1058,7 +1084,7 @@ router.get('/routing', (req: Request, res: Response) => {
     const w = `WHERE ${c.join(' AND ')} AND t.routing_reason IS NOT NULL`;
 
     const routingGroups = db.prepare(`SELECT t.routing_reason, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as success, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, SUM(CASE WHEN t.status IN ('stalled','blocked') THEN 1 ELSE 0 END) as stalled, ROUND(SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t ${w} GROUP BY t.routing_reason ORDER BY dispatched DESC LIMIT 50`).all(...p);
-    const byAgent3 = db.prepare(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id WHERE ${c.join(' AND ')} GROUP BY t.agent_id ORDER BY dispatched DESC LIMIT 20`).all(...p);
+    const byAgent3 = db.prepare(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id WHERE ${c.join(' AND ')} GROUP BY t.agent_id, a.name ORDER BY dispatched DESC LIMIT 20`).all(...p);
 
     const sprintRuleFilters: string[] = [];
     const sprintRuleParams: unknown[] = [];
@@ -1122,7 +1148,7 @@ router.get('/templates', (req: Request, res: Response) => {
         SUM(CASE WHEN ji.last_meaningful_output_at IS NOT NULL THEN 1 ELSE 0 END) as meaningful_output_count,
         ROUND(SUM(CASE WHEN ji.last_meaningful_output_at IS NOT NULL THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as meaningful_output_rate_pct
       FROM job_instances ji JOIN tasks t ON t.id=ji.task_id LEFT JOIN agents a ON a.id=ji.agent_id
-      ${w} GROUP BY ji.agent_id ORDER BY total_runs DESC LIMIT 30
+      ${w} GROUP BY ji.agent_id, a.name, a.job_title, a.job_instructions_updated_at, a.instructions_version ORDER BY total_runs DESC LIMIT 30
     `).all(...p);
 
     res.json({ period: { from: startDate, to: endDate }, by_template: byTemplate });

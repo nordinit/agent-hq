@@ -421,7 +421,9 @@ function ensureWorkflowDefinitionRows(db: Database.Database, tenantId: number, r
   const outcomeSelect = db.prepare(`
     SELECT id, is_system, label, description, enabled, behavior, badge_variant, stage_order, metadata_json
     FROM sprint_type_outcomes
-    WHERE sprint_type_key = ? AND task_type IS ? AND outcome_key = ?
+    WHERE sprint_type_key = ?
+      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND outcome_key = ?
       ${tenantPredicate(db, 'sprint_type_outcomes')}
     LIMIT 1
   `);
@@ -431,7 +433,9 @@ function ensureWorkflowDefinitionRows(db: Database.Database, tenantId: number, r
   const outcomeUpdate = db.prepare(`
     UPDATE sprint_type_outcomes
     SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
-    WHERE sprint_type_key = ? AND task_type IS ? AND outcome_key = ?
+    WHERE sprint_type_key = ?
+      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND outcome_key = ?
       ${tenantPredicate(db, 'sprint_type_outcomes')}
   `);
   for (const seed of STARTER_SPRINT_OUTCOME_SEEDS) {
@@ -441,12 +445,12 @@ function ensureWorkflowDefinitionRows(db: Database.Database, tenantId: number, r
       const behavior = outcome.behavior ?? (taskType ? 'extend' : 'base');
       const badge = outcome.badge_variant ?? null;
       const metadataJson = JSON.stringify(outcome.metadata ?? {});
-      const existing = outcomeSelect.get(seed.sprintType, taskType, outcome.outcome_key, ...tenantArgs(db, 'sprint_type_outcomes', tenantId)) as { is_system: number } | undefined;
+      const existing = outcomeSelect.get(seed.sprintType, taskType, taskType, outcome.outcome_key, ...tenantArgs(db, 'sprint_type_outcomes', tenantId)) as { is_system: number } | undefined;
       if (!existing) {
         outcomeInsert.run(...(outcomeHasTenant ? [tenantId] : []), seed.sprintType, taskType, outcome.outcome_key, outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson);
         addCount(result.created, 'outcomes');
       } else if (existing.is_system === 1) {
-        outcomeUpdate.run(outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson, seed.sprintType, taskType, outcome.outcome_key, ...tenantArgs(db, 'sprint_type_outcomes', tenantId));
+        outcomeUpdate.run(outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson, seed.sprintType, taskType, taskType, outcome.outcome_key, ...tenantArgs(db, 'sprint_type_outcomes', tenantId));
         addCount(result.updated, 'outcomes');
       } else {
         result.conflicts.push({ kind: 'outcome', key: `${seed.sprintType}:${outcome.outcome_key}`, message: 'Tenant-authored outcome differs from the default package; left unchanged.' });
@@ -741,7 +745,7 @@ function ensureAutomaticTransitions(db: Database.Database, tenantId: number, wor
     SELECT id
     FROM sprint_task_transitions
     WHERE sprint_id = ?
-      AND task_type IS ?
+      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
       AND from_status = ?
       AND outcome = ?
       ${hasTenant ? 'AND tenant_id = ?' : ''}
@@ -763,7 +767,7 @@ function ensureAutomaticTransitions(db: Database.Database, tenantId: number, wor
     const sprint = sprintRows.get(sprintId) as { id: number; project_id: number; sprint_type: string } | undefined;
     if (!sprint) continue;
     for (const row of policyTransitionsForSprintType(sprintType)) {
-      const existing = exists.get(sprintId, row.task_type ?? null, row.from_status, row.outcome, ...(hasTenant ? [tenantId] : []));
+      const existing = exists.get(sprintId, row.task_type ?? null, row.task_type ?? null, row.from_status, row.outcome, ...(hasTenant ? [tenantId] : []));
       if (existing) continue;
       const args = hasTenant
         ? (hasScope

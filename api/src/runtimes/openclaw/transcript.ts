@@ -9,6 +9,7 @@ import {
   buildOpenClawGatewayConnectParams,
   GATEWAY_WS_URL,
 } from './gatewayClient';
+import { nowTimestamp, timestampFromEpochMs, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 
 const activeTerminalSignalCaptures = new Map<string, { stop: () => void }>();
 const activeRawSessionTerminalPolls = new Map<number, { stop: () => void }>();
@@ -141,9 +142,9 @@ export function persistGatewayHistory(instanceId: number, agentId: number, messa
   for (const m of messages) {
     const sourceRole = typeof m.role === 'string' ? m.role : 'assistant';
     const role = sourceRole === 'user' ? 'user' : 'assistant';
-    const ts = typeof m.timestamp === 'number' ? new Date(m.timestamp).toISOString()
+    const ts = typeof m.timestamp === 'number' ? (timestampFromEpochMs(m.timestamp) ?? nowTimestamp())
       : typeof m.timestamp === 'string' ? m.timestamp
-      : new Date().toISOString();
+      : nowTimestamp();
 
     for (const evt of extractGatewayEvents(m)) {
       const rowId = `oc-hist-${instanceId}-${rowIndex++}`;
@@ -312,7 +313,7 @@ export function startRawSessionTerminalPoll(params: {
           reason: evaluation.decision.reason,
           sessionKey: params.sessionKey,
           runId: evaluation.state?.trajectoryRunId ?? undefined,
-          endedAt: evaluation.state?.trajectoryEndedAt ?? evaluation.state?.lastEventAt ?? new Date().toISOString(),
+          endedAt: toCanonicalTimestampOrNow(evaluation.state?.trajectoryEndedAt ?? evaluation.state?.lastEventAt),
           error: evaluation.decision.error,
           metadata: {
             raw_session_terminal_poll: true,

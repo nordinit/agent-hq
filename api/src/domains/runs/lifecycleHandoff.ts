@@ -9,6 +9,7 @@ import {
   type WorkflowEventMapping,
 } from '../routing/externalEventMappings';
 import { emitIntegrityEvent, writeTaskHistory, writeTaskRuntimeEndHistory, writeTaskStatusChange } from '../tasks/history';
+import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
 
 export type LifecycleHandoffStatus = 'posted' | 'missing' | 'reconciled';
 export type HandoffEvidencePresence = 'yes' | 'no';
@@ -100,7 +101,7 @@ export function markTaskNeedsAttentionForMissingSemanticHandoff(
     WHERE id = ?
       AND COALESCE(task_outcome, '') = ''
       AND lifecycle_outcome_posted_at IS NULL
-  `).run(params.runtimeEnd?.endedAt ?? new Date().toISOString(), params.instanceId);
+  `).run(toCanonicalTimestampOrNow(params.runtimeEnd?.endedAt), params.instanceId);
 
   if (!params.taskId) return null;
 

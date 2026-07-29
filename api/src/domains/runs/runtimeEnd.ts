@@ -6,6 +6,7 @@ import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOu
 import { recordRunCheckIn } from './observability';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
 import { normalizeTokenUsage } from './tokenUsage';
+import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
 
 export interface TerminalRuntimeEndEvent {
   type: string;
@@ -133,7 +134,7 @@ export async function applyRuntimeEndToJobInstance(
   const requiresSemanticOutcome = taskRequiresSemanticOutcome(db, existing.task_id);
   const runtimeEndError = params.event.error ?? (params.event.success ? null : (params.event.reason ?? 'error'));
   const runtimeEndSource = params.runtimeEndSource ?? params.event.source ?? 'instance_complete';
-  const endedAt = params.event.endedAt || new Date().toISOString();
+  const endedAt = toCanonicalTimestampOrNow(params.event.endedAt);
   const tokenUsage = normalizeTokenUsage(params.event.metadata, params.event);
   const nextStatus = derivePostRuntimeInstanceStatus(
     existing.status,

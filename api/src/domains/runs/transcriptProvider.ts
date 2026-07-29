@@ -26,6 +26,7 @@ import { normalizeChatMessageRole, type PersistedChatRole } from '../../lib/chat
 import { extractGatewayStructuredEvents, extractTextFromGatewayMessage } from '../../lib/openclawMessageEvents';
 import { buildGatewayRunSessionKey, parseHookSessionKey, resolveRuntimeAgentSlug } from '../../lib/sessionKeys';
 import { backfillOpenClawJsonlTranscript, isRunChatTranscriptSparse } from './openclawJsonlBackfill';
+import { nowTimestamp, timestampFromEpochMs, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -472,9 +473,9 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
     let rowIndex = 0;
     for (const m of messages) {
       const baseRole = m.role;
-      const ts = typeof m.timestamp === 'number' ? new Date(m.timestamp).toISOString()
+      const ts = typeof m.timestamp === 'number' ? (timestampFromEpochMs(m.timestamp) ?? nowTimestamp())
         : typeof m.timestamp === 'string' ? m.timestamp
-        : new Date().toISOString();
+        : nowTimestamp();
 
       // Expand structured content blocks into individual rows
       for (const evt of extractGatewayEvents(m)) {
@@ -592,7 +593,7 @@ export class ClaudeCodeTranscriptProvider implements TranscriptProvider {
               id: (parsed.id as string) || `sdk-${index}`,
               role: type as TranscriptMessage['role'],
               content: text,
-              timestamp: (parsed.timestamp as string) || new Date().toISOString(),
+              timestamp: toCanonicalTimestampOrNow(parsed.timestamp),
               event_type: (parsed.event_type as string) ?? 'text',
               event_meta: typeof parsed.event_meta === 'object' && parsed.event_meta !== null
                 ? parsed.event_meta as Record<string, unknown>
@@ -800,7 +801,7 @@ export class RemoteTranscriptProvider implements TranscriptProvider {
       id: (m.id as string) || `remote-${i}`,
       role: (m.role as TranscriptMessage['role']) || 'assistant',
       content: (m.content as string) || '',
-      timestamp: (m.timestamp as string) || new Date().toISOString(),
+      timestamp: toCanonicalTimestampOrNow(m.timestamp),
       event_type: (m.event_type as string) ?? 'text',
       event_meta: typeof m.event_meta === 'object' && m.event_meta !== null
         ? m.event_meta as Record<string, unknown>

@@ -17,6 +17,7 @@ import {
   type OpenClawInstanceSessionStateResult,
 } from '../../domains/runs/openclawSessionState';
 import { stopOpenClawRawSessionTerminalPoll } from './transcript';
+import { nowTimestamp } from '../../lib/timestamps';
 
 const deferredRuntimeEndRetries = new Map<number, NodeJS.Timeout>();
 
@@ -176,7 +177,7 @@ export async function handleOpenClawRuntimeEnd(
     const runtimeEndError = normalizedEvent.error ?? (normalizedEvent.success ? null : (normalizedEvent.reason ?? 'error'));
     const runtimeEndSource = 'instance_complete';
     const tokenUsage = normalizeTokenUsage(normalizedEvent.metadata, normalizedEvent);
-    const nowIso = new Date().toISOString();
+    const nowIso = nowTimestamp();
     const nextStatus = derivePostRuntimeInstanceStatus(
       existing.status,
       nowIso,

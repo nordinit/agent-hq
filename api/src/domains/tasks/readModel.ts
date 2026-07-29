@@ -401,8 +401,16 @@ export function searchProjectTasks(
     params.push(taskType);
   }
   for (const [key, value] of Object.entries(customFieldMatches)) {
-    conditions.push('json_extract(t.custom_fields_json, ?) IS ?');
-    params.push(customFieldMatchesSqlPath(key), normalizeCustomFieldSqlValue(value));
+    // `IS ?` is SQLite-only NULL-safe equality; Postgres rejects a parameter after IS.
+    // The SQL here is built per request, so branch on nullness instead.
+    const sqlValue = normalizeCustomFieldSqlValue(value);
+    if (sqlValue === null || sqlValue === undefined) {
+      conditions.push('json_extract(t.custom_fields_json, ?) IS NULL');
+      params.push(customFieldMatchesSqlPath(key));
+    } else {
+      conditions.push('json_extract(t.custom_fields_json, ?) = ?');
+      params.push(customFieldMatchesSqlPath(key), sqlValue);
+    }
   }
 
   const whereSql = conditions.join(' AND ');

@@ -37,6 +37,7 @@ import {
   type ActiveHermesRun,
   type ProcessExitResult,
 } from "./abort";
+import { nowTimestamp } from '../../lib/timestamps';
 
 const HERMES_TRANSCRIPT_POLL_INTERVAL_MS = 2_000;
 
@@ -472,7 +473,7 @@ export class HermesRuntime implements AgentRuntime {
           sessionKey: params.sessionKey,
           runId,
           success: false,
-          endedAt: new Date().toISOString(),
+          endedAt: nowTimestamp(),
           reason: "aborted",
           error: stderr.trim() || undefined,
         };
@@ -507,7 +508,7 @@ export class HermesRuntime implements AgentRuntime {
           sessionKey: params.sessionKey,
           runId,
           success: false,
-          endedAt: new Date().toISOString(),
+          endedAt: nowTimestamp(),
           reason: state.timedOut ? "timeout" : "error",
           error: summary,
           metadata: {
@@ -538,7 +539,7 @@ export class HermesRuntime implements AgentRuntime {
           sessionKey: params.sessionKey,
           runId,
           success: false,
-          endedAt: new Date().toISOString(),
+          endedAt: nowTimestamp(),
           reason: "error",
           error: `Hermes provider/API limit failure: ${providerLimitFailure}`,
           metadata: {
@@ -559,7 +560,7 @@ export class HermesRuntime implements AgentRuntime {
         sessionKey: params.sessionKey,
         runId,
         success: true,
-        endedAt: new Date().toISOString(),
+        endedAt: nowTimestamp(),
         reason: "completed",
         metadata: {
           stderr: stderr || null,
@@ -574,7 +575,7 @@ export class HermesRuntime implements AgentRuntime {
         sessionKey: params.sessionKey,
         runId,
         success: false,
-        endedAt: new Date().toISOString(),
+        endedAt: nowTimestamp(),
         reason: "error",
         error: message,
       };
@@ -720,7 +721,7 @@ export class HermesRuntime implements AgentRuntime {
       agentId,
       instanceId,
       prompt,
-      new Date().toISOString(),
+      nowTimestamp(),
     );
   }
 
@@ -744,7 +745,7 @@ export class HermesRuntime implements AgentRuntime {
       agentId,
       instanceId,
       content,
-      new Date().toISOString(),
+      nowTimestamp(),
     );
   }
 

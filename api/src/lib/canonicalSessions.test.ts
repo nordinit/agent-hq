@@ -223,7 +223,9 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
       id: 12719,
       status: 'completed',
       message_count: 5,
-      ended_at: '2026-06-03T02:12:00.000Z',
+      // Stored canonically (offset-less UTC) rather than as the ISO-Z the
+      // fixture supplies — see lib/timestamps.ts. Same instant, one format.
+      ended_at: '2026-06-03 02:12:00.000',
     });
     const messages = db.prepare(`
       SELECT ordinal, role, event_type, content

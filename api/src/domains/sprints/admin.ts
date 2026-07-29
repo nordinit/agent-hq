@@ -3,6 +3,7 @@ import { seedSprintTaskPolicy } from '../routing/policy/seed';
 import { writeProjectAudit, diffFields } from '../../lib/projectAudit';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
 import { normalizeRepoConfig, validateRepoConfig } from '../../lib/repoConfig';
+import { toCanonicalTimestamp } from '../../lib/timestamps';
 import {
   completeSprint,
   normalizeSprintStatus,
@@ -256,11 +257,11 @@ export function createSprint(
       ? db.prepare(`
           INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, started_at, repo_path, repo_url, repo_access_mode)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(project.tenant_id ?? tenantId, project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, started_at ?? null, repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode)
+        `).run(project.tenant_id ?? tenantId, project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, toCanonicalTimestamp(started_at), repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode)
       : db.prepare(`
           INSERT INTO sprints (project_id, name, goal, sprint_type, status, length_kind, length_value, started_at, repo_path, repo_url, repo_access_mode)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, started_at ?? null, repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode);
+        `).run(project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, toCanonicalTimestamp(started_at), repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode);
 
     newId = Number(result.lastInsertRowid);
 
@@ -377,8 +378,10 @@ export function updateSprint(
     status: status !== undefined ? normalizeSprintStatus(status) : existing.status,
     length_kind: length_kind ?? existing.length_kind,
     length_value: length_value !== undefined ? length_value : existing.length_value,
-    started_at: started_at !== undefined ? started_at : existing.started_at,
-    ended_at: ended_at !== undefined ? ended_at : existing.ended_at,
+    // API callers send anything from '2026-03-09' to '2026-07-06T11:55:00-04:00';
+    // normalize so sprints.started_at / ended_at only hold canonical UTC.
+    started_at: started_at !== undefined ? toCanonicalTimestamp(started_at) : existing.started_at,
+    ended_at: ended_at !== undefined ? toCanonicalTimestamp(ended_at) : existing.ended_at,
     repo_path: repoConfig.repo_path,
     repo_url: repoConfig.repo_url,
     repo_access_mode: repoConfig.repo_access_mode,
@@ -463,7 +466,7 @@ export function updateSprint(
       ON ${routingJoinPredicate}
     LEFT JOIN tasks t ON t.sprint_id = s.id
     WHERE s.id = ?
-    GROUP BY s.id
+    GROUP BY s.id, p.name
   `).get(sprintId);
 }
 

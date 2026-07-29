@@ -21,6 +21,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { SessionAdapter, AdapterSource, IngestResult, LiveChatInfo, SessionUpsert, SessionMessageInput } from './types';
+import { nowTimestamp, timestampFromEpochMs } from '../timestamps';
 
 const HOME = process.env.HOME ?? os.homedir();
 const OPENCLAW_DIR = process.env.OPENCLAW_DIR ?? path.join(HOME, '.openclaw');
@@ -107,8 +108,8 @@ export class CronSessionAdapter implements SessionAdapter {
     const effectiveKey = externalKey === canonicalKey ? externalKey : canonicalKey;
 
     const status = mapCronStatus(record);
-    const startedAt = new Date(runAtMs).toISOString();
-    const endedAt = record.ts ? new Date(record.ts).toISOString() : undefined;
+    const startedAt = timestampFromEpochMs(runAtMs) ?? nowTimestamp();
+    const endedAt = record.ts ? (timestampFromEpochMs(record.ts) ?? undefined) : undefined;
 
     const tokenInput = (record.usage?.input_tokens ?? 0) + (record.usage?.cache_creation_input_tokens ?? 0);
     const tokenOutput = record.usage?.output_tokens ?? 0;
@@ -143,7 +144,7 @@ export class CronSessionAdapter implements SessionAdapter {
       const r = parseJsonLine(line);
       if (!r) return;
 
-      const ts = r.ts ? new Date(r.ts).toISOString() : new Date(r.runAtMs ?? Date.now()).toISOString();
+      const ts = timestampFromEpochMs(r.ts ?? r.runAtMs ?? Date.now()) ?? nowTimestamp();
 
       // Summary is the primary human-readable content
       if (r.summary) {

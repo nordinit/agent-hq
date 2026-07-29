@@ -3,6 +3,7 @@ import { getDb } from '../../db/client';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { gatewayWsSend } from '../../runtimes/openclaw/gatewayClient';
 import { abortChatRunBySessionKey } from '../../runtimes/openclaw';
+import { nowTimestamp } from '../../lib/timestamps';
 
 export function registerSendAbortRoutes(router: Router): void {
   router.post('/instances/:id/send', async (req: Request, res: Response) => {
@@ -39,7 +40,7 @@ export function registerSendAbortRoutes(router: Router): void {
       }
 
       const fullMessage = [message, attachmentLines].filter(Boolean).join('\n');
-      const now = new Date().toISOString();
+      const now = nowTimestamp();
       const tenantId = resolveRuntimeTenantId(db, { instanceId, agentId: inst.agent_id });
       const tenant = tenantInsertColumns(db, 'chat_messages', tenantId);
       db.prepare(`

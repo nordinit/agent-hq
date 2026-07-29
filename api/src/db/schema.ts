@@ -1358,19 +1358,32 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     if (duplicateSprintTypeKeys.length > 0) {
       restoreSprintTypeForeignKeys = (db.pragma('foreign_keys', { simple: true }) as number) === 1;
       if (restoreSprintTypeForeignKeys) db.pragma('foreign_keys = OFF');
+      // sprint_types has no surrogate id and its `key` is duplicated here by definition, so
+      // there is no per-row identifier to delete by. rowid is SQLite-only, so instead of
+      // deleting losers by rowid we read the winning row, delete every row for the key, and
+      // re-insert the winner. Foreign keys are already disabled around this block.
+      const sprintTypeColumns = (db.prepare(`PRAGMA table_info(sprint_types)`).all() as Array<{ name: string }>)
+        .map((column) => column.name);
       const selectSprintTypeRows = db.prepare(`
-        SELECT rowid
+        SELECT *
         FROM sprint_types
         WHERE key = ?
-        ORDER BY COALESCE(is_system, 1) ASC, COALESCE(updated_at, created_at, datetime('now')) DESC, rowid DESC
+        ORDER BY COALESCE(is_system, 1) ASC,
+                 COALESCE(updated_at, created_at, datetime('now')) DESC,
+                 COALESCE(created_at, '') DESC
       `);
-      const deleteSprintType = db.prepare(`DELETE FROM sprint_types WHERE rowid = ?`);
+      const deleteSprintTypesByKey = db.prepare(`DELETE FROM sprint_types WHERE key = ?`);
+      const reinsertSprintType = db.prepare(`
+        INSERT INTO sprint_types (${sprintTypeColumns.map((column) => `"${column}"`).join(', ')})
+        VALUES (${sprintTypeColumns.map(() => '?').join(', ')})
+      `);
       const dedupeSprintTypes = db.transaction(() => {
         for (const { key } of duplicateSprintTypeKeys) {
-          const rows = selectSprintTypeRows.all(key) as Array<{ rowid: number }>;
-          for (const row of rows.slice(1)) {
-            deleteSprintType.run(row.rowid);
-          }
+          const rows = selectSprintTypeRows.all(key) as Array<Record<string, unknown>>;
+          if (rows.length <= 1) continue;
+          const keep = rows[0];
+          deleteSprintTypesByKey.run(key);
+          reinsertSprintType.run(...sprintTypeColumns.map((column) => keep[column] ?? null));
         }
       });
       dedupeSprintTypes();
@@ -1398,14 +1411,14 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       SELECT id
       FROM task_field_schemas
       WHERE sprint_type_key = ? AND task_type IS NULL
-        ${taskFieldSchemasHasTenantId ? 'AND tenant_id IS ?' : ''}
+        ${taskFieldSchemasHasTenantId ? 'AND (tenant_id = ? OR (tenant_id IS NULL AND ? IS NULL))' : ''}
       ORDER BY COALESCE(updated_at, created_at, datetime('now')) DESC, id DESC
     `);
     const deleteFieldSchema = db.prepare(`DELETE FROM task_field_schemas WHERE id = ?`);
     const dedupeBaseFieldSchemas = db.transaction(() => {
       for (const { tenant_id, sprint_type_key } of duplicateBaseSchemaSprintTypes) {
         const rows = (taskFieldSchemasHasTenantId
-          ? selectBaseSchemaRows.all(sprint_type_key, tenant_id)
+          ? selectBaseSchemaRows.all(sprint_type_key, tenant_id, tenant_id)
           : selectBaseSchemaRows.all(sprint_type_key)) as Array<{ id: number }>;
         for (const row of rows.slice(1)) {
           deleteFieldSchema.run(row.id);
@@ -1528,7 +1541,9 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   const updateSprintOutcome = db.prepare(`
     UPDATE sprint_type_outcomes
     SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
-    WHERE sprint_type_key = ? AND task_type IS ? AND outcome_key = ?
+    WHERE sprint_type_key = ?
+      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND outcome_key = ?
       ${workflowConfigTenantPredicate('sprint_type_outcomes')}
   `);
   const insertSprintOutcome = db.prepare(sprintTypeOutcomesHasTenantId
@@ -1552,7 +1567,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     stageOrder: number,
     metadataJson: string,
   ): void => {
-    const result = updateSprintOutcome.run(label, description, enabled, behavior, badgeVariant, stageOrder, metadataJson, sprintTypeKey, taskType, outcomeKey);
+    const result = updateSprintOutcome.run(label, description, enabled, behavior, badgeVariant, stageOrder, metadataJson, sprintTypeKey, taskType, taskType, outcomeKey);
     if (result.changes === 0) {
       insertSprintOutcome.run(sprintTypeKey, taskType, outcomeKey, label, description, enabled, behavior, badgeVariant, stageOrder, metadataJson);
     }
@@ -1580,7 +1595,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
                  MIN(id) AS keep_id
           FROM sprint_type_outcomes
           WHERE sprint_type_key = ?
-            AND task_type IS ?
+            AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
             AND outcome_key = ?
             AND COALESCE(is_system, 0) = 1
           GROUP BY ${tenantGroup} sprint_type_key, COALESCE(task_type, ''), outcome_key
@@ -1596,7 +1611,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     `);
     const tx = db.transaction(() => {
       for (const seed of seedPairs) {
-        dedupeOne.run(seed.sprintType, seed.taskType, seed.outcomeKey);
+        dedupeOne.run(seed.sprintType, seed.taskType, seed.taskType, seed.outcomeKey);
       }
     });
     tx();
@@ -2535,8 +2550,20 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       ON sprint_task_routing_rules(project_id, sprint_type, sprint_id, task_type, status)
   `);
   db.exec(`DROP INDEX IF EXISTS idx_sprint_task_routing_rules_scope_unique`);
+  // The grouping keys are the COALESCE expressions, so the projection selects those same
+  // expressions rather than the bare columns: a bare column that is neither aggregated nor
+  // grouped is accepted by SQLite but rejected by Postgres. Matching rows back below uses the
+  // identical COALESCE expressions, which keeps the NULL-vs-sentinel semantics unchanged and
+  // avoids SQLite-only `IS ?` NULL-safe comparisons.
   const duplicateScopedRoutingRules = db.prepare(`
-    SELECT project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, COUNT(*) as row_count
+    SELECT project_id,
+           sprint_type,
+           COALESCE(sprint_id, -1) AS sprint_key,
+           COALESCE(task_type, '') AS task_type_key,
+           status,
+           COALESCE(agent_id, -1) AS agent_key,
+           priority,
+           COUNT(*) as row_count
     FROM sprint_task_routing_rules
     WHERE project_id IS NOT NULL
       AND sprint_type IS NOT NULL
@@ -2545,10 +2572,10 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   `).all() as Array<{
     project_id: number;
     sprint_type: string;
-    sprint_id: number | null;
-    task_type: string | null;
+    sprint_key: number;
+    task_type_key: string;
     status: string;
-    agent_id: number | null;
+    agent_key: number;
     priority: number;
     row_count: number;
   }>;
@@ -2558,10 +2585,10 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       FROM sprint_task_routing_rules
       WHERE project_id = ?
         AND sprint_type = ?
-        AND ((sprint_id IS NULL AND ? IS NULL) OR sprint_id = ?)
-        AND task_type IS ?
+        AND COALESCE(sprint_id, -1) = ?
+        AND COALESCE(task_type, '') = ?
         AND status = ?
-        AND agent_id IS ?
+        AND COALESCE(agent_id, -1) = ?
         AND priority = ?
       ORDER BY COALESCE(updated_at, created_at, datetime('now')) DESC, id DESC
     `);
@@ -2571,11 +2598,10 @@ export function initSchema(options: InitSchemaOptions = {}): void {
         const ids = selectScopedRoutingRuleIds.all(
           row.project_id,
           row.sprint_type,
-          row.sprint_id,
-          row.sprint_id,
-          row.task_type,
+          row.sprint_key,
+          row.task_type_key,
           row.status,
-          row.agent_id,
+          row.agent_key,
           row.priority,
         ) as Array<{ id: number }>;
         for (const duplicateRow of ids.slice(1)) {
@@ -6053,125 +6079,6 @@ export function ensurePipelineIntelligenceTelemetry(): void {
     }
   } catch (err) {
     console.error('[schema] Task #53: failed to drop job_template_id from agents:', err);
-  }
-
-  // ── Task #56: Drop stale job_templates FK from task_creation_events and task_outcome_metrics ──
-  // After Task #579 dropped job_templates, the original DDL stored in sqlite_master for
-  // task_creation_events and task_outcome_metrics still contains:
-  //   job_id INTEGER REFERENCES job_templates(id) ON DELETE SET NULL
-  // With foreign_keys = ON, any CASCADE DELETE from tasks (or direct delete on these tables)
-  // causes SQLite to validate this FK against the now-missing job_templates table, producing:
-  //   SqliteError: no such table: main.job_templates
-  // SQLite does not support dropping a column that has an index on it, so we do a
-  // full table rebuild (rename → recreate → copy → drop old).
-  try {
-    const tceDdl56 = (db.prepare(
-      `SELECT sql FROM sqlite_master WHERE type='table' AND name='task_creation_events'`
-    ).get() as { sql: string } | undefined)?.sql ?? '';
-
-    if (tceDdl56.includes('job_templates')) {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        ALTER TABLE task_creation_events RENAME TO task_creation_events_old;
-
-        CREATE TABLE task_creation_events (
-          id                INTEGER PRIMARY KEY AUTOINCREMENT,
-          task_id           INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-          project_id        INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-          sprint_id         INTEGER REFERENCES sprints(id) ON DELETE SET NULL,
-          job_id            INTEGER,
-          source            TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','skill','agent','api','import')),
-          routing           TEXT NOT NULL DEFAULT '',
-          confidence        TEXT NOT NULL DEFAULT '' CHECK(confidence IN ('','low','medium','high')),
-          scope_size        TEXT NOT NULL DEFAULT '' CHECK(scope_size IN ('','xs','small','medium','large','xl')),
-          assumptions       TEXT NOT NULL DEFAULT '',
-          open_questions    TEXT NOT NULL DEFAULT '',
-          needs_split       INTEGER NOT NULL DEFAULT 0,
-          expected_artifact TEXT NOT NULL DEFAULT '',
-          success_mode      TEXT NOT NULL DEFAULT '',
-          raw_input         TEXT NOT NULL DEFAULT '',
-          created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-          agent_id          INTEGER REFERENCES agents(id)
-        );
-
-        INSERT INTO task_creation_events
-          SELECT id, task_id, project_id, sprint_id, job_id, source, routing, confidence,
-                 scope_size, assumptions, open_questions, needs_split, expected_artifact,
-                 success_mode, raw_input, created_at, agent_id
-          FROM task_creation_events_old;
-
-        DROP TABLE task_creation_events_old;
-
-        CREATE INDEX IF NOT EXISTS idx_tce_task      ON task_creation_events(task_id);
-        CREATE INDEX IF NOT EXISTS idx_tce_project   ON task_creation_events(project_id);
-        CREATE INDEX IF NOT EXISTS idx_tce_sprint    ON task_creation_events(sprint_id);
-        CREATE INDEX IF NOT EXISTS idx_tce_job       ON task_creation_events(job_id);
-        CREATE INDEX IF NOT EXISTS idx_tce_source    ON task_creation_events(source);
-        CREATE INDEX IF NOT EXISTS idx_tce_created   ON task_creation_events(created_at);
-      `);
-      db.pragma('foreign_keys = ON');
-      console.log('[schema] Task #56: rebuilt task_creation_events without stale job_templates FK');
-    }
-  } catch (err) {
-    db.pragma('foreign_keys = ON');
-    console.error('[schema] Task #56: task_creation_events rebuild failed:', err);
-  }
-
-  try {
-    const tomDdl56 = (db.prepare(
-      `SELECT sql FROM sqlite_master WHERE type='table' AND name='task_outcome_metrics'`
-    ).get() as { sql: string } | undefined)?.sql ?? '';
-
-    if (tomDdl56.includes('job_templates')) {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        ALTER TABLE task_outcome_metrics RENAME TO task_outcome_metrics_old;
-
-        CREATE TABLE task_outcome_metrics (
-          id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-          task_id                 INTEGER NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
-          project_id              INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-          sprint_id               INTEGER REFERENCES sprints(id) ON DELETE SET NULL,
-          job_id                  INTEGER,
-          first_pass_qa           INTEGER NOT NULL DEFAULT 0,
-          reopened_count          INTEGER NOT NULL DEFAULT 0,
-          rerouted_count          INTEGER NOT NULL DEFAULT 0,
-          split_after_creation    INTEGER NOT NULL DEFAULT 0,
-          blocked_after_creation  INTEGER NOT NULL DEFAULT 0,
-          clarification_count     INTEGER NOT NULL DEFAULT 0,
-          notes_count             INTEGER NOT NULL DEFAULT 0,
-          cycle_time_hours        REAL,
-          outcome_quality         TEXT NOT NULL DEFAULT '' CHECK(outcome_quality IN ('','good','acceptable','poor')),
-          failure_reasons         TEXT NOT NULL DEFAULT '[]',
-          outcome_summary         TEXT NOT NULL DEFAULT '',
-          recorded_at             TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
-          agent_id                INTEGER REFERENCES agents(id),
-          spawned_defects         INTEGER NOT NULL DEFAULT 0
-        );
-
-        INSERT INTO task_outcome_metrics
-          SELECT id, task_id, project_id, sprint_id, job_id, first_pass_qa, reopened_count,
-                 rerouted_count, split_after_creation, blocked_after_creation, clarification_count,
-                 notes_count, cycle_time_hours, outcome_quality, failure_reasons, outcome_summary,
-                 recorded_at, updated_at, agent_id, spawned_defects
-          FROM task_outcome_metrics_old;
-
-        DROP TABLE task_outcome_metrics_old;
-
-        CREATE INDEX IF NOT EXISTS idx_tom_task      ON task_outcome_metrics(task_id);
-        CREATE INDEX IF NOT EXISTS idx_tom_project   ON task_outcome_metrics(project_id);
-        CREATE INDEX IF NOT EXISTS idx_tom_sprint    ON task_outcome_metrics(sprint_id);
-        CREATE INDEX IF NOT EXISTS idx_tom_job       ON task_outcome_metrics(job_id);
-        CREATE INDEX IF NOT EXISTS idx_tom_quality   ON task_outcome_metrics(outcome_quality);
-        CREATE INDEX IF NOT EXISTS idx_tom_recorded  ON task_outcome_metrics(recorded_at);
-      `);
-      db.pragma('foreign_keys = ON');
-      console.log('[schema] Task #56: rebuilt task_outcome_metrics without stale job_templates FK');
-    }
-  } catch (err) {
-    db.pragma('foreign_keys = ON');
-    console.error('[schema] Task #56: task_outcome_metrics rebuild failed:', err);
   }
 
   // Task #449: idempotent receipts for trusted external task event callbacks.

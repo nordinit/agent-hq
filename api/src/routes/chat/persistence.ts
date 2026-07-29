@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { getDb } from '../../db/client';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { tenantInsertColumns, tenantUpsertUpdateSql } from '../../lib/runtimeTenantScope';
+import { nowTimestamp, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { SessionContext } from './sessionContext';
 import { StructuredEvent, extractStructuredEvents, normalizeChatRole } from './structuredEvents';
 
@@ -69,9 +70,10 @@ export function persistHistoryMessages(ctx: SessionContext, messages: Array<Reco
     let rowIndex = 0;
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
-      const ts = typeof m.timestamp === 'number' ? new Date(m.timestamp).toISOString()
-        : typeof m.timestamp === 'string' ? m.timestamp
-        : new Date().toISOString();
+      // Runtime-supplied timestamps arrive as epoch-ms or as arbitrary ISO
+      // strings; normalize so chat_messages.timestamp only ever holds the
+      // canonical offset-less UTC form its DEFAULT also produces.
+      const ts = toCanonicalTimestampOrNow(m.timestamp);
 
       const events = extractStructuredEvents(m).filter(evt => evt.event_type !== 'text');
       for (const evt of events) {
@@ -105,12 +107,7 @@ export function persistLiveStructuredMessage(ctx: SessionContext, message: Recor
     const rowScope = contextRowScope(ctx);
     const durable = chatMessageDurableColumns(db, ctx);
     const tenant = tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
-    const ts =
-      typeof message.timestamp === 'number'
-        ? new Date(message.timestamp).toISOString()
-        : typeof message.timestamp === 'string'
-          ? message.timestamp
-          : new Date().toISOString();
+    const ts = toCanonicalTimestampOrNow(message.timestamp);
     const stmt = db.prepare(`
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, ?, ?, ?, ?, ?)
@@ -148,7 +145,7 @@ export function persistLiveStructuredMessage(ctx: SessionContext, message: Recor
 export function persistStreamDelta(ctx: SessionContext, cumulativeText: string): void {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     const durable = chatMessageDurableColumns(db, ctx);
     const tenant = tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
     db.prepare(`
@@ -162,7 +159,7 @@ export function persistStreamDelta(ctx: SessionContext, cumulativeText: string):
 export function persistFinalMessage(ctx: SessionContext, text: string, msgIndex: number): void {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     const rowScope = contextRowScope(ctx);
     const durable = chatMessageDurableColumns(db, ctx);
     const tenant = tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
@@ -178,7 +175,7 @@ export function persistFinalMessage(ctx: SessionContext, text: string, msgIndex:
 export function startChatRunInstance(ctx: SessionContext): { instanceId: number; durableRunId: string } | null {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     db.prepare(
       `UPDATE job_instances SET status = 'done', completed_at = ?, runtime_ended_at = ?
        WHERE agent_id = ? AND session_key = ? AND run_stage = 'chat' AND status = 'running'`,
@@ -206,7 +203,7 @@ export function startChatRunInstance(ctx: SessionContext): { instanceId: number;
 export function completeChatRunInstance(instanceId: number, status: 'done' | 'failed' | 'cancelled'): void {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     db.prepare(
       `UPDATE job_instances SET status = ?, completed_at = ?, runtime_ended_at = ?
        WHERE id = ? AND status = 'running'`,
@@ -217,7 +214,7 @@ export function completeChatRunInstance(instanceId: number, status: 'done' | 'fa
 export function persistUserChatMessage(ctx: SessionContext, message: string): void {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     const durable = chatMessageDurableColumns(db, ctx);
     const tenant = tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
     const msgId = `oc-chat-user-${contextRowScope(ctx)}-${Date.now()}`;

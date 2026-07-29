@@ -13,6 +13,7 @@ import {
   buildTaskSessionHistory,
 } from '../lib/reflectionContext';
 import { normalizeChatMessageRole } from '../lib/chatMessageRoles';
+import { toCanonicalTimestamp } from '../lib/timestamps';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { chatMessageTenantScope, instanceTenantScope, sessionTenantScope } from '../lib/runtimeTenantScope';
 
@@ -247,7 +248,7 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
                   row.content,
                   row.event_meta ?? '{}',
                   rawPayload,
-                  row.timestamp,
+                  toCanonicalTimestamp(row.timestamp),
                 );
               }
             });

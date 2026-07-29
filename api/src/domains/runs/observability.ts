@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { cleanupImpossibleTaskLifecycleStates } from '../../lib/taskLifecycle';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
+import { nowTimestamp } from '../../lib/timestamps';
 
 export const START_CHECKIN_GRACE_MS = 5 * 60 * 1000;
 export const HEARTBEAT_STALE_MS = 10 * 60 * 1000;
@@ -197,7 +198,7 @@ function isMissingLifecycleHandoffCompletion(input: RunCheckInInput, instance: (
 }
 
 export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput): { taskId: number | null; noteCreated: boolean } {
-  const nowIso = new Date().toISOString();
+  const nowTs = nowTimestamp();
   const changedFiles = parseChangedFiles(input.changedFiles);
   const changedFilesCount = input.changedFilesCount ?? (changedFiles.length > 0 ? changedFiles.length : null);
   const taskId = resolveTaskIdForInstance(db, input.instanceId);
@@ -273,12 +274,12 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
     changedFilesCount,
     input.blockerReason ?? null,
     input.outcome ?? null,
-    trustedStartSignal ? nowIso : null,
-    input.meaningfulOutput || ['progress', 'blocker', 'completion'].includes(input.stage) ? nowIso : null,
-    trustedStartSignal ? nowIso : null,
-    input.stage === 'completion' ? nowIso : null,
+    trustedStartSignal ? nowTs : null,
+    input.meaningfulOutput || ['progress', 'blocker', 'completion'].includes(input.stage) ? nowTs : null,
+    trustedStartSignal ? nowTs : null,
+    input.stage === 'completion' ? nowTs : null,
     input.sessionKey ?? instance.session_key ?? null,
-    nowIso,
+    nowTs,
   );
 
   const artifact = db.prepare(`
@@ -339,7 +340,7 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
       UPDATE instance_artifacts
       SET last_note_at = ?
       WHERE instance_id = ?
-    `).run(nowIso, input.instanceId);
+    `).run(nowTs, input.instanceId);
 
     noteCreated = true;
   }
@@ -359,7 +360,7 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
           status = CASE WHEN status IN ('queued', 'dispatched') THEN 'running' ELSE status END,
           started_at = COALESCE(started_at, ?)
       WHERE id = ?
-    `).run(input.sessionKey ?? null, nowIso, input.instanceId);
+    `).run(input.sessionKey ?? null, nowTs, input.instanceId);
   }
 
   if (input.stage === 'completion') {
@@ -394,9 +395,9 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
       WHERE id = ?
     `).run(
       nextStatus,
-      nowIso,
-      nowIso,
-      nowIso,
+      nowTs,
+      nowTs,
+      nowTs,
       runtimeEndSuccess ? 1 : 0,
       runtimeEndError,
       input.runtimeEndSource ?? 'instance_complete',
@@ -414,7 +415,7 @@ export function markInstanceStale(db: Database.Database, instanceId: number, rea
     return { taskId, changed: false };
   }
 
-  const nowIso = new Date().toISOString();
+  const nowTs = nowTimestamp();
   db.prepare(`
     INSERT INTO instance_artifacts (instance_id, task_id, current_stage, stale, stale_at, updated_at)
     VALUES (?, ?, 'heartbeat', 1, ?, ?)
@@ -423,7 +424,7 @@ export function markInstanceStale(db: Database.Database, instanceId: number, rea
       stale = 1,
       stale_at = excluded.stale_at,
       updated_at = excluded.updated_at
-  `).run(instanceId, taskId, nowIso, nowIso);
+  `).run(instanceId, taskId, nowTs, nowTs);
 
   if (taskId) {
     db.prepare(`

@@ -15,6 +15,7 @@ import {
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
+import { nowTimestamp } from './timestamps';
 
 export interface ApplyTaskOutcomeInput {
   taskId: number;
@@ -617,7 +618,7 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
 
   // Record the task outcome on the authoritative instance so the Jobs UI can
   // distinguish execution status (done/failed) from task workflow outcome.
-  const lifecyclePostedAt = new Date().toISOString();
+  const lifecyclePostedAt = nowTimestamp();
   let runtimeEndedBeforeOutcome = false;
   if (input.instanceId != null) {
     const runtimeState = db.prepare(`SELECT runtime_ended_at FROM job_instances WHERE id = ?`).get(input.instanceId) as { runtime_ended_at: string | null } | undefined;

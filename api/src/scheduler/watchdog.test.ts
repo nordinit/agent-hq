@@ -277,8 +277,8 @@ describe('watchdog transcript activity', () => {
       error: string | null;
     };
     expect(row.status).toBe('done');
-    expect(row.completed_at).toBe('2026-06-03T00:32:30.031Z');
-    expect(row.runtime_ended_at).toBe('2026-06-03T00:32:30.031Z');
+    expect(row.completed_at).toBe('2026-06-03 00:32:30.031');
+    expect(row.runtime_ended_at).toBe('2026-06-03 00:32:30.031');
     expect(row.runtime_end_success).toBe(1);
     expect(row.runtime_end_source).toBe('hermes');
     expect(row.runtime_end_error).toBeNull();
@@ -323,8 +323,8 @@ describe('watchdog transcript activity', () => {
       error: string | null;
     };
     expect(row.status).toBe('failed');
-    expect(row.completed_at).toBe('2026-05-13T10:05:00.000Z');
-    expect(row.runtime_ended_at).toBe('2026-05-13T10:05:00.000Z');
+    expect(row.completed_at).toBe('2026-05-13 10:05:00.000');
+    expect(row.runtime_ended_at).toBe('2026-05-13 10:05:00.000');
     expect(row.runtime_end_success).toBe(0);
     expect(row.runtime_end_source).toBe('veri');
     expect(row.runtime_end_error).toBe('veri execution failed');
@@ -364,8 +364,8 @@ describe('watchdog transcript activity', () => {
       error: string | null;
     };
     expect(row.status).toBe('done');
-    expect(row.completed_at).toBe('2026-05-13T10:06:00.000Z');
-    expect(row.runtime_ended_at).toBe('2026-05-13T10:06:00.000Z');
+    expect(row.completed_at).toBe('2026-05-13 10:06:00.000');
+    expect(row.runtime_ended_at).toBe('2026-05-13 10:06:00.000');
     expect(row.runtime_end_success).toBe(1);
     expect(row.runtime_end_source).toBe('hermes');
     expect(row.runtime_end_error).toBeNull();
@@ -468,8 +468,8 @@ describe('watchdog transcript activity', () => {
       error: string | null;
     };
     expect(row.status).toBe('done');
-    expect(row.completed_at).toBe('2026-05-13T10:59:30.000Z');
-    expect(row.runtime_ended_at).toBe('2026-05-13T10:59:30.000Z');
+    expect(row.completed_at).toBe('2026-05-13 10:59:30.000');
+    expect(row.runtime_ended_at).toBe('2026-05-13 10:59:30.000');
     expect(row.runtime_end_success).toBe(1);
     expect(row.runtime_end_source).toBe('watchdog_raw_session');
     expect(row.error).toBeNull();
@@ -570,8 +570,8 @@ describe('watchdog transcript activity', () => {
       runtime_end_source: string | null;
     };
     expect(row.status).toBe('failed');
-    expect(row.completed_at).toBe('2026-06-02T23:23:57.211Z');
-    expect(row.runtime_ended_at).toBe('2026-06-02T23:23:57.211Z');
+    expect(row.completed_at).toBe('2026-06-02 23:23:57.211');
+    expect(row.runtime_ended_at).toBe('2026-06-02 23:23:57.211');
     expect(row.runtime_end_success).toBe(0);
     expect(row.runtime_end_error).toBe("The model 'gpt-image-2' does not exist.");
     expect(row.runtime_end_source).toBe('watchdog_raw_session');

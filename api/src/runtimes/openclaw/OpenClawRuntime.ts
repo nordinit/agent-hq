@@ -30,6 +30,7 @@ import { handleOpenClawRuntimeEnd } from './runtimeEnd';
 import {
   startRawSessionTerminalPoll,
 } from './transcript';
+import { nowTimestamp } from '../../lib/timestamps';
 
 function normalizeRepoContextValue(value: string | null | undefined): string | null {
   const normalized = value?.trim();
@@ -516,7 +517,7 @@ export class OpenClawRuntime implements AgentRuntime {
       const identityColumnSql = identityColumns.length ? `${identityColumns.join(', ')}, ` : '';
       const identityValueSql = identityColumns.length ? `${identityColumns.map(() => '?').join(', ')}, ` : '';
 
-      const now = new Date().toISOString();
+      const now = nowTimestamp();
       db.prepare(`
         INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, ${identityColumnSql}role, content, timestamp, event_type, event_meta)
         VALUES (?, ?, ?, ${identityValueSql}'user', ?, ?, 'text', '{}')

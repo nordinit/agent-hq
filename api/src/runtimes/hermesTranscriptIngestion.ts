@@ -4,6 +4,7 @@ import path from 'path';
 import type Database from 'better-sqlite3';
 import { tableHasColumn } from '../lib/durableRunIdentity';
 import { normalizeChatMessageRole } from '../lib/chatMessageRoles';
+import { nowTimestamp, timestampFromDate, timestampFromEpochMs, toCanonicalTimestamp } from '../lib/timestamps';
 
 export interface HermesTranscriptRunContext {
   instanceId: number;
@@ -230,8 +231,8 @@ export function parseHermesMessageEvents(message: unknown): HermesParsedEvent[] 
 function timestampForMessage(message: unknown, session: Record<string, unknown>, fallback: string): string {
   const record = asRecord(message) ?? {};
   const raw = record.timestamp ?? record.created_at ?? record.createdAt ?? session.updated_at ?? session.created_at ?? session.timestamp;
-  if (typeof raw === 'string' && raw.trim()) return raw;
-  if (typeof raw === 'number' && Number.isFinite(raw)) return new Date(raw).toISOString();
+  if (typeof raw === 'string' && raw.trim()) return toCanonicalTimestamp(raw) ?? fallback;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return timestampFromEpochMs(raw) ?? fallback;
   return fallback;
 }
 
@@ -260,7 +261,7 @@ export function importHermesSessionJson(params: HermesTranscriptIngestParams & {
     ON CONFLICT(id) DO NOTHING
   `);
 
-  const fallbackTimestamp = fs.statSync(params.filePath).mtime.toISOString();
+  const fallbackTimestamp = timestampFromDate(fs.statSync(params.filePath).mtime) ?? nowTimestamp();
   let imported = 0;
   const tx = params.db.transaction(() => {
     messages.forEach((message, messageIndex) => {

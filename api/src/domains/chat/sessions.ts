@@ -279,7 +279,7 @@ export function listChatSessions(
             ORDER BY timestamp DESC
           ) AS row_number
         FROM raw_source
-      )
+      ) ranked
       WHERE row_number = 1
     )
     SELECT

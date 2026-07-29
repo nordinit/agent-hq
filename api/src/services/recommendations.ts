@@ -210,9 +210,9 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
       FROM task_outcome_metrics tom
       LEFT JOIN agents a ON a.id = tom.job_id
       ${omWhere}
-      GROUP BY tom.job_id
-      HAVING total >= 2 AND (CAST(passed AS REAL) / total) < 0.7
-      ORDER BY (CAST(passed AS REAL) / total) ASC
+      GROUP BY tom.job_id, a.name
+      HAVING COUNT(*) >= 2 AND (CAST(SUM(tom.first_pass_qa) AS REAL) / COUNT(*)) < 0.7
+      ORDER BY (CAST(SUM(tom.first_pass_qa) AS REAL) / COUNT(*)) ASC
     `).all(...omParams) as { job_id: number; agent_name: string | null; total: number; passed: number }[];
 
     recommendations.push({
@@ -285,8 +285,8 @@ export function generateRecommendations(db: Database.Database, filters: QueryFil
       FROM task_outcome_metrics tom
       LEFT JOIN agents a ON a.id = tom.job_id
       ${omWhere ? omWhere + ' AND' : 'WHERE'} tom.cycle_time_hours IS NOT NULL
-      GROUP BY tom.job_id
-      HAVING n >= 2 AND avg_h > 8
+      GROUP BY tom.job_id, a.name
+      HAVING COUNT(*) >= 2 AND AVG(tom.cycle_time_hours) > 8
       ORDER BY avg_h DESC
     `).all(...omParams) as { job_id: number; agent_name: string | null; avg_h: number; n: number }[];
 

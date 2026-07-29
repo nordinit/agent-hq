@@ -7,6 +7,7 @@ import { removeTaskWorktree } from '../services/worktreeManager';
 import { removeTaskClone } from '../services/repoWorkspaceManager';
 import { writeTaskHistory } from '../domains/tasks/history';
 import { taskTableHasColumn } from '../domains/tasks/ownership';
+import { nowTimestamp } from './timestamps';
 
 const LIVE_TASK_STATUSES = ['in_progress', 'dev_deploy_queued', 'dev_deploying', 'stalled'] as const;
 const LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
@@ -182,7 +183,7 @@ async function finalizeTaskTransitionRuntimeEndIfNeeded(
   if (!hasSemanticOutcome) return;
 
   const { applyRuntimeEndToJobInstance } = require('../domains/runs/runtimeEnd') as typeof import('../domains/runs/runtimeEnd');
-  const endedAt = new Date().toISOString();
+  const endedAt = nowTimestamp();
   const result = await applyRuntimeEndToJobInstance(db, {
     instanceId,
     runtimeName: 'Agent HQ',

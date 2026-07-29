@@ -36,6 +36,7 @@ import type {
   MessageRole,
   EventType,
 } from './types';
+import { toCanonicalTimestampOrNow } from '../timestamps';
 
 const HOME = process.env.HOME ?? os.homedir();
 const CLAUDE_PROJECTS_DIR = path.join(HOME, '.claude', 'projects');
@@ -107,7 +108,7 @@ function parseRow(line: string): ClaudeCodeRow | null {
  * text and tool_use blocks emits separate text + tool_call events).
  */
 function normalizeRow(row: ClaudeCodeRow, baseOrdinal: number): SessionMessageInput[] {
-  const ts = row.timestamp ?? new Date().toISOString();
+  const ts = toCanonicalTimestampOrNow(row.timestamp);
   const raw = JSON.stringify(row);
 
   switch (row.type) {

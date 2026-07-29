@@ -42,6 +42,49 @@ jest.mock('../domains/runs/openclawSessionState', () => ({
   })),
 }));
 
+/**
+ * Lifecycle evidence lives in `tasks.custom_fields_json`; the dedicated
+ * review/qa/deploy columns were dropped from the schema. The runtime therefore
+ * probes `PRAGMA table_info(tasks)` before building its task lookup, so the
+ * fake db has to answer that probe with the real column set.
+ */
+const TASKS_COLUMNS = [
+  'id',
+  'tenant_id',
+  'title',
+  'description',
+  'status',
+  'priority',
+  'project_id',
+  'sprint_id',
+  'agent_id',
+  'assigned_agent_id',
+  'created_at',
+  'updated_at',
+  'dispatched_at',
+  'active_instance_id',
+  'task_type',
+  'story_points',
+  'recurring_series_id',
+  'scheduled_for',
+  'schedule_run_id',
+  'generated_from',
+  'custom_fields_json',
+].map((name) => ({ name }));
+
+const TASK_EVIDENCE_CUSTOM_FIELDS = {
+  review_branch: 'cinder-backend/task-403-prevent-outcome-less-run-completions-fro',
+  review_commit: '27bf9e9fb2f32af10d3f8cbd067f76a59b535240',
+  review_url: 'http://localhost:3510/tasks/403',
+  qa_verified_commit: '27bf9e9fb2f32af10d3f8cbd067f76a59b535240',
+  qa_tested_url: 'http://localhost:3510/tasks/403',
+};
+
+/** SQL text is compared with insignificant whitespace collapsed. */
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/g, ' ').trim();
+}
+
 describe('OpenClawRuntime terminal failure handling', () => {
   let db: Pick<Database.Database, 'prepare'>;
 
@@ -56,7 +99,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
       backfillReason: 'session_file_not_found',
     });
 
-    const statements = new Map<string, { get?: jest.Mock; run?: jest.Mock }>([
+    const statementEntries: Array<[string, { get?: jest.Mock; run?: jest.Mock; all?: jest.Mock }]> = [
       [
         `
         SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key
@@ -83,8 +126,8 @@ describe('OpenClawRuntime terminal failure handling', () => {
     LIMIT 8
   `,
         {
-          all: jest.fn?.(),
-        } as never,
+          all: jest.fn().mockReturnValue([]),
+        },
       ],
       [
         `
@@ -134,6 +177,12 @@ describe('OpenClawRuntime terminal failure handling', () => {
         },
       ],
       [
+        `PRAGMA table_info(tasks)`,
+        {
+          all: jest.fn().mockReturnValue(TASKS_COLUMNS),
+        },
+      ],
+      [
         `
           SELECT ji.task_id, ji.agent_id,
                  t.status AS task_status,
@@ -142,15 +191,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
                  t.task_type,
                  t.sprint_id,
                  s.sprint_type,
-                 t.review_branch,
-                 t.review_commit,
-                 t.review_url,
-                 t.qa_verified_commit,
-                 t.qa_tested_url,
-                 t.merged_commit,
-                 t.deployed_commit,
-                 t.deploy_target,
-                 t.deployed_at
+                 t.custom_fields_json
           FROM job_instances ji
           LEFT JOIN tasks t ON t.id = ji.task_id
           LEFT JOIN sprints s ON s.id = t.sprint_id
@@ -166,23 +207,17 @@ describe('OpenClawRuntime terminal failure handling', () => {
             task_type: null,
             sprint_id: 9,
             sprint_type: 'enhancement',
-            review_branch: 'cinder-backend/task-403-prevent-outcome-less-run-completions-fro',
-            review_commit: '27bf9e9fb2f32af10d3f8cbd067f76a59b535240',
-            review_url: 'http://localhost:3510/tasks/403',
-            qa_verified_commit: '27bf9e9fb2f32af10d3f8cbd067f76a59b535240',
-            qa_tested_url: 'http://localhost:3510/tasks/403',
-            merged_commit: null,
-            deployed_commit: null,
-            deploy_target: null,
-            deployed_at: null,
+            custom_fields_json: JSON.stringify(TASK_EVIDENCE_CUSTOM_FIELDS),
           }),
         },
       ],
-    ]);
+    ];
+
+    const statements = new Map(statementEntries.map(([sql, stmt]) => [normalizeSql(sql), stmt]));
 
     db = {
       prepare: jest.fn((sql: string) => {
-        const stmt = statements.get(sql);
+        const stmt = statements.get(normalizeSql(sql));
         if (!stmt) throw new Error(`Unexpected SQL: ${sql}`);
         return stmt;
       }),

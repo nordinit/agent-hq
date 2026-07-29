@@ -217,15 +217,15 @@ export function detectDuplicateRoutingRule(
     const tenant = tenantPredicateFor(db, 'sprint_task_routing_rules', 'sprint_task_routing_rules', args.tenantId);
     const projectPredicate = args.projectId == null ? 'project_id IS NULL' : 'project_id = ?';
     const params: Array<number | string | null> = args.projectId == null
-      ? [args.sprintType, args.sprintId, args.sprintId, args.taskType, args.status, args.agentId, args.priority]
-      : [args.projectId, args.sprintType, args.sprintId, args.sprintId, args.taskType, args.status, args.agentId, args.priority];
+      ? [args.sprintType, args.sprintId, args.sprintId, args.taskType, args.taskType, args.status, args.agentId, args.priority]
+      : [args.projectId, args.sprintType, args.sprintId, args.sprintId, args.taskType, args.taskType, args.status, args.agentId, args.priority];
     let sql = `
       SELECT id
       FROM sprint_task_routing_rules
       WHERE ${projectPredicate}
         AND sprint_type = ?
         AND ((sprint_id IS NULL AND ? IS NULL) OR sprint_id = ?)
-        AND task_type IS ?
+        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
         AND status = ?
         AND agent_id = ?
         AND priority = ?
@@ -240,12 +240,12 @@ export function detectDuplicateRoutingRule(
   }
 
   if (args.sprintId == null) return undefined;
-  const params: Array<number | string | null> = [args.sprintId, args.taskType, args.status, args.agentId, args.priority];
+  const params: Array<number | string | null> = [args.sprintId, args.taskType, args.taskType, args.status, args.agentId, args.priority];
   let sql = `
     SELECT id
     FROM sprint_task_routing_rules
     WHERE sprint_id = ?
-      AND task_type IS ?
+      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
       AND status = ?
       AND agent_id = ?
       AND priority = ?

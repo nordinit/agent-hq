@@ -697,7 +697,9 @@ function ensureStarterSprintTypeRegistry(db: Database.Database, tenantId: number
   const existingOutcome = db.prepare(`
     SELECT id, is_system
     FROM sprint_type_outcomes
-    WHERE sprint_type_key = ? AND task_type IS ? AND outcome_key = ?
+    WHERE sprint_type_key = ?
+      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND outcome_key = ?
       ${outcomeTenant.sql}
     LIMIT 1
   `);
@@ -709,7 +711,9 @@ function ensureStarterSprintTypeRegistry(db: Database.Database, tenantId: number
   const updateOutcome = db.prepare(`
     UPDATE sprint_type_outcomes
     SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
-    WHERE sprint_type_key = ? AND task_type IS ? AND outcome_key = ?
+    WHERE sprint_type_key = ?
+      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND outcome_key = ?
       ${outcomeTenant.sql}
   `);
   for (const outcome of outcomeSeed.outcomes) {
@@ -718,11 +722,11 @@ function ensureStarterSprintTypeRegistry(db: Database.Database, tenantId: number
     const behavior = outcome.behavior ?? (taskType ? 'extend' : 'base');
     const badge = outcome.badge_variant ?? null;
     const metadataJson = JSON.stringify(outcome.metadata ?? {});
-    const existing = existingOutcome.get(sprintType, taskType, outcome.outcome_key, ...outcomeTenant.params) as { id: number; is_system: number } | undefined;
+    const existing = existingOutcome.get(sprintType, taskType, taskType, outcome.outcome_key, ...outcomeTenant.params) as { id: number; is_system: number } | undefined;
     if (!existing) {
       createOutcome.run(...outcomeInsert.params, sprintType, taskType, outcome.outcome_key, outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson);
     } else if (existing.is_system === 1) {
-      updateOutcome.run(outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson, sprintType, taskType, outcome.outcome_key, ...outcomeTenant.params);
+      updateOutcome.run(outcome.label, outcome.description, enabled, behavior, badge, outcome.stage_order, metadataJson, sprintType, taskType, taskType, outcome.outcome_key, ...outcomeTenant.params);
     }
   }
 }

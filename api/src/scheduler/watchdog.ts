@@ -17,6 +17,7 @@ import { normalizeTokenUsage } from '../domains/runs/tokenUsage';
 import { createNotificationRecord } from '../lib/notifications';
 import { getActiveTenantId } from '../lib/tenantContext';
 import { insertRuntimeLog } from '../lib/runtimeTenantScope';
+import { nowTimestamp, timestampFromDate, toCanonicalTimestamp } from '../lib/timestamps';
 
 const DEFAULT_TIMEOUT_MINUTES = 20;
 const DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MINUTES * 60_000;
@@ -449,11 +450,7 @@ function booleanField(value: unknown): boolean | null {
 
 function normalizeIsoTimestamp(raw: unknown, fallback?: string | null): string | null {
   const candidate = stringField(raw) ?? fallback ?? null;
-  if (!candidate) return null;
-  const normalized = candidate.includes('T') ? candidate : candidate.replace(' ', 'T');
-  const withZ = normalized.endsWith('Z') ? normalized : `${normalized}Z`;
-  const ms = new Date(withZ).getTime();
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  return toCanonicalTimestamp(candidate);
 }
 
 function runtimeEndFromObject(raw: Record<string, unknown>, fallback: { source?: string | null; endedAt?: string | null } = {}): WatchdogRuntimeEndEvent | null {
@@ -643,7 +640,8 @@ function reconcileTerminalOpenClawSession(
   const decision = rawSession.decision;
   if (!decision?.terminal) return false;
 
-  const endedAt = rawSession.state?.trajectoryEndedAt ?? rawSession.state?.lastEventAt ?? now.toISOString();
+  const endedAt = toCanonicalTimestamp(rawSession.state?.trajectoryEndedAt ?? rawSession.state?.lastEventAt)
+    ?? timestampFromDate(now) ?? nowTimestamp();
   const task = loadTaskRuntimeContext(db, inst.task_id);
   const requiresSemanticOutcome = decision.success && safeTaskRequiresSemanticOutcome(db, inst.task_id);
   const missingRequiredLifecycleOutcome = Boolean(
@@ -793,7 +791,7 @@ export function runWatchdogPass(db: Database.Database, now = new Date()): void {
     }
 
     const elapsedMin = Math.floor(decision.elapsedMs / 60000);
-    const completedAt = now.toISOString();
+    const completedAt = timestampFromDate(now) ?? nowTimestamp();
     db.prepare(`
       UPDATE job_instances
       SET status = 'failed',

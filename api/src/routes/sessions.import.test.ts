@@ -174,7 +174,7 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
       project_id: 9,
       status: 'active',
       title: 'Prompt-only run',
-      started_at: '2026-05-01T11:59:00Z',
+      started_at: '2026-05-01 11:59:00',
       message_count: 2,
     });
 

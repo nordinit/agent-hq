@@ -1183,9 +1183,11 @@ router.post('/types/:key/field-schemas', (req: Request, res: Response) => {
     const schema = parseFieldSchema(req.body?.schema);
 
     const existing = db.prepare(`
-      SELECT id FROM task_field_schemas WHERE sprint_type_key = ? AND task_type IS ?
+      SELECT id FROM task_field_schemas
+      WHERE sprint_type_key = ?
+        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
         ${schemaTenant.sql}
-    `).get(sprintTypeKey, taskType, ...schemaTenant.params) as { id: number } | undefined;
+    `).get(sprintTypeKey, taskType, taskType, ...schemaTenant.params) as { id: number } | undefined;
     if (existing) return res.status(409).json({ error: 'A field schema for this sprint type/task type already exists' });
 
     const insertTenant = configTenantInsertFragment(db, 'task_field_schemas', tenantId);
@@ -1233,9 +1235,11 @@ router.put('/types/:key/field-schemas/:schemaId', (req: Request, res: Response) 
 
     const duplicate = db.prepare(`
       SELECT id FROM task_field_schemas
-      WHERE sprint_type_key = ? AND task_type IS ? AND id != ?
+      WHERE sprint_type_key = ?
+        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+        AND id != ?
         ${schemaTenant.sql}
-    `).get(sprintTypeKey, taskType, schemaId, ...schemaTenant.params) as { id: number } | undefined;
+    `).get(sprintTypeKey, taskType, taskType, schemaId, ...schemaTenant.params) as { id: number } | undefined;
     if (duplicate) return res.status(409).json({ error: 'A field schema for this sprint type/task type already exists' });
 
     db.prepare(`
@@ -1505,9 +1509,11 @@ router.post('/types/:key/outcomes', (req: Request, res: Response) => {
     const tenant = configTenantPredicate(db, 'sprint_type_outcomes', tenantId);
     const duplicate = db.prepare(`
       SELECT id FROM sprint_type_outcomes
-      WHERE sprint_type_key = ? AND task_type IS ? AND outcome_key = ?
+      WHERE sprint_type_key = ?
+        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+        AND outcome_key = ?
         ${tenant.sql}
-    `).get(sprintTypeKey, payload.task_type, payload.outcome_key, ...tenant.params) as { id: number } | undefined;
+    `).get(sprintTypeKey, payload.task_type, payload.task_type, payload.outcome_key, ...tenant.params) as { id: number } | undefined;
     if (duplicate) return res.status(409).json({ error: 'An outcome definition for this sprint type/task type already exists' });
 
     const isSystem = Number(req.body?.is_system ?? 0) ? 1 : 0;
@@ -1562,9 +1568,12 @@ router.put('/types/:key/outcomes/:outcomeId', (req: Request, res: Response) => {
 
     const duplicate = db.prepare(`
       SELECT id FROM sprint_type_outcomes
-      WHERE sprint_type_key = ? AND task_type IS ? AND outcome_key = ? AND id != ?
+      WHERE sprint_type_key = ?
+        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+        AND outcome_key = ?
+        AND id != ?
         ${tenant.sql}
-    `).get(sprintTypeKey, payload.task_type, payload.outcome_key, outcomeId, ...tenant.params) as { id: number } | undefined;
+    `).get(sprintTypeKey, payload.task_type, payload.task_type, payload.outcome_key, outcomeId, ...tenant.params) as { id: number } | undefined;
     if (duplicate) return res.status(409).json({ error: 'An outcome definition for this sprint type/task type already exists' });
 
     db.prepare(`

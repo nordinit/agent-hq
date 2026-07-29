@@ -64,7 +64,7 @@ describe('applyRuntimeEndToJobInstance token usage persistence', () => {
         source: 'hermes',
         sessionKey: 'run:915',
         success: true,
-        endedAt: '2026-06-03T14:00:00.000Z',
+        endedAt: '2026-06-03 14:00:00.000',
         reason: 'completed',
         metadata: {
           usage: {
@@ -90,7 +90,7 @@ describe('applyRuntimeEndToJobInstance token usage persistence', () => {
       token_input: 12,
       token_output: 34,
       token_total: 46,
-      runtime_ended_at: '2026-06-03T14:00:00.000Z',
+      runtime_ended_at: '2026-06-03 14:00:00.000',
     });
   });
 });

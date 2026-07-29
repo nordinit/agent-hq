@@ -15,6 +15,7 @@ import { writeTaskHistory, writeTaskStatusChange } from '../tasks/history';
 import { getCanonicalTaskRecord } from '../tasks/evidence';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
 import { applyConfiguredRuntimeFailedEvent } from './runtimeFailureEvent';
+import { nowTimestamp } from '../../lib/timestamps';
 
 const START_EVENT_LIVE_INSTANCE_STATUSES = ['queued', 'dispatched', 'running'] as const;
 
@@ -395,7 +396,7 @@ export async function completeRunInstance(
       runtimeEnd: {
         source: 'instance_complete',
         success: true,
-        endedAt: new Date().toISOString(),
+        endedAt: nowTimestamp(),
         error: 'Runtime ended without required lifecycle outcome',
       },
     });

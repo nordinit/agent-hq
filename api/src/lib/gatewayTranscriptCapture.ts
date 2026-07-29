@@ -66,6 +66,7 @@ import { openClawGatewayWsOptions } from './openclawGatewayWs';
 import { resolveOpenClawGatewayProtocolVersion } from './openclawGatewayProtocol';
 import type { RuntimeEndEvent } from '../runtimes/types';
 import { resolveChatTerminalEvent } from '../runtimes/openclaw/terminalEvents';
+import { nowTimestamp, timestampFromEpochMs } from './timestamps';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -317,10 +318,10 @@ function persistHistoryMessages(
       const baseRole = m.role;
       const ts =
         typeof m.timestamp === 'number'
-          ? new Date(m.timestamp).toISOString()
+          ? (timestampFromEpochMs(m.timestamp) ?? nowTimestamp())
           : typeof m.timestamp === 'string'
             ? m.timestamp
-            : new Date().toISOString();
+            : nowTimestamp();
 
       for (const evt of extractStructuredEvents(m)) {
         const rowId = `oc-hist-${ctx.instanceId}-${rowIndex++}`;
@@ -350,7 +351,7 @@ function persistHistoryMessages(
 function persistStreamDelta(ctx: CaptureContext, cumulativeText: string): void {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     const identity = chatMessageIdentityColumns(db, ctx);
     db.prepare(`
       INSERT INTO chat_messages (id, agent_id, instance_id, ${identity.insertColumnSql}role, content, timestamp, event_type, event_meta)
@@ -366,7 +367,7 @@ function persistStreamDelta(ctx: CaptureContext, cumulativeText: string): void {
 function persistFinalMessage(ctx: CaptureContext, text: string, msgIndex: number): void {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     const identity = chatMessageIdentityColumns(db, ctx);
     db.prepare(`
       INSERT INTO chat_messages (id, agent_id, instance_id, ${identity.insertColumnSql}role, content, timestamp, event_type, event_meta)
@@ -391,10 +392,10 @@ function persistLiveStructuredMessage(
     const identity = chatMessageIdentityColumns(db, ctx);
     const ts =
       typeof message.timestamp === 'number'
-        ? new Date(message.timestamp).toISOString()
+        ? (timestampFromEpochMs(message.timestamp) ?? nowTimestamp())
         : typeof message.timestamp === 'string'
           ? message.timestamp
-          : new Date().toISOString();
+          : nowTimestamp();
     const events = extractStructuredEvents(message).filter(evt =>
       evt.event_type !== 'text' || evt.content.trim().length > 0,
     );

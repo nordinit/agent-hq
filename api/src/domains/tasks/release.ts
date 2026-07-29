@@ -22,6 +22,7 @@ import {
 } from './mutations';
 import { enrichTask, TASK_SELECT } from './readModel';
 import { INLINE_EVIDENCE_FIELD_KEYS } from '../../lib/starterCatalog';
+import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
 
 function loadTask(taskId: number, db: Database.Database): Record<string, unknown> | undefined {
   return db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(taskId) as Record<string, unknown> | undefined;
@@ -605,7 +606,7 @@ export function putLiveVerification(
   const liveVerifiedBy = typeof body.live_verified_by === 'string' || body.live_verified_by === null ? body.live_verified_by : undefined;
   const liveVerifiedAt = typeof body.live_verified_at === 'string' || body.live_verified_at === null ? body.live_verified_at : undefined;
   const summary = typeof body.summary === 'string' || body.summary === null ? body.summary : null;
-  const verifiedAt = liveVerifiedAt ?? new Date().toISOString();
+  const verifiedAt = toCanonicalTimestampOrNow(liveVerifiedAt);
 
   updateTaskEvidence(taskId, changedBy, {
     live_verified_by: liveVerifiedBy ?? null,

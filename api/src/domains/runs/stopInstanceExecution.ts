@@ -6,6 +6,7 @@ import { writeTaskRuntimeEndHistory } from '../tasks/history';
 import { resolveRuntime } from '../../runtimes';
 import { OPENCLAW_BIN, OPENCLAW_PATH } from '../../config';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
+import { nowTimestamp } from '../../lib/timestamps';
 function resolveInstanceSessionKey(instance: Record<string, unknown>): string | null {
   const direct = typeof instance.session_key === 'string' && instance.session_key.trim()
     ? instance.session_key.trim()
@@ -193,7 +194,7 @@ export async function stopInstanceExecution(
 
   if (instance.task_id) {
     writeTaskRuntimeEndHistory(db, Number(instance.task_id), 'instance_stop', {
-      endedAt: new Date().toISOString(),
+      endedAt: nowTimestamp(),
       success: false,
       source: 'manual_stop',
       error: stopRuntimeMessage,

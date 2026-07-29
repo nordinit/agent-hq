@@ -237,10 +237,11 @@ export function resolveTaskFieldSchemaForSprint(
       const row = db.prepare(`
         SELECT schema_json
         FROM task_field_schemas
-        WHERE sprint_type_key = ? AND task_type IS ?
+        WHERE sprint_type_key = ?
+          AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
         ORDER BY COALESCE(updated_at, created_at, datetime('now')) DESC, id DESC
         LIMIT 1
-      `).get(sprintType, candidateTaskType) as { schema_json: string } | undefined;
+      `).get(sprintType, candidateTaskType, candidateTaskType) as { schema_json: string } | undefined;
       return row ? parseFieldSchemaJson(row.schema_json) : { fields: [] };
     };
 

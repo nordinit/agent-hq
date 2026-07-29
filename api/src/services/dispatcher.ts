@@ -43,6 +43,7 @@ import {
 import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization';
 import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { getDb } from '../db/client';
+import { nowTimestamp } from '../lib/timestamps';
 import { getAgentHqBaseUrl } from '../lib/agentHqBaseUrl';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn as durableTableHasColumn } from '../lib/durableRunIdentity';
@@ -2336,7 +2337,10 @@ export interface DispatchInstanceParams {
  */
 export async function dispatchInstance(params: DispatchInstanceParams): Promise<void> {
   const db = getDb();
-  const now = new Date().toISOString();
+  // Canonical (offset-less UTC) so this write of job_instances.dispatched_at is
+  // indistinguishable from the `datetime('now')` DEFAULT and the inline
+  // `dispatched_at = datetime('now')` writes elsewhere in this file.
+  const now = nowTimestamp();
 
   let existingPayload: Record<string, unknown> = {};
   try {
@@ -2503,7 +2507,7 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
       UPDATE job_instances
       SET status = 'failed', error = ?, completed_at = ?
       WHERE id = ?
-    `).run(errorMsg, new Date().toISOString(), params.instanceId);
+    `).run(errorMsg, nowTimestamp(), params.instanceId);
 
     insertRuntimeLog(db, {
       instanceId: params.instanceId,

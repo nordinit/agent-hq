@@ -37,6 +37,7 @@ import type {
 import { skippedRuntimeAuthProfileSync } from './types';
 import { getDb } from '../db/client';
 import { renderNamedContractTemplate } from '../services/contracts/templateStore';
+import { nowTimestamp } from '../lib/timestamps';
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -401,7 +402,7 @@ export class CustomAgentRuntime implements AgentRuntime {
         sessionKey: params.sessionKey,
         runId,
         success: false,
-        endedAt: new Date().toISOString(),
+        endedAt: nowTimestamp(),
         error: errorMsg,
         reason: errorMsg.toLowerCase().includes('timeout') ? 'timeout' : 'error',
         metadata: {
@@ -729,7 +730,7 @@ export class CustomAgentRuntime implements AgentRuntime {
         sessionKey: params.sessionKey,
         runId,
         success: true,
-        endedAt: new Date().toISOString(),
+        endedAt: nowTimestamp(),
         reason: 'completed',
         metadata: {
           runtime_phase: 'stream',
@@ -764,7 +765,7 @@ export class CustomAgentRuntime implements AgentRuntime {
       if (agentId == null) return;
 
       const instanceId = params.instanceId ?? 0;
-      const now = new Date().toISOString();
+      const now = nowTimestamp();
       const msgId = `veri-asst-${instanceId}`;
 
       // Upsert the rolling assistant message (backward compat)
@@ -806,7 +807,7 @@ export class CustomAgentRuntime implements AgentRuntime {
       if (agentId == null) return;
 
       const instanceId = params.instanceId ?? 0;
-      const now = new Date().toISOString();
+      const now = nowTimestamp();
 
       db.prepare(`
         INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
@@ -844,7 +845,7 @@ export class CustomAgentRuntime implements AgentRuntime {
       if (agentId == null) return;
 
       const instanceId = params.instanceId ?? 0;
-      const now = new Date().toISOString();
+      const now = nowTimestamp();
 
       // Save the dispatched prompt as a "user" message
       db.prepare(`
@@ -1060,7 +1061,7 @@ function persistEventRows(
   instanceId: number,
   events: SSEEvent[],
 ): void {
-  const now = new Date().toISOString();
+  const now = nowTimestamp();
   const stmt = db.prepare(`
     INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
     VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)

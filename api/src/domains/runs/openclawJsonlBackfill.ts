@@ -11,6 +11,13 @@ import {
   resolveRuntimeAgentSlug,
   toGatewaySessionKey,
 } from '../../lib/sessionKeys';
+import {
+  nowTimestamp,
+  parseTimestamp,
+  timestampFromDate,
+  timestampFromEpochMs,
+  toCanonicalTimestamp,
+} from '../../lib/timestamps';
 
 interface BackfillInstanceRow {
   id: number;
@@ -153,29 +160,26 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
 
 function normalizeTimestamp(raw: unknown, fallback: Date): string {
   if (typeof raw === 'number' && Number.isFinite(raw)) {
+    // JSONL emits seconds or milliseconds depending on the producer.
     const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
-    return new Date(ms).toISOString();
+    return timestampFromEpochMs(ms) ?? timestampFromDate(fallback) ?? nowTimestamp();
   }
 
-  if (typeof raw === 'string' && raw.trim()) {
-    const trimmed = raw.trim();
-    const normalized = trimmed.includes('T') ? trimmed : trimmed.replace(' ', 'T');
-    const candidates = [normalized, normalized.endsWith('Z') ? normalized : `${normalized}Z`];
-    for (const candidate of candidates) {
-      const ms = Date.parse(candidate);
-      if (Number.isFinite(ms)) return new Date(ms).toISOString();
-    }
-  }
-
-  return fallback.toISOString();
+  return (
+    toCanonicalTimestamp(raw) ?? timestampFromDate(fallback) ?? nowTimestamp()
+  );
 }
 
 function timestampMs(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const ms = Date.parse(value);
-  return Number.isFinite(ms) ? ms : null;
+  // NB: must NOT use Date.parse() directly — it reads the offset-less
+  // 'YYYY-MM-DD HH:MM:SS' form stored in the DB as *local* time, which on a
+  // UTC-4 host makes every such value compare four hours later than it is.
+  return parseTimestamp(value)?.getTime() ?? null;
 }
 
+// Keep the winning value's own canonical string rather than re-deriving it from
+// epoch milliseconds — a round-trip through epoch-ms would silently drop
+// sub-second precision that the source carried.
 function maxIso(...values: Array<string | null | undefined>): string | null {
   let best: string | null = null;
   let bestMs: number | null = null;
@@ -184,7 +188,7 @@ function maxIso(...values: Array<string | null | undefined>): string | null {
     if (ms === null) continue;
     if (bestMs === null || ms > bestMs) {
       bestMs = ms;
-      best = new Date(ms).toISOString();
+      best = toCanonicalTimestamp(value);
     }
   }
   return best;
@@ -198,7 +202,7 @@ function minIso(...values: Array<string | null | undefined>): string | null {
     if (ms === null) continue;
     if (bestMs === null || ms < bestMs) {
       bestMs = ms;
-      best = new Date(ms).toISOString();
+      best = toCanonicalTimestamp(value);
     }
   }
   return best;
@@ -513,7 +517,7 @@ function updateInstanceArtifacts(db: Database.Database, params: {
        WHERE instance_id = ?
     `;
     const paramsList: unknown[] = [taskId, startedAt, heartbeatAt, meaningfulOutputAt];
-    if (hasUpdatedAt) paramsList.push(new Date().toISOString());
+    if (hasUpdatedAt) paramsList.push(nowTimestamp());
     paramsList.push(params.instance.id);
     db.prepare(sql).run(...paramsList);
     return;
@@ -814,7 +818,7 @@ export function backfillOpenClawJsonlTranscript(
       latestEventAt,
       heartbeatAt,
       meaningfulOutputAt,
-      now: fallbackNow.toISOString(),
+      now: timestampFromDate(fallbackNow) ?? nowTimestamp(),
     });
 
     updateInstanceArtifacts(db, {

@@ -3,6 +3,7 @@ import path from 'path';
 import type Database from 'better-sqlite3';
 import { normalizeRepoConfig } from './repoConfig';
 import { writeProjectAudit } from './projectAudit';
+import { nowTimestamp } from './timestamps';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const UPLOADS_BASE = process.env.AGENT_HQ_PROJECT_UPLOADS_DIR ?? path.join(REPO_ROOT, 'uploads', 'projects');
@@ -481,16 +482,17 @@ export function importProjectManifest(
         for (const schema of workflow.field_schemas ?? []) {
           const existing = db.prepare(`
             SELECT id FROM task_field_schemas
-            WHERE sprint_type_key = ? AND task_type IS ?
+            WHERE sprint_type_key = ?
+              AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
             LIMIT 1
-          `).get(schema.sprint_type_key, schema.task_type ?? null);
+          `).get(schema.sprint_type_key, schema.task_type ?? null, schema.task_type ?? null);
           if (!existing) {
             insertDynamic(db, 'task_field_schemas', {
               sprint_type_key: schema.sprint_type_key,
               task_type: schema.task_type ?? null,
               schema_json: stringifyStable(schema.schema ?? {}),
               is_system: schema.is_system ? 1 : 0,
-              updated_at: new Date().toISOString(),
+              updated_at: nowTimestamp(),
             });
           }
         }

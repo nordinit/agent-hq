@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { nowTimestamp } from '../lib/timestamps';
 
 const router = Router({ mergeParams: true });
 
@@ -178,7 +179,7 @@ router.post('/', upload.single('file'), (req: Request, res: Response) => {
     }
 
     const uploadedBy = (req.body as { uploaded_by?: string }).uploaded_by ?? 'manual';
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
 
     const result = db.transaction(() => {
       const insertFile = db.prepare(`
@@ -319,7 +320,7 @@ router.put('/:fileId', upload.single('file'), (req: Request, res: Response) => {
     const updatedBy = (req.body as { uploaded_by?: string; updated_by?: string }).updated_by
       ?? (req.body as { uploaded_by?: string; updated_by?: string }).uploaded_by
       ?? 'manual';
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     const nextVersion = Number(file.current_version ?? 1) + 1;
 
     db.transaction(() => {

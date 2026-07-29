@@ -341,7 +341,7 @@ function getReconcilerProjectIds(db: Database.Database): number[] {
       SELECT project_id FROM tasks WHERE project_id IS NOT NULL
       UNION ALL
       SELECT project_id FROM routing_config WHERE project_id IS NOT NULL
-    )
+    ) project_ids
     WHERE project_id IS NOT NULL
     ORDER BY project_id ASC
   `).all() as Array<{ project_id: number }>;

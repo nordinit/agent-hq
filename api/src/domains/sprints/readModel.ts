@@ -95,7 +95,7 @@ export function listSprints(
     sql += ` WHERE ${conditions.join(' AND ')}`;
   }
 
-  sql += ` GROUP BY s.id ORDER BY s.created_at DESC`;
+  sql += ` GROUP BY s.id, p.name ORDER BY s.created_at DESC`;
   return db.prepare(sql).all(...params);
 }
 
@@ -119,7 +119,7 @@ export function getSprintDetail(db: Database.Database, sprintId: number) {
     LEFT JOIN projects p ON p.id = s.project_id
     LEFT JOIN tasks t ON t.sprint_id = s.id
     WHERE s.id = ?
-    GROUP BY s.id
+    GROUP BY s.id, p.name
   `).get(sprintId);
 }
 
