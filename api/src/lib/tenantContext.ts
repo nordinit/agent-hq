@@ -3,6 +3,8 @@ import type { Request } from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { foreignKeysEnabled, withForeignKeysDisabled } from '../db/foreignKeyGuard';
+import { assertForeignKeyEnforcementEnabled } from '../db/startupVerifier';
 import { NODE_BIN_DIR } from '../config';
 import { seedTenantDefaultWorkflowEventMappings } from '../domains/routing/externalEventMappings';
 import { buildRuntimeConfigDefaults } from './runtimeOnboarding';
@@ -307,6 +309,11 @@ const WORKFLOW_DEFINITION_CONFIG_TABLES = [
 
 const ensuredTenantSchemaDbs = new WeakSet<Database.Database>();
 const verifiedTenantSchemaDbs = new WeakSet<Database.Database>();
+
+// Foreign-key enforcement helpers live in db/foreignKeyGuard.ts so that schema.ts,
+// this module and db/startupVerifier.ts can all share them without an import cycle.
+// Re-exported here because this is where migration code already reaches for them.
+export { foreignKeysEnabled, withForeignKeysDisabled };
 
 function tableExists(db: Database.Database, table: string): boolean {
   return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(table) as { name?: string } | undefined)?.name);
@@ -638,6 +645,23 @@ function assertNoNullTenantOwnership(db: Database.Database, table: string): void
   }
 }
 
+/**
+ * Tripwire run after tenant migrations finish. Any leaked `PRAGMA foreign_keys = OFF`
+ * — from these migrations or from schema init before them — is reported unmissably and
+ * force-restored, so deletes stop silently orphaning child rows.
+ *
+ * It deliberately does not throw: this also runs on the request path (every
+ * resolveTenantIdFromRequest call re-enters the migrations), and a loud, self-healed
+ * log is better than taking the API down. The strict, throwing assertion lives in
+ * verifyStartupSchemaCurrent().
+ */
+function assertForeignKeysStillEnforced(db: Database.Database): void {
+  assertForeignKeyEnforcementEnabled(db, 'tenant ownership migrations', {
+    throwOnViolation: false,
+    restore: true,
+  });
+}
+
 export function verifyTenantSchemaForStartup(db: Database.Database): number {
   if (verifiedTenantSchemaDbs.has(db)) return requireCurrentDefaultTenantId(db);
   const defaultTenantId = requireCurrentDefaultTenantId(db);
@@ -704,7 +728,6 @@ function ensureMcpServersTenantLocalSlugSchema(db: Database.Database, defaultTen
   if (!hasGlobalSlugUnique && hasTenantSlugUnique) return;
   if (!tableHasColumn(db, 'mcp_servers', 'id') || !tableHasColumn(db, 'mcp_servers', 'slug') || !tableHasColumn(db, 'mcp_servers', 'command')) return;
 
-  db.pragma('foreign_keys = OFF');
   const migrate = db.transaction(() => {
     db.exec(`DROP TABLE IF EXISTS mcp_servers_tenant_local`);
     db.exec(`
@@ -755,11 +778,8 @@ function ensureMcpServersTenantLocalSlugSchema(db: Database.Database, defaultTen
       CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled);
     `);
   });
-  try {
-    migrate();
-  } finally {
-    db.pragma('foreign_keys = ON');
-  }
+  // The pragma must be toggled outside db.transaction(): inside one it is a no-op.
+  withForeignKeysDisabled(db, migrate);
 }
 
 function tablePrimaryKeyColumns(db: Database.Database, table: string): string[] {
@@ -778,20 +798,22 @@ function rebuildSprintTypesForTenantLocalKeys(db: Database.Database, defaultTena
     ? `(SELECT s.tenant_id FROM sprints s WHERE s.sprint_type = sprint_types.key AND s.tenant_id IS NOT NULL ORDER BY s.tenant_id ASC LIMIT 1)`
     : 'NULL';
   if (hasTenantId && !(primaryKeyColumns.length === 1 && primaryKeyColumns[0] === 'key')) {
-    db.pragma('foreign_keys = OFF');
-    db.prepare(`
-      UPDATE sprint_types
-      SET tenant_id = COALESCE(${inferredTenantExpr}, ?)
-      WHERE tenant_id IS NULL
-    `).run(defaultTenantId);
-    db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key);
-      CREATE INDEX IF NOT EXISTS idx_sprint_types_system ON sprint_types(is_system);
-    `);
+    // This is the steady-state path: it runs on every ensureTenantSchema() call, which
+    // means on every request. It must never leave enforcement disabled behind it.
+    withForeignKeysDisabled(db, () => {
+      db.prepare(`
+        UPDATE sprint_types
+        SET tenant_id = COALESCE(${inferredTenantExpr}, ?)
+        WHERE tenant_id IS NULL
+      `).run(defaultTenantId);
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key);
+        CREATE INDEX IF NOT EXISTS idx_sprint_types_system ON sprint_types(is_system);
+      `);
+    });
     return;
   }
 
-  db.pragma('foreign_keys = OFF');
   const migrate = db.transaction(() => {
     db.exec(`
       CREATE TABLE sprint_types_tenant_local (
@@ -830,14 +852,18 @@ function rebuildSprintTypesForTenantLocalKeys(db: Database.Database, defaultTena
     db.exec(`DROP TABLE sprint_types`);
     db.exec(`ALTER TABLE sprint_types_tenant_local RENAME TO sprint_types`);
   });
-  migrate();
-  // Legacy routing tables still contain single-column REFERENCES sprint_types(key).
-  // The tenant-local parent key is now (tenant_id, key), so leave FK checks off
-  // until those older references are fully rebuilt into composite references.
-  db.exec(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key);
-    CREATE INDEX IF NOT EXISTS idx_sprint_types_system ON sprint_types(is_system);
-  `);
+  // Legacy routing tables could still contain single-column REFERENCES sprint_types(key)
+  // while the tenant-local parent key is (tenant_id, key), so FK checks stay off for the
+  // rebuild and the trailing compatibility DDL. Those legacy references are stripped by
+  // initSchema's rebuildWithoutSprintTypeKeyForeignKey pass; enforcement is restored to
+  // its prior state here regardless, because this connection is process-wide.
+  withForeignKeysDisabled(db, () => {
+    migrate();
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key);
+      CREATE INDEX IF NOT EXISTS idx_sprint_types_system ON sprint_types(is_system);
+    `);
+  });
 }
 
 function workflowConfigTableDefinition(table: string): string | null {
@@ -961,7 +987,6 @@ function migrateWorkflowConfigTable(db: Database.Database, table: string, defaul
   }
 
   const oldTable = `${table}_legacy_global`;
-  db.pragma('foreign_keys = OFF');
   const migrate = db.transaction(() => {
     db.exec(`ALTER TABLE ${table} RENAME TO ${oldTable}`);
     db.exec(`CREATE TABLE ${table} (${definition})`);
@@ -978,8 +1003,9 @@ function migrateWorkflowConfigTable(db: Database.Database, table: string, defaul
     `).run(defaultTenantId);
     db.exec(`DROP TABLE ${oldTable}`);
   });
-  migrate();
-  db.pragma('foreign_keys = OFF');
+  // Previously this restored 'OFF' instead of the prior value — a copy-paste bug that
+  // disabled enforcement for the rest of the process lifetime.
+  withForeignKeysDisabled(db, migrate);
 }
 
 function ensureWorkflowDefinitionConfigTenantScope(db: Database.Database, defaultTenantId: number): void {
@@ -1845,6 +1871,7 @@ export function repairTenantOwnershipForMigration(db: Database.Database): number
       ensureWorkflowDefinitionConfigTenantScope(db, defaultTenantId);
       backfillWorkflowDefinitionOwnership(db, defaultTenantId);
       repairTenantAgentHqMcpServersAndAssignments(db);
+      assertForeignKeysStillEnforced(db);
       return defaultTenantId;
     }
     ensuredTenantSchemaDbs.delete(db);
@@ -1907,6 +1934,7 @@ export function repairTenantOwnershipForMigration(db: Database.Database): number
 
   ensuredTenantSchemaDbs.add(db);
   verifiedTenantSchemaDbs.delete(db);
+  assertForeignKeysStillEnforced(db);
   return defaultTenant.id;
 }
 

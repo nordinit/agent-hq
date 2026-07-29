@@ -41,6 +41,17 @@ export function getDbPath(): string {
   return resolveDbPath();
 }
 
+/**
+ * NOTE: foreign-key enforcement helpers deliberately do NOT live here.
+ *
+ * The connection opened above is a process-wide singleton, so a leaked
+ * `PRAGMA foreign_keys = OFF` disables ON DELETE CASCADE for every later query in
+ * the process. Migrations must therefore toggle the pragma through
+ * withForeignKeysDisabled(), which lives in src/lib/tenantContext.ts because many
+ * test suites replace this module with a partial jest.mock({ getDb }) — importing a
+ * helper from here would resolve to undefined in those suites.
+ */
+
 export function closeDb(): void {
   if (_db) {
     _db.close();
