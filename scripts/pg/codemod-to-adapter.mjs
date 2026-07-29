@@ -39,7 +39,23 @@ const project = new Project({ tsConfigFilePath: path.resolve('api/tsconfig.json'
 const repoRoot = path.resolve('.');
 const rel = (f) => f.getFilePath().replace(`${repoRoot}/`, '');
 
-const allFiles = project.getSourceFiles().filter((f) => !f.getFilePath().includes('/node_modules/'));
+/**
+ * Files the codemod must never touch.
+ *
+ * The adapter is the ONE place that legitimately speaks better-sqlite3 directly — it is
+ * the implementation of the interface everything else migrates onto. Rewriting its own
+ * `Database.Database` field to `Db` makes it circular and its call sites nonsensical.
+ * foreignKeyGuard and client.ts likewise own the raw connection and its pragmas.
+ */
+const EXCLUDED = [
+  '/src/db/adapter/',
+  '/src/db/client.ts',
+  '/src/db/foreignKeyGuard.ts',
+];
+
+const allFiles = project.getSourceFiles()
+  .filter((f) => !f.getFilePath().includes('/node_modules/'))
+  .filter((f) => !EXCLUDED.some((e) => f.getFilePath().includes(e)));
 // --only scopes which files are REWRITTEN. Propagation must still scan the whole program:
 // making a function async changes its contract for every caller everywhere, and a scoped
 // propagation would leave those callers silently dropping a Promise.
@@ -181,6 +197,54 @@ for (const file of files) {
   if (changed) report.filesChanged.add(rel(file));
 }
 
+// ---- pass 1b: retype the handle ------------------------------------------------------
+// The rewritten call sites are meaningless while the handle is still typed
+// Database.Database: better-sqlite3's type has no get(sql, ...) member, so every one of
+// them would be a compile error. Every annotation naming the concrete driver becomes the
+// Db interface, and the driver import is dropped where nothing else needs it.
+report.typesRetyped = 0;
+report.importsRewritten = 0;
+
+for (const file of files) {
+  let changed = false;
+
+  for (const ref of file.getDescendantsOfKind(SyntaxKind.TypeReference)) {
+    if (ref.wasForgotten()) continue;
+    const text = ref.getText();
+    if (text !== 'Database.Database' && text !== 'BetterSqlite3.Database') continue;
+    ref.replaceWithText('Db');
+    report.typesRetyped++;
+    changed = true;
+  }
+
+  if (!changed) continue;
+
+  // Drop the driver import only when nothing else in the file still needs it: schema.ts
+  // and its neighbours legitimately keep using the concrete driver for PRAGMA and
+  // introspection, which the Db interface deliberately does not expose.
+  const sqliteImport = file.getImportDeclaration((d) => d.getModuleSpecifierValue() === 'better-sqlite3');
+  if (sqliteImport) {
+    const stillUsedAsType = file.getDescendantsOfKind(SyntaxKind.TypeReference)
+      .some((r) => !r.wasForgotten() && /^Database\./.test(r.getText()));
+    const usedAsValue = file.getDescendantsOfKind(SyntaxKind.NewExpression)
+      .some((n) => !n.wasForgotten() && n.getExpression().getText() === 'Database');
+    if (!stillUsedAsType && !usedAsValue) {
+      sqliteImport.remove();
+      report.importsRewritten++;
+    }
+  }
+
+  const adapterPath = path.relative(
+    path.dirname(file.getFilePath()),
+    path.resolve('api/src/db/adapter/types')
+  );
+  const spec = adapterPath.startsWith('.') ? adapterPath : `./${adapterPath}`;
+  if (!file.getImportDeclaration((d) => d.getModuleSpecifierValue() === spec)) {
+    file.addImportDeclaration({ moduleSpecifier: spec, namedImports: [{ name: 'Db', isTypeOnly: true }] });
+  }
+  report.filesChanged.add(rel(file));
+}
+
 // ---- pass 2: propagate async to callers, to a fixpoint --------------------------------
 // A function that became async returns a Promise, so every call to it must be awaited and
 // every function containing such a call must itself become async. Repeat until stable.
@@ -249,6 +313,8 @@ for (const [k, v] of Object.entries(report.byKind).sort((a, b) => b[1] - a[1])) 
 }
 console.log(`functions made async : ${report.functionsMadeAsync}`);
 console.log(`awaits added to calls: ${report.awaitsAdded}   (propagation converged in ${iterations} pass(es))`);
+console.log(`handle types retyped : ${report.typesRetyped}   (Database.Database -> Db)`);
+console.log(`driver imports removed: ${report.importsRewritten}`);
 console.log(`files changed        : ${report.filesChanged.size}`);
 console.log('');
 console.log(`SKIPPED, needs manual work:`);
