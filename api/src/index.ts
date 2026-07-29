@@ -9,7 +9,7 @@ if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
 import express, { type Request } from 'express';
 import cors from 'cors';
 import { getDb } from './db/client';
-import { verifyStartupSchemaCurrent } from './db/startupVerifier';
+import { verifyStartupSchema } from './db/startupVerifier';
 import tasksRouter from './domains/tasks';
 import routingRouter, { dispatchRouter, modelRoutingRouter } from './domains/routing';
 import agentsRouter from './routes/agents';
@@ -557,7 +557,12 @@ app.get('/api/v1/stats', async (req, res) => {
 });
 
 // Verify DB schema and start. Startup must not run schema/data migrations.
-verifyStartupSchemaCurrent();
+// Engine-aware and non-mutating: verifies the schema matches the repository and refuses
+// to start if it does not. It never migrates — see verifyStartupSchema().
+void verifyStartupSchema().catch((err) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});
 
 const automationDisabled = process.env.AGENT_HQ_DISABLE_AUTOMATION === '1';
 if (automationDisabled) {
