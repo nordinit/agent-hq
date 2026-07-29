@@ -11,6 +11,7 @@ jest.mock('../db/client', () => ({
 
 import instancesRouter from './instances';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function getJson(app: express.Express, route: string): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -81,7 +82,7 @@ async function setupDb(): Promise<void> {
 
 describe('GET /api/v1/instances', () => {
   beforeEach(async () => {
-    db = new Database(':memory:');
+    db = new SqliteAdapter(new Database(':memory:'));
     await setupDb();
     await db.run(`INSERT INTO agents (id, name, job_title, session_key) VALUES (1, 'Cinder', 'Backend', 'agent:cinder:main')`);
     await db.run(`INSERT INTO agents (id, name, job_title, session_key) VALUES (2, 'Atlas', 'Assistant', 'agent:atlas:main')`);

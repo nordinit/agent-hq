@@ -27,6 +27,7 @@ import sessionsRouter from './sessions';
 import telemetryRouter from './telemetry';
 import { insertRuntimeLog } from '../lib/runtimeTenantScope';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function requestJson(app: express.Express, route: string, init?: RequestInit): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -269,7 +270,7 @@ function buildApp(): express.Express {
 
 describe('runtime tenant scope', () => {
   beforeEach(async () => {
-    db = new Database(':memory:');
+    db = new SqliteAdapter(new Database(':memory:'));
     await setupDb();
   });
 

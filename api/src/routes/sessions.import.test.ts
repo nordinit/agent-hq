@@ -31,6 +31,7 @@ jest.mock('../domains/runs/transcriptProvider', () => ({
 
 import sessionsRouter from './sessions';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function postJson(app: express.Express, route: string): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -132,7 +133,7 @@ async function setupDb(): Promise<void> {
 
 describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
   beforeEach(async () => {
-    db = new Database(':memory:');
+    db = new SqliteAdapter(new Database(':memory:'));
     mockTranscriptMessages = [];
     await setupDb();
   });

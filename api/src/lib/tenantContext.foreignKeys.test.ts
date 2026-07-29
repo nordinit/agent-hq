@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3';
+import { SqliteAdapter } from '../db/adapter/SqliteAdapter';
+import type { Db } from '../db/adapter/types';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import { ensureTenantSchema, foreignKeysEnabled, withForeignKeysDisabled } from './tenantContext';
-import { type Db } from "../db/adapter/types";
 
 /**
  * Regression guard for the foreign-key enforcement leak.
@@ -12,7 +13,8 @@ import { type Db } from "../db/adapter/types";
  * for the rest of the process, silently orphaning task_history / task_notes rows.
  */
 
-let db: Db;
+let db: Database.Database;
+let dbA: Db;
 let errorSpy: ReturnType<typeof jest.spyOn>;
 
 const fkState = (): number => Number(db.pragma('foreign_keys', { simple: true }));
@@ -29,6 +31,7 @@ const expectDisableTookEffect = (): void => {
 
 beforeEach(() => {
   db = new Database(':memory:');
+  dbA = new SqliteAdapter(db);
   // Mirror db/client.ts: the real connection is opened with enforcement ON.
   db.pragma('foreign_keys = ON');
   errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -41,7 +44,7 @@ afterEach(() => {
 
 /** tasks + a CASCADE child, the shape that is losing rows in production. */
 async function seedOperationalTables(): Promise<void> {
-  await db.exec(`
+  await dbA.exec(`
     CREATE TABLE tasks (id INTEGER PRIMARY KEY, tenant_id INTEGER);
     CREATE TABLE task_history (
       id        INTEGER PRIMARY KEY,
@@ -56,7 +59,7 @@ async function seedOperationalTables(): Promise<void> {
 
 /** Steady-state production shape: sprint_types already tenant scoped with a surrogate PK. */
 async function seedTenantScopedSprintTypes(): Promise<void> {
-  await db.exec(`
+  await dbA.exec(`
     CREATE TABLE sprint_types (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id        INTEGER,
@@ -74,7 +77,7 @@ async function seedTenantScopedSprintTypes(): Promise<void> {
 
 /** Legacy shape: sprint_types keyed globally by key, forcing the table rebuild path. */
 async function seedLegacySprintTypes(): Promise<void> {
-  await db.exec(`
+  await dbA.exec(`
     CREATE TABLE sprint_types (
       key  TEXT PRIMARY KEY,
       name TEXT NOT NULL
@@ -85,7 +88,7 @@ async function seedLegacySprintTypes(): Promise<void> {
 
 /** Legacy global workflow config table, forcing migrateWorkflowConfigTable's rebuild. */
 async function seedLegacyWorkflowConfigTable(): Promise<void> {
-  await db.exec(`
+  await dbA.exec(`
     CREATE TABLE task_field_schemas (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       sprint_type_key TEXT NOT NULL,
@@ -98,7 +101,7 @@ async function seedLegacyWorkflowConfigTable(): Promise<void> {
 
 /** Legacy globally-unique MCP server slugs, forcing the mcp_servers rebuild. */
 async function seedLegacyMcpServers(): Promise<void> {
-  await db.exec(`
+  await dbA.exec(`
     CREATE TABLE mcp_servers (
       id      INTEGER PRIMARY KEY AUTOINCREMENT,
       name    TEXT NOT NULL,
@@ -150,7 +153,7 @@ describe('tenant migrations preserve foreign key enforcement', () => {
     await seedOperationalTables();
     await seedTenantScopedSprintTypes();
 
-    await ensureTenantSchema(db);
+    await ensureTenantSchema(dbA);
 
     expect(fkState()).toBe(1);
     expectDisableTookEffect();
@@ -160,7 +163,7 @@ describe('tenant migrations preserve foreign key enforcement', () => {
     await seedOperationalTables();
     await seedLegacySprintTypes();
 
-    await ensureTenantSchema(db);
+    await ensureTenantSchema(dbA);
 
     expect(fkState()).toBe(1);
     expectDisableTookEffect();
@@ -171,7 +174,7 @@ describe('tenant migrations preserve foreign key enforcement', () => {
     await seedTenantScopedSprintTypes();
     await seedLegacyWorkflowConfigTable();
 
-    await ensureTenantSchema(db);
+    await ensureTenantSchema(dbA);
 
     expect(fkState()).toBe(1);
     expectDisableTookEffect();
@@ -181,7 +184,7 @@ describe('tenant migrations preserve foreign key enforcement', () => {
     await seedOperationalTables();
     await seedLegacyMcpServers();
 
-    await ensureTenantSchema(db);
+    await ensureTenantSchema(dbA);
 
     expect(fkState()).toBe(1);
     expectDisableTookEffect();
@@ -193,7 +196,7 @@ describe('tenant migrations preserve foreign key enforcement', () => {
     await seedLegacyWorkflowConfigTable();
 
     for (let i = 0; i < 3; i += 1) {
-      await ensureTenantSchema(db);
+      await ensureTenantSchema(dbA);
       expect(fkState()).toBe(1);
     }
   });
@@ -202,10 +205,10 @@ describe('tenant migrations preserve foreign key enforcement', () => {
     await seedOperationalTables();
     await seedTenantScopedSprintTypes();
 
-    await ensureTenantSchema(db);
-    await db.run(`DELETE FROM tasks WHERE id = 1`);
+    await ensureTenantSchema(dbA);
+    await dbA.run(`DELETE FROM tasks WHERE id = 1`);
 
-    const orphans = await db.get(`SELECT COUNT(*) AS n FROM task_history WHERE task_id = 1`) as { n: number };
+    const orphans = await dbA.get(`SELECT COUNT(*) AS n FROM task_history WHERE task_id = 1`) as { n: number };
     expect(orphans.n).toBe(0);
   });
 
@@ -214,7 +217,7 @@ describe('tenant migrations preserve foreign key enforcement', () => {
     await seedTenantScopedSprintTypes();
     db.pragma('foreign_keys = OFF');
 
-    await ensureTenantSchema(db);
+    await ensureTenantSchema(dbA);
 
     expect(fkState()).toBe(1);
     expect(loggedErrors()).toContain('FATAL DATA INTEGRITY DEFECT');

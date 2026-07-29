@@ -207,7 +207,7 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
         'active', 'Fix live transcript handoff after Task #719', '2026-06-03T02:00:02.000Z', 0
       )
     `);
-    const insertChat = db.prepare(`
+    const insertChat = (db as unknown as { raw: import('better-sqlite3').Database }).raw.prepare(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, 94, 4692, 'agent:cinder-backend:run:4692:durable-4692', ?, ?, ?, ?, ?)
     `);

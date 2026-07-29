@@ -98,9 +98,10 @@ jest.mock('ws', () => {
 
 import { getActiveCaptureCount, startTranscriptCapture, stopTranscriptCapture } from './gatewayTranscriptCapture';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function setupDb(): Promise<void> {
-  db = new Database(':memory:');
+  db = new SqliteAdapter(new Database(':memory:'));
   await db.exec(`
     CREATE TABLE job_instances (
       id INTEGER PRIMARY KEY,

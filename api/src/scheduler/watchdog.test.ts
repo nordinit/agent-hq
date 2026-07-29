@@ -638,7 +638,7 @@ describe('watchdog worktree pruning notifications', () => {
       )
       VALUES (94, 2, 200, 'Cinder', '/workspace/cinder', '/repo/from-agent', 'worktree')
     `);
-    jest.mocked(pruneOrphanedWorktrees).mockReturnValue({
+    jest.mocked(pruneOrphanedWorktrees).mockResolvedValue({
       pruned: ['/workspace/cinder/task-776'],
       errors: [],
     });

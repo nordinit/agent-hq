@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from './client';
+import { closeDb, getDb, getRawDb } from './client';
 import { initSchema } from './schema';
 import { bootstrapRoutingAndWorkflowDefaults } from './bootstrapDefaults';
 
@@ -9,7 +9,7 @@ let tempDir = '';
 let originalDbPath: string | undefined;
 
 function rows(sql: string): unknown[] {
-  return getDb().prepare(sql).all() as unknown[];
+  return getRawDb().prepare(sql).all() as unknown[];
 }
 
 describe('API startup routing metadata and workflow-event defaults', () => {

@@ -97,6 +97,7 @@ jest.mock('ws', () => ({
 
 import { setupChatProxy } from './chat';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 class MockClientSocket {
   readyState = MockGatewaySocket.OPEN;
@@ -128,7 +129,7 @@ class MockClientSocket {
 }
 
 async function setupDb(): Promise<void> {
-  db = new Database(':memory:');
+  db = new SqliteAdapter(new Database(':memory:'));
   await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,

@@ -9,6 +9,7 @@ jest.mock('../../db/client', () => ({
 
 import { resolveSessionContext } from './sessionContext';
 import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 async function setupDb(): Promise<void> {
   await db.exec(`
@@ -38,7 +39,7 @@ async function setupDb(): Promise<void> {
 
 describe('resolveSessionContext', () => {
   beforeEach(async () => {
-    db = new Database(':memory:');
+    db = new SqliteAdapter(new Database(':memory:'));
     await setupDb();
   });
 

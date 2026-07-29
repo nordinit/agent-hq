@@ -1,12 +1,13 @@
 import Database from 'better-sqlite3';
 import { listRecentlyCompletedTasks } from './readModel';
 import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 describe('listRecentlyCompletedTasks tenant isolation', () => {
   let db: Db;
 
   beforeEach(async () => {
-    db = new Database(':memory:');
+    db = new SqliteAdapter(new Database(':memory:'));
     await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,

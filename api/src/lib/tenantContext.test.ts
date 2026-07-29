@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 
 import { deleteTenant, ensureTenantSchema, verifyTenantSchemaForStartup } from './tenantContext';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 let db: Db;
 
 beforeEach(async () => {
-  db = new Database(':memory:');
+  db = new SqliteAdapter(new Database(':memory:'));
   // Minimal operational tables the backfill touches. tasks already carries tenant_id;
   // job_instances starts without it so ensureTenantSchema must add + backfill it.
   await db.exec(`

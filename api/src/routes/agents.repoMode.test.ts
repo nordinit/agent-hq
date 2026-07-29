@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 describe('agents repo source mode defaults', () => {
   let db: Db;
@@ -7,7 +8,7 @@ describe('agents repo source mode defaults', () => {
   beforeEach(async () => {
     jest.resetModules();
     process.env.AGENT_HQ_DB_PATH = ':memory:';
-    db = new Database(':memory:');
+    db = new SqliteAdapter(new Database(':memory:'));
     await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

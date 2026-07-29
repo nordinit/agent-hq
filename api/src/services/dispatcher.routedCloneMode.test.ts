@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../runtimes', () => ({
   resolveRuntime: jest.fn(() => ({
@@ -65,7 +66,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: seedPath, stdio: 'ignore' });
     execFileSync('git', ['push', 'origin', 'main'], { cwd: seedPath, stdio: 'ignore' });
 
-    db = new Database(':memory:');
+    db = new SqliteAdapter(new Database(':memory:'));
     await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,

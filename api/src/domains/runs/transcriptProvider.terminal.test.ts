@@ -21,6 +21,7 @@ jest.mock('./openclawJsonlBackfill', () => ({
 
 import { OpenClawTranscriptProvider } from './transcriptProvider';
 import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 async function setupSchema(): Promise<void> {
   await db.exec(`
@@ -38,7 +39,7 @@ async function setupSchema(): Promise<void> {
 }
 
 beforeEach(async () => {
-  db = new Database(':memory:');
+  db = new SqliteAdapter(new Database(':memory:'));
   await setupSchema();
   mockGatewayGetHistory.mockReset();
 });

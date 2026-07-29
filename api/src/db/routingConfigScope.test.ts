@@ -286,10 +286,9 @@ describe('routing_config scoped ownership schema migration', () => {
     db.close();
     closeDb();
 
-    const migratedDbRawRaw = new Database(getDbPath());
-      const migratedDbRaw = new SqliteAdapter(migratedDbRawRaw);
-      const migratedDb = new SqliteAdapter(migratedDbRaw);
-    migratedDbRawRaw.pragma('foreign_keys = ON');
+    const migratedDbRaw = new Database(getDbPath());
+    const migratedDb = new SqliteAdapter(migratedDbRaw);
+    migratedDbRaw.pragma('foreign_keys = ON');
     const ddlBefore = await migratedDb.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_routing_rules'`) as { sql: string };
     expect(/sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(ddlBefore.sql)).toBe(true);
 
@@ -334,7 +333,7 @@ describe('routing_config scoped ownership schema migration', () => {
       status: 'todo',
       agent_id: 94,
     });
-    migratedDbRawRaw.close();
+    migratedDbRaw.close();
   });
 
   it('allows multiple routing candidates per scope while preserving exact candidate uniqueness', async () => {

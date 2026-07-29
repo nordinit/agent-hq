@@ -2156,7 +2156,7 @@ describe('routing rules API', () => {
         }),
       ]));
 
-      const statusesBody = policy.listSprintTypeTaskStatuses(db, 'dev') as Array<{ name: string; allowed_transitions: string[] }>;
+      const statusesBody = await policy.listSprintTypeTaskStatuses(db, 'dev') as Array<{ name: string; allowed_transitions: string[] }>;
       expect(statusesBody.map((status) => status.name)).not.toContain('dispatched');
       expect(statusesBody.find((status) => status.name === 'ready')).toEqual(expect.objectContaining({
         allowed_transitions: expect.not.arrayContaining(['dispatched']),

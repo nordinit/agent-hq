@@ -528,7 +528,7 @@ describe('tenant workspace isolation', () => {
 
       const db = getDb();
       const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 LIMIT 1`) as { id: number };
-      const insertStatus = db.prepare(`
+      const insertStatus = (db as unknown as { raw: import('better-sqlite3').Database }).raw.prepare(`
         INSERT OR IGNORE INTO sprint_type_task_statuses (
           tenant_id, sprint_type_key, status_key, label, color, terminal, is_system,
           allowed_transitions_json, stage_order, is_default_entry, metadata_json,
