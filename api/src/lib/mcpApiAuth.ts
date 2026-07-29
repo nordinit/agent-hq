@@ -454,6 +454,41 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'recurring_task_series.read_project_scope',
+    group: 'Recurring tasks',
+    label: 'Read project recurring task series',
+    description: 'Allows read-only access to recurring task series, their generated-run history, and schedule previews only inside the MCP agent\'s assigned project and tenant. Schedule previews are non-mutating. Does not allow creating, editing, enabling, disabling, running, or deleting series, and does not allow tenant-wide, cross-project, or cross-tenant reads.',
+    endpoints: [
+      'GET /api/v1/recurring-task-series',
+      'GET /api/v1/recurring-task-series/:id',
+      'GET /api/v1/recurring-task-series/:id/history',
+      'POST /api/v1/recurring-task-series/preview',
+      'POST /api/v1/recurring-task-series/:id/preview',
+    ],
+    defaultEnabled: {
+      scoped_runtime: true,
+      trusted_admin: true,
+    },
+  },
+  {
+    key: 'recurring_task_series.manage_project_scope',
+    group: 'Recurring tasks',
+    label: 'Manage project recurring task series',
+    description: 'Allows creating, updating, enabling, disabling, running now, and deleting recurring task series only inside the MCP agent\'s assigned project and tenant. Running a series generates real tasks, so this is a write capability. Does not allow cross-project edits, cross-tenant edits, or unrelated admin routes.',
+    endpoints: [
+      'POST /api/v1/recurring-task-series',
+      'PUT /api/v1/recurring-task-series/:id',
+      'POST /api/v1/recurring-task-series/:id/enable',
+      'POST /api/v1/recurring-task-series/:id/disable',
+      'POST /api/v1/recurring-task-series/:id/run-now',
+      'DELETE /api/v1/recurring-task-series/:id',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'transition_requirements.manage_project_scope',
     group: 'Workflow',
     label: 'Project transition requirement CRUD',
@@ -1468,6 +1503,22 @@ function getWorkflowDefinitionScopeFromRequest(input: Record<string, unknown>): 
   };
 }
 
+/**
+ * Resolve the owning project for an existing recurring task series. Returns
+ * null when the series does not exist, which callers treat as out of scope so
+ * a missing series can never be reached through a project-scoped key.
+ */
+function getRecurringTaskSeriesProjectId(db: Database.Database, seriesId: number): number | null {
+  try {
+    const row = db.prepare(`SELECT project_id FROM recurring_task_series WHERE id = ?`).get(seriesId) as
+      { project_id: number | null } | undefined;
+    const projectId = Number(row?.project_id);
+    return Number.isInteger(projectId) && projectId > 0 ? projectId : null;
+  } catch {
+    return null;
+  }
+}
+
 function workflowDefinitionScopeMatchesAssignedProject(scope: WorkflowDefinitionScopeContext | null, canonicalAgentProjectId: number | null): boolean {
   return canonicalAgentProjectId != null
     && scope?.projectId != null
@@ -2375,6 +2426,59 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       reason: `Normal Agent HQ MCP keys can only read workflow configuration scoped to the active task's sprint and project.`,
       requiredCapability: 'workflow.read_active_configuration',
     });
+  }
+
+  const recurringTaskSeriesMatch = requestPath.match(/^\/recurring-task-series(?:\/(preview|\d+)(?:\/(history|preview|enable|disable|run-now))?)?$/);
+  if (recurringTaskSeriesMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
+    const idSegment = recurringTaskSeriesMatch[1] ?? null;
+    const subResource = recurringTaskSeriesMatch[2] ?? null;
+    const seriesId = idSegment && idSegment !== 'preview' ? Number(idSegment) : null;
+    // Schedule previews are non-mutating even though they are POSTed, so they
+    // sit with reads. Everything else that is not a GET mutates series state or
+    // generates real tasks (run-now) and requires the manage capability.
+    const isPreview = idSegment === 'preview' || subResource === 'preview';
+    const requiredCapability: AgentMcpCapabilityKey = method === 'GET' || isPreview
+      ? 'recurring_task_series.read_project_scope'
+      : 'recurring_task_series.manage_project_scope';
+    if (!requireCapability(
+      requiredCapability,
+      `Project-scoped recurring task series ${requiredCapability.endsWith('read_project_scope') ? 'reads are' : 'management is'} disabled for ${identity.agentSlug}.`,
+    )) return;
+
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for recurring task series access.`,
+        requiredCapability,
+      });
+    }
+
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? req.body as Record<string, unknown>
+      : {};
+    // For an existing series the authoritative scope is the stored project, not
+    // anything the caller supplied. For list/create the caller must name the
+    // project explicitly so a scoped key can never enumerate other projects.
+    const scopedProjectId = seriesId != null
+      ? getRecurringTaskSeriesProjectId(db, seriesId)
+      : parsePositiveInt(body.project_id ?? req.query.project_id);
+
+    if (scopedProjectId == null) {
+      return deny({
+        reason: seriesId != null
+          ? `Recurring task series ${seriesId} is not visible to ${identity.agentSlug}.`
+          : `Normal Agent HQ MCP keys must supply an explicit project_id scoped to the assigned project for recurring task series access.`,
+        requiredCapability,
+      });
+    }
+
+    if (scopedProjectId !== canonicalAgentProjectId) {
+      return deny({
+        reason: `Normal Agent HQ MCP keys can only access recurring task series inside the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    return next();
   }
 
   return deny({

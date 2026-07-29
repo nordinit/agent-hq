@@ -971,6 +971,143 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
   });
 
+  function seedRecurringTaskSeries(seriesId: number, projectId: number, sprintId: number): void {
+    const db = getDb();
+    // The auth fixture does not build this table, and the gate only reads
+    // project_id, so a minimal shape without foreign keys is enough here and
+    // lets the cross-project case use a project id the fixture never created.
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS recurring_task_series (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        sprint_id INTEGER NOT NULL,
+        title_template TEXT NOT NULL,
+        description_template TEXT NOT NULL DEFAULT '',
+        task_type TEXT NOT NULL,
+        priority TEXT NOT NULL DEFAULT 'medium',
+        story_points INTEGER NOT NULL,
+        status_on_create TEXT NOT NULL,
+        schedule_expression TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        next_run_at TEXT,
+        last_run_at TEXT,
+        overlap_policy TEXT NOT NULL DEFAULT 'skip_if_active',
+        agent_id INTEGER,
+        created_by TEXT NOT NULL DEFAULT 'system',
+        updated_by TEXT NOT NULL DEFAULT 'system',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        tenant_id INTEGER
+      )
+    `).run();
+    db.prepare(`
+      INSERT OR REPLACE INTO recurring_task_series (
+        id, project_id, sprint_id, title_template, description_template, task_type,
+        priority, story_points, status_on_create, schedule_expression, timezone,
+        enabled, overlap_policy, created_by, updated_by, created_at, updated_at
+      ) VALUES (?, ?, ?, 'Series', 'Series body', 'ops', 'high', 2, 'ready',
+        'every monday 09:00', 'America/New_York', 0, 'skip_if_active', 'test', 'test',
+        '2026-07-01 00:00:00', '2026-07-01 00:00:00')
+    `).run(seriesId, projectId, sprintId);
+  }
+
+  it('allows project-scoped recurring task series reads and management with explicit capabilities', async () => {
+    seedRecurringTaskSeries(9001, 86, 42);
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'recurring_task_series.read_project_scope',
+      'recurring_task_series.manage_project_scope',
+    ]);
+
+    // These assert the authorization boundary only. The auth fixture does not
+    // stand up the recurring-series service, so an authorized request may still
+    // 404 at the handler; what matters is that it is never refused with 403.
+    const listRes = await fetch(`${baseUrl}/api/v1/recurring-task-series?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(listRes.status).not.toBe(403);
+
+    const getRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9001`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(getRes.status).not.toBe(403);
+
+    const historyRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9001/history`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(historyRes.status).not.toBe(403);
+
+    const disableRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9001/disable`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+    });
+    expect(disableRes.status).not.toBe(403);
+  });
+
+  it('denies recurring task series access without the matching capability', async () => {
+    seedRecurringTaskSeries(9002, 86, 42);
+    // Read capability only: reads pass, management must still be refused.
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'recurring_task_series.read_project_scope',
+    ]);
+
+    const getRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9002`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(getRes.status).not.toBe(403);
+
+    const enableRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9002/enable`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+    });
+    expect(enableRes.status).toBe(403);
+
+    const runNowRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9002/run-now`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+    });
+    expect(runNowRes.status).toBe(403);
+
+    // No recurring capabilities at all: even reads are refused.
+    replaceAgentMcpPermissionPolicy(getDb(), 7, ['discovery.read_catalog']);
+    const deniedReadRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9002`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(deniedReadRes.status).toBe(403);
+  });
+
+  it('denies recurring task series outside the assigned project and for unknown series', async () => {
+    seedRecurringTaskSeries(9003, 999, 42);
+    replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'recurring_task_series.read_project_scope',
+      'recurring_task_series.manage_project_scope',
+    ]);
+
+    const crossProjectRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9003`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(crossProjectRes.status).toBe(403);
+
+    const crossProjectListRes = await fetch(`${baseUrl}/api/v1/recurring-task-series?project_id=999`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(crossProjectListRes.status).toBe(403);
+
+    // An unscoped list would otherwise enumerate every project.
+    const unscopedListRes = await fetch(`${baseUrl}/api/v1/recurring-task-series`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(unscopedListRes.status).toBe(403);
+
+    const missingSeriesRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/987654`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(missingSeriesRes.status).toBe(403);
+  });
+
   it('refuses unrelated task access and admin-style writes for normal task-agent keys', async () => {
     const createTaskRes = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
