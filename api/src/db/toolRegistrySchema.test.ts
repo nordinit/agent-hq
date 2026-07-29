@@ -99,10 +99,16 @@ describe('ensureToolRegistryTables', () => {
       INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body)
       VALUES (8, 'Tenant Bash', 'bash', 'bash', 'echo tenant')
     `))();
+    // Asserted on the rejection VALUE, not .rejects.toThrow(). better-sqlite3 is a native
+    // addon: a SqliteError raised from the SECOND test file loaded in a jest worker fails
+    // `instanceof Error`, because the addon keeps the constructor registered by the FIRST
+    // module-registry load. jest's toThrow only inspects the rejection once it classifies it
+    // as an Error, so otherwise it reports "did not throw" despite a correct rejection —
+    // making the assertion depend on file order. Matching the message is realm-independent.
     await expect((async () => await getDb().run(`
       INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body)
       VALUES (8, 'Duplicate Tenant Bash', 'bash', 'bash', 'echo duplicate')
-    `))()).rejects.toThrow(/UNIQUE constraint failed/);
+    `))()).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
   });
 
   it('removes stale cross-tenant tool assignments during registry repair', async () => {

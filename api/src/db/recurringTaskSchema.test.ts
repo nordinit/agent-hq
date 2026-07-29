@@ -140,12 +140,22 @@ describe('recurring task scheduling schema', () => {
           idempotency_key: `${series.id}:${scheduledFor}`,
         });
 
+    // Asserted on the rejection VALUE. A bare .rejects.toThrow() is order-dependent here:
+
+    // better-sqlite3 is a native addon, and a SqliteError raised from the second test file
+
+    // loaded in a jest worker fails `instanceof Error` (the addon keeps the constructor from
+
+    // the first module-registry load), so toThrow cannot classify it and reports "did not
+
+    // throw" despite a correct rejection.
+
     await expect((async () => await recordRecurringTaskRun(db, {
                 series_id: series.id,
                 scheduled_for: scheduledFor,
                 status: 'started',
                 idempotency_key: `${series.id}:${scheduledFor}:duplicate-worker`,
-              }))()).rejects.toThrow();
+              }))()).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
 
     await createTaskRecord(db, {
             title: 'Daily QA sweep',
@@ -160,6 +170,16 @@ describe('recurring task scheduling schema', () => {
             generated_from: 'recurring_task_series',
           }, 'scheduler');
 
+    // Asserted on the rejection VALUE. A bare .rejects.toThrow() is order-dependent here:
+
+    // better-sqlite3 is a native addon, and a SqliteError raised from the second test file
+
+    // loaded in a jest worker fails `instanceof Error` (the addon keeps the constructor from
+
+    // the first module-registry load), so toThrow cannot classify it and reports "did not
+
+    // throw" despite a correct rejection.
+
     await expect((async () => await createTaskRecord(db, {
                 title: 'Daily QA sweep duplicate',
                 status: 'in_progress',
@@ -171,7 +191,7 @@ describe('recurring task scheduling schema', () => {
                 scheduled_for: scheduledFor,
                 schedule_run_id: run.id,
                 generated_from: 'recurring_task_series',
-              }, 'scheduler'))()).rejects.toThrow();
+              }, 'scheduler'))()).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
   });
 
   it('creates lookup indexes for due series, run history, and generated tasks', async () => {

@@ -489,9 +489,14 @@ describe('sprint field schema migration', () => {
     expect(customRow).toEqual({ name: 'Custom Tenant', is_system: 0 });
     expect(tenantKeyIndex?.unique).toBe(1);
     expect(tenantColumn?.notnull).toBe(1);
+    // Asserted on the rejection VALUE. A bare .rejects.toThrow() is order-dependent here:
+    // better-sqlite3 is a native addon, and a SqliteError raised from the second test file
+    // loaded in a jest worker fails `instanceof Error` (the addon keeps the constructor from
+    // the first module-registry load), so toThrow cannot classify it and reports "did not
+    // throw" despite a correct rejection.
     await expect((async () => {
             await db.run(`INSERT INTO sprint_types (key, name, description, is_system) VALUES ('custom_dupe', 'Duplicate', '', 0)`);
-          })()).rejects.toThrow();
+          })()).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
   });
 
   it('removes stale sprint type key foreign keys when sprint types are tenant-scoped', async () => {
