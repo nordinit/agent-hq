@@ -224,6 +224,19 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'tasks.write_active_custom_fields',
+    group: 'Task lifecycle',
+    label: 'Update own active task custom fields',
+    description: 'Allows an agent that owns the active dispatched run to persist supported custom fields on that task, and nothing else. The request body may carry only custom_fields (plus changed_by); any attempt to change status, title, assignment, or other task columns is refused. Workflow field-schema validation, tenant scope, and audit history still apply. Does not allow edits to any other task, cross-project or cross-tenant writes, or the broad project task management routes.',
+    endpoints: [
+      'PUT /api/v1/tasks/:id',
+    ],
+    defaultEnabled: {
+      scoped_runtime: true,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'tasks.write_active_lifecycle',
     group: 'Task lifecycle',
     label: 'Write active task lifecycle',
@@ -1508,6 +1521,22 @@ function getWorkflowDefinitionScopeFromRequest(input: Record<string, unknown>): 
  * null when the series does not exist, which callers treat as out of scope so
  * a missing series can never be reached through a project-scoped key.
  */
+/**
+ * True when a task update carries only supported custom fields. This is what
+ * separates "an agent recording its own run evidence" from a general task
+ * edit: anything that would move status, reassign, retitle, or otherwise
+ * change task columns falls outside the narrow active-task write capability
+ * and still requires the broad project task management grant.
+ */
+const ACTIVE_CUSTOM_FIELD_WRITE_ALLOWED_BODY_KEYS = new Set(['custom_fields', 'changed_by']);
+
+function isActiveCustomFieldsOnlyUpdate(body: Record<string, unknown>): boolean {
+  const keys = Object.keys(body);
+  if (keys.length === 0) return false;
+  if (!Object.prototype.hasOwnProperty.call(body, 'custom_fields')) return false;
+  return keys.every((key) => ACTIVE_CUSTOM_FIELD_WRITE_ALLOWED_BODY_KEYS.has(key));
+}
+
 function getRecurringTaskSeriesProjectId(db: Database.Database, seriesId: number): number | null {
   try {
     const row = db.prepare(`SELECT project_id FROM recurring_task_series WHERE id = ?`).get(seriesId) as
@@ -1980,6 +2009,21 @@ export function authorizeMcpApiRequestIfPresent(req: Request, res: Response, nex
       && taskRelationshipMutationMatch != null
       && ((method === 'POST' && taskRelationshipMutationMatch[2] == null) || (method === 'DELETE' && taskRelationshipMutationMatch[2] != null));
     const projectCrudAllowed = suffix === '' && (method === 'PUT' || method === 'DELETE');
+
+    // An agent that owns the active dispatched run may persist supported custom
+    // fields on that task without holding the broad project-task management
+    // grant. Narrow by construction: it must be the agent's own active task,
+    // and the body may carry nothing but custom_fields. Field-schema, tenant,
+    // and audit enforcement still run downstream in the write model.
+    if (
+      suffix === ''
+      && method === 'PUT'
+      && scopedTaskIds.has(taskId)
+      && permissionState.enabledCapabilities.has('tasks.write_active_custom_fields')
+      && isActiveCustomFieldsOnlyUpdate(requestBodyRecord(req.body))
+    ) {
+      return next();
+    }
     const requiredCapability: AgentMcpCapabilityKey | null = readAllowed
       ? hasProjectTaskCrud
         ? 'tasks.manage_project_tasks'
