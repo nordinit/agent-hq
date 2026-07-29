@@ -102,10 +102,19 @@ describe('ensureTenantSchema', () => {
       { id: 10, tenant_id: defaultTenantId, slug: 'agent-hq' },
       { id: 11, tenant_id: otherTenantId, slug: 'agent-hq' },
     ]);
+    // Asserted via the rejection VALUE, not .rejects.toThrow().
+    //
+    // better-sqlite3 is a native addon: a SqliteError raised from the SECOND test file
+    // loaded in a jest worker fails `instanceof Error`, because the addon keeps the
+    // SqliteError constructor registered by the FIRST module-registry load. jest's toThrow
+    // only inspects the rejection when it classifies it as an Error, so otherwise it reports
+    // "Received function did not throw" — even though the promise DID reject with exactly
+    // the right message. That makes toThrow order-dependent here: whichever file runs second
+    // fails. Matching on the message is realm-independent and asserts the same thing.
     await expect(db.run(`
       INSERT INTO mcp_servers (tenant_id, name, slug, command)
       VALUES (?, 'Duplicate', 'agent-hq', 'node')
-    `, otherTenantId)).rejects.toThrow();
+    `, otherTenantId)).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
   });
 
   it('repairs existing cross-tenant Agent HQ MCP assignments on cached schema calls', async () => {

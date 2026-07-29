@@ -103,6 +103,10 @@ describe('tasks.status schema migration', () => {
     `);
     legacyDbRaw.close();
 
+    // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
+    // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
+    // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
+    // async fn simply never matched. Both forms must go through the promise.
     await initSchema();
     const db = getDb();
     const ddl = (await db.get(`
@@ -117,7 +121,7 @@ describe('tasks.status schema migration', () => {
       status: 'todo',
     });
 
-    expect(async () => await db.run(`UPDATE tasks SET status = 'field_reported' WHERE id = 797`)).not.toThrow();
+    await db.run(`UPDATE tasks SET status = 'field_reported' WHERE id = 797`);
     expect((await db.get(`SELECT status FROM tasks WHERE id = 797`) as { status: string }).status).toBe('field_reported');
   });
 

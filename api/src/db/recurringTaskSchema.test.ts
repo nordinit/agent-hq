@@ -18,6 +18,10 @@ describe('recurring task scheduling schema', () => {
     closeDb();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'recurring-task-schema-'));
     process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
+    // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
+    // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
+    // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
+    // async fn simply never matched. Both forms must go through the promise.
     await initSchema();
   });
 
@@ -136,12 +140,12 @@ describe('recurring task scheduling schema', () => {
           idempotency_key: `${series.id}:${scheduledFor}`,
         });
 
-    expect(async () => await recordRecurringTaskRun(db, {
-          series_id: series.id,
-          scheduled_for: scheduledFor,
-          status: 'started',
-          idempotency_key: `${series.id}:${scheduledFor}:duplicate-worker`,
-        })).toThrow();
+    await expect((async () => await recordRecurringTaskRun(db, {
+                series_id: series.id,
+                scheduled_for: scheduledFor,
+                status: 'started',
+                idempotency_key: `${series.id}:${scheduledFor}:duplicate-worker`,
+              }))()).rejects.toThrow();
 
     await createTaskRecord(db, {
             title: 'Daily QA sweep',
@@ -156,18 +160,18 @@ describe('recurring task scheduling schema', () => {
             generated_from: 'recurring_task_series',
           }, 'scheduler');
 
-    expect(async () => await createTaskRecord(db, {
-          title: 'Daily QA sweep duplicate',
-          status: 'in_progress',
-          project_id: 612,
-          sprint_id: 6121,
-          task_type: 'qa',
-          story_points: 1,
-          recurring_series_id: series.id,
-          scheduled_for: scheduledFor,
-          schedule_run_id: run.id,
-          generated_from: 'recurring_task_series',
-        }, 'scheduler')).toThrow();
+    await expect((async () => await createTaskRecord(db, {
+                title: 'Daily QA sweep duplicate',
+                status: 'in_progress',
+                project_id: 612,
+                sprint_id: 6121,
+                task_type: 'qa',
+                story_points: 1,
+                recurring_series_id: series.id,
+                scheduled_for: scheduledFor,
+                schedule_run_id: run.id,
+                generated_from: 'recurring_task_series',
+              }, 'scheduler'))()).rejects.toThrow();
   });
 
   it('creates lookup indexes for due series, run history, and generated tasks', async () => {
@@ -218,7 +222,7 @@ describe('recurring task scheduling schema', () => {
       );
     `);
 
-    expect(async () => await initSchema()).not.toThrow();
+    await initSchema();
 
     const columns = await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>;
     expect(columns.map(col => col.name)).toEqual(expect.arrayContaining([

@@ -78,19 +78,19 @@ describe('sprint type field config', () => {
             { key: 'test_plan', type: 'textarea', source: 'custom_fields', gate_requirement: false },
           ] }));
 
-    expect(async () => await validateRequirementFieldExpression(db, {
-          sprintId: 1,
-          fieldName: 'merged_commit|deployed_commit',
-        })).not.toThrow();
+    await (async () => await validateRequirementFieldExpression(db, {
+                sprintId: 1,
+                fieldName: 'merged_commit|deployed_commit',
+              }))();
 
-    expect(async () => await validateRequirementFieldExpression(db, {
-          sprintId: 1,
-          fieldName: 'test_plan',
-        })).not.toThrow();
+    await (async () => await validateRequirementFieldExpression(db, {
+                sprintId: 1,
+                fieldName: 'test_plan',
+              }))();
 
-    expect(async () => await validateRequirementFieldExpression(db, {
-          sprintId: 1,
-          fieldName: 'missing_field',
-        })).toThrow('not defined for sprint type "dev"');
+    await expect((async () => await validateRequirementFieldExpression(db, {
+                sprintId: 1,
+                fieldName: 'missing_field',
+              }))()).rejects.toThrow('not defined for sprint type "dev"');
   });
 });

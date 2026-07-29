@@ -91,7 +91,18 @@ describe('tenant-owned skills and tools capability inventory', () => {
     const db = getDb();
     await db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Search', 'repo_search', 'bash', 'echo a')`);
     await expect(db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (2, 'B Search', 'repo_search', 'bash', 'echo b')`)).resolves.toBeDefined();
-    await expect(db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Duplicate', 'repo_search', 'bash', 'echo dup')`)).rejects.toThrow(/UNIQUE constraint failed/);
+    // Asserted via the rejection VALUE, not .rejects.toThrow().
+    //
+    // better-sqlite3 is a native addon: a SqliteError raised from the SECOND test file
+    // loaded in a jest worker fails `instanceof Error`, because the addon keeps the
+    // SqliteError constructor registered by the FIRST module-registry load. jest's toThrow
+    // only inspects the rejection when it classifies it as an Error, so otherwise it reports
+    // "Received function did not throw" — even though the promise DID reject with exactly
+    // the right message. That makes toThrow order-dependent here: whichever file runs second
+    // fails. Matching on the message is realm-independent and asserts the same thing.
+    await expect(
+      db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Duplicate', 'repo_search', 'bash', 'echo dup')`)
+    ).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
   });
 
   it('does not materialize stale cross-tenant tool assignments', async () => {

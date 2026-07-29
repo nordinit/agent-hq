@@ -16,10 +16,14 @@ function tempDbPath(prefix: string): { dir: string; dbPath: string } {
 }
 
 describe('verifyStartupSchemaCurrent', () => {
-  it('fails without creating a missing database', () => {
+  it('fails without creating a missing database', async () => {
     const { dir, dbPath } = tempDbPath('agent-hq-missing-schema-');
     try {
-      expect(async () => await verifyStartupSchemaCurrent(dbPath)).toThrow(SchemaMigrationRequiredError);
+      // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
+      // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
+      // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
+      // async fn simply never matched. Both forms must go through the promise.
+      await expect(verifyStartupSchemaCurrent(dbPath)).rejects.toThrow(SchemaMigrationRequiredError);
       expect(fs.existsSync(dbPath)).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -35,7 +39,7 @@ describe('verifyStartupSchemaCurrent', () => {
       const beforeTables = await db.all(`SELECT name, sql FROM sqlite_master ORDER BY name`);
       dbRaw.close();
 
-      expect(async () => await verifyStartupSchemaCurrent(dbPath)).toThrow(/schema_migrations/);
+      await expect(verifyStartupSchemaCurrent(dbPath)).rejects.toThrow(/schema_migrations/);
 
       const afterRaw = new Database(dbPath, { readonly: true, fileMustExist: true });
         const after = new SqliteAdapter(afterRaw);
@@ -64,7 +68,7 @@ describe('verifyStartupSchemaCurrent', () => {
       await db.run(`INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)`, STARTUP_SCHEMA_LEDGER_ID, STARTUP_SCHEMA_LEDGER_CHECKSUM);
       dbRaw.close();
 
-      expect(async () => await verifyStartupSchemaCurrent(dbPath)).not.toThrow();
+      await verifyStartupSchemaCurrent(dbPath);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

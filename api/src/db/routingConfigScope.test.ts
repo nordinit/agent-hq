@@ -46,6 +46,10 @@ describe('routing_config scoped ownership schema migration', () => {
       VALUES (1, 'in_progress', 'custom_project', 'review', 'default', 1)
     `);
 
+    // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
+    // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
+    // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
+    // async fn simply never matched. Both forms must go through the promise.
     await initSchema();
 
     expect(await db.get(`
@@ -190,7 +194,7 @@ describe('routing_config scoped ownership schema migration', () => {
       VALUES (56, 'backend', 'completed_for_review', 'review_commit', 'required', 'block', 'Commit required', 1, 0)
     `);
 
-    expect(async () => await initSchema()).not.toThrow();
+    await initSchema();
 
     const ddl = await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_transition_requirements'`) as { sql: string };
     expect(/sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(ddl.sql)).toBe(false);
@@ -369,14 +373,14 @@ describe('routing_config scoped ownership schema migration', () => {
       INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
       VALUES (86, 'dev', NULL, 'backend', 'ready', 94, 0)
     `);
-    expect(async () => await db.run(`
+    await (async () => await db.run(`
       INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
       VALUES (86, 'dev', NULL, 'backend', 'ready', 108, -10)
-    `)).not.toThrow();
-    expect(async () => await db.run(`
+    `))();
+    await expect((async () => await db.run(`
       INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
       VALUES (86, 'dev', NULL, 'backend', 'ready', 94, 0)
-    `)).toThrow(/UNIQUE constraint failed|constraint/i);
+    `))()).rejects.toThrow(/UNIQUE constraint failed|constraint/i);
   });
 
   it('removes routing rules whose task_type is not allowed by the sprint type catalog', async () => {

@@ -307,35 +307,46 @@ async function persistHistoryMessages(
         event_meta = excluded.event_meta
     `;
 
-    await db.run('DELETE FROM chat_messages WHERE id LIKE ? OR id LIKE ?', `oc-hist-${ctx.instanceId}-%`, `oc-live-${ctx.instanceId}-%`);
+    // ONE transaction around the delete-then-reinsert.
+    //
+    // Before the async conversion the DELETE and the whole insert loop ran in a single
+    // uninterrupted better-sqlite3 tick, so no reader could observe the gap. Now every await
+    // yields the event loop, and this is a full refresh: it deletes every oc-hist-* and
+    // oc-live-* row for the instance and rebuilds them one statement at a time. A concurrent
+    // reader — routes/chat/persistence.ts and routes/sessions.ts both SELECT from
+    // chat_messages on ordinary HTTP requests, and a refresh fires on every
+    // final/aborted/error chat event — would render an empty or truncated transcript.
+    return await db.withTransaction(async (tx) => {
+      await tx.run('DELETE FROM chat_messages WHERE id LIKE ? OR id LIKE ?', `oc-hist-${ctx.instanceId}-%`, `oc-live-${ctx.instanceId}-%`);
 
-    let rowIndex = 0;
-    for (const m of messages) {
-      const baseRole = m.role;
-      const ts =
-        typeof m.timestamp === 'number'
-          ? (timestampFromEpochMs(m.timestamp) ?? nowTimestamp())
-          : typeof m.timestamp === 'string'
-            ? m.timestamp
-            : nowTimestamp();
+      let rowIndex = 0;
+      for (const m of messages) {
+        const baseRole = m.role;
+        const ts =
+          typeof m.timestamp === 'number'
+            ? (timestampFromEpochMs(m.timestamp) ?? nowTimestamp())
+            : typeof m.timestamp === 'string'
+              ? m.timestamp
+              : nowTimestamp();
 
-      for (const evt of extractStructuredEvents(m)) {
-        const rowId = `oc-hist-${ctx.instanceId}-${rowIndex++}`;
-        await db.run(
-          insertSql,
-          rowId,
-          ctx.agentId,
-          ctx.instanceId,
-          ...identity.values,
-          normalizeChatRole(baseRole, evt.event_type),
-          evt.content,
-          ts,
-          evt.event_type,
-          JSON.stringify(evt.event_meta),
-        );
+        for (const evt of extractStructuredEvents(m)) {
+          const rowId = `oc-hist-${ctx.instanceId}-${rowIndex++}`;
+          await tx.run(
+            insertSql,
+            rowId,
+            ctx.agentId,
+            ctx.instanceId,
+            ...identity.values,
+            normalizeChatRole(baseRole, evt.event_type),
+            evt.content,
+            ts,
+            evt.event_type,
+            JSON.stringify(evt.event_meta),
+          );
+        }
       }
-    }
-    return rowIndex;
+      return rowIndex;
+    });
   } catch (err) {
     console.warn(
       `[GatewayCapture] Failed to persist history for instance ${ctx.instanceId}:`,
@@ -469,6 +480,11 @@ class GatewayTranscriptCapture {
   private streamText = '';
   private assistantMsgIndex = 0;
   private liveRowIndex = 0;
+  /**
+   * Serialises chat-event handling. liveRowIndex is read-modify-written across an await, so
+   * concurrent handlers collide on the same row id and lose messages. See the dispatch site.
+   */
+  private chatEventQueue: Promise<void> = Promise.resolve();
   private lastStreamFlushText = '';
   private readonly pending = new Map<string, (frame: Record<string, unknown>) => void>();
   private historyRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -621,7 +637,22 @@ class GatewayTranscriptCapture {
           }
 
           const state = payload?.state as string;
-          this.handleChatEvent(state, payload?.message);
+          // SERIALISED, not merely fire-and-forget. handleChatEvent performs a
+          // read-modify-write on this.liveRowIndex that straddles an await
+          // (persistLiveStructuredMessage). Dispatching concurrently — which is what two
+          // chat frames arriving in one socket read do — lets both invocations read the same
+          // index, insert the same `oc-live-<instance>-<n>` id, and the ON CONFLICT DO UPDATE
+          // makes the second silently OVERWRITE the first. Reproduced: two tool_call frames
+          // produced 2 transcript rows before the async conversion and 1 after.
+          //
+          // The chain keeps the handler off this callback's critical path (the socket must
+          // not block) while guaranteeing one-at-a-time execution. The catch is required:
+          // without it a rejection here is unhandled and terminates the process.
+          this.chatEventQueue = this.chatEventQueue
+            .then(() => this.handleChatEvent(state, payload?.message))
+            .catch((err) => {
+              console.warn(`[gatewayCapture] chat event handling failed for ${this.sessionKey}:`, err);
+            });
           return;
         }
       }

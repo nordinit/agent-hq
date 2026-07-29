@@ -95,14 +95,14 @@ describe('ensureToolRegistryTables', () => {
     expect(await toolsTableSql()).toContain('tenant_id');
     expect(await toolsTableSql()).toContain('UNIQUE(tenant_id, slug)');
     expect(await getDb().get(`SELECT tenant_id, slug FROM tools WHERE id = 10`)).toEqual({ tenant_id: 7, slug: 'bash' });
-    expect(async () => await getDb().run(`
+    await (async () => await getDb().run(`
       INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body)
       VALUES (8, 'Tenant Bash', 'bash', 'bash', 'echo tenant')
-    `)).not.toThrow();
-    expect(async () => await getDb().run(`
+    `))();
+    await expect((async () => await getDb().run(`
       INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body)
       VALUES (8, 'Duplicate Tenant Bash', 'bash', 'bash', 'echo duplicate')
-    `)).toThrow(/UNIQUE constraint failed/);
+    `))()).rejects.toThrow(/UNIQUE constraint failed/);
   });
 
   it('removes stale cross-tenant tool assignments during registry repair', async () => {
@@ -385,10 +385,10 @@ describe('skills registry schema startup', () => {
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Acme', 'acme', 0)
     `)).lastInsertId);
-    expect(async () => await getDb().run(`
+    await (async () => await getDb().run(`
       INSERT INTO skills (tenant_id, name, description, content)
       VALUES (?, 'shared-skill', 'tenant skill', '# tenant')
-    `, otherTenantId)).not.toThrow();
+    `, otherTenantId))();
 
     getRawDb().pragma('foreign_keys = ON');
     await getDb().run(`DELETE FROM tenants WHERE id = ?`, otherTenantId);

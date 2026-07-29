@@ -28,7 +28,11 @@ describe('API startup tenant verification mode', () => {
   });
 
   it('fails instead of creating default tenant bootstrap state', async () => {
-    expect(async () => await initSchema({ tenantMode: 'verify' })).toThrow('Tenant install/migration required');
+    // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
+    // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
+    // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
+    // async fn simply never matched. Both forms must go through the promise.
+    await expect(initSchema({ tenantMode: 'verify' })).rejects.toThrow('Tenant install/migration required');
     const db = getDb();
     expect(await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tenants'`)).toBeUndefined();
     expect(await db.get(`SELECT value FROM app_settings WHERE key = 'default_tenant_id'`)).toBeUndefined();
@@ -40,7 +44,7 @@ describe('API startup tenant verification mode', () => {
     const beforeTenants = await db.all(`SELECT id, name, slug, is_default, updated_at FROM tenants ORDER BY id`);
     const beforeSettings = await db.all(`SELECT key, value, updated_at FROM app_settings ORDER BY key`);
 
-    expect(async () => await initSchema({ tenantMode: 'verify' })).not.toThrow();
+    await initSchema({ tenantMode: 'verify' });
 
     expect(await db.all(`SELECT id, name, slug, is_default, updated_at FROM tenants ORDER BY id`)).toEqual(beforeTenants);
     expect(await db.all(`SELECT key, value, updated_at FROM app_settings ORDER BY key`)).toEqual(beforeSettings);

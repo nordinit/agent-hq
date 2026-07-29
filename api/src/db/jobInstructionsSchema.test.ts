@@ -55,7 +55,11 @@ describe('initSchema job_instructions canonical migration', () => {
       );
     `);
 
-    expect(async () => await initSchema()).not.toThrow();
+    // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
+    // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
+    // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
+    // async fn simply never matched. Both forms must go through the promise.
+    await initSchema();
 
     const columns = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
     const names = columns.map((column) => column.name);

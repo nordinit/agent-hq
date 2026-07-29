@@ -38,6 +38,10 @@ describe('sprint field schema migration', () => {
   });
 
   it('seeds dev sprint fields as unified task fields', async () => {
+    // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
+    // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
+    // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
+    // async fn simply never matched. Both forms must go through the promise.
     await initSchema();
     const db = getDb();
 
@@ -471,7 +475,7 @@ describe('sprint field schema migration', () => {
     `);
     legacyDbRaw.close();
 
-    expect(async () => await initSchema()).not.toThrow();
+    await initSchema();
 
     const db = getDb();
     const duplicateCount = await db.get(`SELECT COUNT(*) AS n FROM sprint_types WHERE key = 'custom_dupe'`) as { n: number };
@@ -485,9 +489,9 @@ describe('sprint field schema migration', () => {
     expect(customRow).toEqual({ name: 'Custom Tenant', is_system: 0 });
     expect(tenantKeyIndex?.unique).toBe(1);
     expect(tenantColumn?.notnull).toBe(1);
-    expect(async () => {
-      await db.run(`INSERT INTO sprint_types (key, name, description, is_system) VALUES ('custom_dupe', 'Duplicate', '', 0)`);
-    }).toThrow();
+    await expect((async () => {
+            await db.run(`INSERT INTO sprint_types (key, name, description, is_system) VALUES ('custom_dupe', 'Duplicate', '', 0)`);
+          })()).rejects.toThrow();
   });
 
   it('removes stale sprint type key foreign keys when sprint types are tenant-scoped', async () => {
@@ -543,7 +547,7 @@ describe('sprint field schema migration', () => {
     `);
     legacyDbRaw.close();
 
-    expect(async () => await initSchema()).not.toThrow();
+    await initSchema();
 
     const db = getDb();
     const sprintTypeRows = await db.get(`SELECT COUNT(*) AS n FROM sprint_types WHERE key = 'dev'`) as { n: number };

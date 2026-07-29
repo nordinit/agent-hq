@@ -246,7 +246,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(catalog.enums).not.toHaveProperty('task_statuses');
   });
 
-  it('registers live move_task status as a non-empty string before backend workflow validation', () => {
+  it('registers live move_task status as a non-empty string before backend workflow validation', async () => {
     const schemas = new Map<string, Record<string, ZodTypeAny>>();
 
     registerTasksTools({
@@ -267,7 +267,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(statusSchema?.safeParse('').success).toBe(false);
   });
 
-  it('advertises custom_fields on task create and update schemas', () => {
+  it('advertises custom_fields on task create and update schemas', async () => {
     const schemas = new Map<string, Record<string, ZodTypeAny>>();
 
     registerTasksTools({
@@ -289,7 +289,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     }
   });
 
-  it('advertises optional workflow-resolved status on task create schema', () => {
+  it('advertises optional workflow-resolved status on task create schema', async () => {
     const schemas = new Map<string, Record<string, ZodTypeAny>>();
 
     registerTasksTools({
