@@ -102,10 +102,10 @@ describe('ensureTenantSchema', () => {
       { id: 10, tenant_id: defaultTenantId, slug: 'agent-hq' },
       { id: 11, tenant_id: otherTenantId, slug: 'agent-hq' },
     ]);
-    expect(async () => await db.run(`
+    await expect(db.run(`
       INSERT INTO mcp_servers (tenant_id, name, slug, command)
       VALUES (?, 'Duplicate', 'agent-hq', 'node')
-    `, otherTenantId)).toThrow();
+    `, otherTenantId)).rejects.toThrow();
   });
 
   it('repairs existing cross-tenant Agent HQ MCP assignments on cached schema calls', async () => {
@@ -243,7 +243,7 @@ describe('verifyTenantSchemaForStartup', () => {
   }
 
   it('fails with an install/migration-required error instead of creating tenant state', async () => {
-    expect(async () => await verifyTenantSchemaForStartup(db)).toThrow('Tenant install/migration required');
+    await expect(verifyTenantSchemaForStartup(db)).rejects.toThrow('Tenant install/migration required');
     expect(await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tenants'`)).toBeUndefined();
     expect(await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'`)).toBeUndefined();
   });
@@ -257,7 +257,7 @@ describe('verifyTenantSchemaForStartup', () => {
       INSERT INTO job_instances (id, task_id, tenant_id) VALUES (10, 1, NULL);
     `);
 
-    expect(async () => await verifyTenantSchemaForStartup(db)).toThrow('job_instances contains rows without tenant ownership');
+    await expect(verifyTenantSchemaForStartup(db)).rejects.toThrow('job_instances contains rows without tenant ownership');
     const row = await db.get(`SELECT tenant_id FROM job_instances WHERE id = 10`) as { tenant_id: number | null };
     expect(row.tenant_id).toBeNull();
   });

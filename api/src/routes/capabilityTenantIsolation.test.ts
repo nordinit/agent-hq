@@ -90,8 +90,8 @@ describe('tenant-owned skills and tools capability inventory', () => {
   it('allows duplicate tool slugs across tenants while preserving per-tenant uniqueness', async () => {
     const db = getDb();
     await db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Search', 'repo_search', 'bash', 'echo a')`);
-    expect(async () => await db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (2, 'B Search', 'repo_search', 'bash', 'echo b')`)).not.toThrow();
-    expect(async () => await db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Duplicate', 'repo_search', 'bash', 'echo dup')`)).toThrow(/UNIQUE constraint failed/);
+    await expect(db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (2, 'B Search', 'repo_search', 'bash', 'echo b')`)).resolves.toBeDefined();
+    await expect(db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Duplicate', 'repo_search', 'bash', 'echo dup')`)).rejects.toThrow(/UNIQUE constraint failed/);
   });
 
   it('does not materialize stale cross-tenant tool assignments', async () => {

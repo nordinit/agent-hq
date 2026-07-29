@@ -281,10 +281,10 @@ describe('completeRunInstance runtime failure workflow event', () => {
     db = await createDb();
     await seedInProgressRun('status', 'blocked');
 
-    await expect(await completeRunInstance(db, 3461, {
-              status: 'failed',
-              summary: 'Runtime process exited with code 1',
-            })).resolves.toEqual({ ok: true, id: 3461, status: 'failed' });
+    await expect(completeRunInstance(db, 3461, {
+      status: 'failed',
+      summary: 'Runtime process exited with code 1',
+    })).resolves.toEqual({ ok: true, id: 3461, status: 'failed' });
 
     const task = await db.get(`SELECT status, failure_detail FROM tasks WHERE id = 552`) as { status: string; failure_detail: string | null };
     expect(task.status).toBe('blocked');

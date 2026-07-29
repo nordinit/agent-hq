@@ -329,11 +329,11 @@ async function markReceiptProcessed(
     values.push(value);
   };
 
-  maybeAssign('processing_state', state);
-  maybeAssign('processing_error', error ? (error instanceof Error ? error.message : String(error)) : null);
-  maybeAssign('mapping_id', mapping?.id ?? null);
-  maybeAssign('mapping_action_kind', mapping?.action_kind ?? null);
-  maybeAssign('mapping_action_target', mapping?.action_target ?? null);
+  await maybeAssign('processing_state', state);
+  await maybeAssign('processing_error', error ? (error instanceof Error ? error.message : String(error)) : null);
+  await maybeAssign('mapping_id', mapping?.id ?? null);
+  await maybeAssign('mapping_action_kind', mapping?.action_kind ?? null);
+  await maybeAssign('mapping_action_target', mapping?.action_target ?? null);
 
   await db.run(`
     UPDATE external_task_event_receipts

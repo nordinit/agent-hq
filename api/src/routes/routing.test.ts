@@ -309,7 +309,7 @@ describe('routing rules API', () => {
   it('keeps task routing rules, transitions, and requirements scoped to the active tenant', async () => {
     const tenantContext = await import('../lib/tenantContext');
     const db = getDb();
-    const defaultTenantId = tenantContext.ensureTenantSchema(db);
+    const defaultTenantId = await tenantContext.ensureTenantSchema(db);
     const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Company', 'beta-company', 0)
@@ -382,7 +382,7 @@ describe('routing rules API', () => {
   it('allows only super-admin MCP keys to select tenant-scoped routing admin config', async () => {
     const tenantContext = await import('../lib/tenantContext');
     const db = getDb();
-    const defaultTenantId = tenantContext.ensureTenantSchema(db);
+    const defaultTenantId = await tenantContext.ensureTenantSchema(db);
     const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Company', 'beta-company', 0)
@@ -1791,7 +1791,7 @@ describe('routing rules API', () => {
   it('denies scoped MCP workflow transition CRUD outside the caller project or tenant', async () => {
     const tenantContext = await import('../lib/tenantContext');
     const db = getDb();
-    const defaultTenantId = tenantContext.ensureTenantSchema(db);
+    const defaultTenantId = await tenantContext.ensureTenantSchema(db);
     const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Company', 'beta-company', 0)

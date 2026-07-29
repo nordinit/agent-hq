@@ -29,34 +29,34 @@ describe('taskRelease configurable outcome routing', () => {
     await db.run(`INSERT INTO tasks (id, tenant_id, title, status, sprint_id, task_type, created_at, updated_at) VALUES (42, ?, 'Configurable outcome task', 'in_progress', 10, 'backend', datetime('now'), datetime('now'))`, tenantId);
   });
 
-  it('allows a direct status move when a configured custom outcome routes there', () => {
-    expect(async () => await assertAtlasDirectStatusGate(db, {
-          id: 42,
-          title: 'Configurable outcome task',
-          status: 'in_progress',
-          sprint_id: 10,
-          task_type: 'backend',
-        } as never, 'review')).not.toThrow();
+  it('allows a direct status move when a configured custom outcome routes there', async () => {
+    await expect(assertAtlasDirectStatusGate(db, {
+      id: 42,
+      title: 'Configurable outcome task',
+      status: 'in_progress',
+      sprint_id: 10,
+      task_type: 'backend',
+    } as never, 'review')).resolves.toBeUndefined();
   });
 
-  it('still rejects unknown status keys even when direct overrides are allowed', () => {
-    expect(async () => await assertAtlasDirectStatusGate(db, {
-          id: 42,
-          title: 'Configurable outcome task',
-          status: 'in_progress',
-          sprint_id: 10,
-          task_type: 'backend',
-        } as never, 'not_a_real_status')).toThrow('"not_a_real_status" is not a valid task status for this workflow');
+  it('still rejects unknown status keys even when direct overrides are allowed', async () => {
+    await expect(assertAtlasDirectStatusGate(db, {
+      id: 42,
+      title: 'Configurable outcome task',
+      status: 'in_progress',
+      sprint_id: 10,
+      task_type: 'backend',
+    } as never, 'not_a_real_status')).rejects.toThrow('"not_a_real_status" is not a valid task status for this workflow');
   });
 
-  it('documents that direct status overrides are no longer constrained by the routing graph', () => {
-    expect(async () => await assertAtlasDirectStatusGate(db, {
-          id: 42,
-          title: 'Configurable outcome task',
-          status: 'in_progress',
-          sprint_id: 10,
-          task_type: 'backend',
-        } as never, 'done')).not.toThrow();
+  it('documents that direct status overrides are no longer constrained by the routing graph', async () => {
+    await expect(assertAtlasDirectStatusGate(db, {
+      id: 42,
+      title: 'Configurable outcome task',
+      status: 'in_progress',
+      sprint_id: 10,
+      task_type: 'backend',
+    } as never, 'done')).resolves.toBeUndefined();
   });
 
   it('does not resolve through legacy lifecycle_rules when no explicit sprint transition exists', async () => {

@@ -511,12 +511,14 @@ describe('OpenClawRuntime gateway dispatch', () => {
   it('multiplexes concurrent short-lived gateway RPC responses over one socket by response id', async () => {
     mockResponseDelays.set('chat.history', 15);
 
+    // Both calls must be started before either resolves — awaiting inside the
+    // array would serialize them and stop exercising response multiplexing.
     const [historyResult, reloadResult] = await Promise.all([
-      await gatewayGetHistory({
-                sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
-                limit: 12,
-              }),
-      await reloadOpenClawSecretsRuntimeForAuthSync(),
+      gatewayGetHistory({
+        sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
+        limit: 12,
+      }),
+      reloadOpenClawSecretsRuntimeForAuthSync(),
     ]);
 
     expect(historyResult).toEqual({
@@ -539,10 +541,12 @@ describe('OpenClawRuntime gateway dispatch', () => {
 
   it('fails in-flight calls predictably after the disconnect retry is exhausted and reconnects lazily later', async () => {
     mockNeverRespondMethods.add('chat.history');
-    const inFlight = await gatewayGetHistory({
-          sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
-          limit: 12,
-        });
+    // Deliberately unawaited: the call must still be in flight while the socket
+    // drops underneath it.
+    const inFlight = gatewayGetHistory({
+      sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
+      limit: 12,
+    });
 
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
@@ -617,11 +621,13 @@ describe('OpenClawRuntime gateway dispatch', () => {
     jest.useFakeTimers();
     mockNeverRespondMethods.add('chat.history');
 
-    const resultPromise = await gatewayGetHistory({
-          sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
-          limit: 12,
-          timeoutMs: 25,
-        });
+    // Deliberately unawaited: the per-call timeout only fires once the fake
+    // timers are advanced below.
+    const resultPromise = gatewayGetHistory({
+      sessionKey: 'agent:cinder-backend:hook:atlas:jobrun:383',
+      limit: 12,
+      timeoutMs: 25,
+    });
 
     await jest.advanceTimersByTimeAsync(25);
 

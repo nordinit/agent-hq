@@ -263,8 +263,8 @@ test('seedSprintTaskPolicy preserves sprint-type metadata when cloning statuses 
   await db.run(`UPDATE sprint_type_task_statuses SET metadata_json = ? WHERE sprint_type_key = ? AND status_key = ?`, '{"source":"legacy-seed"}', 'enhancements', 'review');
   await db.run(`DELETE FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`, 10, 'review');
 
-  const { seedSprintTaskPolicy } = require('../domains/routing/policy');
-  seedSprintTaskPolicy(db, 10, { force: true });
+  const { seedSprintTaskPolicy } = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
+  await seedSprintTaskPolicy(db, 10, { force: true });
 
   const sprintSeedRow = await db.get(`SELECT metadata_json FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`, 10, 'review') as { metadata_json: string } | undefined;
   expect(JSON.parse(sprintSeedRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ source: 'legacy-seed' }));

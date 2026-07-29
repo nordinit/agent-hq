@@ -126,6 +126,21 @@ async function getInstanceContext(db: Db, instanceId: number): Promise<InstanceC
   const optionalInstanceColumn = async (column: string): Promise<string> => (
     await tableHasColumn(db, 'job_instances', column) ? `ji.${column}` : 'NULL'
   );
+  const [
+    runIdSelect,
+    runtimeEndedAtSelect,
+    runtimeEndErrorSelect,
+    runtimeEndSourceSelect,
+    tokenInputSelect,
+    tokenOutputSelect,
+  ] = await Promise.all([
+    optionalInstanceColumn('run_id'),
+    optionalInstanceColumn('runtime_ended_at'),
+    optionalInstanceColumn('runtime_end_error'),
+    optionalInstanceColumn('runtime_end_source'),
+    optionalInstanceColumn('token_input'),
+    optionalInstanceColumn('token_output'),
+  ]);
   const instanceTenantSelect = await tableHasColumn(db, 'job_instances', 'tenant_id') ? 'ji.tenant_id' : 'NULL';
   return await db.get(`
     SELECT
@@ -136,12 +151,12 @@ async function getInstanceContext(db: Db, instanceId: number): Promise<InstanceC
       ji.completed_at,
       ji.dispatched_at,
       ji.created_at,
-      ${optionalInstanceColumn('run_id')} AS run_id,
-      ${optionalInstanceColumn('runtime_ended_at')} AS runtime_ended_at,
-      ${optionalInstanceColumn('runtime_end_error')} AS runtime_end_error,
-      ${optionalInstanceColumn('runtime_end_source')} AS runtime_end_source,
-      ${optionalInstanceColumn('token_input')} AS token_input,
-      ${optionalInstanceColumn('token_output')} AS token_output,
+      ${runIdSelect} AS run_id,
+      ${runtimeEndedAtSelect} AS runtime_ended_at,
+      ${runtimeEndErrorSelect} AS runtime_end_error,
+      ${runtimeEndSourceSelect} AS runtime_end_source,
+      ${tokenInputSelect} AS token_input,
+      ${tokenOutputSelect} AS token_output,
       ${instanceTenantSelect} AS tenant_id,
       ji.agent_id,
       ji.task_id,

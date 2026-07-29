@@ -304,7 +304,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       VALUES (NULL, 'blocked', 'custom_global_handoff', 'ready', 1)
     `);
 
-    await expect(await applyTaskOutcome(db, {
+    await expect(applyTaskOutcome(db, {
               taskId: 417,
               outcome: 'custom_global_handoff',
               changedBy: 'cinder-backend',
@@ -337,7 +337,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       VALUES ('backend', 'blocked', 'custom_global_handoff', 'ready', 1, 100)
     `);
 
-    await expect(await applyTaskOutcome(db, {
+    await expect(applyTaskOutcome(db, {
               taskId: 417,
               outcome: 'custom_global_handoff',
               changedBy: 'cinder-backend',
@@ -443,7 +443,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       VALUES (10, 'backend', 'todo', 'bad_custom_route', 'field_reported', 1)
     `);
 
-    await expect(await applyTaskOutcome(db, {
+    await expect(applyTaskOutcome(db, {
               taskId: 417,
               outcome: 'bad_custom_route',
               changedBy: 'cinder-backend',
@@ -689,7 +689,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       VALUES ('generic', NULL, 'custom_failed', 'Custom Failed', 'Name alone should not imply failure semantics', 1, 'base', 'failed', 1, 0, '{}')
     `);
 
-    await expect(await applyTaskOutcome(db, {
+    await expect(applyTaskOutcome(db, {
               taskId: 417,
               outcome: 'custom_failed',
               changedBy: 'cinder-backend',
@@ -929,7 +929,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       VALUES (10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
     `);
 
-    await expect(await postTaskOutcome(db, 417, {
+    await expect(postTaskOutcome(db, 417, {
               outcome: 'completed_for_review',
               summary: 'Wrong agent should not advance this task',
             }, 'agent-7', { mcpIdentity: mcpIdentity(7) })).rejects.toMatchObject({
@@ -956,7 +956,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
       VALUES (10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
     `);
 
-    await expect(await postTaskOutcome(db, 417, {
+    await expect(postTaskOutcome(db, 417, {
               outcome: 'completed_for_review',
               summary: 'Task-level outcome without active run must not advance',
             }, 'agent-7', { mcpIdentity: mcpIdentity(7) })).rejects.toMatchObject({

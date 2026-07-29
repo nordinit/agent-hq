@@ -7,6 +7,7 @@ import {
   cleanupTaskExecutionLinkageForStatus,
   clearPendingEndedActiveInstanceLinkageCleanupTimers,
   clearEndedActiveInstanceLinkageIfEligible,
+  flushPendingEndedActiveInstanceLinkageCleanups,
   scheduleEndedActiveInstanceLinkageCleanup,
 } from './taskLifecycle';
 import { removeTaskWorktree } from '../services/worktreeManager';
@@ -34,10 +35,11 @@ const mockedRemoveTaskWorktree = removeTaskWorktree as jest.MockedFunction<typeo
 const mockedRemoveTaskClone = removeTaskClone as jest.MockedFunction<typeof removeTaskClone>;
 const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
 
+// The deferred cleanup is launched from a timer callback, so the only
+// deterministic way to observe its result is to await the work itself rather
+// than a fixed number of microtask ticks.
 async function flushPromises(): Promise<void> {
-  for (let i = 0; i < 10; i += 1) {
-    await Promise.resolve();
-  }
+  await flushPendingEndedActiveInstanceLinkageCleanups();
 }
 
 function mockAbortSpawn(): void {
@@ -294,8 +296,8 @@ describe('task lifecycle worktree cleanup', () => {
   it('keeps repeated done cleanup calls harmless', async () => {
     await seedLinkedTask(db, { taskStatus: 'done', activeInstanceId: null, instanceStatus: 'done' });
 
-    expect(async () => await cleanupTaskExecutionLinkageForStatus(db, 1, 'done')).not.toThrow();
-    expect(async () => await cleanupTaskExecutionLinkageForStatus(db, 1, 'done')).not.toThrow();
+    await expect(cleanupTaskExecutionLinkageForStatus(db, 1, 'done')).resolves.toBeDefined();
+    await expect(cleanupTaskExecutionLinkageForStatus(db, 1, 'done')).resolves.toBeDefined();
 
     expect(mockedRemoveTaskWorktree).toHaveBeenCalledTimes(2);
   });

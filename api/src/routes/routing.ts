@@ -88,13 +88,15 @@ async function dryRunConfigWrite<T>(
   action: 'create' | 'update' | 'delete',
   table: string,
   input: Record<string, unknown>,
-  run: () => T,
+  run: () => T | Promise<T>,
 ): Promise<T | { dry_run: true; preview: { action: string; table: string; affected: T; input: Record<string, unknown> } }> {
-  if (!isDryRunInput(input)) return run();
+  if (!isDryRunInput(input)) return await run();
   const db = getDb();
   await db.exec('SAVEPOINT dry_run_config_write');
   try {
-    const affected = run();
+    // The write is async now: it MUST settle before the savepoint is rolled back, or the
+    // rows land after the rollback and the "preview" persists.
+    const affected = await run();
     await db.exec('ROLLBACK TO dry_run_config_write');
     await db.exec('RELEASE dry_run_config_write');
     return {
@@ -504,7 +506,7 @@ router.get('/external-event-mappings', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    return res.json(listExternalEventMappings(db, { ...normalizeWorkflowAliases(req.query), tenant_id: tenantId }));
+    return res.json(await listExternalEventMappings(db, { ...normalizeWorkflowAliases(req.query), tenant_id: tenantId }));
   } catch (err) {
     return sendRoutingError(res, err);
   }
@@ -514,7 +516,7 @@ router.get('/external-event-mappings/:id', async (req: Request, res: Response) =
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    return res.json(getExternalEventMapping(db, { id: req.params.id, tenant_id: tenantId }));
+    return res.json(await getExternalEventMapping(db, { id: req.params.id, tenant_id: tenantId }));
   } catch (err) {
     return sendRoutingError(res, err);
   }

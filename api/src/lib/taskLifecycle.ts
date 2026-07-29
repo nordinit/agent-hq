@@ -19,6 +19,30 @@ export const ACTIVE_INSTANCE_END_GRACE_MS: number = (() => {
   return Number.isFinite(v) && v >= 0 ? v : 10_000;
 })();
 const pendingEndedLinkageCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// Deferred linkage cleanup runs from a timer callback, so nothing can await it
+// through the normal call graph. Track the in-flight promises so callers that
+// need the work to be finished (notably tests, and shutdown paths) can wait on
+// it deterministically instead of guessing how many microtask ticks it needs.
+const inFlightEndedLinkageCleanups = new Set<Promise<void>>();
+
+function trackEndedLinkageCleanup(work: () => Promise<void>): Promise<void> {
+  const holder: { done?: Promise<void> } = {};
+  holder.done = (async () => {
+    try {
+      await work();
+    } finally {
+      if (holder.done) inFlightEndedLinkageCleanups.delete(holder.done);
+    }
+  })();
+  inFlightEndedLinkageCleanups.add(holder.done);
+  return holder.done;
+}
+
+export async function flushPendingEndedActiveInstanceLinkageCleanups(): Promise<void> {
+  while (inFlightEndedLinkageCleanups.size > 0) {
+    await Promise.allSettled([...inFlightEndedLinkageCleanups]);
+  }
+}
 
 export function clearPendingEndedActiveInstanceLinkageCleanupTimers(): number {
   const count = pendingEndedLinkageCleanupTimers.size;
@@ -294,11 +318,11 @@ export async function scheduleEndedActiveInstanceLinkageCleanup(
   };
 
   if (remainingMs === 0) {
-    setImmediate(runCleanup);
+    setImmediate(() => { void trackEndedLinkageCleanup(runCleanup); });
     return true;
   }
 
-  const timer = setTimeout(runCleanup, remainingMs);
+  const timer = setTimeout(() => { void trackEndedLinkageCleanup(runCleanup); }, remainingMs);
   timer.unref?.();
   pendingEndedLinkageCleanupTimers.set(key, timer);
   return true;

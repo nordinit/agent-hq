@@ -625,7 +625,7 @@ export async function resolveWorkspaceProvider(agentId?: string | number, option
   if (!agentId) {
     if (tenantId !== null) {
       const db = getDb();
-      const deletedFilter = (async () => {
+      const deletedFilter = await (async () => {
         try {
           const columns = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
           return columns.some((column) => column.name === 'deleted_at') ? 'AND deleted_at IS NULL' : '';

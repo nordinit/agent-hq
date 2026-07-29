@@ -283,7 +283,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       NULL as story_points
     FROM tasks WHERE id = 373`) as Record<string, unknown>;
 
-    const ok = dispatchTaskToJob(db, job as never, task as never, 1, 'Rule: Backend Engineer (agent #1)');
+    const ok = await dispatchTaskToJob(db, job as never, task as never, 1, 'Rule: Backend Engineer (agent #1)');
     expect(ok).toBe(true);
     await new Promise(resolve => setImmediate(resolve));
     expect(runtimeDispatch).toHaveBeenCalledTimes(1);
@@ -374,7 +374,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       NULL as story_points
     FROM tasks WHERE id = 373`) as Record<string, unknown>;
 
-    const ok = dispatchTaskToJob(db, job as never, task as never, 1, 'Rule: Backend Engineer (agent #1)');
+    const ok = await dispatchTaskToJob(db, job as never, task as never, 1, 'Rule: Backend Engineer (agent #1)');
 
     expect(ok).toBe(false);
     expect(runtimeDispatch).not.toHaveBeenCalled();

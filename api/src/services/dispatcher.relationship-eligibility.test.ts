@@ -200,9 +200,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     await insertTask(db, 567, 'in_progress', 'frontend');
     await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'blocked_by')`);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(0);
+    expect(result.dispatched).toBe(0);
     expect(resolveRuntime).not.toHaveBeenCalled();
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
@@ -226,9 +226,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     `);
     await insertTask(db, 608, 'ready');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(1);
+    expect(result.dispatched).toBe(1);
     const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 608`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'ready', agent_id: 1, active_instance_id: 1 });
     await db.close();
@@ -243,9 +243,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     `);
     await insertTask(db, 797, 'intake');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(1);
+    expect(result.dispatched).toBe(1);
     const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 797`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'intake', agent_id: 1, active_instance_id: 1 });
     await new Promise(resolve => setImmediate(resolve));
@@ -257,9 +257,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     const { runDispatcher } = await import('./dispatcher');
     await insertTask(db, 798, 'field_reported');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(0);
+    expect(result.dispatched).toBe(0);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 798`) as { status: string; active_instance_id: number | null };
     expect(task).toEqual({ status: 'field_reported', active_instance_id: null });
     await db.close();
@@ -278,9 +278,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     `);
     await insertTask(db, 799, 'archived');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(0);
+    expect(result.dispatched).toBe(0);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 799`) as { status: string; active_instance_id: number | null };
     expect(task).toEqual({ status: 'archived', active_instance_id: null });
     await db.close();
@@ -299,9 +299,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     `);
     await insertTask(db, 800, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(1);
+    expect(result.dispatched).toBe(1);
     const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 800`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'failed', agent_id: 1, active_instance_id: 1 });
     await new Promise(resolve => setImmediate(resolve));
@@ -323,9 +323,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     `);
     await insertTask(db, 801, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(1);
+    expect(result.dispatched).toBe(1);
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 801`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
@@ -347,9 +347,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     `);
     await insertTask(db, 806, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(0);
+    expect(result.dispatched).toBe(0);
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 806`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBeNull();
     await db.close();
@@ -370,7 +370,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     `);
     await insertTask(db, 805, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result).toEqual({ dispatched: 1, skipped: 0, errors: [] });
     const task = await db.get(`SELECT status, agent_id, active_instance_id, dispatched_at FROM tasks WHERE id = 805`) as {
@@ -404,9 +404,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     `);
     await insertTask(db, 802, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(1);
+    expect(result.dispatched).toBe(1);
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 802`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
@@ -429,9 +429,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     await insertTask(db, 803, 'cancelled');
     await insertTask(db, 804, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(0);
+    expect(result.dispatched).toBe(0);
     const tasks = await db.all(`SELECT id, active_instance_id FROM tasks WHERE id IN (802, 803, 804) ORDER BY id`) as Array<{ id: number; active_instance_id: number | null }>;
     expect(tasks).toEqual([
       { id: 802, active_instance_id: null },
@@ -448,9 +448,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     await insertTask(db, 567, 'in_progress', 'frontend');
     await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (567, 530, 'blocks')`);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(0);
+    expect(result.dispatched).toBe(0);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeNull();
@@ -466,9 +466,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     await insertTask(db, 567, 'done');
     await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'blocked_by')`);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(1);
+    expect(result.dispatched).toBe(1);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeGreaterThan(0);
@@ -483,9 +483,9 @@ describe('dispatcher relationship-driven eligibility', () => {
     await insertTask(db, 567, 'in_progress', 'frontend');
     await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'defect_of')`);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
-    expect((await result).dispatched).toBe(1);
+    expect(result.dispatched).toBe(1);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeGreaterThan(0);

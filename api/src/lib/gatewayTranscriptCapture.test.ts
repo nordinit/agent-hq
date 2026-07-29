@@ -250,6 +250,10 @@ describe('gatewayTranscriptCapture', () => {
       },
     })));
 
+    // The gateway 'message' handler is async: emitting only starts the persistence
+    // work. Let the in-flight writes settle before asserting on the rows.
+    await waitForAsyncFrames();
+
     const rows = await db.all(`
       SELECT id, role, event_type, content, session_key, durable_run_id
       FROM chat_messages
