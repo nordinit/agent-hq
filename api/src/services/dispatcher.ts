@@ -1507,7 +1507,7 @@ async function fireAgentRun(
     if (workingDirectory) {
       const adapter = getSkillMaterializationAdapter(job.runtime_type);
       try {
-        const materializeResult = adapter.materialize({
+        const materializeResult = await adapter.materialize({
           workingDirectory,
           skillNames,
           skillsBasePath: OPENCLAW_SKILLS_PATH,
@@ -1528,11 +1528,11 @@ async function fireAgentRun(
                     tenantId: Number(job.tenant_id ?? 0) || null,
                     requestedSkillNames: skillNames,
                   });
-        if (!materializeResult.ok && materializeResult.error) {
-          console.warn(`[dispatcher] skill materialization error for instance #${instanceId}: ${materializeResult.error}`);
-        } else if (materializeResult.count > 0) {
+        if (!(await materializeResult).ok && (await materializeResult).error) {
+          console.warn(`[dispatcher] skill materialization error for instance #${instanceId}: ${(await materializeResult).error}`);
+        } else if ((await materializeResult).count > 0) {
           console.log(
-            `[dispatcher] skill materialization (${adapter.adapterName}): ${materializeResult.count} skill(s) for instance #${instanceId}`,
+            `[dispatcher] skill materialization (${adapter.adapterName}): ${(await materializeResult).count} skill(s) for instance #${instanceId}`,
           );
         }
       } catch (matErr) {

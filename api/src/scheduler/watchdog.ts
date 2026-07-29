@@ -251,11 +251,11 @@ export async function runWorktreePrunePass(db: Db = getDb()): Promise<void> {
       },
     });
 
-    if (result.pruned.length > 0) {
+    if ((await result).pruned.length > 0) {
       const agentLabel = agent.name || `agent #${agent.id}`;
-      console.log(`[watchdog] Pruned ${result.pruned.length} orphaned worktree(s) for ${agentLabel}`);
-      await recordWorktreePruneNotification(db, agent, result.pruned.length);
-      await notifyTelegram(`🧹 Watchdog: pruned ${result.pruned.length} orphaned worktree(s) for ${agentLabel}`);
+      console.log(`[watchdog] Pruned ${(await result).pruned.length} orphaned worktree(s) for ${agentLabel}`);
+      await recordWorktreePruneNotification(db, agent, (await result).pruned.length);
+      await notifyTelegram(`🧹 Watchdog: pruned ${(await result).pruned.length} orphaned worktree(s) for ${agentLabel}`);
     }
   }
 }

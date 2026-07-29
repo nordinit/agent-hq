@@ -1065,8 +1065,8 @@ router.post('/provision-full', async (req: Request, res: Response) => {
           db,
           tenantId,
         });
-        if (!skillResult.ok) {
-          throw new Error(skillResult.error ?? `${runtimeType} skill materialization failed`);
+        if (!(await skillResult).ok) {
+          throw new Error((await skillResult).error ?? `${runtimeType} skill materialization failed`);
         }
 
         const mcpResult = await syncAssignedMcpForAgent({
@@ -1084,13 +1084,13 @@ router.post('/provision-full', async (req: Request, res: Response) => {
           status: (createdToolAssignmentIds.length > 0 || createdMcpAssignmentIds.length > 0 || normalizeJsonArray(body.skill_names).length > 0) ? 'created' : 'skipped',
           details: {
             skill_names: normalizeJsonArray(body.skill_names),
-            skill_materialization_count: skillResult.count,
+            skill_materialization_count: (await skillResult).count,
             mcp_materialization_count: mcpResult.count,
             mcp_materialization_path: mcpResult.path ?? null,
             tool_assignment_ids: createdToolAssignmentIds,
             mcp_assignment_ids: createdMcpAssignmentIds,
           },
-          warnings: [...skillResult.warnings, ...mcpResult.warnings],
+          warnings: [...(await skillResult).warnings, ...mcpResult.warnings],
         };
       });
     } catch (err) {
@@ -1893,7 +1893,7 @@ router.put('/:id', async (req: Request, res: Response) => {
         if (Array.isArray(parsed)) syncSkillNames = parsed.filter((s): s is string => typeof s === 'string');
       } catch { /* ignore */ }
 
-      setImmediate(() => {
+      setImmediate(async () => {
         try {
           const adapter = getSkillMaterializationAdapter(runtimeType);
           const result = adapter.materialize({
@@ -1905,10 +1905,10 @@ router.put('/:id', async (req: Request, res: Response) => {
             db,
             tenantId: Number(updated.tenant_id ?? 0) || null,
           });
-          for (const warn of result.warnings) console.warn(`[agents.put] ${warn}`);
-          if (result.count > 0 || result.details.length > 0) {
+          for (const warn of (await result).warnings) console.warn(`[agents.put] ${warn}`);
+          if ((await result).count > 0 || (await result).details.length > 0) {
             console.log(
-              `[agents.put] skill re-materialization (${adapter.adapterName}) for agent #${req.params.id}: ${result.count} artifact(s) updated`,
+              `[agents.put] skill re-materialization (${adapter.adapterName}) for agent #${req.params.id}: ${(await result).count} artifact(s) updated`,
             );
           }
         } catch (matErr) {
@@ -2453,11 +2453,11 @@ const describeTenantSkills = async (
   return described;
 };
 
-const materializeAgentSkills = (
+const materializeAgentSkills = async (
   db: ReturnType<typeof getDb>,
   agent: Record<string, unknown>,
   skillNames: string[],
-): Record<string, unknown> | null => {
+): Promise<Record<string, unknown> | null> => {
   const workingDirectory = (agent.workspace_path as string | null) ?? null;
   if (!workingDirectory) return null;
 
@@ -2473,12 +2473,12 @@ const materializeAgentSkills = (
   });
 
   return {
-    ok: result.ok,
+    ok: (await result).ok,
     adapter: adapter.adapterName,
-    count: result.count,
-    details: result.details,
-    warnings: result.warnings,
-    ...(result.error ? { error: result.error } : {}),
+    count: (await result).count,
+    details: (await result).details,
+    warnings: (await result).warnings,
+    ...((await result).error ? { error: (await result).error } : {}),
   };
 };
 
@@ -2661,15 +2661,15 @@ router.post('/:id/skills/sync', async (req: Request, res: Response) => {
     });
 
     return res.json({
-      ok: result.ok,
+      ok: (await result).ok,
       adapter: adapter.adapterName,
       runtime_type: runtimeType,
       working_directory: workingDirectory,
       skill_names: skillNames,
-      count: result.count,
-      details: result.details,
-      warnings: result.warnings,
-      ...(result.error ? { error: result.error } : {}),
+      count: (await result).count,
+      details: (await result).details,
+      warnings: (await result).warnings,
+      ...((await result).error ? { error: (await result).error } : {}),
     });
   } catch (err) {
     return res.status(500).json({ error: String(err) });

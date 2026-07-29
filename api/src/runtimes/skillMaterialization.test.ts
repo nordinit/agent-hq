@@ -56,8 +56,8 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
       tenantId: 1,
     });
 
-    expect(result.count).toBe(0);
-    expect(result.details).toEqual([{ skill: 'shared-skill', action: 'skipped', reason: 'source not found' }]);
+    expect((await result).count).toBe(0);
+    expect((await result).details).toEqual([{ skill: 'shared-skill', action: 'skipped', reason: 'source not found' }]);
     expect(fs.existsSync(path.join(workspace, 'skills', 'shared-skill'))).toBe(false);
     db.close();
   });
@@ -75,8 +75,8 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     const resultA = adapter.materialize({ workingDirectory: workspaceA, skillNames: ['shared-skill'], db, tenantId: 1 });
     const resultB = adapter.materialize({ workingDirectory: workspaceB, skillNames: ['shared-skill'], db, tenantId: 2 });
 
-    expect(resultA.count).toBe(1);
-    expect(resultB.count).toBe(1);
+    expect((await resultA).count).toBe(1);
+    expect((await resultB).count).toBe(1);
     expect(fs.readFileSync(path.join(workspaceA, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant A skill\n');
     expect(fs.readFileSync(path.join(workspaceB, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant B skill\n');
     db.close();
@@ -98,9 +98,9 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     const resultA = adapter.materialize({ workingDirectory: workspaceA, skillNames: ['system-skill'], skillsBasePath: globalSkills, db, tenantId: 1 });
     const resultB = adapter.materialize({ workingDirectory: workspaceB, skillNames: ['system-skill'], skillsBasePath: globalSkills, db, tenantId: 2 });
 
-    expect(resultA.count).toBe(0);
+    expect((await resultA).count).toBe(0);
     expect(fs.existsSync(path.join(workspaceA, 'skills', 'system-skill'))).toBe(false);
-    expect(resultB.count).toBe(1);
+    expect((await resultB).count).toBe(1);
     expect(fs.readFileSync(path.join(workspaceB, 'skills', 'system-skill', 'SKILL.md'), 'utf-8')).toBe('# System skill\n');
     db.close();
   });

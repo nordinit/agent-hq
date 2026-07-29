@@ -44,7 +44,7 @@ describe('pruneOrphanedWorktrees', () => {
     return dir;
   }
 
-  it('preserves non-terminal task worktrees that are idle but within the stale backstop', () => {
+  it('preserves non-terminal task worktrees that are idle but within the stale backstop', async () => {
     const reviewWorktree = makeOldDirectory('task-101');
 
     const result = pruneOrphanedWorktrees({
@@ -55,12 +55,12 @@ describe('pruneOrphanedWorktrees', () => {
       hasLiveInstance: () => false,
     });
 
-    expect(result.errors).toEqual([]);
-    expect(result.pruned).toEqual([]);
+    expect((await result).errors).toEqual([]);
+    expect((await result).pruned).toEqual([]);
     expect(fs.existsSync(reviewWorktree)).toBe(true);
   });
 
-  it.each(['cancelled', 'failed'])('prunes terminal %s task worktrees once idle', (status) => {
+  it.each(['cancelled', 'failed'])('prunes terminal %s task worktrees once idle', async (status) => {
     const terminalWorktree = makeOldDirectory('task-105');
 
     const result = pruneOrphanedWorktrees({
@@ -71,12 +71,12 @@ describe('pruneOrphanedWorktrees', () => {
       hasLiveInstance: () => false,
     });
 
-    expect(result.errors).toEqual([]);
-    expect(result.pruned).toEqual([terminalWorktree]);
+    expect((await result).errors).toEqual([]);
+    expect((await result).pruned).toEqual([terminalWorktree]);
     expect(fs.existsSync(terminalWorktree)).toBe(false);
   });
 
-  it('reclaims non-terminal task worktrees once past the stale backstop', () => {
+  it('reclaims non-terminal task worktrees once past the stale backstop', async () => {
     const abandoned = makeDirectoryAgedDays('task-106', 30);
 
     const result = pruneOrphanedWorktrees({
@@ -88,12 +88,12 @@ describe('pruneOrphanedWorktrees', () => {
       hasLiveInstance: () => false,
     });
 
-    expect(result.errors).toEqual([]);
-    expect(result.pruned).toEqual([abandoned]);
+    expect((await result).errors).toEqual([]);
+    expect((await result).pruned).toEqual([abandoned]);
     expect(fs.existsSync(abandoned)).toBe(false);
   });
 
-  it('keeps a live non-terminal worktree even when past the stale backstop', () => {
+  it('keeps a live non-terminal worktree even when past the stale backstop', async () => {
     const stillRunning = makeDirectoryAgedDays('task-107', 30);
 
     const result = pruneOrphanedWorktrees({
@@ -105,12 +105,12 @@ describe('pruneOrphanedWorktrees', () => {
       hasLiveInstance: (worktreePath) => worktreePath === stillRunning,
     });
 
-    expect(result.errors).toEqual([]);
-    expect(result.pruned).toEqual([]);
+    expect((await result).errors).toEqual([]);
+    expect((await result).pruned).toEqual([]);
     expect(fs.existsSync(stillRunning)).toBe(true);
   });
 
-  it('reclaims clone-mode workspaces by deleting the directory', () => {
+  it('reclaims clone-mode workspaces by deleting the directory', async () => {
     const clone = path.join(basePath, 'task-108');
     // A clone is standalone: it owns a .git directory rather than a worktree
     // pointer file, and is not registered with the source repo.
@@ -128,12 +128,12 @@ describe('pruneOrphanedWorktrees', () => {
       hasLiveInstance: () => false,
     });
 
-    expect(result.errors).toEqual([]);
-    expect(result.pruned).toEqual([clone]);
+    expect((await result).errors).toEqual([]);
+    expect((await result).pruned).toEqual([clone]);
     expect(fs.existsSync(clone)).toBe(false);
   });
 
-  it('prunes done task worktrees when no live instance exists', () => {
+  it('prunes done task worktrees when no live instance exists', async () => {
     const current = makeOldDirectory('task-101');
     const legacy = makeOldDirectory('agent-hq-task-102');
 
@@ -145,13 +145,13 @@ describe('pruneOrphanedWorktrees', () => {
       hasLiveInstance: () => false,
     });
 
-    expect(result.errors).toEqual([]);
-    expect(result.pruned.sort()).toEqual([current, legacy].sort());
+    expect((await result).errors).toEqual([]);
+    expect((await result).pruned.sort()).toEqual([current, legacy].sort());
     expect(fs.existsSync(current)).toBe(false);
     expect(fs.existsSync(legacy)).toBe(false);
   });
 
-  it('preserves done task worktrees when a live instance still exists', () => {
+  it('preserves done task worktrees when a live instance still exists', async () => {
     const activeDoneWorktree = makeOldDirectory('task-103');
 
     const result = pruneOrphanedWorktrees({
@@ -162,12 +162,12 @@ describe('pruneOrphanedWorktrees', () => {
       hasLiveInstance: (worktreePath, taskId) => taskId === 103 && worktreePath === activeDoneWorktree,
     });
 
-    expect(result.errors).toEqual([]);
-    expect(result.pruned).toEqual([]);
+    expect((await result).errors).toEqual([]);
+    expect((await result).pruned).toEqual([]);
     expect(fs.existsSync(activeDoneWorktree)).toBe(true);
   });
 
-  it('prunes task directories whose backing task record is missing', () => {
+  it('prunes task directories whose backing task record is missing', async () => {
     const missingTask = makeOldDirectory('task-104');
 
     const result = pruneOrphanedWorktrees({
@@ -178,12 +178,12 @@ describe('pruneOrphanedWorktrees', () => {
       hasLiveInstance: () => false,
     });
 
-    expect(result.errors).toEqual([]);
-    expect(result.pruned).toEqual([missingTask]);
+    expect((await result).errors).toEqual([]);
+    expect((await result).pruned).toEqual([missingTask]);
     expect(fs.existsSync(missingTask)).toBe(false);
   });
 
-  it('prunes malformed legacy task folders with no live instance', () => {
+  it('prunes malformed legacy task folders with no live instance', async () => {
     const malformed = makeOldDirectory('agent-hq-task-bad');
     makeOldDirectory('not-a-task');
 
@@ -195,8 +195,8 @@ describe('pruneOrphanedWorktrees', () => {
       hasLiveInstance: () => false,
     });
 
-    expect(result.errors).toEqual([]);
-    expect(result.pruned).toEqual([malformed]);
+    expect((await result).errors).toEqual([]);
+    expect((await result).pruned).toEqual([malformed]);
     expect(fs.existsSync(malformed)).toBe(false);
     expect(fs.existsSync(path.join(basePath, 'not-a-task'))).toBe(true);
   });

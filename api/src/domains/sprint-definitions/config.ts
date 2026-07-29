@@ -245,8 +245,8 @@ export async function resolveTaskFieldSchemaForSprint(
       return row ? parseFieldSchemaJson(row.schema_json) : { fields: [] };
     };
 
-    const defaultSchema = getSchemaForTaskType(null);
-    const taskTypeSchema = taskType ? getSchemaForTaskType(taskType) : { fields: [] };
+    const defaultSchema = await getSchemaForTaskType(null);
+    const taskTypeSchema = taskType ? await getSchemaForTaskType(taskType) : { fields: [] };
     return {
       sprint_type: sprintType,
       schema: mergeFieldSchemas(defaultSchema, taskTypeSchema),

@@ -106,7 +106,7 @@ export interface SkillMaterializationAdapter {
    * remove those for skills no longer in skillNames. Safe to call multiple
    * times (idempotent per call for the same skillNames).
    */
-  materialize(context: MaterializationContext): MaterializationResult;
+  materialize(context: MaterializationContext): Promise<MaterializationResult>;
 
   /**
    * cleanup — remove runtime artifacts for a given list of skill names.
@@ -154,7 +154,7 @@ const HERMES_PROFILE_PROMPT_SNAPSHOT = '.skills_prompt_snapshot.json';
 export class NoopSkillAdapter implements SkillMaterializationAdapter {
   readonly adapterName = 'noop';
 
-  materialize(_context: MaterializationContext): MaterializationResult {
+  async materialize(_context: MaterializationContext): Promise<MaterializationResult> {
     return emptyResult();
   }
 
@@ -312,7 +312,7 @@ export abstract class FilesystemSkillAdapter implements SkillMaterializationAdap
     return sourceDir;
   }
 
-  materialize(context: MaterializationContext): MaterializationResult {
+  async materialize(context: MaterializationContext): Promise<MaterializationResult> {
     const { workingDirectory, skillNames, skillsBasePath, db, tenantId } = context;
     const result: MaterializationResult = { ok: true, count: 0, details: [], warnings: [] };
 
@@ -338,7 +338,7 @@ export abstract class FilesystemSkillAdapter implements SkillMaterializationAdap
     const previouslyManagedSkillNames = this.readManagedSkillNames(skillsDir);
 
     for (const name of skillNames) {
-      const source = this.resolveSkillDir(name, skillsBasePath, db, workingDirectory, tenantId);
+      const source = await this.resolveSkillDir(name, skillsBasePath, db, workingDirectory, tenantId);
 
       try {
         if (!source) {
@@ -456,8 +456,8 @@ export class ClaudeCodeSkillAdapter extends FilesystemSkillAdapter {
     return path.join(workingDirectory, '.claude', 'skills');
   }
 
-  override materialize(context: MaterializationContext): MaterializationResult {
-    const result = super.materialize(context);
+  override async materialize(context: MaterializationContext): Promise<MaterializationResult> {
+    const result = await super.materialize(context);
 
     if (context.workingDirectory) {
       try {
@@ -588,7 +588,7 @@ export class HermesSkillAdapter extends FilesystemSkillAdapter {
     return true;
   }
 
-  override materialize(context: MaterializationContext): MaterializationResult {
+  override async materialize(context: MaterializationContext): Promise<MaterializationResult> {
     const targets = resolveHermesTargets(context);
     if (!targets) {
       return {
@@ -610,7 +610,7 @@ export class HermesSkillAdapter extends FilesystemSkillAdapter {
       fs.writeFileSync(targets.readmePath, buildHermesSkillsReadme(context.skillNames, targets), 'utf-8');
       clearHermesPromptSnapshot(targets.promptSnapshotPath);
     } catch (err) {
-      result.warnings.push(
+      (await result).warnings.push(
         `[hermes] failed to write Hermes profile context artifacts: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
@@ -663,7 +663,7 @@ export class PromptInjectionSkillAdapter implements SkillMaterializationAdapter 
     this.adapterName = `prompt-injection(${runtimeName})`;
   }
 
-  materialize(context: MaterializationContext): MaterializationResult {
+  async materialize(context: MaterializationContext): Promise<MaterializationResult> {
     const result = emptyResult();
     if (context.skillNames.length === 0) return result;
 

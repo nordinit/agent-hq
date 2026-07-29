@@ -147,8 +147,8 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
   };
 }
 
-export function enrichTasks(tasks: TaskRecord[]): TaskRecord[] {
-  return tasks.map(enrichTask);
+export async function enrichTasks(tasks: TaskRecord[]): Promise<TaskRecord[]> {
+  return Promise.all(tasks.map(enrichTask));
 }
 
 export const TASK_SELECT = `

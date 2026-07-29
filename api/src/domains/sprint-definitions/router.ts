@@ -459,13 +459,13 @@ async function getResolvedOutcomesForSprintType(db: ReturnType<typeof getDb>, sp
     source: row.id ? 'configured' : 'fallback',
   }));
 
-  const byTaskType = Object.fromEntries(taskTypes.map(async (taskType) => [
+  const byTaskType = Object.fromEntries(await Promise.all(taskTypes.map(async (taskType) => [
       taskType,
       (await resolveSprintOutcomeVocabulary(db, { sprintType: sprintTypeKey, taskType, tenantId })).map((row) => ({
       ...row,
       source: row.id ? 'configured' : 'fallback',
     })),
-  ]));
+  ])));
 
   return {
     base,

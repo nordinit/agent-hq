@@ -54,7 +54,7 @@ describe('Hermes skill materialization', () => {
       runtimeConfig: { profile: 'agent-hq-hermes-test', hermesHome },
     });
 
-    expect(result.ok).toBe(true);
+    expect((await result).ok).toBe(true);
     expect(adapter.adapterName).toBe('hermes');
     expect(fs.lstatSync(path.join(hermesHome, 'skills', 'create-tool')).isDirectory()).toBe(true);
     expect(fs.readFileSync(path.join(hermesHome, 'skills', 'create-tool', 'SKILL.md'), 'utf-8')).toBe('# create-tool\n');
@@ -94,7 +94,7 @@ describe('Hermes skill materialization', () => {
       runtimeConfig: { profile: 'agent-hq-hermes-test', hermesHome },
     });
 
-    expect(result.ok).toBe(true);
+    expect((await result).ok).toBe(true);
     expect(fs.existsSync(path.join(hermesHome, 'skills', 'create-tool'))).toBe(false);
     expect(fs.lstatSync(path.join(hermesHome, 'skills', 'debug-tool')).isDirectory()).toBe(true);
     expect(JSON.parse(fs.readFileSync(path.join(hermesHome, '.agent-hq', 'assigned-skills.json'), 'utf-8')).skills).toEqual(['debug-tool']);

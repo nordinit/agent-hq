@@ -447,7 +447,7 @@ export class HermesRuntime implements AgentRuntime {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (state.transcriptPoller) clearInterval(state.transcriptPoller);
-      this.ingestTranscriptOnce(db, params.instanceId ?? null, args.config, {
+      await this.ingestTranscriptOnce(db, params.instanceId ?? null, args.config, {
         durableRunId: params.durableRunId ?? null,
         sessionKey: params.sessionKey,
       });
@@ -457,8 +457,8 @@ export class HermesRuntime implements AgentRuntime {
       const transcriptOutput = stdout.trim() || stderr.trim();
 
       if (state.aborted) {
-        if (transcriptOutput && !this.hasHermesJsonTranscriptRows(db, params.instanceId ?? null)) {
-          this.persistAssistantMessage(
+        if (transcriptOutput && !(await this.hasHermesJsonTranscriptRows(db, params.instanceId ?? null))) {
+          await this.persistAssistantMessage(
             db,
             params.instanceId ?? null,
             transcriptOutput,
@@ -478,8 +478,8 @@ export class HermesRuntime implements AgentRuntime {
       }
 
       if (result.error || state.timedOut || result.code !== 0) {
-        if (transcriptOutput && !this.hasHermesJsonTranscriptRows(db, params.instanceId ?? null)) {
-          this.persistAssistantMessage(
+        if (transcriptOutput && !(await this.hasHermesJsonTranscriptRows(db, params.instanceId ?? null))) {
+          await this.persistAssistantMessage(
             db,
             params.instanceId ?? null,
             transcriptOutput,
@@ -518,8 +518,8 @@ export class HermesRuntime implements AgentRuntime {
         return;
       }
 
-      if (transcriptOutput && !this.hasHermesJsonTranscriptRows(db, params.instanceId ?? null)) {
-        this.persistAssistantMessage(
+      if (transcriptOutput && !(await this.hasHermesJsonTranscriptRows(db, params.instanceId ?? null))) {
+        await this.persistAssistantMessage(
           db,
           params.instanceId ?? null,
           transcriptOutput,
@@ -599,7 +599,7 @@ export class HermesRuntime implements AgentRuntime {
       runtimeName: "Hermes",
       runtimeEndSource: event.source,
     });
-    this.persistRuntimeEndEvent(db, instanceId, event);
+    await this.persistRuntimeEndEvent(db, instanceId, event);
   }
 
 
@@ -643,13 +643,27 @@ export class HermesRuntime implements AgentRuntime {
     config: NormalizedHermesRuntimeConfig;
     state: ActiveHermesRun;
   }): ReturnType<typeof setInterval> {
+    // Deliberately fire-and-forget — this is a periodic poller and setInterval cannot
+    // await. But ingestTranscriptOnce is async now, which adds two hazards a synchronous
+    // poll did not have, so both are handled explicitly rather than left to chance:
+    //   - a rejection with nothing attached is an unhandled rejection, which under Node's
+    //     default --unhandled-rejections=throw terminates the process
+    //   - an ingest slower than the poll interval would overlap the next one, and two
+    //     concurrent ingests of the same transcript duplicate rows
+    let ingestInFlight = false;
     const poll = () => {
       if (args.state.exited || args.state.aborted || args.state.timedOut) return;
-      this.ingestTranscriptOnce(args.db, args.instanceId, args.config, {
+      if (ingestInFlight) return;
+      ingestInFlight = true;
+      void this.ingestTranscriptOnce(args.db, args.instanceId, args.config, {
         agentId: args.agentId,
         durableRunId: args.durableRunId,
         sessionKey: args.sessionKey,
-      });
+      })
+        .catch((err) => {
+          console.warn(`[hermes] transcript poll failed for instance ${args.instanceId}:`, err);
+        })
+        .finally(() => { ingestInFlight = false; });
     };
     poll();
     const timer = setInterval(poll, HERMES_TRANSCRIPT_POLL_INTERVAL_MS);

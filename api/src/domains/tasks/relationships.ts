@@ -267,7 +267,7 @@ export async function listTaskRelationships(db: Db, taskId: number): Promise<Tas
     WHERE tr.source_task_id = ? OR tr.target_task_id = ?
     ORDER BY tr.created_at ASC, tr.id ASC
   `, taskId, taskId) as Array<Record<string, unknown>>;
-  return rows.map(async row => await shapeRelationship(db, row));
+  return Promise.all(rows.map((row) => shapeRelationship(db, row)));
 }
 
 async function mirrorDispatchDependency(db: Db, sourceTaskId: number, targetTaskId: number, type: TaskRelationshipTypeConfig): Promise<void> {
