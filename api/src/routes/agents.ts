@@ -45,7 +45,9 @@ import { ensureOpenClawGatewayAvailable, requireOpenClawOutput, runOpenClawSync 
 import { syncAvailableOAuthProfilesToAuthFile } from '../lib/openclawOAuthProfiles';
 import {
   getAgentMcpPermissionPolicy,
+  getAgentMcpServerToolAllowlists,
   replaceAgentMcpPermissionPolicy,
+  replaceAgentMcpServerToolAllowlist,
   resetAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
@@ -1258,6 +1260,57 @@ function replaceAgentMcpPermissionsHandler(req: Request, res: Response) {
 
 router.post('/:id/mcp-permissions', replaceAgentMcpPermissionsHandler);
 router.put('/:id/mcp-permissions', replaceAgentMcpPermissionsHandler);
+
+// Per-agent MCP tool allowlists, one entry per assigned server. Separate from
+// capability policies above: capabilities gate Agent HQ's own MCP routes, these
+// gate which tools an external MCP server exposes to the agent.
+router.get('/:id/mcp-tool-allowlists', (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = resolveTenantIdFromRequest(db, req);
+    const agentId = Number(req.params.id);
+    if (!Number.isInteger(agentId) || agentId <= 0) {
+      return res.status(400).json({ error: 'Invalid agent id' });
+    }
+    if (!requireAgentVisibleForTenant(db, agentId, tenantId)) return res.status(404).json({ error: 'Agent not found' });
+    return res.json({ agent_id: agentId, servers: getAgentMcpServerToolAllowlists(db, agentId) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({ error: message });
+  }
+});
+
+function replaceAgentMcpToolAllowlistHandler(req: Request, res: Response) {
+  try {
+    const db = getDb();
+    const tenantId = resolveTenantIdFromRequest(db, req);
+    const agentId = Number(req.params.id);
+    const mcpServerId = Number(req.params.serverId);
+    if (!Number.isInteger(agentId) || agentId <= 0) {
+      return res.status(400).json({ error: 'Invalid agent id' });
+    }
+    if (!Number.isInteger(mcpServerId) || mcpServerId <= 0) {
+      return res.status(400).json({ error: 'Invalid MCP server id' });
+    }
+    if (!requireAgentVisibleForTenant(db, agentId, tenantId)) return res.status(404).json({ error: 'Agent not found' });
+
+    const body = req.body as { tool_allowlist?: unknown };
+    if (!Array.isArray(body.tool_allowlist) || !body.tool_allowlist.every((value) => typeof value === 'string')) {
+      return res.status(400).json({ error: 'tool_allowlist must be an array of tool names' });
+    }
+
+    const servers = replaceAgentMcpServerToolAllowlist(db, agentId, mcpServerId, body.tool_allowlist);
+    return res.json({ agent_id: agentId, servers });
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status;
+    const message = err instanceof Error ? err.message : String(err);
+    if (status) return res.status(status).json({ error: message });
+    return res.status(500).json({ error: message });
+  }
+}
+
+router.post('/:id/mcp-tool-allowlists/:serverId', replaceAgentMcpToolAllowlistHandler);
+router.put('/:id/mcp-tool-allowlists/:serverId', replaceAgentMcpToolAllowlistHandler);
 
 router.delete('/:id/mcp-permissions', (req: Request, res: Response) => {
   try {

@@ -3,7 +3,7 @@ import { formatDateTime, formatTime } from '@/lib/date';
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { api, Agent, AgentRuntimeType, JobInstance, LogEntry, AgentDoc, ProvisionStatus, ClaudeMdResult, Tool, AgentToolAssignment, AgentMcpAssignment, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, McpServer, ProviderConnectionRecord, ProviderRecord, AgentMcpPermissionPolicy, AgentMcpPermissionCapability, ProviderSlug } from '@/lib/api';
+import { api, Agent, AgentRuntimeType, JobInstance, LogEntry, AgentDoc, ProvisionStatus, ClaudeMdResult, Tool, AgentToolAssignment, AgentMcpAssignment, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, McpServer, ProviderConnectionRecord, ProviderRecord, AgentMcpPermissionPolicy, AgentMcpPermissionCapability, AgentMcpServerToolAllowlist, AgentMcpToolAllowlistPolicy, ProviderSlug } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Badge, StatusDot } from '@/components/ui/badge';
 import { getRunLifecycle, getRunStatusLabel } from '@/lib/runLifecycle';
@@ -238,6 +238,11 @@ export default function AgentDetailPage() {
   // Agent HQ MCP permissions
   const [mcpPermissionPolicy, setMcpPermissionPolicy] = useState<AgentMcpPermissionPolicy | null>(null);
   const [mcpPermissionDraft, setMcpPermissionDraft] = useState<AgentMcpPermissionCapability[]>([]);
+  // Per-server MCP tool allowlists (separate from Agent HQ capability policy)
+  const [mcpToolAllowlists, setMcpToolAllowlists] = useState<AgentMcpServerToolAllowlist[]>([]);
+  const [mcpToolAllowlistDraft, setMcpToolAllowlistDraft] = useState<Record<number, string>>({});
+  const [mcpToolAllowlistSavingId, setMcpToolAllowlistSavingId] = useState<number | null>(null);
+  const [mcpToolAllowlistError, setMcpToolAllowlistError] = useState<string | null>(null);
   const [mcpPermissionSaving, setMcpPermissionSaving] = useState(false);
   const [mcpPermissionError, setMcpPermissionError] = useState<string | null>(null);
 
@@ -567,13 +572,14 @@ export default function AgentDetailPage() {
       api.getAgentTools(id).catch(() => [] as AgentToolAssignment[]),
       api.getAgentMcpServers(id).catch(() => [] as AgentMcpAssignment[]),
       api.getAgentMcpPermissions(id).catch(() => null as AgentMcpPermissionPolicy | null),
+      api.getAgentMcpToolAllowlists(id).catch(() => null as AgentMcpToolAllowlistPolicy | null),
       api.getTools().catch(() => [] as Tool[]),
       api.getMcpServers().catch(() => [] as McpServer[]),
       api.getProviders().catch(() => ({ providers: [] })),
       api.getProviderConnections().catch(() => ({ connections: [] as ProviderConnectionRecord[] })),
       api.getSkills().catch(() => [] as import('@/lib/api').SkillEntry[]),
     ])
-      .then(([a, inst, lg, d, atools, amcp, permissionPolicy, tools, mcpServers, providerResponse, connectionResponse, skills]) => {
+      .then(([a, inst, lg, d, atools, amcp, permissionPolicy, toolAllowlistPolicy, tools, mcpServers, providerResponse, connectionResponse, skills]) => {
         setAgent(a);
         setInstances(inst);
         setLogs(lg);
@@ -582,6 +588,10 @@ export default function AgentDetailPage() {
         setAgentMcpServers(amcp);
         setMcpPermissionPolicy(permissionPolicy);
         setMcpPermissionDraft(permissionPolicy?.capabilities ?? []);
+        setMcpToolAllowlists(toolAllowlistPolicy?.servers ?? []);
+        setMcpToolAllowlistDraft(Object.fromEntries(
+          (toolAllowlistPolicy?.servers ?? []).map((server) => [server.mcp_server_id, server.tool_allowlist.join('\n')]),
+        ));
         setAllTools(tools);
         setAllMcpServers(mcpServers);
         setAllSkills(skills);
@@ -1225,6 +1235,28 @@ export default function AgentDetailPage() {
 
   // ── View mode render ─────────────────────────────────────────────────────────
 
+  async function saveMcpToolAllowlist(mcpServerId: number) {
+    if (!agent) return;
+    setMcpToolAllowlistSavingId(mcpServerId);
+    setMcpToolAllowlistError(null);
+    try {
+      // One tool per line; blank clears the restriction so every tool is allowed.
+      const tools = (mcpToolAllowlistDraft[mcpServerId] ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      const updated = await api.updateAgentMcpToolAllowlist(agent.id, mcpServerId, tools);
+      setMcpToolAllowlists(updated.servers);
+      setMcpToolAllowlistDraft(Object.fromEntries(
+        updated.servers.map((server) => [server.mcp_server_id, server.tool_allowlist.join('\n')]),
+      ));
+    } catch (err) {
+      setMcpToolAllowlistError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMcpToolAllowlistSavingId(null);
+    }
+  }
+
   const permissionGroups = groupMcpCapabilities(mcpPermissionDraft);
   const hasMcpPermissionChanges = JSON.stringify(mcpPermissionDraft.map((capability) => ({ key: capability.key, enabled: capability.enabled })))
     !== JSON.stringify((mcpPermissionPolicy?.capabilities ?? []).map((capability) => ({ key: capability.key, enabled: capability.enabled })));
@@ -1593,6 +1625,87 @@ export default function AgentDetailPage() {
             </>
           ) : (
             <div className="text-xs text-slate-400">MCP permission policy is unavailable for this agent right now.</div>
+          )}
+        </div>
+      </Card>
+
+      {/* MCP tool allowlists — which tools each assigned MCP server exposes */}
+      <Card>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Wrench className="w-4 h-4 text-emerald-400" />
+                <h2 className="text-sm font-semibold text-slate-200">MCP tool allowlists</h2>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Limits which tools each assigned MCP server exposes to this agent. Separate from the Agent HQ
+                capability policy above, which governs Agent HQ&apos;s own MCP routes. One tool name per line;
+                leave blank to allow every tool on that server.
+              </p>
+            </div>
+          </div>
+
+          {mcpToolAllowlistError ? (
+            <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
+              {mcpToolAllowlistError}
+            </div>
+          ) : null}
+
+          {mcpToolAllowlists.length === 0 ? (
+            <div className="text-xs text-slate-400">No MCP servers are assigned to this agent.</div>
+          ) : (
+            <div className="space-y-3">
+              {mcpToolAllowlists.map((server) => {
+                const draft = mcpToolAllowlistDraft[server.mcp_server_id] ?? '';
+                const dirty = draft !== server.tool_allowlist.join('\n');
+                const draftCount = draft.split('\n').map((line) => line.trim()).filter((line) => line.length > 0).length;
+                return (
+                  <div key={server.mcp_server_id} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-slate-200">{server.server_name ?? `MCP server #${server.mcp_server_id}`}</span>
+                        {server.server_slug ? <span className="text-xs text-slate-500">{server.server_slug}</span> : null}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs">
+                        {!server.enabled ? <Badge variant="warn">Disabled</Badge> : null}
+                        <Badge variant={draftCount === 0 ? 'warn' : 'info'}>
+                          {draftCount === 0 ? 'All tools allowed' : `${draftCount} tool${draftCount === 1 ? '' : 's'}`}
+                        </Badge>
+                      </div>
+                    </div>
+                    <textarea
+                      value={draft}
+                      onChange={(event) => setMcpToolAllowlistDraft((current) => ({
+                        ...current,
+                        [server.mcp_server_id]: event.target.value,
+                      }))}
+                      rows={Math.min(14, Math.max(4, draftCount + 1))}
+                      spellCheck={false}
+                      placeholder="Leave blank to allow every tool on this server"
+                      className="w-full rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs font-mono text-slate-200 focus:border-slate-600 focus:outline-none"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => saveMcpToolAllowlist(server.mcp_server_id)}
+                        disabled={mcpToolAllowlistSavingId === server.mcp_server_id || !dirty}
+                      >
+                        {mcpToolAllowlistSavingId === server.mcp_server_id
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <Save className="w-3 h-3" />}
+                        Save allowlist
+                      </Button>
+                      {dirty ? <span className="text-xs text-amber-300">Unsaved changes</span> : null}
+                    </div>
+                  </div>
+                );
+              })}
+              <p className="text-xs text-slate-500">
+                Changes take effect for new agent sessions after an MCP sync, since allowlists are materialized
+                into the runtime config rather than read live.
+              </p>
+            </div>
           )}
         </div>
       </Card>

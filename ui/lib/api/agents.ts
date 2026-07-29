@@ -1,5 +1,5 @@
 import { apiFetch } from './http';
-import type { Agent, AgentDoc, AgentMcpAssignment, AgentMcpPermissionPolicy, AgentToolAssignment, ClaudeMdResult, DeleteAgentResponse, GatewayConfig, GatewayRestartResponse, GatewayRuntimeHint, GatewayStatus, GatewayPairResponse, McpCatalog, McpServer, ProvisionResult, ProvisionStatus, RuntimeConfigResponse, SetupStatus, SkillDetail, SkillEntry, StarterPlanApplyResponse, StarterPlanInput, StarterPlanPreviewResponse, StarterTemplateCatalogResponse, Tool } from './types';
+import type { Agent, AgentDoc, AgentMcpAssignment, AgentMcpPermissionPolicy, AgentMcpToolAllowlistPolicy, AgentToolAssignment, ClaudeMdResult, DeleteAgentResponse, GatewayConfig, GatewayRestartResponse, GatewayRuntimeHint, GatewayStatus, GatewayPairResponse, McpCatalog, McpServer, ProvisionResult, ProvisionStatus, RuntimeConfigResponse, SetupStatus, SkillDetail, SkillEntry, StarterPlanApplyResponse, StarterPlanInput, StarterPlanPreviewResponse, StarterTemplateCatalogResponse, Tool } from './types';
 
 export const agentsClient = {
 // Agents
@@ -32,6 +32,13 @@ updateAgentMcpPermissions: (id: number, enabledCapabilities: string[]) =>
   }),
 resetAgentMcpPermissions: (id: number) =>
   apiFetch<AgentMcpPermissionPolicy>(`/api/v1/agents/${id}/mcp-permissions`, { method: 'DELETE' }),
+getAgentMcpToolAllowlists: (id: number) =>
+  apiFetch<AgentMcpToolAllowlistPolicy>(`/api/v1/agents/${id}/mcp-tool-allowlists`),
+updateAgentMcpToolAllowlist: (id: number, mcpServerId: number, toolAllowlist: string[]) =>
+  apiFetch<AgentMcpToolAllowlistPolicy>(`/api/v1/agents/${id}/mcp-tool-allowlists/${mcpServerId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ tool_allowlist: toolAllowlist }),
+  }),
 // Skills
 getSkills: () => apiFetch<SkillEntry[]>('/api/v1/skills'),
 getSkill: (name: string) => apiFetch<SkillDetail>(`/api/v1/skills/${encodeURIComponent(name)}`),

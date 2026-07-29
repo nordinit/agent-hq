@@ -106,6 +106,21 @@ export interface AgentMcpPermissionPolicy {
   capabilities: AgentMcpPermissionCapability[];
 }
 
+export interface AgentMcpServerToolAllowlist {
+  mcp_server_id: number;
+  server_name: string | null;
+  server_slug: string | null;
+  enabled: boolean;
+  /** Empty means every tool on the server is permitted. */
+  tool_allowlist: string[];
+  unrestricted: boolean;
+}
+
+export interface AgentMcpToolAllowlistPolicy {
+  agent_id: number;
+  servers: AgentMcpServerToolAllowlist[];
+}
+
 export interface JobInstance {
   id: number;
   template_id: number;
