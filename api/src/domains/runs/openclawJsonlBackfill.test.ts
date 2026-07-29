@@ -237,8 +237,8 @@ describe('OpenClaw JSONL transcript backfill', () => {
     expect(await db.get(`SELECT COUNT(*) AS count FROM chat_messages`)).toEqual({ count: 0 });
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
     fs.rmSync(openclawHome, { recursive: true, force: true });
   });
 

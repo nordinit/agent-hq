@@ -31,8 +31,8 @@ describe('agents repo source mode defaults', () => {
     `);
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
     jest.clearAllMocks();
   });
 

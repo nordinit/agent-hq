@@ -292,9 +292,9 @@ function mcpIdentity(agentId: number): McpApiIdentity {
 describe('applyTaskOutcome scoped routing_config resolution', () => {
   let db: Db;
 
-  afterEach(() => {
+  afterEach(async () => {
     jest.clearAllMocks();
-    db.close();
+    await db.close();
   });
 
   it('ignores null-scoped routing_config fallback rows', async () => {

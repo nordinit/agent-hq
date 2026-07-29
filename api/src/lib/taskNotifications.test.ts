@@ -191,7 +191,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🧱 <b>Task #484 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🏗️ <i>in_progress</i>  →  🧱 <b>blocked</b>'));
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -212,7 +212,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🧪 <b>Task #485 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🔍 <i>review</i>  →  🧪 <b>review_ready</b>'));
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -233,7 +233,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🔍 <b>Task #486 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🔵 <i>ready</i>  →  🔍 <b>review</b>'));
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -254,7 +254,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🧱 <b>Task #487 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🕒 <i>dev_deploy_queued</i>  →  🧱 <b>blocked</b>'));
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -286,7 +286,7 @@ describe('notifyTaskStatusChange', () => {
       expect(row.outlet).toBe('telegram');
       expect(notifyTelegramMock).toHaveBeenCalled();
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -309,7 +309,7 @@ describe('notifyTaskStatusChange', () => {
       expect(count).toBe(1);
       expect(notifyTelegramMock).not.toHaveBeenCalled();
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -333,7 +333,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).not.toHaveBeenCalled();
       expect(await db.get(`SELECT value FROM app_settings WHERE key = 'notifications.preferences'`)).toBeUndefined();
     } finally {
-      db.close();
+      await db.close();
     }
   });
 });

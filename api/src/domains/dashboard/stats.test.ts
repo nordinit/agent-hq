@@ -37,8 +37,8 @@ describe('getDashboardTokenUsageLast24h', () => {
     `);
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('includes token usage from the rolling last 24 hours and excludes older usage', async () => {

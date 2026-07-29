@@ -211,8 +211,8 @@ async function seedReadyTaskRun(db: Db, activeInstanceId: number | null = null):
 describe('startRunInstance task ownership repair', () => {
   let db: Db;
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('reattaches a matching live instance before applying the agent_started status mapping', async () => {
@@ -260,8 +260,8 @@ describe('startRunInstance task ownership repair', () => {
 describe('completeRunInstance runtime failure workflow event', () => {
   let db: Db;
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   async function seedInProgressRun(actionKind: 'status' | 'ignore', actionTarget: string | null): Promise<void> {

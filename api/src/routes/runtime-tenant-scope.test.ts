@@ -274,8 +274,8 @@ describe('runtime tenant scope', () => {
     await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('filters chat sessions, canonical sessions, logs, instance history, and telemetry to the active tenant', async () => {

@@ -138,8 +138,8 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
     await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('creates a canonical active session and backfills prompt-only chat_messages for a dispatched OpenClaw run', async () => {

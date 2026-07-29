@@ -33,7 +33,7 @@ describe('notification preferences', () => {
         outlets: { telegram: true },
       });
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -52,7 +52,7 @@ describe('notification preferences', () => {
       expect((await readNotificationPreferences(db, 2)).enabled).toBe(false);
       expect((await readNotificationPreferences(db, 2)).liveEnabled).toBe(true);
     } finally {
-      db.close();
+      await db.close();
     }
   });
 });

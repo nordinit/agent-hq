@@ -283,7 +283,7 @@ describe('routing_config scoped ownership schema migration', () => {
       VALUES (56, 'backend', 'todo', 94, 0, 0, 1, 'dev')
     `);
 
-    db.close();
+    await db.close();
     closeDb();
 
     const migratedDbRaw = new Database(getDbPath());

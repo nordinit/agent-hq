@@ -141,8 +141,8 @@ describe('GET /api/v1/sessions/:id/messages active live sync', () => {
     await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('updates rolling assistant stream rows and appends tool events without duplicates', async () => {
@@ -199,8 +199,8 @@ describe('POST /api/v1/sessions/import/instance/:instanceId completed reimport',
     await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('refreshes stale partial canonical rows from completed chat_messages without force', async () => {

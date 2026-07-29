@@ -74,7 +74,7 @@ describe('reconciler runtime integrity recovery', () => {
     expect(logs.some(row => row.message.includes('Orphan in_progress integrity anomaly: task #501'))).toBe(true);
     expect(logs.every(row => !row.message.includes('→ stalled'))).toBe(true);
 
-    db.close();
+    await db.close();
   });
 
   it('releases the scheduler overlap guard after a hung tick times out', async () => {

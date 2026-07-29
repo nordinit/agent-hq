@@ -53,14 +53,14 @@ function reloadWithoutFileTemplates(): void {
   ({ buildContractInstructions } = loadTransportAdapters());
 }
 
-afterEach(() => {
+afterEach(async () => {
   if (originalRoot == null) delete process.env.AGENT_CONTRACT_ROOT;
   else process.env.AGENT_CONTRACT_ROOT = originalRoot;
   process.chdir(originalCwd);
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   for (const dir of extraTempDirs) fs.rmSync(dir, { recursive: true, force: true });
   extraTempDirs = [];
-  for (const db of extraDbs) db.close();
+  for (const db of extraDbs) await db.close();
   extraDbs = [];
 });
 

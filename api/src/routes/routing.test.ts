@@ -1701,7 +1701,7 @@ describe('routing rules API', () => {
   it('allows non-admin MCP keys to CRUD project-scoped workflow transitions only in their assigned project', async () => {
     const tenantContext = await import('../lib/tenantContext');
     const db = getDb();
-    tenantContext.ensureTenantSchema(db);
+    await tenantContext.ensureTenantSchema(db);
     const apiKey = (await issueMcpApiKeyForAgent(db, 7, 'transition manager key')).apiKey;
     await replaceAgentMcpPermissionPolicy(db, 7, ['discovery.read_catalog', 'routing_transitions.manage_project_scope']);
     const authHeaders = {
@@ -2104,8 +2104,8 @@ describe('routing rules API', () => {
 
       const policy = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
       const externalEvents = require('../domains/routing/externalEventMappings') as typeof import('../domains/routing/externalEventMappings');
-      policy.seedSprintTypeTaskStatuses(db, 'dev', { force: true });
-      externalEvents.seedDefaultExternalEventMappings(db);
+      await policy.seedSprintTypeTaskStatuses(db, 'dev', { force: true });
+      await externalEvents.seedDefaultExternalEventMappings(db);
 
       const mappingResponse = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings?project_id=86`);
       expect(mappingResponse.status).toBe(200);
@@ -2168,7 +2168,7 @@ describe('routing rules API', () => {
         allowed_transitions: expect.arrayContaining(['blocked', 'failed']),
       }));
 
-      policy.seedSprintTaskPolicy(db, 57, { force: true });
+      await policy.seedSprintTaskPolicy(db, 57, { force: true });
 
       const sprintRows = await db.all(`SELECT status_key FROM sprint_task_statuses WHERE sprint_id = ? ORDER BY stage_order ASC`, 57) as Array<{ status_key: string }>;
       expect(sprintRows.map((row) => row.status_key)).not.toContain('dispatched');
@@ -2262,7 +2262,7 @@ describe('routing rules API', () => {
     try {
       const db = getDb();
       const tenantContext = require('../lib/tenantContext') as typeof import('../lib/tenantContext');
-      tenantContext.ensureTenantSchema(db);
+      await tenantContext.ensureTenantSchema(db);
       await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'EcoPool', 'ecopool', 0)`);
       await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (91, 2, 'Pool Client Import')`);
       await db.run(`

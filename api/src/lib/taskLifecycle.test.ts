@@ -195,7 +195,7 @@ describe('task lifecycle worktree cleanup', () => {
     clearPendingEndedActiveInstanceLinkageCleanupTimers();
     jest.clearAllTimers();
     jest.useRealTimers();
-    db.close();
+    await db.close();
   });
 
   it.each(['failed', 'cancelled', 'ready', 'qa_pass'])('keeps the worktree when a task moves to %s', async (status) => {

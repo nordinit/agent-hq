@@ -31,6 +31,12 @@ const { Project, SyntaxKind, Node } = require(path.resolve('api/node_modules/ts-
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
 const reportOnly = args.includes('--report-only');
+// Scoping matters. Applying this to source files wholesale is NOT safe: several are
+// deliberate fire-and-forget inside event handlers or shutdown paths, where inserting an
+// await changes ordering or deadlocks. Test files are mechanical by comparison — an
+// unawaited setup helper simply races the suite's own teardown.
+const testsOnly = args.includes('--tests-only');
+const sourceOnly = args.includes('--source-only');
 
 const project = new Project({ tsConfigFilePath: path.resolve('api/tsconfig.json') });
 const repoRoot = path.resolve('.');
@@ -48,6 +54,9 @@ function isPromiseType(type) {
 
 for (const file of project.getSourceFiles()) {
   if (file.getFilePath().includes('/node_modules/')) continue;
+  const isTest = file.getFilePath().endsWith('.test.ts');
+  if (testsOnly && !isTest) continue;
+  if (sourceOnly && isTest) continue;
 
   const statements = file.getDescendantsOfKind(SyntaxKind.ExpressionStatement);
   // Back to front, so an edit never invalidates a position still to be visited.

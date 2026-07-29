@@ -58,8 +58,8 @@ describe('stopTaskActiveInstance', () => {
     db = await createDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('aborts the active authoritative instance without pausing the task', async () => {

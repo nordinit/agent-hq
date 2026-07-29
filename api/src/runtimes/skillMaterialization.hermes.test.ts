@@ -76,14 +76,14 @@ describe('Hermes skill materialization', () => {
     const db = await makeSkillsDb(['create-tool', 'debug-tool']);
 
     const adapter = getSkillMaterializationAdapter('hermes');
-    adapter.materialize({
-      workingDirectory: workspaceDir,
-      skillNames: ['create-tool', 'debug-tool'],
-      skillsBasePath,
-      db,
-      tenantId: TENANT_ID,
-      runtimeConfig: { profile: 'agent-hq-hermes-test', hermesHome },
-    });
+    await adapter.materialize({
+            workingDirectory: workspaceDir,
+            skillNames: ['create-tool', 'debug-tool'],
+            skillsBasePath,
+            db,
+            tenantId: TENANT_ID,
+            runtimeConfig: { profile: 'agent-hq-hermes-test', hermesHome },
+          });
 
     const result = adapter.materialize({
       workingDirectory: workspaceDir,

@@ -327,7 +327,7 @@ async function resetDb(): Promise<void> {
     ) VALUES (1784, 449, 42, 'running', 'run:1784', datetime('now'))
   `);
   await db.run(`INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at) VALUES (449, 0, datetime('now'))`);
-  seedDefaultExternalEventMappings(db);
+  await seedDefaultExternalEventMappings(db);
   await db.run(`
     INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status)
     VALUES

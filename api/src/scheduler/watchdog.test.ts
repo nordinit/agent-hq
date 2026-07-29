@@ -230,8 +230,8 @@ describe('watchdog transcript activity', () => {
     process.env.OPENCLAW_HOME = openclawHome;
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
     fs.rmSync(openclawHome, { recursive: true, force: true });
     if (previousOpenClawHome === undefined) {
       delete process.env.OPENCLAW_HOME;
@@ -621,8 +621,8 @@ describe('watchdog worktree pruning notifications', () => {
     jest.mocked(pruneOrphanedWorktrees).mockReset();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('records prune notifications in the pruned agent tenant instead of the active tenant', async () => {

@@ -162,7 +162,7 @@ describe('reconciler workflow-defined status routing', () => {
 
     const task = await db.get(`SELECT assigned_agent_id FROM tasks WHERE id = 797`) as { assigned_agent_id: number };
     expect(task.assigned_agent_id).toBe(2);
-    db.close();
+    await db.close();
   });
 
   it('does not reconcile ownership for workflow terminal custom statuses', async () => {
@@ -178,7 +178,7 @@ describe('reconciler workflow-defined status routing', () => {
 
     const task = await db.get(`SELECT assigned_agent_id FROM tasks WHERE id = 798`) as { assigned_agent_id: number };
     expect(task.assigned_agent_id).toBe(1);
-    db.close();
+    await db.close();
   });
 
   it('reconciles ownership for legacy failed when workflow configuration marks it non-terminal', async () => {
@@ -194,7 +194,7 @@ describe('reconciler workflow-defined status routing', () => {
 
     const task = await db.get(`SELECT assigned_agent_id FROM tasks WHERE id = 799`) as { assigned_agent_id: number };
     expect(task.assigned_agent_id).toBe(2);
-    db.close();
+    await db.close();
   });
 
   it('uses workflow-specific terminality before sprint-type and global fallbacks', async () => {
@@ -212,7 +212,7 @@ describe('reconciler workflow-defined status routing', () => {
 
     const task = await db.get(`SELECT assigned_agent_id FROM tasks WHERE id = 800`) as { assigned_agent_id: number };
     expect(task.assigned_agent_id).toBe(2);
-    db.close();
+    await db.close();
   });
 
   it('keeps workflow-specific terminal failed from reconciling before non-terminal fallbacks', async () => {
@@ -230,7 +230,7 @@ describe('reconciler workflow-defined status routing', () => {
 
     const task = await db.get(`SELECT assigned_agent_id FROM tasks WHERE id = 804`) as { assigned_agent_id: number };
     expect(task.assigned_agent_id).toBe(1);
-    db.close();
+    await db.close();
   });
 
   it('uses tenant-specific sprint-type terminality before default sprint-type fallback', async () => {
@@ -251,7 +251,7 @@ describe('reconciler workflow-defined status routing', () => {
 
     const task = await db.get(`SELECT assigned_agent_id FROM tasks WHERE id = 801`) as { assigned_agent_id: number };
     expect(task.assigned_agent_id).toBe(2);
-    db.close();
+    await db.close();
   });
 
   it('keeps configured terminal and legacy fallback terminal statuses out of ownership reconciliation', async () => {
@@ -277,6 +277,6 @@ describe('reconciler workflow-defined status routing', () => {
       { id: 802, assigned_agent_id: 1 },
       { id: 803, assigned_agent_id: 1 },
     ]);
-    db.close();
+    await db.close();
   });
 });

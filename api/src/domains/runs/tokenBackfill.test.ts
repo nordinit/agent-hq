@@ -36,8 +36,8 @@ describe('backfillInstanceTokens', () => {
     mockSpawnSync.mockReset();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('persists token usage from canonical OpenClaw run sessions with durable suffixes', async () => {

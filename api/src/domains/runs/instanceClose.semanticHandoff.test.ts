@@ -130,8 +130,8 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
     db = await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
     jest.clearAllMocks();
   });
 

@@ -232,8 +232,8 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     });
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
     fs.rmSync(tempRoot, { recursive: true, force: true });
     jest.clearAllMocks();
   });

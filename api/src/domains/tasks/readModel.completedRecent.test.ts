@@ -51,8 +51,8 @@ describe('listRecentlyCompletedTasks tenant isolation', () => {
     `);
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('returns only recently completed tasks for the requested tenant', async () => {

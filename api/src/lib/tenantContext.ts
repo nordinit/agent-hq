@@ -2077,12 +2077,15 @@ export async function resolveTenantIdFromRequest(db: Db, req: Request): Promise<
     // exist by distinguishing 404 (no such tenant) from 403 (exists, not authorized);
     // enforcing scope first returns an identical 403 either way.
     enforceMcpTenantScope(id, 'explicit');
-    requireTenant(id);
+    // MUST be awaited: requireTenant became async, and an unawaited call means the
+    // tenant-existence check never runs before the id is returned — a nonexistent or
+    // unauthorized tenant id would be accepted.
+    await requireTenant(id);
     return id;
   }
 
   if (req.mcpIdentity) {
-    requireTenant(req.mcpIdentity.tenantId);
+    await requireTenant(req.mcpIdentity.tenantId);
     enforceMcpTenantScope(req.mcpIdentity.tenantId, 'identity');
     return req.mcpIdentity.tenantId;
   }

@@ -99,8 +99,8 @@ describe('GET /api/v1/chat/sessions/:instanceId/messages', () => {
     await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('loads a direct chat conversation by session_key across instance-backed and legacy rows', async () => {
@@ -138,8 +138,8 @@ describe('GET /api/v1/chat/sessions', () => {
     await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('returns canonical session project metadata when present', async () => {

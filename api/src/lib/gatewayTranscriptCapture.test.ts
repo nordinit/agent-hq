@@ -165,9 +165,9 @@ describe('gatewayTranscriptCapture', () => {
     await db.run(`INSERT INTO job_instances (id, durable_run_id) VALUES (4698, 'durable-4698')`);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     stopTranscriptCapture('agent:cinder-backend:run:4698:durable-4698');
-    db.close();
+    await db.close();
   });
 
   it('subscribes with the routed agent run key and persists assistant/tool history rows', async () => {

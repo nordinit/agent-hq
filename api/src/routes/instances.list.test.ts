@@ -98,8 +98,8 @@ describe('GET /api/v1/instances', () => {
     `);
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('filters server-side by agent_id and project_id', async () => {

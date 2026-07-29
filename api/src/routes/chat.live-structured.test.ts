@@ -251,11 +251,11 @@ describe('chat websocket live structured persistence', () => {
     await setupDb();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const client of proxyClients) {
       if (client.readyState === MockGatewaySocket.OPEN) client.close();
     }
-    db.close();
+    await db.close();
     if (previousOpenClawHome === undefined) {
       delete process.env.OPENCLAW_HOME;
     } else {

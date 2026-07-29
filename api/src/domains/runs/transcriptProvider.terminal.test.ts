@@ -44,8 +44,8 @@ beforeEach(async () => {
   mockGatewayGetHistory.mockReset();
 });
 
-afterEach(() => {
-  db.close();
+afterEach(async () => {
+  await db.close();
 });
 
 describe('OpenClawTranscriptProvider.getTranscript — terminal runs skip the gateway', () => {

@@ -59,7 +59,7 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     expect((await result).count).toBe(0);
     expect((await result).details).toEqual([{ skill: 'shared-skill', action: 'skipped', reason: 'source not found' }]);
     expect(fs.existsSync(path.join(workspace, 'skills', 'shared-skill'))).toBe(false);
-    db.close();
+    await db.close();
   });
 
   it('materializes the tenant-local DB skill when tenants reuse the same name', async () => {
@@ -79,7 +79,7 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     expect((await resultB).count).toBe(1);
     expect(fs.readFileSync(path.join(workspaceA, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant A skill\n');
     expect(fs.readFileSync(path.join(workspaceB, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant B skill\n');
-    db.close();
+    await db.close();
   });
 
   it('uses system skill directories only when the tenant has an explicit system skill row', async () => {
@@ -102,6 +102,6 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     expect(fs.existsSync(path.join(workspaceA, 'skills', 'system-skill'))).toBe(false);
     expect((await resultB).count).toBe(1);
     expect(fs.readFileSync(path.join(workspaceB, 'skills', 'system-skill', 'SKILL.md'), 'utf-8')).toBe('# System skill\n');
-    db.close();
+    await db.close();
   });
 });

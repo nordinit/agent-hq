@@ -984,9 +984,9 @@ describe('sprints API create clone support', () => {
 
       const policy = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
       const externalEvents = require('../domains/routing/externalEventMappings') as typeof import('../domains/routing/externalEventMappings');
-      policy.seedSprintTypeTaskStatuses(db, 'dev', { force: true });
-      policy.seedSprintTaskPolicy(db, 57, { force: true });
-      externalEvents.seedDefaultExternalEventMappings(db);
+      await policy.seedSprintTypeTaskStatuses(db, 'dev', { force: true });
+      await policy.seedSprintTaskPolicy(db, 57, { force: true });
+      await externalEvents.seedDefaultExternalEventMappings(db);
       await db.run(`
         INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority, is_system)
         VALUES (57, 'backend', 'ready', 1, 0, 0)

@@ -48,8 +48,8 @@ async function createDb(): Promise<Db> {
 describe('applyRuntimeEndToJobInstance token usage persistence', () => {
   let db: Db;
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('persists token usage from runtime end metadata without overwriting existing non-null values with null', async () => {

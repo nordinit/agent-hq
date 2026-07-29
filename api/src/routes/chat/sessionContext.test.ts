@@ -43,8 +43,8 @@ describe('resolveSessionContext', () => {
     await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('resolves a direct chat key as instance-less when a chat-stage job_instance already exists', async () => {

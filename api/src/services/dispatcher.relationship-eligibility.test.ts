@@ -210,7 +210,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     const history = await db.get(`SELECT new_value FROM task_history WHERE task_id = 530 AND field = 'dispatch_eligibility'`) as { new_value: string };
     expect(history.new_value).toContain('Dispatch ineligible: Blocked by (blocked_by) task #567');
     expect(history.new_value).toContain('is in_progress');
-    db.close();
+    await db.close();
   });
 
   it('keeps sprint overrides ahead of higher-priority sprint-type fallback candidates', async () => {
@@ -231,7 +231,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect((await result).dispatched).toBe(1);
     const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 608`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'ready', agent_id: 1, active_instance_id: 1 });
-    db.close();
+    await db.close();
   });
 
   it('dispatches workflow-defined custom statuses when a matching routing rule exists', async () => {
@@ -249,7 +249,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 797`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'intake', agent_id: 1, active_instance_id: 1 });
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('does not dispatch custom statuses without a matching routing rule', async () => {
@@ -262,7 +262,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect((await result).dispatched).toBe(0);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 798`) as { status: string; active_instance_id: number | null };
     expect(task).toEqual({ status: 'field_reported', active_instance_id: null });
-    db.close();
+    await db.close();
   });
 
   it('does not dispatch workflow terminal statuses even when a routing rule exists', async () => {
@@ -283,7 +283,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect((await result).dispatched).toBe(0);
     const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 799`) as { status: string; active_instance_id: number | null };
     expect(task).toEqual({ status: 'archived', active_instance_id: null });
-    db.close();
+    await db.close();
   });
 
   it('dispatches legacy failed when workflow configuration marks it non-terminal', async () => {
@@ -305,7 +305,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 800`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'failed', agent_id: 1, active_instance_id: 1 });
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('uses workflow-specific terminality before sprint-type and global fallbacks', async () => {
@@ -329,7 +329,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 801`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('keeps workflow-specific terminal statuses non-dispatchable before non-terminal fallbacks', async () => {
@@ -352,7 +352,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect((await result).dispatched).toBe(0);
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 806`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBeNull();
-    db.close();
+    await db.close();
   });
 
   it('dispatches configured non-terminal failed tasks on legacy task schemas without dispatch metadata columns', async () => {
@@ -386,7 +386,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     const instance = await db.get(`SELECT task_id, status FROM job_instances WHERE id = ?`, task.active_instance_id) as { task_id: number; status: string };
     expect(instance).toEqual({ task_id: 805, status: 'dispatched' });
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('uses tenant-specific sprint-type terminality before default sprint-type fallback', async () => {
@@ -410,7 +410,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 802`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('keeps globally configured terminal statuses and legacy terminal fallback non-dispatchable', async () => {
@@ -438,7 +438,7 @@ describe('dispatcher relationship-driven eligibility', () => {
       { id: 803, active_instance_id: null },
       { id: 804, active_instance_id: null },
     ]);
-    db.close();
+    await db.close();
   });
 
   it('uses relationship direction semantics to resolve which side blocks dispatch', async () => {
@@ -456,7 +456,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect(task.active_instance_id).toBeNull();
     const history = await db.get(`SELECT new_value FROM task_history WHERE task_id = 530 AND field = 'dispatch_eligibility'`) as { new_value: string };
     expect(history.new_value).toContain('Dispatch ineligible: Blocks (blocks) task #567');
-    db.close();
+    await db.close();
   });
 
   it('dispatches when the related blocking task is resolved', async () => {
@@ -473,7 +473,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeGreaterThan(0);
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('ignores non-blocking relationship types for dispatch eligibility', async () => {
@@ -490,6 +490,6 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeGreaterThan(0);
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 });
