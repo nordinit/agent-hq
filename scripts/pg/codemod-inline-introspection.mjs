@@ -42,7 +42,14 @@ function walk(dir, out = []) {
 }
 
 const Q = "[`'\"]";                       // any quote style
-const TBL = '([A-Za-z_][A-Za-z0-9_$.{}]*)'; // table name or ${interpolation}
+// Table name OR a ${...} interpolation. The leading char class must admit '$', or every
+// `PRAGMA table_info(${table})` site is silently skipped.
+const TBL = '([A-Za-z_$][A-Za-z0-9_$.{}]*)';
+
+/** Renders a captured table name as a TS expression: literal string, or template if interpolated. */
+function tableExpr(name) {
+  return name.includes('${') ? '`' + name + '`' : `'${name}'`;
+}
 
 /** Each rule: a pattern over the whole expression, and how to rebuild it. */
 const RULES = [
@@ -54,7 +61,7 @@ const RULES = [
       `(?:\\s+as\\s+Array<\\{[^}]*\\}>)?\\)` +
       `\\.some\\(\\s*\\(?(\\w+)\\)?\\s*=>\\s*\\3\\.name\\s*===\\s*([^)]+?)\\)`,
       'g'),
-    build: (m) => `await sharedColumnExists(${m[1]}, '${m[2]}', ${m[4].trim()})`,
+    build: (m) => `await sharedColumnExists(${m[1]}, ${tableExpr(m[2])}, ${m[4].trim()})`,
   },
   {
     name: 'table_info(...).map(r => r.name)  -> tableColumns',
@@ -63,7 +70,7 @@ const RULES = [
       `(?:\\s+as\\s+Array<\\{[^}]*\\}>)?\\)` +
       `\\.map\\(\\s*\\(?(\\w+)\\)?\\s*=>\\s*\\3\\.name\\s*\\)`,
       'g'),
-    build: (m) => `await sharedTableColumns(${m[1]}, '${m[2]}')`,
+    build: (m) => `await sharedTableColumns(${m[1]}, ${tableExpr(m[2])})`,
   },
   {
     name: 'multi-line table_info(...).some / .map  -> columnExists / tableColumns',
@@ -76,8 +83,8 @@ const RULES = [
       `(?:\\4\\.name\\s*===\\s*([^)\\n]+?)|\\4\\.name)\\s*\\)`,
       'g'),
     build: (m) => (m[3] === 'some'
-      ? `await sharedColumnExists(${m[1]}, '${m[2]}', ${(m[5] ?? '').trim()})`
-      : `await sharedTableColumns(${m[1]}, '${m[2]}')`),
+      ? `await sharedColumnExists(${m[1]}, ${tableExpr(m[2])}, ${(m[5] ?? '').trim()})`
+      : `await sharedTableColumns(${m[1]}, ${tableExpr(m[2])})`),
   },
   {
     name: "const x = await db.get(sqlite_master name='t')  -> tableExists",
@@ -96,6 +103,16 @@ const RULES = [
       `WHERE type\\s*=\\s*'table'${Q}\\s*\\)(?:\\s*as\\s+Array<\\{[^}]*\\}>)?`,
       'g'),
     build: (m) => `(await sharedListTables(${m[1]})).map((name) => ({ name }))`,
+  },
+  {
+    name: 'assigned table_info(...) -> tableColumns mapped back to {name} rows',
+    // `const cols = await db.all('PRAGMA table_info(t)') as Array<{name:string}>` — the value
+    // is inspected later, so the row SHAPE has to be preserved rather than flattened.
+    pattern: new RegExp(
+      `await ([A-Za-z_$][\\w.$]*)\\.all\\(\\s*${Q}PRAGMA table_info\\(${TBL}\\)${Q}\\s*\\)` +
+      `\\s*as\\s+Array<\\{\\s*name:\\s*string;?\\s*\\}>`,
+      'g'),
+    build: (m) => `(await sharedTableColumns(${m[1]}, ${tableExpr(m[2])})).map((name) => ({ name }))`,
   },
   {
     name: "Boolean(sqlite_master name='t')  -> tableExists",

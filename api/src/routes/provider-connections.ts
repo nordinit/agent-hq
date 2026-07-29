@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { listProviderDefinitions } from '../domains/providers/registry';
+import { tableColumns as sharedTableColumns } from "../db/introspection";
 import {
   getRuntimeProviderAdapter,
   listRuntimeProviderCapabilities,
@@ -205,7 +206,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'Provider connection not found.' });
       return;
     }
-    const agentColumns = await db.all('PRAGMA table_info(agents)') as Array<{ name: string }>;
+    const agentColumns = (await sharedTableColumns(db, 'agents')).map((name) => ({ name }));
     if (agentColumns.some(column => column.name === 'provider_connection_id')) {
       await db.run('UPDATE agents SET provider_connection_id = NULL WHERE provider_connection_id = ? AND tenant_id = ?', existing.id, tenantId);
     }

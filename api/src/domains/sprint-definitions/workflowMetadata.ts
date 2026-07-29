@@ -109,8 +109,7 @@ async function resolveContext(
 ): Promise<SprintContext> {
   const sprintId = Number(input.sprintId);
   if (Number.isFinite(sprintId) && sprintId > 0 && await tableExists(db, 'sprints')) {
-    const tenantColumn = await tableExists(db, 'sprints') && (await db.all(`PRAGMA table_info(sprints)`))
-      .some((row) => (row as { name: string }).name === 'tenant_id');
+    const tenantColumn = await sharedColumnExists(db, 'sprints', 'tenant_id');
     const tenantSql = tenantColumn && input.tenantId != null ? ' AND tenant_id = ?' : '';
     const tenantParams = tenantSql ? [input.tenantId] : [];
     const row = await db.get(`
@@ -136,8 +135,7 @@ async function resolveContext(
 
 async function loadTaskTypes(db: Db, sprintType: string, tenantId?: number | null): Promise<WorkflowTaskTypeMeta[]> {
   if (!await tableExists(db, 'sprint_type_task_types')) return [];
-  const tenantColumn = (await db.all(`PRAGMA table_info(sprint_type_task_types)`))
-    .some((row) => (row as { name: string }).name === 'tenant_id');
+  const tenantColumn = await sharedColumnExists(db, 'sprint_type_task_types', 'tenant_id');
   const tenantSql = tenantColumn && tenantId != null ? ' AND tenant_id = ?' : '';
   const tenantParams = tenantSql ? [tenantId] : [];
   const rows = await db.all(`

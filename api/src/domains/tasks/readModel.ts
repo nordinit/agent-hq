@@ -672,7 +672,11 @@ export async function listTasks(
     const tasks = await db.all(sql, ...params, lim, off) as Record<string, unknown>[];
 
     return {
-      tasks: enrichTasks(tasks),
+      // MUST be awaited. enrichTasks became async, and an unawaited promise assigned to an
+      // object property is not a type error — the property is simply typed Promise<T[]>. The
+      // object is then JSON-serialised, and JSON.stringify(promise) is `{}`, so the endpoint
+      // returned `"tasks": {}` with no rows at all and no error anywhere.
+      tasks: await enrichTasks(tasks),
       total,
       hasMore: off + lim < total,
       limit: lim,

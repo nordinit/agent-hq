@@ -6,6 +6,8 @@ import { attachSprintJob, closeSprint, completeSprintRoute, createSprint, delete
 import { checkSprintCompletion } from '../domains/sprints/lifecycle';
 import { getSprintDetail, getSprintMetrics, listSprintJobs, listSprints } from '../domains/sprints/readModel';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { columnExists as sharedColumnExists } from "../db/introspection";
+import { parseIdParam } from '../lib/routeParams';
 
 export { checkSprintCompletion };
 
@@ -40,7 +42,7 @@ async function requireSprintVisibleForTenant(db: ReturnType<typeof getDb>, sprin
 
 async function routeTableHasColumn(db: ReturnType<typeof getDb>, table: string, column: string): Promise<boolean> {
   try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, `${table}`, column);
   } catch {
     return false;
   }
@@ -76,6 +78,10 @@ router.get('/', async (req: Request, res: Response) => {
 
 router.get('/:id', async (req: Request, res: Response) => {
   try {
+    // Reject a non-numeric id before it reaches the database. SQLite silently returned no
+    // match for `/workflows/types`, so this route 404'd by accident; PostgreSQL rejects the
+    // cast and would 500 with a database error instead.
+    if (parseIdParam(req.params.id) === null) return res.status(404).json({ error: 'Sprint not found' });
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });

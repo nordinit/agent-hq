@@ -16,6 +16,39 @@ import { translateToPostgres } from './dialect';
  * work and would not roll back. That is the most dangerous mistake available here, so
  * finished transaction handles are poisoned rather than left usable.
  */
+/**
+ * Return int8 (bigint) as a NUMBER, not a string.
+ *
+ * node-postgres decodes int8 as a string by default, because PostgreSQL's range exceeds
+ * IEEE-754. That default is wrong for this application and silently corrosive: the baseline
+ * maps every SQLite INTEGER to bigint, so EVERY id, count and foreign key comes back as
+ * "99" instead of 99. Nothing throws — JSON responses just change shape, `id === 99` starts
+ * failing, arithmetic silently concatenates, and the UI compares strings to numbers.
+ *
+ * Agent HQ ids are sequence-generated and nowhere near 2^53, so the precision the string
+ * form protects is precision this schema cannot reach. Registered once at module load,
+ * because the parser table is global to the pg driver.
+ *
+ * numeric/decimal (1700) is deliberately left as a string — those columns CAN exceed
+ * float precision, and no Agent HQ id uses the type.
+ */
+const PG_INT8_OID = 20;
+let int8ParserRegistered = false;
+function registerInt8Parser(): void {
+  if (int8ParserRegistered) return;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { types } = require('pg') as typeof import('pg');
+  types.setTypeParser(PG_INT8_OID, (value: string) => {
+    const asNumber = Number(value);
+    if (!Number.isSafeInteger(asNumber)) {
+      // Louder than a silent precision loss, and unreachable for sequence-generated ids.
+      console.warn(`[pg] int8 value ${value} exceeds safe integer range; returning as number anyway`);
+    }
+    return asNumber;
+  });
+  int8ParserRegistered = true;
+}
+
 export class PostgresAdapter implements Db {
   readonly dialect: Dialect = 'postgres';
 
@@ -31,7 +64,9 @@ export class PostgresAdapter implements Db {
     private readonly client: PoolClient | null = null,
     private readonly depth = 0,
     private readonly state: { closed: boolean } = { closed: false },
-  ) {}
+  ) {
+    registerInt8Parser();
+  }
 
   get inTransaction(): boolean {
     return this.client !== null;

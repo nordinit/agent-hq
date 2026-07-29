@@ -1811,7 +1811,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     // Track job_instructions changes for prompt effectiveness analytics (#586)
     if (jobInstructionsProvided && resolvedJobInstructions !== getStoredJobInstructions(agent)) {
       try {
-        const agentCols = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
+        const agentCols = (await sharedTableColumns(db, 'agents')).map((name) => ({ name }));
         const hasUpdatedAt = agentCols.some((c: { name: string }) => c.name === 'job_instructions_updated_at');
         const hasVersion = agentCols.some((c: { name: string }) => c.name === 'instructions_version');
         if (hasUpdatedAt || hasVersion) {
@@ -2549,7 +2549,7 @@ router.post('/:id/skills', async (req: Request, res: Response) => {
       },
       skills: await describeTenantSkills(db, tenantId, nextSkillNames),
       skill_names: nextSkillNames,
-      sync: materializeAgentSkills(db, agent, nextSkillNames),
+      sync: await materializeAgentSkills(db, agent, nextSkillNames),
     });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
@@ -2593,7 +2593,7 @@ router.delete('/:id/skills/:skillName', async (req: Request, res: Response) => {
         name,
       })),
       skill_names: nextSkillNames,
-      sync: materializeAgentSkills(db, agent, nextSkillNames),
+      sync: await materializeAgentSkills(db, agent, nextSkillNames),
     });
   } catch (err) {
     return res.status(500).json({ error: String(err) });

@@ -13,6 +13,7 @@
  */
 
 import { getDb } from '../db/client';
+import { tableColumns as sharedTableColumns } from "../db/introspection";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -202,7 +203,7 @@ export async function buildReflectionContext(
 
   if (session.task_id) {
     // Detect available columns to build a compatible query
-    const colInfo = await db.all("PRAGMA table_info(job_instances)") as Array<{ name: string }>;
+    const colInfo = (await sharedTableColumns(db, 'job_instances')).map((name) => ({ name }));
     const cols = new Set(colInfo.map(c => c.name));
     const blockerCol = cols.has('blocker_reason') ? 'ji.blocker_reason' : "NULL";
     const summaryCol = cols.has('artifact_summary') ? 'ji.artifact_summary' : "NULL";
@@ -308,7 +309,7 @@ export interface TaskSessionEntry {
 export async function buildTaskSessionHistory(taskId: number): Promise<TaskSessionEntry[]> {
   const db = getDb();
   // Schema-tolerant: blocker_reason may not exist in all environments
-  const colInfo = await db.all("PRAGMA table_info(job_instances)") as Array<{ name: string }>;
+  const colInfo = (await sharedTableColumns(db, 'job_instances')).map((name) => ({ name }));
   const cols = new Set(colInfo.map(c => c.name));
   const blockerCol = cols.has('blocker_reason') ? 'ji.blocker_reason' : "NULL";
 

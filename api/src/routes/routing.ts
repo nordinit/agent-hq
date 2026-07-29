@@ -14,6 +14,7 @@ import {
 } from '../domains/sprint-definitions/config';
 import { getNeedsAttentionEligibleStatuses, setNeedsAttentionEligibleStatuses } from '../lib/reconcilerConfig';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { columnExists as sharedColumnExists } from "../db/introspection";
 import {
   createRoutingRule,
   createRoutingStatus,
@@ -132,7 +133,7 @@ async function withRequestTenant<T extends Record<string, unknown>>(req: Request
 async function routeTableHasColumn(table: string, column: string): Promise<boolean> {
   try {
     const db = getDb();
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, `${table}`, column);
   } catch {
     return false;
   }

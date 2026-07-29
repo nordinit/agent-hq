@@ -573,7 +573,10 @@ async function buildWorkflowConfigSnapshot(db: ReturnType<typeof getDb>, tenantI
   const visibleSprintTypes = sprintTypes.filter((_, index) => visibility[index]);
 
   return {
-    sprint_types: visibleSprintTypes.map(async (sprintType) => ({
+    // Promise.all, not a bare map. `.map(async ...)` yields Promise<T>[], and an array of
+    // promises assigned to a serialised property becomes an array of EMPTY OBJECTS in the
+    // response — no type error, no runtime error, just missing data.
+    sprint_types: await Promise.all(visibleSprintTypes.map(async (sprintType) => ({
       ...sprintType,
       deletion: await getSprintTypeDeletionSummary(db, sprintType.key, tenantId),
       task_types: await getTaskTypesForSprintType(db, sprintType.key),
@@ -582,7 +585,7 @@ async function buildWorkflowConfigSnapshot(db: ReturnType<typeof getDb>, tenantI
       outcomes: await getOutcomesForSprintType(db, sprintType.key, tenantId),
       resolved_outcomes: await getResolvedOutcomesForSprintType(db, sprintType.key, tenantId),
       relationship_types: await listRelationshipTypesForSprintType(db, sprintType.key, tenantId),
-    })),
+    }))),
   };
 }
 

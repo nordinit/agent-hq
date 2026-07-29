@@ -23,6 +23,7 @@ import { getDb } from '../db/client';
 import { WORKSPACE_ROOT as DEFAULT_WORKSPACE_ROOT } from '../config';
 import { ATLAS_SYSTEM_ROLE } from './atlasAgent';
 import { resolveAtlasWorkspaceRoot } from './atlasAgent';
+import { tableColumns as sharedTableColumns } from "../db/introspection";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -627,7 +628,7 @@ export async function resolveWorkspaceProvider(agentId?: string | number, option
       const db = getDb();
       const deletedFilter = await (async () => {
         try {
-          const columns = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
+          const columns = (await sharedTableColumns(db, 'agents')).map((name) => ({ name }));
           return columns.some((column) => column.name === 'deleted_at') ? 'AND deleted_at IS NULL' : '';
         } catch {
           return '';

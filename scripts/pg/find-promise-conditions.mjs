@@ -129,6 +129,31 @@ for (const file of project.getSourceFiles()) {
   }
 }
 
+// ---- promises assigned to object-literal properties --------------------------------
+// `return { tasks: enrichTasks(rows) }` is NOT a type error — the property is just typed
+// Promise<T>. If the object is then serialised, JSON.stringify(promise) is `{}`, so the
+// field silently becomes an empty object. One of these made /api/v1/tasks return no rows.
+for (const file of project.getSourceFiles()) {
+  const fp = file.getFilePath();
+  if (fp.includes('/node_modules/')) continue;
+  if (!includeTests && fp.endsWith('.test.ts')) continue;
+
+  for (const prop of file.getDescendantsOfKind(SyntaxKind.PropertyAssignment)) {
+    if (prop.wasForgotten()) continue;
+    const init = prop.getInitializer();
+    if (!init || Node.isAwaitExpression(init)) continue;
+    // A promise deliberately stored for later (.then/.catch attached, or a `void`) is fine.
+    if (!Node.isCallExpression(init)) continue;
+    if (!isPromise(init)) continue;
+    hits.push({
+      file: rel(file),
+      line: prop.getStartLineNumber(),
+      position: 'object-property',
+      code: prop.getText().split('\n')[0].trim().slice(0, 95),
+    });
+  }
+}
+
 hits.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
 
 console.log(`promises used as booleans: ${hits.length}\n`);

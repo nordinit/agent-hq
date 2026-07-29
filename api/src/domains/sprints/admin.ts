@@ -47,7 +47,7 @@ async function tableExists(db: Db, table: string): Promise<boolean> {
 async function listTableColumns(db: Db, table: string): Promise<string[]> {
   if (!await tableExists(db, table)) return [];
   try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).map((row) => row.name);
+    return await sharedTableColumns(db, `${table}`);
   } catch {
     return [];
   }

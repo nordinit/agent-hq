@@ -610,6 +610,9 @@ export async function upsertOAuthProfileStore(
   try {
     db = new Database(filePath, { fileMustExist: true });
     db.pragma('busy_timeout = 5000');
+    // Raw better-sqlite3 on purpose: this opens OPENCLAW'S OWN auth-profile file, an
+    // external SQLite database Agent HQ only reads. It is not Agent HQ's database and does
+    // not migrate to PostgreSQL with it, so sqlite_master here is correct and permanent.
     const table = db.prepare(`
       SELECT 1 AS present
       FROM sqlite_master

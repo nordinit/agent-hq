@@ -756,6 +756,14 @@ async function ensureTenantOwnedTableColumns(db: Db, defaultTenantId: number): P
 }
 
 async function ensureMcpServersTenantLocalSlugSchema(db: Db, defaultTenantId: number): Promise<void> {
+  // SQLite-only. This is a table REBUILD migration: it reads the stored DDL text out of
+  // sqlite_master to decide whether the tenant-local unique index is already in place, then
+  // recreates the table if not. PostgreSQL stores no DDL text, and does not need this at all —
+  // its schema comes from db/pg-baseline, which already declares the index.
+  //
+  // The guard matters because ensureTenantSchema() runs on EVERY request, so without it every
+  // request queries sqlite_master and every route 500s.
+  if (db.dialect === 'postgres') return;
   if (!await tableExists(db, 'mcp_servers') || !await tableHasColumn(db, 'mcp_servers', 'tenant_id')) return;
   const ddl = (await db.get(`
     SELECT sql
@@ -839,6 +847,17 @@ async function ensureMcpServersTenantLocalSlugSchema(db: Db, defaultTenantId: nu
 }
 
 async function tablePrimaryKeyColumns(db: Db, table: string): Promise<string[]> {
+  if (db.dialect === 'postgres') {
+    const rows = await db.all<{ column_name: string }>(
+      `SELECT a.attname AS column_name
+         FROM pg_index i
+         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indrelid = to_regclass(?) AND i.indisprimary`,
+      table,
+    );
+    return rows.map((r) => r.column_name);
+  }
+
   if (!await tableExists(db, table)) return [];
   return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string; pk: number }>)
     .filter((column) => Number(column.pk) > 0)
@@ -847,6 +866,14 @@ async function tablePrimaryKeyColumns(db: Db, table: string): Promise<string[]> 
 }
 
 async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: number): Promise<void> {
+  // SQLite-only. This is a table REBUILD: create-copy-drop-rename, driven by PRAGMA
+  // introspection of the existing declaration. PostgreSQL needs none of it — its schema comes
+  // from db/pg-baseline, which already declares the tenant-local shape this migrates TO.
+  //
+  // The guard is load-bearing rather than tidy: ensureTenantSchema() runs on EVERY request, so
+  // without it every request issues a PRAGMA and every route 500s.
+  if (db.dialect === 'postgres') return;
+
   if (!await tableExists(db, 'sprint_types')) return;
   const hasTenantId = await tableHasColumn(db, 'sprint_types', 'tenant_id');
   const primaryKeyColumns = await tablePrimaryKeyColumns(db, 'sprint_types');
@@ -1030,10 +1057,18 @@ function workflowConfigTableDefinition(table: string): string | null {
 }
 
 async function migrateWorkflowConfigTable(db: Db, table: string, defaultTenantId: number): Promise<void> {
+  // SQLite-only. This is a table REBUILD: create-copy-drop-rename, driven by PRAGMA
+  // introspection of the existing declaration. PostgreSQL needs none of it — its schema comes
+  // from db/pg-baseline, which already declares the tenant-local shape this migrates TO.
+  //
+  // The guard is load-bearing rather than tidy: ensureTenantSchema() runs on EVERY request, so
+  // without it every request issues a PRAGMA and every route 500s.
+  if (db.dialect === 'postgres') return;
+
   if (!await tableExists(db, table)) return;
   const definition = workflowConfigTableDefinition(table);
   if (!definition) return;
-  const columns = new Set((await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).map((column) => column.name));
+  const columns = new Set(await sharedTableColumns(db, `${table}`));
   const hasTenantId = columns.has('tenant_id');
   const hasNullTenantRows = hasTenantId
     ? ((await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id IS NULL`) as { n: number }).n > 0)

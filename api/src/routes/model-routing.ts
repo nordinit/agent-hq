@@ -2,13 +2,14 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { THINKING_LEVELS } from '../lib/workflowVocabulary';
+import { columnExists as sharedColumnExists, tableExists as sharedTableExists } from "../db/introspection";
 
 const router = Router();
 const ALLOWED_THINKING_LEVELS = new Set<string>(THINKING_LEVELS);
 
 async function hasColumn(db: ReturnType<typeof getDb>, table: string, column: string): Promise<boolean> {
   try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, `${table}`, column);
   } catch {
     return false;
   }
@@ -202,11 +203,7 @@ async function resolveScope(
 }
 
 async function providerConfigTableExists(db: ReturnType<typeof getDb>): Promise<boolean> {
-  const row = await db.get(`
-    SELECT name FROM sqlite_master
-    WHERE type = 'table' AND name = 'provider_config'
-  `) as { name: string } | undefined;
-  return Boolean(row);
+  return await sharedTableExists(db, 'provider_config');
 }
 
 async function assertConfiguredProvider(db: ReturnType<typeof getDb>, tenantId: number, provider: string | null | undefined): Promise<void> {

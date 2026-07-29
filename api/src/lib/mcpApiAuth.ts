@@ -11,6 +11,7 @@ import {
 import { resolveRuntimeAgentSlug } from './sessionKeys';
 import { ensureTenantSchema, resolveTenantIdFromRequest, verifyTenantSchemaForStartup } from './tenantContext';
 import { type Db } from "../db/adapter/types";
+import { columnExists as sharedColumnExists, tableExists as sharedTableExists } from "../db/introspection";
 
 export interface McpApiIdentity {
   keyId: number;
@@ -45,8 +46,7 @@ export class McpApiAuthError extends Error {
 
 async function hasTable(db: Db, table: string): Promise<boolean> {
   try {
-    const row = await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table) as { name: string } | undefined;
-    return Boolean(row);
+    return await sharedTableExists(db, table);
   } catch {
     return false;
   }
@@ -54,7 +54,7 @@ async function hasTable(db: Db, table: string): Promise<boolean> {
 
 async function hasColumn(db: Db, table: string, column: string): Promise<boolean> {
   try {
-    return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, `${table}`, column);
   } catch {
     return false;
   }
