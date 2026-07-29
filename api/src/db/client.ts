@@ -21,6 +21,8 @@ function ensureDbParentDir(dbPath: string): void {
 
 let _db: Database.Database | null = null;
 let _adapter: Db | null = null;
+// The connection the cached adapter wraps, so a reopen can be detected.
+let _adapterConnection: Database.Database | null = null;
 let _pool: import('pg').Pool | null = null;
 let _dbPath: string | null = null;
 
@@ -38,6 +40,7 @@ export function getRawDb(): Database.Database {
     _db.close();
     _db = null;
     _adapter = null;
+    _adapterConnection = null;
     _dbPath = null;
   }
   if (!_db) {
@@ -77,9 +80,23 @@ function postgresUrl(): string | undefined {
  * or URL change never leaves an adapter wrapping the previous one.
  */
 export function getDb(): Db {
-  if (_adapter) return _adapter;
-
   const url = postgresUrl();
+
+  // SQLite: resolve the raw connection FIRST, every time. getRawDb() is what notices that
+  // AGENT_HQ_DB_PATH changed and reopens, and short-circuiting on a cached adapter before
+  // calling it hands back an adapter still wrapping the OLD, now-closed connection —
+  // "TypeError: The database connection is not open" on the next query. Test suites hit
+  // this constantly because they point the path at a fresh temp file per test.
+  if (!url) {
+    const raw = getRawDb();
+    if (!_adapter || _adapterConnection !== raw) {
+      _adapter = new SqliteAdapter(raw);
+      _adapterConnection = raw;
+    }
+    return _adapter;
+  }
+
+  if (_adapter) return _adapter;
   if (url) {
     // Required rather than imported at module scope: pulling in `pg` unconditionally would
     // make it a hard dependency of every SQLite-only entrypoint and every test process.
@@ -97,8 +114,7 @@ export function getDb(): Db {
     return _adapter;
   }
 
-  _adapter = new SqliteAdapter(getRawDb());
-  return _adapter;
+  throw new Error('unreachable: the SQLite path returns above');
 }
 
 export function getDbPath(): string {
@@ -133,6 +149,7 @@ export function closeDb(): void {
   // The PostgreSQL pool is intentionally NOT ended here: closeDb() is synchronous and
   // pool.end() is not. Use closeDbAsync() where the pool must actually be released.
   _adapter = null;
+  _adapterConnection = null;
   _dbPath = null;
 }
 

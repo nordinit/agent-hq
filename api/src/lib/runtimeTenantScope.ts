@@ -98,12 +98,16 @@ export async function insertRuntimeLog(
     placeholders.push('?');
     values.push(value);
   };
-  pushValue('tenant_id', tenantId);
-  pushValue('instance_id', input.instanceId ?? null);
-  pushValue('agent_id', input.agentId ?? null);
-  pushValue('job_title', input.jobTitle == null ? '' : String(input.jobTitle));
-  pushValue('level', input.level ?? 'info');
-  pushValue('message', input.message);
+  // Each of these MUST be awaited: pushValue became async when tableHasColumn did, and an
+  // unawaited call leaves columns/placeholders empty, producing `INSERT INTO logs () VALUES ()`.
+  // They are awaited in sequence rather than via Promise.all so column order stays
+  // deterministic and matches the values array.
+  await pushValue('tenant_id', tenantId);
+  await pushValue('instance_id', input.instanceId ?? null);
+  await pushValue('agent_id', input.agentId ?? null);
+  await pushValue('job_title', input.jobTitle == null ? '' : String(input.jobTitle));
+  await pushValue('level', input.level ?? 'info');
+  await pushValue('message', input.message);
   await db.run(`
     INSERT INTO logs (${columns.join(', ')})
     VALUES (${placeholders.join(', ')})
