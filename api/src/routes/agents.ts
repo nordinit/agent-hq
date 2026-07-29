@@ -609,7 +609,7 @@ async function insertProvisionedAgent(db: ReturnType<typeof getDb>, params: Agen
 
   const placeholders = columns.map(() => '?').join(', ');
   const result = await db.run(`INSERT INTO agents (${columns.join(', ')}) VALUES (${placeholders})`, ...values);
-  return Number(result.lastInsertRowid);
+  return Number(result.lastInsertId);
 }
 
 function validateRoutingRules(routingRules: ProvisionFullRequest['routing_rules']): string[] {

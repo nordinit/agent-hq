@@ -122,7 +122,7 @@ router.post('/', async (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, tenantId, name, slug, description ?? '', implementation_type, implementation_body ?? '', input_schema ? JSON.stringify(input_schema) : '{}', permissions ?? 'read_only', tags ? JSON.stringify(tags) : '[]', enabled !== undefined ? (enabled ? 1 : 0) : 1);
 
-    const created = await db.get(`SELECT * FROM tools WHERE id = ?`, result.lastInsertRowid);
+    const created = await db.get(`SELECT * FROM tools WHERE id = ?`, result.lastInsertId);
     return res.status(201).json(created);
   } catch (err: any) {
     if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
@@ -382,7 +382,7 @@ agentToolsRouter.post('/', async (req: Request, res: Response) => {
       FROM agent_tool_assignments ata
       JOIN tools t ON t.id = ata.tool_id
       WHERE ata.id = ?
-    `, result.lastInsertRowid);
+    `, result.lastInsertId);
 
     return res.status(201).json(created);
   } catch (err: any) {

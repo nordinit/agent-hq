@@ -184,7 +184,7 @@ export async function startChatRunInstance(ctx: SessionContext): Promise<{ insta
            VALUES (${tenant.valueSql}?, NULL, 'running', ?, 'chat', ?, ?)`, ...tenant.values, ctx.agentId, ctx.sessionKey, now, durableRunId)
       : await db.run(`INSERT INTO job_instances (${tenant.columnSql}agent_id, task_id, status, session_key, run_stage, started_at)
            VALUES (${tenant.valueSql}?, NULL, 'running', ?, 'chat', ?)`, ...tenant.values, ctx.agentId, ctx.sessionKey, now);
-    return { instanceId: Number(info.lastInsertRowid), durableRunId };
+    return { instanceId: Number(info.lastInsertId), durableRunId };
   } catch (err) {
     console.warn('[chat-proxy] Failed to start chat run instance:', err instanceof Error ? err.message : String(err));
     return null;

@@ -318,7 +318,7 @@ describe('recurring task series API', () => {
     const ecoPoolTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('EcoPool', 'ecopool', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md)
       VALUES (714, ?, 'EcoPool', '', '')

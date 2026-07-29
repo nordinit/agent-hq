@@ -40,26 +40,44 @@ const repoRoot = path.resolve('.');
 const rel = (f) => f.getFilePath().replace(`${repoRoot}/`, '');
 
 /**
- * Files the codemod must never touch.
+ * Files the codemod must never touch, in any pass.
  *
  * The adapter is the ONE place that legitimately speaks better-sqlite3 directly — it is
- * the implementation of the interface everything else migrates onto. Rewriting its own
- * `Database.Database` field to `Db` makes it circular and its call sites nonsensical.
- * foreignKeyGuard and client.ts likewise own the raw connection and its pragmas.
+ * the implementation everything else migrates onto. Rewriting its own Database.Database
+ * field to Db makes it circular. client.ts and foreignKeyGuard.ts own the raw connection
+ * and its pragmas for the same reason.
  */
-const EXCLUDED = [
+const NEVER_TOUCH = [
   '/src/db/adapter/',
   '/src/db/client.ts',
   '/src/db/foreignKeyGuard.ts',
 ];
 
+/**
+ * Files that keep the RAW driver but still participate in async propagation.
+ *
+ * db/schema.ts is the SQLite schema-migration engine: it reads PRAGMA table_info to
+ * discover columns, toggles PRAGMA foreign_keys around table rebuilds, and performs
+ * SQLite's create-copy-drop-rename dance. None of that is expressible through the Db
+ * interface, and none of it has a PostgreSQL equivalent — it is replaced wholesale by the
+ * generated baseline, and deleted by task #766.
+ *
+ * So its own query sites and handle type are left alone. It DOES still need awaits,
+ * because it calls functions elsewhere that the conversion made async; those two concerns
+ * are independent, which is why this list is separate from NEVER_TOUCH.
+ */
+const RAW_DRIVER = [
+  '/src/db/schema.ts',
+];
+
 const allFiles = project.getSourceFiles()
   .filter((f) => !f.getFilePath().includes('/node_modules/'))
-  .filter((f) => !EXCLUDED.some((e) => f.getFilePath().includes(e)));
-// --only scopes which files are REWRITTEN. Propagation must still scan the whole program:
-// making a function async changes its contract for every caller everywhere, and a scoped
-// propagation would leave those callers silently dropping a Promise.
-const files = only ? allFiles.filter((f) => rel(f).includes(only)) : allFiles;
+  .filter((f) => !NEVER_TOUCH.some((e) => f.getFilePath().includes(e)));
+
+// Passes 1 and 1b (rewrite + retype) skip RAW_DRIVER; propagation and return-type
+// wrapping still cover it.
+const rewritable = allFiles.filter((f) => !RAW_DRIVER.some((e) => f.getFilePath().includes(e)));
+const files = only ? rewritable.filter((f) => rel(f).includes(only)) : rewritable;
 
 const report = {
   rewritten: 0,

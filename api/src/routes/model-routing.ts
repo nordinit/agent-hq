@@ -418,7 +418,7 @@ router.post('/', async (req: Request, res: Response) => {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, payload.max_points, provider, payload.model, payload.fallback_model ?? null, payload.max_turns ?? null, payload.max_budget_usd ?? null, payload.thinking_level ?? null, payload.fast_mode == null ? null : (payload.fast_mode ? 1 : 0), payload.enabled ? 1 : 0, payload.label ?? null);
 
-    const created = await db.get(`SELECT * FROM story_point_model_routing WHERE id = ?`, result.lastInsertRowid) as Record<string, unknown> | undefined;
+    const created = await db.get(`SELECT * FROM story_point_model_routing WHERE id = ?`, result.lastInsertId) as Record<string, unknown> | undefined;
     return res.status(201).json(serializeRule(created ?? {}));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;

@@ -262,7 +262,7 @@ export async function createSprint(
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, toCanonicalTimestamp(started_at), repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode);
 
-    newId = Number(result.lastInsertRowid);
+    newId = Number(result.lastInsertId);
 
     if (sourceSprint) {
       await cloneSprintSetup(db, sourceSprint.id, Number(project_id), newId, project.tenant_id ?? null);

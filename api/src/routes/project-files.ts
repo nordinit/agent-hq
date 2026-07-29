@@ -116,7 +116,7 @@ async function insertProjectFileVersion(
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, input.tenantId, input.projectId, input.fileId, input.versionNumber, input.file.filename, input.file.originalname, input.file.mimetype, input.file.size, input.file.path, input.actor, input.timestamp, input.changeSource);
-  return result.lastInsertRowid;
+  return result.lastInsertId;
 }
 
 function cleanupUploadedFile(file: Express.Multer.File | undefined): void {
@@ -180,7 +180,7 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
       const versionId = await insertProjectFileVersion(db, {
               tenantId,
               projectId: req.params.id,
-              fileId: insertFile.lastInsertRowid,
+              fileId: insertFile.lastInsertId,
               versionNumber: 1,
               file: req.file!,
               actor: uploadedBy,
@@ -188,7 +188,7 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
               changeSource: 'api_upload',
             });
 
-      await db.run('UPDATE project_files SET current_version_id = ? WHERE id = ?', versionId, insertFile.lastInsertRowid);
+      await db.run('UPDATE project_files SET current_version_id = ? WHERE id = ?', versionId, insertFile.lastInsertId);
       return insertFile;
     })();
 

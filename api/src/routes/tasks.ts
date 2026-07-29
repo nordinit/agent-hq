@@ -983,7 +983,7 @@ router.post('/:id/attachments', upload.single('file'), async (req: Request, res:
       VALUES (?, ?, ?, ?, ?, ?)
     `, taskId, file.originalname, file.path, file.mimetype || '', file.size, uploadedBy);
 
-    const attachment = await db.get('SELECT * FROM task_attachments WHERE id = ?', result.lastInsertRowid);
+    const attachment = await db.get('SELECT * FROM task_attachments WHERE id = ?', result.lastInsertId);
     res.status(201).json(attachment);
   } catch (err) {
     res.status(500).json({ error: String(err) });

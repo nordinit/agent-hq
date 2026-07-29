@@ -1176,7 +1176,7 @@ router.post('/types/:key/field-schemas', async (req: Request, res: Response) => 
       SELECT ${await tableHasColumn(db, 'task_field_schemas', 'tenant_id') ? 'tenant_id,' : ''} id, sprint_type_key, task_type, schema_json, is_system, created_at, updated_at
       FROM task_field_schemas
       WHERE id = ?
-    `, Number(result.lastInsertRowid)) as TaskFieldSchemaRow;
+    `, Number(result.lastInsertId)) as TaskFieldSchemaRow;
 
     return res.status(201).json({
       ...created,
@@ -1321,7 +1321,7 @@ router.post('/types/:key/relationship-types', async (req: Request, res: Response
       ) VALUES (${insertTenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     `, ...insertTenant.params, sprintTypeKey, payload.key, payload.label, payload.inverse_label, payload.category, payload.affects_dispatch_eligibility, payload.direction_semantics, JSON.stringify(payload.active_statuses), JSON.stringify(payload.resolved_statuses), payload.allow_create_related_task, payload.default_related_task_type, payload.default_related_task_status, isSystem, JSON.stringify(payload.metadata));
 
-    const created = await getRelationshipTypeRow(db, sprintTypeKey, Number(result.lastInsertRowid), tenantId);
+    const created = await getRelationshipTypeRow(db, sprintTypeKey, Number(result.lastInsertId), tenantId);
     return res.status(201).json(created ? shapeRelationshipType(created) : null);
   } catch (err) {
     return res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
@@ -1471,7 +1471,7 @@ router.post('/types/:key/outcomes', async (req: Request, res: Response) => {
       SELECT id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at
       FROM sprint_type_outcomes
       WHERE id = ?
-    `, Number(result.lastInsertRowid)) as SprintTypeOutcomeRow;
+    `, Number(result.lastInsertId)) as SprintTypeOutcomeRow;
 
     return res.status(201).json({ ...created, metadata: JSON.parse(created.metadata_json || '{}') });
   } catch (err) {

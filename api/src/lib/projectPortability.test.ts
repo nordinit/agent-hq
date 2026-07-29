@@ -33,12 +33,12 @@ async function seedPortableProject(): Promise<number> {
   const projectId = Number((await db.run(`
     INSERT INTO projects (tenant_id, name, description, context_md, repo_path, repo_access_mode)
     VALUES (1, 'Portable Source', 'Source description', '# Context', '/tmp/source-worktree', 'worktree')
-  `)).lastInsertRowid);
+  `)).lastInsertId);
 
   const sprintId = Number((await db.run(`
     INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
     VALUES (1, ?, 'Enhancements', 'Ship portability', 'dev', 'active', 'runs', '5')
-  `, projectId)).lastInsertRowid);
+  `, projectId)).lastInsertId);
 
   const agentId = Number((await db.run(`
     INSERT INTO agents (
@@ -51,16 +51,16 @@ async function seedPortableProject(): Promise<number> {
       'claude-sonnet-4-5', 'anthropic', 'Backend Engineer', 'Build APIs', '["github"]', 1,
       1200, 45, 2, '["priority"]', ?
     )
-  `, projectId)).lastInsertRowid);
+  `, projectId)).lastInsertId);
 
   const toolId = Number((await db.run(`
     INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body, enabled)
     VALUES (1, 'Repo Search', 'repo_search', 'bash', 'rg "$QUERY"', 1)
-  `)).lastInsertRowid);
+  `)).lastInsertId);
   const mcpId = Number((await db.run(`
     INSERT INTO mcp_servers (tenant_id, name, slug, command, args, env, enabled)
     VALUES (1, 'Agent HQ', 'agent_hq', 'node', '[]', '{}', 1)
-  `)).lastInsertRowid);
+  `)).lastInsertId);
   await db.run(`INSERT INTO agent_tool_assignments (agent_id, tool_id, overrides, enabled) VALUES (?, ?, '{"limit":10}', 1)`, agentId, toolId);
   await db.run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled) VALUES (?, ?, '{}', 1)`, agentId, mcpId);
 

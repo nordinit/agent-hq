@@ -138,7 +138,7 @@ async function insertWorkflowFileVersion(
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, input.scope.tenant_id, input.scope.project_id, input.scope.workflow_id, input.fileId, input.versionNumber, input.file.filename, input.file.originalname, input.file.mimetype, input.file.size, input.file.path, input.actor, input.timestamp, input.changeSource);
-  return result.lastInsertRowid;
+  return result.lastInsertId;
 }
 
 function cleanupUploadedFile(file: Express.Multer.File | undefined): void {
@@ -196,14 +196,14 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
 
       const versionId = await insertWorkflowFileVersion(db, {
               scope,
-              fileId: insertFile.lastInsertRowid,
+              fileId: insertFile.lastInsertId,
               versionNumber: 1,
               file: req.file!,
               actor: uploadedBy,
               timestamp: now,
               changeSource: 'api_upload',
             });
-      await db.run('UPDATE workflow_files SET current_version_id = ? WHERE id = ?', versionId, insertFile.lastInsertRowid);
+      await db.run('UPDATE workflow_files SET current_version_id = ? WHERE id = ?', versionId, insertFile.lastInsertId);
       return insertFile;
     })();
 

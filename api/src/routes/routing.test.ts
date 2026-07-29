@@ -313,7 +313,7 @@ describe('routing rules API', () => {
     const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Company', 'beta-company', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
     await db.run(`UPDATE sprints SET tenant_id = ? WHERE id = 10`, defaultTenantId);
     await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
@@ -386,7 +386,7 @@ describe('routing rules API', () => {
     const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Company', 'beta-company', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
     await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
     await db.run(`UPDATE agents SET tenant_id = ? WHERE id = 8`, betaTenantId);
@@ -1795,7 +1795,7 @@ describe('routing rules API', () => {
     const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Company', 'beta-company', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
     await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
     await db.run(`UPDATE agents SET tenant_id = ? WHERE id = 8`, betaTenantId);

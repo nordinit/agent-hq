@@ -523,7 +523,7 @@ describe('model-routing aliases', () => {
 
     const { server, baseUrl } = await startTestServer();
     try {
-      const response = await fetch(`${baseUrl}/api/v1/model-routing/${inserted.lastInsertRowid}`, {
+      const response = await fetch(`${baseUrl}/api/v1/model-routing/${inserted.lastInsertId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: 'openai-codex' }),
@@ -547,7 +547,7 @@ describe('model-routing aliases', () => {
     const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Tenant', 'beta-tenant', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
     await db.run(`UPDATE sprints SET tenant_id = ? WHERE id = 20`, betaTenantId);
     const inserted = await db.run(`
@@ -555,7 +555,7 @@ describe('model-routing aliases', () => {
         (tenant_id, project_id, sprint_id, max_points, provider, model, label)
       VALUES (?, 2, 20, 8, 'openai', 'openai/gpt-5.5', 'Beta private rule')
     `, betaTenantId);
-    const betaRuleId = Number(inserted.lastInsertRowid);
+    const betaRuleId = Number(inserted.lastInsertId);
 
     const { server, baseUrl } = await startTestServer();
     try {

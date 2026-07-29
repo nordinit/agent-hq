@@ -1150,7 +1150,7 @@ export async function createWorkflowEventMapping(db: Db, input: Record<string, u
     VALUES (${placeholders}, datetime('now'), datetime('now'))
   `, ...columns.map((column) => insertValues[column]));
 
-  const row = await db.get('SELECT * FROM external_event_mappings WHERE id = ?', result.lastInsertRowid) as MappingRecord;
+  const row = await db.get('SELECT * FROM external_event_mappings WHERE id = ?', result.lastInsertId) as MappingRecord;
   return serializeMappingRow(row);
 }
 

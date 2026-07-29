@@ -287,7 +287,7 @@ export async function createTaskRecord(
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, resolvedTenantId, title, description, status, priority, resolvedProjectId, resolvedAgentId, resolvedSprintId, recurring ? 1 : 0, normalizedTaskType ?? null, normalizedStoryPoints ?? null, origin_task_id ?? null, defect_type ?? null, recurring_series_id ?? null, scheduled_for ?? null, schedule_run_id ?? null, generated_from ?? null, JSON.stringify(normalizedCustomFields));
 
-    const taskId = Number(result.lastInsertRowid);
+    const taskId = Number(result.lastInsertId);
 
     const legacyBlockerWarnings: string[] = [];
     if (validBlockerIds.length > 0) {
@@ -685,7 +685,7 @@ export async function createTaskNoteRecord(db: Db, taskId: number, author: strin
     INSERT INTO task_notes (${tenant.columnSql}task_id, author, content) VALUES (${tenant.valueSql}?, ?, ?)
   `, ...tenant.values, taskId, author, content);
 
-  return await db.get('SELECT * FROM task_notes WHERE id = ?', result.lastInsertRowid);
+  return await db.get('SELECT * FROM task_notes WHERE id = ?', result.lastInsertId);
 }
 
 export async function addTaskBlockerRecord(db: Db, taskId: number, blockerId: number): Promise<TaskRecord> {

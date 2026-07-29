@@ -85,7 +85,7 @@ describe('ensureTenantSchema', () => {
     const otherTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Acme', 'acme', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     await db.run(`
       INSERT INTO mcp_servers (tenant_id, name, slug, command)
       VALUES (?, 'Acme Agent HQ MCP', 'agent-hq', 'node')
@@ -112,7 +112,7 @@ describe('ensureTenantSchema', () => {
     const otherTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Acme', 'acme', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -146,10 +146,10 @@ describe('ensureTenantSchema', () => {
     const defaultServerId = Number((await db.run(`
       INSERT INTO mcp_servers (tenant_id, name, slug, command)
       VALUES (?, 'Default Agent HQ MCP', 'agent-hq', 'node')
-    `, defaultTenantId)).lastInsertRowid);
+    `, defaultTenantId)).lastInsertId);
     const otherAgentId = Number((await db.run(`
       INSERT INTO agents (tenant_id) VALUES (?)
-    `, otherTenantId)).lastInsertRowid);
+    `, otherTenantId)).lastInsertId);
     await db.run(`
       INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
       VALUES (?, ?, '{"from":"stale"}', 1)
@@ -187,7 +187,7 @@ describe('ensureTenantSchema', () => {
     const otherTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Acme', 'acme', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -393,7 +393,7 @@ router.post('/creation-events', async (req: Request, res: Response) => {
       VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, ...tenant.values, task_id, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, source, routing, confidence, scope_size, assumptionsStr, openQStr, needs_split ? 1 : 0, expected_artifact, success_mode, raw_input);
 
-    const created = await db.get(`SELECT * FROM task_creation_events WHERE id = ?`, result.lastInsertRowid) as Record<string, unknown>;
+    const created = await db.get(`SELECT * FROM task_creation_events WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
     res.status(201).json(created);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -430,7 +430,7 @@ router.put('/creation-events/:task_id', async (req: Request, res: Response) => {
            assumptions, open_questions, needs_split, expected_artifact, success_mode, raw_input)
         VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, ...tenant.values, taskId, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, source ?? 'manual', routing ?? '', confidence ?? '', scope_size ?? '', assumptionsStr, openQStr, needs_split ? 1 : 0, expected_artifact ?? '', success_mode ?? '', raw_input ?? '');
-      const created = await db.get(`SELECT * FROM task_creation_events WHERE id = ?`, result.lastInsertRowid) as Record<string, unknown>;
+      const created = await db.get(`SELECT * FROM task_creation_events WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
       return res.json(created);
     }
 
@@ -509,7 +509,7 @@ router.post('/outcome-metrics', async (req: Request, res: Response) => {
       VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, ...tenant.values, task_id, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, first_pass_qa ? 1 : 0, reopened_count, rerouted_count, split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0, clarification_count, notes_count, cycle_time_hours, outcome_quality, failureReasonsStr, outcome_summary);
 
-    const created = await db.get(`SELECT * FROM task_outcome_metrics WHERE id = ?`, result.lastInsertRowid) as Record<string, unknown>;
+    const created = await db.get(`SELECT * FROM task_outcome_metrics WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
     res.status(201).json({
       ...created,
       failure_reasons: (() => { try { return JSON.parse(created.failure_reasons as string); } catch { return []; } })(),
@@ -552,7 +552,7 @@ router.put('/outcome-metrics/:task_id', async (req: Request, res: Response) => {
            failure_reasons, outcome_summary)
         VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, ...tenant.values, taskId, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, first_pass_qa ? 1 : 0, reopened_count, rerouted_count, split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0, clarification_count, notes_count, cycle_time_hours, outcome_quality, failureReasonsStr, outcome_summary);
-      const created = await db.get(`SELECT * FROM task_outcome_metrics WHERE id = ?`, result.lastInsertRowid) as Record<string, unknown>;
+      const created = await db.get(`SELECT * FROM task_outcome_metrics WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
       return res.json({
         ...created,
         failure_reasons: (() => { try { return JSON.parse(created.failure_reasons as string); } catch { return []; } })(),

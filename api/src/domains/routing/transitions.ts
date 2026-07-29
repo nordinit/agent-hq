@@ -79,7 +79,7 @@ export async function createRoutingTransition(db: Db, input: Record<string, unkn
         VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
       `, ...tenant.params, scope.sprintId, task_type ?? null, from_status, outcome, to_status, enabled ? 1 : 0, priority, is_protected ? 1 : 0);
 
-  return await readScopedRoutingTransition(db, { projectId: scope.projectId, sprintType: scope.sprintType, sprintId: scope.sprintId, tenantId: scope.tenantId, scopeLabel: scope.sprintName ?? scope.sprintType }, Number(result.lastInsertRowid));
+  return await readScopedRoutingTransition(db, { projectId: scope.projectId, sprintType: scope.sprintType, sprintId: scope.sprintId, tenantId: scope.tenantId, scopeLabel: scope.sprintName ?? scope.sprintType }, Number(result.lastInsertId));
 }
 
 export async function updateRoutingTransition(db: Db, input: Record<string, unknown> & { id: unknown }) {

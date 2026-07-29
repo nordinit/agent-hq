@@ -58,13 +58,13 @@ export function registerAttachmentRoutes(router: Router): void {
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `, instanceId, agentId, req.file.filename, req.file.path, req.file.mimetype, req.file.size, uploadedBy);
 
-        const record = await db.get('SELECT * FROM chat_attachments WHERE id = ?', result.lastInsertRowid) as Record<string, unknown>;
+        const record = await db.get('SELECT * FROM chat_attachments WHERE id = ?', result.lastInsertId) as Record<string, unknown>;
 
         return res.json({
           ok: true,
           attachment: {
             ...record,
-            url: `/api/v1/chat/attachments/${result.lastInsertRowid}/download`,
+            url: `/api/v1/chat/attachments/${result.lastInsertId}/download`,
           },
         });
       } catch (dbErr) {

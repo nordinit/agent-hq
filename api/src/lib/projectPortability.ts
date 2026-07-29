@@ -109,7 +109,7 @@ async function insertDynamic(db: Db, table: string, values: Row): Promise<number
   if (keys.length === 0) throw new Error(`No insertable columns for ${table}`);
   const placeholders = keys.map(() => '?').join(', ');
   const result = await db.run(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`, ...keys.map((key) => filtered[key]));
-  return Number(result.lastInsertRowid);
+  return Number(result.lastInsertId);
 }
 
 function countRows(manifest: Partial<ProjectManifest> | null, key: keyof ProjectManifest['routing']): number {

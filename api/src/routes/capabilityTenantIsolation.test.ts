@@ -40,7 +40,7 @@ async function resetDb(): Promise<void> {
       openclaw_agent_id TEXT
     );
   `);
-  await ensureToolRegistryTables();
+  ensureToolRegistryTables();
   await db.exec(`
     CREATE TABLE skills (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

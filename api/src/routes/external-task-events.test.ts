@@ -545,7 +545,7 @@ describe('external task events route', () => {
         fingerprint, source, event, task_id, environment_id, queue_id, lease_id,
         branch, commit_sha, review_url, message, payload_json, received_by, processing_state
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, 'other-project-fingerprint', DEV_ENV_LEASE_MANAGER_SOURCE, 'dev_deploy_queued', 450, 'agent-hq-dev', 'queue-other-project', 'lease-other-project', 'other/project', 'def456', 'http://127.0.0.1:3510', 'Other project receipt.', JSON.stringify(payload), DEV_ENV_LEASE_MANAGER_SOURCE, 'processed')).lastInsertRowid;
+    `, 'other-project-fingerprint', DEV_ENV_LEASE_MANAGER_SOURCE, 'dev_deploy_queued', 450, 'agent-hq-dev', 'queue-other-project', 'lease-other-project', 'other/project', 'def456', 'http://127.0.0.1:3510', 'Other project receipt.', JSON.stringify(payload), DEV_ENV_LEASE_MANAGER_SOURCE, 'processed')).lastInsertId;
 
     const missingCapabilityKey = await issueScopedApiKey(43, ['discovery.read_catalog']);
     const scopedKey = await issueCinderApiKey([

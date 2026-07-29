@@ -155,7 +155,7 @@ router.post('/', async (req: Request, res: Response) => {
           status, metadata, last_validated_at, validation_error
         ) VALUES (?, ?, ?, ?, ?, ?, 'connected', ?, datetime('now'), NULL)
       `, tenantId, provider, authMode, runtime, externalRef, displayName || match.displayName, JSON.stringify(mergedMetadata));
-      id = Number(result.lastInsertRowid);
+      id = Number(result.lastInsertId);
     }
     const row = await db.get('SELECT * FROM provider_connections WHERE id = ? AND tenant_id = ?', id, tenantId) as ConnectionRow;
     res.status(existing ? 200 : 201).json(serialize(row));

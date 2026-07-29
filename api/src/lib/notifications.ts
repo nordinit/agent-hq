@@ -130,7 +130,7 @@ export async function createNotificationRecord(db: Db, input: NotificationRecord
     INSERT INTO notification_records (tenant_id, type, title, body, source, outlet, metadata_json)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `, input.tenantId, input.type, input.title, input.body, input.source ?? null, input.outlet ?? null, JSON.stringify(input.metadata ?? {}));
-  return await db.get(`SELECT * FROM notification_records WHERE id = ?`, result.lastInsertRowid) as NotificationRecord;
+  return await db.get(`SELECT * FROM notification_records WHERE id = ?`, result.lastInsertId) as NotificationRecord;
 }
 
 function encodeNotificationCursor(record: NotificationRecord): string {

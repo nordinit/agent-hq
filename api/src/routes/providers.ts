@@ -316,7 +316,7 @@ router.post('/', async (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
     `, tenantId, slug, label, status, JSON.stringify(effectiveConfig), validation.error || null);
 
-    const row = await db.get('SELECT * FROM provider_config WHERE id = ?', result.lastInsertRowid) as ProviderRow;
+    const row = await db.get('SELECT * FROM provider_config WHERE id = ?', result.lastInsertId) as ProviderRow;
     const reload = await reloadOpenClawSecretsAfterProviderCredentialWrite(slug);
 
     res.status(201).json({

@@ -126,7 +126,7 @@ export async function createTransitionRequirement(db: Db, input: Record<string, 
         VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
       `, ...tenant.params, sprintId, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
       const readTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', tenantId);
-      return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${readTenant.sql}`, result.lastInsertRowid, sprintId, ...readTenant.params);
+      return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${readTenant.sql}`, result.lastInsertId, sprintId, ...readTenant.params);
     }
 
     const scope = await requireTransitionRequirementScope(db, input);
@@ -138,7 +138,7 @@ export async function createTransitionRequirement(db: Db, input: Record<string, 
       VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     `, ...tenant.params, scope.sprintId, scope.projectId, scope.sprintType, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
     const readTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
-    return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ?${readTenant.sql}`, result.lastInsertRowid, ...readTenant.params);
+    return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ?${readTenant.sql}`, result.lastInsertId, ...readTenant.params);
   }
 
   const result = await db.run(`
@@ -146,7 +146,7 @@ export async function createTransitionRequirement(db: Db, input: Record<string, 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
 
-  return await db.get('SELECT * FROM transition_requirements WHERE id = ?', result.lastInsertRowid);
+  return await db.get('SELECT * FROM transition_requirements WHERE id = ?', result.lastInsertId);
 }
 
 export async function updateTransitionRequirement(db: Db, input: Record<string, unknown> & { id: unknown; sprint_id?: unknown; project_id?: unknown; sprint_type?: unknown; tenant_id?: unknown }) {

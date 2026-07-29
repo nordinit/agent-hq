@@ -573,7 +573,7 @@ async function insertProject(db: Db, tenantId: number, plan: StarterSetupPlan): 
     INSERT INTO projects (tenant_id, name, description, context_md)
     VALUES (?, ?, ?, ?)
   `, tenantId, plan.project.name, plan.project.description, '');
-  return Number(result.lastInsertRowid);
+  return Number(result.lastInsertId);
 }
 
 async function insertWorkflow(db: Db, tenantId: number, projectId: number, workflow: StarterWorkflowPlan): Promise<number> {
@@ -581,7 +581,7 @@ async function insertWorkflow(db: Db, tenantId: number, projectId: number, workf
     INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, workflow_template_key, status, length_kind, length_value)
     VALUES (?, ?, ?, ?, ?, ?, 'active', 'time', 'ongoing')
   `, tenantId, projectId, workflow.workflow.name, workflow.workflow.goal, workflow.workflow.sprint_type, workflow.template.key);
-  const sprintId = Number(result.lastInsertRowid);
+  const sprintId = Number(result.lastInsertId);
   await seedSprintTaskPolicy(db, sprintId);
   return sprintId;
 }
@@ -746,7 +746,7 @@ async function insertAgent(db: Db, tenantId: number, projectId: number, projectN
     )
     VALUES (?, ?, ?, ?, '', 'idle', ?, NULL, ?, ?, ?, NULL, 1, ?, '', ?, ?, 900, 30, 3, '[]')
   `, tenantId, agent.name, agent.role, sessionKey, agent.runtime_type, projectId, agent.preferred_provider, agent.model, agent.job_title, `Starter owner role: ${agent.owner_role}`, JSON.stringify(agent.skill_names));
-  return Number(result.lastInsertRowid);
+  return Number(result.lastInsertId);
 }
 
 async function insertRoutingRule(db: Db, sprintId: number, projectId: number, sprintType: string, route: StarterRoutePlan, agentId: number): Promise<number> {
@@ -754,7 +754,7 @@ async function insertRoutingRule(db: Db, sprintId: number, projectId: number, sp
     INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, enabled, priority, is_system, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
   `, sprintId, projectId, sprintType, route.task_type, route.status, agentId, route.enabled ? 1 : 0, route.priority);
-  return Number(result.lastInsertRowid);
+  return Number(result.lastInsertId);
 }
 
 async function insertModelRouting(db: Db, tenantId: number, projectId: number, sprintId: number, rule: StarterModelRoutingPlan): Promise<number> {
@@ -784,7 +784,7 @@ async function insertModelRouting(db: Db, tenantId: number, projectId: number, s
     INSERT INTO story_point_model_routing (${columns.join(', ')})
     VALUES (${columns.map(() => '?').join(', ')})
   `, ...values);
-  return Number(result.lastInsertRowid);
+  return Number(result.lastInsertId);
 }
 
 export async function applyStarterSetupPlan(db: Db, tenantId: number, input: StarterPlanInput = {}): Promise<{

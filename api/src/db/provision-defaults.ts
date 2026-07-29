@@ -12,7 +12,7 @@ import { ensureConfiguredRuntimeMcpApiKey } from '../lib/mcpApiAuth';
 
 async function main(): Promise<void> {
   await initSchema();
-  await provisionDefaultToolRegistry();
+  provisionDefaultToolRegistry();
   await provisionDefaultMcpRegistry();
 
   const runtimeMcpKey = await ensureConfiguredRuntimeMcpApiKey();

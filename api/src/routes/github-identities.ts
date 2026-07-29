@@ -113,7 +113,7 @@ router.post('/', async (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `, tenantId, github_username, token, git_author_name ?? github_username, git_author_email ?? `${github_username}@users.noreply.github.com`, effectiveLane, notes ?? '');
 
-    const created = await db.get('SELECT * FROM github_identities WHERE id = ?', result.lastInsertRowid) as Record<string, unknown>;
+    const created = await db.get('SELECT * FROM github_identities WHERE id = ?', result.lastInsertId) as Record<string, unknown>;
     created.token = `***${(created.token as string).slice(-4)}`;
 
     return res.status(201).json(created);

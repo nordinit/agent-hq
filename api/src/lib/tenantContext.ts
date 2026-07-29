@@ -1372,7 +1372,7 @@ async function ensureTenantDefaultAtlasAgent(db: Db, tenantId: number, projectId
     INSERT INTO agents (${columns.join(', ')})
     VALUES (${placeholders})
   `, ...values);
-  return Number(result.lastInsertRowid);
+  return Number(result.lastInsertId);
 }
 
 async function buildStarterAgentRuntimeConfig(
@@ -1468,7 +1468,7 @@ export async function ensureTenantAgentHqMcpServer(db: Db, tenantId: number): Pr
     INSERT INTO mcp_servers (tenant_id, name, slug, description, transport, command, args, env, cwd, enabled)
     VALUES (?, ?, ?, ?, 'stdio', ?, ?, ?, ?, 1)
   `, tenantId, 'Agent HQ MCP Server', AGENT_HQ_MCP_SERVER_SLUG, 'Tenant-local stdio MCP server exposing Agent HQ projects, sprints, tasks, and agents.', nodeExecutable, args, env, cwd);
-  return Number(inserted.lastInsertRowid);
+  return Number(inserted.lastInsertId);
 }
 
 export async function repairAgentMcpAssignmentsForTenant(db: Db, tenantId: number, agentId: number): Promise<void> {
@@ -1743,7 +1743,7 @@ async function ensureTenantStarterAgents(db: Db, tenantId: number, projectId: nu
       INSERT INTO agents (${columns.join(', ')})
       VALUES (${placeholders})
     `, ...values);
-    const agentId = Number(result.lastInsertRowid);
+    const agentId = Number(result.lastInsertId);
     await replaceStarterAgentMcpPermissionPolicy(db, agentId, definition.mcpCapabilities);
     await ensureStarterAgentToolAssignments(db, agentId, definition.toolSlugs);
     await ensureStarterAgentMcpAssignments(db, tenantId, agentId, definition.mcpServerSlugs);
@@ -1786,7 +1786,7 @@ async function provisionTenantDefaultWorkspace(db: Db, tenantId: number, options
   const projectId = existingProject?.id ?? Number((await db.run(`
     INSERT INTO projects (tenant_id, name, description, context_md)
     VALUES (?, ?, ?, ?)
-  `, tenantId, DEFAULT_PROJECT_NAME, 'Reusable starter workspace project.', 'Clean starter workspace for this tenant.')).lastInsertRowid);
+  `, tenantId, DEFAULT_PROJECT_NAME, 'Reusable starter workspace project.', 'Clean starter workspace for this tenant.')).lastInsertId);
   if (existingProject?.name === LEGACY_STARTER_PROJECT_NAME) {
     await db.run(`
       UPDATE projects
@@ -1883,7 +1883,7 @@ export async function repairTenantOwnershipForMigration(db: Db): Promise<number>
         INSERT INTO tenants (name, slug, is_default)
         VALUES (?, ?, 1)
       `, DEFAULT_TENANT_NAME, DEFAULT_TENANT_SLUG);
-      defaultTenant = { id: Number(result.lastInsertRowid) };
+      defaultTenant = { id: Number(result.lastInsertId) };
       createdDefaultTenant = true;
     }
   }
@@ -2046,7 +2046,7 @@ export async function createTenantWithDefaults(db: Db, input: { name?: unknown; 
 
   const tenant = db.transaction(async () => {
     const result = await db.run(`INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 0)`, name, slug);
-    const tenantId = Number(result.lastInsertRowid);
+    const tenantId = Number(result.lastInsertId);
     await provisionTenantDefaultWorkspace(db, tenantId);
     if (input.set_active === true || input.set_active === 'true' || input.set_active === 1 || input.set_active === '1') {
       await setSetting(db, ACTIVE_TENANT_SETTING_KEY, String(tenantId));

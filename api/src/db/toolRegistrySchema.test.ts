@@ -25,7 +25,7 @@ describe('ensureToolRegistryTables', () => {
   it('bootstraps cleanly when the tools table does not exist', async () => {
     await createMinimalAgentsTable();
 
-    expect(async () => await ensureToolRegistryTables()).not.toThrow();
+    expect(() => ensureToolRegistryTables()).not.toThrow();
 
     expect(await toolsTableSql()).toContain("'shell'");
     expect(await toolsTableSql()).toContain("'script'");
@@ -53,7 +53,7 @@ describe('ensureToolRegistryTables', () => {
       VALUES ('Legacy Bash', 'legacy_bash', 'bash', 'echo legacy', 'exec');
     `);
 
-    expect(async () => await ensureToolRegistryTables()).not.toThrow();
+    expect(() => ensureToolRegistryTables()).not.toThrow();
 
     expect(await toolsTableSql()).toContain("'shell'");
     expect(await toolsTableSql()).toContain("'script'");
@@ -90,7 +90,7 @@ describe('ensureToolRegistryTables', () => {
       VALUES (10, 'Legacy Bash', 'bash', 'bash', 'echo legacy');
     `);
 
-    expect(async () => await ensureToolRegistryTables()).not.toThrow();
+    expect(() => ensureToolRegistryTables()).not.toThrow();
 
     expect(await toolsTableSql()).toContain('tenant_id');
     expect(await toolsTableSql()).toContain('UNIQUE(tenant_id, slug)');
@@ -142,7 +142,7 @@ describe('ensureToolRegistryTables', () => {
       INSERT INTO agent_tool_assignments (id, agent_id, tool_id) VALUES (100, 1, 10), (101, 1, 20), (102, 2, 20);
     `);
 
-    await ensureToolRegistryTables();
+    ensureToolRegistryTables();
 
     expect(await getDb().all(`SELECT id, agent_id, tool_id FROM agent_tool_assignments ORDER BY id ASC`)).toEqual([
       { id: 100, agent_id: 1, tool_id: 10 },
@@ -187,7 +187,7 @@ describe('ensureToolRegistryTables', () => {
       INSERT INTO agent_tool_assignments (id, agent_id, tool_id) VALUES (100, 1, 10), (101, 1, 20), (102, 2, 20);
     `);
 
-    expect(async () => await ensureToolRegistryTables()).not.toThrow();
+    expect(() => ensureToolRegistryTables()).not.toThrow();
 
     const assignmentSql = (await getDb().get(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_tool_assignments'`) as { sql: string }).sql;
     expect(assignmentSql).toContain('REFERENCES tools(id)');
@@ -236,7 +236,7 @@ describe('ensureToolRegistryTables', () => {
     `);
     getDb().pragma('foreign_keys = ON');
 
-    expect(async () => await ensureToolRegistryTables()).not.toThrow();
+    expect(() => ensureToolRegistryTables()).not.toThrow();
 
     const assignmentSql = (await getDb().get(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_tool_assignments'`) as { sql: string }).sql;
     expect(assignmentSql).toContain('REFERENCES tools(id)');
@@ -249,7 +249,7 @@ describe('ensureToolRegistryTables', () => {
   it('does not seed tool registry defaults during schema startup', async () => {
     await createMinimalAgentsTable();
 
-    await ensureToolRegistryTables();
+    ensureToolRegistryTables();
 
     expect(await getDb().get(`SELECT COUNT(*) AS count FROM tools`)).toEqual({ count: 0 });
     expect(await getDb().get(`SELECT COUNT(*) AS count FROM agent_tool_assignments`)).toEqual({ count: 0 });
@@ -258,7 +258,7 @@ describe('ensureToolRegistryTables', () => {
   it('seeds explore_codebase as a Python script tool through explicit provisioning', async () => {
     await createMinimalAgentsTable();
 
-    await provisionDefaultToolRegistry();
+    provisionDefaultToolRegistry();
 
     const tool = await getDb().get(`
       SELECT slug, implementation_type, implementation_body, input_schema
@@ -292,7 +292,7 @@ describe('ensureToolRegistryTables', () => {
       INSERT INTO agents (id, name, openclaw_agent_id) VALUES (1, 'Atlas', 'atlas');
     `);
 
-    await provisionDefaultToolRegistry();
+    provisionDefaultToolRegistry();
 
     const tool = await getDb().get(`SELECT slug, implementation_type, permissions, input_schema, tags FROM tools WHERE slug = 'local_stt_transcribe'`) as any;
     expect(tool).toMatchObject({
@@ -319,23 +319,23 @@ describe('ensureToolRegistryTables', () => {
   it('is a no-op on the current tools schema', async () => {
     await createMinimalAgentsTable();
 
-    await provisionDefaultToolRegistry();
+    provisionDefaultToolRegistry();
     const firstSql = await toolsTableSql();
 
-    expect(async () => await ensureToolRegistryTables()).not.toThrow();
+    expect(() => ensureToolRegistryTables()).not.toThrow();
     expect(await toolsTableSql()).toEqual(firstSql);
   });
 
   it('does not overwrite custom tool edits on schema restart', async () => {
     await createMinimalAgentsTable();
-    await provisionDefaultToolRegistry();
+    provisionDefaultToolRegistry();
     await getDb().run(`
       UPDATE tools
       SET name = 'Custom Bash', description = 'customized locally', enabled = 0, updated_at = '2026-01-01 00:00:00'
       WHERE slug = 'bash'
     `);
 
-    await ensureToolRegistryTables();
+    ensureToolRegistryTables();
 
     expect(await getDb().get(`SELECT name, description, enabled, updated_at FROM tools WHERE slug = 'bash'`)).toEqual({
       name: 'Custom Bash',
@@ -384,7 +384,7 @@ describe('skills registry schema startup', () => {
     const otherTenantId = Number((await getDb().run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Acme', 'acme', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     expect(async () => await getDb().run(`
       INSERT INTO skills (tenant_id, name, description, content)
       VALUES (?, 'shared-skill', 'tenant skill', '# tenant')

@@ -201,7 +201,7 @@ export async function createRoutingRule(db: Db, input: Record<string, unknown>) 
       `, ...tenant.params, scope.sprintId, taskType, status, target.agent_id, normalizedPriority, enabled);
 
   const readTenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'trr', scope.tenantId);
-  const created = await db.get(`${await selectScopedRoutingRuleRowSql(db)} WHERE trr.id = ?${readTenant.sql}`, result.lastInsertRowid, ...readTenant.params) as RoutingRuleRow;
+  const created = await db.get(`${await selectScopedRoutingRuleRowSql(db)} WHERE trr.id = ?${readTenant.sql}`, result.lastInsertId, ...readTenant.params) as RoutingRuleRow;
   return annotateRoutingRuleScope([created], scope.sprintId)[0];
 }
 

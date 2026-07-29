@@ -1,6 +1,12 @@
+import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
-import { getDb } from './client';
+// schema.ts is the SQLite schema-migration engine: it reads PRAGMA table_info, toggles
+// PRAGMA foreign_keys around table rebuilds, and performs SQLite's create-copy-drop-rename
+// dance. None of that is expressible through the Db interface — deliberately, since none
+// of it has a PostgreSQL equivalent. It therefore holds the raw driver. This whole module
+// is replaced by the generated Postgres baseline and deleted by task #766.
+import { getRawDb } from './client';
 import { NODE_BIN_DIR } from '../config';
 import { RELEASE_TASK_STATUSES, taskStatusesSqlList } from '../lib/taskStatuses';
 import { extractTokenUsage } from '../domains/runs/tokenUsage';
@@ -42,7 +48,6 @@ import { beginIntentionalForeignKeyDisable, endIntentionalForeignKeyDisable } fr
 import { tableHasColumn } from '../lib/durableRunIdentity';
 import { syncAllTaskActiveAgentsFromInstances } from '../domains/tasks/ownership';
 import { ensureNotificationTables } from '../lib/notifications';
-import { type Db } from "./adapter/types";
 
 const HOME = process.env.HOME ?? os.homedir();
 const OPENCLAW_DIR = process.env.WORKSPACE_PARENT ?? `${HOME}/.openclaw`;
@@ -52,42 +57,44 @@ let activeTenantMode: 'repair' | 'verify' = 'repair';
 
 const TASKS_STATUS_CHECK_RE = /\s+CHECK\s*\(\s*status\s+IN\s*\([^)]*\)\s*\)/i;
 
-async function tableExists(db: Db, table: string): Promise<boolean> {
-  return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table) as { name?: string } | undefined)?.name);
+function tableExists(db: Database.Database, table: string): boolean {
+  return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(table) as { name?: string } | undefined)?.name);
 }
 
-async function ensureTableColumn(db: Db, table: string, column: string, ddl: string): Promise<void> {
+async function ensureTableColumn(db: Database.Database, table: string, column: string, ddl: string): Promise<void> {
   if (await tableHasColumn(db, table, column)) return;
-  await db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   console.log(`[schema] Migrated: added ${table}.${column}`);
 }
 
-async function ensureTasksRequireWorkflow(db: Db): Promise<void> {
-  if (!await tableExists(db, 'tasks')) return;
+function ensureTasksRequireWorkflow(db: Database.Database): void {
+  if (!tableExists(db, 'tasks')) return;
 
-  const taskColumns = (await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string; notnull: number }>).map((col) => col.name);
+  const taskColumns = (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string; notnull: number }>).map((col) => col.name);
   if (!taskColumns.includes('sprint_id')) {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN sprint_id INTEGER REFERENCES sprints(id) ON DELETE SET NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN sprint_id INTEGER REFERENCES sprints(id) ON DELETE SET NULL`);
     console.log('[schema] Migrated: added sprint_id to tasks');
   }
 
-  const orphaned = await db.run(`
+  const orphaned = db.prepare(`
     DELETE FROM tasks
     WHERE sprint_id IS NULL
        OR NOT EXISTS (SELECT 1 FROM sprints WHERE sprints.id = tasks.sprint_id)
-  `);
+  `).run();
   if (orphaned.changes > 0) {
     console.log(`[schema] Task #855: removed ${orphaned.changes} task(s) without a valid workflow`);
   }
 
-  const columns = await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string; notnull: number }>;
+  const columns = db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string; notnull: number }>;
   const sprintColumn = columns.find((col) => col.name === 'sprint_id');
-  const sprintFk = (await db.all(`PRAGMA foreign_key_list(tasks)`) as Array<{ from: string; table: string; on_delete: string }>)
+  const sprintFk = (db.prepare(`PRAGMA foreign_key_list(tasks)`).all() as Array<{ from: string; table: string; on_delete: string }>)
     .find((fk) => fk.from === 'sprint_id' && fk.table === 'sprints');
   const alreadyRequired = sprintColumn?.notnull === 1 && sprintFk?.on_delete?.toUpperCase() === 'CASCADE';
   if (alreadyRequired) return;
 
-  const tasksDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`) as { sql: string } | undefined)?.sql ?? '';
+  const tasksDdl = (db.prepare(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`
+  ).get() as { sql: string } | undefined)?.sql ?? '';
   if (!tasksDdl) return;
 
   const colList = columns.map((col) => col.name).join(', ');
@@ -101,26 +108,26 @@ async function ensureTasksRequireWorkflow(db: Db): Promise<void> {
     throw new Error('Unable to rebuild tasks.sprint_id workflow constraint');
   }
 
-  const indexSql = (await db.all(`
+  const indexSql = (db.prepare(`
     SELECT sql
     FROM sqlite_master
     WHERE type = 'index'
       AND tbl_name = 'tasks'
       AND sql IS NOT NULL
     ORDER BY name
-  `) as Array<{ sql: string }>).map((row) => row.sql);
+  `).all() as Array<{ sql: string }>).map((row) => row.sql);
 
   db.pragma('foreign_keys = OFF');
   try {
-    const migrate = db.transaction(async () => {
+    const migrate = db.transaction(() => {
       db.prepare(rebuiltDdl).run();
-      await db.run(`INSERT INTO tasks_workflow_required (${colList}) SELECT ${colList} FROM tasks`);
-      await db.run(`DROP TABLE tasks`);
-      await db.run(`ALTER TABLE tasks_workflow_required RENAME TO tasks`);
+      db.prepare(`INSERT INTO tasks_workflow_required (${colList}) SELECT ${colList} FROM tasks`).run();
+      db.prepare(`DROP TABLE tasks`).run();
+      db.prepare(`ALTER TABLE tasks_workflow_required RENAME TO tasks`).run();
       for (const sql of indexSql) db.prepare(sql).run();
-      await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`);
-      await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`);
-      await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`);
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`).run();
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`).run();
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`).run();
     });
     migrate();
     console.log('[schema] Task #855: rebuilt tasks.sprint_id as NOT NULL ON DELETE CASCADE');
@@ -137,19 +144,19 @@ function stripTasksStatusCheck(ddl: string): string {
   return ddl.replace(TASKS_STATUS_CHECK_RE, '');
 }
 
-async function tenantDefaultIdForSchemaInit(db: Db): Promise<number> {
+async function tenantDefaultIdForSchemaInit(db: Database.Database): Promise<number> {
   return activeTenantMode === 'verify'
     ? await verifyTenantSchemaForStartup(db)
     : await ensureTenantSchema(db);
 }
 
-async function backfillJobInstanceDurableRunIds(db: Db): Promise<void> {
+async function backfillJobInstanceDurableRunIds(db: Database.Database): Promise<void> {
   if (!await tableHasColumn(db, 'job_instances', 'durable_run_id')) return;
-  const rows = await db.all(`
+  const rows = db.prepare(`
     SELECT id
     FROM job_instances
     WHERE durable_run_id IS NULL OR TRIM(durable_run_id) = ''
-  `) as Array<{ id: number }>;
+  `).all() as Array<{ id: number }>;
   if (rows.length === 0) return;
 
   const update = db.prepare(`UPDATE job_instances SET durable_run_id = ? WHERE id = ?`);
@@ -170,17 +177,17 @@ function parseJsonObject(raw: unknown): Record<string, unknown> {
   }
 }
 
-async function removeDeprecatedRuntimeLifecycleConfig(db: Db): Promise<void> {
+function removeDeprecatedRuntimeLifecycleConfig(db: Database.Database): void {
   const agentColumns = new Set(
-    (await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>).map((col) => col.name),
+    (db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>).map((col) => col.name),
   );
   if (!agentColumns.has('runtime_type') || !agentColumns.has('runtime_config')) return;
 
-  const rows = await db.all(`
+  const rows = db.prepare(`
     SELECT id, runtime_type, runtime_config
     FROM agents
     WHERE runtime_config IS NOT NULL
-  `) as Array<{ id: number; runtime_type: string | null; runtime_config: string | null }>;
+  `).all() as Array<{ id: number; runtime_type: string | null; runtime_config: string | null }>;
 
   const update = db.prepare(`UPDATE agents SET runtime_config = ? WHERE id = ?`);
   let changedCount = 0;
@@ -225,8 +232,8 @@ function normalizeTaskFieldSchemaDocument(raw: unknown): { fields: Array<Record<
   };
 }
 
-async function normalizeStoredTaskFieldSchemas(db: Db): Promise<void> {
-  const rows = await db.all(`SELECT id, schema_json FROM task_field_schemas`) as Array<{ id: number; schema_json: string }>;
+function normalizeStoredTaskFieldSchemas(db: Database.Database): void {
+  const rows = db.prepare(`SELECT id, schema_json FROM task_field_schemas`).all() as Array<{ id: number; schema_json: string }>;
   const update = db.prepare(`UPDATE task_field_schemas SET schema_json = ?, updated_at = datetime('now') WHERE id = ?`);
   const tx = db.transaction(() => {
     for (const row of rows) {
@@ -238,11 +245,11 @@ async function normalizeStoredTaskFieldSchemas(db: Db): Promise<void> {
   tx();
 }
 
-async function ensureTaskRelationshipModel(
-  db: Db,
+function ensureTaskRelationshipModel(
+  db: Database.Database,
   options: { sprintTypesTenantScoped?: boolean; rebuildWithoutSprintTypeKeyForeignKey?: (table: string) => void } = {},
-): Promise<void> {
-  await db.exec(`
+): void {
+  db.exec(`
     CREATE TABLE IF NOT EXISTS sprint_type_relationship_types (
       id                           INTEGER PRIMARY KEY AUTOINCREMENT,
       sprint_type_key              TEXT NOT NULL,
@@ -287,42 +294,42 @@ async function ensureTaskRelationshipModel(
   }
 
   try {
-    await db.run(`
+    db.prepare(`
       INSERT OR IGNORE INTO task_relationships (source_task_id, target_task_id, relationship_type_key, metadata_json, created_by, created_at, updated_at)
       SELECT blocked_id, blocker_id, 'blocked_by', '{}', 'legacy-task_dependencies', created_at, created_at
       FROM task_dependencies
       WHERE blocked_id != blocker_id
-    `);
+    `).run();
   } catch (err) {
     console.warn('[schema] Task relationship blocker backfill skipped:', err);
   }
 
   try {
-    const taskCols = new Set((await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).map(col => col.name));
+    const taskCols = new Set((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map(col => col.name));
     if (taskCols.has('origin_task_id')) {
       const metadataExpr = taskCols.has('defect_type')
         ? `CASE WHEN defect_type IS NULL OR defect_type = '' THEN '{}' ELSE json_object('legacy_defect_type', defect_type) END`
         : `'{}'`;
-      await db.run(`
+      db.prepare(`
         INSERT OR IGNORE INTO task_relationships (source_task_id, target_task_id, relationship_type_key, metadata_json, created_by)
         SELECT id, origin_task_id, 'defect_of', ${metadataExpr}, 'legacy-origin_task_id'
         FROM tasks
         WHERE origin_task_id IS NOT NULL AND origin_task_id != id
-      `);
+      `).run();
     }
   } catch (err) {
     console.warn('[schema] Task relationship defect backfill skipped:', err);
   }
 }
 
-async function backfillEvidenceFieldsIntoCustomFields(db: Db): Promise<void> {
-  const columns = new Set((await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).map(col => col.name));
+function backfillEvidenceFieldsIntoCustomFields(db: Database.Database): void {
+  const columns = new Set((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map(col => col.name));
   if (!columns.has('custom_fields_json')) return;
   const availableEvidenceFields = INLINE_EVIDENCE_FIELD_KEYS.filter(field => columns.has(field));
   if (availableEvidenceFields.length === 0) return;
 
   const selectColumns = ['id', 'custom_fields_json', ...availableEvidenceFields].join(', ');
-  const rows = await db.all(`SELECT ${selectColumns} FROM tasks`) as Array<Record<string, unknown>>;
+  const rows = db.prepare(`SELECT ${selectColumns} FROM tasks`).all() as Array<Record<string, unknown>>;
   const update = db.prepare(`UPDATE tasks SET custom_fields_json = ?, updated_at = updated_at WHERE id = ?`);
   const tx = db.transaction(() => {
     for (const row of rows) {
@@ -341,13 +348,15 @@ async function backfillEvidenceFieldsIntoCustomFields(db: Db): Promise<void> {
   tx();
 }
 
-async function rebuildTasksWithoutLegacyEvidenceColumns(db: Db): Promise<void> {
-  if (!await tableExists(db, 'tasks')) return;
-  const columns = (await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).map((col) => col.name);
+function rebuildTasksWithoutLegacyEvidenceColumns(db: Database.Database): void {
+  if (!tableExists(db, 'tasks')) return;
+  const columns = (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map((col) => col.name);
   const removableColumns = LEGACY_TASK_EVIDENCE_COLUMNS.filter((column) => columns.includes(column));
   if (removableColumns.length === 0) return;
 
-  const tasksDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`) as { sql?: string } | undefined)?.sql ?? '';
+  const tasksDdl = (db.prepare(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`
+  ).get() as { sql?: string } | undefined)?.sql ?? '';
   if (!tasksDdl) return;
 
   let rebuiltDdl = tasksDdl.replace(/CREATE TABLE\s+"?tasks"?/, 'CREATE TABLE tasks_lifecycle_evidence_pruned');
@@ -358,15 +367,15 @@ async function rebuildTasksWithoutLegacyEvidenceColumns(db: Db): Promise<void> {
   const keptColumns = columns.filter((column) => !removableColumns.includes(column as typeof LEGACY_TASK_EVIDENCE_COLUMNS[number]));
   const keptColumnList = keptColumns.join(', ');
   db.pragma('foreign_keys = OFF');
-  const migrate = db.transaction(async () => {
+  const migrate = db.transaction(() => {
     db.prepare(rebuiltDdl).run();
-    await db.run(`INSERT INTO tasks_lifecycle_evidence_pruned (${keptColumnList}) SELECT ${keptColumnList} FROM tasks`);
-    await db.run(`DROP TABLE tasks`);
-    await db.run(`ALTER TABLE tasks_lifecycle_evidence_pruned RENAME TO tasks`);
-    await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`);
-    await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`);
-    await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`);
-    await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_agent ON tasks(assigned_agent_id)`);
+    db.prepare(`INSERT INTO tasks_lifecycle_evidence_pruned (${keptColumnList}) SELECT ${keptColumnList} FROM tasks`).run();
+    db.prepare(`DROP TABLE tasks`).run();
+    db.prepare(`ALTER TABLE tasks_lifecycle_evidence_pruned RENAME TO tasks`).run();
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`).run();
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`).run();
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`).run();
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_agent ON tasks(assigned_agent_id)`).run();
   });
   migrate();
   db.pragma('foreign_keys = ON');
@@ -378,13 +387,13 @@ async function rebuildTasksWithoutLegacyEvidenceColumns(db: Db): Promise<void> {
  * The routing_config_legacy table has been removed. This function is kept as a
  * stub so that existing callers don't break during the transition.
  */
-export function ensureRoutingLegacyConfigTable(_db?: Db): void {
+export function ensureRoutingLegacyConfigTable(_db?: Database.Database): void {
   // No-op: routing_config_legacy table has been dropped (task #596)
 }
 
-async function migrateAgentSessionKeysToCanonical(db: Db): Promise<void> {
+function migrateAgentSessionKeysToCanonical(db: Database.Database): void {
   const agentColumns = new Set(
-    (await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>).map((col) => col.name),
+    (db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>).map((col) => col.name),
   );
   const hasProjectId = agentColumns.has('project_id');
   const hasOpenclawAgentId = agentColumns.has('openclaw_agent_id');
@@ -470,12 +479,12 @@ async function migrateAgentSessionKeysToCanonical(db: Db): Promise<void> {
   }
 }
 
-async function backfillProjectRepoConfigs(db: Db): Promise<void> {
+function backfillProjectRepoConfigs(db: Database.Database): void {
   const projectColumns = new Set(
-    (await db.all(`PRAGMA table_info(projects)`) as Array<{ name: string }>).map((col) => col.name),
+    (db.prepare(`PRAGMA table_info(projects)`).all() as Array<{ name: string }>).map((col) => col.name),
   );
   const agentColumns = new Set(
-    (await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>).map((col) => col.name),
+    (db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>).map((col) => col.name),
   );
 
   if (!projectColumns.has('repo_path') || !projectColumns.has('repo_url') || !projectColumns.has('repo_access_mode')) {
@@ -485,18 +494,18 @@ async function backfillProjectRepoConfigs(db: Db): Promise<void> {
     return;
   }
 
-  const projects = await db.all(`
+  const projects = db.prepare(`
     SELECT id, repo_path, repo_url, repo_access_mode
     FROM projects
     ORDER BY id ASC
-  `) as Array<{ id: number; repo_path: string | null; repo_url: string | null; repo_access_mode: string | null }>;
+  `).all() as Array<{ id: number; repo_path: string | null; repo_url: string | null; repo_access_mode: string | null }>;
 
-  const projectAgents = await db.all(`
+  const projectAgents = db.prepare(`
     SELECT project_id, repo_path, repo_url, repo_access_mode
     FROM agents
     WHERE project_id IS NOT NULL
     ORDER BY id ASC
-  `) as Array<{ project_id: number; repo_path: string | null; repo_url: string | null; repo_access_mode: string | null }>;
+  `).all() as Array<{ project_id: number; repo_path: string | null; repo_url: string | null; repo_access_mode: string | null }>;
 
   const configsByProject = new Map<number, Map<string, { repo_path: string | null; repo_url: string | null; repo_access_mode: 'worktree' | 'clone' | null }>>();
 
@@ -535,22 +544,22 @@ async function backfillProjectRepoConfigs(db: Db): Promise<void> {
   }
 }
 
-async function backfillWorkflowRepoConfigs(db: Db): Promise<void> {
+function backfillWorkflowRepoConfigs(db: Database.Database): void {
   const sprintColumns = new Set(
-    (await db.all(`PRAGMA table_info(sprints)`) as Array<{ name: string }>).map((col) => col.name),
+    (db.prepare(`PRAGMA table_info(sprints)`).all() as Array<{ name: string }>).map((col) => col.name),
   );
   const projectColumns = new Set(
-    (await db.all(`PRAGMA table_info(projects)`) as Array<{ name: string }>).map((col) => col.name),
+    (db.prepare(`PRAGMA table_info(projects)`).all() as Array<{ name: string }>).map((col) => col.name),
   );
-  const sprintTypeColumns = await tableExists(db, 'sprint_types')
-    ? new Set((await db.all(`PRAGMA table_info(sprint_types)`) as Array<{ name: string }>).map((col) => col.name))
+  const sprintTypeColumns = tableExists(db, 'sprint_types')
+    ? new Set((db.prepare(`PRAGMA table_info(sprint_types)`).all() as Array<{ name: string }>).map((col) => col.name))
     : new Set<string>();
 
   if (!sprintColumns.has('repo_path') || !sprintColumns.has('repo_url') || !sprintColumns.has('repo_access_mode')) return;
   if (!projectColumns.has('repo_path') || !projectColumns.has('repo_url') || !projectColumns.has('repo_access_mode')) return;
 
   const canUseRepoRequiredMetadata = sprintTypeColumns.has('repo_required');
-  const canJoinSprintTypes = await tableExists(db, 'sprint_types') && sprintTypeColumns.has('key');
+  const canJoinSprintTypes = tableExists(db, 'sprint_types') && sprintTypeColumns.has('key');
   const typeTenantJoin = canJoinSprintTypes && sprintTypeColumns.has('tenant_id') && sprintColumns.has('tenant_id')
     ? 'AND (st.tenant_id IS NULL OR st.tenant_id = s.tenant_id)'
     : '';
@@ -566,7 +575,7 @@ async function backfillWorkflowRepoConfigs(db: Db): Promise<void> {
       ), 0) AS repo_required`
     : `CASE WHEN s.sprint_type = 'dev' THEN 1 ELSE 0 END AS repo_required`;
 
-  const rows = await db.all(`
+  const rows = db.prepare(`
     SELECT s.id AS workflow_id,
            s.name AS workflow_name,
            s.sprint_type,
@@ -582,7 +591,7 @@ async function backfillWorkflowRepoConfigs(db: Db): Promise<void> {
     FROM sprints s
     LEFT JOIN projects p ON p.id = s.project_id
     ORDER BY p.id ASC, s.id ASC
-  `) as Array<{
+  `).all() as Array<{
     workflow_id: number;
     workflow_name: string | null;
     sprint_type: string | null;
@@ -657,11 +666,11 @@ export type InitSchemaOptions = {
 };
 
 export async function initSchema(options: InitSchemaOptions = {}): Promise<void> {
-  const db = getDb();
+  const db = getRawDb();
   const tenantMode = options.tenantMode ?? 'repair';
   activeTenantMode = tenantMode;
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id    INTEGER,
@@ -740,32 +749,32 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // Safe migration: add model column to agents
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN model TEXT`);
+    db.exec(`ALTER TABLE agents ADD COLUMN model TEXT`);
     console.log('[schema] Migrated: added model to agents');
   } catch { /* already exists */ }
 
   // Safe migration: add openclaw_agent_id column to agents
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN openclaw_agent_id TEXT`);
+    db.exec(`ALTER TABLE agents ADD COLUMN openclaw_agent_id TEXT`);
     console.log('[schema] Migrated: added openclaw_agent_id to agents');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add runtime_type and runtime_config to agents
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN runtime_type TEXT NOT NULL DEFAULT 'openclaw'`);
+    db.exec(`ALTER TABLE agents ADD COLUMN runtime_type TEXT NOT NULL DEFAULT 'openclaw'`);
     console.log('[schema] Migrated: added runtime_type to agents');
   } catch (_) { /* column already exists */ }
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN runtime_config JSON`);
+    db.exec(`ALTER TABLE agents ADD COLUMN runtime_config JSON`);
     console.log('[schema] Migrated: added runtime_config to agents');
   } catch (_) { /* column already exists */ }
-  await removeDeprecatedRuntimeLifecycleConfig(db);
+  removeDeprecatedRuntimeLifecycleConfig(db);
 
   // Safe migration: add Remote Gateway URL compatibility column to agents (task #288).
   // Used for Docker/container routing — when set, the dispatcher POSTs to
   // <hooks_url>/hooks/agent instead of the host gateway. Null = host gateway.
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN hooks_url TEXT`);
+    db.exec(`ALTER TABLE agents ADD COLUMN hooks_url TEXT`);
     console.log('[schema] Migrated: added hooks_url to agents');
   } catch (_) { /* column already exists */ }
 
@@ -773,12 +782,12 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // Per-agent Authorization header for Remote Gateway URL dispatch.
   // When set, dispatcher uses this instead of the global HOOKS_TOKEN.
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN hooks_auth_header TEXT`);
+    db.exec(`ALTER TABLE agents ADD COLUMN hooks_auth_header TEXT`);
     console.log('[schema] Migrated: added hooks_auth_header to agents');
   } catch (_) { /* column already exists */ }
 
   // Canonical session/transcript store (task #599)
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       external_key  TEXT NOT NULL UNIQUE,
@@ -824,7 +833,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   // Safe migration: create chat_messages table
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS chat_messages (
       id          TEXT PRIMARY KEY,
       agent_id    INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -840,7 +849,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // Canonical current direct-chat session per agent/channel so all UI clients
   // converge on the same conversation and New Chat can rotate one shared key.
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS canonical_chat_sessions (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       agent_id    INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -858,32 +867,32 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // Safe migration: add event_type column to chat_messages (task #532)
   // Valid event_type values: 'text' | 'thought' | 'tool_call' | 'tool_result' | 'turn_start' | 'system' | 'error'
   try {
-    await db.exec(`ALTER TABLE chat_messages ADD COLUMN event_type TEXT NOT NULL DEFAULT 'text'`);
+    db.exec(`ALTER TABLE chat_messages ADD COLUMN event_type TEXT NOT NULL DEFAULT 'text'`);
     console.log('[schema] Migrated: added event_type to chat_messages');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add event_meta column to chat_messages (task #532)
   // JSON blob for structured attributes (tool name, args, output, turn number, etc.)
   try {
-    await db.exec(`ALTER TABLE chat_messages ADD COLUMN event_meta TEXT NOT NULL DEFAULT '{}'`);
+    db.exec(`ALTER TABLE chat_messages ADD COLUMN event_meta TEXT NOT NULL DEFAULT '{}'`);
     console.log('[schema] Migrated: added event_meta to chat_messages');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add instance_id column to chat_messages (task #468)
   // Links chat messages to a specific job instance for per-run transcript views.
   try {
-    await db.exec(`ALTER TABLE chat_messages ADD COLUMN instance_id INTEGER REFERENCES job_instances(id) ON DELETE SET NULL`);
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_instance ON chat_messages(instance_id)`);
+    db.exec(`ALTER TABLE chat_messages ADD COLUMN instance_id INTEGER REFERENCES job_instances(id) ON DELETE SET NULL`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_instance ON chat_messages(instance_id)`);
     console.log('[schema] Migrated: added instance_id to chat_messages');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE chat_messages ADD COLUMN durable_run_id TEXT`);
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_durable_run ON chat_messages(durable_run_id)`);
+    db.exec(`ALTER TABLE chat_messages ADD COLUMN durable_run_id TEXT`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_durable_run ON chat_messages(durable_run_id)`);
     console.log('[schema] Migrated: added durable_run_id to chat_messages');
   } catch (_) { /* column already exists */ }
 
-  await db.exec(`
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_chat_messages_session_key_ts
       ON chat_messages(session_key, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_chat_messages_instance_ts
@@ -909,9 +918,11 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // Rebuild from the current sqlite_master DDL so we preserve every existing column
   // instead of assuming a hardcoded table shape.
   try {
-    const chatMessagesDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_messages'`) as { sql: string } | undefined)?.sql ?? '';
+    const chatMessagesDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_messages'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
     if (chatMessagesDdl && !chatMessagesDdl.includes("'tool'")) {
-      const cols = (await db.all(`PRAGMA table_info(chat_messages)`) as { name: string }[]).map(c => c.name);
+      const cols = (db.prepare(`PRAGMA table_info(chat_messages)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       const rebuiltDdl = chatMessagesDdl
         .replace(/CREATE TABLE\s+"?chat_messages"?/, 'CREATE TABLE chat_messages_new')
@@ -921,25 +932,25 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
         );
 
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
+      const migrate = db.transaction(() => {
         db.prepare(rebuiltDdl).run();
-        await db.run(`INSERT INTO chat_messages_new (${colList}) SELECT ${colList} FROM chat_messages`);
-        await db.run(`DROP TABLE chat_messages`);
-        await db.run(`ALTER TABLE chat_messages_new RENAME TO chat_messages`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent ON chat_messages(agent_id)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp)`);
+        db.prepare(`INSERT INTO chat_messages_new (${colList}) SELECT ${colList} FROM chat_messages`).run();
+        db.prepare(`DROP TABLE chat_messages`).run();
+        db.prepare(`ALTER TABLE chat_messages_new RENAME TO chat_messages`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent ON chat_messages(agent_id)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_timestamp ON chat_messages(timestamp)`).run();
         if (cols.includes('instance_id')) {
-          await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_instance ON chat_messages(instance_id)`);
+          db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_instance ON chat_messages(instance_id)`).run();
         }
         if (cols.includes('durable_run_id')) {
-          await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_durable_run ON chat_messages(durable_run_id)`);
+          db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_durable_run ON chat_messages(durable_run_id)`).run();
         }
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_session_key_ts ON chat_messages(session_key, timestamp DESC)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_instance_ts ON chat_messages(instance_id, timestamp DESC)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_session_ts ON chat_messages(agent_id, session_key, timestamp DESC)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_instance_ts ON chat_messages(agent_id, instance_id, timestamp DESC)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_instance_session_ts ON chat_messages(agent_id, instance_id, session_key, timestamp DESC)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_durable_instance_session_ts ON chat_messages(agent_id, durable_run_id, instance_id, session_key, timestamp DESC)`);
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_session_key_ts ON chat_messages(session_key, timestamp DESC)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_instance_ts ON chat_messages(instance_id, timestamp DESC)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_session_ts ON chat_messages(agent_id, session_key, timestamp DESC)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_instance_ts ON chat_messages(agent_id, instance_id, timestamp DESC)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_instance_session_ts ON chat_messages(agent_id, instance_id, session_key, timestamp DESC)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_chat_messages_agent_durable_instance_session_ts ON chat_messages(agent_id, durable_run_id, instance_id, session_key, timestamp DESC)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -954,11 +965,11 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // user/assistant rows under oc-hist-* ids. Direct chats now ingest structured
   // rows from JSONL instead, so these snapshot rows should not remain visible.
   try {
-    const removed = await db.run(`
+    const removed = db.prepare(`
       DELETE FROM chat_messages
       WHERE id LIKE 'oc-hist-%'
         AND session_key LIKE 'agent:%:direct:%'
-    `);
+    `).run();
     if (removed.changes > 0) {
       console.log(`[schema] Task #884: removed ${removed.changes} duplicated direct-chat history row(s)`);
     }
@@ -967,7 +978,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   }
 
   // Safe migration: create tasks table
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id    INTEGER,
@@ -997,7 +1008,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id);
   `);
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS dispatch_log (
       id                 INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id            INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
@@ -1013,37 +1024,37 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN assigned_agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN assigned_agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL`);
     console.log('[schema] Migrated: added assigned_agent_id to tasks and backfilled from agent_id');
   } catch (_) { /* column already exists */ }
   try {
-    await db.exec(`UPDATE tasks SET assigned_agent_id = agent_id WHERE assigned_agent_id IS NULL`);
+    db.exec(`UPDATE tasks SET assigned_agent_id = agent_id WHERE assigned_agent_id IS NULL`);
     await syncAllTaskActiveAgentsFromInstances(db);
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_agent ON tasks(assigned_agent_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_agent ON tasks(assigned_agent_id)`);
   } catch (_) { /* minimal schema or transient migration ordering */ }
 
   // Safe migration: add recurring column to tasks
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN recurring INTEGER NOT NULL DEFAULT 0`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN recurring INTEGER NOT NULL DEFAULT 0`);
     console.log('[schema] Migrated: added recurring to tasks');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add dispatched_at to tasks for legacy/minimal DBs.
   // Background dispatch/watchdog code still reads this timestamp.
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN dispatched_at TEXT`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN dispatched_at TEXT`);
     console.log('[schema] Migrated: added dispatched_at to tasks');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add task_type column to tasks
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN task_type TEXT`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN task_type TEXT`);
     console.log('[schema] Migrated: added task_type to tasks');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add story_points column to tasks
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN story_points INTEGER`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN story_points INTEGER`);
     console.log('[schema] Migrated: added story_points to tasks');
   } catch (_) { /* column already exists */ }
 
@@ -1054,11 +1065,11 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     { name: 'generated_from', sql: `ALTER TABLE tasks ADD COLUMN generated_from TEXT` },
   ]) {
     try {
-      await db.exec(column.sql);
+      db.exec(column.sql);
       console.log(`[schema] Migrated: added ${column.name} to tasks`);
     } catch (_) { /* column already exists */ }
   }
-  await db.exec(`
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_tasks_generated_lookup
       ON tasks(recurring_series_id, scheduled_for)
       WHERE recurring_series_id IS NOT NULL;
@@ -1073,7 +1084,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   // Safe migration: sprints table
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS sprints (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id    INTEGER,
@@ -1100,13 +1111,15 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // SQLite requires table rebuild to alter CHECK constraints or add missing columns safely
   // while preserving existing rows.
   try {
-    const sprintsDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprints'`) as { sql: string } | undefined)?.sql ?? '';
-    const sprintCols = (await db.all(`PRAGMA table_info(sprints)`) as {name:string}[]).map(c => c.name);
+    const sprintsDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='sprints'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
+    const sprintCols = (db.prepare(`PRAGMA table_info(sprints)`).all() as {name:string}[]).map(c => c.name);
     const needsSprintsRebuild = Boolean(sprintsDdl) && (!sprintsDdl.includes("'closed'") || !sprintCols.includes('sprint_type') || !sprintCols.includes('workflow_template_key'));
     if (needsSprintsRebuild) {
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
-        await db.run(`
+      const migrate = db.transaction(() => {
+        db.prepare(`
           CREATE TABLE sprints_new (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -1124,7 +1137,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
             ended_at     TEXT,
             created_at   TEXT NOT NULL DEFAULT (datetime('now'))
           )
-        `);
+        `).run();
 
         const hasSprintType = sprintCols.includes('sprint_type');
         const hasWorkflowTemplateKey = sprintCols.includes('workflow_template_key');
@@ -1146,11 +1159,11 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
         ];
         const selectExpr = extraSelectExpr.length > 0 ? `${selectCols}, ${extraSelectExpr.join(', ')}` : selectCols;
 
-        await db.run(`INSERT INTO sprints_new (${insertCols}) SELECT ${selectExpr} FROM sprints`);
-        await db.run(`DROP TABLE sprints`);
-        await db.run(`ALTER TABLE sprints_new RENAME TO sprints`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_sprints_project ON sprints(project_id)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status)`);
+        db.prepare(`INSERT INTO sprints_new (${insertCols}) SELECT ${selectExpr} FROM sprints`).run();
+        db.prepare(`DROP TABLE sprints`).run();
+        db.prepare(`ALTER TABLE sprints_new RENAME TO sprints`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_sprints_project ON sprints(project_id)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_sprints_status ON sprints(status)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -1162,7 +1175,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   }
 
   // Sprint type registry + baseline field schema templates (task #2)
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS sprint_types (
       key         TEXT PRIMARY KEY,
       project_id  INTEGER REFERENCES projects(id) ON DELETE CASCADE,
@@ -1266,25 +1279,25 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     CREATE INDEX IF NOT EXISTS idx_sprint_workflow_transitions_template_from ON sprint_workflow_transitions(template_id, from_status_key, stage_order);
   `);
 
-  const ensureColumn = async (table: string, column: string, ddl: string): Promise<void> => {
-    const cols = await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>;
+  const ensureColumn = (table: string, column: string, ddl: string): void => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!cols.some(col => col.name === column)) {
-      await db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
     }
   };
-  const rebuildWithoutSprintTypeKeyForeignKey = async (table: string): Promise<void> => {
-    const row = await db.get(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, table) as { sql?: string } | undefined;
+  const rebuildWithoutSprintTypeKeyForeignKey = (table: string): void => {
+    const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) as { sql?: string } | undefined;
     const ddl = row?.sql ?? '';
     if (!ddl.includes('REFERENCES sprint_types(key)')) return;
 
-    const indexes = await db.all(`
+    const indexes = db.prepare(`
       SELECT name, sql
       FROM sqlite_master
       WHERE type = 'index'
         AND tbl_name = ?
         AND sql IS NOT NULL
-    `, table) as Array<{ name: string; sql: string }>;
-    const columns = await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>;
+    `).all(table) as Array<{ name: string; sql: string }>;
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     const columnList = columns.map(column => column.name).join(', ');
     const tempTable = `${table}__sprint_type_fk_migration`;
     const rebuiltDdl = ddl
@@ -1294,12 +1307,12 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     const restoreForeignKeys = (db.pragma('foreign_keys', { simple: true }) as number) === 1;
     if (restoreForeignKeys) db.pragma('foreign_keys = OFF');
     try {
-      const rebuild = db.transaction(async () => {
-        await db.run(`DROP TABLE IF EXISTS ${tempTable}`);
+      const rebuild = db.transaction(() => {
+        db.prepare(`DROP TABLE IF EXISTS ${tempTable}`).run();
         db.prepare(rebuiltDdl).run();
-        await db.run(`INSERT INTO ${tempTable} (${columnList}) SELECT ${columnList} FROM ${table}`);
-        await db.run(`DROP TABLE ${table}`);
-        await db.run(`ALTER TABLE ${tempTable} RENAME TO ${table}`);
+        db.prepare(`INSERT INTO ${tempTable} (${columnList}) SELECT ${columnList} FROM ${table}`).run();
+        db.prepare(`DROP TABLE ${table}`).run();
+        db.prepare(`ALTER TABLE ${tempTable} RENAME TO ${table}`).run();
         for (const index of indexes) {
           const indexSql = index.sql.replace(/^CREATE\s+(UNIQUE\s+)?INDEX\s+/i, (_match, uniquePrefix: string | undefined) => (
             `CREATE ${uniquePrefix ?? ''}INDEX IF NOT EXISTS `
@@ -1321,8 +1334,8 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   ensureColumn('sprint_types', 'created_at', `created_at TEXT`);
   ensureColumn('sprint_types', 'updated_at', `updated_at TEXT`);
   ensureColumn('sprint_types', 'status_seeded_at', `status_seeded_at TEXT`);
-  await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_types_project ON sprint_types(project_id)`);
-  await db.exec(`UPDATE sprint_types SET description = COALESCE(description, ''), is_system = COALESCE(is_system, 1), created_at = COALESCE(created_at, datetime('now')), updated_at = COALESCE(updated_at, datetime('now'))`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_types_project ON sprint_types(project_id)`);
+  db.exec(`UPDATE sprint_types SET description = COALESCE(description, ''), is_system = COALESCE(is_system, 1), created_at = COALESCE(created_at, datetime('now')), updated_at = COALESCE(updated_at, datetime('now'))`);
   const sprintTypesTenantScoped = await tableHasColumn(db, 'sprint_types', 'tenant_id');
   if (sprintTypesTenantScoped) {
     for (const table of [
@@ -1341,13 +1354,13 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   }
   let restoreSprintTypeForeignKeys = false;
   if (!sprintTypesTenantScoped) {
-    const duplicateSprintTypeKeys = await db.all(`
+    const duplicateSprintTypeKeys = db.prepare(`
       SELECT key
       FROM sprint_types
       WHERE key IS NOT NULL
       GROUP BY key
       HAVING COUNT(*) > 1
-    `) as Array<{ key: string }>;
+    `).all() as Array<{ key: string }>;
     if (duplicateSprintTypeKeys.length > 0) {
       restoreSprintTypeForeignKeys = (db.pragma('foreign_keys', { simple: true }) as number) === 1;
       if (restoreSprintTypeForeignKeys) db.pragma('foreign_keys = OFF');
@@ -1355,7 +1368,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       // there is no per-row identifier to delete by. rowid is SQLite-only, so instead of
       // deleting losers by rowid we read the winning row, delete every row for the key, and
       // re-insert the winner. Foreign keys are already disabled around this block.
-      const sprintTypeColumns = (await db.all(`PRAGMA table_info(sprint_types)`) as Array<{ name: string }>)
+      const sprintTypeColumns = (db.prepare(`PRAGMA table_info(sprint_types)`).all() as Array<{ name: string }>)
         .map((column) => column.name);
       const selectSprintTypeRows = db.prepare(`
         SELECT *
@@ -1382,23 +1395,23 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       dedupeSprintTypes();
       console.log(`[schema] Deduplicated sprint_types rows for ${duplicateSprintTypeKeys.length} key(s)`);
     }
-    await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_key_unique ON sprint_types(key)`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_key_unique ON sprint_types(key)`);
   }
   if (restoreSprintTypeForeignKeys) db.pragma('foreign_keys = ON');
   ensureColumn('task_field_schemas', 'is_system', `is_system INTEGER NOT NULL DEFAULT 1`);
   ensureColumn('task_field_schemas', 'updated_at', `updated_at TEXT`);
-  await db.exec(`UPDATE task_field_schemas SET updated_at = COALESCE(updated_at, datetime('now'))`);
-  const taskFieldSchemasHasTenantId = (await db.all(`PRAGMA table_info(task_field_schemas)`) as Array<{ name: string }>).some((row) => row.name === 'tenant_id');
+  db.exec(`UPDATE task_field_schemas SET updated_at = COALESCE(updated_at, datetime('now'))`);
+  const taskFieldSchemasHasTenantId = (db.prepare(`PRAGMA table_info(task_field_schemas)`).all() as Array<{ name: string }>).some((row) => row.name === 'tenant_id');
   if (taskFieldSchemasHasTenantId) {
-    await db.exec(`DROP INDEX IF EXISTS idx_task_field_schemas_base_unique`);
+    db.exec(`DROP INDEX IF EXISTS idx_task_field_schemas_base_unique`);
   }
-  const duplicateBaseSchemaSprintTypes = await db.all(`
+  const duplicateBaseSchemaSprintTypes = db.prepare(`
     SELECT ${taskFieldSchemasHasTenantId ? 'tenant_id,' : 'NULL AS tenant_id,'} sprint_type_key
     FROM task_field_schemas
     WHERE task_type IS NULL
     GROUP BY ${taskFieldSchemasHasTenantId ? 'tenant_id, sprint_type_key' : 'sprint_type_key'}
     HAVING COUNT(*) > 1
-  `) as Array<{ tenant_id: number | null; sprint_type_key: string }>;
+  `).all() as Array<{ tenant_id: number | null; sprint_type_key: string }>;
   if (duplicateBaseSchemaSprintTypes.length > 0) {
     const selectBaseSchemaRows = db.prepare(`
       SELECT id
@@ -1422,16 +1435,16 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     console.log(`[schema] Deduplicated task_field_schemas base rows for ${duplicateBaseSchemaSprintTypes.length} sprint type(s)`);
   }
   if (!taskFieldSchemasHasTenantId) {
-    await db.exec(`
+    db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_task_field_schemas_base_unique
       ON task_field_schemas(sprint_type_key)
       WHERE task_type IS NULL
     `);
   }
-  await normalizeStoredTaskFieldSchemas(db);
+  normalizeStoredTaskFieldSchemas(db);
   ensureColumn('sprint_type_task_types', 'is_system', `is_system INTEGER NOT NULL DEFAULT 1`);
   ensureColumn('sprint_type_task_types', 'updated_at', `updated_at TEXT`);
-  await db.exec(`UPDATE sprint_type_task_types SET updated_at = COALESCE(updated_at, datetime('now'))`);
+  db.exec(`UPDATE sprint_type_task_types SET updated_at = COALESCE(updated_at, datetime('now'))`);
   ensureColumn('sprint_type_outcomes', 'description', `description TEXT NOT NULL DEFAULT ''`);
   ensureColumn('sprint_type_outcomes', 'enabled', `enabled INTEGER NOT NULL DEFAULT 1`);
   ensureColumn('sprint_type_outcomes', 'behavior', `behavior TEXT NOT NULL DEFAULT 'base'`);
@@ -1440,10 +1453,10 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   ensureColumn('sprint_type_outcomes', 'is_system', `is_system INTEGER NOT NULL DEFAULT 1`);
   ensureColumn('sprint_type_outcomes', 'metadata_json', `metadata_json TEXT NOT NULL DEFAULT '{}'`);
   ensureColumn('sprint_type_outcomes', 'updated_at', `updated_at TEXT`);
-  await db.exec(`UPDATE sprint_type_outcomes SET description = COALESCE(description, ''), enabled = COALESCE(enabled, 1), behavior = COALESCE(NULLIF(behavior, ''), 'base'), stage_order = COALESCE(stage_order, 0), is_system = COALESCE(is_system, 1), metadata_json = COALESCE(metadata_json, '{}'), updated_at = COALESCE(updated_at, datetime('now'))`);
+  db.exec(`UPDATE sprint_type_outcomes SET description = COALESCE(description, ''), enabled = COALESCE(enabled, 1), behavior = COALESCE(NULLIF(behavior, ''), 'base'), stage_order = COALESCE(stage_order, 0), is_system = COALESCE(is_system, 1), metadata_json = COALESCE(metadata_json, '{}'), updated_at = COALESCE(updated_at, datetime('now'))`);
   ensureColumn('sprint_workflow_templates', 'is_system', `is_system INTEGER NOT NULL DEFAULT 1`);
   ensureColumn('sprint_workflow_templates', 'updated_at', `updated_at TEXT`);
-  await db.exec(`UPDATE sprint_workflow_templates SET updated_at = COALESCE(updated_at, datetime('now'))`);
+  db.exec(`UPDATE sprint_workflow_templates SET updated_at = COALESCE(updated_at, datetime('now'))`);
 
   const defaultTenantIdSql = `(SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1)`;
   const sprintTypesHasTenantId = await tableHasColumn(db, 'sprint_types', 'tenant_id');
@@ -1565,8 +1578,8 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       insertSprintOutcome.run(sprintTypeKey, taskType, outcomeKey, label, description, enabled, behavior, badgeVariant, stageOrder, metadataJson);
     }
   };
-  const dedupeStarterSprintOutcomes = async (): Promise<void> => {
-    if (!await tableExists(db, 'sprint_type_outcomes')) return;
+  const dedupeStarterSprintOutcomes = (): void => {
+    if (!tableExists(db, 'sprint_type_outcomes')) return;
     const tenantSelect = sprintTypeOutcomesHasTenantId ? 'COALESCE(tenant_id, 0) AS tenant_key,' : '';
     const tenantGroup = sprintTypeOutcomesHasTenantId ? 'COALESCE(tenant_id, 0),' : '';
     const tenantWhere = sprintTypeOutcomesHasTenantId ? 'AND COALESCE(candidate.tenant_id, 0) = duplicate.tenant_key' : '';
@@ -1614,7 +1627,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   const fieldSchemaSeeds = STARTER_FIELD_SCHEMA_SEEDS;
   const sprintTypeTaskTypeSeeds = STARTER_SPRINT_TYPE_TASK_TYPE_SEEDS;
   const sprintOutcomeSeeds = STARTER_SPRINT_OUTCOME_SEEDS;
-  const shouldSeedStarterSprintDefinitions = ((await db.get(`SELECT COUNT(*) AS n FROM sprint_types`) as { n: number }).n ?? 0) === 0;
+  const shouldSeedStarterSprintDefinitions = ((db.prepare(`SELECT COUNT(*) AS n FROM sprint_types`).get() as { n: number }).n ?? 0) === 0;
   let shouldSeedStarterSprintTypeStatuses = false;
 
   if (shouldSeedStarterSprintDefinitions) {
@@ -1672,7 +1685,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   }
 
   try {
-    const result = await db.run(`
+    const result = db.prepare(`
       UPDATE sprints
       SET sprint_type = 'dev'
       WHERE project_id IN (
@@ -1680,7 +1693,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       )
         AND status = 'active'
         AND sprint_type != 'dev'
-    `);
+    `).run();
     if (result.changes > 0) {
       console.log(`[schema] Migrated ${result.changes} active Agent HQ sprint(s) to dev sprint type`);
     }
@@ -1693,11 +1706,11 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // Safe migration: add sprint_id to tasks. Task #855 later rebuilds this column
   // as NOT NULL ON DELETE CASCADE after all legacy task-table migrations run.
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN sprint_id INTEGER REFERENCES sprints(id) ON DELETE SET NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN sprint_id INTEGER REFERENCES sprints(id) ON DELETE SET NULL`);
     console.log('[schema] Migrated: added sprint_id to tasks');
   } catch (_) { /* column already exists */ }
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS recurring_task_series (
       id                   INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id           INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -1756,7 +1769,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // because it references sprint_job_schedules, which no longer exists.
 
   // Task dependencies (blocker → blocked)
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_dependencies (
       blocker_id  INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
       blocked_id  INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -1766,7 +1779,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     CREATE INDEX IF NOT EXISTS idx_task_deps_blocker ON task_dependencies(blocker_id);
     CREATE INDEX IF NOT EXISTS idx_task_deps_blocked ON task_dependencies(blocked_id);
   `);
-  await ensureTaskRelationshipModel(db, { sprintTypesTenantScoped, rebuildWithoutSprintTypeKeyForeignKey });
+  ensureTaskRelationshipModel(db, { sprintTypesTenantScoped, rebuildWithoutSprintTypeKeyForeignKey });
   if (!sprintTypesTenantScoped) {
     await pruneUnexpectedStarterWorkflowRelationshipTypes(db);
   }
@@ -1776,21 +1789,21 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // Safe migration: add branch_url to tasks
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN branch_url TEXT`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN branch_url TEXT`);
     console.log('[schema] Migrated: added branch_url to tasks');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add custom_fields_json to tasks
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN custom_fields_json TEXT NOT NULL DEFAULT '{}'`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN custom_fields_json TEXT NOT NULL DEFAULT '{}'`);
     console.log('[schema] Migrated: added custom_fields_json to tasks');
   } catch (_) { /* column already exists */ }
 
-  await backfillEvidenceFieldsIntoCustomFields(db);
-  await rebuildTasksWithoutLegacyEvidenceColumns(db);
+  backfillEvidenceFieldsIntoCustomFields(db);
+  rebuildTasksWithoutLegacyEvidenceColumns(db);
 
   // Project files table
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS project_files (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -1828,7 +1841,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     CREATE INDEX IF NOT EXISTS idx_project_file_versions_tenant_project ON project_file_versions(tenant_id, project_id, file_id);
   `);
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS workflow_files (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id    INTEGER NOT NULL,
@@ -1878,7 +1891,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   for (const column of projectFileColumns) {
     try {
-      await db.exec(column.sql);
+      db.exec(column.sql);
       console.log(`[schema] Migrated: added ${column.log} to project_files`);
     } catch (_) { /* column already exists */ }
   }
@@ -1886,7 +1899,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   await backfillProjectFileVersionHistory(db);
 
   // Task history / audit log
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_history (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -1900,7 +1913,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   // Task notes
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_notes (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -1912,7 +1925,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   // Structured run observability artifacts
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS instance_artifacts (
       instance_id                INTEGER PRIMARY KEY REFERENCES job_instances(id) ON DELETE CASCADE,
       task_id                    INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
@@ -1939,7 +1952,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   // Incremental cursor for materializing raw OpenClaw JSONL session logs into chat_messages.
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS openclaw_transcript_ingest_state (
       instance_id INTEGER PRIMARY KEY REFERENCES job_instances(id) ON DELETE CASCADE,
       session_file TEXT NOT NULL,
@@ -1952,7 +1965,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   // Task attachments
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_attachments (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id      INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -1967,7 +1980,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   // Chat attachments (task #658)
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS chat_attachments (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       instance_id  INTEGER REFERENCES job_instances(id) ON DELETE CASCADE,
@@ -1986,45 +1999,45 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // Safe migrations: observability columns for instances/tasks
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN session_key TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN session_key TEXT`);
     console.log('[schema] Migrated: added session_key to job_instances');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL`);
     console.log('[schema] Migrated: added task_id to job_instances');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN started_at TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN started_at TEXT`);
     console.log('[schema] Migrated: added started_at to job_instances');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN run_id TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN run_id TEXT`);
     console.log('[schema] Migrated: added run_id to job_instances');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN durable_run_id TEXT`);
-    await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_job_instances_durable_run_id ON job_instances(durable_run_id) WHERE durable_run_id IS NOT NULL`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN durable_run_id TEXT`);
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_job_instances_durable_run_id ON job_instances(durable_run_id) WHERE durable_run_id IS NOT NULL`);
     console.log('[schema] Migrated: added durable_run_id to job_instances');
   } catch (_) { /* column already exists */ }
-  await db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_job_instances_durable_run_id ON job_instances(durable_run_id) WHERE durable_run_id IS NOT NULL`);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_job_instances_durable_run_id ON job_instances(durable_run_id) WHERE durable_run_id IS NOT NULL`);
   await backfillJobInstanceDurableRunIds(db);
 
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN abort_attempted_at TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN abort_attempted_at TEXT`);
     console.log('[schema] Migrated: added abort_attempted_at to job_instances');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN abort_status TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN abort_status TEXT`);
     console.log('[schema] Migrated: added abort_status to job_instances');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN abort_error TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN abort_error TEXT`);
     console.log('[schema] Migrated: added abort_error to job_instances');
   } catch (_) { /* column already exists */ }
 
@@ -2042,7 +2055,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     { name: 'token_total', sql: `ALTER TABLE job_instances ADD COLUMN token_total INTEGER` },
   ]) {
     try {
-      await db.exec(column.sql);
+      db.exec(column.sql);
       console.log(`[schema] Migrated: added ${column.name} to job_instances`);
     } catch (_) { /* column already exists */ }
   }
@@ -2052,7 +2065,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // from the execution status (done/failed). A run can complete execution cleanly (done)
   // while reporting a task outcome of qa_fail or blocked — these are not runtime failures.
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN task_outcome TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN task_outcome TEXT`);
     console.log('[schema] Migrated: added task_outcome to job_instances');
   } catch (_) { /* column already exists */ }
 
@@ -2067,18 +2080,18 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     { name: 'lifecycle_outcome_posted_at', sql: `ALTER TABLE job_instances ADD COLUMN lifecycle_outcome_posted_at TEXT` },
   ]) {
     try {
-      await db.exec(column.sql);
+      db.exec(column.sql);
       console.log(`[schema] Migrated: added ${column.name} to job_instances`);
     } catch (_) { /* column already exists */ }
   }
 
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN active_instance_id INTEGER REFERENCES job_instances(id) ON DELETE SET NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN active_instance_id INTEGER REFERENCES job_instances(id) ON DELETE SET NULL`);
     console.log('[schema] Migrated: added active_instance_id to tasks');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN review_owner_agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN review_owner_agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL`);
     console.log('[schema] Migrated: added review_owner_agent_id to tasks');
   } catch (_) { /* column already exists */ }
 
@@ -2086,21 +2099,23 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // enforced by the write model so tenant/workflow-defined status keys can be
   // stored without rebuilding SQLite schema for every workflow.
   try {
-    const tasksDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`) as { sql: string } | undefined)?.sql ?? '';
+    const tasksDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
     if (tasksDdlHasStatusCheck(tasksDdl)) {
-      const cols = (await db.all(`PRAGMA table_info(tasks)`) as { name: string }[]).map(c => c.name);
+      const cols = (db.prepare(`PRAGMA table_info(tasks)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       const rebuiltDdl = stripTasksStatusCheck(tasksDdl)
         .replace(/CREATE TABLE\s+"?tasks"?/, 'CREATE TABLE tasks_status_unchecked');
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
+      const migrate = db.transaction(() => {
         db.prepare(rebuiltDdl).run();
-        await db.run(`INSERT INTO tasks_status_unchecked (${colList}) SELECT ${colList} FROM tasks`);
-        await db.run(`DROP TABLE tasks`);
-        await db.run(`ALTER TABLE tasks_status_unchecked RENAME TO tasks`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`);
+        db.prepare(`INSERT INTO tasks_status_unchecked (${colList}) SELECT ${colList} FROM tasks`).run();
+        db.prepare(`DROP TABLE tasks`).run();
+        db.prepare(`ALTER TABLE tasks_status_unchecked RENAME TO tasks`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -2113,9 +2128,11 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // Safe migration: expand tasks.status CHECK to include 'cancelled'
   try {
-    const tasksDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`) as { sql: string } | undefined)?.sql ?? '';
+    const tasksDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
     if (tasksDdlHasStatusCheck(tasksDdl) && !tasksDdl.includes("'cancelled'")) {
-      const cols = (await db.all(`PRAGMA table_info(tasks)`) as { name: string }[]).map(c => c.name);
+      const cols = (db.prepare(`PRAGMA table_info(tasks)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       const rebuiltDdl = tasksDdl
         .replace(/CREATE TABLE\s+"?tasks"?/, 'CREATE TABLE tasks_new')
@@ -2125,15 +2142,15 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
         );
       // Disable FK enforcement, run migration, re-enable
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
+      const migrate = db.transaction(() => {
         db.prepare(rebuiltDdl).run();
-        await db.run(`INSERT INTO tasks_new (${colList}) SELECT ${colList} FROM tasks`);
-        await db.run(`DROP TABLE tasks`);
-        await db.run(`ALTER TABLE tasks_new RENAME TO tasks`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`);
+        db.prepare(`INSERT INTO tasks_new (${colList}) SELECT ${colList} FROM tasks`).run();
+        db.prepare(`DROP TABLE tasks`).run();
+        db.prepare(`ALTER TABLE tasks_new RENAME TO tasks`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`).run();
 
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`);
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -2144,7 +2161,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   }
 
   // Telemetry: task_creation_events table
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_creation_events (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id           INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -2171,7 +2188,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   // Telemetry: task_outcome_metrics table
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_outcome_metrics (
       id                      INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id                 INTEGER NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
@@ -2201,9 +2218,11 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // Safe migration: expand tasks.status CHECK to include lifecycle + release-truth statuses
   try {
-    const tasksDdl2 = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`) as { sql: string } | undefined)?.sql ?? '';
+    const tasksDdl2 = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
     if (tasksDdlHasStatusCheck(tasksDdl2) && !tasksDdl2.includes("'qa_pass'")) {
-      const cols = (await db.all(`PRAGMA table_info(tasks)`) as { name: string }[]).map(c => c.name);
+      const cols = (db.prepare(`PRAGMA table_info(tasks)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       const rebuiltDdl = tasksDdl2
         .replace(/CREATE TABLE\s+"?tasks"?/, 'CREATE TABLE tasks_new2')
@@ -2212,15 +2231,15 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
           `CHECK(status IN (${taskStatusesSqlList(RELEASE_TASK_STATUSES.filter(status => status !== 'blocked'))}))`
         );
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
+      const migrate = db.transaction(() => {
         db.prepare(rebuiltDdl).run();
-        await db.run(`INSERT INTO tasks_new2 (${colList}) SELECT ${colList} FROM tasks`);
-        await db.run(`DROP TABLE tasks`);
-        await db.run(`ALTER TABLE tasks_new2 RENAME TO tasks`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`);
+        db.prepare(`INSERT INTO tasks_new2 (${colList}) SELECT ${colList} FROM tasks`).run();
+        db.prepare(`DROP TABLE tasks`).run();
+        db.prepare(`ALTER TABLE tasks_new2 RENAME TO tasks`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`).run();
 
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`);
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -2235,14 +2254,16 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // 'needs_attention', which caused raw SQLite CHECK failures on refused outcomes.
   // Uses dynamic DDL to mirror all existing columns (avoids hardcoded column drift).
   try {
-    const tasksDdl3 = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`) as { sql: string } | undefined)?.sql ?? '';
+    const tasksDdl3 = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
     const missingCanonicalTaskStatus = tasksDdlHasStatusCheck(tasksDdl3)
       && RELEASE_TASK_STATUSES.some(status => !tasksDdl3.includes(`'${status}'`));
     if (missingCanonicalTaskStatus) {
-      const cols = (await db.all(`PRAGMA table_info(tasks)`) as { name: string }[]).map(c => c.name);
+      const cols = (db.prepare(`PRAGMA table_info(tasks)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
+      const migrate = db.transaction(() => {
         const newDdl = tasksDdl3
           .replace(
             /CHECK\(status IN \([^)]*\)\)/,
@@ -2250,13 +2271,13 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
           )
           .replace(/CREATE TABLE\s+"?tasks"?/, 'CREATE TABLE tasks_status_fix');
         db.prepare(newDdl).run();
-        await db.run(`INSERT INTO tasks_status_fix (${colList}) SELECT ${colList} FROM tasks`);
-        await db.run(`DROP TABLE tasks`);
-        await db.run(`ALTER TABLE tasks_status_fix RENAME TO tasks`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`);
+        db.prepare(`INSERT INTO tasks_status_fix (${colList}) SELECT ${colList} FROM tasks`).run();
+        db.prepare(`DROP TABLE tasks`).run();
+        db.prepare(`ALTER TABLE tasks_status_fix RENAME TO tasks`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)`).run();
 
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`);
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -2269,10 +2290,10 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // Routing config v2: state-machine transitions table
   // Migrate from old routing_config (job-level config) to new (state transitions)
   try {
-    const rcCols = (await db.all(`PRAGMA table_info(routing_config)`) as { name: string }[]).map(c => c.name);
+    const rcCols = (db.prepare(`PRAGMA table_info(routing_config)`).all() as { name: string }[]).map(c => c.name);
     if (rcCols.includes('job_id') && !rcCols.includes('from_status')) {
       // Old schema — rename and recreate
-      await db.exec(`ALTER TABLE routing_config RENAME TO routing_config_legacy`);
+      db.exec(`ALTER TABLE routing_config RENAME TO routing_config_legacy`);
       console.log('[schema] Renamed old routing_config to routing_config_legacy');
     }
   } catch (_) { /* table may not exist at all */ }
@@ -2302,7 +2323,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     foreignKeysDisabledForLegacyWorkflowDdl = true;
   }
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS routing_config (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id  INTEGER REFERENCES projects(id) ON DELETE CASCADE,
@@ -2426,7 +2447,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   }
   ensureColumn('sprint_task_transitions', 'project_id', `project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
   ensureColumn('sprint_task_transitions', 'sprint_type', `sprint_type TEXT`);
-  await db.exec(`
+  db.exec(`
     UPDATE sprint_task_transitions
     SET project_id = COALESCE(project_id, (SELECT s.project_id FROM sprints s WHERE s.id = sprint_task_transitions.sprint_id)),
         sprint_type = COALESCE(sprint_type, (SELECT s.sprint_type FROM sprints s WHERE s.id = sprint_task_transitions.sprint_id))
@@ -2436,10 +2457,10 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       AND EXISTS (SELECT 1 FROM projects p WHERE p.id = (SELECT s.project_id FROM sprints s WHERE s.id = sprint_task_transitions.sprint_id))
       AND EXISTS (SELECT 1 FROM sprint_types st WHERE st.key = (SELECT s.sprint_type FROM sprints s WHERE s.id = sprint_task_transitions.sprint_id))
   `);
-  const taskTransitionsDdlRow = await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_transitions'`) as { sql?: string } | undefined;
+  const taskTransitionsDdlRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_transitions'`).get() as { sql?: string } | undefined;
   const taskTransitionsDdl = taskTransitionsDdlRow?.sql ?? '';
   if (/sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(taskTransitionsDdl)) {
-    await db.exec(`
+    db.exec(`
       BEGIN TRANSACTION;
       CREATE TABLE sprint_task_transitions__new (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2465,7 +2486,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     `);
     console.log('[schema] Migrated: sprint_task_transitions.sprint_id now allows NULL for sprint-type defaults');
   }
-  await db.exec(`
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sprint_task_transitions_lookup
       ON sprint_task_transitions(sprint_id, from_status, outcome, task_type);
     CREATE INDEX IF NOT EXISTS idx_sprint_task_transitions_scope_lookup
@@ -2473,9 +2494,9 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
   for (const tableName of ['routing_config', 'sprint_task_transitions']) {
     try {
-      const columns = await db.all(`PRAGMA table_info(${tableName})`) as Array<{ name: string }>;
+      const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
       if (columns.some(column => column.name === 'lane')) {
-        await db.exec(`ALTER TABLE ${tableName} DROP COLUMN lane`);
+        db.exec(`ALTER TABLE ${tableName} DROP COLUMN lane`);
         console.log(`[schema] Task #743: dropped legacy ${tableName}.lane column`);
       }
     } catch (err) {
@@ -2484,7 +2505,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   }
   ensureColumn('sprint_task_transition_requirements', 'project_id', `project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
   ensureColumn('sprint_task_transition_requirements', 'sprint_type', `sprint_type TEXT`);
-  await db.exec(`
+  db.exec(`
     UPDATE sprint_task_transition_requirements
     SET project_id = COALESCE(project_id, (SELECT s.project_id FROM sprints s WHERE s.id = sprint_task_transition_requirements.sprint_id)),
         sprint_type = COALESCE(sprint_type, (SELECT s.sprint_type FROM sprints s WHERE s.id = sprint_task_transition_requirements.sprint_id))
@@ -2494,10 +2515,10 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       AND EXISTS (SELECT 1 FROM projects p WHERE p.id = (SELECT s.project_id FROM sprints s WHERE s.id = sprint_task_transition_requirements.sprint_id))
       AND EXISTS (SELECT 1 FROM sprint_types st WHERE st.key = (SELECT s.sprint_type FROM sprints s WHERE s.id = sprint_task_transition_requirements.sprint_id))
   `);
-  const taskTransitionRequirementsDdlRow = await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_transition_requirements'`) as { sql?: string } | undefined;
+  const taskTransitionRequirementsDdlRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_transition_requirements'`).get() as { sql?: string } | undefined;
   const taskTransitionRequirementsDdl = taskTransitionRequirementsDdlRow?.sql ?? '';
   if (/sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(taskTransitionRequirementsDdl)) {
-    await db.exec(`
+    db.exec(`
       BEGIN TRANSACTION;
       CREATE TABLE sprint_task_transition_requirements__new (
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2527,7 +2548,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     `);
     console.log('[schema] Migrated: sprint_task_transition_requirements.sprint_id now allows NULL for sprint-type defaults');
   }
-  await db.exec(`
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sprint_task_transition_requirements_lookup
       ON sprint_task_transition_requirements(sprint_id, outcome, task_type);
     CREATE INDEX IF NOT EXISTS idx_sprint_task_transition_requirements_scope_lookup
@@ -2537,24 +2558,24 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   ensureColumn('sprint_task_routing_rules', 'enabled', `enabled INTEGER NOT NULL DEFAULT 1`);
   ensureColumn('sprint_task_routing_rules', 'project_id', `project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
   ensureColumn('sprint_task_routing_rules', 'sprint_type', `sprint_type TEXT`);
-  await db.exec(`
+  db.exec(`
     UPDATE sprint_task_routing_rules
     SET project_id = COALESCE(project_id, (SELECT s.project_id FROM sprints s WHERE s.id = sprint_task_routing_rules.sprint_id)),
         sprint_type = COALESCE(sprint_type, (SELECT s.sprint_type FROM sprints s WHERE s.id = sprint_task_routing_rules.sprint_id))
     WHERE sprint_id IS NOT NULL
       AND (project_id IS NULL OR sprint_type IS NULL)
   `);
-  await db.exec(`
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sprint_task_routing_rules_scope_lookup
       ON sprint_task_routing_rules(project_id, sprint_type, sprint_id, task_type, status)
   `);
-  await db.exec(`DROP INDEX IF EXISTS idx_sprint_task_routing_rules_scope_unique`);
+  db.exec(`DROP INDEX IF EXISTS idx_sprint_task_routing_rules_scope_unique`);
   // The grouping keys are the COALESCE expressions, so the projection selects those same
   // expressions rather than the bare columns: a bare column that is neither aggregated nor
   // grouped is accepted by SQLite but rejected by Postgres. Matching rows back below uses the
   // identical COALESCE expressions, which keeps the NULL-vs-sentinel semantics unchanged and
   // avoids SQLite-only `IS ?` NULL-safe comparisons.
-  const duplicateScopedRoutingRules = await db.all(`
+  const duplicateScopedRoutingRules = db.prepare(`
     SELECT project_id,
            sprint_type,
            COALESCE(sprint_id, -1) AS sprint_key,
@@ -2568,7 +2589,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       AND sprint_type IS NOT NULL
     GROUP BY project_id, sprint_type, COALESCE(sprint_id, -1), COALESCE(task_type, ''), status, COALESCE(agent_id, -1), priority
     HAVING COUNT(*) > 1
-  `) as Array<{
+  `).all() as Array<{
     project_id: number;
     sprint_type: string;
     sprint_key: number;
@@ -2611,12 +2632,12 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     dedupeScopedRoutingRules();
     console.log(`[schema] Deduplicated exact sprint_task_routing_rules scoped rows for ${duplicateScopedRoutingRules.length} key(s)`);
   }
-  const routingRulesDdlRow = await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_routing_rules'`) as { sql?: string } | undefined;
+  const routingRulesDdlRow = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_routing_rules'`).get() as { sql?: string } | undefined;
   const routingRulesDdl = routingRulesDdlRow?.sql ?? '';
   const sprintRoutingNeedsNullSprintIdMigration = /sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(routingRulesDdl);
   const sprintRoutingNeedsNullTaskTypeMigration = /task_type\s+TEXT\s+NOT\s+NULL/i.test(routingRulesDdl);
   if (sprintRoutingNeedsNullSprintIdMigration || sprintRoutingNeedsNullTaskTypeMigration) {
-    await db.exec(`
+    db.exec(`
       BEGIN TRANSACTION;
       CREATE TABLE sprint_task_routing_rules__new (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2639,7 +2660,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       ALTER TABLE sprint_task_routing_rules__new RENAME TO sprint_task_routing_rules;
       COMMIT;
     `);
-    await db.exec(`
+    db.exec(`
       CREATE INDEX IF NOT EXISTS idx_sprint_task_routing_rules_lookup
         ON sprint_task_routing_rules(sprint_id, task_type, status);
       CREATE INDEX IF NOT EXISTS idx_sprint_task_routing_rules_scope_lookup
@@ -2647,7 +2668,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     `);
     console.log('[schema] Migrated: sprint_task_routing_rules.sprint_id now allows NULL for sprint-type defaults');
   }
-  await db.exec(`
+  db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_task_routing_rules_candidate_unique
       ON sprint_task_routing_rules(
         project_id,
@@ -2661,7 +2682,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       WHERE project_id IS NOT NULL AND sprint_type IS NOT NULL;
   `);
   await normalizeSprintTaskRoutingRuleTaskTypes(db);
-  await db.exec(`
+  db.exec(`
     UPDATE sprints
     SET task_policy_seeded_at = COALESCE(task_policy_seeded_at, datetime('now'))
     WHERE id IN (
@@ -2673,18 +2694,18 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     )
   `);
 
-  const disabledGlobalRoutingConfig = await db.run(`
+  const disabledGlobalRoutingConfig = db.prepare(`
     UPDATE routing_config
     SET enabled = 0
     WHERE enabled = 1
       AND project_id IS NULL
-  `);
+  `).run();
   if (disabledGlobalRoutingConfig.changes > 0) {
     console.log(`[schema] Disabled ${disabledGlobalRoutingConfig.changes} null-scoped routing_config transition(s)`);
   }
 
   const validStatusesSql = taskStatusesSqlList(RELEASE_TASK_STATUSES);
-  const disabledRoutingResult = await db.run(`
+  const disabledRoutingResult = db.prepare(`
     UPDATE routing_config
     SET enabled = 0
     WHERE enabled = 1
@@ -2694,52 +2715,54 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
         OR (from_status = 'review' AND outcome = 'qa_pass' AND to_status = 'done')
         OR (from_status = 'in_progress' AND outcome = 'completed_done')
       )
-  `);
+  `).run();
   if (disabledRoutingResult.changes > 0) {
     console.log(`[schema] Disabled ${disabledRoutingResult.changes} obsolete routing_config transition(s)`);
   }
 
   ensureAgencyDevOpsReleaseLane();
-  await backfillJobInstanceTokenUsage();
+  backfillJobInstanceTokenUsage();
 
   // Deterministic task routing metadata
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN task_type TEXT`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN task_type TEXT`);
     console.log('[schema] Migrated: added task_type to tasks');
   } catch (_) { /* already exists */ }
 
   // Second task_routing_rules CREATE removed — table already created above without job_id
   // Note: alignAgencyReleaseJobInstructions() requires agents.job_instructions (added in Task #459 Phase 0
   // migration below), so it is called after that migration block rather than here.
-  await ensureSecurityEventsTable();
-  await ensureProjectAuditLogTable();
-  await ensureAppSettingsTable();
+  ensureSecurityEventsTable();
+  ensureProjectAuditLogTable();
+  ensureAppSettingsTable();
   if (activeTenantMode !== 'verify') {
     await ensureDefaultProjectId(db);
   }
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN system_role TEXT`);
+    db.exec(`ALTER TABLE agents ADD COLUMN system_role TEXT`);
     console.log('[schema] Migrated: added system_role to agents');
   } catch (_) { /* column already exists */ }
-  await ensureDefectTrackingColumns();
-  await ensureTaskRelationshipModel(db, { sprintTypesTenantScoped, rebuildWithoutSprintTypeKeyForeignKey });
-  await ensureToolRegistryTables();
+  ensureDefectTrackingColumns();
+  ensureTaskRelationshipModel(db, { sprintTypesTenantScoped, rebuildWithoutSprintTypeKeyForeignKey });
+  ensureToolRegistryTables();
   await ensureProviderConfigTable();
-  await ensureProviderConnectionsTable();
+  ensureProviderConnectionsTable();
   await ensureGitHubIdentitiesTable();
-  await ensureFailureDetailAndWorkflowColumns();
+  ensureFailureDetailAndWorkflowColumns();
   await seedInitialData();
   await ensureMcpApiKeyTable(db);
   await ensureMcpRegistryTables();
-  await ensureLifecycleRulesTable();
-  await ensureDataMigration593();
+  ensureLifecycleRulesTable();
+  ensureDataMigration593();
 
   // Safe migration: expand job_instances.status CHECK to include 'cancelled'
   // Instances aborted via task cancel/stop should show as 'cancelled', not 'done'.
   try {
-    const instancesDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='job_instances'`) as { sql: string } | undefined)?.sql ?? '';
+    const instancesDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='job_instances'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
     if (instancesDdl && !instancesDdl.includes("'cancelled'")) {
-      const cols = (await db.all(`PRAGMA table_info(job_instances)`) as { name: string }[]).map(c => c.name);
+      const cols = (db.prepare(`PRAGMA table_info(job_instances)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       const rebuiltDdl = instancesDdl
         .replace(/CREATE TABLE\s+"?job_instances"?/, 'CREATE TABLE job_instances_new')
@@ -2748,14 +2771,14 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
           "CHECK(status IN ('queued','dispatched','running','done','failed','cancelled'))"
         );
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
+      const migrate = db.transaction(() => {
         db.prepare(rebuiltDdl).run();
-        await db.run(`INSERT INTO job_instances_new (${colList}) SELECT ${colList} FROM job_instances`);
-        await db.run(`DROP TABLE job_instances`);
-        await db.run(`ALTER TABLE job_instances_new RENAME TO job_instances`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_instances_status ON job_instances(status)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_instances_task ON job_instances(task_id)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_instances_agent ON job_instances(agent_id)`);
+        db.prepare(`INSERT INTO job_instances_new (${colList}) SELECT ${colList} FROM job_instances`).run();
+        db.prepare(`DROP TABLE job_instances`).run();
+        db.prepare(`ALTER TABLE job_instances_new RENAME TO job_instances`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_instances_status ON job_instances(status)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_instances_task ON job_instances(task_id)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_instances_agent ON job_instances(agent_id)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -2767,21 +2790,21 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // Safe migration: add preferred_provider to agents
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN preferred_provider TEXT NOT NULL DEFAULT 'anthropic'`);
+    db.exec(`ALTER TABLE agents ADD COLUMN preferred_provider TEXT NOT NULL DEFAULT 'anthropic'`);
     console.log('[schema] Migrated: added preferred_provider to agents');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add agent-native routing config columns (Task #594/596)
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN stall_threshold_min INTEGER NOT NULL DEFAULT 30`);
+    db.exec(`ALTER TABLE agents ADD COLUMN stall_threshold_min INTEGER NOT NULL DEFAULT 30`);
     console.log('[schema] Migrated: added stall_threshold_min to agents');
   } catch (_) { /* column already exists */ }
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3`);
+    db.exec(`ALTER TABLE agents ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3`);
     console.log('[schema] Migrated: added max_retries to agents');
   } catch (_) { /* column already exists */ }
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN sort_rules TEXT NOT NULL DEFAULT '[]'`);
+    db.exec(`ALTER TABLE agents ADD COLUMN sort_rules TEXT NOT NULL DEFAULT '[]'`);
     console.log('[schema] Migrated: added sort_rules to agents');
   } catch (_) { /* column already exists */ }
 
@@ -2790,7 +2813,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // When set, the agent process runs as this OS user for filesystem isolation.
   // Null = no OS-level isolation (legacy behaviour).
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN os_user TEXT`);
+    db.exec(`ALTER TABLE agents ADD COLUMN os_user TEXT`);
     console.log('[schema] Migrated: added os_user to agents');
   } catch (_) { /* column already exists */ }
 
@@ -2801,19 +2824,19 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // Safe migration: add effective_model to job_instances
   // Stores the model actually used (or selected at dispatch time) for that run.
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN effective_model TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN effective_model TEXT`);
     console.log('[schema] Migrated: added effective_model to job_instances');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add effective_thinking_level to job_instances
   // Stores the resolved thinking level used at dispatch time for audit/debugging.
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN effective_thinking_level TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN effective_thinking_level TEXT`);
     console.log('[schema] Migrated: added effective_thinking_level to job_instances');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN effective_fast_mode INTEGER CHECK(effective_fast_mode IN (0, 1))`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN effective_fast_mode INTEGER CHECK(effective_fast_mode IN (0, 1))`);
     console.log('[schema] Migrated: added effective_fast_mode to job_instances');
   } catch (_) { /* column already exists */ }
 
@@ -2821,53 +2844,53 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   // Stores the git worktree path used by the agent for this run.
   // Enables cleanup on completion and orphan detection by the watchdog.
   try {
-    await db.exec(`ALTER TABLE job_instances ADD COLUMN worktree_path TEXT`);
+    db.exec(`ALTER TABLE job_instances ADD COLUMN worktree_path TEXT`);
     console.log('[schema] Migrated: added worktree_path to job_instances');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: project-level repo ownership (task #438)
   try {
-    await db.exec(`ALTER TABLE projects ADD COLUMN repo_path TEXT`);
+    db.exec(`ALTER TABLE projects ADD COLUMN repo_path TEXT`);
     console.log('[schema] Migrated: added repo_path to projects');
   } catch (_) { /* column already exists */ }
   try {
-    await db.exec(`ALTER TABLE projects ADD COLUMN repo_url TEXT`);
+    db.exec(`ALTER TABLE projects ADD COLUMN repo_url TEXT`);
     console.log('[schema] Migrated: added repo_url to projects');
   } catch (_) { /* column already exists */ }
   try {
-    await db.exec(`ALTER TABLE projects ADD COLUMN repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone'))`);
+    db.exec(`ALTER TABLE projects ADD COLUMN repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone'))`);
     console.log('[schema] Migrated: added repo_access_mode to projects');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: add repo_path to agents (task #365)
   // The canonical local git repository path used for worktree operations.
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN repo_path TEXT`);
+    db.exec(`ALTER TABLE agents ADD COLUMN repo_path TEXT`);
     console.log('[schema] Migrated: added repo_path to agents');
   } catch (_) { /* column already exists */ }
 
   // Safe migration: explicit repo source fields for worktree vs clone dispatch (task #373)
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN repo_url TEXT`);
+    db.exec(`ALTER TABLE agents ADD COLUMN repo_url TEXT`);
     console.log('[schema] Migrated: added repo_url to agents');
   } catch (_) { /* column already exists */ }
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone'))`);
+    db.exec(`ALTER TABLE agents ADD COLUMN repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone'))`);
     console.log('[schema] Migrated: added repo_access_mode to agents');
   } catch (_) { /* column already exists */ }
   try {
-    await db.exec(`UPDATE agents SET repo_access_mode = 'worktree' WHERE repo_access_mode IS NULL AND repo_path IS NOT NULL AND repo_path != ''`);
+    db.exec(`UPDATE agents SET repo_access_mode = 'worktree' WHERE repo_access_mode IS NULL AND repo_path IS NOT NULL AND repo_path != ''`);
   } catch (_) { /* ignore */ }
 
   await ensureTableColumn(db, 'sprints', 'repo_path', `repo_path TEXT`);
   await ensureTableColumn(db, 'sprints', 'repo_url', `repo_url TEXT`);
   await ensureTableColumn(db, 'sprints', 'repo_access_mode', `repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone'))`);
 
-  await backfillProjectRepoConfigs(db);
-  await backfillWorkflowRepoConfigs(db);
+  backfillProjectRepoConfigs(db);
+  backfillWorkflowRepoConfigs(db);
 
   // Create story_point_model_routing table
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS story_point_model_routing (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id      INTEGER REFERENCES projects(id) ON DELETE CASCADE,
@@ -2890,17 +2913,17 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   `);
 
   try {
-    await db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
+    db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
     console.log('[schema] Migrated: added project_id to story_point_model_routing');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN sprint_id INTEGER REFERENCES sprints(id) ON DELETE CASCADE`);
+    db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN sprint_id INTEGER REFERENCES sprints(id) ON DELETE CASCADE`);
     console.log('[schema] Migrated: added sprint_id to story_point_model_routing');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN sprint_type TEXT`);
+    db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN sprint_type TEXT`);
     console.log('[schema] Migrated: added sprint_type to story_point_model_routing');
   } catch (_) { /* column already exists */ }
   if (sprintTypesTenantScoped) {
@@ -2908,16 +2931,18 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   }
 
   try {
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_spmr_scope_points ON story_point_model_routing(project_id, sprint_id, sprint_type, provider, max_points)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_spmr_scope_points ON story_point_model_routing(project_id, sprint_id, sprint_type, provider, max_points)`);
   } catch (_) { /* ignore */ }
 
   // Safe migration: allow provider-agnostic model routing rules.
   // Older DBs created story_point_model_routing.provider as NOT NULL DEFAULT 'anthropic',
   // but scoped routing still allows provider-agnostic rows within an explicit project/sprint scope.
   try {
-    const routingDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='story_point_model_routing'`) as { sql: string } | undefined)?.sql ?? '';
+    const routingDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='story_point_model_routing'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
     if (/provider\s+TEXT\s+NOT\s+NULL/i.test(routingDdl)) {
-      const cols = (await db.all(`PRAGMA table_info(story_point_model_routing)`) as { name: string }[]).map(c => c.name);
+      const cols = (db.prepare(`PRAGMA table_info(story_point_model_routing)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       const rebuiltDdl = routingDdl
         .replace(/CREATE TABLE\s+"?story_point_model_routing"?/, 'CREATE TABLE story_point_model_routing_new')
@@ -2925,12 +2950,12 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
         .replace(/provider\s+TEXT\s+NOT\s+NULL/i, 'provider TEXT');
 
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
+      const migrate = db.transaction(() => {
         db.prepare(rebuiltDdl).run();
-        await db.run(`INSERT INTO story_point_model_routing_new (${colList}) SELECT ${colList} FROM story_point_model_routing`);
-        await db.run(`DROP TABLE story_point_model_routing`);
-        await db.run(`ALTER TABLE story_point_model_routing_new RENAME TO story_point_model_routing`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_spmr_provider_points ON story_point_model_routing(provider, max_points)`);
+        db.prepare(`INSERT INTO story_point_model_routing_new (${colList}) SELECT ${colList} FROM story_point_model_routing`).run();
+        db.prepare(`DROP TABLE story_point_model_routing`).run();
+        db.prepare(`ALTER TABLE story_point_model_routing_new RENAME TO story_point_model_routing`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_spmr_provider_points ON story_point_model_routing(provider, max_points)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -2942,22 +2967,22 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   }
 
   try {
-    await db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN thinking_level TEXT`);
+    db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN thinking_level TEXT`);
     console.log('[schema] Migrated: added thinking_level to story_point_model_routing');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN fast_mode INTEGER CHECK(fast_mode IN (0, 1))`);
+    db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN fast_mode INTEGER CHECK(fast_mode IN (0, 1))`);
     console.log('[schema] Migrated: added fast_mode to story_point_model_routing');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`);
+    db.exec(`ALTER TABLE story_point_model_routing ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`);
     console.log('[schema] Migrated: added enabled to story_point_model_routing');
   } catch (_) { /* column already exists */ }
 
   try {
-    const result = await db.run(`
+    const result = db.prepare(`
       UPDATE story_point_model_routing
       SET provider = CASE
             WHEN provider = 'openai' AND (model LIKE 'openai-codex/%' OR fallback_model LIKE 'openai-codex/%') THEN 'openai-codex'
@@ -2974,14 +2999,14 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
           updated_at = datetime('now')
       WHERE model LIKE 'openai-codex/%'
          OR fallback_model LIKE 'openai-codex/%'
-    `);
+    `).run();
     if (result.changes > 0) {
       console.log(`[schema] Migrated ${result.changes} OpenAI Codex model routing row(s) to OpenClaw model IDs`);
     }
   } catch (_) { /* older DBs may not have all columns yet */ }
 
   try {
-    const result = await db.run(`
+    const result = db.prepare(`
       UPDATE agents
       SET preferred_provider = CASE
             WHEN preferred_provider = 'openai' THEN 'openai-codex'
@@ -2989,7 +3014,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
           END,
           model = 'openai/' || substr(model, length('openai-codex/') + 1)
       WHERE model LIKE 'openai-codex/%'
-    `);
+    `).run();
     if (result.changes > 0) {
       console.log(`[schema] Migrated ${result.changes} OpenAI Codex agent model row(s) to OpenClaw model IDs`);
     }
@@ -3016,7 +3041,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   let phase0Added = 0;
   for (const col of phase0Columns) {
     try {
-      await db.exec(col.sql);
+      db.exec(col.sql);
       phase0Added++;
     } catch { /* column already exists */ }
   }
@@ -3026,20 +3051,20 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // Ensure job_instructions is the canonical stored column, upgrading legacy pre_instructions when present.
   try {
-    const agentCols407 = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
+    const agentCols407 = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
     const hasJobInstructions407 = agentCols407.some((c) => c.name === 'job_instructions');
     const hasLegacyPreInstructions407 = agentCols407.some((c) => c.name === 'pre_instructions');
 
     if (!hasJobInstructions407 && hasLegacyPreInstructions407) {
-      await db.exec(`ALTER TABLE agents RENAME COLUMN pre_instructions TO job_instructions`);
+      db.exec(`ALTER TABLE agents RENAME COLUMN pre_instructions TO job_instructions`);
       console.log('[schema] Task #407: renamed agents.pre_instructions to job_instructions');
     } else if (!hasJobInstructions407) {
-      await db.exec(`ALTER TABLE agents ADD COLUMN job_instructions TEXT NOT NULL DEFAULT ''`);
+      db.exec(`ALTER TABLE agents ADD COLUMN job_instructions TEXT NOT NULL DEFAULT ''`);
       console.log('[schema] Task #407: added job_instructions to agents');
     }
 
     try {
-      await db.exec(`UPDATE agents SET job_instructions = pre_instructions WHERE COALESCE(job_instructions, '') = '' AND COALESCE(pre_instructions, '') != ''`);
+      db.exec(`UPDATE agents SET job_instructions = pre_instructions WHERE COALESCE(job_instructions, '') = '' AND COALESCE(pre_instructions, '') != ''`);
     } catch {
       /* legacy column may not exist once the rename/drop migration has run */
     }
@@ -3052,7 +3077,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // Now that agents.job_instructions exists, align instructions.
   alignAgencyReleaseJobInstructions();
-  await normalizeAgentHqProjectLifecycleInstructions();
+  normalizeAgentHqProjectLifecycleInstructions();
 
   // Task #459 Phase 0 backfill from job_templates removed — Task #579 (table dropped).
   // Agent rows already have their job-template fields populated from prior migrations.
@@ -3063,19 +3088,19 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
 
   // 3e. Ensure agent_id column exists on task_creation_events
   try {
-    await db.exec(`ALTER TABLE task_creation_events ADD COLUMN agent_id INTEGER REFERENCES agents(id)`);
+    db.exec(`ALTER TABLE task_creation_events ADD COLUMN agent_id INTEGER REFERENCES agents(id)`);
     console.log(`[schema] Task #459 Phase 3: added agent_id to task_creation_events`);
   } catch { /* column already exists */ }
 
   // 3f. Ensure agent_id column exists on task_outcome_metrics
   try {
-    await db.exec(`ALTER TABLE task_outcome_metrics ADD COLUMN agent_id INTEGER REFERENCES agents(id)`);
+    db.exec(`ALTER TABLE task_outcome_metrics ADD COLUMN agent_id INTEGER REFERENCES agents(id)`);
     console.log(`[schema] Task #459 Phase 3: added agent_id to task_outcome_metrics`);
   } catch { /* column already exists */ }
 
   // 3g. Ensure agent_id column exists on dispatch_log
   try {
-    await db.exec(`ALTER TABLE dispatch_log ADD COLUMN agent_id INTEGER REFERENCES agents(id)`);
+    db.exec(`ALTER TABLE dispatch_log ADD COLUMN agent_id INTEGER REFERENCES agents(id)`);
     console.log(`[schema] Task #459 Phase 3: added agent_id to dispatch_log`);
   } catch { /* column already exists */ }
 
@@ -3109,13 +3134,13 @@ function ensureAgencyDevOpsReleaseLane(): void {
   // No-op: job_templates table has been dropped (task #579)
 }
 
-async function backfillJobInstanceTokenUsage(): Promise<void> {
-  const db = getDb();
-  const rows = await db.all(`
+function backfillJobInstanceTokenUsage(): void {
+  const db = getRawDb();
+  const rows = db.prepare(`
     SELECT id, response, payload_sent, error
     FROM job_instances
     WHERE token_input IS NULL AND token_output IS NULL AND token_total IS NULL
-  `) as Array<{ id: number; response: string | null; payload_sent: string | null; error: string | null }>;
+  `).all() as Array<{ id: number; response: string | null; payload_sent: string | null; error: string | null }>;
 
   const update = db.prepare(`
     UPDATE job_instances
@@ -3158,7 +3183,7 @@ function rewriteInstructionPaths(text: string): string {
 }
 
 function alignAgencyReleaseJobInstructions(): void {
-  const db = getDb();
+  const db = getRawDb();
   const rawInstructionsByTitle: Record<string, string> = {
     'Agency — Frontend': `You are Pixel, the Agency Frontend Engineer. Your session is starting because a frontend task has been assigned.
 
@@ -3344,28 +3369,28 @@ If blocked by missing product direction or unclear constraints:
   }
 }
 
-async function normalizeAgentHqProjectLifecycleInstructions(): Promise<void> {
-  const db = getDb();
+function normalizeAgentHqProjectLifecycleInstructions(): void {
+  const db = getRawDb();
   try {
     const agentColumns = new Set(
-      (await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>).map((col) => col.name),
+      (db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>).map((col) => col.name),
     );
     if (!agentColumns.has('job_instructions') || !agentColumns.has('project_id')) return;
 
     const projectColumns = new Set(
-      (await db.all(`PRAGMA table_info(projects)`) as Array<{ name: string }>).map((col) => col.name),
+      (db.prepare(`PRAGMA table_info(projects)`).all() as Array<{ name: string }>).map((col) => col.name),
     );
     if (!projectColumns.has('id') || !projectColumns.has('name')) return;
 
     const deletedFilter = agentColumns.has('deleted_at') ? 'AND a.deleted_at IS NULL' : '';
-    const rows = await db.all(`
+    const rows = db.prepare(`
       SELECT a.id, a.job_instructions
       FROM agents a
       JOIN projects p ON p.id = a.project_id
       WHERE p.name = 'Agent HQ'
         ${deletedFilter}
         AND COALESCE(a.job_instructions, '') != ''
-    `) as Array<{ id: number; job_instructions: string }>;
+    `).all() as Array<{ id: number; job_instructions: string }>;
 
     const replacements: Array<[string, string]> = [
       [
@@ -3437,10 +3462,10 @@ async function normalizeAgentHqProjectLifecycleInstructions(): Promise<void> {
  *   task_id     — FK to tasks.id (nullable)
  *   details     — JSON blob with attempted_path, resolved_path, workspace_root, detail
  */
-async function ensureSecurityEventsTable(): Promise<void> {
-  const db = getDb();
+function ensureSecurityEventsTable(): void {
+  const db = getRawDb();
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS security_events (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       event_type  TEXT NOT NULL DEFAULT 'workspace_boundary_violation',
@@ -3478,7 +3503,7 @@ async function ensureSecurityEventsTable(): Promise<void> {
  * Only sets os_user where it is currently NULL (idempotent, respects manual overrides).
  */
 function backfillAgentOsUsers(): void {
-  const db = getDb();
+  const db = getRawDb();
 
   const mapping: Record<string, string> = {
     'agent:agency-backend:main':    'agent-forge',
@@ -3521,10 +3546,10 @@ function backfillAgentOsUsers(): void {
  *   actor       — who made the change (user, agent slug, 'system', 'api')
  *   changes     — JSON blob with field-level diffs ({ field: { old, new } })
  */
-async function ensureProjectAuditLogTable(): Promise<void> {
-  const db = getDb();
+function ensureProjectAuditLogTable(): void {
+  const db = getRawDb();
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS project_audit_log (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -3545,51 +3570,51 @@ async function ensureProjectAuditLogTable(): Promise<void> {
  * ensureDefectTrackingColumns — Task #535: add origin_task_id + defect_type
  * to tasks, spawned_defects to task_outcome_metrics, and backfill task #534.
  */
-async function ensureDefectTrackingColumns(): Promise<void> {
-  const db = getDb();
+function ensureDefectTrackingColumns(): void {
+  const db = getRawDb();
 
   // 1. Add origin_task_id to tasks
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN origin_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL`);
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_origin ON tasks(origin_task_id)`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN origin_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_origin ON tasks(origin_task_id)`);
     console.log('[schema] Migrated: added origin_task_id to tasks');
   } catch (_) { /* column already exists */ }
 
   // 2. Add defect_type to tasks
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN defect_type TEXT DEFAULT NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN defect_type TEXT DEFAULT NULL`);
     console.log('[schema] Migrated: added defect_type to tasks');
   } catch (_) { /* column already exists */ }
 
   // 3. Add spawned_defects to task_outcome_metrics
   try {
-    await db.exec(`ALTER TABLE task_outcome_metrics ADD COLUMN spawned_defects INTEGER NOT NULL DEFAULT 0`);
+    db.exec(`ALTER TABLE task_outcome_metrics ADD COLUMN spawned_defects INTEGER NOT NULL DEFAULT 0`);
     console.log('[schema] Migrated: added spawned_defects to task_outcome_metrics');
   } catch (_) { /* column already exists */ }
 
   // Ensure index exists (idempotent)
   try {
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_origin ON tasks(origin_task_id)`);
-    await db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_defect_type ON tasks(defect_type)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_origin ON tasks(origin_task_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_defect_type ON tasks(defect_type)`);
   } catch (_) { /* already exists */ }
 
   // 4. Backfill task #534 → origin_task_id=532, defect_type=qa_miss
   try {
-    const task534 = await db.get(`SELECT id, origin_task_id FROM tasks WHERE id = 534`) as { id: number; origin_task_id: number | null } | undefined;
+    const task534 = db.prepare(`SELECT id, origin_task_id FROM tasks WHERE id = 534`).get() as { id: number; origin_task_id: number | null } | undefined;
     if (task534 && task534.origin_task_id === null) {
       // Check task 532 exists
-      const task532 = await db.get(`SELECT id FROM tasks WHERE id = 532`) as { id: number } | undefined;
+      const task532 = db.prepare(`SELECT id FROM tasks WHERE id = 532`).get() as { id: number } | undefined;
       if (task532) {
-        await db.run(`UPDATE tasks SET origin_task_id = 532, defect_type = 'qa_miss' WHERE id = 534`);
+        db.prepare(`UPDATE tasks SET origin_task_id = 532, defect_type = 'qa_miss' WHERE id = 534`).run();
         // Upsert spawned_defects on task 532's outcome metrics
-        const existingMetrics = await db.get(`SELECT id FROM task_outcome_metrics WHERE task_id = 532`) as { id: number } | undefined;
+        const existingMetrics = db.prepare(`SELECT id FROM task_outcome_metrics WHERE task_id = 532`).get() as { id: number } | undefined;
         if (existingMetrics) {
-          await db.run(`UPDATE task_outcome_metrics SET spawned_defects = spawned_defects + 1 WHERE task_id = 532`);
+          db.prepare(`UPDATE task_outcome_metrics SET spawned_defects = spawned_defects + 1 WHERE task_id = 532`).run();
         } else {
-          await db.run(`
+          db.prepare(`
             INSERT INTO task_outcome_metrics (task_id, spawned_defects)
             VALUES (532, 1)
-          `);
+          `).run();
         }
         console.log('[schema] Backfilled: task #534 origin_task_id=532, defect_type=qa_miss');
       }
@@ -3599,9 +3624,9 @@ async function ensureDefectTrackingColumns(): Promise<void> {
   }
 }
 
-async function ensureAppSettingsTable(): Promise<void> {
-  const db = getDb();
-  await db.exec(`
+function ensureAppSettingsTable(): void {
+  const db = getRawDb();
+  db.exec(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key        TEXT PRIMARY KEY,
       value      TEXT NOT NULL DEFAULT '',
@@ -3620,47 +3645,47 @@ type RegistryProvisionOptions = {
  * Normal API startup must only ensure table shape. Default tool rows and agent
  * assignments are explicit bootstrap/admin provisioning, not restart side effects.
  */
-export async function ensureToolRegistryTables(options: RegistryProvisionOptions = {}): Promise<void> {
-  const db = getDb();
+export function ensureToolRegistryTables(options: RegistryProvisionOptions = {}): void {
+  const db = getRawDb();
 
-  const tableExists = async (name: string): Promise<boolean> => {
-    const row = await db.get(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, name);
+  const tableExists = (name: string): boolean => {
+    const row = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
     return Boolean(row);
   };
-  const getTableSql = async (name: string): Promise<string> => {
-    return (await db.get(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, name) as { sql?: string } | undefined)?.sql ?? '';
+  const getTableSql = (name: string): string => {
+    return (db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name) as { sql?: string } | undefined)?.sql ?? '';
   };
-  const getColumns = async (name: string): Promise<string[]> => {
-    return (await db.all(`PRAGMA table_info(${name})`) as Array<{ name: string }>).map((col) => col.name);
+  const getColumns = (name: string): string[] => {
+    return (db.prepare(`PRAGMA table_info(${name})`).all() as Array<{ name: string }>).map((col) => col.name);
   };
-  const getDefaultTenantId = async (): Promise<number> => {
+  const getDefaultTenantId = (): number => {
     try {
-      const fromSetting = await db.get(`SELECT value FROM app_settings WHERE key = 'default_tenant_id' LIMIT 1`) as { value?: string } | undefined;
+      const fromSetting = db.prepare(`SELECT value FROM app_settings WHERE key = 'default_tenant_id' LIMIT 1`).get() as { value?: string } | undefined;
       const configured = Number(fromSetting?.value ?? '');
       if (Number.isInteger(configured) && configured > 0) return configured;
     } catch { /* app_settings may not exist in legacy/minimal bootstrap tests */ }
     try {
-      const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id?: number } | undefined;
+      const defaultTenant = db.prepare(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`).get() as { id?: number } | undefined;
       const candidate = Number(defaultTenant?.id ?? 0);
       if (Number.isInteger(candidate) && candidate > 0) return candidate;
     } catch { /* tenants may not exist in legacy/minimal bootstrap tests */ }
     return 1;
   };
-  const hasUniqueIndexExactly = async (tableName: string, columns: string[]): Promise<boolean> => {
+  const hasUniqueIndexExactly = (tableName: string, columns: string[]): boolean => {
     try {
-      const indexes = await db.all(`PRAGMA index_list(${tableName})`) as Array<{ name: string; unique: number }>;
-      return indexes.some(async (index) => {
+      const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{ name: string; unique: number }>;
+      return indexes.some((index) => {
         if (!index.unique) return false;
-        const indexedColumns = (await db.all(`PRAGMA index_info(${index.name})`) as Array<{ name: string }>).map((col) => col.name);
+        const indexedColumns = (db.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{ name: string }>).map((col) => col.name);
         return indexedColumns.length === columns.length && indexedColumns.every((column, idx) => column === columns[idx]);
       });
     } catch {
       return false;
     }
   };
-  const assignmentToolForeignKeyTargetsTools = async (): Promise<boolean> => {
+  const assignmentToolForeignKeyTargetsTools = (): boolean => {
     try {
-      const foreignKeys = await db.all(`PRAGMA foreign_key_list(agent_tool_assignments)`) as Array<{ from: string; table: string }>;
+      const foreignKeys = db.prepare(`PRAGMA foreign_key_list(agent_tool_assignments)`).all() as Array<{ from: string; table: string }>;
       const toolForeignKey = foreignKeys.find((fk) => fk.from === 'tool_id');
       return toolForeignKey?.table === 'tools';
     } catch {
@@ -3690,7 +3715,7 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
     CREATE INDEX IF NOT EXISTS idx_tools_enabled ON tools(enabled);
   `;
 
-  const rebuildToolsTable = async (): Promise<void> => {
+  const rebuildToolsTable = (): void => {
     const sourceColumns = new Set(getColumns('tools'));
     const tempTable = `tools_rebuild_${Date.now()}`;
     const targetColumns = [
@@ -3755,9 +3780,9 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
     };
 
     db.pragma('foreign_keys = OFF');
-    const rebuild = db.transaction(async () => {
-      await db.run(`ALTER TABLE tools RENAME TO ${tempTable}`);
-      await db.exec(`
+    const rebuild = db.transaction(() => {
+      db.prepare(`ALTER TABLE tools RENAME TO ${tempTable}`).run();
+      db.exec(`
       CREATE TABLE tools (
         id                   INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant_id            INTEGER NOT NULL DEFAULT 1,
@@ -3775,19 +3800,19 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
         UNIQUE(tenant_id, slug)
       );
       `);
-      await db.run(`
+      db.prepare(`
         INSERT OR IGNORE INTO tools (id, tenant_id, name, slug, description, implementation_type, implementation_body, input_schema, permissions, tags, enabled, created_at, updated_at)
         SELECT ${targetColumns.map((column) => selectExpressionByColumn[column]).join(', ')}
         FROM ${tempTable}
-      `);
-      await db.run(`DROP TABLE ${tempTable}`);
+      `).run();
+      db.prepare(`DROP TABLE ${tempTable}`).run();
     });
     try {
       rebuild();
     } finally {
       db.pragma('foreign_keys = ON');
     }
-    await db.exec(`
+    db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_tools_tenant_slug ON tools(tenant_id, slug);
       CREATE INDEX IF NOT EXISTS idx_tools_slug ON tools(slug);
       CREATE INDEX IF NOT EXISTS idx_tools_tenant ON tools(tenant_id);
@@ -3797,7 +3822,7 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
   };
 
   if (!tableExists('tools')) {
-    await db.exec(createToolsTableSql);
+    db.exec(createToolsTableSql);
   } else {
     const toolsTableSql = getTableSql('tools');
     const toolColumns = new Set(getColumns('tools'));
@@ -3824,7 +3849,7 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
     if (missingRequiredColumn || legacyImplementationCheck || legacyGlobalSlugUniqueness) {
       rebuildToolsTable();
     } else {
-      await db.exec(`
+      db.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_tools_tenant_slug ON tools(tenant_id, slug);
         CREATE INDEX IF NOT EXISTS idx_tools_slug ON tools(slug);
         CREATE INDEX IF NOT EXISTS idx_tools_tenant ON tools(tenant_id);
@@ -3846,7 +3871,7 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
     CREATE INDEX IF NOT EXISTS idx_ata_agent ON agent_tool_assignments(agent_id);
     CREATE INDEX IF NOT EXISTS idx_ata_tool ON agent_tool_assignments(tool_id);
   `;
-  const rebuildAgentToolAssignmentsTable = async (): Promise<void> => {
+  const rebuildAgentToolAssignmentsTable = (): void => {
     const sourceColumns = new Set(getColumns('agent_tool_assignments'));
     const tempTable = `agent_tool_assignments_rebuild_${Date.now()}`;
     const targetColumns = ['id', 'agent_id', 'tool_id', 'overrides', 'enabled'];
@@ -3859,9 +3884,9 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
     };
 
     db.pragma('foreign_keys = OFF');
-    const rebuild = db.transaction(async () => {
-      await db.run(`ALTER TABLE agent_tool_assignments RENAME TO ${tempTable}`);
-      await db.exec(`
+    const rebuild = db.transaction(() => {
+      db.prepare(`ALTER TABLE agent_tool_assignments RENAME TO ${tempTable}`).run();
+      db.exec(`
         CREATE TABLE agent_tool_assignments (
           id        INTEGER PRIMARY KEY AUTOINCREMENT,
           agent_id  INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -3872,21 +3897,21 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
         );
       `);
       if (sourceColumns.has('agent_id') && sourceColumns.has('tool_id')) {
-        await db.run(`
+        db.prepare(`
           INSERT OR IGNORE INTO agent_tool_assignments (id, agent_id, tool_id, overrides, enabled)
           SELECT ${targetColumns.map((column) => selectExpressionByColumn[column]).join(', ')}
           FROM ${tempTable}
           WHERE agent_id IS NOT NULL AND tool_id IS NOT NULL
-        `);
+        `).run();
       }
-      await db.run(`DROP TABLE ${tempTable}`);
+      db.prepare(`DROP TABLE ${tempTable}`).run();
     });
     try {
       rebuild();
     } finally {
       db.pragma('foreign_keys = ON');
     }
-    await db.exec(`
+    db.exec(`
       CREATE INDEX IF NOT EXISTS idx_ata_agent ON agent_tool_assignments(agent_id);
       CREATE INDEX IF NOT EXISTS idx_ata_tool ON agent_tool_assignments(tool_id);
     `);
@@ -3894,14 +3919,14 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
   };
 
   if (!tableExists('agent_tool_assignments')) {
-    await db.exec(createAgentToolAssignmentsSql);
+    db.exec(createAgentToolAssignmentsSql);
   } else {
     const assignmentColumns = new Set(getColumns('agent_tool_assignments'));
     const missingAssignmentColumn = ['id', 'agent_id', 'tool_id', 'overrides', 'enabled'].some((column) => !assignmentColumns.has(column));
     if (missingAssignmentColumn || !assignmentToolForeignKeyTargetsTools()) {
       rebuildAgentToolAssignmentsTable();
     } else {
-      await db.exec(`
+      db.exec(`
         CREATE INDEX IF NOT EXISTS idx_ata_agent ON agent_tool_assignments(agent_id);
         CREATE INDEX IF NOT EXISTS idx_ata_tool ON agent_tool_assignments(tool_id);
       `);
@@ -3911,7 +3936,7 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
   const agentsHaveTenantId = tableExists('agents') && getColumns('agents').includes('tenant_id');
   if (agentsHaveTenantId) {
     try {
-      const removed = await db.run(`
+      const removed = db.prepare(`
         DELETE FROM agent_tool_assignments
         WHERE EXISTS (
           SELECT 1
@@ -3922,7 +3947,7 @@ export async function ensureToolRegistryTables(options: RegistryProvisionOptions
             AND t.tenant_id IS NOT NULL
             AND a.tenant_id <> t.tenant_id
         )
-      `);
+      `).run();
       if (removed.changes > 0) {
         console.warn(`[schema] Removed ${removed.changes} stale cross-tenant tool assignment(s)`);
       }
@@ -4520,14 +4545,14 @@ PY`,
   console.log('[schema] Ensured tool registry defaults (explore_codebase, bash, file_edit, git_worktree_enter, git_worktree_exit, local_stt_transcribe)');
 }
 
-export async function provisionDefaultToolRegistry(): Promise<void> {
-  await ensureToolRegistryTables({ provisionDefaults: true });
+export function provisionDefaultToolRegistry(): void {
+  ensureToolRegistryTables({ provisionDefaults: true });
 }
 
 async function ensureMcpRegistryTables(options: RegistryProvisionOptions = {}): Promise<void> {
-  const db = getDb();
+  const db = getRawDb();
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS mcp_servers (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id     INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -4566,7 +4591,7 @@ async function ensureMcpRegistryTables(options: RegistryProvisionOptions = {}): 
   const serverEntryScript = path.join(path.resolve(__dirname, '../..'), 'dist', 'mcp', 'server.js');
   const nodeExecutable = path.join(NODE_BIN_DIR, 'node');
 
-  await db.run(`
+  db.prepare(`
     INSERT INTO mcp_servers (tenant_id, name, slug, description, transport, command, args, env, cwd, enabled)
     VALUES (?, ?, ?, ?, 'stdio', ?, ?, ?, ?, 1)
     ON CONFLICT(tenant_id, slug) DO UPDATE SET
@@ -4579,9 +4604,18 @@ async function ensureMcpRegistryTables(options: RegistryProvisionOptions = {}): 
       cwd = excluded.cwd,
       enabled = 1,
       updated_at = datetime('now')
-  `, await tenantDefaultIdForSchemaInit(db), 'Agent HQ MCP Server', 'agent-hq', 'Local stdio MCP server exposing Agent HQ projects, sprints, tasks, and agents.', nodeExecutable, JSON.stringify([serverEntryScript]), JSON.stringify({ AGENT_HQ_API_URL: 'http://127.0.0.1:3501' }), path.resolve(__dirname, '../..'));
+  `).run(
+    await tenantDefaultIdForSchemaInit(db),
+    'Agent HQ MCP Server',
+    'agent-hq',
+    'Local stdio MCP server exposing Agent HQ projects, sprints, tasks, and agents.',
+    nodeExecutable,
+    JSON.stringify([serverEntryScript]),
+    JSON.stringify({ AGENT_HQ_API_URL: 'http://127.0.0.1:3501' }),
+    path.resolve(__dirname, '../..'),
+  );
 
-  await db.run(`
+  db.prepare(`
     INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
     SELECT a.id, s.id, '{}', 1
     FROM agents a
@@ -4597,7 +4631,7 @@ async function ensureMcpRegistryTables(options: RegistryProvisionOptions = {}): 
         SELECT 1 FROM agent_mcp_assignments ama
         WHERE ama.agent_id = a.id AND ama.mcp_server_id = s.id
       )
-  `, ATLAS_SYSTEM_ROLE, ATLAS_AGENT_SLUG, ATLAS_SESSION_KEY, ATLAS_AGENT_NAME);
+  `).run(ATLAS_SYSTEM_ROLE, ATLAS_AGENT_SLUG, ATLAS_SESSION_KEY, ATLAS_AGENT_NAME);
 
   console.log('[schema] Ensured MCP registry defaults (agent-hq)');
 }
@@ -4607,31 +4641,40 @@ export async function provisionDefaultMcpRegistry(): Promise<void> {
 }
 
 async function seedInitialData(): Promise<void> {
-  const db = getDb();
-  const existing = await db.get('SELECT COUNT(*) as count FROM agents') as { count: number };
+  const db = getRawDb();
+  const existing = db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number };
   if (existing.count === 0) {
     const defaultTenantId = await tenantDefaultIdForSchemaInit(db);
-    await db.run(`
+    db.prepare(`
       INSERT INTO agents (tenant_id, name, role, session_key, workspace_path, status, openclaw_agent_id, system_role)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, defaultTenantId, ATLAS_AGENT_NAME, 'Built-in assistant — task routing, coordination, and chat', ATLAS_SESSION_KEY, ATLAS_WORKSPACE_PATH, 'idle', ATLAS_AGENT_SLUG, ATLAS_SYSTEM_ROLE);
+    `).run(
+      defaultTenantId,
+      ATLAS_AGENT_NAME,
+      'Built-in assistant — task routing, coordination, and chat',
+      ATLAS_SESSION_KEY,
+      ATLAS_WORKSPACE_PATH,
+      'idle',
+      ATLAS_AGENT_SLUG,
+      ATLAS_SYSTEM_ROLE,
+    );
     console.log('[schema] Seeded initial Atlas agent');
   }
 }
 
-async function getAppSetting(key: string): Promise<string | null> {
-  const db = getDb();
-  const row = await db.get('SELECT value FROM app_settings WHERE key = ?', key) as { value: string } | undefined;
+function getAppSetting(key: string): string | null {
+  const db = getRawDb();
+  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;
   return row?.value ?? null;
 }
 
-async function setAppSetting(key: string, value: string): Promise<void> {
-  const db = getDb();
-  await db.run(`
+function setAppSetting(key: string, value: string): void {
+  const db = getRawDb();
+  db.prepare(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `, key, value);
+  `).run(key, value);
 }
 
 function pathExists(target: string): boolean {
@@ -4820,9 +4863,9 @@ function migrateOpenClawConfigForAtlas(telegramChatId: string | null): boolean {
 }
 
 async function migrateAtlasToDedicatedAgent(): Promise<void> {
-  if (await getAppSetting(ATLAS_MIGRATION_SETTING_KEY) === 'true') return;
+  if (getAppSetting(ATLAS_MIGRATION_SETTING_KEY) === 'true') return;
 
-  const db = getDb();
+  const db = getRawDb();
   const skipExternalMigration = process.env.JEST_WORKER_ID !== undefined || process.env.NODE_ENV === 'test';
   const atlas = await getAtlasAgentRecord();
   const hasLegacyWorkspace = looksLikeAtlasWorkspace(LEGACY_MAIN_WORKSPACE_PATH);
@@ -4837,7 +4880,7 @@ async function migrateAtlasToDedicatedAgent(): Promise<void> {
     const previousWorkspace = String(atlas.workspace_path ?? '');
     const previousOpenClawId = typeof atlas.openclaw_agent_id === 'string' ? atlas.openclaw_agent_id : '';
 
-    await db.run(`
+    db.prepare(`
       UPDATE agents
       SET system_role = ?,
           session_key = ?,
@@ -4849,7 +4892,13 @@ async function migrateAtlasToDedicatedAgent(): Promise<void> {
             ELSE role
           END
       WHERE id = ?
-    `, ATLAS_SYSTEM_ROLE, ATLAS_SESSION_KEY, ATLAS_WORKSPACE_PATH, ATLAS_AGENT_SLUG, atlasId);
+    `).run(
+      ATLAS_SYSTEM_ROLE,
+      ATLAS_SESSION_KEY,
+      ATLAS_WORKSPACE_PATH,
+      ATLAS_AGENT_SLUG,
+      atlasId,
+    );
 
     if (
       previousSessionKey === 'main'
@@ -4862,9 +4911,9 @@ async function migrateAtlasToDedicatedAgent(): Promise<void> {
     }
 
     if (previousSessionKey && previousSessionKey !== ATLAS_SESSION_KEY) {
-      await db.run(`UPDATE job_instances SET session_key = ? WHERE session_key = ?`, ATLAS_SESSION_KEY, previousSessionKey);
-      await db.run(`UPDATE chat_messages SET session_key = ? WHERE session_key = ?`, ATLAS_SESSION_KEY, previousSessionKey);
-      await db.run(`UPDATE sessions SET external_key = ? WHERE external_key = ?`, ATLAS_SESSION_KEY, previousSessionKey);
+      db.prepare(`UPDATE job_instances SET session_key = ? WHERE session_key = ?`).run(ATLAS_SESSION_KEY, previousSessionKey);
+      db.prepare(`UPDATE chat_messages SET session_key = ? WHERE session_key = ?`).run(ATLAS_SESSION_KEY, previousSessionKey);
+      db.prepare(`UPDATE sessions SET external_key = ? WHERE external_key = ?`).run(ATLAS_SESSION_KEY, previousSessionKey);
     }
   }
 
@@ -4874,18 +4923,18 @@ async function migrateAtlasToDedicatedAgent(): Promise<void> {
     ['job_instances', 'session_key'],
   ];
   for (const [tableName, columnName] of remapTables) {
-    await db.run(`
+    db.prepare(`
       UPDATE ${tableName}
       SET ${columnName} = REPLACE(${columnName}, ?, ?)
       WHERE ${columnName} LIKE ?
-    `, LEGACY_ATLAS_TELEGRAM_PREFIX, ATLAS_TELEGRAM_PREFIX, `${LEGACY_ATLAS_TELEGRAM_PREFIX}%`);
+    `).run(LEGACY_ATLAS_TELEGRAM_PREFIX, ATLAS_TELEGRAM_PREFIX, `${LEGACY_ATLAS_TELEGRAM_PREFIX}%`);
   }
 
   if (!skipExternalMigration) {
     movedEntries = migrateAtlasWorkspace(LEGACY_MAIN_WORKSPACE_PATH, ATLAS_WORKSPACE_PATH);
     if (movedEntries > 0) changed = true;
 
-    const telegramChatId = await getAppSetting('telegram_chat_id');
+    const telegramChatId = getAppSetting('telegram_chat_id');
     if (migrateOpenClawConfigForAtlas(telegramChatId)) changed = true;
 
     if (replaceTextInFile(
@@ -4897,7 +4946,7 @@ async function migrateAtlasToDedicatedAgent(): Promise<void> {
     }
   }
 
-  await setAppSetting(ATLAS_MIGRATION_SETTING_KEY, 'true');
+  setAppSetting(ATLAS_MIGRATION_SETTING_KEY, 'true');
   if (changed) {
     console.log(`[schema] Task #25: migrated Atlas to dedicated agent (workspace entries moved: ${movedEntries})`);
   } else {
@@ -4908,10 +4957,10 @@ async function migrateAtlasToDedicatedAgent(): Promise<void> {
 // ── Task #612: Data-driven lifecycle rules ────────────────────────────────────
 // lifecycle_rules replaces the hardcoded canonicalOutcomeRoute map.
 // transition_requirements replaces the hardcoded requireReleaseGate checks.
-export async function ensureLifecycleRulesTable(): Promise<void> {
-  const db = getDb();
+export function ensureLifecycleRulesTable(): void {
+  const db = getRawDb();
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS lifecycle_rules (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       task_type   TEXT,
@@ -4951,7 +5000,7 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
   `);
 
   // Seed lifecycle_rules from the hardcoded canonicalOutcomeRoute map (idempotent)
-  const existingRules = (await db.get(`SELECT COUNT(*) as n FROM lifecycle_rules`) as { n: number }).n;
+  const existingRules = (db.prepare(`SELECT COUNT(*) as n FROM lifecycle_rules`).get() as { n: number }).n;
   if (existingRules === 0) {
     const insertRule = db.prepare(`
       INSERT INTO lifecycle_rules (task_type, from_status, outcome, to_status, priority)
@@ -4995,18 +5044,18 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
     console.log('[schema] Seeded lifecycle_rules from canonicalOutcomeRoute defaults');
   }
   try {
-    const normalizedQaPassRules = await db.run(`
+    const normalizedQaPassRules = db.prepare(`
       UPDATE lifecycle_rules
       SET to_status = 'ready_to_merge', updated_at = datetime('now')
       WHERE from_status = 'review'
         AND outcome = 'qa_pass'
         AND to_status = 'qa_pass'
-    `);
-    const disabledQaPassStatusRules = await db.run(`
+    `).run();
+    const disabledQaPassStatusRules = db.prepare(`
       UPDATE lifecycle_rules
       SET enabled = 0, updated_at = datetime('now')
       WHERE from_status = 'qa_pass'
-    `);
+    `).run();
     if (normalizedQaPassRules.changes > 0 || disabledQaPassStatusRules.changes > 0) {
       console.log(`[schema] Normalized qa_pass status lifecycle rules (updated=${normalizedQaPassRules.changes}, disabled=${disabledQaPassStatusRules.changes})`);
     }
@@ -5014,9 +5063,9 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
     console.error('[schema] Failed to normalize qa_pass lifecycle rules:', err);
   }
   try {
-    const columns = await db.all(`PRAGMA table_info(lifecycle_rules)`) as Array<{ name: string }>;
+    const columns = db.prepare(`PRAGMA table_info(lifecycle_rules)`).all() as Array<{ name: string }>;
     if (columns.some(column => column.name === 'lane')) {
-      await db.exec(`ALTER TABLE lifecycle_rules DROP COLUMN lane`);
+      db.exec(`ALTER TABLE lifecycle_rules DROP COLUMN lane`);
       console.log('[schema] Task #743: dropped legacy lifecycle_rules.lane column');
     }
   } catch (err) {
@@ -5024,7 +5073,7 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
   }
 
   // Seed transition_requirements from the hardcoded requireReleaseGate checks (idempotent)
-  const existingReqs = (await db.get(`SELECT COUNT(*) as n FROM transition_requirements`) as { n: number }).n;
+  const existingReqs = (db.prepare(`SELECT COUNT(*) as n FROM transition_requirements`).get() as { n: number }).n;
   if (existingReqs === 0) {
     const insertReq = db.prepare(`
       INSERT INTO transition_requirements (task_type, outcome, field_name, requirement_type, match_field, severity, message, priority)
@@ -5061,31 +5110,31 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
 
   // Backfill: ensure deployed_live can be satisfied by either merged_commit or deployed_commit.
   try {
-    await db.run(`
+    db.prepare(`
       UPDATE transition_requirements
       SET field_name = 'merged_commit|deployed_commit'
       WHERE outcome = 'deployed_live'
         AND field_name = 'merged_commit'
         AND message LIKE '%or deployed_commit%'
-    `);
-    await db.run(`
+    `).run();
+    db.prepare(`
       UPDATE sprint_task_transition_requirements
       SET field_name = 'merged_commit|deployed_commit'
       WHERE outcome = 'deployed_live'
         AND field_name = 'merged_commit'
         AND message LIKE '%or deployed_commit%'
-    `);
+    `).run();
 
-    const hasMergedCommitReq = await db.get(`
+    const hasMergedCommitReq = db.prepare(`
       SELECT id FROM transition_requirements
       WHERE task_type IS NULL AND outcome = 'deployed_live' AND field_name = 'merged_commit|deployed_commit'
       LIMIT 1
-    `);
+    `).get();
     if (!hasMergedCommitReq) {
-      await db.run(`
+      db.prepare(`
         INSERT INTO transition_requirements (task_type, outcome, field_name, requirement_type, match_field, severity, message, priority)
         VALUES (NULL, 'deployed_live', 'merged_commit|deployed_commit', 'required', NULL, 'block', 'deployed_live requires merged_commit or deployed_commit', 0)
-      `);
+      `).run();
       console.log('[schema] Backfilled: deployed_live merged/deployed commit requirement');
     }
   } catch { /* table may not exist yet */ }
@@ -5136,7 +5185,7 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
       }
     }
 
-    const sprintRows = await db.all(`SELECT id FROM sprints WHERE sprint_type = 'dev' ORDER BY id ASC`) as Array<{ id: number }>;
+    const sprintRows = db.prepare(`SELECT id FROM sprints WHERE sprint_type = 'dev' ORDER BY id ASC`).all() as Array<{ id: number }>;
     const maxStatusOrder = db.prepare(`
       SELECT COALESCE(MAX(stage_order), -1) AS max_order
       FROM sprint_task_statuses
@@ -5227,7 +5276,7 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
       }
     }
 
-    const devSprints = await db.all(`SELECT id FROM sprints WHERE sprint_type = 'dev' ORDER BY id ASC`) as Array<{ id: number }>;
+    const devSprints = db.prepare(`SELECT id FROM sprints WHERE sprint_type = 'dev' ORDER BY id ASC`).all() as Array<{ id: number }>;
     const hasSprintTransition = db.prepare(`
       SELECT id FROM sprint_task_transitions
       WHERE sprint_id = ?
@@ -5260,7 +5309,7 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
       }
     };
 
-    const tx = db.transaction(async () => {
+    const tx = db.transaction(() => {
       for (const sprint of devSprints) {
         for (const [fromStatus, outcome, toStatus] of releaseBlockerTransitions) {
           if (!hasSprintTransition.get(sprint.id, fromStatus, outcome)) {
@@ -5283,11 +5332,11 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
       }
 
       try {
-        const typeRows = await db.all(`
+        const typeRows = db.prepare(`
           SELECT id, allowed_transitions_json
           FROM sprint_type_task_statuses
           WHERE sprint_type_key = 'dev' AND status_key = 'ready_to_merge'
-        `) as Array<{ id: number; allowed_transitions_json: string | null }>;
+        `).all() as Array<{ id: number; allowed_transitions_json: string | null }>;
         const updateTypeStatus = db.prepare(`
           UPDATE sprint_type_task_statuses
           SET allowed_transitions_json = ?, updated_at = datetime('now')
@@ -5315,10 +5364,10 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
 
   // Backfill cleanup (task #528): remove legacy approved_for_merge visible workflow semantics.
   try {
-    await db.run(`DELETE FROM lifecycle_rules WHERE outcome = 'approved_for_merge'`);
-    await db.run(`DELETE FROM transition_requirements WHERE outcome = 'approved_for_merge'`);
-    await db.run(`DELETE FROM sprint_task_transitions WHERE outcome = 'approved_for_merge'`);
-    await db.run(`DELETE FROM sprint_task_transition_requirements WHERE outcome = 'approved_for_merge'`);
+    db.prepare(`DELETE FROM lifecycle_rules WHERE outcome = 'approved_for_merge'`).run();
+    db.prepare(`DELETE FROM transition_requirements WHERE outcome = 'approved_for_merge'`).run();
+    db.prepare(`DELETE FROM sprint_task_transitions WHERE outcome = 'approved_for_merge'`).run();
+    db.prepare(`DELETE FROM sprint_task_transition_requirements WHERE outcome = 'approved_for_merge'`).run();
   } catch (err) {
     console.warn('[schema] Backfill task #528 approved_for_merge cleanup skipped:', err);
   }
@@ -5333,8 +5382,8 @@ export async function ensureLifecycleRulesTable(): Promise<void> {
  * Stores API keys / connection details for Anthropic, OpenAI, Google, Ollama.
  */
 async function ensureProviderConfigTable(): Promise<void> {
-  const db = getDb();
-  await db.exec(`
+  const db = getRawDb();
+  db.exec(`
     CREATE TABLE IF NOT EXISTS provider_config (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id         INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
@@ -5352,20 +5401,20 @@ async function ensureProviderConfigTable(): Promise<void> {
   `);
 
   const defaultTenantId = await tenantDefaultIdForSchemaInit(db);
-  const providerCols = (await db.all(`PRAGMA table_info(provider_config)`) as { name: string }[]).map(c => c.name);
+  const providerCols = (db.prepare(`PRAGMA table_info(provider_config)`).all() as { name: string }[]).map(c => c.name);
   if (!providerCols.includes('tenant_id')) {
     if (activeTenantMode === 'verify') {
       throw new Error('Tenant install/migration required: provider_config.tenant_id is missing');
     }
-    await db.exec(`ALTER TABLE provider_config ADD COLUMN tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE`);
+    db.exec(`ALTER TABLE provider_config ADD COLUMN tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE`);
   }
   if (activeTenantMode === 'verify') {
-    const missingTenant = await db.get(`SELECT 1 FROM provider_config WHERE tenant_id IS NULL LIMIT 1`);
+    const missingTenant = db.prepare(`SELECT 1 FROM provider_config WHERE tenant_id IS NULL LIMIT 1`).get();
     if (missingTenant) throw new Error('Tenant install/migration required: provider_config contains rows without tenant ownership');
   } else {
-    await db.run(`UPDATE provider_config SET tenant_id = ? WHERE tenant_id IS NULL`, defaultTenantId);
+    db.prepare(`UPDATE provider_config SET tenant_id = ? WHERE tenant_id IS NULL`).run(defaultTenantId);
   }
-  await db.exec(`
+  db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_config_tenant_slug ON provider_config(tenant_id, slug);
     CREATE INDEX IF NOT EXISTS idx_provider_config_tenant ON provider_config(tenant_id);
   `);
@@ -5373,13 +5422,15 @@ async function ensureProviderConfigTable(): Promise<void> {
   // Safe migration: expand provider_config.slug CHECK to include new slugs.
   // Runs when the live DDL is missing a slug that the code now supports.
   try {
-    const providerDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='provider_config'`) as { sql: string } | undefined)?.sql ?? '';
+    const providerDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='provider_config'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
     if (providerDdl && (!providerDdl.includes("'minimax'") || !providerDdl.includes("'openrouter'") || /slug\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(providerDdl))) {
-      const cols = (await db.all(`PRAGMA table_info(provider_config)`) as { name: string }[]).map(c => c.name);
+      const cols = (db.prepare(`PRAGMA table_info(provider_config)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
-        await db.run(`
+      const migrate = db.transaction(() => {
+        db.prepare(`
           CREATE TABLE provider_config_new (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
             tenant_id         INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
@@ -5392,14 +5443,14 @@ async function ensureProviderConfigTable(): Promise<void> {
             created_at        TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
           )
-        `);
-        await db.run(`INSERT INTO provider_config_new (${colList}) SELECT ${colList} FROM provider_config`);
-        await db.run(`DROP TABLE provider_config`);
-        await db.run(`ALTER TABLE provider_config_new RENAME TO provider_config`);
-        await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_config_tenant_slug ON provider_config(tenant_id, slug)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_provider_config_slug ON provider_config(slug)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_provider_config_tenant ON provider_config(tenant_id)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_provider_config_status ON provider_config(status)`);
+        `).run();
+        db.prepare(`INSERT INTO provider_config_new (${colList}) SELECT ${colList} FROM provider_config`).run();
+        db.prepare(`DROP TABLE provider_config`).run();
+        db.prepare(`ALTER TABLE provider_config_new RENAME TO provider_config`).run();
+        db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_config_tenant_slug ON provider_config(tenant_id, slug)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_provider_config_slug ON provider_config(slug)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_provider_config_tenant ON provider_config(tenant_id)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_provider_config_status ON provider_config(status)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -5414,9 +5465,9 @@ async function ensureProviderConfigTable(): Promise<void> {
  * Runtime-owned provider credentials. Agent HQ stores only routing metadata and
  * an opaque reference to the credential in the runtime's own auth store.
  */
-async function ensureProviderConnectionsTable(): Promise<void> {
-  const db = getDb();
-  await db.exec(`
+function ensureProviderConnectionsTable(): void {
+  const db = getRawDb();
+  db.exec(`
     CREATE TABLE IF NOT EXISTS provider_connections (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id         INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -5438,10 +5489,10 @@ async function ensureProviderConnectionsTable(): Promise<void> {
   `);
 
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN provider_connection_id INTEGER REFERENCES provider_connections(id) ON DELETE SET NULL`);
+    db.exec(`ALTER TABLE agents ADD COLUMN provider_connection_id INTEGER REFERENCES provider_connections(id) ON DELETE SET NULL`);
     console.log('[schema] Migrated: added agents.provider_connection_id');
   } catch (_) { /* column already exists */ }
-  await db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_provider_connection ON agents(provider_connection_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_agents_provider_connection ON agents(provider_connection_id)`);
 }
 
 /**
@@ -5457,9 +5508,9 @@ async function ensureProviderConnectionsTable(): Promise<void> {
  * Workflow role labels (informational): dev, qa, release, shared.
  */
 async function ensureGitHubIdentitiesTable(): Promise<void> {
-  const db = getDb();
+  const db = getRawDb();
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS github_identities (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id         INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
@@ -5482,32 +5533,34 @@ async function ensureGitHubIdentitiesTable(): Promise<void> {
   `);
 
   const defaultTenantId = await tenantDefaultIdForSchemaInit(db);
-  const githubCols = (await db.all(`PRAGMA table_info(github_identities)`) as { name: string }[]).map(c => c.name);
+  const githubCols = (db.prepare(`PRAGMA table_info(github_identities)`).all() as { name: string }[]).map(c => c.name);
   if (!githubCols.includes('tenant_id')) {
     if (activeTenantMode === 'verify') {
       throw new Error('Tenant install/migration required: github_identities.tenant_id is missing');
     }
-    await db.exec(`ALTER TABLE github_identities ADD COLUMN tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE`);
+    db.exec(`ALTER TABLE github_identities ADD COLUMN tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE`);
   }
   if (activeTenantMode === 'verify') {
-    const missingTenant = await db.get(`SELECT 1 FROM github_identities WHERE tenant_id IS NULL LIMIT 1`);
+    const missingTenant = db.prepare(`SELECT 1 FROM github_identities WHERE tenant_id IS NULL LIMIT 1`).get();
     if (missingTenant) throw new Error('Tenant install/migration required: github_identities contains rows without tenant ownership');
   } else {
-    await db.run(`UPDATE github_identities SET tenant_id = ? WHERE tenant_id IS NULL`, defaultTenantId);
+    db.prepare(`UPDATE github_identities SET tenant_id = ? WHERE tenant_id IS NULL`).run(defaultTenantId);
   }
-  await db.exec(`
+  db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_github_identities_tenant_username ON github_identities(tenant_id, github_username);
     CREATE INDEX IF NOT EXISTS idx_github_identities_tenant ON github_identities(tenant_id);
   `);
 
   try {
-    const githubDdl = (await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='github_identities'`) as { sql: string } | undefined)?.sql ?? '';
+    const githubDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='github_identities'`
+    ).get() as { sql: string } | undefined)?.sql ?? '';
     if (githubDdl && /github_username\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(githubDdl)) {
-      const cols = (await db.all(`PRAGMA table_info(github_identities)`) as { name: string }[]).map(c => c.name);
+      const cols = (db.prepare(`PRAGMA table_info(github_identities)`).all() as { name: string }[]).map(c => c.name);
       const colList = cols.join(', ');
       db.pragma('foreign_keys = OFF');
-      const migrate = db.transaction(async () => {
-        await db.run(`
+      const migrate = db.transaction(() => {
+        db.prepare(`
           CREATE TABLE github_identities_new (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
             tenant_id         INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
@@ -5524,15 +5577,15 @@ async function ensureGitHubIdentitiesTable(): Promise<void> {
             created_at        TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
           )
-        `);
-        await db.run(`INSERT INTO github_identities_new (${colList}) SELECT ${colList} FROM github_identities`);
-        await db.run(`DROP TABLE github_identities`);
-        await db.run(`ALTER TABLE github_identities_new RENAME TO github_identities`);
-        await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_github_identities_tenant_username ON github_identities(tenant_id, github_username)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_github_identities_tenant ON github_identities(tenant_id)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_github_identities_username ON github_identities(github_username)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_github_identities_lane ON github_identities(lane)`);
-        await db.run(`CREATE INDEX IF NOT EXISTS idx_github_identities_enabled ON github_identities(enabled)`);
+        `).run();
+        db.prepare(`INSERT INTO github_identities_new (${colList}) SELECT ${colList} FROM github_identities`).run();
+        db.prepare(`DROP TABLE github_identities`).run();
+        db.prepare(`ALTER TABLE github_identities_new RENAME TO github_identities`).run();
+        db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_github_identities_tenant_username ON github_identities(tenant_id, github_username)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_github_identities_tenant ON github_identities(tenant_id)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_github_identities_username ON github_identities(github_username)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_github_identities_lane ON github_identities(lane)`).run();
+        db.prepare(`CREATE INDEX IF NOT EXISTS idx_github_identities_enabled ON github_identities(enabled)`).run();
       });
       migrate();
       db.pragma('foreign_keys = ON');
@@ -5545,7 +5598,7 @@ async function ensureGitHubIdentitiesTable(): Promise<void> {
 
   // Add github_identity_id FK to agents table
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN github_identity_id INTEGER REFERENCES github_identities(id) ON DELETE SET NULL`);
+    db.exec(`ALTER TABLE agents ADD COLUMN github_identity_id INTEGER REFERENCES github_identities(id) ON DELETE SET NULL`);
     console.log('[schema] Migrated: added github_identity_id to agents');
   } catch (_) { /* column already exists */ }
 }
@@ -5555,12 +5608,12 @@ async function ensureGitHubIdentitiesTable(): Promise<void> {
  * Failure/blocker semantics are owned by configured task outcomes; this only
  * stores human-readable details and workflow recovery state.
  */
-async function ensureFailureDetailAndWorkflowColumns(): Promise<void> {
-  const db = getDb();
+function ensureFailureDetailAndWorkflowColumns(): void {
+  const db = getRawDb();
 
   // Add failure_detail to tasks (human-readable explanation)
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN failure_detail TEXT DEFAULT NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN failure_detail TEXT DEFAULT NULL`);
     console.log('[schema] Migrated: added failure_detail to tasks');
   } catch (_) { /* column already exists */ }
 
@@ -5569,12 +5622,12 @@ async function ensureFailureDetailAndWorkflowColumns(): Promise<void> {
   // pause_reason: optional human note explaining why the task is paused
   // Paused tasks are excluded from routing, dispatch, and lifecycle transitions.
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN paused_at TEXT DEFAULT NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN paused_at TEXT DEFAULT NULL`);
     console.log('[schema] Migrated: added paused_at to tasks (task #660)');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN pause_reason TEXT DEFAULT NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN pause_reason TEXT DEFAULT NULL`);
     console.log('[schema] Migrated: added pause_reason to tasks (task #660)');
   } catch (_) { /* column already exists */ }
 
@@ -5583,12 +5636,12 @@ async function ensureFailureDetailAndWorkflowColumns(): Promise<void> {
   // heartbeat_stale_seconds — overrides HEARTBEAT_STALE_MS for this agent
   // NULL = use global defaults
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN startup_grace_seconds INTEGER DEFAULT NULL`);
+    db.exec(`ALTER TABLE agents ADD COLUMN startup_grace_seconds INTEGER DEFAULT NULL`);
     console.log('[schema] Migrated: added startup_grace_seconds to agents (task #681)');
   } catch (_) { /* column already exists */ }
 
   try {
-    await db.exec(`ALTER TABLE agents ADD COLUMN heartbeat_stale_seconds INTEGER DEFAULT NULL`);
+    db.exec(`ALTER TABLE agents ADD COLUMN heartbeat_stale_seconds INTEGER DEFAULT NULL`);
     console.log('[schema] Migrated: added heartbeat_stale_seconds to agents (task #681)');
   } catch (_) { /* column already exists */ }
 
@@ -5597,7 +5650,7 @@ async function ensureFailureDetailAndWorkflowColumns(): Promise<void> {
   // Used by retry/reopen logic to restore the task to its original position in
   // the workflow instead of always resetting to 'ready'.
   try {
-    await db.exec(`ALTER TABLE tasks ADD COLUMN previous_status TEXT DEFAULT NULL`);
+    db.exec(`ALTER TABLE tasks ADD COLUMN previous_status TEXT DEFAULT NULL`);
     console.log('[schema] Migrated: added previous_status to tasks (task #30)');
   } catch (_) { /* column already exists */ }
 }
@@ -5621,33 +5674,33 @@ async function ensureFailureDetailAndWorkflowColumns(): Promise<void> {
  *      job_templates row (which will be the case after Phase 5 cleanup).
  *   4. Log a validation summary of all pre-conditions for Phase 5 (safe drop).
  */
-export async function ensureDataMigration593(): Promise<void> {
-  const db = getDb();
-  const getTableSql = async (name: string): Promise<string> => {
-    return ((await db.get(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, name) as { sql?: string } | undefined)?.sql ?? '');
+export function ensureDataMigration593(): void {
+  const db = getRawDb();
+  const getTableSql = (name: string): string => {
+    return ((db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(name) as { sql?: string } | undefined)?.sql ?? '');
   };
-  const getColumns = async (name: string): Promise<string[]> => {
-    return (await db.all(`PRAGMA table_info(${name})`) as Array<{ name: string }>).map((col) => col.name);
+  const getColumns = (name: string): string[] => {
+    return (db.prepare(`PRAGMA table_info(${name})`).all() as Array<{ name: string }>).map((col) => col.name);
   };
-  const getDefaultTenantId = async (): Promise<number> => {
+  const getDefaultTenantId = (): number => {
     try {
-      const fromSetting = await db.get(`SELECT value FROM app_settings WHERE key = 'default_tenant_id' LIMIT 1`) as { value?: string } | undefined;
+      const fromSetting = db.prepare(`SELECT value FROM app_settings WHERE key = 'default_tenant_id' LIMIT 1`).get() as { value?: string } | undefined;
       const configured = Number(fromSetting?.value ?? '');
       if (Number.isInteger(configured) && configured > 0) return configured;
     } catch { /* app_settings may not exist in legacy/minimal bootstrap tests */ }
     try {
-      const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id?: number } | undefined;
+      const defaultTenant = db.prepare(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`).get() as { id?: number } | undefined;
       const candidate = Number(defaultTenant?.id ?? 0);
       if (Number.isInteger(candidate) && candidate > 0) return candidate;
     } catch { /* tenants may not exist in legacy/minimal bootstrap tests */ }
     return 1;
   };
-  const hasUniqueIndexExactly = async (tableName: string, columns: string[]): Promise<boolean> => {
+  const hasUniqueIndexExactly = (tableName: string, columns: string[]): boolean => {
     try {
-      const indexes = await db.all(`PRAGMA index_list(${tableName})`) as Array<{ name: string; unique: number }>;
-      return indexes.some(async (index) => {
+      const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{ name: string; unique: number }>;
+      return indexes.some((index) => {
         if (!index.unique) return false;
-        const indexedColumns = (await db.all(`PRAGMA index_info(${index.name})`) as Array<{ name: string }>).map((col) => col.name);
+        const indexedColumns = (db.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{ name: string }>).map((col) => col.name);
         return indexedColumns.length === columns.length && indexedColumns.every((column, idx) => column === columns[idx]);
       });
     } catch {
@@ -5657,7 +5710,7 @@ export async function ensureDataMigration593(): Promise<void> {
 
   // ── Step 1: Retire legacy project-level task routing rules after sprint migration ──
   try {
-    await db.exec(`DROP TABLE IF EXISTS task_routing_rules`);
+    db.exec(`DROP TABLE IF EXISTS task_routing_rules`);
   } catch (err) {
     console.warn('[schema] Task #370 legacy task_routing_rules drop skipped:', (err as Error).message);
   }
@@ -5667,14 +5720,14 @@ export async function ensureDataMigration593(): Promise<void> {
   // authority checks to fall back to legacy job_id/review_owner_job_id.
   try {
     const taskCols = new Set(
-      (await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).map((col) => col.name),
+      (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map((col) => col.name),
     );
     const hasLegacyJobId = taskCols.has('job_id');
     const hasLegacyReviewOwnerJobId = taskCols.has('review_owner_job_id');
 
     if (hasLegacyJobId) {
       const assignmentColumn = taskCols.has('assigned_agent_id') ? 'assigned_agent_id' : 'agent_id';
-      const backfillAgentOwnership = await db.run(`
+      const backfillAgentOwnership = db.prepare(`
         UPDATE tasks
         SET ${assignmentColumn} = (
           SELECT jt.agent_id
@@ -5689,14 +5742,14 @@ export async function ensureDataMigration593(): Promise<void> {
             WHERE jt.id = tasks.job_id
               AND jt.agent_id IS NOT NULL
           )
-      `);
+      `).run();
       if (backfillAgentOwnership.changes > 0) {
         console.log(`[schema] Task #593: backfilled ${assignmentColumn} on ${backfillAgentOwnership.changes} legacy job-owned task(s)`);
       }
     }
 
     if (hasLegacyReviewOwnerJobId) {
-      const backfillReviewOwnership = await db.run(`
+      const backfillReviewOwnership = db.prepare(`
         UPDATE tasks
         SET review_owner_agent_id = (
           SELECT jt.agent_id
@@ -5711,19 +5764,19 @@ export async function ensureDataMigration593(): Promise<void> {
             WHERE jt.id = tasks.review_owner_job_id
               AND jt.agent_id IS NOT NULL
           )
-      `);
+      `).run();
       if (backfillReviewOwnership.changes > 0) {
         console.log(`[schema] Task #593: backfilled review_owner_agent_id on ${backfillReviewOwnership.changes} legacy review-owned task(s)`);
       }
     }
 
     const agentCols = new Set(
-      (await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>).map((col) => col.name),
+      (db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>).map((col) => col.name),
     );
 
     if (agentCols.has('project_id') && agentCols.has('enabled')) {
       const assignmentColumn = taskCols.has('assigned_agent_id') ? 'assigned_agent_id' : 'agent_id';
-      const viaProject = await db.run(`
+      const viaProject = db.prepare(`
         UPDATE tasks
         SET ${assignmentColumn} = (
           SELECT a.id FROM agents a
@@ -5734,7 +5787,7 @@ export async function ensureDataMigration593(): Promise<void> {
         )
         WHERE ${assignmentColumn} IS NULL
           AND status IN ('done', 'cancelled', 'failed')
-      `);
+      `).run();
       if (viaProject.changes > 0) {
         console.log(`[schema] Task #593: backfilled ${assignmentColumn} on ${viaProject.changes} terminal task(s) via project fallback`);
       }
@@ -5771,12 +5824,12 @@ export async function ensureDataMigration593(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_skills_tenant ON skills(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_skills_source ON skills(source);
   `;
-  if (!await tableExists(db, 'skills')) {
-    await db.exec(createSkillsTableSql);
+  if (!tableExists(db, 'skills')) {
+    db.exec(createSkillsTableSql);
   } else {
     const skillsTableSql = getTableSql('skills');
     const skillColumns = new Set(getColumns('skills'));
-    const hasSkillsTenantFk = (await db.all(`PRAGMA foreign_key_list(skills)`) as Array<{ from: string; table: string; on_delete: string }>)
+    const hasSkillsTenantFk = (db.prepare(`PRAGMA foreign_key_list(skills)`).all() as Array<{ from: string; table: string; on_delete: string }>)
       .some((fk) => fk.from === 'tenant_id' && fk.table === 'tenants' && fk.on_delete.toUpperCase() === 'CASCADE');
     const needsSkillsRebuild = !skillColumns.has('tenant_id')
       || !hasSkillsTenantFk
@@ -5798,15 +5851,15 @@ export async function ensureDataMigration593(): Promise<void> {
         updated_at: sourceColumns.has('updated_at') ? `COALESCE(updated_at, datetime('now')) AS updated_at` : `datetime('now') AS updated_at`,
       };
       db.pragma('foreign_keys = OFF');
-      const rebuildSkills = db.transaction(async () => {
-        await db.run(`ALTER TABLE skills RENAME TO ${tempTable}`);
-        await db.exec(createSkillsTableSql.replace('CREATE TABLE IF NOT EXISTS skills', 'CREATE TABLE skills'));
-        await db.run(`
+      const rebuildSkills = db.transaction(() => {
+        db.prepare(`ALTER TABLE skills RENAME TO ${tempTable}`).run();
+        db.exec(createSkillsTableSql.replace('CREATE TABLE IF NOT EXISTS skills', 'CREATE TABLE skills'));
+        db.prepare(`
           INSERT OR IGNORE INTO skills (id, tenant_id, name, description, content, source, fs_path, created_at, updated_at)
           SELECT ${['id','tenant_id','name','description','content','source','fs_path','created_at','updated_at'].map((column) => selectExpressionByColumn[column]).join(', ')}
           FROM ${tempTable}
-        `);
-        await db.run(`DROP TABLE ${tempTable}`);
+        `).run();
+        db.prepare(`DROP TABLE ${tempTable}`).run();
       });
       try {
         rebuildSkills();
@@ -5815,7 +5868,7 @@ export async function ensureDataMigration593(): Promise<void> {
       }
       console.log('[schema] Migrated: rebuilt skills table with tenant-local uniqueness');
     } else {
-      await db.exec(`
+      db.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_tenant_name ON skills(tenant_id, name);
         CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
         CREATE INDEX IF NOT EXISTS idx_skills_tenant ON skills(tenant_id);
@@ -5827,7 +5880,7 @@ export async function ensureDataMigration593(): Promise<void> {
   // ── Step 5: Validation — log Phase 5 pre-condition status ──
   try {
     const checks = [
-      ...((await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>).some(col => col.name === 'job_id') ? [{
+      ...((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some(col => col.name === 'job_id') ? [{
         label: 'legacy tasks with job_id but no agent_id (non-terminal)',
         sql: `SELECT COUNT(*) as n FROM tasks WHERE job_id IS NOT NULL AND agent_id IS NULL AND status NOT IN ('done','cancelled','failed')`,
         wantZero: true,
@@ -5869,10 +5922,10 @@ export async function ensureDataMigration593(): Promise<void> {
 
 // ── Task #586: Pipeline Intelligence Telemetry — Event Model ─────────────────
 export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
-  const db = getDb();
+  const db = getRawDb();
 
   // 1. task_events table
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_events (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -5898,7 +5951,7 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
   console.log('[schema] Task #586: task_events table ensured');
 
   // 2. integrity_events table
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS integrity_events (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id      INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -5931,9 +5984,9 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
 
   // 3. job_instances: failure_stage column
   try {
-    const cols = await db.all(`PRAGMA table_info(job_instances)`) as Array<{ name: string }>;
+    const cols = db.prepare(`PRAGMA table_info(job_instances)`).all() as Array<{ name: string }>;
     if (!cols.some(c => c.name === 'failure_stage')) {
-      await db.exec(`ALTER TABLE job_instances ADD COLUMN failure_stage TEXT DEFAULT NULL`);
+      db.exec(`ALTER TABLE job_instances ADD COLUMN failure_stage TEXT DEFAULT NULL`);
       console.log('[schema] Task #586: added failure_stage to job_instances');
     }
   } catch (err) {
@@ -5942,17 +5995,17 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
 
   // 4. agents: job_instructions tracking
   try {
-    const agentCols = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
+    const agentCols = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
     if (!agentCols.some(c => c.name === 'job_instructions_updated_at')) {
-      await db.exec(`ALTER TABLE agents ADD COLUMN job_instructions_updated_at TEXT DEFAULT NULL`);
+      db.exec(`ALTER TABLE agents ADD COLUMN job_instructions_updated_at TEXT DEFAULT NULL`);
       console.log('[schema] Task #586: added job_instructions_updated_at to agents');
     }
     if (!agentCols.some(c => c.name === 'instructions_version')) {
-      await db.exec(`ALTER TABLE agents ADD COLUMN instructions_version INTEGER NOT NULL DEFAULT 0`);
+      db.exec(`ALTER TABLE agents ADD COLUMN instructions_version INTEGER NOT NULL DEFAULT 0`);
       console.log('[schema] Task #586: added instructions_version to agents');
     }
     if (!agentCols.some(c => c.name === 'deleted_at')) {
-      await db.exec(`ALTER TABLE agents ADD COLUMN deleted_at TEXT DEFAULT NULL`);
+      db.exec(`ALTER TABLE agents ADD COLUMN deleted_at TEXT DEFAULT NULL`);
       console.log('[schema] Task #404: added deleted_at to agents');
     }
   } catch (err) {
@@ -5961,14 +6014,14 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
 
   // Task #407: remove legacy pre_instructions storage columns after backfilling canonical fields.
   try {
-    const agentCols407 = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
+    const agentCols407 = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
     const hasLegacyPreInstructions407 = agentCols407.some((c) => c.name === 'pre_instructions');
     const hasLegacyPreInstructionsUpdatedAt407 = agentCols407.some((c) => c.name === 'pre_instructions_updated_at');
     const hasJobInstructions407 = agentCols407.some((c) => c.name === 'job_instructions');
     const hasJobInstructionsUpdatedAt407 = agentCols407.some((c) => c.name === 'job_instructions_updated_at');
 
     if (hasLegacyPreInstructions407 && hasJobInstructions407) {
-      await db.exec(`
+      db.exec(`
         UPDATE agents
         SET job_instructions = CASE
           WHEN (job_instructions IS NULL OR TRIM(job_instructions) = '')
@@ -5981,7 +6034,7 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
     }
 
     if (hasLegacyPreInstructionsUpdatedAt407 && hasJobInstructionsUpdatedAt407) {
-      await db.exec(`
+      db.exec(`
         UPDATE agents
         SET job_instructions_updated_at = COALESCE(job_instructions_updated_at, pre_instructions_updated_at)
         WHERE pre_instructions_updated_at IS NOT NULL
@@ -5989,11 +6042,11 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
     }
 
     if (hasLegacyPreInstructions407) {
-      await db.exec(`ALTER TABLE agents DROP COLUMN pre_instructions`);
+      db.exec(`ALTER TABLE agents DROP COLUMN pre_instructions`);
       console.log('[schema] Task #407: dropped legacy agents.pre_instructions column');
     }
     if (hasLegacyPreInstructionsUpdatedAt407) {
-      await db.exec(`ALTER TABLE agents DROP COLUMN pre_instructions_updated_at`);
+      db.exec(`ALTER TABLE agents DROP COLUMN pre_instructions_updated_at`);
       console.log('[schema] Task #407: dropped legacy agents.pre_instructions_updated_at column');
     }
   } catch (err) {
@@ -6002,17 +6055,17 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
 
   // 5. tasks: dispatch tracking + manual intervention counter
   try {
-    const taskCols = await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>;
+    const taskCols = db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>;
     if (!taskCols.some(c => c.name === 'first_dispatched_at')) {
-      await db.exec(`ALTER TABLE tasks ADD COLUMN first_dispatched_at TEXT DEFAULT NULL`);
+      db.exec(`ALTER TABLE tasks ADD COLUMN first_dispatched_at TEXT DEFAULT NULL`);
       console.log('[schema] Task #586: added first_dispatched_at to tasks');
     }
     if (!taskCols.some(c => c.name === 'total_dispatch_count')) {
-      await db.exec(`ALTER TABLE tasks ADD COLUMN total_dispatch_count INTEGER NOT NULL DEFAULT 0`);
+      db.exec(`ALTER TABLE tasks ADD COLUMN total_dispatch_count INTEGER NOT NULL DEFAULT 0`);
       console.log('[schema] Task #586: added total_dispatch_count to tasks');
     }
     if (!taskCols.some(c => c.name === 'manual_intervention_count')) {
-      await db.exec(`ALTER TABLE tasks ADD COLUMN manual_intervention_count INTEGER NOT NULL DEFAULT 0`);
+      db.exec(`ALTER TABLE tasks ADD COLUMN manual_intervention_count INTEGER NOT NULL DEFAULT 0`);
       console.log('[schema] Task #586: added manual_intervention_count to tasks');
     }
   } catch (err) {
@@ -6023,10 +6076,10 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
   // Drop tables that are no longer referenced. sprint_job_schedules has an FK
   // from sprint_schedule_fires, so drop the dependent table first.
   try {
-    await db.exec(`DROP TABLE IF EXISTS sprint_schedule_fires`);
-    await db.exec(`DROP TABLE IF EXISTS routing_config_legacy`);
-    await db.exec(`DROP TABLE IF EXISTS sprint_job_schedules`);
-    await db.exec(`DROP TABLE IF EXISTS sprint_job_assignments`);
+    db.exec(`DROP TABLE IF EXISTS sprint_schedule_fires`);
+    db.exec(`DROP TABLE IF EXISTS routing_config_legacy`);
+    db.exec(`DROP TABLE IF EXISTS sprint_job_schedules`);
+    db.exec(`DROP TABLE IF EXISTS sprint_job_assignments`);
     console.log('[schema] Task #596: dropped legacy tables (routing_config_legacy, sprint_job_schedules, sprint_job_assignments, sprint_schedule_fires)');
   } catch (err) {
     console.error('[schema] Task #596: drop legacy tables failed:', err);
@@ -6036,9 +6089,9 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
   // agents.schedule remains as a compatibility column for older DBs/rows, but
   // recurring task series are now the only active scheduling path.
   try {
-    const agentCols616 = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
+    const agentCols616 = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
     if (agentCols616.some(c => c.name === 'schedule')) {
-      const cleared = await db.run(`UPDATE agents SET schedule = '' WHERE COALESCE(schedule, '') != ''`);
+      const cleared = db.prepare(`UPDATE agents SET schedule = '' WHERE COALESCE(schedule, '') != ''`).run();
       if (cleared.changes > 0) {
         console.log(`[schema] Task #616: cleared ${cleared.changes} legacy agent schedule(s)`);
       }
@@ -6057,9 +6110,9 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
   // when the column has no dependencies (indexes, triggers, generated columns).
   // The FK constraint is stored only in the column definition, so DROP COLUMN works.
   try {
-    const agentCols53 = await db.all(`PRAGMA table_info(agents)`) as Array<{ name: string }>;
+    const agentCols53 = db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>;
     if (agentCols53.some(c => c.name === 'job_template_id')) {
-      await db.exec(`ALTER TABLE agents DROP COLUMN job_template_id`);
+      db.exec(`ALTER TABLE agents DROP COLUMN job_template_id`);
       console.log('[schema] Task #53: dropped stale job_template_id column from agents');
     }
   } catch (err) {
@@ -6067,7 +6120,7 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
   }
 
   // Task #449: idempotent receipts for trusted external task event callbacks.
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS external_task_event_receipts (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       fingerprint    TEXT NOT NULL UNIQUE,
@@ -6105,13 +6158,13 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
     ['request_metadata_json', 'TEXT'],
   ] as const) {
     if (!await tableHasColumn(db, 'external_task_event_receipts', column)) {
-      await db.run(`ALTER TABLE external_task_event_receipts ADD COLUMN ${column} ${definition}`);
+      db.prepare(`ALTER TABLE external_task_event_receipts ADD COLUMN ${column} ${definition}`).run();
     }
   }
-  await db.exec(`CREATE INDEX IF NOT EXISTS idx_external_task_event_receipts_processing_state ON external_task_event_receipts(processing_state);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_external_task_event_receipts_processing_state ON external_task_event_receipts(processing_state);`);
 
   // Task #491/#569: configurable workflow-event routing for internal and callback-driven task state changes.
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS external_event_mappings (
       id                    INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id            INTEGER REFERENCES projects(id) ON DELETE CASCADE,
@@ -6136,7 +6189,7 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
   `);
   await ensureTableColumn(db, 'external_event_mappings', 'sprint_id', `sprint_id INTEGER REFERENCES sprints(id) ON DELETE CASCADE`);
   await ensureTableColumn(db, 'external_event_mappings', 'sprint_type', `sprint_type TEXT`);
-  await db.exec(`
+  db.exec(`
     UPDATE external_event_mappings
     SET project_id = COALESCE(project_id, (SELECT s.project_id FROM sprints s WHERE s.id = external_event_mappings.sprint_id)),
         sprint_type = COALESCE(sprint_type, (SELECT s.sprint_type FROM sprints s WHERE s.id = external_event_mappings.sprint_id))
@@ -6144,14 +6197,14 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
       AND (project_id IS NULL OR sprint_type IS NULL)
       AND EXISTS (SELECT 1 FROM sprints s WHERE s.id = external_event_mappings.sprint_id)
   `);
-  await db.exec(`
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_external_event_mappings_scope_lookup
       ON external_event_mappings(project_id, sprint_type, sprint_id, event_name, source, task_type, enabled, priority);
   `);
 
   // Some legacy task-table constraint migrations rebuild tasks and recreate only
   // historic indexes. Re-assert recurring generated-task indexes after rebuilds.
-  await db.exec(`
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_tasks_generated_lookup
       ON tasks(recurring_series_id, scheduled_for)
       WHERE recurring_series_id IS NOT NULL;
@@ -6164,7 +6217,7 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
         AND scheduled_for IS NOT NULL
         AND generated_from = 'recurring_task_series';
   `);
-  await ensureTasksRequireWorkflow(db);
+  ensureTasksRequireWorkflow(db);
   if (activeTenantMode === 'verify') {
     await verifyTenantSchemaForStartup(db);
   } else {
@@ -6176,20 +6229,20 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
   await ensureNotificationTables(db);
 
   try {
-    await migrateAgentSessionKeysToCanonical(db);
+    migrateAgentSessionKeysToCanonical(db);
   } catch (err) {
     console.error('[schema] Task #91/92: agent session key migration failed:', err);
   }
 }
 
-async function backfillProjectFileVersionHistory(db: Db): Promise<void> {
+async function backfillProjectFileVersionHistory(db: Database.Database): Promise<void> {
   // Requires projects.tenant_id, which legacy databases gain only once
   // ensureTenantSchema has run. Idempotent: INSERT OR IGNORE + NOT EXISTS,
   // and the UPDATE only touches rows that still need backfilling.
   if (!await tableHasColumn(db, 'projects', 'tenant_id')) return;
-  if (!await tableExists(db, 'project_files') || !await tableExists(db, 'project_file_versions')) return;
+  if (!tableExists(db, 'project_files') || !tableExists(db, 'project_file_versions')) return;
 
-  await db.exec(`
+  db.exec(`
     INSERT OR IGNORE INTO project_file_versions (
       tenant_id, project_id, file_id, version_number, filename, original_name, mime_type,
       size_bytes, file_path, created_by, created_at, change_source

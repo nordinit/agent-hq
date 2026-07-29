@@ -101,7 +101,7 @@ export async function completeSprint(sprintId: number): Promise<void> {
       : await db.run(`
           INSERT INTO job_instances (agent_id, status) VALUES (?, 'queued')
         `, job.id);
-    const instanceId = instanceResult.lastInsertRowid as number;
+    const instanceId = instanceResult.lastInsertId as number;
 
     let message = buildDispatchMessage({
       jobInstructions,

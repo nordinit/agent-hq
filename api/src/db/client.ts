@@ -28,9 +28,8 @@ let _dbPath: string | null = null;
  *
  * Reserved for code that genuinely needs the concrete driver: PRAGMA statements, schema
  * introspection and the table-rebuild machinery in db/schema.ts. The Db interface
- * deliberately does not expose those, because they have no PostgreSQL equivalent and
- * every remaining caller of this function is a site the migration still has to answer for.
- * Application code should use getDb().
+ * deliberately does not expose those — they have no PostgreSQL equivalent, so every
+ * remaining caller of this function is a site the migration still has to answer for.
  */
 export function getRawDb(): Database.Database {
   const resolvedPath = resolveDbPath();
@@ -55,8 +54,8 @@ export function getRawDb(): Database.Database {
  *
  * Returns the async Db interface rather than the driver, so the engine can be swapped
  * without any call site naming a concrete implementation. The adapter is cached alongside
- * the connection and invalidated with it, so a path change produces a matching pair rather
- * than an adapter still wrapping the previous connection.
+ * the connection and invalidated with it, so a path change never leaves an adapter
+ * wrapping the previous connection.
  */
 export function getDb(): Db {
   const raw = getRawDb();

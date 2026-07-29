@@ -28,7 +28,20 @@
  * maintaining two binding models across both engines.
  */
 
-export type SqlParam = string | number | bigint | boolean | null | undefined | Buffer | Date;
+/**
+ * A bound SQL parameter.
+ *
+ * Deliberately `unknown` rather than a union of the types a driver can serialise. The
+ * union looks safer but is not: callers throughout Agent HQ build parameter lists as
+ * `unknown[]` from parsed JSON, request bodies and dynamic column maps, and better-sqlite3
+ * accepted them. Narrowing here would not catch a single real bug — the value's runtime
+ * type is not known at the call site either way — it would just force ~120 casts that
+ * assert rather than verify, and casts are exactly where genuine type errors hide.
+ *
+ * Parameter type errors surface where they can actually be diagnosed: at the driver, which
+ * reports the offending value.
+ */
+export type SqlParam = unknown;
 
 export interface RunResult {
   /** Rows created, updated or deleted. */

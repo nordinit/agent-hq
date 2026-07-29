@@ -425,7 +425,7 @@ export async function reconcileReviewQaRouting(
           INSERT INTO job_instances (agent_id, status)
           VALUES (?, 'queued')
         `, agent.id);
-    const instanceId = instanceResult.lastInsertRowid as number;
+    const instanceId = instanceResult.lastInsertId as number;
     await attachInstanceToTask(db, instanceId, task.id);
 
     try {

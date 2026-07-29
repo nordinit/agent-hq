@@ -135,7 +135,7 @@ router.post('/', async (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, tenantId, name.trim(), slug.trim(), typeof description === 'string' ? description.trim() : '', transport === 'stdio' ? 'stdio' : 'stdio', command.trim(), normalizeJsonText(args, '[]'), normalizeJsonText(env, '{}'), typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null, enabled !== undefined ? (enabled ? 1 : 0) : 1);
 
-    const created = await db.get('SELECT * FROM mcp_servers WHERE id = ?', result.lastInsertRowid);
+    const created = await db.get('SELECT * FROM mcp_servers WHERE id = ?', result.lastInsertId);
     return res.status(201).json(created);
   } catch (err: any) {
     if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
@@ -261,7 +261,7 @@ agentMcpServersRouter.post('/', async (req: Request, res: Response) => {
       FROM agent_mcp_assignments ama
       JOIN mcp_servers s ON s.id = ama.mcp_server_id
       WHERE ama.id = ?
-    `, result.lastInsertRowid);
+    `, result.lastInsertId);
     scheduleAgentMcpSync(Number(agentId));
     return res.status(201).json(created);
   } catch (err: any) {

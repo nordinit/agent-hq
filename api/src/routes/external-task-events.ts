@@ -279,7 +279,7 @@ async function insertReceipt(
     INSERT INTO external_task_event_receipts (${columns.join(', ')})
     VALUES (${placeholders})
   `, ...values);
-  return Number(insertResult.lastInsertRowid);
+  return Number(insertResult.lastInsertId);
 }
 
 async function loadReceiptByFingerprint(db: Db, fingerprint: string): Promise<ExistingReceiptRow | null> {

@@ -515,7 +515,7 @@ async function ensureProject(db: Db, tenantId: number, result: DefaultInstallPac
     VALUES (?, ?, ?, ?)
   `, tenantId, DEFAULT_INSTALL_PROJECT_NAME, DEFAULT_INSTALL_PROJECT_DESCRIPTION, 'Starter workspace for this tenant.');
   addCount(result.created, 'projects');
-  return Number(inserted.lastInsertRowid);
+  return Number(inserted.lastInsertId);
 }
 
 async function ensureBacklog(db: Db, tenantId: number, projectId: number, result: DefaultInstallPackageResult): Promise<number> {
@@ -534,7 +534,7 @@ async function ensureBacklog(db: Db, tenantId: number, projectId: number, result
     INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
     VALUES (?, ?, ?, '', 'generic', 'active', 'time', 'ongoing')
   `, tenantId, projectId, STARTER_BACKLOG_SPRINT_NAME);
-  const sprintId = Number(inserted.lastInsertRowid);
+  const sprintId = Number(inserted.lastInsertId);
   await seedSprintTaskPolicy(db, sprintId);
   addCount(result.created, 'workflows');
   return sprintId;
@@ -643,7 +643,7 @@ async function ensureAgent(db: Db, tenantId: number, tenantSlug: string, project
   }
   const inserted = await db.run(`INSERT INTO agents (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`, ...values);
   addCount(result.created, 'agents');
-  return Number(inserted.lastInsertRowid);
+  return Number(inserted.lastInsertId);
 }
 
 async function ensureAgentCapabilities(db: Db, agentId: number, seed: StarterAgentSeed, result: DefaultInstallPackageResult): Promise<void> {

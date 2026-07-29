@@ -36,7 +36,7 @@ describe('applyDefaultInstallPackage', () => {
     const tenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Acme', 'acme', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
 
     const result = await applyDefaultInstallPackage(db, tenantId);
 
@@ -79,7 +79,7 @@ describe('applyDefaultInstallPackage', () => {
     const tenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Acme', 'acme', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     const canonicalContent = fs.readFileSync(
       path.resolve(__dirname, '../../../skills/create-agent/SKILL.md'),
       'utf8',
@@ -110,11 +110,11 @@ describe('applyDefaultInstallPackage', () => {
     const systemTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('System', 'system', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     const workspaceTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Workspace', 'workspace', 0)
-    `)).lastInsertRowid);
+    `)).lastInsertId);
     await db.run(`
       INSERT INTO skills (tenant_id, name, description, content, source)
       VALUES (?, 'create-agent', 'Old', '# Old', 'system')

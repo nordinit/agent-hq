@@ -1971,7 +1971,7 @@ export async function dispatchTaskToJob(
         INSERT INTO job_instances (${instanceTenant.columnSql}agent_id, status, dispatched_at, payload_sent, task_id, worktree_path)
         VALUES (${instanceTenant.valueSql}?, 'dispatched', datetime('now'), ?, ?, ?)
       `, ...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath);
-  const instanceId = instanceResult.lastInsertRowid as number;
+  const instanceId = instanceResult.lastInsertId as number;
   const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
   const sessionKey = buildSessionKey(instanceId, durableRunId);
   const taskNotesSection = buildDispatchTaskNotesSection(await getDispatchTaskNotesContext(db, {

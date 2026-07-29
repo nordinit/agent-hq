@@ -334,7 +334,7 @@ describe('tenant workspace isolation', () => {
       const sampleTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority, task_type, story_points)
         VALUES (?, ?, ?, 'Sample backend task', '', 'ready', 'medium', 'backend', 3)
-      `, first.tenant.id, defaultProject.id, devWorkflow.id)).lastInsertRowid);
+      `, first.tenant.id, defaultProject.id, devWorkflow.id)).lastInsertId);
       expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM tasks t
@@ -700,24 +700,24 @@ describe('tenant workspace isolation', () => {
         id: Number((await db.run(`
           INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
           VALUES (?, ?, ?, 'Acme cleanup task', '', 'todo', 'medium')
-        `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertRowid),
+        `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId),
       };
       const acmeToolId = Number((await db.run(`
         INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body)
         VALUES (?, 'Acme Tool', 'acme-delete-tool', 'bash', 'echo ok')
-      `, acme.tenant.id)).lastInsertRowid);
+      `, acme.tenant.id)).lastInsertId);
       const acmeServerId = Number((await db.run(`
         INSERT INTO mcp_servers (tenant_id, name, slug, command)
         VALUES (?, 'Acme MCP', 'acme-delete-mcp', 'node')
-      `, acme.tenant.id)).lastInsertRowid);
+      `, acme.tenant.id)).lastInsertId);
       await db.run(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (?, ?)`, acmeAgent.id, acmeToolId);
       await db.run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (?, ?)`, acmeAgent.id, acmeServerId);
       await db.run(`INSERT INTO mcp_api_keys (agent_id, name, key_prefix, key_hash) VALUES (?, 'Acme Key', 'acme', 'hash-acme')`, acmeAgent.id);
-      const instanceId = Number((await db.run(`INSERT INTO job_instances (agent_id, task_id, status) VALUES (?, ?, 'done')`, acmeAgent.id, acmeTask.id)).lastInsertRowid);
+      const instanceId = Number((await db.run(`INSERT INTO job_instances (agent_id, task_id, status) VALUES (?, ?, 'done')`, acmeAgent.id, acmeTask.id)).lastInsertId);
       const sessionId = Number((await db.run(`
         INSERT INTO sessions (tenant_id, external_key, runtime, agent_id, task_id, instance_id, project_id)
         VALUES (?, 'acme-session', 'openclaw', ?, ?, ?, ?)
-      `, acme.tenant.id, acmeAgent.id, acmeTask.id, instanceId, acmeProject.id)).lastInsertRowid);
+      `, acme.tenant.id, acmeAgent.id, acmeTask.id, instanceId, acmeProject.id)).lastInsertId);
       await db.run(`INSERT INTO session_messages (session_id, ordinal, role, content, timestamp) VALUES (?, 1, 'user', 'hi', datetime('now'))`, sessionId);
       await db.run(`INSERT INTO chat_messages (id, agent_id, role, content, session_key) VALUES ('acme-chat', ?, 'user', 'hi', 'acme-session')`, acmeAgent.id);
       await db.run(`INSERT INTO canonical_chat_sessions (agent_id, channel, session_key) VALUES (?, 'web', 'acme-session')`, acmeAgent.id);
@@ -972,7 +972,7 @@ describe('tenant workspace isolation', () => {
       const tenantId = Number((await db.run(`
         INSERT INTO tenants (name, slug, is_default)
         VALUES ('Legacy Empty', 'legacy-empty', 0)
-      `)).lastInsertRowid);
+      `)).lastInsertId);
       const defaultAtlas = await db.get(`SELECT workspace_path FROM agents WHERE tenant_id = (SELECT id FROM tenants WHERE slug = 'default') AND system_role = ?`, ATLAS_SYSTEM_ROLE) as { workspace_path: string };
       fs.mkdirSync(defaultAtlas.workspace_path, { recursive: true });
       fs.writeFileSync(path.join(defaultAtlas.workspace_path, 'default-only.md'), 'default workspace', 'utf-8');
@@ -1238,7 +1238,7 @@ describe('tenant workspace isolation', () => {
       const acmeTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Acme Active Task', '', 'in_progress', 'medium')
-      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertRowid);
+      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId);
       await db.run(`INSERT INTO job_instances (task_id, agent_id, status) VALUES (?, ?, 'running')`, acmeTaskId, acmeAgent.id);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
@@ -1382,19 +1382,19 @@ describe('tenant workspace isolation', () => {
       const acmeTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Acme direct task', '', 'todo', 'medium')
-      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertRowid);
+      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId);
       const betaTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Beta direct task', '', 'todo', 'medium')
-      `, beta.tenant.id, betaProject.id, betaSprint.id)).lastInsertRowid);
+      `, beta.tenant.id, betaProject.id, betaSprint.id)).lastInsertId);
       const acmeAgentId = Number((await db.run(`
         INSERT INTO agents (tenant_id, project_id, name, role, session_key, workspace_path)
         VALUES (?, ?, 'Acme Tool Agent', 'Agent', 'acme-tool-agent', '')
-      `, acme.tenant.id, acmeProject.id)).lastInsertRowid);
+      `, acme.tenant.id, acmeProject.id)).lastInsertId);
       const betaAgentId = Number((await db.run(`
         INSERT INTO agents (tenant_id, project_id, name, role, session_key, workspace_path)
         VALUES (?, ?, 'Beta Tool Agent', 'Agent', 'beta-tool-agent', '')
-      `, beta.tenant.id, betaProject.id)).lastInsertRowid);
+      `, beta.tenant.id, betaProject.id)).lastInsertId);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       const acmeTask = await json<{ id: number; title: string }>(`${baseUrl}/api/v1/tasks/${acmeTaskId}`);
@@ -1468,11 +1468,11 @@ describe('tenant workspace isolation', () => {
       const acmeTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Acme relationship source', '', 'todo', 'medium')
-      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertRowid);
+      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId);
       const betaTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Beta relationship target', '', 'todo', 'medium')
-      `, beta.tenant.id, betaProject.id, betaSprint.id)).lastInsertRowid);
+      `, beta.tenant.id, betaProject.id, betaSprint.id)).lastInsertId);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       await expect(fetch(`${baseUrl}/api/v1/sprints/${betaSprint.id}`)).resolves.toMatchObject({ status: 404 });

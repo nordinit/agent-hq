@@ -158,7 +158,7 @@ describe('tenant workflow-event default seeding and repair', () => {
     const scopedProjectId = Number((await db.run(`
       INSERT INTO projects (tenant_id, name, description, context_md)
       VALUES (1, 'Workflow event scope fixture', 'project-scoped mapping variant', '')
-    `)).lastInsertRowid);
+    `)).lastInsertId);
 
     await db.run(`
       INSERT INTO external_event_mappings (

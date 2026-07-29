@@ -132,7 +132,7 @@ router.post('/', async (req: Request, res: Response) => {
       INSERT INTO skills (tenant_id, name, description, content, source)
       VALUES (?, ?, ?, ?, ?)
     `, tenantId, name, description ?? '', content ?? `# ${name}\n\n${description ?? 'Describe this skill here.'}\n`, sourceValue);
-    const created = await db.get(`SELECT * FROM skills WHERE id = ? AND tenant_id = ?`, result.lastInsertRowid, tenantId);
+    const created = await db.get(`SELECT * FROM skills WHERE id = ? AND tenant_id = ?`, result.lastInsertId, tenantId);
     return res.status(201).json({ ...(created as object), files: [] });
   } catch (err) {
     if (constraintIsTenantNameConflict(err)) return res.status(409).json({ error: 'A skill with this name already exists' });

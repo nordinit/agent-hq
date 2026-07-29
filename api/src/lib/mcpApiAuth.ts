@@ -1076,7 +1076,7 @@ export async function issueMcpApiKeyForAgent(
 
   return {
     apiKey,
-    keyId: Number(result.lastInsertRowid),
+    keyId: Number(result.lastInsertId),
     keyPrefix,
   };
 }
@@ -1190,7 +1190,7 @@ export async function ensureConfiguredRuntimeMcpApiKey(
   return {
     status: 'created',
     agentId,
-    keyId: Number(result.lastInsertRowid),
+    keyId: Number(result.lastInsertId),
     keyPrefix,
   };
 }

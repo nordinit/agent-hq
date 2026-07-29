@@ -416,7 +416,7 @@ export async function createRecurringTaskSeries(
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, normalized.tenant_id ?? null, normalized.project_id, normalized.sprint_id, normalized.title_template, normalized.description_template ?? '', normalized.task_type, normalized.priority, normalized.story_points, normalized.status_on_create, normalized.schedule_expression, normalized.timezone, normalized.enabled, normalized.next_run_at ?? null, normalized.last_run_at ?? null, normalized.overlap_policy ?? 'skip_if_active', normalized.agent_id ?? null, normalized.created_by ?? 'system', normalized.updated_by ?? normalized.created_by ?? 'system');
 
-  return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, result.lastInsertRowid) as RecurringTaskSeriesRecord;
+  return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, result.lastInsertId) as RecurringTaskSeriesRecord;
 }
 
 export async function listRecurringTaskSeries(
@@ -616,7 +616,7 @@ export async function recordRecurringTaskRun(
     VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?)
   `, input.series_id, input.scheduled_for, input.created_task_id ?? null, input.status, input.error_message ?? null, input.started_at ?? null, input.finished_at ?? null, input.idempotency_key);
 
-  return await db.get(`SELECT * FROM recurring_task_runs WHERE id = ?`, result.lastInsertRowid) as RecurringTaskRunRecord;
+  return await db.get(`SELECT * FROM recurring_task_runs WHERE id = ?`, result.lastInsertId) as RecurringTaskRunRecord;
 }
 
 export async function linkRecurringRunToGeneratedTask(

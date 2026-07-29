@@ -206,7 +206,7 @@ export async function ensureProjectBacklogSprint(db: Db, projectId: number): Pro
     VALUES (?, ?, ?, '', ?, 'active', 'time', 'ongoing')
   `, project?.tenant_id ?? null, projectId, STARTER_BACKLOG_SPRINT_NAME, tenantSprintType);
 
-  const sprintId = Number(result.lastInsertRowid);
+  const sprintId = Number(result.lastInsertId);
   await seedSprintTaskPolicy(db, sprintId);
   await syncStarterRoutingForSprint(db, sprintId);
   return sprintId;
