@@ -21,6 +21,7 @@ function ensureDbParentDir(dbPath: string): void {
 
 let _db: Database.Database | null = null;
 let _adapter: Db | null = null;
+let _pool: import('pg').Pool | null = null;
 let _dbPath: string | null = null;
 
 /**
@@ -50,21 +51,67 @@ export function getRawDb(): Database.Database {
 }
 
 /**
+ * Which engine this process talks to.
+ *
+ * PostgreSQL is selected by setting DATABASE_URL (or AGENT_HQ_DATABASE_URL). There is no
+ * "auto-detect and fall back" behaviour on purpose: a fallback would let a misconfigured
+ * process quietly open a local SQLite file and start serving from an empty database
+ * instead of failing, which is indistinguishable from a fresh install and very hard to
+ * notice until data is missing.
+ */
+export type Engine = 'sqlite' | 'postgres';
+
+export function getEngine(): Engine {
+  return postgresUrl() ? 'postgres' : 'sqlite';
+}
+
+function postgresUrl(): string | undefined {
+  return process.env.AGENT_HQ_DATABASE_URL ?? process.env.DATABASE_URL ?? undefined;
+}
+
+/**
  * The database handle application code uses.
  *
- * Returns the async Db interface rather than the driver, so the engine can be swapped
- * without any call site naming a concrete implementation. The adapter is cached alongside
- * the connection and invalidated with it, so a path change never leaves an adapter
- * wrapping the previous connection.
+ * Returns the async Db interface rather than a driver, so no call site names a concrete
+ * engine. The adapter is cached and invalidated together with its connection, so a path
+ * or URL change never leaves an adapter wrapping the previous one.
  */
 export function getDb(): Db {
-  const raw = getRawDb();
-  if (!_adapter) _adapter = new SqliteAdapter(raw);
+  if (_adapter) return _adapter;
+
+  const url = postgresUrl();
+  if (url) {
+    // Required rather than imported at module scope: pulling in `pg` unconditionally would
+    // make it a hard dependency of every SQLite-only entrypoint and every test process.
+    const { Pool } = require('pg') as typeof import('pg');
+    const { PostgresAdapter } = require('./adapter/PostgresAdapter') as typeof import('./adapter/PostgresAdapter');
+    _pool = new Pool({
+      connectionString: url,
+      // Bounded so a burst of concurrent handlers cannot exhaust the server's connection
+      // slots. SQLite serialised everything behind one writer; PostgreSQL will happily
+      // accept far more concurrency than the database is configured for.
+      max: Number(process.env.AGENT_HQ_PG_POOL_MAX ?? 10),
+      idleTimeoutMillis: 30_000,
+    });
+    _adapter = new PostgresAdapter(_pool);
+    return _adapter;
+  }
+
+  _adapter = new SqliteAdapter(getRawDb());
   return _adapter;
 }
 
 export function getDbPath(): string {
   return resolveDbPath();
+}
+
+/** Closes the PostgreSQL pool, if this process opened one. */
+export async function closeDbAsync(): Promise<void> {
+  if (_pool) {
+    await _pool.end();
+    _pool = null;
+  }
+  closeDb();
 }
 
 /**
@@ -83,6 +130,8 @@ export function closeDb(): void {
     _db.close();
     _db = null;
   }
+  // The PostgreSQL pool is intentionally NOT ended here: closeDb() is synchronous and
+  // pool.end() is not. Use closeDbAsync() where the pool must actually be released.
   _adapter = null;
   _dbPath = null;
 }
