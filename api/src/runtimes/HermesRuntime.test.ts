@@ -97,32 +97,56 @@ function createMockDb(options: {
     ...(options.taskRow ?? {}),
   };
 
-  return {
+  // Presents the async Db ADAPTER interface — db.get(sql, ...) — rather than
+  // better-sqlite3's prepare(sql).get(). The canned-result logic below is unchanged; only
+  // the calling convention moved. __statements is still populated, keyed by SQL, so
+  // findPreparedRun() keeps working.
+  //
+  // Statements are deduped by exact SQL rather than pushed per call, which is what lets an
+  // assertion see every invocation on ONE jest.Mock instead of only the first.
+  const statementFor = (sql: string) => {
+    const existing = statements.find((entry) => entry.sql === sql);
+    if (existing) return existing;
+    const stmt = {
+      sql,
+      run: jest.fn(() => {
+        if (
+          sql.includes('UPDATE job_instances') &&
+          sql.includes('runtime_ended_at') &&
+          sql.includes("status IN ('queued', 'dispatched', 'running')")
+        ) {
+          return { changes: options.terminalClaimChanges ?? 1 };
+        }
+        return { changes: 1 };
+      }),
+      get: jest.fn(() => {
+        if (sql.includes('SELECT agent_id FROM job_instances')) return { agent_id: 17 };
+        if (sql.includes('SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key')) return defaultExisting;
+        if (sql.includes('SELECT ji.task_id, ji.agent_id')) return defaultTaskRow;
+        return undefined;
+      }),
+      all: jest.fn(() => []),
+    };
+    statements.push(stmt);
+    return stmt;
+  };
+
+  const db: Record<string, unknown> = {
     __statements: statements,
-    prepare: jest.fn((sql: string) => {
-      const stmt = {
-        run: jest.fn(() => {
-          if (
-            sql.includes('UPDATE job_instances') &&
-            sql.includes('runtime_ended_at') &&
-            sql.includes("status IN ('queued', 'dispatched', 'running')")
-          ) {
-            return { changes: options.terminalClaimChanges ?? 1 };
-          }
-          return { changes: 1 };
-        }),
-        get: jest.fn(() => {
-          if (sql.includes('SELECT agent_id FROM job_instances')) return { agent_id: 17 };
-          if (sql.includes('SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key')) return defaultExisting;
-          if (sql.includes('SELECT ji.task_id, ji.agent_id')) return defaultTaskRow;
-          return undefined;
-        }),
-        all: jest.fn(() => []),
-      };
-      statements.push({ sql, ...stmt });
-      return stmt;
+    dialect: 'sqlite',
+    inTransaction: false,
+    get: jest.fn(async (sql: string, ...params: unknown[]) => statementFor(sql).get(...params)),
+    all: jest.fn(async (sql: string, ...params: unknown[]) => statementFor(sql).all(...params)),
+    value: jest.fn(async (sql: string, ...params: unknown[]) => statementFor(sql).get(...params)),
+    run: jest.fn(async (sql: string, ...params: unknown[]) => {
+      const result = statementFor(sql).run(...params) as { changes?: number };
+      return { changes: result?.changes ?? 0, lastInsertId: null };
     }),
-  } as any;
+    exec: jest.fn(async () => undefined),
+    withTransaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(db)),
+    close: jest.fn(async () => undefined),
+  };
+  return db as any;
 }
 
 function findPreparedRun(db: any, fragment: string): jest.Mock {
@@ -346,18 +370,20 @@ describe('HermesRuntime', () => {
       order.push('ingest');
       return { imported: 0, matchedFile: null, skipped: 'no-session-dir' };
     });
-    const originalPrepare = db.prepare;
-    db.prepare = jest.fn((sql: string) => {
-      const stmt = originalPrepare(sql);
-      if (sql.includes('hermes-runtime-end-') || sql.includes('INSERT INTO chat_messages') && sql.includes('turn_end')) {
-        const originalRun = stmt.run;
-        stmt.run = jest.fn((...values: unknown[]) => {
-          order.push('runtime-end');
-          return originalRun(...values);
-        });
+    // Watches for the runtime-end write on db.run, which is what the code calls now. The
+    // previous version wrapped db.prepare — absent from the adapter — so originalPrepare
+    // was undefined and this interceptor silently never fired, which is why 'runtime-end'
+    // was missing from the ordering rather than genuinely not happening.
+    const originalRun = db.run;
+    db.run = jest.fn(async (sql: string, ...values: unknown[]) => {
+      if (
+        sql.includes('hermes-runtime-end-')
+        || (sql.includes('INSERT INTO chat_messages') && sql.includes('turn_end'))
+      ) {
+        order.push('runtime-end');
       }
-      return stmt;
-    }) as typeof db.prepare;
+      return originalRun(sql, ...values);
+    }) as typeof db.run;
     mockSpawn.mockImplementation(() => {
       setImmediate(() => child.emit('spawn'));
       return child;

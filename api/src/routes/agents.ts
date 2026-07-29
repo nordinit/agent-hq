@@ -238,7 +238,12 @@ function rejectAgentRepoPayload(body: Record<string, unknown>): { ok: true } | {
 
 async function selectAgentWithProject(db: ReturnType<typeof getDb>, id: number | string, includeDeleted = false): Promise<Record<string, unknown> | undefined> {
   const hasProjectsTable = await tableHasColumn(db, 'projects', 'id');
-  const hasProjectRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every(async (column) => await tableHasColumn(db, 'projects', column));
+  // Array.prototype.every is SYNCHRONOUS: an async callback returns a Promise, which is
+  // always truthy, so `.every(async ...)` unconditionally returns true and the check never
+  // runs. Resolve first, then reduce.
+  const hasProjectRepoColumns = (await Promise.all(
+    ['repo_path', 'repo_url', 'repo_access_mode'].map((column) => tableHasColumn(db, 'projects', column)),
+  )).every(Boolean);
   const hasDeletedAt = await tableHasColumn(db, 'agents', 'deleted_at');
   return await db.get(`
     SELECT a.*,
@@ -640,7 +645,10 @@ router.get('/', async (req: Request, res: Response) => {
     const includeDeleted = req.query.include_deleted === '1' || req.query.include_deleted === 'true';
 
     const hasProjectsTable = await tableHasColumn(db, 'projects', 'id');
-    const hasProjectRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every(async (column) => await tableHasColumn(db, 'projects', column));
+    // See the note in selectAgentWithProject: `.every(async ...)` is always true.
+    const hasProjectRepoColumns = (await Promise.all(
+      ['repo_path', 'repo_url', 'repo_access_mode'].map((column) => tableHasColumn(db, 'projects', column)),
+    )).every(Boolean);
     const hasDeletedAt = await tableHasColumn(db, 'agents', 'deleted_at');
 
     // Task #594: agents table is the canonical entity.

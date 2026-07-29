@@ -998,8 +998,16 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
  */
 async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<RoutingRuleRow[]> {
   const hasProjectsTable = await tableHasColumn(db, 'projects', 'id');
-  const hasProjectRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every(async (column) => await tableHasColumn(db, 'projects', column));
-  const hasWorkflowRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every(async (column) => await tableHasColumn(db, 'sprints', column));
+  // Array.prototype.every is SYNCHRONOUS. An async callback returns a Promise, which is
+  // always truthy, so `.every(async ...)` unconditionally returns true and the column check
+  // never actually runs. The columns must be resolved first, then reduced.
+  const REPO_COLUMNS = ['repo_path', 'repo_url', 'repo_access_mode'];
+  const hasProjectRepoColumns = (await Promise.all(
+    REPO_COLUMNS.map((column) => tableHasColumn(db, 'projects', column)),
+  )).every(Boolean);
+  const hasWorkflowRepoColumns = (await Promise.all(
+    REPO_COLUMNS.map((column) => tableHasColumn(db, 'sprints', column)),
+  )).every(Boolean);
   const hasScopedRoutingColumns = await tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
     && await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
   const hasRoutingTenantColumn = await tableHasColumn(db, 'sprint_task_routing_rules', 'tenant_id');

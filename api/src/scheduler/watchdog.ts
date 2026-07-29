@@ -169,9 +169,16 @@ async function recordWorktreePruneNotification(
 export async function runWorktreePrunePass(db: Db = getDb()): Promise<void> {
   const hasAgentTenantId = await tableHasColumn(db, 'agents', 'tenant_id');
   const hasAgentProjectId = await tableHasColumn(db, 'agents', 'project_id');
-  const hasProjectRepoColumns = hasAgentProjectId && ['repo_path', 'repo_url', 'repo_access_mode'].every(async (column) => await tableHasColumn(db, 'projects', column));
-  const hasWorkflowRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every(async (column) => await tableHasColumn(db, 'sprints', column));
-  const hasWorkflowRoutingColumns = ['agent_id', 'sprint_id', 'project_id', 'sprint_type'].every(async (column) => await tableHasColumn(db, 'sprint_task_routing_rules', column));
+  // All three were `.every(async ...)`, which is unconditionally true — every one of these
+  // capability flags reported "present" regardless of the actual schema.
+  const allColumnsPresent = async (table: string, columns: string[]): Promise<boolean> =>
+    (await Promise.all(columns.map((column) => tableHasColumn(db, table, column)))).every(Boolean);
+  const REPO_COLUMNS = ['repo_path', 'repo_url', 'repo_access_mode'];
+  const hasProjectRepoColumns = hasAgentProjectId && await allColumnsPresent('projects', REPO_COLUMNS);
+  const hasWorkflowRepoColumns = await allColumnsPresent('sprints', REPO_COLUMNS);
+  const hasWorkflowRoutingColumns = await allColumnsPresent(
+    'sprint_task_routing_rules', ['agent_id', 'sprint_id', 'project_id', 'sprint_type'],
+  );
   const hasProjectTenantId = hasAgentProjectId && await tableHasColumn(db, 'projects', 'tenant_id');
 
   const agents = await db.all(`

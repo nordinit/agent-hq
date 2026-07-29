@@ -567,10 +567,13 @@ async function buildWorkflowConfigSnapshot(db: ReturnType<typeof getDb>, tenantI
       ${project.sql}
     ORDER BY is_system DESC, name ASC, key ASC
   `, ...tenant.params, ...project.params) as SprintTypeRow[];
-  const visibleSprintTypes = sprintTypes.filter(async (sprintType) => {
+  // `.filter(async ...)` keeps EVERY element, so the system 'pm' type was always visible
+  // even with no workflows referencing it. The predicate is resolved first, then applied.
+  const visibility = await Promise.all(sprintTypes.map(async (sprintType) => {
     if (!(sprintType.key === 'pm' && sprintType.is_system === 1)) return true;
     return (await getSprintTypeDeletionSummary(db, sprintType.key, tenantId)).total_sprint_count > 0;
-  });
+  }));
+  const visibleSprintTypes = sprintTypes.filter((_, index) => visibility[index]);
 
   return {
     sprint_types: visibleSprintTypes.map(async (sprintType) => ({

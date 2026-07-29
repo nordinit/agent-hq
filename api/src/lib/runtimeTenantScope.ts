@@ -9,15 +9,18 @@ async function hasTenantId(db: Db, table: string): Promise<boolean> {
   return await tableExists(db, table) && await tableHasColumn(db, table, 'tenant_id');
 }
 
-function pushTenantSubquery(
+async function pushTenantSubquery(
   db: Db,
   conditions: string[],
   params: unknown[],
   sql: string,
   refs: string[],
   tenantId: number,
-): void {
-  if (!refs.every(async (table) => await hasTenantId(db, table))) return;
+): Promise<void> {
+  // `.every(async ...)` always returned true, so this guard never fired and the caller
+  // appended a tenant condition referencing columns that may not exist.
+  const tenantIdPresence = await Promise.all(refs.map((table) => hasTenantId(db, table)));
+  if (!tenantIdPresence.every(Boolean)) return;
   conditions.push(sql);
   params.push(tenantId);
 }

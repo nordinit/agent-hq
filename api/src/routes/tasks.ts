@@ -826,12 +826,17 @@ router.post('/backfill-release-integrity', async (_req: Request, res: Response) 
   try {
     const db = getDb();
     const tasks = await db.all('SELECT * FROM tasks') as Record<string, unknown>[];
-    const results = tasks.map(async task => ({
+    // Promise.all, not a bare map: `results` is also serialised into the response below,
+    // and an array of pending Promises serialises to an array of EMPTY OBJECTS — the
+    // endpoint was returning no integrity data at all.
+    const results = await Promise.all(tasks.map(async task => ({
       id: task.id,
       title: task.title,
       ...await evaluateTaskIntegrity(task as { status?: string | null; task_type?: string | null }, db),
-    }));
-    const flagged = results.filter(async task => (await task).integrity_state !== 'clean');
+    })));
+    // `.filter(async ...)` keeps EVERY element, because each callback returns a truthy
+    // Promise — `flagged` was reporting every task as flagged regardless of integrity_state.
+    const flagged = results.filter((task) => task.integrity_state !== 'clean');
     res.json({ ok: true, total: results.length, flagged: flagged.length, results, flagged_results: flagged });
   } catch (err) {
     res.status(500).json({ error: String(err) });
