@@ -1,4 +1,4 @@
-import { closeDb, getDb } from './client';
+import { closeDb, getDb, getRawDb } from './client';
 import { initSchema, ensureToolRegistryTables, provisionDefaultMcpRegistry, provisionDefaultToolRegistry } from './schema';
 
 function resetDb(): void {
@@ -203,7 +203,7 @@ describe('ensureToolRegistryTables', () => {
 
   it('repairs assignment tables left pointing at the stale legacy tools table', async () => {
     await createMinimalAgentsTable();
-    getDb().pragma('foreign_keys = OFF');
+    getRawDb().pragma('foreign_keys = OFF');
     await getDb().exec(`
       INSERT INTO agents (id, name) VALUES (1, 'Agent');
       CREATE TABLE tools (
@@ -234,7 +234,7 @@ describe('ensureToolRegistryTables', () => {
       INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (1, 10);
       DROP TABLE tools_legacy_capability_exec;
     `);
-    getDb().pragma('foreign_keys = ON');
+    getRawDb().pragma('foreign_keys = ON');
 
     expect(() => ensureToolRegistryTables()).not.toThrow();
 
@@ -390,7 +390,7 @@ describe('skills registry schema startup', () => {
       VALUES (?, 'shared-skill', 'tenant skill', '# tenant')
     `, otherTenantId)).not.toThrow();
 
-    getDb().pragma('foreign_keys = ON');
+    getRawDb().pragma('foreign_keys = ON');
     await getDb().run(`DELETE FROM tenants WHERE id = ?`, otherTenantId);
     expect(await getDb().all(`SELECT name FROM skills WHERE tenant_id = ?`, otherTenantId)).toEqual([]);
     expect(await getDb().all(`SELECT name FROM skills WHERE tenant_id = ?`, defaultTenantId)).toEqual([

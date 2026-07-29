@@ -604,7 +604,7 @@ async function buildDesiredServerConfig(
     db: Db;
     agentId: number;
     existingServer?: Record<string, unknown>;
-    resolveAgentApiKey?: (existingApiKey: string | null, name: string) => string;
+    resolveAgentApiKey?: (existingApiKey: string | null, name: string) => Promise<string>;
   },
 ): Promise<Record<string, unknown> | null> {
   if (!row.command || !row.command.trim()) return null;
@@ -640,7 +640,7 @@ async function buildDesiredServerConfig(
     const existingEnv = isRecord(params.existingServer?.env) ? params.existingServer?.env : {};
     const existingApiKey = readStringEnvValue(existingEnv, 'AGENT_HQ_MCP_API_KEY');
     const apiKey = params.resolveAgentApiKey
-      ? params.resolveAgentApiKey(existingApiKey, 'Agent HQ MCP materialized key')
+      ? await params.resolveAgentApiKey(existingApiKey, 'Agent HQ MCP materialized key')
       : (await ensureMaterializedMcpApiKeyForAgent({
                   db: params.db,
                   agentId: params.agentId,
@@ -693,19 +693,20 @@ export async function fetchAssignedMcpServers(
     return key.apiKey;
   };
 
-  return Object.fromEntries(
-    rows
-      .map(async (row) => {
-        const scopedName = openClawScopedMcpServerName(row.slug, agentId);
-        return [scopedName, await buildDesiredServerConfig(row, {
-                      db,
-                      agentId,
-                      existingServer: existingServers[scopedName] ?? existingServers[row.slug],
-                      resolveAgentApiKey,
-                    })] as const;
-      })
-      .filter((entry): entry is [string, Record<string, unknown>] => entry[1] !== null),
-  );
+  // Sequential on purpose: resolveAgentApiKey mutates sharedAgentApiKey and may mint
+  // an API key, so concurrent resolution could create duplicate keys per agent.
+  const entries: Array<[string, Record<string, unknown>]> = [];
+  for (const row of rows) {
+    const scopedName = openClawScopedMcpServerName(row.slug, agentId);
+    const config = await buildDesiredServerConfig(row, {
+      db,
+      agentId,
+      existingServer: existingServers[scopedName] ?? existingServers[row.slug],
+      resolveAgentApiKey,
+    });
+    if (config !== null) entries.push([scopedName, config]);
+  }
+  return Object.fromEntries(entries);
 }
 
 function scopeOpenClawMcpServerToCodexAgent(
@@ -1618,25 +1619,29 @@ export async function syncAssignedMcpForServer(params: {
     ORDER BY agent_id ASC
   `, params.mcpServerId) as Array<{ agent_id: number }>;
 
-  const results = agentIds.map(async ({ agent_id }) => await syncAssignedMcpForAgent({
+  // Sequential on purpose: each sync writes agent config files and may mint API keys.
+  const results: AgentMcpSyncResult[] = [];
+  for (const { agent_id } of agentIds) {
+    results.push(await syncAssignedMcpForAgent({
       db: params.db,
       agentId: agent_id,
       refreshPluginRegistry: false,
       materializeOpenClawGlobalConfig: params.materializeOpenClawGlobalConfig,
     }));
-  const successfulOpenClawMaterializations = results.filter(async result => (
-    (await result).runtimeType === 'openclaw'
+  }
+  const successfulOpenClawMaterializations = results.filter(result => (
+    result.runtimeType === 'openclaw'
     && params.materializeOpenClawGlobalConfig === true
-    && (await result).ok
-    && (await result).count > 0
-    && !(await result).skipped
+    && result.ok
+    && result.count > 0
+    && !result.skipped
   ));
 
   if (successfulOpenClawMaterializations.length > 0) {
     const refresh = params.refreshOpenClawPluginRegistry ?? refreshOpenClawPluginRegistry;
     const refreshResult = refresh({
       mcpServerId: params.mcpServerId,
-      materializedCount: successfulOpenClawMaterializations.reduce(async (sum, result) => sum + (await result).count, 0),
+      materializedCount: successfulOpenClawMaterializations.reduce((sum, result) => sum + result.count, 0),
     });
     if (!refreshResult.ok) {
       for (const result of successfulOpenClawMaterializations) {

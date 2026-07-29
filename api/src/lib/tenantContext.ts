@@ -4,8 +4,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
-  beginIntentionalForeignKeyDisable,
-  endIntentionalForeignKeyDisable,
   foreignKeysEnabled,
   withForeignKeysDisabled,
 } from '../db/foreignKeyGuard';
@@ -339,48 +337,34 @@ function rawConnectionFor(db: Db): Database.Database {
   return getRawDb();
 }
 
-/**
- * Async counterpart to withForeignKeysDisabled().
+/*
+ * WHY THE REBUILDS BELOW ARE SYNCHRONOUS
+ * --------------------------------------
+ * `PRAGMA foreign_keys` is per-connection and db/client.ts hands out ONE process-wide
+ * connection, so a disable window is a window for the WHOLE process, not just for the
+ * caller that opened it.
  *
- * withForeignKeysDisabled() restores the pragma in a SYNCHRONOUS finally block, so handing
- * it an async callback re-enables enforcement at the callback's first `await` — while the
- * rebuild is still running. Every rebuild in this module is async now, so they go through
- * here instead: enforcement stays off for the whole awaited body and the PRIOR pragma value
- * (never a hardcoded ON) is restored afterwards, including on throw.
+ * There must therefore be no `await` — of any kind — between the disable and the restore.
+ * Every SqliteAdapter method is async, so awaiting inside the window yields to the event
+ * loop and lets other in-flight request handlers resume THERE: their DELETEs run with
+ * foreign keys off, ON DELETE CASCADE silently does not fire, and orphan rows accumulate
+ * with nothing logged. Awaiting an already-resolved promise is enough to do it, so "the
+ * callback body contains no awaits" is not a sufficient guard either — the wrapper itself
+ * has to be synchronous. That is exactly the production defect this guard exists to
+ * prevent, and it is why there is no async counterpart to withForeignKeysDisabled().
  *
- * SQLite treats `PRAGMA foreign_keys` as a NO-OP inside a transaction, so this must wrap
- * withTransaction() rather than being called from inside it.
+ * So each rebuild does its work synchronously on rawConnectionFor(db) — raw.exec(),
+ * raw.prepare().run(), raw.transaction()() — inside the SYNCHRONOUS
+ * withForeignKeysDisabled() from db/foreignKeyGuard.ts. Any async introspection a rebuild
+ * needs (tableExists, columnExpression, …) is resolved BEFORE the window opens.
+ *
+ * All four sites are SQLite-only table rebuilds and are deleted with SQLite; the
+ * PostgreSQL path has no equivalent, because session-level foreign keys cannot be
+ * switched off there at all.
+ *
+ * SQLite treats `PRAGMA foreign_keys` as a NO-OP inside a transaction, so the window must
+ * stay OUTSIDE the transaction, never be opened from within one.
  */
-async function withForeignKeysDisabledAsync<T>(db: Db, fn: () => Promise<T>): Promise<T> {
-  const rawDb = rawConnectionFor(db);
-  const wasEnabled = foreignKeysEnabled(rawDb);
-  if (wasEnabled) {
-    rawDb.pragma('foreign_keys = OFF');
-    if (foreignKeysEnabled(rawDb)) {
-      console.error(
-        '[db] PRAGMA foreign_keys = OFF did not take effect' +
-        `${rawDb.inTransaction ? ' (called inside a transaction, where the pragma is a no-op)' : ''}` +
-        ' — the enclosed rebuild is running WITH foreign keys enforced.'
-      );
-    }
-  }
-  beginIntentionalForeignKeyDisable();
-  try {
-    return await fn();
-  } finally {
-    endIntentionalForeignKeyDisable();
-    if (wasEnabled) {
-      rawDb.pragma('foreign_keys = ON');
-      if (!foreignKeysEnabled(rawDb)) {
-        console.error(
-          '[db] FAILED to restore PRAGMA foreign_keys = ON' +
-          `${rawDb.inTransaction ? ' (still inside a transaction, where the pragma is a no-op)' : ''}` +
-          ' — foreign-key enforcement is OFF for this connection.'
-        );
-      }
-    }
-  }
-}
 
 async function tableExists(db: Db, table: string): Promise<boolean> {
   return Boolean((await db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`, table) as { name?: string } | undefined)?.name);
@@ -719,7 +703,9 @@ async function assertNoNullTenantOwnership(db: Db, table: string): Promise<void>
  * verifyStartupSchemaCurrent().
  */
 function assertForeignKeysStillEnforced(db: Db): void {
-  assertForeignKeyEnforcementEnabled(db, 'tenant ownership migrations', {
+  // The RAW connection, not the Db adapter: the check reads and restores PRAGMA
+  // foreign_keys, which the Db interface deliberately does not expose (SQLite-only).
+  assertForeignKeyEnforcementEnabled(rawConnectionFor(db), 'tenant ownership migrations', {
     throwOnViolation: false,
     restore: true,
   });
@@ -791,11 +777,37 @@ async function ensureMcpServersTenantLocalSlugSchema(db: Db, defaultTenantId: nu
   if (!hasGlobalSlugUnique && hasTenantSlugUnique) return;
   if (!await tableHasColumn(db, 'mcp_servers', 'id') || !await tableHasColumn(db, 'mcp_servers', 'slug') || !await tableHasColumn(db, 'mcp_servers', 'command')) return;
 
+  // Resolved BEFORE the disable window opens: every await here would otherwise hand the
+  // event loop to another request handler while foreign keys are off for the whole process.
+  const copyRowsSql = `
+    INSERT OR IGNORE INTO mcp_servers_tenant_local (
+      id, tenant_id, name, slug, description, transport, command, args, env, cwd, enabled, created_at, updated_at
+    )
+    SELECT
+      id,
+      COALESCE(tenant_id, ?),
+      ${await columnExpression(db, 'mcp_servers', 'name', 'slug')},
+      slug,
+      ${await columnExpression(db, 'mcp_servers', 'description', "''")},
+      CASE WHEN ${await columnExpression(db, 'mcp_servers', 'transport', "'stdio'")} = 'stdio' THEN 'stdio' ELSE 'stdio' END,
+      command,
+      ${await columnExpression(db, 'mcp_servers', 'args', "'[]'")},
+      ${await columnExpression(db, 'mcp_servers', 'env', "'{}'")},
+      ${await columnExpression(db, 'mcp_servers', 'cwd', 'NULL')},
+      ${await columnExpression(db, 'mcp_servers', 'enabled', '1')},
+      ${await columnExpression(db, 'mcp_servers', 'created_at', "datetime('now')")},
+      ${await columnExpression(db, 'mcp_servers', 'updated_at', "datetime('now')")}
+    FROM mcp_servers
+    ORDER BY id ASC
+  `;
+
+  // Synchronous on the raw connection: see "WHY THE REBUILDS BELOW ARE SYNCHRONOUS" above.
   // The pragma must be toggled outside the transaction: inside one it is a no-op.
-  await withForeignKeysDisabledAsync(db, async () => {
-    await db.withTransaction(async (db) => {
-      await db.exec(`DROP TABLE IF EXISTS mcp_servers_tenant_local`);
-      await db.exec(`
+  const raw = rawConnectionFor(db);
+  withForeignKeysDisabled(raw, () => {
+    raw.transaction(() => {
+      raw.exec(`DROP TABLE IF EXISTS mcp_servers_tenant_local`);
+      raw.exec(`
       CREATE TABLE mcp_servers_tenant_local (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant_id     INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -813,36 +825,16 @@ async function ensureMcpServersTenantLocalSlugSchema(db: Db, defaultTenantId: nu
         UNIQUE(tenant_id, slug)
       )
     `);
-      await db.run(`
-      INSERT OR IGNORE INTO mcp_servers_tenant_local (
-        id, tenant_id, name, slug, description, transport, command, args, env, cwd, enabled, created_at, updated_at
-      )
-      SELECT
-        id,
-        COALESCE(tenant_id, ?),
-        ${await columnExpression(db, 'mcp_servers', 'name', 'slug')},
-        slug,
-        ${await columnExpression(db, 'mcp_servers', 'description', "''")},
-        CASE WHEN ${await columnExpression(db, 'mcp_servers', 'transport', "'stdio'")} = 'stdio' THEN 'stdio' ELSE 'stdio' END,
-        command,
-        ${await columnExpression(db, 'mcp_servers', 'args', "'[]'")},
-        ${await columnExpression(db, 'mcp_servers', 'env', "'{}'")},
-        ${await columnExpression(db, 'mcp_servers', 'cwd', 'NULL')},
-        ${await columnExpression(db, 'mcp_servers', 'enabled', '1')},
-        ${await columnExpression(db, 'mcp_servers', 'created_at', "datetime('now')")},
-        ${await columnExpression(db, 'mcp_servers', 'updated_at', "datetime('now')")}
-      FROM mcp_servers
-      ORDER BY id ASC
-    `, defaultTenantId);
-      await db.exec(`DROP TABLE mcp_servers`);
-      await db.exec(`ALTER TABLE mcp_servers_tenant_local RENAME TO mcp_servers`);
-      await db.exec(`
+      raw.prepare(copyRowsSql).run(defaultTenantId);
+      raw.exec(`DROP TABLE mcp_servers`);
+      raw.exec(`ALTER TABLE mcp_servers_tenant_local RENAME TO mcp_servers`);
+      raw.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_tenant_slug ON mcp_servers(tenant_id, slug);
       CREATE INDEX IF NOT EXISTS idx_mcp_servers_tenant ON mcp_servers(tenant_id);
       CREATE INDEX IF NOT EXISTS idx_mcp_servers_slug ON mcp_servers(slug);
       CREATE INDEX IF NOT EXISTS idx_mcp_servers_enabled ON mcp_servers(enabled);
     `);
-    });
+    })();
   });
 }
 
@@ -861,16 +853,20 @@ async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: num
   const inferredTenantExpr = await tableExists(db, 'sprints') && await tableHasColumn(db, 'sprints', 'tenant_id')
     ? `(SELECT s.tenant_id FROM sprints s WHERE s.sprint_type = sprint_types.key AND s.tenant_id IS NOT NULL ORDER BY s.tenant_id ASC LIMIT 1)`
     : 'NULL';
+  const raw = rawConnectionFor(db);
   if (hasTenantId && !(primaryKeyColumns.length === 1 && primaryKeyColumns[0] === 'key')) {
     // This is the steady-state path: it runs on every ensureTenantSchema() call, which
-    // means on every request. It must never leave enforcement disabled behind it.
-    await withForeignKeysDisabledAsync(db, async () => {
-      await db.run(`
+    // means on every request. It must never leave enforcement disabled behind it, and it
+    // must not yield to the event loop while the window is open — the pragma is per
+    // connection and the connection is shared by every concurrent handler. Hence raw and
+    // synchronous.
+    withForeignKeysDisabled(raw, () => {
+      raw.prepare(`
         UPDATE sprint_types
         SET tenant_id = COALESCE(${inferredTenantExpr}, ?)
         WHERE tenant_id IS NULL
-      `, defaultTenantId);
-      await db.exec(`
+      `).run(defaultTenantId);
+      raw.exec(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key);
         CREATE INDEX IF NOT EXISTS idx_sprint_types_system ON sprint_types(is_system);
       `);
@@ -878,15 +874,34 @@ async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: num
     return;
   }
 
+  // Resolved BEFORE the disable window opens; sprint_types is untouched until the rebuild
+  // starts, so its column set is the same inside the window.
+  const columns = new Set((await db.all(`PRAGMA table_info(sprint_types)`) as Array<{ name: string }>).map((column) => column.name));
+  const copyRowsSql = `
+    INSERT OR IGNORE INTO sprint_types_tenant_local (
+      tenant_id, key, name, description, is_system, status_seeded_at, created_at, updated_at
+    )
+    SELECT
+      COALESCE(${columns.has('tenant_id') ? 'tenant_id' : 'NULL'}, ${inferredTenantExpr}, ?),
+      key,
+      name,
+      COALESCE(${columns.has('description') ? 'description' : "''"}, ''),
+      COALESCE(${columns.has('is_system') ? 'is_system' : '1'}, 1),
+      ${columns.has('status_seeded_at') ? 'status_seeded_at' : 'NULL'},
+      COALESCE(${columns.has('created_at') ? 'created_at' : 'NULL'}, datetime('now')),
+      COALESCE(${columns.has('updated_at') ? 'updated_at' : 'NULL'}, datetime('now'))
+    FROM sprint_types
+  `;
+
   // Legacy routing tables could still contain single-column REFERENCES sprint_types(key)
   // while the tenant-local parent key is (tenant_id, key), so FK checks stay off for the
   // rebuild and the trailing compatibility DDL. Those legacy references are stripped by
   // initSchema's rebuildWithoutSprintTypeKeyForeignKey pass; enforcement is restored to
   // its prior state here regardless, because this connection is process-wide. The pragma
-  // toggle stays outside withTransaction(): inside a transaction it is a no-op.
-  await withForeignKeysDisabledAsync(db, async () => {
-    await db.withTransaction(async (db) => {
-      await db.exec(`
+  // toggle stays outside the transaction: inside one it is a no-op.
+  withForeignKeysDisabled(raw, () => {
+    raw.transaction(() => {
+      raw.exec(`
       CREATE TABLE sprint_types_tenant_local (
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant_id        INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id) ON DELETE CASCADE,
@@ -900,30 +915,11 @@ async function rebuildSprintTypesForTenantLocalKeys(db: Db, defaultTenantId: num
         UNIQUE(tenant_id, key)
       );
     `);
-      const columns = new Set((await db.all(`PRAGMA table_info(sprint_types)`) as Array<{ name: string }>).map((column) => column.name));
-      await db.run(`
-      INSERT OR IGNORE INTO sprint_types_tenant_local (
-        tenant_id, key, name, description, is_system, status_seeded_at, created_at, updated_at
-      )
-      SELECT
-        COALESCE(${columns.has('tenant_id') ? 'tenant_id' : 'NULL'}, ${
-                await tableExists(db, 'sprints') && await tableHasColumn(db, 'sprints', 'tenant_id')
-                  ? '(SELECT s.tenant_id FROM sprints s WHERE s.sprint_type = sprint_types.key AND s.tenant_id IS NOT NULL ORDER BY s.tenant_id ASC LIMIT 1)'
-                  : 'NULL'
-              }, ?),
-        key,
-        name,
-        COALESCE(${columns.has('description') ? 'description' : "''"}, ''),
-        COALESCE(${columns.has('is_system') ? 'is_system' : '1'}, 1),
-        ${columns.has('status_seeded_at') ? 'status_seeded_at' : 'NULL'},
-        COALESCE(${columns.has('created_at') ? 'created_at' : 'NULL'}, datetime('now')),
-        COALESCE(${columns.has('updated_at') ? 'updated_at' : 'NULL'}, datetime('now'))
-      FROM sprint_types
-    `, defaultTenantId);
-      await db.exec(`DROP TABLE sprint_types`);
-      await db.exec(`ALTER TABLE sprint_types_tenant_local RENAME TO sprint_types`);
-    });
-    await db.exec(`
+      raw.prepare(copyRowsSql).run(defaultTenantId);
+      raw.exec(`DROP TABLE sprint_types`);
+      raw.exec(`ALTER TABLE sprint_types_tenant_local RENAME TO sprint_types`);
+    })();
+    raw.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_types_tenant_key ON sprint_types(tenant_id, key);
       CREATE INDEX IF NOT EXISTS idx_sprint_types_system ON sprint_types(is_system);
     `);
@@ -1053,24 +1049,27 @@ async function migrateWorkflowConfigTable(db: Db, table: string, defaultTenantId
   const oldTable = `${table}_legacy_global`;
   // Previously this restored 'OFF' instead of the prior value — a copy-paste bug that
   // disabled enforcement for the rest of the process lifetime. The pragma toggle stays
-  // outside withTransaction(): inside a transaction it is a no-op.
-  await withForeignKeysDisabledAsync(db, async () => {
-    await db.withTransaction(async (db) => {
-      await db.exec(`ALTER TABLE ${table} RENAME TO ${oldTable}`);
-      await db.exec(`CREATE TABLE ${table} (${definition})`);
-      const nextColumns = (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).map((column) => column.name).filter((column) => column !== 'id');
+  // outside the transaction: inside one it is a no-op. The body is synchronous on the raw
+  // connection so no other handler can resume inside the window — the pragma is
+  // per-connection and the connection is process-wide.
+  const raw = rawConnectionFor(db);
+  withForeignKeysDisabled(raw, () => {
+    raw.transaction(() => {
+      raw.exec(`ALTER TABLE ${table} RENAME TO ${oldTable}`);
+      raw.exec(`CREATE TABLE ${table} (${definition})`);
+      const nextColumns = (raw.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name).filter((column) => column !== 'id');
       const selectExpr = nextColumns.map((column) => {
         if (column === 'tenant_id') return `COALESCE(${hasTenantId ? 'legacy.tenant_id,' : ''} st.tenant_id, ?) AS tenant_id`;
         return columns.has(column) ? `legacy.${column}` : `NULL AS ${column}`;
       }).join(', ');
-      await db.run(`
+      raw.prepare(`
         INSERT OR IGNORE INTO ${table} (${nextColumns.join(', ')})
         SELECT ${selectExpr}
         FROM ${oldTable} legacy
         LEFT JOIN sprint_types st ON st.key = legacy.sprint_type_key
-      `, defaultTenantId);
-      await db.exec(`DROP TABLE ${oldTable}`);
-    });
+      `).run(defaultTenantId);
+      raw.exec(`DROP TABLE ${oldTable}`);
+    })();
   });
 }
 

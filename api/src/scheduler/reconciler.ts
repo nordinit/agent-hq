@@ -158,8 +158,8 @@ interface DispatchDeps {
 }
 
 export interface ReconcilerDeps extends DispatchDeps {
-  runEligibilityPass: (db: Db, projectId?: number) => EligibilityResult;
-  runDispatcher: (db: Db, projectId?: number) => DispatchResult;
+  runEligibilityPass: (db: Db, projectId?: number) => Promise<EligibilityResult>;
+  runDispatcher: (db: Db, projectId?: number) => Promise<DispatchResult>;
 }
 
 export interface ReconcilerTickSummary {
@@ -782,8 +782,8 @@ export async function runReconcilerTick(
 
   for (const projectId of projectIds) {
     try {
-      const eligibility = deps.runEligibilityPass(db, projectId);
-      const dispatch = deps.runDispatcher(db, projectId);
+      const eligibility = await deps.runEligibilityPass(db, projectId);
+      const dispatch = await deps.runDispatcher(db, projectId);
 
       summary.promoted += eligibility.promoted;
       summary.blocked += eligibility.blocked;
@@ -806,7 +806,7 @@ export async function runReconcilerTick(
   }
 
   await withReconcilerTimeout(
-    await reconcileReviewQaRouting({ dispatchInstance: deps.dispatchInstance }, db),
+    reconcileReviewQaRouting({ dispatchInstance: deps.dispatchInstance }, db),
     RECONCILER_OPERATION_TIMEOUT_MS,
     `review/QA routing projects=${projectIds.join(',') || 'none'}`,
   );
@@ -818,7 +818,7 @@ export async function runReconcilerTick(
   // Uses the async token-backfill path so reconciler ticks do not block the Node.js event loop.
   try {
     await withReconcilerTimeout(
-      await backfillInstanceTokensAsync(db),
+      backfillInstanceTokensAsync(db),
       RECONCILER_OPERATION_TIMEOUT_MS,
       `token backfill projects=${projectIds.join(',') || 'none'}`,
     );

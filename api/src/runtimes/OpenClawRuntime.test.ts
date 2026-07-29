@@ -86,7 +86,10 @@ function normalizeSql(sql: string): string {
 }
 
 describe('OpenClawRuntime terminal failure handling', () => {
-  let db: Pick<Db, 'prepare'>;
+  let db: Db;
+  // Hoisted so the test bodies can assert against the same mocked statements the
+  // adapter mock reads from; it is rebuilt per test in beforeEach.
+  let statements: Map<string, { get?: jest.Mock; all?: jest.Mock; run?: jest.Mock }>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -213,27 +216,41 @@ describe('OpenClawRuntime terminal failure handling', () => {
       ],
     ];
 
-    const statements = new Map(statementEntries.map(([sql, stmt]) => [normalizeSql(sql), stmt]));
+    statements = new Map(statementEntries.map(([sql, stmt]) => [normalizeSql(sql), stmt])) as typeof statements;
+
+    // The mock now presents the Db ADAPTER shape — db.get(sql, ...) / db.all(sql, ...) —
+    // rather than better-sqlite3's prepare(sql).get(). The statements map stays the source
+    // of truth for what each query returns; only the calling convention changed.
+    const lookup = (sql: string) => {
+      const stmt = statements.get(normalizeSql(sql));
+      if (!stmt) throw new Error(`Unexpected SQL: ${sql}`);
+      return stmt as { get?: jest.Mock; all?: jest.Mock; run?: jest.Mock };
+    };
 
     db = {
-      prepare: jest.fn((sql: string) => {
-        const stmt = statements.get(normalizeSql(sql));
-        if (!stmt) throw new Error(`Unexpected SQL: ${sql}`);
-        return stmt;
-      }),
-    } as unknown as Pick<Db, 'prepare'>;
+      dialect: 'sqlite',
+      inTransaction: false,
+      get: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).get?.(...params)),
+      all: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).all?.(...params) ?? []),
+      value: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).get?.(...params)),
+      run: jest.fn(async (sql: string, ...params: unknown[]) =>
+        lookup(sql).run?.(...params) ?? { changes: 0, lastInsertId: null }),
+      exec: jest.fn(async () => undefined),
+      withTransaction: jest.fn(async (fn: (tx: Db) => Promise<unknown>) => fn(db)),
+      close: jest.fn(async () => undefined),
+    } as unknown as Db;
 
     const { getDb } = jest.requireMock('../db/client') as { getDb: jest.Mock };
     getDb.mockReturnValue(db);
 
-    (db.prepare(`
+    (statements.get(normalizeSql(`
     SELECT content
     FROM chat_messages
     WHERE instance_id = ?
       AND role = 'assistant'
     ORDER BY timestamp DESC
     LIMIT 8
-  `) as unknown as { all: jest.Mock }).all.mockReturnValue([]);
+  `)) as unknown as { all: jest.Mock }).all.mockReturnValue([]);
   });
 
   it('quarantines missing lifecycle handoff after runtime success on lifecycle-managed workflow states', async () => {
@@ -295,7 +312,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
       },
     });
 
-    const runtimeStateUpdate = db.prepare(`
+    const runtimeStateUpdate = statements.get(normalizeSql(`
         UPDATE job_instances
         SET status = ?,
             started_at = COALESCE(started_at, ?),
@@ -310,7 +327,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
         WHERE id = ?
           AND status IN ('running', 'dispatched')
           AND runtime_ended_at IS NULL
-      `) as unknown as { run: jest.Mock };
+      `)) as unknown as { run: jest.Mock };
     expect(runtimeStateUpdate.run).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
@@ -329,14 +346,14 @@ describe('OpenClawRuntime terminal failure handling', () => {
   it('posts a failed task outcome when provider-limit failure is detected behind a successful terminal event', async () => {
     const { taskRequiresSemanticOutcome } = jest.requireMock('../domains/runs/lifecycleHandoff') as { taskRequiresSemanticOutcome: jest.Mock };
     taskRequiresSemanticOutcome.mockReturnValue(false);
-    (db.prepare(`
+    (statements.get(normalizeSql(`
     SELECT content
     FROM chat_messages
     WHERE instance_id = ?
       AND role = 'assistant'
     ORDER BY timestamp DESC
     LIMIT 8
-  `) as unknown as { all: jest.Mock }).all.mockReturnValue([
+  `)) as unknown as { all: jest.Mock }).all.mockReturnValue([
       { content: 'Agent failed before reply: provider rate limit exceeded (429 too many requests)' },
     ]);
 
@@ -423,11 +440,11 @@ describe('OpenClawRuntime terminal failure handling', () => {
       instanceId: 1757,
       runtimeEndError: "The model 'gpt-image-2' does not exist.",
     }));
-    const responseUpdate = db.prepare(`
+    const responseUpdate = statements.get(normalizeSql(`
         UPDATE job_instances
         SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
         WHERE id = ?
-      `) as unknown as { run: jest.Mock };
+      `)) as unknown as { run: jest.Mock };
     expect(JSON.parse(responseUpdate.run.mock.calls[0][0])).toMatchObject({
       success: false,
       error: "The model 'gpt-image-2' does not exist.",

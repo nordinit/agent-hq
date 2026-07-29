@@ -137,7 +137,7 @@ async function tableHasColumn(db: Db, table: string, column: string): Promise<bo
   return (await db.all(`PRAGMA table_info(${table})`) as Array<{ name: string }>).some(col => col.name === column);
 }
 
-function selectTaskEvidenceColumns(db: Db): string {
+async function selectTaskEvidenceColumns(db: Db): Promise<string> {
   const lifecycleColumns = [
     'review_branch',
     'review_commit',
@@ -157,7 +157,9 @@ function selectTaskEvidenceColumns(db: Db): string {
   ];
   return [
     ...lifecycleColumns.map((column) => `NULL AS ${column}`),
-    ...compatibilityColumns.map(async (column) => (await tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`)),
+    ...await Promise.all(
+      compatibilityColumns.map(async (column) => (await tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`)),
+    ),
   ]
     .join(',\n      ');
 }
@@ -298,7 +300,7 @@ async function resolveOutcomeAuthority(
 async function reloadTaskOutcomeTaskRow(db: Db, taskId: number): Promise<TaskOutcomeTaskRow> {
   const customFieldsSelect = await tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
   const assignedAgentSelect = await tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id' : 'agent_id AS assigned_agent_id';
-  const evidenceSelect = selectTaskEvidenceColumns(db);
+  const evidenceSelect = await selectTaskEvidenceColumns(db);
   const reloaded = await db.get(`
     SELECT
       id,
@@ -347,7 +349,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
   const customFieldsSelect = await tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
   const hasAssignedAgentColumn = await tableHasColumn(db, 'tasks', 'assigned_agent_id');
   const assignedAgentSelect = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id AS assigned_agent_id';
-  const evidenceSelect = selectTaskEvidenceColumns(db);
+  const evidenceSelect = await selectTaskEvidenceColumns(db);
   const existing = await db.get(`
     SELECT
       id,
@@ -439,7 +441,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
   let routingOutcome = effectiveOutcome;
   const isUnsuccessfulOutcome = outcomeSemantics.failureLike || outcomeSemantics.blockedLike;
 
-  let sprintWorkflowRoute: ReturnType<typeof resolveSprintWorkflowOutcome> = null;
+  let sprintWorkflowRoute: Awaited<ReturnType<typeof resolveSprintWorkflowOutcome>> = null;
   try {
     sprintWorkflowRoute = await resolveSprintWorkflowOutcome(db, {
           status: routingBaseStatus,
@@ -448,7 +450,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
           sprint_type: reloadedExisting.sprint_type,
         }, routingOutcome);
   } catch (error) {
-    let fallbackRoute: ReturnType<typeof resolveSprintWorkflowOutcome> = null;
+    let fallbackRoute: Awaited<ReturnType<typeof resolveSprintWorkflowOutcome>> = null;
     for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
       try {
         fallbackRoute = await resolveSprintWorkflowOutcome(db, {

@@ -5,5 +5,5 @@ import { type Db } from "./adapter/types";
 
 export async function bootstrapRoutingAndWorkflowDefaults(db: Db = getDb()): Promise<void> {
   await ensureRoutingMetadata(db);
-  seedDefaultWorkflowEventMappings(db);
+  await seedDefaultWorkflowEventMappings(db);
 }

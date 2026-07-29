@@ -275,8 +275,8 @@ export class HermesRuntime implements AgentRuntime {
     const transcriptConfig = { ...mergedConfig, hermesHome: hermesProfileHome };
 
     const db = params.db ?? null;
-    const agentId = this.materializeMcpConfigForRun(db, params.instanceId ?? null, cwd, hermesProfileHome);
-    this.persistUserPrompt(db, params.instanceId ?? null, prompt);
+    const agentId = await this.materializeMcpConfigForRun(db, params.instanceId ?? null, cwd, hermesProfileHome);
+    await this.persistUserPrompt(db, params.instanceId ?? null, prompt);
 
     const command = this.buildCommandArgs(mergedConfig, hermesPrompt);
     const env = {
@@ -336,7 +336,7 @@ export class HermesRuntime implements AgentRuntime {
 
     if (params.instanceId != null) {
       this.activeRuns.set(params.instanceId, processState);
-      await db.run("UPDATE job_instances SET run_id = ? WHERE id = ?", runId, params.instanceId);
+      await db?.run("UPDATE job_instances SET run_id = ? WHERE id = ?", runId, params.instanceId);
       if (db && agentId != null) {
         processState.transcriptPoller = this.startTranscriptPoller({
           db,
@@ -610,7 +610,7 @@ export class HermesRuntime implements AgentRuntime {
     hermesProfileHome: string,
   ): Promise<number | null> {
     if (!db || instanceId == null) return null;
-    const agentId = this.lookupAgentId(db, instanceId);
+    const agentId = await this.lookupAgentId(db, instanceId);
     if (agentId == null) return null;
 
     const targets = Array.from(new Set([cwd, hermesProfileHome].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
@@ -668,7 +668,7 @@ export class HermesRuntime implements AgentRuntime {
     },
   ): Promise<void> {
     if (!db || instanceId == null) return;
-    const agentId = identity.agentId ?? this.lookupAgentId(db, instanceId);
+    const agentId = identity.agentId ?? await this.lookupAgentId(db, instanceId);
     if (agentId == null) return;
     try {
       await ingestHermesTranscriptForRun({
@@ -705,7 +705,7 @@ export class HermesRuntime implements AgentRuntime {
     prompt: string,
   ): Promise<void> {
     if (!db || instanceId == null) return;
-    const agentId = this.lookupAgentId(db, instanceId);
+    const agentId = await this.lookupAgentId(db, instanceId);
     if (agentId == null) return;
 
     await db.run(`
@@ -720,7 +720,7 @@ export class HermesRuntime implements AgentRuntime {
     content: string,
   ): Promise<void> {
     if (!db || instanceId == null || !content) return;
-    const agentId = this.lookupAgentId(db, instanceId);
+    const agentId = await this.lookupAgentId(db, instanceId);
     if (agentId == null) return;
 
     await db.run(`

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { SqliteAdapter } from '../db/adapter/SqliteAdapter';
 import express from 'express';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
@@ -136,7 +137,7 @@ async function setupDb(): Promise<void> {
 
 describe('GET /api/v1/sessions/:id/messages active live sync', () => {
   beforeEach(async () => {
-    db = new Database(':memory:');
+    db = new SqliteAdapter(new Database(':memory:'));
     await setupDb();
   });
 
@@ -194,7 +195,7 @@ describe('GET /api/v1/sessions/:id/messages active live sync', () => {
 
 describe('POST /api/v1/sessions/import/instance/:instanceId completed reimport', () => {
   beforeEach(async () => {
-    db = new Database(':memory:');
+    db = new SqliteAdapter(new Database(':memory:'));
     await setupDb();
   });
 

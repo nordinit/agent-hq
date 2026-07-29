@@ -75,7 +75,7 @@ export async function resolveModelFromStoryPoints(
     const params: unknown[] = [story_points, provider];
     const orderParams: unknown[] = [];
     let scopeOrderCase = '';
-    const hasSprintTypeRoutingScope = (async () => {
+    const hasSprintTypeRoutingScope = await (async () => {
       try {
         return (await db.all(`PRAGMA table_info(story_point_model_routing)`) as Array<{ name: string }>).some((column) => column.name === 'sprint_type');
       } catch {

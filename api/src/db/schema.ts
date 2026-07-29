@@ -1029,7 +1029,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     console.log('[schema] Migrated: added assigned_agent_id to tasks and backfilled from agent_id');
   } catch (_) { /* column already exists */ }
   try {
-    db.exec(new SqliteAdapter(`UPDATE tasks SET assigned_agent_id = agent_id WHERE assigned_agent_id IS NULL`));
+    db.exec(`UPDATE tasks SET assigned_agent_id = agent_id WHERE assigned_agent_id IS NULL`);
     await syncAllTaskActiveAgentsFromInstances(new SqliteAdapter(db));
     db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_agent ON tasks(assigned_agent_id)`);
   } catch (_) { /* minimal schema or transient migration ordering */ }
@@ -1466,12 +1466,13 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     : '';
 
   ensureColumn('sprint_types', 'repo_required', `repo_required INTEGER NOT NULL DEFAULT 0`);
+  const sprintTypesTenantPredicate = await workflowConfigTenantPredicate('sprint_types');
   const syncStarterRepoRequirement = db.prepare(`
     UPDATE sprint_types
     SET repo_required = ?, updated_at = datetime('now')
     WHERE key = ?
       AND COALESCE(is_system, 0) = 1
-      ${workflowConfigTenantPredicate('sprint_types')}
+      ${sprintTypesTenantPredicate}
   `);
   for (const sprintType of STARTER_SPRINT_TYPE_SEEDS) {
     syncStarterRepoRequirement.run(sprintType.repoRequired ? 1 : 0, sprintType.key);
@@ -1481,7 +1482,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     UPDATE sprint_types
     SET name = ?, description = ?, repo_required = ?, is_system = 1, updated_at = datetime('now')
     WHERE key = ?
-      ${workflowConfigTenantPredicate('sprint_types')}
+      ${sprintTypesTenantPredicate}
   `);
   const insertStarterSprintType = db.prepare(sprintTypesHasTenantId
     ? `
@@ -1499,11 +1500,12 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     }
   };
 
+  const taskFieldSchemasTenantPredicate = await workflowConfigTenantPredicate('task_field_schemas');
   const updateBaseFieldSchema = db.prepare(`
     UPDATE task_field_schemas
     SET schema_json = ?, is_system = 1, updated_at = datetime('now')
     WHERE sprint_type_key = ? AND task_type IS NULL
-      ${workflowConfigTenantPredicate('task_field_schemas')}
+      ${taskFieldSchemasTenantPredicate}
   `);
   const insertBaseFieldSchema = db.prepare(taskFieldSchemasHasTenantId
     ? `
@@ -1522,11 +1524,12 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   };
 
   const sprintTypeTaskTypesHasTenantId = await tableHasColumn(new SqliteAdapter(db), 'sprint_type_task_types', 'tenant_id');
+  const sprintTypeTaskTypesTenantPredicate = await workflowConfigTenantPredicate('sprint_type_task_types');
   const updateSprintTypeTaskType = db.prepare(`
     UPDATE sprint_type_task_types
     SET is_system = 1, updated_at = datetime('now')
     WHERE sprint_type_key = ? AND task_type = ?
-      ${workflowConfigTenantPredicate('sprint_type_task_types')}
+      ${sprintTypeTaskTypesTenantPredicate}
   `);
   const insertSprintTypeTaskType = db.prepare(sprintTypeTaskTypesHasTenantId
     ? `
@@ -1545,13 +1548,14 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   };
 
   const sprintTypeOutcomesHasTenantId = await tableHasColumn(new SqliteAdapter(db), 'sprint_type_outcomes', 'tenant_id');
+  const sprintTypeOutcomesTenantPredicate = await workflowConfigTenantPredicate('sprint_type_outcomes');
   const updateSprintOutcome = db.prepare(`
     UPDATE sprint_type_outcomes
     SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
     WHERE sprint_type_key = ?
       AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
       AND outcome_key = ?
-      ${workflowConfigTenantPredicate('sprint_type_outcomes')}
+      ${sprintTypeOutcomesTenantPredicate}
   `);
   const insertSprintOutcome = db.prepare(sprintTypeOutcomesHasTenantId
     ? `
@@ -2669,7 +2673,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     `);
     console.log('[schema] Migrated: sprint_task_routing_rules.sprint_id now allows NULL for sprint-type defaults');
   }
-  db.exec(new SqliteAdapter(`
+  db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sprint_task_routing_rules_candidate_unique
       ON sprint_task_routing_rules(
         project_id,
@@ -2681,7 +2685,7 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
         priority
       )
       WHERE project_id IS NOT NULL AND sprint_type IS NOT NULL;
-  `));
+  `);
   await normalizeSprintTaskRoutingRuleTaskTypes(new SqliteAdapter(db));
   db.exec(`
     UPDATE sprints

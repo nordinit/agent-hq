@@ -396,7 +396,7 @@ export async function resolveEvidenceRequirements(options: {
   sprintId?: number | null;
   outcomes?: string[];
   suggestedOutcome?: string | null;
-}): EvidenceRequirements {
+}): Promise<EvidenceRequirements> {
   const outcomes = Array.from(new Set([
     ...(options.outcomes ?? []),
     options.suggestedOutcome ?? '',
@@ -410,25 +410,26 @@ export async function resolveEvidenceRequirements(options: {
     };
   }
 
-  const requirements = outcomes.flatMap(async (outcome) => await loadConfiguredGateRequirements(
+  const requirementGroups = await Promise.all(outcomes.map((outcome) => loadConfiguredGateRequirements(
       options.db as Db,
       outcome,
       options.sprintId ?? null,
       options.taskType ?? null,
-    ));
+    )));
+  const requirements = requirementGroups.flat();
 
-  const blockingRequirements = requirements.filter(async (requirement) => (await requirement).severity !== 'warn');
+  const blockingRequirements = requirements.filter((requirement) => requirement.severity !== 'warn');
   const fieldExpressions = new Set<string>();
   const fieldNames = new Set<string>();
 
   for (const requirement of blockingRequirements) {
-    if ((await requirement).requirement_type === 'from_status') continue;
-    if ((await requirement).requirement_type !== 'required' && (await requirement).requirement_type !== 'match') continue;
+    if (requirement.requirement_type === 'from_status') continue;
+    if (requirement.requirement_type !== 'required' && requirement.requirement_type !== 'match') continue;
 
-    const fields = parseFieldExpression((await requirement).field_name).filter((field) => !NON_EVIDENCE_FIELDS.has(field));
+    const fields = parseFieldExpression(requirement.field_name).filter((field) => !NON_EVIDENCE_FIELDS.has(field));
     if (fields.length === 0) continue;
 
-    fieldExpressions.add(formatFieldExpression((await requirement).field_name));
+    fieldExpressions.add(formatFieldExpression(requirement.field_name));
     for (const field of fields) fieldNames.add(field);
   }
 
