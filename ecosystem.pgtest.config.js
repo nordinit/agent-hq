@@ -5,11 +5,15 @@
  * that do not collide with anything already running (production is 3501/3500; the dev
  * instances occupy 3510/3511 and 3520/3521).
  *
- * Deliberately isolated from production in three separate ways, because any one of them
+ * Deliberately isolated from production in four separate ways, because any one of them
  * failing alone would be enough to touch live data:
  *   - a different DATABASE (PostgreSQL, not ~/.agent-hq/agent-hq.db)
  *   - different PORTS
  *   - different PM2 PROCESS NAMES, so `pm2 restart agent-hq-api` can never hit these
+ *   - AGENT_HQ_INTERNAL_BASE_URL, so agents dispatched here report back HERE and not to prod
+ *
+ * That fourth one was learned the hard way and is the least obvious: the first three are all
+ * inbound, and none of them constrains where a dispatched agent sends its own MCP calls.
  *
  * AGENT_HQ_DB_PATH is deliberately NOT set. db/client.ts selects PostgreSQL purely on
  * DATABASE_URL being present, and leaving the SQLite path unset means a misconfiguration
@@ -54,6 +58,14 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: apiPort,
         DATABASE_URL: databaseUrl,
+        // The FOURTH isolation boundary, and the one that was missing. Every MCP bundle handed to a
+        // dispatched agent carries an Agent HQ API address, and that address was a hardcoded 3501 —
+        // so agents dispatched by THIS instance called PRODUCTION's API, asking it about instance
+        // ids that exist only in the test database. Production refused the writes, but the runs
+        // died at MCP readiness and each attempt still appended a refusal audit row to a production
+        // task. A separate database, ports and process names are not isolation on their own while
+        // the agents are told to phone home to prod.
+        AGENT_HQ_INTERNAL_BASE_URL: `http://127.0.0.1:${apiPort}`,
         // Workspaces are scoped to this instance so a test run cannot reuse or reclaim a
         // workspace directory that the production instance is actively using.
         WORKSPACE_PARENT: path.join(repoRoot, '.pgtest-workspaces'),
