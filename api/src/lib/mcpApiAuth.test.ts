@@ -346,6 +346,32 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     };
   }
 
+  it('refuses lifecycle writes once the instance has reached a terminal status', async () => {
+    // The other half of the contract: a finished run must not still accept lifecycle callbacks.
+    // Cleared as the task's active instance too, since that alone would keep it in scope.
+    await getDb().run(`UPDATE job_instances SET status = 'done' WHERE id = 2551`);
+    await getDb().run(`UPDATE tasks SET active_instance_id = NULL WHERE id = 448`);
+    const res = await fetch(`${baseUrl}/api/v1/instances/2551/start`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ session_key: 'run:2551' }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json() as { code?: string }).code).toBe('mcp_scope_denied');
+  });
+
+  it('distinguishes a wrong-method lifecycle call from an out-of-scope one', async () => {
+    // These two failures used to share one reason string, which made a production denial
+    // impossible to attribute. check-in is POST, so PUT must fail on the method, not the scope.
+    const res = await fetch(`${baseUrl}/api/v1/instances/2551/check-in`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ note: 'progress' }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json() as { error?: string }).error).toMatch(/not the correct method/i);
+  });
+
   it('allows scoped lifecycle writes and context reads for the active dispatched task', async () => {
     const taskRes = await fetch(`${baseUrl}/api/v1/tasks/448`, { headers: authHeaders(normalKey) });
     expect(taskRes.status).toBe(200);

@@ -1287,13 +1287,34 @@ async function getScopedTaskContexts(db: Db, identity: McpApiIdentity): Promise<
   });
 }
 
+/**
+ * The instances a normal MCP key may write lifecycle callbacks for: those the calling agent owns
+ * and that are either still running or still linked as their task's active instance.
+ *
+ * THE ALIASES MUST STAY QUOTED. PostgreSQL folds unquoted identifiers to lower case, so
+ * `AS instanceId` returns a column named `instanceid`, `row.instanceId` below reads undefined, and
+ * Number(undefined) is NaN. Every id in the returned set became NaN, so scopedInstanceIds.has(id)
+ * was false for every instance and EVERY agent was denied lifecycle callbacks on its own run —
+ * which is exactly what happened in production once it moved to PostgreSQL. SQLite preserves the
+ * alias case, so the same code was correct there and nothing failed until the engine changed.
+ *
+ * Nothing threw and nothing logged: the query succeeded, the rows came back, and only the property
+ * names differed. translateToPostgres() now quotes mixed-case aliases automatically, but these are
+ * spelled out explicitly because this query decides an authorization outcome.
+ *
+ * NOTE: the status list is an allowlist of live statuses, but production job_instances only ever
+ * hold done, failed, cancelled and dispatched — so two of the three values enumerated here never
+ * occur, and any new non-terminal dispatch stage would silently cost the owning agent the right to
+ * report on its own run. Inverting it to a denylist of terminal statuses is worth doing as
+ * hardening, but it was NOT the cause of the production denial and is deliberately left alone here.
+ */
 async function getScopedInstanceContexts(db: Db, identity: McpApiIdentity): Promise<ScopedInstanceContext[]> {
   return (await db.all(`
     SELECT DISTINCT
-      ji.id AS instanceId,
-      ji.task_id AS taskId,
+      ji.id AS "instanceId",
+      ji.task_id AS "taskId",
       ji.status AS status,
-      CASE WHEN t.active_instance_id = ji.id THEN 1 ELSE 0 END AS activeForTask
+      CASE WHEN t.active_instance_id = ji.id THEN 1 ELSE 0 END AS "activeForTask"
     FROM job_instances ji
     LEFT JOIN tasks t ON t.id = ji.task_id
     WHERE ji.agent_id = ?
@@ -2237,11 +2258,32 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       `Lifecycle callback writes are disabled for ${identity.agentSlug}.`,
       { instanceId },
     )) return;
-    const allow = scopedInstanceIds.has(instanceId)
-      && ((action === 'start' && method === 'PUT') || (action === 'check-in' && method === 'POST') || (action === 'complete' && method === 'PUT'));
-    if (allow) return next();
+    const inScope = scopedInstanceIds.has(instanceId);
+    const methodMatches = (action === 'start' && method === 'PUT')
+      || (action === 'check-in' && method === 'POST')
+      || (action === 'complete' && method === 'PUT');
+    if (inScope && methodMatches) return next();
+
+    // This denial states WHICH condition failed, and for the scope case dumps the state the
+    // decision was made from.
+    //
+    // It is here because a production agent was refused this exact call and the refusal could
+    // not be explained afterwards: by the time anyone looked, the instance had reached a terminal
+    // status and the task's active_instance_id had moved on, so every input to the decision had
+    // already changed. The reason string alone conflates two independent failures — an instance
+    // outside the caller's scope, and a correct instance reached with the wrong HTTP method — and
+    // gives no way to tell them apart, let alone to see which scope condition was false.
+    const scopeDetail = inScope
+      ? 'in scope'
+      : `not in scope; caller agent=${identity.agentId} owns instances [${Array.from(scopedInstanceIds).join(', ') || 'none'}]`;
+    console.warn(
+      `[mcp-auth] lifecycle denial for ${identity.agentSlug} ${method} ${requestPath}: ` +
+      `instance=${instanceId} ${scopeDetail}; method ${methodMatches ? 'matches' : `does NOT match (${action} requires ${action === 'check-in' ? 'POST' : 'PUT'})`}`,
+    );
     return deny({
-      reason: `Normal Agent HQ MCP keys can only write lifecycle callbacks for the active dispatched instance owned by ${identity.agentSlug}.`,
+      reason: methodMatches
+        ? `Normal Agent HQ MCP keys can only write lifecycle callbacks for the active dispatched instance owned by ${identity.agentSlug}.`
+        : `${method} is not the correct method for the ${action} lifecycle callback.`,
       requiredCapability: 'tasks.write_active_lifecycle',
       instanceId,
     });

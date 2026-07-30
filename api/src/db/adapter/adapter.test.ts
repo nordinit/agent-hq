@@ -105,6 +105,24 @@ describe('dialect translation', () => {
     expect(applySafeRewrites('SELECT my_round(x, 1) FROM t')).toBe('SELECT my_round(x, 1) FROM t');
   });
 
+  it('quotes mixed-case aliases so PostgreSQL does not fold them to lower case', () => {
+    // Unquoted, `AS instanceId` returns a column named `instanceid`, row.instanceId reads
+    // undefined, and Number(undefined) is NaN — which is how every id in an authorization scope
+    // set became NaN in production and denied every agent lifecycle writes on its own run.
+    expect(applySafeRewrites('SELECT ji.id AS instanceId, ji.task_id AS taskId FROM job_instances ji'))
+      .toBe('SELECT ji.id AS "instanceId", ji.task_id AS "taskId" FROM job_instances ji');
+  });
+
+  it('leaves CAST type names and lower-case aliases alone when quoting aliases', () => {
+    // The guard against quoting a type name: all-caps has no lower-case start, all-lower has no
+    // upper-case letter, and a multi-word type is not a single identifier.
+    expect(applySafeRewrites('SELECT CAST(x AS BIGINT) AS total FROM t'))
+      .toBe('SELECT CAST(x AS BIGINT) AS total FROM t');
+    expect(applySafeRewrites('SELECT CAST(x AS text) FROM t')).toBe('SELECT CAST(x AS text) FROM t');
+    // An alias that is already quoted must not be double-quoted.
+    expect(applySafeRewrites('SELECT a AS "keepMe" FROM t')).toBe('SELECT a AS "keepMe" FROM t');
+  });
+
   it('translates json_set with a literal path to jsonb_set', () => {
     // The path notations differ ('$.runtimeEnd' vs '{runtimeEnd}'), and the nested COALESCE has
     // to survive as a single argument.
