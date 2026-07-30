@@ -62,6 +62,34 @@ describe('applyDefaultInstallPackage', () => {
     `) as { n: number }).n).toBe(0);
   });
 
+  // Routing used to be filled in afterwards by a heuristic that guessed each agent's role from
+  // its job-title text. That guessing is gone, so the declared seeds are now the ONLY thing
+  // routing a fresh install — if they ever stop covering it, an install comes up unroutable and
+  // silently dispatches nothing.
+  it('routes a fresh install from declared seeds alone', async () => {
+    const db = getDb();
+    const tenantId = await insertTenant('Routing', 'routing');
+
+    await applyDefaultInstallPackage(db, tenantId);
+
+    const rules = await db.all(`
+      SELECT r.sprint_type, r.task_type, r.status, a.system_role
+      FROM sprint_task_routing_rules r
+      JOIN agents a ON a.id = r.agent_id
+      WHERE a.tenant_id = ?
+    `, tenantId) as Array<{ sprint_type: string; task_type: string; status: string; system_role: string }>;
+
+    expect(rules.length).toBeGreaterThan(0);
+    // Implementation work goes to the declared developer, never to any other seed.
+    const devReady = rules.filter(r => r.sprint_type === 'dev' && r.status === 'ready'
+      && ['backend', 'frontend', 'fullstack'].includes(r.task_type));
+    expect(devReady.length).toBe(3);
+    expect([...new Set(devReady.map(r => r.system_role))]).toEqual(['default_developer']);
+    // Every rule points at a declared seed rather than an inferred match.
+    const seededRoles = new Set(DEFAULT_INSTALL_AGENT_SEEDS.map(seed => seed.systemRole));
+    expect(rules.every(rule => seededRoles.has(rule.system_role))).toBe(true);
+  });
+
   it('installs the canonical create-agent skill and assigns it to the developer agent', async () => {
     const db = getDb();
     const tenantId = await insertTenant('Acme', 'acme');

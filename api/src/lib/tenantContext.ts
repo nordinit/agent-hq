@@ -21,7 +21,7 @@ import {
   buildCanonicalAgentMainSessionKey,
   slugifySessionKeyPart,
 } from './sessionKeys';
-import { ensureProjectBacklogSprint, syncStarterRoutingForProject } from './starterSetup';
+import { ensureProjectBacklogSprint } from './starterSetup';
 import {
   DEFAULT_PROJECT_NAME,
   LEGACY_STARTER_PROJECT_NAME,
@@ -1942,8 +1942,11 @@ async function provisionTenantDefaultWorkspace(db: Db, tenantId: number, options
   await ensureProjectBacklogSprint(db, projectId);
   const agentId = await ensureTenantDefaultAtlasAgent(db, tenantId, projectId);
   await ensureStarterAgentMcpAssignments(db, tenantId, agentId, [AGENT_HQ_MCP_SERVER_SLUG]);
+  // Routing for these agents is declared in defaultInstallPackage.ensureRouting,
+  // which ran above and already points at these same rows (ensureTenantStarterAgents
+  // matches the install package's agents by name and updates them in place). Nothing
+  // infers routing from agent job titles — declared seeds are the only source.
   const starterAgentIds = await ensureTenantStarterAgents(db, tenantId, projectId, tenantSlug);
-  await syncStarterRoutingForProject(db, projectId);
   await repairProvisionedTenantOwnership(db, tenantId, projectId, agentId);
   for (const starterAgentId of starterAgentIds) {
     await repairProvisionedTenantOwnership(db, tenantId, projectId, starterAgentId);

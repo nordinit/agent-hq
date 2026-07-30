@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { writeProjectAudit, diffFields, extractActor } from '../lib/projectAudit';
-import { ensureProjectBacklogSprint, syncStarterRoutingForProject } from '../lib/starterSetup';
+import { ensureProjectBacklogSprint } from '../lib/starterSetup';
 import { ensureDefaultProjectId, setDefaultProjectId } from '../lib/defaultProject';
 import {
   requireTenantOwnedRow,
@@ -148,7 +148,6 @@ router.post('/', async (req: Request, res: Response) => {
 
     const newId = Number(result.lastInsertId);
     await ensureProjectBacklogSprint(db, newId);
-    await syncStarterRoutingForProject(db, newId);
     await ensureDefaultProjectId(db);
     const actor = extractActor(req);
     await writeProjectAudit(db, newId, 'project', newId, 'created', actor, {

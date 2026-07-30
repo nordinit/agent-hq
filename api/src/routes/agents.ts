@@ -36,7 +36,6 @@ import {
   type AgentRuntimeConfigPayload,
   type AgentRuntimeType,
 } from '../domains/agents/runtimeConfig';
-import { syncStarterRoutingForProject } from '../lib/starterSetup';
 import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization';
 import { cleanupOpenClawGlobalMcpForAgent, syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { resolveRuntime, type RuntimeAuthProfileSyncResult } from '../runtimes';
@@ -1543,7 +1542,6 @@ router.post('/', async (req: Request, res: Response) => {
         });
 
     const agent = await selectAgentWithProject(db, createdAgentId, true) as Record<string, unknown>;
-    await syncStarterRoutingForProject(db, project_id ?? null);
     if ((agent.runtime_type as string | null) === 'openclaw' && (agent.workspace_path as string | null)) {
       setImmediate(async () => {
         try {
@@ -1830,11 +1828,6 @@ router.put('/:id', async (req: Request, res: Response) => {
     }
 
     const updated = await selectAgentWithProject(db, req.params.id, true) as Record<string, unknown>;
-    const nextProjectId = (updated.project_id as number | null | undefined) ?? null;
-    await syncStarterRoutingForProject(db, previousProjectId);
-    if (nextProjectId !== previousProjectId) {
-      await syncStarterRoutingForProject(db, nextProjectId);
-    }
 
     // Keep OpenClaw agent config in sync for provisioned openclaw-runtime agents.
     // Without this, Agent HQ can update the DB model/provider while ~/.openclaw/openclaw.json
@@ -2855,7 +2848,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
     if (historicalReferences.length > 0) {
       await archiveAgentForDeletion(db, agent, referenceCounts);
-      await syncStarterRoutingForProject(db, previousProjectId);
       return res.json({
         ok: true,
         deleted: true,
@@ -2867,7 +2859,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
     }
 
     await db.run('DELETE FROM agents WHERE id = ?', id);
-    await syncStarterRoutingForProject(db, previousProjectId);
 
     return res.json({
       ok: true,
