@@ -129,9 +129,27 @@ export async function sessionTenantScope(
     conditions.push(`${alias}.tenant_id = ?`);
     params.push(tenantId);
   }
-  pushTenantSubquery(db, conditions, params, `${alias}.task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, ['tasks'], tenantId);
-  pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
-  pushTenantSubquery(db, conditions, params, `${alias}.project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, ['projects'], tenantId);
+  // Every pushTenantSubquery call MUST be awaited. It appends to `conditions` AND to
+  // `params`, so an unawaited call defers both appends to a later microtask — and whether
+  // they land before `conditions.join(' OR ')` freezes the SQL string comes down to whether
+  // the builder happens to await something else first.
+  //
+  // That is what made the missing awaits so treacherous here. Three of the four builders in
+  // this file await a tableExists() query after their pushTenantSubquery calls, and a
+  // database round trip is more than enough for the pending appends to land, so they stayed
+  // correct BY ACCIDENT. instanceTenantScope, which returns immediately, did not: it emitted
+  // SQL with its task_id and agent_id branches dropped, and a `params` array that then grew
+  // past the placeholder count, because `params` is returned by reference and the appends
+  // arrived after the caller already held it.
+  //
+  // So the failure takes two shapes, neither visible to the compiler: tenant scope silently
+  // narrowed by a missing OR-branch, and a bind count that drifts out of step with the SQL
+  // (which PostgreSQL rejects outright). The accidental correctness is the worse half — any
+  // refactor that removed or reordered a later await would break tenant scoping in a builder
+  // that looks untouched.
+  await pushTenantSubquery(db, conditions, params, `${alias}.task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, ['tasks'], tenantId);
+  await pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
+  await pushTenantSubquery(db, conditions, params, `${alias}.project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, ['projects'], tenantId);
   if (await tableExists(db, 'job_instances') && await hasTenantId(db, 'tasks') && await hasTenantId(db, 'agents')) {
     conditions.push(`${alias}.instance_id IN (
       SELECT ji.id
@@ -156,7 +174,7 @@ export async function chatMessageTenantScope(
     conditions.push(`${alias}.tenant_id = ?`);
     params.push(tenantId);
   }
-  pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
+  await pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
   if (await tableExists(db, 'job_instances') && await hasTenantId(db, 'tasks') && await hasTenantId(db, 'agents')) {
     conditions.push(`${alias}.instance_id IN (
       SELECT ji.id
@@ -181,8 +199,8 @@ export async function instanceTenantScope(
     conditions.push(`${alias}.tenant_id = ?`);
     params.push(tenantId);
   }
-  pushTenantSubquery(db, conditions, params, `${alias}.task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, ['tasks'], tenantId);
-  pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
+  await pushTenantSubquery(db, conditions, params, `${alias}.task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, ['tasks'], tenantId);
+  await pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
   return conditions.length ? { sql: `(${conditions.join(' OR ')})`, params } : { sql: '1 = 1', params: [] };
 }
 
@@ -193,7 +211,13 @@ export async function logTenantScope(
 ): Promise<{ sql: string; params: unknown[] }> {
   const relationshipConditions: string[] = [];
   const params: unknown[] = [];
-  pushTenantSubquery(db, relationshipConditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
+  // The only one of the four whose failure mode WIDENS rather than narrows, which is why it
+  // is worth calling out separately. `relationshipConditions` starts empty here, so this call
+  // is the only thing that can populate it before the job_instances check. Unawaited, on a
+  // schema whose `logs` table has no tenant_id column, both branches below fall through to
+  // `1 = 1` — no tenant predicate at all, exposing every tenant's logs. The tableExists()
+  // await below currently masks it, but that is timing, not a guarantee.
+  await pushTenantSubquery(db, relationshipConditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
   if (await tableExists(db, 'job_instances') && await hasTenantId(db, 'tasks') && await hasTenantId(db, 'agents')) {
     relationshipConditions.push(`${alias}.instance_id IN (
       SELECT ji.id

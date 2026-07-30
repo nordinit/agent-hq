@@ -166,7 +166,7 @@ describe('gatewayTranscriptCapture', () => {
   });
 
   afterEach(async () => {
-    stopTranscriptCapture('agent:cinder-backend:run:4698:durable-4698');
+    await stopTranscriptCapture('agent:cinder-backend:run:4698:durable-4698');
     await db.close();
   });
 
@@ -402,7 +402,7 @@ describe('gatewayTranscriptCapture', () => {
     await waitForAsyncFrames();
     expect(getActiveCaptureCount()).toBe(1);
 
-    stopTranscriptCapture('agent:cinder-backend:run:4698:durable-4698');
+    await stopTranscriptCapture('agent:cinder-backend:run:4698:durable-4698');
 
     expect(getActiveCaptureCount()).toBe(0);
     expect(mockSockets[0]).toEqual(expect.objectContaining({ readyState: 3 }));

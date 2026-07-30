@@ -1759,11 +1759,23 @@ async function sendMcpScopeDenied(res: Response, params: {
   instanceId?: number | null;
   path: string;
 }): Promise<void> {
-  await insertMcpScopeDeniedNote(params.db, {
-        taskId: params.taskId ?? (params.instanceId ? await taskIdForInstance(params.db, params.instanceId) : null),
-        identity: params.identity,
-        reason: params.reason,
-      });
+  // The audit note is best-effort; the 403 is not. Letting a failed insert propagate would
+  // mean the most common denial of all — an agent naming a task that does not exist — returns
+  // nothing at all, because task_notes.task_id REFERENCES tasks(id) and that insert cannot
+  // succeed. The caller would get a hung socket instead of "you lack this capability", so the
+  // refusal is logged and swallowed while the denial itself always goes out.
+  try {
+    await insertMcpScopeDeniedNote(params.db, {
+      taskId: params.taskId ?? (params.instanceId ? await taskIdForInstance(params.db, params.instanceId) : null),
+      identity: params.identity,
+      reason: params.reason,
+    });
+  } catch (err) {
+    console.warn(
+      `[mcp-auth] could not record the MCP scope refusal for ${params.identity.auditActor} on ${params.path}:`,
+      err,
+    );
+  }
 
   res.status(403).json({
     error: params.reason,
@@ -1877,13 +1889,25 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
           });
   };
 
-  const requireCapability = (
+  // Async, and every call site awaits it. This guard used to be synchronous, which was fine
+  // while deny() was too — but deny() now writes the refusal to task_notes before sending the
+  // 403, so a synchronous guard has nowhere to put the returned promise and simply drops it.
+  //
+  // Dropping it is not a latency question, it is a crash. task_notes.task_id is NOT NULL
+  // REFERENCES tasks(id), the taskId reaching deny() is parsed straight out of the request
+  // path with no existence check, and denial is exactly the path taken when an agent names a
+  // task it has no business naming — including one that does not exist. The insert then
+  // violates the foreign key, the rejection has no handler anywhere in this process, and Node
+  // terminates on it. pm2 restarts the API, dropping every in-flight request for every tenant,
+  // and the caller can repeat it at will. Awaiting keeps the rejection inside the middleware,
+  // where it is one failed request rather than an outage.
+  const requireCapability = async (
     capability: AgentMcpCapabilityKey,
     reason: string,
     resource?: { taskId?: number | null; instanceId?: number | null },
-  ): boolean => {
+  ): Promise<boolean> => {
     if (permissionState.enabledCapabilities.has(capability)) return true;
-    deny({
+    await deny({
       reason,
       requiredCapability: capability,
       taskId: resource?.taskId,
@@ -1893,7 +1917,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   };
 
   if (requestPath === '/mcp/catalog' || requestPath === '/mcp/catalog/health') {
-    if (!requireCapability(
+    if (!await requireCapability(
       'discovery.read_catalog',
       `Agent HQ MCP catalog discovery is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -1901,7 +1925,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   }
 
   if (requestPath === '/external/task-events' && method === 'POST') {
-    if (!requireCapability(
+    if (!await requireCapability(
       'external.write_task_events',
       `External task event callbacks are disabled for ${identity.agentSlug}.`,
     )) return;
@@ -1909,7 +1933,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   }
 
   if (requestPath === '/external/task-events/receipts' && method === 'GET') {
-    if (!requireCapability(
+    if (!await requireCapability(
       'external.manage_project_task_events',
       `External task-event receipt management is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -1924,7 +1948,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
 
   const externalTaskEventReceiptMatch = requestPath.match(/^\/external\/task-events\/receipts\/(\d+)$/);
   if (externalTaskEventReceiptMatch && method === 'GET') {
-    if (!requireCapability(
+    if (!await requireCapability(
       'external.manage_project_task_events',
       `External task-event receipt management is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -1941,7 +1965,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     const requiredCapability: AgentMcpCapabilityKey = permissionState.enabledCapabilities.has('tasks.manage_project_tasks')
       ? 'tasks.manage_project_tasks'
       : 'tasks.create';
-    if (!requireCapability(
+    if (!await requireCapability(
       requiredCapability,
       `Project task creation is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -1978,7 +2002,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
         ? 'mcp_capability_policies.read'
         : 'mcp_capability_policies.write';
 
-    if (!requireCapability(
+    if (!await requireCapability(
       requiredCapability,
       `MCP capability policy ${isWrite ? 'mutation' : 'readback'} is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2036,7 +2060,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   }
 
   if (requestPath === '/tasks/project-search' && method === 'POST') {
-    if (!requireCapability(
+    if (!await requireCapability(
       'tasks.search_project_tasks',
       `Project task search is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2136,7 +2160,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       });
     }
 
-    if (!requireCapability(requiredCapability, `${identity.agentSlug} is not allowed to ${readAllowed ? 'read' : 'write'} active task MCP routes.`, { taskId })) {
+    if (!await requireCapability(requiredCapability, `${identity.agentSlug} is not allowed to ${readAllowed ? 'read' : 'write'} active task MCP routes.`, { taskId })) {
       return;
     }
 
@@ -2208,7 +2232,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   if (instanceMatch) {
     const instanceId = Number(instanceMatch[1]);
     const action = instanceMatch[2];
-    if (!requireCapability(
+    if (!await requireCapability(
       'tasks.write_active_lifecycle',
       `Lifecycle callback writes are disabled for ${identity.agentSlug}.`,
       { instanceId },
@@ -2226,7 +2250,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   const projectMatch = requestPath.match(/^\/projects\/(\d+)$/);
   if (projectMatch && method === 'GET') {
     const projectId = Number(projectMatch[1]);
-    if (!requireCapability(
+    if (!await requireCapability(
       'projects.read_active_project',
       `Project reads are disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2240,7 +2264,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   const projectFileMatch = requestPath.match(/^\/projects\/(\d+)\/files(?:\/(\d+)(?:\/(?:download|versions))?)?$/);
   if (projectFileMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const projectId = Number(projectFileMatch[1]);
-    if (!requireCapability(
+    if (!await requireCapability(
       'projects.manage_active_files',
       `Project file access is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2255,7 +2279,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   if (workflowFileMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const projectId = Number(workflowFileMatch[1]);
     const sprintId = Number(workflowFileMatch[2]);
-    if (!requireCapability(
+    if (!await requireCapability(
       'projects.manage_active_files',
       `Workflow file access is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2270,7 +2294,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   const sprintMatch = requestPath.match(/^\/sprints\/(\d+)$/);
   if (sprintMatch && method === 'GET') {
     const sprintId = Number(sprintMatch[1]);
-    if (!requireCapability(
+    if (!await requireCapability(
       'sprints.read_active_sprint',
       `Sprint reads are disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2284,7 +2308,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   const routingRuleMatch = requestPath.match(/^\/(?:routing\/(?:rules|assignment-rules)|routing-rules|assignment-rules)(?:\/(\d+))?$/);
   if (routingRuleMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const requiredCapability: AgentMcpCapabilityKey = 'routing_rules.manage_project_scope';
-    if (!requireCapability(
+    if (!await requireCapability(
       requiredCapability,
       `Assignment rule management is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2349,7 +2373,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   const routingTransitionMatch = requestPath.match(/^\/routing\/transitions(?:\/(\d+))?$/);
   if (routingTransitionMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const requiredCapability: AgentMcpCapabilityKey = 'routing_transitions.manage_project_scope';
-    if (!requireCapability(
+    if (!await requireCapability(
       requiredCapability,
       `Workflow transition management is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2416,7 +2440,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     const requiredCapability: AgentMcpCapabilityKey = method === 'GET'
       ? 'workflow_definitions.read_project_scope'
       : 'workflow_definitions.manage_project_scope';
-    if (!requireCapability(
+    if (!await requireCapability(
       requiredCapability,
       `Project-scoped workflow definition ${method === 'GET' ? 'reads are' : 'edits are'} disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2492,7 +2516,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     }
 
     const requiredCapability: AgentMcpCapabilityKey = 'transition_requirements.manage_project_scope';
-    if (!requireCapability(
+    if (!await requireCapability(
       requiredCapability,
       `Project-scoped transition requirement CRUD is disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2549,7 +2573,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   }
 
   if ((requestPath === '/routing/transitions' || requestPath === '/routing/transition-requirements') && method === 'GET') {
-    if (!requireCapability(
+    if (!await requireCapability(
       'workflow.read_active_configuration',
       `Workflow configuration reads are disabled for ${identity.agentSlug}.`,
     )) return;
@@ -2576,7 +2600,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     const requiredCapability: AgentMcpCapabilityKey = method === 'GET' || isPreview
       ? 'recurring_task_series.read_project_scope'
       : 'recurring_task_series.manage_project_scope';
-    if (!requireCapability(
+    if (!await requireCapability(
       requiredCapability,
       `Project-scoped recurring task series ${requiredCapability.endsWith('read_project_scope') ? 'reads are' : 'management is'} disabled for ${identity.agentSlug}.`,
     )) return;

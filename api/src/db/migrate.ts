@@ -41,8 +41,17 @@ async function main(): Promise<void> {
   }));
 }
 
-try {
-  main();
-} finally {
-  closeDb();
-}
+// main() is async, so `try { main() } finally { closeDb() }` was actively harmful: the finally
+// ran on the very next tick and closed the database while the migration was still in flight,
+// and a synchronous catch can never see an async rejection, so a failed migration printed its
+// success JSON and exited 0. Chaining restores the intended order — migrate, then report the
+// failure, then tear down — which is the best shape available under `module: commonjs`, where
+// top-level await does not exist.
+void main()
+  .catch((error) => {
+    console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    closeDb();
+  });

@@ -25,7 +25,13 @@ import chatRouter from './chat';
 import logsRouter from './logs';
 import sessionsRouter from './sessions';
 import telemetryRouter from './telemetry';
-import { insertRuntimeLog } from '../lib/runtimeTenantScope';
+import {
+  chatMessageTenantScope,
+  insertRuntimeLog,
+  instanceTenantScope,
+  logTenantScope,
+  sessionTenantScope,
+} from '../lib/runtimeTenantScope';
 import { type Db } from "../db/adapter/types";
 import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
@@ -352,5 +358,55 @@ describe('runtime tenant scope', () => {
       agent_id: 202,
       message: 'tenant two derived runtime log',
     });
+  });
+
+  // Regression guard for a defect class the type system cannot see, and which the tenant
+  // isolation tests above did NOT catch.
+  //
+  // Each scope builder assembles `conditions` and `params` partly through an async helper
+  // (pushTenantSubquery). Dropping the `await` on such a call is valid TypeScript and
+  // produces no diagnostic, but the append then happens on a later microtask — after
+  // `conditions.join(' OR ')` has already frozen the SQL string. That yields two distinct
+  // symptoms depending on how the builder returns its params, so both are asserted:
+  //
+  //   1. Builders that return `params` BY REFERENCE keep growing the array the caller is
+  //      already holding, so the bind count drifts past the placeholder count — PostgreSQL
+  //      rejects that bind outright.
+  //   2. Builders that COPY their params on return (logTenantScope) stay aligned but emit
+  //      SQL missing an OR-branch, silently narrowing or widening tenant scope instead.
+  //
+  // Verified by deleting the awaits and re-running: only instanceTenantScope failed. The
+  // other three await a tableExists() query after their pushTenantSubquery calls, and that
+  // round trip is long enough for the pending appends to land, so they were correct purely by
+  // accident. These assertions therefore pin down intent as much as behaviour — they are what
+  // makes a future reordering of those awaits fail loudly instead of quietly unscoping a
+  // tenant query.
+  describe('scope builders emit SQL and params that agree', () => {
+    const builders = [
+      { name: 'sessionTenantScope', build: sessionTenantScope, alias: 's', branches: ['task_id', 'agent_id', 'project_id'] },
+      { name: 'chatMessageTenantScope', build: chatMessageTenantScope, alias: 'c', branches: ['agent_id'] },
+      { name: 'instanceTenantScope', build: instanceTenantScope, alias: 'ji', branches: ['task_id', 'agent_id'] },
+      { name: 'logTenantScope', build: logTenantScope, alias: 'l', branches: ['agent_id'] },
+    ];
+
+    for (const { name, build, alias, branches } of builders) {
+      it(`${name} binds exactly one param per placeholder`, async () => {
+        const { sql, params } = await build(db, alias, 1);
+        // Draining the microtask queue is what gives this assertion teeth: comparing the
+        // counts on return would pass even with the await missing, because the extra
+        // appends have not run yet.
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(sql.match(/\?/g)?.length ?? 0).toBe(params.length);
+      });
+
+      it(`${name} includes every relationship branch it can resolve`, async () => {
+        // The fixture gives every referenced table a tenant_id column, so no branch is
+        // legitimately skippable here — anything missing was dropped, not filtered out.
+        const { sql } = await build(db, alias, 1);
+        for (const column of branches) {
+          expect(sql).toContain(`${alias}.${column} IN (SELECT id FROM`);
+        }
+      });
+    }
   });
 });

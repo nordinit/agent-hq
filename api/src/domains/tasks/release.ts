@@ -378,7 +378,16 @@ export async function postTaskOutcome(
     }
     const message = error instanceof Error ? error.message : String(error);
     if (isOutcomeRefusalMessage(message) && !(error instanceof RefusedTaskOutcomeError)) {
-      persistOutcomeRefusal(message);
+      // Awaited so the refusal is recorded before the original error propagates and the request
+      // unwinds — unawaited, the write was still pending when the caller had already failed the
+      // release, and its own rejection would have escaped as an unhandled rejection. Contained
+      // in a try/catch because this runs on an error path: a failure to record the refusal must
+      // not replace the error that caused it, which is the more useful of the two.
+      try {
+        await persistOutcomeRefusal(message);
+      } catch (refusalError) {
+        console.warn('[release] could not record the outcome refusal:', refusalError);
+      }
     }
     throw error;
   }

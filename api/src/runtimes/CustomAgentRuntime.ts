@@ -192,7 +192,10 @@ export class CustomAgentRuntime implements AgentRuntime {
 
       const emitRuntimeEnd = async (event: RuntimeEndEvent): Promise<void> => {
         if (params.instanceId != null) {
-          this.persistRuntimeEndEvent(params.instanceId, event);
+          // Awaited so the end event is durable before onRuntimeEnd tells the rest of the
+          // system the run finished. Unawaited, the callback can mark the instance complete
+          // and a reader can load the run while its terminal event is still in flight.
+          await this.persistRuntimeEndEvent(params.instanceId, event);
         }
         await params.onRuntimeEnd?.(event);
       };
@@ -645,8 +648,10 @@ export class CustomAgentRuntime implements AgentRuntime {
     // SSE line buffering: maintain a buffer of raw bytes to avoid parsing incomplete lines
     let lineBuffer = '';
 
-    // Write the user prompt immediately so Chats tab shows it at run start
-    this.persistUserPrompt(params, runId);
+    // Write the user prompt immediately so Chats tab shows it at run start. Awaited so it is
+    // ordered ahead of the assistant chunks appended below — chat_messages is read back in
+    // insertion order, so an unawaited prompt can land after the reply it prompted.
+    await this.persistUserPrompt(params, runId);
 
     try {
       while (true) {
@@ -681,7 +686,11 @@ export class CustomAgentRuntime implements AgentRuntime {
             (newChars > 0 || newEvents > 0) &&
             (now - lastFlushTime >= FLUSH_INTERVAL_MS || newChars >= FLUSH_CHAR_THRESHOLD)
           ) {
-            this.appendTranscriptChunk(params, assistantContent, runId, parsedEvents);
+            // Awaited to serialise the flushes. The three cursors below are advanced as if the
+            // write already happened, so unawaited appends from successive loop iterations
+            // overlap: they race on the same transcript row and can commit a shorter, earlier
+            // snapshot of assistantContent last, truncating the visible transcript.
+            await this.appendTranscriptChunk(params, assistantContent, runId, parsedEvents);
             lastFlushLen = assistantContent.length;
             lastEventFlushCount = parsedEvents.length;
             lastFlushTime = now;
@@ -698,7 +707,9 @@ export class CustomAgentRuntime implements AgentRuntime {
         if (parsed.assistantMessage) {
           assistantContent = parsed.assistantMessage;
           parsedEvents = parsed.events;
-          this.appendTranscriptChunk(params, assistantContent, runId, parsedEvents);
+          // The stream's final partial segment. Awaited so it lands before the loop exits and
+          // persistTranscript below writes the completed message.
+          await this.appendTranscriptChunk(params, assistantContent, runId, parsedEvents);
         }
       }
     } catch (err) {
@@ -718,8 +729,10 @@ export class CustomAgentRuntime implements AgentRuntime {
     // Use already-parsed content from the streaming loop (avoid re-parsing).
     const assistantMessage = assistantContent || parseSSEAssistantMessage(fullText);
 
-    // Persist transcript messages to chat_messages for Chats tab visibility
-    this.persistTranscript(params, assistantMessage, runId);
+    // Persist transcript messages to chat_messages for Chats tab visibility. Awaited so the
+    // transcript exists before emitRuntimeEnd below announces the run as finished; unawaited,
+    // a client reacting to that event can fetch the run and find no messages.
+    await this.persistTranscript(params, assistantMessage, runId);
 
     if (emitRuntimeEnd) {
       await emitRuntimeEnd({

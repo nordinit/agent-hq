@@ -69,11 +69,14 @@ async function run(): Promise<void> {
   }
 }
 
-try {
-  run();
-} catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-} finally {
-  closeDb();
-}
+// run() is async, so the synchronous catch below could never fire and the finally closed the
+// database mid-repair — while run() holds an open SAVEPOINT it intends to roll back on failure.
+// Chaining is what makes that rollback reachable and the error path observable again.
+void run()
+  .catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    closeDb();
+  });

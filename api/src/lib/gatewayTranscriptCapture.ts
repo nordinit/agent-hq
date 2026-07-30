@@ -464,7 +464,12 @@ export interface CaptureOptions {
 }
 
 interface GatewayTranscriptCaptureHandle {
-  stop(): void;
+  // Promise<void>, not void. stop() flushes buffered transcript data to chat_messages and is
+  // async; declaring it `void` here let TypeScript accept an async implementation while
+  // silently permitting every caller to discard the flush, which is how eight dropped stop()
+  // promises accumulated in this file without a single compiler diagnostic. Typing it honestly
+  // makes any future omission a compile error rather than a lost transcript.
+  stop(): Promise<void>;
 }
 
 /**
@@ -508,7 +513,12 @@ class GatewayTranscriptCapture {
       console.log(
         `[GatewayCapture] Timeout for instance ${ctx.instanceId} — stopping capture`,
       );
-      this.stop();
+      // A timer callback cannot await, so the promise is terminated explicitly here. The catch
+      // is the point: a failed flush from a bare timer has no request to fail and would surface
+      // as an unhandledRejection, which Node 24 turns into a process exit.
+      void this.stop().catch((err) => {
+        console.warn(`[GatewayCapture] Stop after timeout failed for instance ${ctx.instanceId}:`, err);
+      });
     }, timeoutMs);
 
     this.connect();
@@ -583,14 +593,21 @@ class GatewayTranscriptCapture {
           `[GatewayCapture] WS error for instance ${this.ctx.instanceId}:`,
           err.message,
         );
-        this.stop();
+        // Synchronous listener, so the promise is terminated here rather than awaited.
+        void this.stop().catch((stopErr) => {
+          console.warn(`[GatewayCapture] Stop after WS error failed for instance ${this.ctx.instanceId}:`, stopErr);
+        });
       }
     });
 
     ws.on('close', () => {
       if (!this.stopped) {
         console.log(`[GatewayCapture] WS closed for instance ${this.ctx.instanceId}`);
-        this.stop();
+        // Synchronous listener, so the promise is terminated here rather than awaited. This is
+        // the ordinary end-of-run path, which makes it the one most likely to lose a flush.
+        void this.stop().catch((stopErr) => {
+          console.warn(`[GatewayCapture] Stop after WS close failed for instance ${this.ctx.instanceId}:`, stopErr);
+        });
       }
     });
 
@@ -719,7 +736,7 @@ class GatewayTranscriptCapture {
         `[GatewayCapture] Connect failed for instance ${this.ctx.instanceId}:`,
         JSON.stringify(connectResult.error),
       );
-      this.stop();
+      await this.stop();
       return;
     }
 
@@ -829,9 +846,13 @@ class GatewayTranscriptCapture {
 
       // Do a full history re-fetch to capture structured events (tool calls, thoughts,
       // and native agent_end terminal events) that aren't visible in plain-text streaming.
-      void this.fetchAndPersistHistory().then(() => {
-        this.stop();
-      });
+      // stop() is RETURNED from the then, not called inside it: calling it discarded the flush
+      // promise, so `void` terminated only the fetch and the stop ran unobserved after it.
+      void this.fetchAndPersistHistory()
+        .then(() => this.stop())
+        .catch((err) => {
+          console.warn(`[GatewayCapture] History re-fetch or stop failed for instance ${this.ctx.instanceId}:`, err);
+        });
 
     } else if (state === 'aborted' || state === 'error') {
       // Flush whatever partial text was streamed before abort
@@ -841,10 +862,13 @@ class GatewayTranscriptCapture {
         this.lastStreamFlushText = '';
       }
       // Do a final history fetch to capture partial structured content
-      void this.fetchAndPersistHistory().then(() => {
-        // Stop after partial flush for failed/aborted runs
-        this.stop();
-      });
+      // Stop after partial flush for failed/aborted runs. Returned from the then rather than
+      // called inside it, so the flush is actually part of the chain.
+      void this.fetchAndPersistHistory()
+        .then(() => this.stop())
+        .catch((err) => {
+          console.warn(`[GatewayCapture] Partial-flush stop failed for instance ${this.ctx.instanceId}:`, err);
+        });
     } else if (message && typeof message === 'object') {
       this.liveRowIndex = await persistLiveStructuredMessage(
               this.ctx,
@@ -903,9 +927,9 @@ export async function startTranscriptCapture(
 
   // Auto-remove from registry when stopped
   const originalStop = capture.stop.bind(capture);
-  const wrappedStop = () => {
+  const wrappedStop = async (): Promise<void> => {
     activeCaptures.delete(sessionKey);
-    originalStop();
+    await originalStop();
   };
   // Patch stop on the instance (TypeScript: access via any for private override)
   (capture as unknown as Record<string, unknown>).stop = wrappedStop;
@@ -917,10 +941,12 @@ export async function startTranscriptCapture(
  * stopTranscriptCapture — stop a background capture by session key.
  * Called on instance abort or when the run is complete.
  */
-export function stopTranscriptCapture(sessionKey: string): void {
+export async function stopTranscriptCapture(sessionKey: string): Promise<void> {
   const capture = activeCaptures.get(sessionKey);
   if (capture) {
-    capture.stop();
+    // Awaited so callers that stop a capture on abort actually wait for the transcript flush
+    // instead of returning while it is still in flight.
+    await capture.stop();
     activeCaptures.delete(sessionKey);
   }
 }

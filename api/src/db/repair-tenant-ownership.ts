@@ -14,8 +14,13 @@ async function main(): Promise<void> {
   }));
 }
 
-try {
-  main();
-} finally {
-  closeDb();
-}
+// See migrate.ts: main() is async, so the original try/finally closed the database before the
+// repair finished and let rejections pass silently with exit code 0.
+void main()
+  .catch((error) => {
+    console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    closeDb();
+  });

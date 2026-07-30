@@ -413,8 +413,12 @@ export class OpenClawRuntime implements AgentRuntime {
     // Start local/raw terminal observation before chat.send returns. Some OpenClaw
     // failures end the trajectory immediately and never emit a gateway chat
     // terminal event after the RPC resolves.
-    this.persistUserPrompt(params, dispatchMessage);
-    this.startCapture(params, undefined, routedSessionKey);
+    // Both awaited, which is what actually delivers on the comment above: startCapture only
+    // registers the listeners and returns, so unawaited it was racing gatewayWsSend rather than
+    // preceding it, and an OpenClaw run that fails instantly could emit and finish its whole
+    // trajectory before the capture was subscribed — exactly the case this is here to observe.
+    await this.persistUserPrompt(params, dispatchMessage);
+    await this.startCapture(params, undefined, routedSessionKey);
 
     const wsResult = await gatewayWsSend({
       sessionKey: routedSessionKey,
@@ -426,7 +430,9 @@ export class OpenClawRuntime implements AgentRuntime {
       throw new Error(wsResult.error ?? 'WebSocket dispatch failed');
     }
 
-    this.startCapture(params, wsResult.runId, routedSessionKey);
+    // Re-registers the capture now that the real runId is known. Awaited so the capture is in
+    // place before this method returns and the caller treats the dispatch as observed.
+    await this.startCapture(params, wsResult.runId, routedSessionKey);
     return { runId: wsResult.runId ?? '' };
   }
 
@@ -537,8 +543,11 @@ export class OpenClawRuntime implements AgentRuntime {
    * "Already gone" (session not found) is treated as a success.
    */
   async abort(runId: string, sessionKey: string): Promise<void> {
-    // Stop any active background transcript capture for this session
-    stopTranscriptCapture(sessionKey);
+    // Stop any active background transcript capture for this session. Awaited so the final
+    // transcript flush completes before the run is aborted below — otherwise the abort tears
+    // down the session while the capture is still writing, and the tail of the transcript for
+    // the very run being cancelled is the part most likely to be lost.
+    await stopTranscriptCapture(sessionKey);
 
     const result = abortChatRunBySessionKey(sessionKey);
     if (!result.ok) {
