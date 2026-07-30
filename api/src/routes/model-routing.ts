@@ -4,7 +4,13 @@ import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { THINKING_LEVELS } from '../lib/workflowVocabulary';
 import { columnExists as sharedColumnExists, tableExists as sharedTableExists } from "../db/introspection";
 
+import { requireNumericId } from '../lib/routeParams';
+
 const router = Router();
+// Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
+// returned for a no-match. Must be per-router: app.param() does not fire for a param
+// declared on a mounted sub-router.
+router.param('id', requireNumericId);
 const ALLOWED_THINKING_LEVELS = new Set<string>(THINKING_LEVELS);
 
 async function hasColumn(db: ReturnType<typeof getDb>, table: string, column: string): Promise<boolean> {

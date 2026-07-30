@@ -336,7 +336,19 @@ function rawConnectionFor(db: Db): Database.Database {
   if (candidate.raw) return candidate.raw;
   // Some suites still hand this module a bare better-sqlite3 connection cast to Db.
   if (typeof candidate.pragma === 'function') return db as unknown as Database.Database;
-  return getRawDb();
+
+  // Throws rather than falling back to getRawDb(). The fallback is what made the PostgreSQL
+  // split-brain silent: handed a PostgresAdapter this returned a SQLite connection to a file the
+  // rest of the process was not using, and callers happily ran SQLite DDL against it. Every
+  // caller is now required to return early on `db.dialect === 'postgres'`, so reaching this line
+  // means a new caller was added without that guard — and a loud failure in the one code path
+  // that added it is far better than writes landing in the wrong database.
+  throw new Error(
+    'rawConnectionFor() was called with a non-SQLite Db. A raw better-sqlite3 connection has no '
+    + 'meaning on PostgreSQL, and returning the SQLite file here would write to a database the '
+    + 'process is not reading from. Guard the caller with `if (db.dialect === \'postgres\') return;` '
+    + 'or express the operation through the Db interface.',
+  );
 }
 
 /*
@@ -704,6 +716,23 @@ async function assertNoNullTenantOwnership(db: Db, table: string): Promise<void>
  * verifyStartupSchemaCurrent().
  */
 function assertForeignKeysStillEnforced(db: Db): void {
+  // PRAGMA foreign_keys is SQLite-only, so there is nothing here to check on PostgreSQL — and
+  // without this guard there was something much worse than a useless check.
+  //
+  // This is the one rawConnectionFor() caller that was not dialect-guarded, and by its own
+  // comment above it runs on the REQUEST path: every resolveTenantIdFromRequest re-enters the
+  // tenant migrations. Under PostgreSQL rawConnectionFor() found neither a `raw` handle nor a
+  // `pragma` method on the adapter and fell through to getRawDb(), which opened the SQLite file
+  // and set `journal_mode = WAL` and `foreign_keys = ON` — both writes. So a production process
+  // serving every request from PostgreSQL also held the SQLite file open read-write and created
+  // a WAL beside it, and the assertion then read back the pragma getRawDb had just set, passed,
+  // and logged nothing.
+  //
+  // No rows were written to SQLite: the three rawConnectionFor callers that actually rebuild
+  // tables were already guarded. The damage was that the file being kept as the rollback artifact
+  // stopped being quiescent while a live process held it open.
+  if (db.dialect === 'postgres') return;
+
   // The RAW connection, not the Db adapter: the check reads and restores PRAGMA
   // foreign_keys, which the Db interface deliberately does not expose (SQLite-only).
   assertForeignKeyEnforcementEnabled(rawConnectionFor(db), 'tenant ownership migrations', {

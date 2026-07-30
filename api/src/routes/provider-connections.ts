@@ -8,7 +8,13 @@ import {
   listRuntimeProviderCapabilities,
 } from '../domains/providers/runtimeAdapters';
 
+import { requireNumericId } from '../lib/routeParams';
+
 const router = Router();
+// Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
+// returned for a no-match. Must be per-router: app.param() does not fire for a param
+// declared on a mounted sub-router.
+router.param('id', requireNumericId);
 
 interface ConnectionRow {
   id: number;

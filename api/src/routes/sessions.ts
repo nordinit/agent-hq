@@ -17,7 +17,13 @@ import { toCanonicalTimestamp } from '../lib/timestamps';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { chatMessageTenantScope, instanceTenantScope, sessionTenantScope } from '../lib/runtimeTenantScope';
 
+import { requireNumericId } from '../lib/routeParams';
+
 const router = Router();
+// Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
+// returned for a no-match. Must be per-router: app.param() does not fire for a param
+// declared on a mounted sub-router.
+router.param('id', requireNumericId);
 
 function parsePositiveInt(value: unknown, fallback: number, max?: number): number {
   const n = Number(value);
