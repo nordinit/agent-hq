@@ -303,6 +303,17 @@ const UNSAFE_CONSTRUCTS: Array<{ pattern: RegExp; construct: string; detail: str
       "`now() AT TIME ZONE 'utc' - make_interval(...)` explicitly.",
   },
   {
+    // `strftime('%s', x)` is translated automatically (see rewriteStrftimeEpochCalls); every
+    // other format survives to here. The lookahead keeps the translated form from matching.
+    pattern: /\bstrftime\s*\(\s*(?!'%s'\s*,)/gi,
+    construct: "strftime with a non-'%s' format",
+    detail:
+      "strftime() is SQLite-only. Only strftime('%s', x) is translated, to " +
+      'EXTRACT(EPOCH FROM (x)::timestamp). Other formats must be rewritten by hand with ' +
+      "to_char(), whose specifiers differ from strftime()'s — %Y-%m-%d is 'YYYY-MM-DD', for " +
+      'example — so they cannot be mapped mechanically.',
+  },
+  {
     pattern: /\bPRAGMA\b/gi,
     construct: 'PRAGMA',
     detail:
@@ -522,6 +533,53 @@ function rewriteRoundCalls(sql: string): string {
 }
 
 /**
+ * `strftime('%s', x)` -> `EXTRACT(EPOCH FROM (x)::timestamp)`.
+ *
+ * strftime() is SQLite-only; PostgreSQL rejects the whole statement with
+ * `function strftime(unknown, text) does not exist`. It reached production in the workflow
+ * detail read model, so opening any workflow in the UI failed outright.
+ *
+ * Only the `'%s'` (seconds-since-epoch) format is translated, because that is the only one in
+ * use and the only one with a single-expression equivalent. Timestamps are stored as text here,
+ * hence the explicit ::timestamp cast; PostgreSQL parses both the `YYYY-MM-DD HH24:MI:SS` form
+ * this codebase writes and the ISO-8601 form that arrives from runtimes.
+ *
+ * Any other format string is deliberately left untouched and reported by findIncompatibilities()
+ * instead: to_char() format specifiers are not the same language as strftime()'s, so guessing a
+ * mapping would silently produce a differently-formatted value rather than an error.
+ */
+function rewriteStrftimeEpochCalls(sql: string): string {
+  return rewriteTwoArgCall(sql, 'strftime', (format, value) => (
+    /^'%s'$/i.test(format.trim())
+      ? `EXTRACT(EPOCH FROM (${value})::timestamp)`
+      : `strftime(${format}, ${value})`
+  ));
+}
+
+/**
+ * `julianday(x)` -> the same Julian day number computed from an epoch extraction.
+ *
+ * Another SQLite-only function with no PostgreSQL counterpart, which fails the whole statement
+ * with `function julianday(unknown) does not exist`. It is used across the telemetry queries to
+ * express age and duration in days, so every one of those endpoints was broken on PostgreSQL.
+ *
+ * 2440587.5 is the Julian day number of the Unix epoch, so epoch-seconds / 86400 + that constant
+ * reproduces julianday() exactly. The constant cancels in the differences this codebase actually
+ * takes, but including it keeps a bare julianday() correct too rather than only correct inside a
+ * subtraction.
+ *
+ * `julianday('now')` is special-cased to UTC. SQLite's 'now' is UTC, whereas PostgreSQL's
+ * `'now'::timestamp` resolves to local time — using it directly would silently skew every age and
+ * duration by the machine's UTC offset while still returning a plausible-looking number.
+ */
+function rewriteJuliandayCalls(sql: string): string {
+  return rewriteSingleArgCall(sql, 'julianday', (value) => {
+    const source = /^'now'$/i.test(value.trim()) ? `(${UTC_NOW})` : `(${value})::timestamp`;
+    return `(EXTRACT(EPOCH FROM ${source}) / 86400.0 + 2440587.5)`;
+  });
+}
+
+/**
  * `AS instanceId` -> `AS "instanceId"`.
  *
  * PostgreSQL folds unquoted identifiers to lower case, so a camelCase alias comes back as
@@ -553,6 +611,49 @@ function quoteMixedCaseAliases(sql: string): string {
  * parentheses and string literals — `round(AVG(x) * 100.0 / COUNT(*), 1)` being the case that
  * matters here — which no regex can bracket correctly.
  */
+/**
+ * Same paren-walking as rewriteTwoArgCall, for a call taking exactly one argument.
+ *
+ * A regex cannot do this: the argument may itself contain parentheses and string literals
+ * (`julianday(COALESCE(a, b))`), so the closing paren has to be found by tracking depth.
+ * A call with any top-level comma is left alone rather than guessed at.
+ */
+function rewriteSingleArgCall(
+  sql: string,
+  name: string,
+  build: (arg: string) => string,
+): string {
+  const mask = literalMask(sql);
+  const opener = new RegExp(`^${name}\\s*\\(`, 'i');
+  let out = '';
+  let i = 0;
+
+  while (i < sql.length) {
+    const match = opener.exec(sql.slice(i));
+    if (!match || mask[i]) { out += sql[i]; i++; continue; }
+    // A longer identifier ending in `name` (my_julianday(...)) must not match.
+    if (i > 0 && /[A-Za-z0-9_]/.test(sql[i - 1])) { out += sql[i]; i++; continue; }
+
+    let depth = 0;
+    let j = i + match[0].length - 1;
+    const argStart = j + 1;
+    let sawTopLevelComma = false;
+    for (; j < sql.length; j++) {
+      if (mask[j]) continue;
+      const ch = sql[j];
+      if (ch === '(') depth++;
+      else if (ch === ')') { depth--; if (depth === 0) break; }
+      else if (ch === ',' && depth === 1) sawTopLevelComma = true;
+    }
+    if (j >= sql.length || sawTopLevelComma) { out += sql[i]; i++; continue; }
+
+    out += build(sql.slice(argStart, j).trim());
+    i = j + 1;
+  }
+
+  return out;
+}
+
 function rewriteTwoArgCall(
   sql: string,
   name: string,
@@ -699,6 +800,8 @@ export function applySafeRewrites(sql: string): string {
   text = unwrapSingleArgDatetime(text);
   text = rewriteJsonSetCalls(text);
   text = rewriteRoundCalls(text);
+  text = rewriteStrftimeEpochCalls(text);
+  text = rewriteJuliandayCalls(text);
   text = rewriteNullSafeComparisons(text);
   text = quoteMixedCaseAliases(text);
   text = rewriteInsertOrIgnore(text);

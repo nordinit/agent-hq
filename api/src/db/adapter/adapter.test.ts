@@ -107,6 +107,51 @@ describe('dialect translation', () => {
     expect(applySafeRewrites('SELECT my_round(x, 1) FROM t')).toBe('SELECT my_round(x, 1) FROM t');
   });
 
+  it("translates strftime('%s', x) to an epoch extraction", () => {
+    // strftime() does not exist in PostgreSQL, so the statement fails to parse outright:
+    // "function strftime(unknown, text) does not exist". This is the exact expression from the
+    // workflow detail read model, which made every workflow page in the UI error.
+    expect(applySafeRewrites(
+      "SELECT AVG((strftime('%s', updated_at) - strftime('%s', created_at)) * 1000) FROM tasks",
+    )).toBe(
+      'SELECT AVG((EXTRACT(EPOCH FROM (updated_at)::timestamp)'
+      + ' - EXTRACT(EPOCH FROM (created_at)::timestamp)) * 1000) FROM tasks',
+    );
+    // Timestamps are stored as text, so the cast has to survive an expression argument too.
+    expect(applySafeRewrites("SELECT strftime('%s', COALESCE(a, b)) FROM t"))
+      .toBe('SELECT EXTRACT(EPOCH FROM (COALESCE(a, b))::timestamp) FROM t');
+    // Any other format is left alone rather than guessed at — strftime and to_char do not share
+    // a specifier language, so a mechanical mapping would silently change the output format.
+    expect(applySafeRewrites("SELECT strftime('%Y-%m-%d', created_at) FROM t"))
+      .toBe("SELECT strftime('%Y-%m-%d', created_at) FROM t");
+    // An identifier merely ending in "strftime" must not be rewritten.
+    expect(applySafeRewrites("SELECT my_strftime('%s', x) FROM t"))
+      .toBe("SELECT my_strftime('%s', x) FROM t");
+  });
+
+  it('translates julianday() to an equivalent epoch expression', () => {
+    // 2440587.5 is the Julian day of the Unix epoch, so this reproduces julianday() exactly
+    // rather than only being correct inside a subtraction.
+    expect(applySafeRewrites('SELECT julianday(created_at) FROM t'))
+      .toBe('SELECT (EXTRACT(EPOCH FROM (created_at)::timestamp) / 86400.0 + 2440587.5) FROM t');
+    // 'now' must resolve in UTC. PostgreSQL's own 'now'::timestamp is LOCAL time, which would
+    // skew every age by the machine's UTC offset while still looking plausible.
+    expect(applySafeRewrites("SELECT julianday('now') FROM t"))
+      .toBe(`SELECT (EXTRACT(EPOCH FROM (now() AT TIME ZONE 'utc')) / 86400.0 + 2440587.5) FROM t`);
+    // The argument may contain its own parens and commas.
+    expect(applySafeRewrites('SELECT julianday(COALESCE(a, b)) FROM t'))
+      .toBe('SELECT (EXTRACT(EPOCH FROM (COALESCE(a, b))::timestamp) / 86400.0 + 2440587.5) FROM t');
+    // An identifier merely ending in "julianday" must not be rewritten.
+    expect(applySafeRewrites('SELECT my_julianday(x) FROM t')).toBe('SELECT my_julianday(x) FROM t');
+  });
+
+  it("reports an untranslatable strftime format as an incompatibility", () => {
+    const found = findIncompatibilities("SELECT strftime('%Y', created_at) FROM t");
+    expect(found.map(entry => entry.construct)).toContain("strftime with a non-'%s' format");
+    // The translated epoch form must not be reported — it is already valid PostgreSQL.
+    expect(findIncompatibilities("SELECT strftime('%s', created_at) FROM t")).toEqual([]);
+  });
+
   it('rewrites SQLite null-safe IS / IS NOT comparisons', () => {
     // SQLite overloads IS / IS NOT to accept any operand; PostgreSQL allows only NULL, TRUE,
     // FALSE, UNKNOWN or DISTINCT FROM, so a parameter there is a syntax error. Found by running
