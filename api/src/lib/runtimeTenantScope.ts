@@ -71,8 +71,19 @@ export async function tenantInsertColumns(
   return { columnSql: 'tenant_id, ', valueSql: '?, ', values: [tenantId] };
 }
 
+/**
+ * The fallback is qualified with the table name deliberately.
+ *
+ * Inside ON CONFLICT ... DO UPDATE SET, a bare `tenant_id` on the right-hand side is ambiguous
+ * in PostgreSQL — it could mean the existing row or the proposed `excluded` one — and it is
+ * rejected outright with `column reference "tenant_id" is ambiguous`. SQLite silently resolves
+ * it to the target table, so the unqualified form worked on one engine and failed on the other.
+ * Naming the table is accepted by both and says which row is meant.
+ */
 export async function tenantUpsertUpdateSql(db: Db, table: string): Promise<string> {
-  return await hasTenantId(db, table) ? 'tenant_id = COALESCE(excluded.tenant_id, tenant_id),' : '';
+  return await hasTenantId(db, table)
+    ? `tenant_id = COALESCE(excluded.tenant_id, ${table}.tenant_id),`
+    : '';
 }
 
 export async function insertRuntimeLog(

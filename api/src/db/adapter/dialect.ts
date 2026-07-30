@@ -231,6 +231,22 @@ const SAFE_REWRITES: Array<{ pattern: RegExp; replacement: string; note: string 
     note: 'GROUP_CONCAT has no PostgreSQL equivalent by that name',
   },
   {
+    // The `(? IS NULL OR col = ?)` optional-filter idiom, used at ~30 sites. PostgreSQL infers a
+    // parameter's type from its context, and `IS NULL` supplies none, so the statement is
+    // rejected before it runs with "could not determine data type of parameter $N". SQLite is
+    // untyped and never had to care.
+    //
+    // The cast is safe precisely because this occurrence is only ever tested for nullness: each
+    // `?` becomes its own positional parameter, so casting this one to text cannot affect the
+    // comparison in the other half of the OR. NULL::text IS NULL stays true, and any non-null
+    // value stays non-null.
+    // A lookahead, not a capture: replaceInCode inserts the replacement literally and does not
+    // expand $1, so matching the IS NULL text would delete it and leave a stray "$1" behind.
+    pattern: /\?(?=\s+IS\s+(?:NOT\s+)?NULL\b)/gi,
+    replacement: '?::text',
+    note: 'a bare parameter in IS NULL has no inferable type in PostgreSQL',
+  },
+  {
     // Runtime "ensure table exists" DDL is written in SQLite dialect. On PostgreSQL the
     // schema comes from migrations and every table already exists, so these statements are
     // no-ops in intent — but they must still PARSE. Translating the column definition is
@@ -301,9 +317,32 @@ const UNSAFE_CONSTRUCTS: Array<{ pattern: RegExp; construct: string; detail: str
       'or pg_catalog.',
   },
   {
-    pattern: /\bINSERT\s+OR\s+(REPLACE|IGNORE)\b/gi,
-    construct: 'INSERT OR REPLACE / INSERT OR IGNORE',
-    detail: 'Use INSERT ... ON CONFLICT ... DO UPDATE / DO NOTHING.',
+    // OR IGNORE is translated automatically (see rewriteInsertOrIgnore); OR REPLACE is not,
+    // because rebuilding it as DO UPDATE needs a conflict target and the full column list.
+    pattern: /\bINSERT\s+OR\s+REPLACE\b/gi,
+    construct: 'INSERT OR REPLACE',
+    detail:
+      'Rewrite as INSERT ... ON CONFLICT (<target>) DO UPDATE SET ..., naming the conflicting ' +
+      'columns explicitly. INSERT OR IGNORE needs no change — it is translated to ' +
+      'ON CONFLICT DO NOTHING.',
+  },
+  {
+    // json_set with a literal path is translated; anything else reaches PostgreSQL as-is.
+    pattern: /\bjson_set\s*\((?![^)]*'\$\.)/gi,
+    construct: 'json_set() with a non-literal path',
+    detail:
+      "Only json_set(target, '$.literal.path', json(value)) can be translated to jsonb_set — " +
+      'a path built from a bound parameter is not known at translation time. Use ' +
+      'jsonb_set(target::jsonb, <text[] path>, value::jsonb) directly.',
+  },
+  {
+    pattern: /\bjson_extract\s*\(/gi,
+    construct: 'json_extract()',
+    detail:
+      'PostgreSQL has no json_extract. For a literal path use ' +
+      "target::jsonb #>> '{a,b}'; for a path supplied as a bound parameter use " +
+      'jsonb_extract_path_text(target::jsonb, ?), which takes bare key names rather than ' +
+      "SQLite's '$.a.b' form — so the caller must change what it binds, not just the SQL.",
   },
 ];
 
@@ -446,6 +485,157 @@ function matchesInCode(sql: string, pattern: RegExp): boolean {
 }
 
 /** Applies the safe rewrites, leaving string and comment CONTENT untouched. */
+/**
+ * `json_set(target, '$.path', json(value))` -> `jsonb_set((target)::jsonb, '{path}', (value)::jsonb)`
+ *
+ * PostgreSQL has no `json_set`, and the two dialects disagree on how a path is written:
+ * SQLite takes `'$.a.b'`, PostgreSQL takes a text[] like `'{a,b}'`. Assigning the jsonb result
+ * back into a text column needs no cast — PostgreSQL casts on assignment.
+ *
+ * Only the three-argument form with a LITERAL path and a `json()`-wrapped value is translated.
+ * A path built from a bound parameter cannot be converted by substitution, so it is left intact
+ * for findIncompatibilities() to report rather than silently rewritten into something else.
+ */
+/**
+ * `round(x, n)` -> `round((x)::numeric, n)`.
+ *
+ * PostgreSQL only defines two-argument round() for numeric; applied to a double precision value
+ * — which is what any AVG(), division or SUM() of a real column produces — it fails with
+ * "function round(double precision, integer) does not exist". SQLite's round() takes any numeric
+ * type, so the same expression is valid there.
+ *
+ * Only the two-argument form is touched. Single-argument round() is defined for double precision
+ * in PostgreSQL and needs no cast.
+ *
+ * The numeric result needs no cast back to a float type here: PostgresAdapter registers a numeric
+ * type parser, so every numeric the driver returns arrives as a JS number. Casting again would be
+ * a second mechanism for one problem, and the parser has to exist regardless — SUM(bigint) and
+ * AVG() widen to numeric with no round() involved.
+ */
+function rewriteRoundCalls(sql: string): string {
+  return rewriteTwoArgCall(sql, 'round', (first, rest) => `round((${first})::numeric, ${rest})`);
+}
+
+/**
+ * Shared walker for `fn(a, b)` rewrites: finds each call to `name` in a code position, splits its
+ * arguments at the top-level comma, and hands both halves to `build`.
+ *
+ * Written as a paren-matching walk rather than a regex because an argument can itself contain
+ * parentheses and string literals — `round(AVG(x) * 100.0 / COUNT(*), 1)` being the case that
+ * matters here — which no regex can bracket correctly.
+ */
+function rewriteTwoArgCall(
+  sql: string,
+  name: string,
+  build: (first: string, rest: string) => string,
+): string {
+  const mask = literalMask(sql);
+  const opener = new RegExp(`^${name}\\s*\\(`, 'i');
+  let out = '';
+  let i = 0;
+
+  while (i < sql.length) {
+    const match = opener.exec(sql.slice(i));
+    if (!match || mask[i]) { out += sql[i]; i++; continue; }
+    // A longer identifier ending in `name` (my_round(...)) must not match.
+    if (i > 0 && /[A-Za-z0-9_]/.test(sql[i - 1])) { out += sql[i]; i++; continue; }
+
+    let depth = 0;
+    let j = i + match[0].length - 1;
+    const argStart = j + 1;
+    const commas: number[] = [];
+    for (; j < sql.length; j++) {
+      if (mask[j]) continue;
+      const ch = sql[j];
+      if (ch === '(') depth++;
+      else if (ch === ')') { depth--; if (depth === 0) break; }
+      else if (ch === ',' && depth === 1) commas.push(j);
+    }
+    if (j >= sql.length || commas.length !== 1) { out += sql[i]; i++; continue; }
+
+    out += build(sql.slice(argStart, commas[0]).trim(), sql.slice(commas[0] + 1, j).trim());
+    i = j + 1;
+  }
+
+  return out;
+}
+
+function rewriteJsonSetCalls(sql: string): string {
+  const mask = literalMask(sql);
+  let out = '';
+  let i = 0;
+
+  while (i < sql.length) {
+    const match = /^json_set\s*\(/i.exec(sql.slice(i));
+    if (!match || mask[i]) { out += sql[i]; i++; continue; }
+
+    // Walk to the matching close paren, tracking depth and skipping string literals, so a
+    // nested call like COALESCE(response, '{}') is treated as one argument.
+    let depth = 0;
+    let j = i + match[0].length - 1;
+    const argStart = j + 1;
+    const commas: number[] = [];
+    for (; j < sql.length; j++) {
+      if (mask[j]) continue;
+      const ch = sql[j];
+      if (ch === '(') depth++;
+      else if (ch === ')') { depth--; if (depth === 0) break; }
+      else if (ch === ',' && depth === 1) commas.push(j);
+    }
+    if (j >= sql.length || commas.length !== 2) { out += sql[i]; i++; continue; }
+
+    const target = sql.slice(argStart, commas[0]).trim();
+    const path = sql.slice(commas[0] + 1, commas[1]).trim();
+    const value = sql.slice(commas[1] + 1, j).trim();
+
+    const literalPath = /^'\$\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)'$/.exec(path);
+    const jsonValue = /^json\s*\(([\s\S]*)\)$/i.exec(value);
+    if (!literalPath || !jsonValue) { out += sql[i]; i++; continue; }
+
+    out += `jsonb_set((${target})::jsonb, '{${literalPath[1].split('.').join(',')}}', (${jsonValue[1].trim()})::jsonb)`;
+    i = j + 1;
+  }
+
+  return out;
+}
+
+/**
+ * `INSERT OR IGNORE INTO ...` -> `INSERT INTO ... ON CONFLICT DO NOTHING`.
+ *
+ * PostgreSQL accepts `ON CONFLICT DO NOTHING` with NO conflict target, meaning "any unique
+ * violation", which is exactly SQLite's OR IGNORE semantics — so this needs no per-statement
+ * knowledge of which constraint might fire. Row counts match too: a suppressed insert reports
+ * zero changes on both engines.
+ *
+ * The clause is placed BEFORE any RETURNING, because PostgresAdapter.run() appends
+ * `RETURNING <pk>` to the statement before translation runs, and ON CONFLICT must precede it.
+ *
+ * INSERT OR REPLACE is deliberately NOT handled: it would need a conflict target and the full
+ * column list to rebuild as DO UPDATE, so it stays a reported incompatibility.
+ */
+function rewriteInsertOrIgnore(sql: string): string {
+  if (!matchesInCode(sql, /\bINSERT\s+OR\s+IGNORE\b/i)) return sql;
+
+  const text = replaceInCode(sql, /\bINSERT\s+OR\s+IGNORE\b/gi, 'INSERT');
+  // An explicit ON CONFLICT already states the resolution; a second clause is a syntax error.
+  if (matchesInCode(text, /\bON\s+CONFLICT\b/i)) return text;
+
+  const mask = literalMask(text);
+  let insertAt = text.length;
+  const returning = /\bRETURNING\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = returning.exec(text)) !== null) {
+    if (!mask[m.index]) { insertAt = m.index; break; }
+  }
+  if (insertAt === text.length) {
+    insertAt = text.length - (/[\s;]*$/.exec(text)?.[0].length ?? 0);
+  }
+
+  const head = text.slice(0, insertAt).replace(/\s+$/, '');
+  const tail = text.slice(insertAt).trimStart();
+  return tail ? `${head} ON CONFLICT DO NOTHING ${tail}` : `${head} ON CONFLICT DO NOTHING`;
+}
+
 export function applySafeRewrites(sql: string): string {
   let text = sql;
   // datetime() first: it is the only rewrite that inspects its own arguments, and running it
@@ -454,6 +644,9 @@ export function applySafeRewrites(sql: string): string {
   // way round would strip datetime('now') down to a bare 'now' string literal.
   text = rewriteDatetimeCalls(text);
   text = unwrapSingleArgDatetime(text);
+  text = rewriteJsonSetCalls(text);
+  text = rewriteRoundCalls(text);
+  text = rewriteInsertOrIgnore(text);
   for (const { pattern, replacement } of SAFE_REWRITES) {
     text = replaceInCode(text, pattern, replacement);
   }

@@ -29,24 +29,40 @@ import { translateToPostgres } from './dialect';
  * form protects is precision this schema cannot reach. Registered once at module load,
  * because the parser table is global to the pg driver.
  *
- * numeric/decimal (1700) is deliberately left as a string — those columns CAN exceed
- * float precision, and no Agent HQ id uses the type.
+ * numeric (1700) is parsed for the same reason, and it is NOT reachable only in theory: the
+ * schema declares no numeric column anywhere — 554 text, 323 bigint, 2 double precision — so
+ * every numeric value the driver ever sees is the result of an aggregate. PostgreSQL widens
+ * SUM(bigint) to numeric to avoid overflow and AVG() likewise, so leaving it as a string turned
+ * sprints.total_story_points into "13" and telemetry's first_pass_rate_pct into "0.0" while the
+ * SQLite build returned numbers. Since no column carries the type, there is no column precision
+ * to protect by keeping the string form.
  */
 const PG_INT8_OID = 20;
-let int8ParserRegistered = false;
+const PG_NUMERIC_OID = 1700;
+let numberParsersRegistered = false;
 function registerInt8Parser(): void {
-  if (int8ParserRegistered) return;
+  if (numberParsersRegistered) return;
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { types } = require('pg') as typeof import('pg');
-  types.setTypeParser(PG_INT8_OID, (value: string) => {
+  const toNumber = (label: string) => (value: string) => {
     const asNumber = Number(value);
     if (!Number.isSafeInteger(asNumber)) {
       // Louder than a silent precision loss, and unreachable for sequence-generated ids.
-      console.warn(`[pg] int8 value ${value} exceeds safe integer range; returning as number anyway`);
+      console.warn(`[pg] ${label} value ${value} exceeds safe integer range; returning as number anyway`);
+    }
+    return asNumber;
+  };
+  types.setTypeParser(PG_INT8_OID, toNumber('int8'));
+  // Fractional aggregates are expected here, so only a magnitude beyond 2^53 is worth warning
+  // about — Number.isSafeInteger would fire on every ordinary average.
+  types.setTypeParser(PG_NUMERIC_OID, (value: string) => {
+    const asNumber = Number(value);
+    if (!Number.isFinite(asNumber) || Math.abs(asNumber) > Number.MAX_SAFE_INTEGER) {
+      console.warn(`[pg] numeric value ${value} exceeds safe range; returning as number anyway`);
     }
     return asNumber;
   });
-  int8ParserRegistered = true;
+  numberParsersRegistered = true;
 }
 
 export class PostgresAdapter implements Db {

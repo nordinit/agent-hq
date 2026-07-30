@@ -12,6 +12,7 @@ import { assertForeignKeyEnforcementEnabled } from '../db/startupVerifier';
 import { NODE_BIN_DIR } from '../config';
 import { seedTenantDefaultWorkflowEventMappings } from '../domains/routing/externalEventMappings';
 import { buildRuntimeConfigDefaults } from './runtimeOnboarding';
+import { getAgentHqBaseUrl } from './agentHqBaseUrl';
 import {
   ATLAS_AGENT_NAME,
   ATLAS_SYSTEM_ROLE,
@@ -1564,7 +1565,16 @@ export async function ensureTenantAgentHqMcpServer(db: Db, tenantId: number): Pr
   const serverEntryScript = path.join(path.resolve(__dirname, '../..'), 'dist', 'mcp', 'server.js');
   const nodeExecutable = path.join(NODE_BIN_DIR, 'node');
   const args = JSON.stringify([serverEntryScript]);
-  const env = JSON.stringify({ AGENT_HQ_API_URL: 'http://127.0.0.1:3501' });
+  // Resolved from the environment, never hardcoded. This value is stored on the mcp_servers row
+  // and ends up in the MCP bundle every dispatched agent loads, so it decides which Agent HQ API
+  // the agent reports back to. A literal 3501 meant any non-production instance handed its agents
+  // PRODUCTION's address: the PostgreSQL test instance on 3531 dispatched runs whose agents then
+  // asked production about instance ids that existed only in the test database. Production
+  // refused those writes correctly, but the required tool never appeared, the runs died at MCP
+  // readiness, and each attempt still left a refusal audit row on a production task.
+  const env = JSON.stringify({
+    AGENT_HQ_API_URL: getAgentHqBaseUrl(`http://127.0.0.1:${process.env.PORT ?? 3501}`),
+  });
   const cwd = path.resolve(__dirname, '../..');
 
   const inserted = await db.run(`
