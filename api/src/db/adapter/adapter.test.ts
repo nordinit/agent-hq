@@ -56,7 +56,76 @@ describe('dialect translation', () => {
     expect(findIncompatibilities('SELECT rowid FROM t')
       .map((i) => i.construct)).toContain('rowid');
     expect(findIncompatibilities('INSERT OR REPLACE INTO t VALUES (1)')
-      .map((i) => i.construct)).toContain('INSERT OR REPLACE / INSERT OR IGNORE');
+      .map((i) => i.construct)).toContain('INSERT OR REPLACE');
+    // json_extract cannot be translated at all: PostgreSQL's equivalent takes bare key names
+    // rather than SQLite's '$.a.b', so the caller has to change what it binds.
+    expect(findIncompatibilities('SELECT json_extract(custom_fields_json, ?) FROM tasks')
+      .map((i) => i.construct)).toContain('json_extract()');
+  });
+
+  it('translates INSERT OR IGNORE to ON CONFLICT DO NOTHING', () => {
+    // PostgreSQL accepts a bare DO NOTHING — "any unique violation" — which is exactly what
+    // OR IGNORE means, so no per-statement conflict target has to be inferred.
+    expect(translateToPostgres('INSERT OR IGNORE INTO chat_messages (id, role) VALUES (?, ?)'))
+      .toBe('INSERT INTO chat_messages (id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING');
+  });
+
+  it('places ON CONFLICT before a RETURNING clause', () => {
+    // PostgresAdapter.run() appends RETURNING <pk> before translation runs, and ON CONFLICT
+    // must precede it — appending blindly would produce invalid SQL for every insert that
+    // needs lastInsertId.
+    expect(translateToPostgres('INSERT OR IGNORE INTO t (a) VALUES (?) RETURNING "id"'))
+      .toBe('INSERT INTO t (a) VALUES ($1) ON CONFLICT DO NOTHING RETURNING "id"');
+  });
+
+  it('leaves an explicit ON CONFLICT alone rather than adding a second one', () => {
+    const sql = 'INSERT OR IGNORE INTO t (a) VALUES (?) ON CONFLICT(a) DO UPDATE SET a = excluded.a';
+    expect(translateToPostgres(sql))
+      .toBe('INSERT INTO t (a) VALUES ($1) ON CONFLICT(a) DO UPDATE SET a = excluded.a');
+  });
+
+  it('casts a bare parameter used in IS NULL so PostgreSQL can type it', () => {
+    // The optional-filter idiom. Without the cast PostgreSQL refuses the statement with
+    // "could not determine data type of parameter $1" before it ever runs.
+    expect(translateToPostgres('SELECT * FROM s WHERE (? IS NULL OR s.agent_id = ?)'))
+      .toBe('SELECT * FROM s WHERE ($1::text IS NULL OR s.agent_id = $2)');
+    expect(translateToPostgres('SELECT * FROM s WHERE ? IS NOT NULL'))
+      .toBe('SELECT * FROM s WHERE $1::text IS NOT NULL');
+  });
+
+  it('casts round() to numeric, keeping nested calls intact', () => {
+    // PostgreSQL has no round(double precision, int), which is what AVG()/division produces.
+    // The nested parens and the top-level comma are why this cannot be a regex.
+    // No cast back to float: PostgresAdapter's numeric type parser returns numbers.
+    expect(applySafeRewrites('SELECT round(AVG(x) * 100.0 / COUNT(*), 1) FROM t'))
+      .toBe('SELECT round((AVG(x) * 100.0 / COUNT(*))::numeric, 1) FROM t');
+    // Single-argument round() is already valid for double precision.
+    expect(applySafeRewrites('SELECT round(x) FROM t')).toBe('SELECT round(x) FROM t');
+    // An identifier that merely ends in "round" must not be rewritten.
+    expect(applySafeRewrites('SELECT my_round(x, 1) FROM t')).toBe('SELECT my_round(x, 1) FROM t');
+  });
+
+  it('translates json_set with a literal path to jsonb_set', () => {
+    // The path notations differ ('$.runtimeEnd' vs '{runtimeEnd}'), and the nested COALESCE has
+    // to survive as a single argument.
+    expect(translateToPostgres(
+      `UPDATE job_instances SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?)) WHERE id = ?`,
+    )).toBe(
+      `UPDATE job_instances SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', ($1)::jsonb) WHERE id = $2`,
+    );
+  });
+
+  it('translates a nested json_set path to a text[] path', () => {
+    expect(applySafeRewrites(`SELECT json_set(doc, '$.a.b', json('1'))`))
+      .toBe(`SELECT jsonb_set((doc)::jsonb, '{a,b}', ('1')::jsonb)`);
+  });
+
+  it('leaves json_set with a bound-parameter path untranslated for reporting', () => {
+    // Silently guessing a path here would corrupt the document rather than fail.
+    const sql = `SELECT json_set(doc, ?, json('1'))`;
+    expect(applySafeRewrites(sql)).toBe(sql);
+    expect(findIncompatibilities(sql).map((i) => i.construct))
+      .toContain('json_set() with a non-literal path');
   });
 
   it('does not flag an incompatibility that only appears inside a literal', () => {

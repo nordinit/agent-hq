@@ -241,8 +241,40 @@ const indexes = db.prepare(
    WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name`
 ).all();
 
+// UNIQUE constraints declared inline on a column (`external_key TEXT UNIQUE`) or at table level
+// (`UNIQUE(a, b)`) are not part of the CREATE TABLE text emitted above, and SQLite does not
+// expose them as CREATE UNIQUE INDEX either — it backs them with an internal `sqlite_autoindex_*`
+// entry whose `sql` column is NULL. Both the `name NOT LIKE 'sqlite_%'` filter on the query above
+// and the `if (!idx.sql) continue` below therefore skipped them, and 27 uniqueness guarantees
+// were silently dropped from the migrated schema — among them mcp_api_keys(key_hash),
+// tenants(slug) and recurring_task_runs(idempotency_key).
+//
+// The loss is not merely that PostgreSQL would accept duplicates SQLite rejects. Every
+// `ON CONFLICT (col) DO UPDATE` upsert against one of these fails outright with "no unique or
+// exclusion constraint matching the ON CONFLICT specification", because an upsert needs a real
+// unique index to arbitrate on. That is a hard runtime error on a normal write path.
+//
+// PRAGMA index_list reports an `origin` per index: 'u' for a UNIQUE constraint, 'pk' for the
+// index backing a PRIMARY KEY, 'c' for an explicit CREATE INDEX. Only 'u' belongs here — primary
+// keys already come across in the table DDL, and 'c' entries are handled by the loop below.
+for (const { name: table } of tables) {
+  for (const entry of db.prepare(`PRAGMA index_list(${q(table)})`).all()) {
+    if (entry.origin !== 'u') continue;
+    const cols = db.prepare(`SELECT name FROM pragma_index_info(?)`).all(entry.name).map((c) => c.name);
+    // An expression index reports a NULL column name and cannot be rebuilt from index_info.
+    if (!cols.length || cols.some((c) => c == null)) {
+      console.warn(`  WARNING: unique index ${entry.name} on ${table} is not reconstructible from index_info; skipped`);
+      continue;
+    }
+    idxSql.push(
+      `CREATE UNIQUE INDEX IF NOT EXISTS ${q(`uq_${table}_${cols.join('_')}`)} ` +
+      `ON ${q(table)} (${cols.map(q).join(', ')});`
+    );
+  }
+}
+
 for (const idx of indexes) {
-  if (!idx.sql) continue; // implicit index backing a UNIQUE constraint; already emitted
+  if (!idx.sql) continue; // implicit index; emitted from PRAGMA index_list above
   let stmt = idx.sql.trim().replace(/\s+/g, ' ');
   stmt = stmt.replace(/^CREATE\s+(UNIQUE\s+)?INDEX\s+(IF\s+NOT\s+EXISTS\s+)?/i, (m, u) =>
     `CREATE ${u ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS `);
