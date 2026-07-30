@@ -3,17 +3,15 @@ afterEach(() => {
   taskLifecycle.clearPendingEndedActiveInstanceLinkageCleanupTimers?.();
 });
 
-// Releases this worker's PostgreSQL pool once the FILE is done, rather than after each test.
+// The PostgreSQL pool is deliberately NOT closed here.
 //
-// The pool has to outlive individual tests: testFixture keeps one database per worker and resets it
-// by truncation, so closing the pool per test sends the next setup back through DROP DATABASE +
-// CREATE DATABASE ... TEMPLATE and blows jest's 5s hook timeout. Releasing it here keeps jest from
-// reporting an open handle after a worker's last file, while leaving the database itself for global
-// teardown to drop.
+// Closing it per FILE looked tidy and was wrong for the same reason closing it per TEST was:
+// closeTestDb() clears testFixture's cached handle, so the next file's setup re-enters the clone
+// path and runs DROP DATABASE + CREATE DATABASE ... TEMPLATE again. Cloning a 71-table template is
+// slow enough that whole files then failed on jest's 5s timeout — including under --runInBand,
+// which is what ruled out worker contention as the cause and pointed back here.
 //
-// A no-op on SQLite runs — closeTestDb() returns immediately when no pool was opened.
-afterAll(async () => {
-  if (!process.env.AGENT_HQ_TEST_PG_URL) return;
-  const fixture = require('./pg/testFixture') as Partial<typeof import('./pg/testFixture')>;
-  await fixture.closeTestDb?.();
-});
+// The fixture's model is one database per WORKER, held for the worker's lifetime and reset by
+// truncation in setupTestDb(). One clone per worker instead of one per file is the difference
+// between a suite that finishes and one that times out. The database is dropped by
+// dropWorkerDatabase(), and stale ones are reaped by global setup on the next run.

@@ -1,8 +1,6 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { closeDb, getDb } from './client';
+import { getDb } from './client';
 import { initSchema } from './schema';
+import { setupTestDb, teardownTestDb, usingPostgres } from './testDb';
 import { bootstrapRoutingAndWorkflowDefaults } from './bootstrapDefaults';
 import {
   AGENT_HQ_RUNTIME_SOURCE,
@@ -12,8 +10,26 @@ import {
   removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForNonDefaultTenants,
 } from '../domains/routing/externalEventMappings';
 
-let tempDir = '';
-let originalDbPath: string | undefined;
+const DEFAULT_TENANT_ID = 1;
+
+/**
+ * The default tenant row every assertion in this file is scoped to.
+ *
+ * On SQLite initSchema() seeded it as a side effect; the PostgreSQL fixture template carries DDL
+ * only and is truncated between tests, so it is simply absent there. Rather than depend on a
+ * seeding side effect on one engine, insert it explicitly on both: the seeding path under test
+ * resolves its target tenant through getDefaultTenantIdIfAvailable(), which needs a real
+ * is_default = 1 row, and external_event_mappings.tenant_id is a real foreign key on PostgreSQL.
+ */
+async function ensureDefaultTenant(): Promise<void> {
+  const db = getDb();
+  const existing = await db.get(`SELECT id FROM tenants WHERE id = ?`, DEFAULT_TENANT_ID);
+  if (existing) return;
+  await db.run(
+    `INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, 1)`,
+    DEFAULT_TENANT_ID, 'Default', 'default',
+  );
+}
 
 async function devLeaseMappingCount(tenantId: number): Promise<number> {
   const db = getDb();
@@ -97,27 +113,20 @@ async function defaultMappingCloneCount(eventName: string): Promise<number> {
 }
 
 describe('tenant workflow-event default seeding and repair', () => {
-  beforeEach(() => {
-    originalDbPath = process.env.AGENT_HQ_DB_PATH;
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-workflow-event-defaults-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-    closeDb();
+  beforeEach(async () => {
+    // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
+    // SQLite and on PostgreSQL. It replaces the old temp-file + initSchema() dance entirely.
+    await setupTestDb();
+    await ensureDefaultTenant();
   });
 
-  afterEach(() => {
-    closeDb();
-    if (originalDbPath === undefined) {
-      delete process.env.AGENT_HQ_DB_PATH;
-    } else {
-      process.env.AGENT_HQ_DB_PATH = originalDbPath;
-    }
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  afterEach(async () => {
+    await teardownTestDb();
   });
 
   it('does not duplicate default-tenant Dev Environment Lease Manager mappings when explicit bootstrap reruns', async () => {
     const expectedDevLeaseMappings = DEFAULT_WORKFLOW_EVENT_MAPPINGS.filter((row) => row.source === DEV_ENV_LEASE_MANAGER_SOURCE).length;
 
-    await initSchema();
     await bootstrapRoutingAndWorkflowDefaults(getDb());
     expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
 
@@ -126,7 +135,6 @@ describe('tenant workflow-event default seeding and repair', () => {
   });
 
   it('collapses legacy duplicate default mappings and keeps custom variants across reinstall reruns', async () => {
-    await initSchema();
     await bootstrapRoutingAndWorkflowDefaults(getDb());
 
     const db = getDb();
@@ -154,7 +162,8 @@ describe('tenant workflow-event default seeding and repair', () => {
     // The project-scoped variant below needs a real projects row: project_id carries a
     // REFERENCES projects(id) constraint, and this fixture previously hardcoded id 1,
     // which only inserted because foreign-key enforcement had leaked OFF during schema
-    // init. Create the parent explicitly rather than assuming an id.
+    // init. Create the parent explicitly rather than assuming an id — on PostgreSQL the
+    // fixture truncates with RESTART IDENTITY, so ids are not stable across tests either.
     const scopedProjectId = Number((await db.run(`
       INSERT INTO projects (tenant_id, name, description, context_md)
       VALUES (1, 'Workflow event scope fixture', 'project-scoped mapping variant', '')
@@ -179,7 +188,7 @@ describe('tenant workflow-event default seeding and repair', () => {
 
     expect(await defaultMappingCloneCount('agent_started')).toBe(1);
     expect(await workflowEventMappingCount()).toBe(beforeRepairTotal - 2);
-    expect((await db.get(`
+    expect(Number((await db.get(`
       SELECT COUNT(*) AS count
       FROM external_event_mappings
       WHERE tenant_id = 1
@@ -188,9 +197,9 @@ describe('tenant workflow-event default seeding and repair', () => {
         AND (
           enabled = 0
           OR priority = 500
-          OR project_id = 1
+          OR project_id = ?
         )
-    `, AGENT_HQ_RUNTIME_SOURCE) as { count: number }).count).toBe(3);
+    `, AGENT_HQ_RUNTIME_SOURCE, scopedProjectId) as { count: number }).count)).toBe(3);
 
     const afterRepairTotal = await workflowEventMappingCount();
     await bootstrapRoutingAndWorkflowDefaults(db);
@@ -212,7 +221,6 @@ describe('tenant workflow-event default seeding and repair', () => {
   it('repairs leaked non-default tenant Dev Environment Lease Manager mappings without changing default rows', async () => {
     const expectedDevLeaseMappings = DEFAULT_WORKFLOW_EVENT_MAPPINGS.filter((row) => row.source === DEV_ENV_LEASE_MANAGER_SOURCE).length;
 
-    await initSchema();
     await bootstrapRoutingAndWorkflowDefaults(getDb());
     await copyDefaultDevLeaseMappingsToTenant(2);
     expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
@@ -224,7 +232,13 @@ describe('tenant workflow-event default seeding and repair', () => {
     expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
     expect(await devLeaseMappingCount(2)).toBe(0);
 
-    await initSchema();
+    // Re-run startup so the guarantee "startup must not resurrect what the repair deleted" is
+    // still covered. initSchema() is SQLite-only machinery — it goes through getRawDb(), the raw
+    // better-sqlite3 handle, so calling it under a PostgreSQL run would open an unrelated SQLite
+    // file and assert nothing. On PostgreSQL run the startup path that actually could re-add the
+    // rows: the defaults bootstrap (schema DDL itself seeds no mappings).
+    if (usingPostgres()) await bootstrapRoutingAndWorkflowDefaults(getDb());
+    else await initSchema();
     expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
     expect(await devLeaseMappingCount(2)).toBe(0);
   });

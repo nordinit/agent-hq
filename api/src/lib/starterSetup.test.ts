@@ -1,41 +1,31 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
+import type { Db } from '../db/adapter/types';
 import { syncStarterRoutingForProject } from './starterSetup';
 
-const originalDbPath = process.env.AGENT_HQ_DB_PATH;
-let tempDir = '';
+// The tenant is created explicitly rather than read back from initSchema's seeding: the PostgreSQL
+// fixture carries DDL only and is truncated between tests, so there is no seeded default tenant to
+// find. A fixed id keeps the project/sprint/agent foreign keys below satisfiable on both engines.
+const TENANT_ID = 9000;
 
-async function resetDb(): Promise<void> {
-  closeDb();
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'starter-setup-'));
-  process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-  await initSchema();
-}
-
-function cleanup(): void {
-  closeDb();
-  if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-  else process.env.AGENT_HQ_DB_PATH = originalDbPath;
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-  tempDir = '';
-}
-
-async function defaultTenantId(): Promise<number> {
-  const row = await getDb().get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id: number } | undefined;
-  if (!row) throw new Error('default tenant missing');
-  return row.id;
+async function seedTenant(db: Db): Promise<number> {
+  // is_default = 0 deliberately: SQLite and PostgreSQL both carry a unique partial index over
+  // is_default = 1, and on SQLite initSchema has already seeded the default tenant. Nothing in
+  // starter routing looks at is_default, so an ordinary tenant is the honest fixture.
+  await db.run(`
+    INSERT INTO tenants (id, name, slug, is_default)
+    VALUES (?, 'Starter Setup Test', 'starter-setup-test', 0)
+  `, TENANT_ID);
+  return TENANT_ID;
 }
 
 describe('starter routing setup', () => {
-  afterEach(cleanup);
+  beforeEach(async () => { await setupTestDb(); });
+  afterEach(async () => { await teardownTestDb(); });
 
   it('does not provision dev-only routing statuses for a narrowed lead-generation sprint', async () => {
-    await resetDb();
     const db = getDb();
-    const tenantId = await defaultTenantId();
+    const tenantId = await seedTenant(db);
 
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md, created_at)
@@ -85,9 +75,8 @@ describe('starter routing setup', () => {
   });
 
   it('preserves ready-to-merge starter routing for dev sprints', async () => {
-    await resetDb();
     const db = getDb();
-    const tenantId = await defaultTenantId();
+    const tenantId = await seedTenant(db);
 
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md, created_at)

@@ -1,7 +1,7 @@
 import express from 'express';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { authenticateMcpApiKeyIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 import { getDefaultTenantId } from '../lib/tenantContext';
 import tasksRouter from '../routes/tasks';
@@ -27,16 +27,33 @@ async function stopTestServer(server: Server): Promise<void> {
   });
 }
 
-async function seedAtlasTask(): Promise<{ agentId: number; taskId: number }> {
+/**
+ * The Atlas agent this file authenticates as is normally a seeding side effect of initSchema(),
+ * which only runs on SQLite — the PostgreSQL fixture template is DDL-only and truncated between
+ * tests. Reuse the seeded row when it exists and insert it explicitly when it does not, so the
+ * fixture states its own dependency on both engines instead of relying on seeding.
+ */
+async function ensureAtlasAgent(tenantId: number): Promise<number> {
   const db = getDb();
-  const tenantId = await getDefaultTenantId(db);
-  const atlas = await db.get(`
+  const existing = await db.get(`
     SELECT id FROM agents
     WHERE system_role = 'atlas' OR openclaw_agent_id = 'atlas' OR name = 'Atlas'
     ORDER BY id ASC
     LIMIT 1
   `) as { id: number } | undefined;
-  if (!atlas) throw new Error('Atlas seed agent missing');
+  if (existing) return Number(existing.id);
+
+  const inserted = await db.run(`
+    INSERT INTO agents (name, role, session_key, workspace_path, status, openclaw_agent_id, slug, system_role, tenant_id)
+    VALUES ('Atlas', 'Built-in assistant', 'agent:atlas:main', '', 'idle', 'atlas', 'atlas', 'atlas', ?)
+  `, tenantId);
+  return Number(inserted.lastInsertId);
+}
+
+async function seedAtlasTask(): Promise<{ agentId: number; taskId: number }> {
+  const db = getDb();
+  const tenantId = await getDefaultTenantId(db);
+  const atlasId = await ensureAtlasAgent(tenantId);
 
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (9101, ?, 'MCP Auth Test', '', '')`, tenantId);
   await db.run(`
@@ -46,22 +63,23 @@ async function seedAtlasTask(): Promise<{ agentId: number; taskId: number }> {
   await db.run(`
     INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, sprint_id, agent_id, task_type, custom_fields_json)
     VALUES (9102, ?, 'MCP auth task', '', 'todo', 'medium', 9101, 9103, ?, 'backend', '{}')
-  `, tenantId, atlas.id);
+  `, tenantId, atlasId);
 
-  return { agentId: atlas.id, taskId: 9102 };
+  return { agentId: atlasId, taskId: 9102 };
 }
 
 async function seedCustomFieldWorkflow(): Promise<{ projectId: number; sprintId: number }> {
   const db = getDb();
-  await db.run(`INSERT INTO projects (id, name, description, context_md) VALUES (9201, 'Custom Field Workflow Test', '', '')`);
+  const tenantId = await getDefaultTenantId(db);
+  await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (9201, ?, 'Custom Field Workflow Test', '', '')`, tenantId);
   await db.run(`
-    INSERT INTO sprints (id, project_id, name, goal, sprint_type, status)
-    VALUES (9202, 9201, 'Configurable Workflow', '', 'custom_mcp', 'active')
-  `);
+    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
+    VALUES (9202, ?, 9201, 'Configurable Workflow', '', 'custom_mcp', 'active')
+  `, tenantId);
   await db.run(`
     INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
-    VALUES (1, 'custom_mcp', NULL, ?)
-  `, JSON.stringify({
+    VALUES (?, 'custom_mcp', NULL, ?)
+  `, tenantId, JSON.stringify({
         fields: [
           { key: 'target_surface', label: 'Target Surface', type: 'select', options: ['api', 'ui'], required: true },
           { key: 'risk_score', label: 'Risk Score', type: 'number' },
@@ -74,30 +92,32 @@ async function seedCustomFieldWorkflow(): Promise<{ projectId: number; sprintId:
 
 async function seedCustomStatusWorkflow(): Promise<{ projectId: number; sprintId: number }> {
   const db = getDb();
-  await db.run(`INSERT INTO projects (id, name, description, context_md) VALUES (9301, 'Custom Status Workflow Test', '', '')`);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'custom_status_mcp', 'Custom Status MCP', '')`);
+  const tenantId = await getDefaultTenantId(db);
+  await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (9301, ?, 'Custom Status Workflow Test', '', '')`, tenantId);
+  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (?, 'custom_status_mcp', 'Custom Status MCP', '')`, tenantId);
   await db.run(`
     INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, stage_order, is_default_entry)
     VALUES
-      (1, 'custom_status_mcp', 'todo', 'To Do', 0, 1),
-      (1, 'custom_status_mcp', 'ready', 'Ready', 1, 0),
-      (1, 'custom_status_mcp', 'field_reported', 'Field Reported', 2, 0)
-  `);
+      (?, 'custom_status_mcp', 'todo', 'To Do', 0, 1),
+      (?, 'custom_status_mcp', 'ready', 'Ready', 1, 0),
+      (?, 'custom_status_mcp', 'field_reported', 'Field Reported', 2, 0)
+  `, tenantId, tenantId, tenantId);
   await db.run(`
-    INSERT INTO sprints (id, project_id, name, goal, sprint_type, status)
-    VALUES (9302, 9301, 'Custom Status Workflow', '', 'custom_status_mcp', 'active')
-  `);
+    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
+    VALUES (9302, ?, 9301, 'Custom Status Workflow', '', 'custom_status_mcp', 'active')
+  `, tenantId);
   return { projectId: 9301, sprintId: 9302 };
 }
 
 describe('Agent HQ MCP API identity propagation', () => {
   beforeEach(async () => {
-    closeDb();
-    await initSchema();
+    // setupTestDb() selects the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
+    // SQLite and on PostgreSQL.
+    await setupTestDb();
   });
 
-  afterEach(() => {
-    closeDb();
+  afterEach(async () => {
+    await teardownTestDb();
   });
 
   it('allows an MCP task status update when the API key maps to Atlas and audits the resolved agent', async () => {

@@ -17,6 +17,21 @@ import { describe, expect, it } from '@jest/globals';
  */
 const TEST_ROOT = path.join(__dirname, '..');
 
+/**
+ * Strips comments before matching.
+ *
+ * Without this the guard fires on prose. These conversions are heavily commented precisely
+ * BECAUSE of the initSchema seeding difference, so phrases like "on SQLite initSchema() seeds a
+ * default tenant" appear all over them — and a naive search reported six clean files as offenders.
+ */
+function code(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .map((line) => line.replace(/\/\/.*$/, ''))
+    .join('\n');
+}
+
 function testFilesUnder(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
@@ -38,7 +53,13 @@ describe('dual-engine test conversion', () => {
 
   it('lets setupTestDb be the only thing that chooses the engine', () => {
     const offenders = converted
-      .filter(({ src }) => /\binitSchema\s*\(/.test(src) || /AGENT_HQ_DB_PATH\s*=/.test(src))
+      .filter(({ src }) => {
+        const body = code(src);
+        // An initSchema() call guarded by usingPostgres() is legitimate: the SQLite branch may
+        // still want the seeding, so long as the PostgreSQL branch does something else.
+        const unguardedInitSchema = /\binitSchema\s*\(/.test(body) && !/usingPostgres\s*\(/.test(body);
+        return unguardedInitSchema || /AGENT_HQ_DB_PATH\s*=/.test(body);
+      })
       .map(({ file }) => path.relative(TEST_ROOT, file));
 
     // Either of those pins the file to SQLite, so a PostgreSQL run of it proves nothing.
@@ -50,7 +71,7 @@ describe('dual-engine test conversion', () => {
     // teardown so the next file in the worker is unaffected. A file setting it by hand would
     // escape that lifecycle and leak an engine choice into unrelated tests.
     const offenders = converted
-      .filter(({ src }) => /process\.env\.DATABASE_URL\s*=/.test(src))
+      .filter(({ src }) => /process\.env\.DATABASE_URL\s*=/.test(code(src)))
       .map(({ file }) => path.relative(TEST_ROOT, file));
 
     expect(offenders).toEqual([]);

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from './client';
+import { closeDb, closeDbAsync, getDb } from './client';
 import { initSchema } from './schema';
 import { closeTestDb, getTestDb, resetTestDb, workerDatabaseUrl } from './pg/testFixture';
 import type { Db } from './adapter/types';
@@ -54,9 +54,12 @@ export async function setupTestDb(options: SetupTestDbOptions = {}): Promise<Db>
     // Clone-from-template first: workerDatabaseUrl() is only valid once the database exists.
     await getTestDb();
     process.env.DATABASE_URL = workerDatabaseUrl();
-    // Drop any adapter cached from a previous file in this worker, or getDb() hands back one still
-    // wrapping the old (possibly SQLite) connection.
-    closeDb();
+    // closeDbAsync(), not closeDb(). closeDb() is synchronous so it deliberately does NOT end the
+    // PostgreSQL pool — and it does not null it either, so getDb() then builds a BRAND-NEW Pool
+    // and orphans the previous one. Called per test that leaks ten connections at a time until the
+    // server queues every request and whole files fail on jest's 5s timeout, with no "too many
+    // clients" error to point at it because a saturated pool waits rather than throwing.
+    await closeDbAsync();
     await resetTestDb();
 
     const db = getDb();
@@ -107,6 +110,9 @@ export async function teardownTestDb(): Promise<void> {
     // sequence, and leaving it set would silently move every not-yet-converted file in that worker
     // onto PostgreSQL against a truncated database. Clearing it costs nothing — the pool stays
     // open, and the next setupTestDb() sets it again.
+    // Ends the pool this test opened, for the same reason: leaving it to closeDb() elsewhere
+    // orphans it. The worker DATABASE is untouched and is reused by the next test via truncation.
+    await closeDbAsync();
     delete process.env.DATABASE_URL;
     return;
   }

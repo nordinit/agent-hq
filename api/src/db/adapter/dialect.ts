@@ -280,13 +280,6 @@ const SAFE_REWRITES: Array<{ pattern: RegExp; replacement: string; note: string 
  */
 const UNSAFE_CONSTRUCTS: Array<{ pattern: RegExp; construct: string; detail: string }> = [
   {
-    pattern: /\bIS\s+\?/gi,
-    construct: 'IS ?',
-    detail:
-      'SQLite uses `IS ?` for NULL-safe equality. PostgreSQL rejects a parameter after ' +
-      'IS. Rewrite as `col IS NOT DISTINCT FROM ?`.',
-  },
-  {
     pattern: /\browid\b/gi,
     construct: 'rowid',
     detail:
@@ -325,6 +318,18 @@ const UNSAFE_CONSTRUCTS: Array<{ pattern: RegExp; construct: string; detail: str
       'Rewrite as INSERT ... ON CONFLICT (<target>) DO UPDATE SET ..., naming the conflicting ' +
       'columns explicitly. INSERT OR IGNORE needs no change — it is translated to ' +
       'ON CONFLICT DO NOTHING.',
+  },
+  {
+    // Kept as a reported incompatibility only for a bare `IS ?` / `IS NOT ?` that survived the
+    // rewrite below — which should be impossible, since the rewrite is unconditional. Retained as
+    // a tripwire rather than deleted.
+    pattern: /\bIS\s+(?:NOT\s+)?\?(?!\s*DISTINCT)/gi,
+    construct: 'IS ? / IS NOT ? (untranslated)',
+    detail:
+      'SQLite treats IS / IS NOT as null-safe comparison operators that accept a parameter. '
+      + 'PostgreSQL only allows NULL, TRUE, FALSE, UNKNOWN or DISTINCT FROM after IS. This should '
+      + 'have been rewritten to IS [NOT] DISTINCT FROM automatically; reaching this means the '
+      + 'rewrite was bypassed.',
   },
   {
     // json_set with a literal path is translated; anything else reaches PostgreSQL as-is.
@@ -584,6 +589,30 @@ function rewriteTwoArgCall(
   return out;
 }
 
+/**
+ * `IS ?` -> `IS NOT DISTINCT FROM ?`, and `IS NOT ?` -> `IS DISTINCT FROM ?`.
+ *
+ * SQLite overloads IS / IS NOT as null-safe comparison operators that accept any operand, so
+ * `tenant_id IS NOT ?` is valid there and means "differs, treating NULL as a value". PostgreSQL
+ * only permits NULL, TRUE, FALSE, UNKNOWN or DISTINCT FROM after IS, so the same statement fails
+ * with `syntax error at or near "$3"` — the parameter is in a position no parameter may occupy.
+ *
+ * Found by running projectPortability's test against PostgreSQL: repairImportedProjectTenantScope
+ * threw on every import, and prod is on PostgreSQL. The construct was already listed in
+ * UNSAFE_CONSTRUCTS, but that list is only read by findIncompatibilities() — an audit helper that
+ * never runs on the execution path. Same gap that let INSERT OR IGNORE through.
+ *
+ * IS [NOT] DISTINCT FROM is the exact semantic equivalent and is understood by BOTH engines
+ * (SQLite has supported it since 3.39; this project bundles 3.51), so the rewrite is a
+ * normalisation rather than a divergence. `IS NULL` and `IS NOT NULL` cannot match, because the
+ * pattern requires a placeholder.
+ */
+function rewriteNullSafeComparisons(sql: string): string {
+  let text = replaceInCode(sql, /\bIS\s+NOT\s+\?/gi, 'IS DISTINCT FROM ?');
+  text = replaceInCode(text, /\bIS\s+\?/gi, 'IS NOT DISTINCT FROM ?');
+  return text;
+}
+
 function rewriteJsonSetCalls(sql: string): string {
   const mask = literalMask(sql);
   let out = '';
@@ -670,6 +699,7 @@ export function applySafeRewrites(sql: string): string {
   text = unwrapSingleArgDatetime(text);
   text = rewriteJsonSetCalls(text);
   text = rewriteRoundCalls(text);
+  text = rewriteNullSafeComparisons(text);
   text = quoteMixedCaseAliases(text);
   text = rewriteInsertOrIgnore(text);
   for (const { pattern, replacement } of SAFE_REWRITES) {

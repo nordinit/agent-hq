@@ -51,8 +51,10 @@ describe('dialect translation', () => {
 
   it('reports constructs it refuses to translate rather than guessing', () => {
     // A wrong rewrite that still parses is worse than a loud failure.
+    // `IS ?` is now rewritten to IS NOT DISTINCT FROM rather than merely reported, so the entry
+    // that remains is a tripwire for one that somehow bypassed the rewrite.
     expect(findIncompatibilities('SELECT * FROM t WHERE a IS ?')
-      .map((i) => i.construct)).toContain('IS ?');
+      .map((i) => i.construct)).toContain('IS ? / IS NOT ? (untranslated)');
     expect(findIncompatibilities('SELECT rowid FROM t')
       .map((i) => i.construct)).toContain('rowid');
     expect(findIncompatibilities('INSERT OR REPLACE INTO t VALUES (1)')
@@ -103,6 +105,23 @@ describe('dialect translation', () => {
     expect(applySafeRewrites('SELECT round(x) FROM t')).toBe('SELECT round(x) FROM t');
     // An identifier that merely ends in "round" must not be rewritten.
     expect(applySafeRewrites('SELECT my_round(x, 1) FROM t')).toBe('SELECT my_round(x, 1) FROM t');
+  });
+
+  it('rewrites SQLite null-safe IS / IS NOT comparisons', () => {
+    // SQLite overloads IS / IS NOT to accept any operand; PostgreSQL allows only NULL, TRUE,
+    // FALSE, UNKNOWN or DISTINCT FROM, so a parameter there is a syntax error. Found by running
+    // projectPortability against PostgreSQL, where every project import threw
+    // `syntax error at or near "$3"`.
+    expect(translateToPostgres(`UPDATE t SET a = ? WHERE b = ? AND (c IS NOT ?)`))
+      .toBe(`UPDATE t SET a = $1 WHERE b = $2 AND (c IS DISTINCT FROM $3)`);
+    expect(translateToPostgres(`SELECT * FROM t WHERE a IS ?`))
+      .toBe(`SELECT * FROM t WHERE a IS NOT DISTINCT FROM $1`);
+  });
+
+  it('does not touch IS NULL or IS NOT NULL', () => {
+    // The pattern requires a placeholder, so these cannot match.
+    expect(applySafeRewrites(`SELECT * FROM t WHERE a IS NULL AND b IS NOT NULL`))
+      .toBe(`SELECT * FROM t WHERE a IS NULL AND b IS NOT NULL`);
   });
 
   it('quotes mixed-case aliases so PostgreSQL does not fold them to lower case', () => {
