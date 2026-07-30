@@ -213,6 +213,17 @@ if (keepLegacyNames) {
   console.log('  legacy-named tables/indexes remaining: 0');
 }
 
+// Remove the working copy. It is a full 2.7 GB duplicate of the snapshot, and leaving one
+// behind per run is how this machine filled up. Kept on failure, where it is the evidence.
+try {
+  fs.rmSync(working, { force: true });
+  fs.rmSync(`${working}-shm`, { force: true });
+  fs.rmSync(`${working}-wal`, { force: true });
+  console.log('  cleaned up the working copy');
+} catch (err) {
+  console.warn(`  could not remove the working copy at ${working}:`, err);
+}
+
 const rows = sql(DB_NAME, `
   SELECT SUM(n_live_tup)::bigint FROM pg_stat_user_tables`);
 console.log(`\nProvisioned ${DB_NAME}: ~${rows} rows, ${fkCount} foreign keys${keepLegacyNames ? '' : ', renamed'}`);
