@@ -58,7 +58,24 @@ export async function setupTestDb(options: SetupTestDbOptions = {}): Promise<Db>
     // wrapping the old (possibly SQLite) connection.
     closeDb();
     await resetTestDb();
-    return getDb();
+
+    const db = getDb();
+    // Hard invariant, because "the suite is green under AGENT_HQ_TEST_PG_URL" is NOT evidence that
+    // anything ran on PostgreSQL. A file that still calls initSchema() builds SQLite whatever this
+    // variable says, then passes — a false green that looks exactly like a successful conversion.
+    // Two conversions were correctly abandoned after their own agent spotted precisely this.
+    //
+    // Failing here means the run asked for PostgreSQL and got something else, which is never a
+    // result worth reporting as a pass.
+    if (db.dialect !== 'postgres') {
+      throw new Error(
+        `setupTestDb() was asked for PostgreSQL (AGENT_HQ_TEST_PG_URL is set) but getDb() returned `
+        + `a '${db.dialect}' handle. Something else in this file is configuring the engine — most `
+        + `often a leftover initSchema() call or an AGENT_HQ_DB_PATH assignment. Passing tests in `
+        + `this state prove nothing about PostgreSQL.`,
+      );
+    }
+    return db;
   }
 
   // SQLite: a real temp file rather than :memory:, because initSchema reopens the connection and
@@ -85,6 +102,12 @@ export async function teardownTestDb(): Promise<void> {
     // setupTestDb() already truncates at the start of each test, so isolation does not depend on
     // anything happening here. The pool is closed by closeTestDb() in per-file teardown, and the
     // worker database is dropped by dropWorkerDatabase() in global teardown.
+    //
+    // DATABASE_URL *is* cleared, which is separate from the pool: a jest worker runs many files in
+    // sequence, and leaving it set would silently move every not-yet-converted file in that worker
+    // onto PostgreSQL against a truncated database. Clearing it costs nothing — the pool stays
+    // open, and the next setupTestDb() sets it again.
+    delete process.env.DATABASE_URL;
     return;
   }
   closeDb();
