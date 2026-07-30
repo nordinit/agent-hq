@@ -33,13 +33,11 @@ describe('project file versions', () => {
     process.env.AGENT_HQ_PROJECT_UPLOADS_DIR = path.join(tempDir, 'uploads');
     closeDb();
 
-    initSchema();
+    await initSchema();
     const db = getDb();
-    db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
-      .run(101, 'Tenant One', 'tenant-one', 0, 202, 'Tenant Two', 'tenant-two', 0);
-    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?)`)
-      .run(700, 101, 'Tenant One Project', 800, 202, 'Tenant Two Project');
-    db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run('101');
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`, 101, 'Tenant One', 'tenant-one', 0, 202, 'Tenant Two', 'tenant-two', 0);
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?)`, 700, 101, 'Tenant One Project', 800, 202, 'Tenant Two Project');
+    await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, '101');
 
     const app = express();
     app.use('/api/v1/projects/:id/files', projectFilesRouter);
@@ -152,7 +150,7 @@ describe('project file versions', () => {
     expect(upload.status).toBe(201);
     const uploaded = await upload.json() as { id: number };
 
-    getDb().prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run('202');
+    await getDb().run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, '202');
 
     const crossTenantHistory = await fetch(`${baseUrl}/api/v1/projects/700/files/${uploaded.id}/versions`);
     expect(crossTenantHistory.status).toBe(404);

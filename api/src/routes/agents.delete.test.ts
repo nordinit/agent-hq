@@ -10,7 +10,7 @@ let tempDir: string;
 let dbPath: string;
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-delete-'));
@@ -19,7 +19,7 @@ function resetDb(): void {
   process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, 'openclaw.json');
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     PRAGMA foreign_keys = ON;
 
     CREATE TABLE projects (
@@ -111,10 +111,10 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('agents delete', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-delete-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
-    resetDb();
+    await resetDb();
   });
 
   afterEach(() => {
@@ -127,15 +127,15 @@ describe('agents delete', () => {
 
   it('archives referenced agents instead of throwing a raw foreign-key error', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, name, session_key, status, enabled)
       VALUES (98, 'Repo Mode Smoke Agent', 'agent:repo-mode-smoke:main', 'idle', 0)
-    `).run();
-    db.prepare(`INSERT INTO tasks (id, title, agent_id) VALUES (394, 'Live clone mode smoke', 98)`).run();
-    db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (1849, 394, 98, 'done')`).run();
-    db.prepare(`INSERT INTO dispatch_log (id, task_id, agent_id) VALUES (1, 394, 98)`).run();
-    db.prepare(`INSERT INTO sprint_task_routing_rules (id, sprint_id, task_type, status, agent_id) VALUES (1, 1, 'backend', 'ready', 98)`).run();
-    db.prepare(`INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id) VALUES (1, 98, 30)`).run();
+    `);
+    await db.run(`INSERT INTO tasks (id, title, agent_id) VALUES (394, 'Live clone mode smoke', 98)`);
+    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (1849, 394, 98, 'done')`);
+    await db.run(`INSERT INTO dispatch_log (id, task_id, agent_id) VALUES (1, 394, 98)`);
+    await db.run(`INSERT INTO sprint_task_routing_rules (id, sprint_id, task_type, status, agent_id) VALUES (1, 1, 'backend', 'ready', 98)`);
+    await db.run(`INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id) VALUES (1, 98, 30)`);
     fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({
       mcp: {
         servers: {
@@ -181,7 +181,7 @@ describe('agents delete', () => {
       expect(body.error).toBeUndefined();
       expect(body.dependency_counts?.some((entry) => entry.table === 'job_instances' && entry.count === 1)).toBe(true);
 
-      const agent = db.prepare(`SELECT id, enabled, deleted_at, session_key FROM agents WHERE id = 98`).get() as {
+      const agent = await db.get(`SELECT id, enabled, deleted_at, session_key FROM agents WHERE id = 98`) as {
         id: number;
         enabled: number;
         deleted_at: string | null;
@@ -192,10 +192,10 @@ describe('agents delete', () => {
       expect(agent.deleted_at).toBeTruthy();
       expect(agent.session_key).toMatch(/^deleted:98:/);
 
-      const task = db.prepare(`SELECT agent_id FROM tasks WHERE id = 394`).get() as { agent_id: number };
-      const instance = db.prepare(`SELECT agent_id FROM job_instances WHERE id = 1849`).get() as { agent_id: number };
-      const routing = db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_routing_rules WHERE agent_id = 98`).get() as { n: number };
-      const mcpAssignments = db.prepare(`SELECT COUNT(*) AS n FROM agent_mcp_assignments WHERE agent_id = 98`).get() as { n: number };
+      const task = await db.get(`SELECT agent_id FROM tasks WHERE id = 394`) as { agent_id: number };
+      const instance = await db.get(`SELECT agent_id FROM job_instances WHERE id = 1849`) as { agent_id: number };
+      const routing = await db.get(`SELECT COUNT(*) AS n FROM sprint_task_routing_rules WHERE agent_id = 98`) as { n: number };
+      const mcpAssignments = await db.get(`SELECT COUNT(*) AS n FROM agent_mcp_assignments WHERE agent_id = 98`) as { n: number };
       const openClawConfig = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'));
       expect(task.agent_id).toBe(98);
       expect(instance.agent_id).toBe(98);
@@ -216,11 +216,11 @@ describe('agents delete', () => {
 
   it('hard-deletes agents with no historical references', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, name, session_key, status, enabled)
       VALUES (99, 'Disposable Agent', 'agent:disposable:main', 'idle', 1)
-    `).run();
-    db.prepare(`INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id) VALUES (1, 99, 30)`).run();
+    `);
+    await db.run(`INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id) VALUES (1, 99, 30)`);
     fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({
       mcp: {
         servers: {
@@ -253,7 +253,7 @@ describe('agents delete', () => {
       expect(body.hard_deleted).toBe(true);
       expect(body.error).toBeUndefined();
 
-      const row = db.prepare(`SELECT id FROM agents WHERE id = 99`).get();
+      const row = await db.get(`SELECT id FROM agents WHERE id = 99`);
       expect(row).toBeUndefined();
       const openClawConfig = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'));
       expect(openClawConfig.mcp.servers['agent-hq__agent-99']).toBeUndefined();

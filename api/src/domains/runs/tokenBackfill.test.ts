@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import { spawnSync } from 'child_process';
 import { backfillInstanceTokens } from './tokenBackfill';
+import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 jest.mock('child_process', () => ({
   spawnSync: jest.fn(),
@@ -9,9 +11,10 @@ jest.mock('child_process', () => ({
 
 const mockSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
 
-function createDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.exec(`
+async function createDb(): Promise<Db> {
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
+  await db.exec(`
     CREATE TABLE job_instances (
       id INTEGER PRIMARY KEY,
       status TEXT,
@@ -26,22 +29,22 @@ function createDb(): Database.Database {
 }
 
 describe('backfillInstanceTokens', () => {
-  let db: Database.Database;
+  let db: Db;
 
-  beforeEach(() => {
-    db = createDb();
+  beforeEach(async () => {
+    db = await createDb();
     mockSpawnSync.mockReset();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
-  it('persists token usage from canonical OpenClaw run sessions with durable suffixes', () => {
-    db.prepare(`
+  it('persists token usage from canonical OpenClaw run sessions with durable suffixes', async () => {
+    await db.run(`
       INSERT INTO job_instances (id, status, created_at, session_key)
       VALUES (99974450, 'done', datetime('now', '-5 minutes'), 'run:99974450:d6252a6b-6160-4f62-b288-4ad972449e65')
-    `).run();
+    `);
 
     mockSpawnSync.mockReturnValue({
       status: 0,
@@ -60,13 +63,13 @@ describe('backfillInstanceTokens', () => {
       signal: null,
     });
 
-    expect(backfillInstanceTokens(db)).toBe(1);
+    expect(await backfillInstanceTokens(db)).toBe(1);
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT token_input, token_output, token_total
       FROM job_instances
       WHERE id = 99974450
-    `).get() as { token_input: number | null; token_output: number | null; token_total: number | null };
+    `) as { token_input: number | null; token_output: number | null; token_total: number | null };
 
     expect(row).toEqual({
       token_input: 1621,

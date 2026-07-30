@@ -33,7 +33,7 @@ describe('task active-owner endpoint', () => {
     closeDb();
 
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         tenant_id INTEGER,
@@ -67,32 +67,32 @@ describe('task active-owner endpoint', () => {
         content TEXT
       );
     `);
-    ensureMcpApiKeyTable(db);
+    await ensureMcpApiKeyTable(db);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, tenant_id, project_id, name, slug, enabled, system_role)
       VALUES
         (94, 1, 86, 'Cinder', 'cinder-backend', 1, NULL),
         (95, 1, 86, 'Prism', 'prism-qa', 1, NULL)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id, agent_id, active_instance_id)
       VALUES
         (398, 1, 'Wrong task', 'review', 86, 57, 94, NULL),
         (551, 1, 'Routing rule fix', 'in_progress', 86, 57, 94, 7001),
         (552, 1, 'Other agent task', 'in_progress', 86, 57, 95, 7002),
         (553, 1, 'Finished run task', 'review', 86, 57, 94, 7003)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, status)
       VALUES
         (7001, 551, 94, 'running'),
         (7002, 552, 95, 'running'),
         (7003, 553, 94, 'done')
-    `).run();
+    `);
 
-    cinderKey = issueMcpApiKeyForAgent(db, 94, 'cinder test key').apiKey;
-    prismKey = issueMcpApiKeyForAgent(db, 95, 'prism test key').apiKey;
+    cinderKey = (await issueMcpApiKeyForAgent(db, 94, 'cinder test key')).apiKey;
+    prismKey = (await issueMcpApiKeyForAgent(db, 95, 'prism test key')).apiKey;
 
     const app = express();
     app.use(express.json());
@@ -154,12 +154,12 @@ describe('task active-owner endpoint', () => {
   });
 
   it('reports false when the task has no active instance', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 94, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-      'tasks.read_project_context',
-      'tasks.write_active_lifecycle',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 94, [
+            'discovery.read_catalog',
+            'tasks.read_active_context',
+            'tasks.read_project_context',
+            'tasks.write_active_lifecycle',
+          ]);
 
     const response = await fetch(`${baseUrl}/api/v1/tasks/398/active-owner`, {
       headers: apiKeyHeaders(cinderKey),
@@ -177,12 +177,12 @@ describe('task active-owner endpoint', () => {
   });
 
   it('reports false when another agent owns the active instance', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 94, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-      'tasks.read_project_context',
-      'tasks.write_active_lifecycle',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 94, [
+            'discovery.read_catalog',
+            'tasks.read_active_context',
+            'tasks.read_project_context',
+            'tasks.write_active_lifecycle',
+          ]);
 
     const response = await fetch(`${baseUrl}/api/v1/tasks/552/active-owner`, {
       headers: apiKeyHeaders(cinderKey),
@@ -215,12 +215,12 @@ describe('task active-owner endpoint', () => {
   });
 
   it('lets a project-scoped different agent check ownership without passing active task auth', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 95, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-      'tasks.read_project_context',
-      'tasks.write_active_lifecycle',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 95, [
+            'discovery.read_catalog',
+            'tasks.read_active_context',
+            'tasks.read_project_context',
+            'tasks.write_active_lifecycle',
+          ]);
 
     const response = await fetch(`${baseUrl}/api/v1/tasks/551/active-owner`, {
       headers: apiKeyHeaders(prismKey),

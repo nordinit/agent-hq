@@ -35,25 +35,25 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
 }
 
-function seedFixture(): void {
+async function seedFixture(): Promise<void> {
   const db = getDb();
-  const tenantId = getDefaultTenantId(db);
-  db.prepare(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (614, ?, 'Recurring API', '', '')`).run(tenantId);
-  db.prepare(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (615, ?, 'Other Project', '', '')`).run(tenantId);
-  db.prepare(`
+  const tenantId = await getDefaultTenantId(db);
+  await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (614, ?, 'Recurring API', '', '')`, tenantId);
+  await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (615, ?, 'Other Project', '', '')`, tenantId);
+  await db.run(`
     INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
     VALUES
       (6141, ?, 614, 'Fixed Workflow', '', 'recurring_api', 'active', 'time', '2w'),
       (6142, ?, 614, 'Closed Workflow', '', 'recurring_api', 'closed', 'time', '2w'),
       (6151, ?, 615, 'Other Workflow', '', 'recurring_api', 'active', 'time', '2w')
-  `).run(tenantId, tenantId, tenantId);
-  db.prepare(`
+  `, tenantId, tenantId, tenantId);
+  await db.run(`
     INSERT INTO agents (id, tenant_id, name, role, session_key, workspace_path, status, preferred_provider)
     VALUES (6143, ?, 'Pinned Cinder', 'Backend Engineer', 'agent:pinned-cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
-  `).run(tenantId);
-  db.prepare(`INSERT OR IGNORE INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1)`).run(tenantId);
-  db.prepare(`DELETE FROM sprint_type_task_types WHERE tenant_id = ? AND sprint_type_key = 'recurring_api'`).run(tenantId);
-  db.prepare(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`).run(tenantId);
+  `, tenantId);
+  await db.run(`INSERT OR IGNORE INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1)`, tenantId);
+  await db.run(`DELETE FROM sprint_type_task_types WHERE tenant_id = ? AND sprint_type_key = 'recurring_api'`, tenantId);
+  await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, tenantId);
 }
 
 function validPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -85,8 +85,8 @@ describe('recurring task series API', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'recurring-task-series-route-'));
     process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
     closeDb();
-    initSchema();
-    seedFixture();
+    await initSchema();
+    await seedFixture();
     triggerDispatchSpy = jest.spyOn(dispatchTrigger, 'triggerDispatch').mockImplementation(() => {});
     ({ server, baseUrl } = await startServer());
   });
@@ -301,7 +301,7 @@ describe('recurring task series API', () => {
       url: `/tasks/${body.task.id}`,
     });
     expect(triggerDispatchSpy).toHaveBeenCalledWith(614);
-    expect(getDb().prepare(`SELECT COUNT(*) AS count FROM job_instances`).get()).toEqual({ count: 0 });
+    expect(await getDb().get(`SELECT COUNT(*) AS count FROM job_instances`)).toEqual({ count: 0 });
 
     const historyRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/${series.id}/history`);
     expect(historyRes.status).toBe(200);
@@ -314,28 +314,28 @@ describe('recurring task series API', () => {
 
   it('isolates recurring series and generated task history by tenant context', async () => {
     const db = getDb();
-    const defaultTenantId = getDefaultTenantId(db);
-    const ecoPoolTenantId = Number(db.prepare(`
+    const defaultTenantId = await getDefaultTenantId(db);
+    const ecoPoolTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('EcoPool', 'ecopool', 0)
-    `).run().lastInsertRowid);
-    db.prepare(`
+    `)).lastInsertId);
+    await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md)
       VALUES (714, ?, 'EcoPool', '', '')
-    `).run(ecoPoolTenantId);
-    db.prepare(`
+    `, ecoPoolTenantId);
+    await db.run(`
       INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
       VALUES (7141, ?, 714, 'EcoPool Workflow', '', 'recurring_api', 'active', 'time', '2w')
-    `).run(ecoPoolTenantId);
-    db.prepare(`
+    `, ecoPoolTenantId);
+    await db.run(`
       INSERT INTO agents (id, tenant_id, name, role, session_key, workspace_path, status, preferred_provider)
       VALUES (7143, ?, 'EcoPool Agent', 'Backend Engineer', 'agent:ecopool:test', '/tmp/ecopool', 'idle', 'openai-codex')
-    `).run(ecoPoolTenantId);
-    db.prepare(`INSERT OR IGNORE INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1)`).run(ecoPoolTenantId);
-    db.prepare(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`).run(ecoPoolTenantId);
+    `, ecoPoolTenantId);
+    await db.run(`INSERT OR IGNORE INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1)`, ecoPoolTenantId);
+    await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, ecoPoolTenantId);
 
     const defaultSeries = await createSeries({ title_template: 'Default weekly maintenance' });
-    setActiveTenantId(db, ecoPoolTenantId);
+    await setActiveTenantId(db, ecoPoolTenantId);
     const ecoRes = await fetch(`${baseUrl}/api/v1/recurring-task-series`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -349,7 +349,7 @@ describe('recurring task series API', () => {
     expect(ecoRes.status).toBe(201);
     const ecoSeries = await ecoRes.json() as Record<string, unknown>;
 
-    setActiveTenantId(db, defaultTenantId);
+    await setActiveTenantId(db, defaultTenantId);
     const defaultRunRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/${defaultSeries.id}/run-now`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -357,7 +357,7 @@ describe('recurring task series API', () => {
     });
     expect(defaultRunRes.status).toBe(201);
 
-    setActiveTenantId(db, ecoPoolTenantId);
+    await setActiveTenantId(db, ecoPoolTenantId);
     const ecoList = await fetch(`${baseUrl}/api/v1/recurring-task-series`);
     expect(ecoList.status).toBe(200);
     const ecoListBody = await ecoList.json() as { series: Array<Record<string, unknown>>; total: number };
@@ -371,7 +371,7 @@ describe('recurring task series API', () => {
     const ecoTaskBody = await ecoTasks.json() as Array<Record<string, unknown>>;
     expect(ecoTaskBody.map(task => task.title)).not.toContain('Default weekly maintenance');
 
-    setActiveTenantId(db, defaultTenantId);
+    await setActiveTenantId(db, defaultTenantId);
     const defaultList = await fetch(`${baseUrl}/api/v1/recurring-task-series`);
     expect(defaultList.status).toBe(200);
     const defaultListBody = await defaultList.json() as { series: Array<Record<string, unknown>>; total: number };

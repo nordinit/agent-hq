@@ -1,13 +1,15 @@
 import Database from 'better-sqlite3';
+import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 describe('agents repo source mode defaults', () => {
-  let db: Database.Database;
+  let db: Db;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.resetModules();
     process.env.AGENT_HQ_DB_PATH = ':memory:';
-    db = new Database(':memory:');
-    db.exec(`
+    db = new SqliteAdapter(new Database(':memory:'));
+    await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
@@ -29,35 +31,20 @@ describe('agents repo source mode defaults', () => {
     `);
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
     jest.clearAllMocks();
   });
 
   it('surfaces no repo mode when an agent has only workspace_path', async () => {
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (
         name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, runtime_type, runtime_config, project_id, preferred_provider, model, system_role
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'Clone Candidate',
-      'Backend Engineer',
-      'agent:test:main',
-      '/tmp/agent-workspace',
-      null,
-      null,
-      null,
-      'idle',
-      'openclaw',
-      null,
-      null,
-      null,
-      null,
-      null,
-    );
+    `, 'Clone Candidate', 'Backend Engineer', 'agent:test:main', '/tmp/agent-workspace', null, null, null, 'idle', 'openclaw', null, null, null, null, null);
 
     const { parseAgentRuntimeConfig } = await import('./agents');
-    const row = db.prepare('SELECT * FROM agents WHERE name = ?').get('Clone Candidate') as Record<string, unknown>;
+    const row = await db.get('SELECT * FROM agents WHERE name = ?', 'Clone Candidate') as Record<string, unknown>;
     const parsed = parseAgentRuntimeConfig(row);
 
     expect(parsed.workspace_path).toBe('/tmp/agent-workspace');
@@ -67,29 +54,14 @@ describe('agents repo source mode defaults', () => {
   });
 
   it('preserves explicit clone mode metadata', async () => {
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (
         name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, runtime_type, runtime_config, project_id, preferred_provider, model, system_role
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'Clone Agent',
-      'Backend Engineer',
-      'agent:test:main',
-      '/tmp/agent-workspace',
-      null,
-      'https://example.com/repo.git',
-      'clone',
-      'idle',
-      'openclaw',
-      null,
-      null,
-      null,
-      null,
-      null,
-    );
+    `, 'Clone Agent', 'Backend Engineer', 'agent:test:main', '/tmp/agent-workspace', null, 'https://example.com/repo.git', 'clone', 'idle', 'openclaw', null, null, null, null, null);
 
     const { parseAgentRuntimeConfig } = await import('./agents');
-    const row = db.prepare('SELECT * FROM agents WHERE name = ?').get('Clone Agent') as Record<string, unknown>;
+    const row = await db.get('SELECT * FROM agents WHERE name = ?', 'Clone Agent') as Record<string, unknown>;
     const parsed = parseAgentRuntimeConfig(row);
 
     expect(parsed.repo_path).toBeNull();
@@ -98,29 +70,14 @@ describe('agents repo source mode defaults', () => {
   });
 
   it('preserves worktree mode when repo_path exists', async () => {
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (
         name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, runtime_type, runtime_config, project_id, preferred_provider, model, system_role
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'Worktree Agent',
-      'Backend Engineer',
-      'agent:test:main',
-      '/tmp/agent-workspace',
-      '/tmp/canonical-repo',
-      null,
-      null,
-      'idle',
-      'openclaw',
-      null,
-      null,
-      null,
-      null,
-      null,
-    );
+    `, 'Worktree Agent', 'Backend Engineer', 'agent:test:main', '/tmp/agent-workspace', '/tmp/canonical-repo', null, null, 'idle', 'openclaw', null, null, null, null, null);
 
     const { parseAgentRuntimeConfig } = await import('./agents');
-    const row = db.prepare('SELECT * FROM agents WHERE name = ?').get('Worktree Agent') as Record<string, unknown>;
+    const row = await db.get('SELECT * FROM agents WHERE name = ?', 'Worktree Agent') as Record<string, unknown>;
     const parsed = parseAgentRuntimeConfig(row);
 
     expect(parsed.repo_path).toBe('/tmp/canonical-repo');

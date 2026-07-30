@@ -24,12 +24,12 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
 }
 
 describe('runtime-owned provider connections', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     closeDb();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-provider-connections-'));
     process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, 'openclaw');
-    initSchema();
+    await initSchema();
     const authPath = path.join(process.env.OPENCLAW_STATE_DIR, 'agents', 'builder', 'agent', 'auth-profiles.json');
     fs.mkdirSync(path.dirname(authPath), { recursive: true });
     fs.writeFileSync(authPath, JSON.stringify({
@@ -74,9 +74,9 @@ describe('runtime-owned provider connections', () => {
       expect(create.status).toBe(201);
       const saved = await create.json() as Record<string, unknown>;
       expect(saved).toMatchObject({ provider_slug: 'anthropic', runtime_type: 'openclaw', status: 'connected' });
-      const row = getDb().prepare('SELECT config FROM provider_config WHERE slug = ?').get('anthropic');
+      const row = await getDb().get('SELECT config FROM provider_config WHERE slug = ?', 'anthropic');
       expect(row).toBeUndefined();
-      const connection = getDb().prepare('SELECT external_ref, metadata FROM provider_connections').get() as { external_ref: string; metadata: string };
+      const connection = await getDb().get('SELECT external_ref, metadata FROM provider_connections') as { external_ref: string; metadata: string };
       expect(connection.external_ref).toBe('builder/anthropic:work');
       expect(connection.metadata).not.toContain('do-not-store');
     } finally {

@@ -1,6 +1,7 @@
-import type Database from 'better-sqlite3';
 import { RELEASE_TASK_STATUSES, TERMINAL_TASK_STATUSES } from '../../../lib/taskStatuses';
 import type { PolicyRequirementSeed, PolicyTransitionSeed, SprintSeedRow, StarterSprintType } from './types';
+import { type Db } from "../../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../../db/introspection";
 
 const DEV_WORKFLOW_STATUSES = RELEASE_TASK_STATUSES.filter(status => status !== 'qa_pass');
 const GENERIC_WORKFLOW_STATUSES = ['todo', 'ready', 'in_progress', 'review', 'done'] as const;
@@ -42,8 +43,8 @@ export function canonicalTaskStatusEmoji(status: string): string | null {
   return typeof emoji === 'string' && emoji.trim().length > 0 ? emoji : null;
 }
 
-export function ensureRoutingMetadata(db: Database.Database): void {
-  db.exec(`
+export async function ensureRoutingMetadata(db: Db): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS task_statuses (
       name                TEXT PRIMARY KEY,
       label               TEXT NOT NULL,
@@ -96,9 +97,9 @@ export function ensureRoutingMetadata(db: Database.Database): void {
     { name: 'failed', label: 'Failed', color: 'red', terminal: 1, is_system: 1, allowed_transitions: ['todo', 'ready'] },
   ];
 
-  const seedTx = db.transaction(() => {
+  await db.withTransaction(async (db) => {
     for (const status of statuses) {
-      db.prepare(`
+      await db.run(`
         INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
@@ -107,89 +108,65 @@ export function ensureRoutingMetadata(db: Database.Database): void {
           terminal = excluded.terminal,
           is_system = excluded.is_system,
           allowed_transitions = excluded.allowed_transitions
-      `).run(
-        status.name,
-        status.label,
-        status.color,
-        status.terminal,
-        status.is_system,
-        JSON.stringify(status.allowed_transitions),
-      );
+      `, status.name, status.label, status.color, status.terminal, status.is_system, JSON.stringify(status.allowed_transitions));
     }
 
-    db.prepare(`
+    await db.run(`
       DELETE FROM task_statuses
       WHERE name = 'qa_pass'
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       UPDATE routing_transitions
       SET enabled = 0
       WHERE project_id IS NULL
-    `).run();
+    `);
   });
 
-  seedTx();
-  removeQaPassFromDevelopmentStatusMetadata(db);
-  normalizeQaPassDevelopmentTransitions(db);
+  await removeQaPassFromDevelopmentStatusMetadata(db);
+  await normalizeQaPassDevelopmentTransitions(db);
 
-  try { db.exec(`ALTER TABLE routing_transitions ADD COLUMN task_type TEXT`); } catch { /* exists */ }
-  try { db.exec(`ALTER TABLE routing_transitions ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`); } catch { /* exists */ }
+  try { await db.exec(`ALTER TABLE routing_transitions ADD COLUMN task_type TEXT`); } catch { /* exists */ }
+  try { await db.exec(`ALTER TABLE routing_transitions ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`); } catch { /* exists */ }
   try {
-    db.exec(`ALTER TABLE routing_transitions ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0`);
+    await db.exec(`ALTER TABLE routing_transitions ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0`);
   } catch { /* exists */ }
   try {
-    db.exec(`
+    await db.exec(`
       CREATE INDEX IF NOT EXISTS idx_routing_transitions_type
         ON routing_transitions(task_type, from_status, outcome);
     `);
   } catch { /* exists */ }
 
-  db.prepare(`
+  await db.run(`
     UPDATE routing_transitions
     SET is_protected = 0
     WHERE COALESCE(is_protected, 0) != 0
-  `).run();
+  `);
   try {
-    db.prepare(`
+    await db.run(`
       UPDATE sprint_task_transitions
       SET is_protected = 0
       WHERE COALESCE(is_protected, 0) != 0
-    `).run();
+    `);
   } catch { /* table or column may not exist yet */ }
 }
 
-export function tableExists(db: Database.Database, tableName: string): boolean {
-  try {
-    const row = db.prepare(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name = ?
-      LIMIT 1
-    `).get(tableName) as { name?: string } | undefined;
-    return Boolean(row?.name);
-  } catch {
-    return false;
-  }
+export async function tableExists(db: Db, tableName: string): Promise<boolean> {
+    return await sharedTableExists(db, tableName);
 }
 
-export function tableHasColumn(db: Database.Database, tableName: string, columnName: string): boolean {
-  if (!tableExists(db, tableName)) return false;
-  try {
-    const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
-    return rows.some((row) => row.name === columnName);
-  } catch {
-    return false;
-  }
+export async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
-export function tenantPredicate(db: Database.Database, tableName: string, alias: string, tenantId?: number | null): { sql: string; params: unknown[] } {
-  if (tenantId == null || !tableHasColumn(db, tableName, 'tenant_id')) return { sql: '', params: [] };
+export async function tenantPredicate(db: Db, tableName: string, alias: string, tenantId?: number | null): Promise<{ sql: string; params: unknown[] }> {
+  if (tenantId == null || !await tableHasColumn(db, tableName, 'tenant_id')) return { sql: '', params: [] };
   return { sql: ` AND ${alias}.tenant_id = ?`, params: [tenantId] };
 }
 
-export function sprintTypeTenantPredicate(db: Database.Database, tableName: string, tenantId?: number | null): { sql: string; params: unknown[] } {
-  if (tenantId == null || !tableHasColumn(db, tableName, 'tenant_id')) return { sql: '', params: [] };
+export async function sprintTypeTenantPredicate(db: Db, tableName: string, tenantId?: number | null): Promise<{ sql: string; params: unknown[] }> {
+  if (tenantId == null || !await tableHasColumn(db, tableName, 'tenant_id')) return { sql: '', params: [] };
   return { sql: ` AND tenant_id = ?`, params: [tenantId] };
 }
 
@@ -376,53 +353,51 @@ export function devWorkflowTransitions(): PolicyTransitionSeed[] {
   return rows;
 }
 
-function removeQaPassFromDevelopmentStatusMetadata(db: Database.Database): void {
+async function removeQaPassFromDevelopmentStatusMetadata(db: Db): Promise<void> {
   try {
-    if (tableExists(db, 'sprint_type_task_statuses')) {
-      db.prepare(`
+    if (await tableExists(db, 'sprint_type_task_statuses')) {
+      await db.run(`
         DELETE FROM sprint_type_task_statuses
         WHERE sprint_type_key = 'dev'
           AND status_key = 'qa_pass'
-      `).run();
-      const rows = db.prepare(`
+      `);
+      const rows = await db.all(`
         SELECT id, allowed_transitions_json
         FROM sprint_type_task_statuses
         WHERE sprint_type_key = 'dev'
-      `).all() as Array<{ id: number; allowed_transitions_json: string | null }>;
-      const update = db.prepare(`
-        UPDATE sprint_type_task_statuses
-        SET allowed_transitions_json = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `);
+      `) as Array<{ id: number; allowed_transitions_json: string | null }>;
       for (const row of rows) {
         const next = parseJsonArray(row.allowed_transitions_json)
           .map(status => status === 'qa_pass' ? 'ready_to_merge' : status);
-        update.run(JSON.stringify([...new Set(next)]), row.id);
+        await db.run(`
+          UPDATE sprint_type_task_statuses
+          SET allowed_transitions_json = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `, JSON.stringify([...new Set(next)]), row.id);
       }
     }
 
-    if (tableExists(db, 'sprint_task_statuses') && tableExists(db, 'sprints')) {
-      db.prepare(`
+    if (await tableExists(db, 'sprint_task_statuses') && await tableExists(db, 'sprints')) {
+      await db.run(`
         DELETE FROM sprint_task_statuses
         WHERE status_key = 'qa_pass'
           AND sprint_id IN (SELECT id FROM sprints WHERE sprint_type = 'dev')
-      `).run();
-      const rows = db.prepare(`
+      `);
+      const rows = await db.all(`
         SELECT sts.id, sts.allowed_transitions_json
         FROM sprint_task_statuses sts
         JOIN sprints s ON s.id = sts.sprint_id
         WHERE s.sprint_type = 'dev'
-      `).all() as Array<{ id: number; allowed_transitions_json: string | null }>;
-      const update = db.prepare(`
-        UPDATE sprint_task_statuses
-        SET allowed_transitions_json = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `);
+      `) as Array<{ id: number; allowed_transitions_json: string | null }>;
       for (const row of rows) {
         const next = parseJsonArray(row.allowed_transitions_json)
           .map(status => status === 'qa_pass' ? 'ready_to_merge' : status)
           .filter(status => status !== 'qa_pass');
-        update.run(JSON.stringify([...new Set(next)]), row.id);
+        await db.run(`
+          UPDATE sprint_task_statuses
+          SET allowed_transitions_json = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `, JSON.stringify([...new Set(next)]), row.id);
       }
     }
   } catch {
@@ -430,58 +405,58 @@ function removeQaPassFromDevelopmentStatusMetadata(db: Database.Database): void 
   }
 }
 
-function normalizeQaPassDevelopmentTransitions(db: Database.Database): void {
+async function normalizeQaPassDevelopmentTransitions(db: Db): Promise<void> {
   try {
-    if (tableExists(db, 'routing_config')) {
-      db.prepare(`
+    if (await tableExists(db, 'routing_config')) {
+      await db.run(`
         UPDATE routing_config
         SET to_status = 'ready_to_merge'
         WHERE from_status = 'review'
           AND outcome = 'qa_pass'
           AND to_status = 'qa_pass'
-      `).run();
-      db.prepare(`
+      `);
+      await db.run(`
         UPDATE routing_config
         SET enabled = 0
         WHERE from_status = 'qa_pass'
-      `).run();
+      `);
     }
-    if (tableExists(db, 'lifecycle_rules')) {
-      db.prepare(`
+    if (await tableExists(db, 'lifecycle_rules')) {
+      await db.run(`
         UPDATE lifecycle_rules
         SET to_status = 'ready_to_merge'
         WHERE from_status = 'review'
           AND outcome = 'qa_pass'
           AND to_status = 'qa_pass'
-      `).run();
-      db.prepare(`
+      `);
+      await db.run(`
         UPDATE lifecycle_rules
         SET enabled = 0
         WHERE from_status = 'qa_pass'
-      `).run();
+      `);
     }
-    if (tableExists(db, 'sprint_task_transitions')) {
-      const hasSprintType = tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
-      const hasSprintId = tableHasColumn(db, 'sprint_task_transitions', 'sprint_id');
+    if (await tableExists(db, 'sprint_task_transitions')) {
+      const hasSprintType = await tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
+      const hasSprintId = await tableHasColumn(db, 'sprint_task_transitions', 'sprint_id');
       const scopeSql = hasSprintType
         ? `sprint_type = 'dev'`
-        : hasSprintId && tableExists(db, 'sprints')
+        : hasSprintId && await tableExists(db, 'sprints')
           ? `sprint_id IN (SELECT id FROM sprints WHERE sprint_type = 'dev')`
           : `0`;
-      db.prepare(`
+      await db.run(`
         UPDATE sprint_task_transitions
         SET to_status = 'ready_to_merge', updated_at = datetime('now')
         WHERE from_status = 'review'
           AND outcome = 'qa_pass'
           AND to_status = 'qa_pass'
           AND (${scopeSql})
-      `).run();
-      db.prepare(`
+      `);
+      await db.run(`
         UPDATE sprint_task_transitions
         SET enabled = 0, updated_at = datetime('now')
         WHERE from_status = 'qa_pass'
           AND (${scopeSql})
-      `).run();
+      `);
     }
   } catch {
     // Transition cleanup is best-effort during startup across historical schemas.
@@ -521,56 +496,56 @@ export function policyRequirementsForSprintType(sprintType: string | null | unde
   return starterSprintType(sprintType) === 'dev' ? devWorkflowRequirements() : [];
 }
 
-export function getSprintSeedRow(db: Database.Database, sprintId: number): SprintSeedRow | null {
+export async function getSprintSeedRow(db: Db, sprintId: number): Promise<SprintSeedRow | null> {
   try {
-    const selectSeededAt = tableHasColumn(db, 'sprints', 'task_policy_seeded_at') ? ', task_policy_seeded_at' : '';
-    const selectTenantId = tableHasColumn(db, 'sprints', 'tenant_id') ? ', tenant_id' : '';
-    return db.prepare(`
+    const selectSeededAt = await tableHasColumn(db, 'sprints', 'task_policy_seeded_at') ? ', task_policy_seeded_at' : '';
+    const selectTenantId = await tableHasColumn(db, 'sprints', 'tenant_id') ? ', tenant_id' : '';
+    return await db.get(`
       SELECT id, project_id, sprint_type${selectTenantId}${selectSeededAt}
       FROM sprints
       WHERE id = ?
       LIMIT 1
-    `).get(sprintId) as SprintSeedRow | undefined ?? null;
+    `, sprintId) as SprintSeedRow | undefined ?? null;
   } catch {
     return null;
   }
 }
 
-export function isSprintTaskPolicySeeded(db: Database.Database, sprintId: number): boolean {
-  if (!tableHasColumn(db, 'sprints', 'task_policy_seeded_at')) return false;
-  const sprint = getSprintSeedRow(db, sprintId);
+export async function isSprintTaskPolicySeeded(db: Db, sprintId: number): Promise<boolean> {
+  if (!await tableHasColumn(db, 'sprints', 'task_policy_seeded_at')) return false;
+  const sprint = await getSprintSeedRow(db, sprintId);
   return Boolean(sprint?.task_policy_seeded_at);
 }
 
-export function markSprintTaskPolicySeeded(db: Database.Database, sprintId: number): void {
-  if (!tableHasColumn(db, 'sprints', 'task_policy_seeded_at')) return;
-  db.prepare(`
+export async function markSprintTaskPolicySeeded(db: Db, sprintId: number): Promise<void> {
+  if (!await tableHasColumn(db, 'sprints', 'task_policy_seeded_at')) return;
+  await db.run(`
     UPDATE sprints
     SET task_policy_seeded_at = COALESCE(task_policy_seeded_at, datetime('now'))
     WHERE id = ?
-  `).run(sprintId);
+  `, sprintId);
 }
 
-export function isSprintTypeStatusSeeded(db: Database.Database, sprintType: string, tenantId?: number | null): boolean {
-  if (!tableHasColumn(db, 'sprint_types', 'status_seeded_at')) return false;
-  const tenant = sprintTypeTenantPredicate(db, 'sprint_types', tenantId);
-  const row = db.prepare(`
+export async function isSprintTypeStatusSeeded(db: Db, sprintType: string, tenantId?: number | null): Promise<boolean> {
+  if (!await tableHasColumn(db, 'sprint_types', 'status_seeded_at')) return false;
+  const tenant = await sprintTypeTenantPredicate(db, 'sprint_types', tenantId);
+  const row = await db.get(`
     SELECT status_seeded_at
     FROM sprint_types
     WHERE key = ?
       ${tenant.sql}
     LIMIT 1
-  `).get(sprintType, ...tenant.params) as { status_seeded_at?: string | null } | undefined;
+  `, sprintType, ...tenant.params) as { status_seeded_at?: string | null } | undefined;
   return Boolean(row?.status_seeded_at);
 }
 
-export function markSprintTypeStatusSeeded(db: Database.Database, sprintType: string, tenantId?: number | null): void {
-  if (!tableHasColumn(db, 'sprint_types', 'status_seeded_at')) return;
-  const tenant = sprintTypeTenantPredicate(db, 'sprint_types', tenantId);
-  db.prepare(`
+export async function markSprintTypeStatusSeeded(db: Db, sprintType: string, tenantId?: number | null): Promise<void> {
+  if (!await tableHasColumn(db, 'sprint_types', 'status_seeded_at')) return;
+  const tenant = await sprintTypeTenantPredicate(db, 'sprint_types', tenantId);
+  await db.run(`
     UPDATE sprint_types
     SET status_seeded_at = COALESCE(status_seeded_at, datetime('now'))
     WHERE key = ?
       ${tenant.sql}
-  `).run(sprintType, ...tenant.params);
+  `, sprintType, ...tenant.params);
 }

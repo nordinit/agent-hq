@@ -1,4 +1,5 @@
-import type Database from 'better-sqlite3';
+import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export interface TaskFieldDefinition {
   key: string;
@@ -162,39 +163,29 @@ function mergeFieldSchemas(
   return { fields };
 }
 
-function tableExists(db: Database.Database, tableName: string): boolean {
-  try {
-    const row = db.prepare(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name = ?
-      LIMIT 1
-    `).get(tableName) as { name?: string } | undefined;
-    return Boolean(row?.name);
-  } catch {
-    return false;
-  }
+async function tableExists(db: Db, tableName: string): Promise<boolean> {
+    return await sharedTableExists(db, tableName);
 }
 
-export function resolveSprintTypeForSprintId(db: Database.Database, sprintId: unknown): string {
+export async function resolveSprintTypeForSprintId(db: Db, sprintId: unknown): Promise<string> {
   if (sprintId == null || sprintId === '') return 'generic';
 
   try {
-    const row = db.prepare(`SELECT sprint_type FROM sprints WHERE id = ? LIMIT 1`).get(Number(sprintId)) as { sprint_type?: string | null } | undefined;
+    const row = await db.get(`SELECT sprint_type FROM sprints WHERE id = ? LIMIT 1`, Number(sprintId)) as { sprint_type?: string | null } | undefined;
     return normalizeSprintType(row?.sprint_type);
   } catch {
     return 'generic';
   }
 }
 
-export function getAllowedTaskTypesForSprintType(db: Database.Database, sprintType: string): string[] {
+export async function getAllowedTaskTypesForSprintType(db: Db, sprintType: string): Promise<string[]> {
   try {
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT task_type
       FROM sprint_type_task_types
       WHERE sprint_type_key = ?
       ORDER BY task_type ASC
-    `).all(normalizeSprintType(sprintType)) as Array<{ task_type: string | null }>;
+    `, normalizeSprintType(sprintType)) as Array<{ task_type: string | null }>;
 
     return rows
       .map(row => normalizeTaskType(row.task_type))
@@ -204,48 +195,49 @@ export function getAllowedTaskTypesForSprintType(db: Database.Database, sprintTy
   }
 }
 
-export function isTaskTypeAllowedForSprintType(
-  db: Database.Database,
+export async function isTaskTypeAllowedForSprintType(
+  db: Db,
   sprintType: string,
   taskType: unknown,
-): boolean {
+): Promise<boolean> {
   const normalizedTaskType = normalizeTaskType(taskType);
   if (!normalizedTaskType) return true;
 
-  const allowedTaskTypes = getAllowedTaskTypesForSprintType(db, sprintType);
+  const allowedTaskTypes = await getAllowedTaskTypesForSprintType(db, sprintType);
   if (allowedTaskTypes.length === 0) return true;
 
   return allowedTaskTypes.includes(normalizedTaskType);
 }
 
-export function resolveTaskFieldSchemaForSprint(
-  db: Database.Database,
+export async function resolveTaskFieldSchemaForSprint(
+  db: Db,
   input: { sprintId?: unknown; sprintType?: unknown; taskType?: unknown },
-): ResolvedTaskFieldSchema {
+): Promise<ResolvedTaskFieldSchema> {
   const sprintType = input.sprintType != null
     ? normalizeSprintType(input.sprintType)
-    : resolveSprintTypeForSprintId(db, input.sprintId ?? null);
+    : await resolveSprintTypeForSprintId(db, input.sprintId ?? null);
   const taskType = normalizeTaskType(input.taskType);
-  const allowedTaskTypes = getAllowedTaskTypesForSprintType(db, sprintType);
+  const allowedTaskTypes = await getAllowedTaskTypesForSprintType(db, sprintType);
 
-  if (!tableExists(db, 'task_field_schemas')) {
+  if (!await tableExists(db, 'task_field_schemas')) {
     return { sprint_type: sprintType, schema: { fields: [] }, allowed_task_types: allowedTaskTypes };
   }
 
   try {
-    const getSchemaForTaskType = (candidateTaskType: string | null): { fields: TaskFieldDefinition[] } => {
-      const row = db.prepare(`
+    const getSchemaForTaskType = async (candidateTaskType: string | null): Promise<{ fields: TaskFieldDefinition[] }> => {
+      const row = await db.get(`
         SELECT schema_json
         FROM task_field_schemas
-        WHERE sprint_type_key = ? AND task_type IS ?
+        WHERE sprint_type_key = ?
+          AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
         ORDER BY COALESCE(updated_at, created_at, datetime('now')) DESC, id DESC
         LIMIT 1
-      `).get(sprintType, candidateTaskType) as { schema_json: string } | undefined;
+      `, sprintType, candidateTaskType, candidateTaskType) as { schema_json: string } | undefined;
       return row ? parseFieldSchemaJson(row.schema_json) : { fields: [] };
     };
 
-    const defaultSchema = getSchemaForTaskType(null);
-    const taskTypeSchema = taskType ? getSchemaForTaskType(taskType) : { fields: [] };
+    const defaultSchema = await getSchemaForTaskType(null);
+    const taskTypeSchema = taskType ? await getSchemaForTaskType(taskType) : { fields: [] };
     return {
       sprint_type: sprintType,
       schema: mergeFieldSchemas(defaultSchema, taskTypeSchema),
@@ -271,14 +263,14 @@ export function parseRequirementFieldExpression(fieldName: string): string[] {
     .filter(Boolean);
 }
 
-export function validateRequirementFieldExpression(
-  db: Database.Database,
+export async function validateRequirementFieldExpression(
+  db: Db,
   input: { sprintId?: unknown; sprintType?: unknown; taskType?: unknown; fieldName?: unknown; fieldRole?: string },
-): void {
+): Promise<void> {
   const fieldName = typeof input.fieldName === 'string' ? input.fieldName.trim() : '';
   if (!fieldName) return;
 
-  const resolved = resolveTaskFieldSchemaForSprint(db, input);
+  const resolved = await resolveTaskFieldSchemaForSprint(db, input);
   const allowedFields = new Set(getGateRequirementFieldDefinitions(resolved.schema.fields).map(field => field.key));
   if (allowedFields.size === 0) return;
 
@@ -290,15 +282,15 @@ export function validateRequirementFieldExpression(
   }
 }
 
-export function resolveTaskWorkflowContext(
-  db: Database.Database,
+export async function resolveTaskWorkflowContext(
+  db: Db,
   input: { sprintId?: unknown; sprintType?: unknown; taskType?: unknown },
-): { sprintType: string; taskType: string | null; allowedTaskTypes: string[] } {
+): Promise<{ sprintType: string; taskType: string | null; allowedTaskTypes: string[] }> {
   const sprintType = input.sprintType != null
     ? normalizeSprintType(input.sprintType)
-    : resolveSprintTypeForSprintId(db, input.sprintId ?? null);
+    : await resolveSprintTypeForSprintId(db, input.sprintId ?? null);
   const taskType = normalizeTaskType(input.taskType);
-  const allowedTaskTypes = getAllowedTaskTypesForSprintType(db, sprintType);
+  const allowedTaskTypes = await getAllowedTaskTypesForSprintType(db, sprintType);
 
   return {
     sprintType,

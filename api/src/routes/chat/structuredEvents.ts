@@ -1,6 +1,7 @@
 import { normalizeChatMessageRole } from '../../lib/chatMessageRoles';
 import { extractGatewayErrorMessage, summarizeGatewayErrorForUi } from '../../lib/chatGatewayErrors';
 import { extractGatewayStructuredEvents, extractTextFromGatewayMessage, unwrapGatewayMessage } from '../../lib/openclawMessageEvents';
+import { nowTimestamp } from '../../lib/timestamps';
 
 export interface StructuredEvent {
   event_type: string;
@@ -51,7 +52,7 @@ export function extractStructuredEvents(msg: unknown): StructuredEvent[] {
 
 export function gatewayMsgToUi(msg: unknown, index: number): Record<string, unknown> {
   if (!msg || typeof msg !== 'object') {
-    return { id: `hist-${index}`, role: 'assistant', content: '', event_type: 'text', event_meta: {}, timestamp: new Date().toISOString() };
+    return { id: `hist-${index}`, role: 'assistant', content: '', event_type: 'text', event_meta: {}, timestamp: nowTimestamp() };
   }
   const outer = msg as Record<string, unknown>;
   const m = unwrapGatewayMessage(msg) ?? outer;
@@ -62,7 +63,7 @@ export function gatewayMsgToUi(msg: unknown, index: number): Record<string, unkn
   } else if (typeof ts === 'string') {
     timestamp = ts;
   } else {
-    timestamp = new Date().toISOString();
+    timestamp = nowTimestamp();
   }
 
   const events = extractStructuredEvents(msg);

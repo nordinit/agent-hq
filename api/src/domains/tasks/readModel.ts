@@ -4,6 +4,8 @@ import { TERMINAL_TASK_STATUSES } from '../../lib/taskStatuses';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
 import { getCanonicalTaskCustomFields, getCanonicalTaskRecord, stripTaskLifecycleEvidenceFields } from './evidence';
 import { getTaskRelationshipsForEnrichment } from './relationships';
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../db/introspection";
+import { nowTimestamp, timestampFromEpochMs } from '../../lib/timestamps';
 
 export type TaskRecord = Record<string, unknown>;
 
@@ -15,15 +17,15 @@ export function stripRetiredTaskColumns(row: TaskRecord): TaskRecord {
   return rest;
 }
 
-function tableHasTaskColumn(db: ReturnType<typeof getDb>, column: string): boolean {
-  return (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((row) => row.name === column);
+async function tableHasTaskColumn(db: ReturnType<typeof getDb>, column: string): Promise<boolean> {
+  return await sharedColumnExists(db, 'tasks', column);
 }
 
 function stripPublicTaskResponseColumns(row: TaskRecord): TaskRecord {
   return stripTaskLifecycleEvidenceFields(stripRetiredTaskColumns(row));
 }
 
-export function enrichTask(task: TaskRecord): TaskRecord {
+export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
   const db = getDb();
   const canonicalTask = getCanonicalTaskRecord(task);
   const publicTask = stripPublicTaskResponseColumns(task);
@@ -45,17 +47,17 @@ export function enrichTask(task: TaskRecord): TaskRecord {
       return {};
     }
   })();
-  const resolvedFieldSchema = resolveTaskFieldSchema(task.sprint_id, task.task_type);
+  const resolvedFieldSchema = await resolveTaskFieldSchema(task.sprint_id, task.task_type);
   const assignedAgentId = typeof task.assigned_agent_id === 'number' ? task.assigned_agent_id : null;
   const activeAgentId = typeof task.agent_id === 'number' ? task.agent_id : null;
-  const agentNames = (() => {
+  const agentNames = (async () => {
     const ids = [...new Set([assignedAgentId, activeAgentId].filter((value): value is number => value != null))];
     if (ids.length === 0) return new Map<number, string>();
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT id, name
       FROM agents
       WHERE id IN (${ids.map(() => '?').join(',')})
-    `).all(...ids) as Array<{ id: number; name: string }>;
+    `, ...ids) as Array<{ id: number; name: string }>;
     return new Map(rows.map((row) => [row.id, row.name]));
   })();
   const unifiedCustomFields = { ...customFields };
@@ -67,9 +69,9 @@ export function enrichTask(task: TaskRecord): TaskRecord {
     }
   }
 
-  const hasRelationshipTable = Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_relationships' LIMIT 1`).get() as { name?: string } | undefined)?.name);
+  const hasRelationshipTable = await sharedTableExists(db, 'task_relationships');
   const blockers = hasRelationshipTable
-    ? db.prepare(`
+    ? await db.all(`
       SELECT DISTINCT t.*, a.name as agent_name, s.name as sprint_name
       FROM tasks t
       LEFT JOIN agents a ON a.id = t.agent_id
@@ -88,18 +90,18 @@ export function enrichTask(task: TaskRecord): TaskRecord {
          )
       )
       ${tenantFilter}
-    `).all(...(tenantId == null ? [id, id, id] : [id, id, id, tenantId])) as TaskRecord[]
-    : db.prepare(`
+    `, ...(tenantId == null ? [id, id, id] : [id, id, id, tenantId])) as TaskRecord[]
+    : await db.all(`
       SELECT t.*, a.name as agent_name, s.name as sprint_name
       FROM tasks t
       LEFT JOIN agents a ON a.id = t.agent_id
       LEFT JOIN sprints s ON s.id = t.sprint_id
       WHERE t.id IN (SELECT blocker_id FROM task_dependencies WHERE blocked_id = ?)
       ${tenantFilter}
-    `).all(...(tenantId == null ? [id] : [id, tenantId])) as TaskRecord[];
+    `, ...(tenantId == null ? [id] : [id, tenantId])) as TaskRecord[];
 
   const blocking = hasRelationshipTable
-    ? db.prepare(`
+    ? await db.all(`
       SELECT DISTINCT t.*, a.name as agent_name, s.name as sprint_name
       FROM tasks t
       LEFT JOIN agents a ON a.id = t.agent_id
@@ -118,37 +120,37 @@ export function enrichTask(task: TaskRecord): TaskRecord {
          )
       )
       ${tenantFilter}
-    `).all(...(tenantId == null ? [id, id, id] : [id, id, id, tenantId])) as TaskRecord[]
-    : db.prepare(`
+    `, ...(tenantId == null ? [id, id, id] : [id, id, id, tenantId])) as TaskRecord[]
+    : await db.all(`
       SELECT t.*, a.name as agent_name, s.name as sprint_name
       FROM tasks t
       LEFT JOIN agents a ON a.id = t.agent_id
       LEFT JOIN sprints s ON s.id = t.sprint_id
       WHERE t.id IN (SELECT blocked_id FROM task_dependencies WHERE blocker_id = ?)
       ${tenantFilter}
-    `).all(...(tenantId == null ? [id] : [id, tenantId])) as TaskRecord[];
+    `, ...(tenantId == null ? [id] : [id, tenantId])) as TaskRecord[];
 
   const latestTaskOutcome = typeof task.latest_task_outcome === 'string' && task.latest_task_outcome.trim()
     ? task.latest_task_outcome.trim()
     : (typeof task.active_instance_task_outcome === 'string' && task.active_instance_task_outcome.trim() ? task.active_instance_task_outcome.trim() : null);
   return {
     ...publicTask,
-    ...evaluateTaskIntegrity({ ...canonicalTask, ...unifiedCustomFields } as { status?: string | null; task_type?: string | null }, db),
+    ...await evaluateTaskIntegrity({ ...canonicalTask, ...unifiedCustomFields } as { status?: string | null; task_type?: string | null }, db),
     latest_task_outcome: latestTaskOutcome,
     changed_files: changedFiles,
     custom_fields: unifiedCustomFields,
     resolved_sprint_type: resolvedFieldSchema.sprint_type,
     resolved_custom_field_schema: resolvedFieldSchema.schema,
-    relationships: getTaskRelationshipsForEnrichment(id),
-    assigned_agent_name: assignedAgentId == null ? null : agentNames.get(assignedAgentId) ?? null,
-    active_agent_name: activeAgentId == null ? null : agentNames.get(activeAgentId) ?? null,
+    relationships: await getTaskRelationshipsForEnrichment(id),
+    assigned_agent_name: assignedAgentId == null ? null : (await agentNames).get(assignedAgentId) ?? null,
+    active_agent_name: activeAgentId == null ? null : (await agentNames).get(activeAgentId) ?? null,
     blockers: blockers.map(stripPublicTaskResponseColumns),
     blocking: blocking.map(stripPublicTaskResponseColumns),
   };
 }
 
-export function enrichTasks(tasks: TaskRecord[]): TaskRecord[] {
-  return tasks.map(enrichTask);
+export async function enrichTasks(tasks: TaskRecord[]): Promise<TaskRecord[]> {
+  return Promise.all(tasks.map(enrichTask));
 }
 
 export const TASK_SELECT = `
@@ -206,10 +208,10 @@ export const TASK_SELECT = `
   LEFT JOIN task_outcome_metrics tom ON tom.task_id = t.id
 `;
 
-export function searchTasks(
+export async function searchTasks(
   db: ReturnType<typeof getDb>,
   query: { q?: unknown; exclude_id?: unknown; limit?: unknown; project_id?: unknown; sprint_id?: unknown; tenant_id?: unknown },
-): Array<{ id: number; title: string; status: string }> {
+): Promise<Array<{ id: number; title: string; status: string }>> {
   const q = String(query.q ?? '').trim();
   const excludeId = query.exclude_id ? Number(query.exclude_id) : null;
   const projectId = query.project_id ? Number(query.project_id) : null;
@@ -253,13 +255,13 @@ export function searchTasks(
 
   params.push(limit);
 
-  return db.prepare(`
+  return await db.all(`
     SELECT t.id, t.title, t.status
     FROM tasks t
     WHERE ${condition}${excludeCondition}${contextCondition}
     ORDER BY t.id DESC
     LIMIT ?
-  `).all(...params) as Array<{ id: number; title: string; status: string }>;
+  `, ...params) as Array<{ id: number; title: string; status: string }>;
 }
 
 const PROJECT_TASK_SEARCH_MAX_LIMIT = 50;
@@ -361,10 +363,10 @@ function normalizeCustomFieldSqlValue(value: unknown): unknown {
   return value;
 }
 
-export function searchProjectTasks(
+export async function searchProjectTasks(
   db: ReturnType<typeof getDb>,
   input: ProjectTaskSearchInput,
-): ProjectTaskSearchResult {
+): Promise<ProjectTaskSearchResult> {
   const tenantId = Number(input.tenant_id);
   const projectId = Number(input.project_id);
   if (!Number.isInteger(tenantId) || tenantId <= 0) throw new Error('tenant_id is required');
@@ -401,13 +403,21 @@ export function searchProjectTasks(
     params.push(taskType);
   }
   for (const [key, value] of Object.entries(customFieldMatches)) {
-    conditions.push('json_extract(t.custom_fields_json, ?) IS ?');
-    params.push(customFieldMatchesSqlPath(key), normalizeCustomFieldSqlValue(value));
+    // `IS ?` is SQLite-only NULL-safe equality; Postgres rejects a parameter after IS.
+    // The SQL here is built per request, so branch on nullness instead.
+    const sqlValue = normalizeCustomFieldSqlValue(value);
+    if (sqlValue === null || sqlValue === undefined) {
+      conditions.push('json_extract(t.custom_fields_json, ?) IS NULL');
+      params.push(customFieldMatchesSqlPath(key));
+    } else {
+      conditions.push('json_extract(t.custom_fields_json, ?) = ?');
+      params.push(customFieldMatchesSqlPath(key), sqlValue);
+    }
   }
 
   const whereSql = conditions.join(' AND ');
-  const total = (db.prepare(`SELECT COUNT(*) AS total FROM tasks t WHERE ${whereSql}`).get(...params) as { total: number }).total;
-  const rows = db.prepare(`
+  const total = (await db.get(`SELECT COUNT(*) AS total FROM tasks t WHERE ${whereSql}`, ...params) as { total: number }).total;
+  const rows = await db.all(`
     SELECT
       t.id,
       t.title,
@@ -427,7 +437,7 @@ export function searchProjectTasks(
     WHERE ${whereSql}
     ORDER BY t.updated_at DESC, t.id DESC
     LIMIT ? OFFSET ?
-  `).all(...params, limit, offset) as Array<Record<string, unknown>>;
+  `, ...params, limit, offset) as Array<Record<string, unknown>>;
 
   const customFieldKeys = Object.keys(customFieldMatches);
   return {
@@ -460,25 +470,31 @@ export function searchProjectTasks(
   };
 }
 
-export function listRecentlyCompletedTasks(
+export async function listRecentlyCompletedTasks(
   db: ReturnType<typeof getDb>,
   hoursRaw: unknown,
   projectIdRaw?: unknown,
   tenantIdRaw?: unknown,
-): { hours: number; count: number; tasks: Record<string, unknown>[] } {
+): Promise<{ hours: number; count: number; tasks: Record<string, unknown>[] }> {
   const hours = Math.max(1, Math.min(168, Number(hoursRaw) || 24));
   const projectId = Number(projectIdRaw) || null;
   const tenantId = Number(tenantIdRaw) || null;
   const projectFilter = projectId ? 'AND t.project_id = ?' : '';
   const tenantFilter = tenantId ? 'AND t.tenant_id = ?' : '';
-  const params: unknown[] = [hours];
+  // The cutoff is computed HERE and bound as one parameter, rather than assembled in SQL as
+  // datetime('now', '-' || ? || ' hours'). That concatenation is not portable: PostgreSQL
+  // reports `function datetime(unknown, text) does not exist`, and an interval literal cannot
+  // be built by string concatenation at all. updated_at is canonical-format text, so a direct
+  // comparison against a canonical timestamp is exactly what SQLite was already doing.
+  const cutoff = timestampFromEpochMs(Date.now() - hours * 60 * 60 * 1000) ?? nowTimestamp();
+  const params: unknown[] = [cutoff];
   if (projectId) params.push(projectId);
   if (tenantId) params.push(tenantId);
-  const customFieldsSelect = tableHasTaskColumn(db, 'custom_fields_json')
+  const customFieldsSelect = await tableHasTaskColumn(db, 'custom_fields_json')
     ? 't.custom_fields_json'
     : 'NULL AS custom_fields_json';
 
-  const rows = db.prepare(`
+  const rows = await db.all(`
     SELECT
       t.id,
       t.title,
@@ -524,11 +540,11 @@ export function listRecentlyCompletedTasks(
     LEFT JOIN projects p ON p.id = t.project_id
     LEFT JOIN sprints s ON s.id = t.sprint_id
     WHERE t.status = 'done'
-      AND t.updated_at >= datetime('now', '-' || ? || ' hours')
+      AND t.updated_at >= ?
       ${projectFilter}
       ${tenantFilter}
     ORDER BY t.updated_at DESC
-  `).all(...params) as Record<string, unknown>[];
+  `, ...params) as Record<string, unknown>[];
 
   return {
     hours,
@@ -540,7 +556,7 @@ export function listRecentlyCompletedTasks(
   };
 }
 
-export function listTasks(
+export async function listTasks(
   db: ReturnType<typeof getDb>,
   query: {
     project_id?: unknown;
@@ -558,7 +574,7 @@ export function listTasks(
     live_instances_only?: unknown;
     tenant_id?: unknown;
   },
-): Record<string, unknown>[] | Record<string, unknown> {
+): Promise<Record<string, unknown>[] | Record<string, unknown>> {
   const {
     project_id,
     sprint_id,
@@ -579,7 +595,7 @@ export function listTasks(
   let sql = TASK_SELECT;
   const params: unknown[] = [];
   const conditions: string[] = [];
-  const hasAssignedAgentColumn = (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((col) => col.name === 'assigned_agent_id');
+  const hasAssignedAgentColumn = await sharedColumnExists(db, 'tasks', 'assigned_agent_id');
 
   if (project_id) {
     conditions.push('t.project_id = ?');
@@ -656,14 +672,18 @@ export function listTasks(
     if (conditions.length > 0) {
       countQuery += ` WHERE ${conditions.join(' AND ')}`;
     }
-    const countResult = db.prepare(countQuery).get(...params) as { total: number };
+    const countResult = await db.get(countQuery, ...params) as { total: number };
     const total = countResult.total;
 
     sql += ' LIMIT ? OFFSET ?';
-    const tasks = db.prepare(sql).all(...params, lim, off) as Record<string, unknown>[];
+    const tasks = await db.all(sql, ...params, lim, off) as Record<string, unknown>[];
 
     return {
-      tasks: enrichTasks(tasks),
+      // MUST be awaited. enrichTasks became async, and an unawaited promise assigned to an
+      // object property is not a type error — the property is simply typed Promise<T[]>. The
+      // object is then JSON-serialised, and JSON.stringify(promise) is `{}`, so the endpoint
+      // returned `"tasks": {}` with no rows at all and no error anywhere.
+      tasks: await enrichTasks(tasks),
       total,
       hasMore: off + lim < total,
       limit: lim,
@@ -671,53 +691,51 @@ export function listTasks(
     };
   }
 
-  const tasks = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  const tasks = await db.all(sql, ...params) as Record<string, unknown>[];
   return enrichTasks(tasks);
 }
 
-export function getTaskById(db: ReturnType<typeof getDb>, taskId: number): TaskRecord | null {
-  const task = db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(taskId) as TaskRecord | undefined;
-  return task ? enrichTask(task) : null;
+export async function getTaskById(db: ReturnType<typeof getDb>, taskId: number): Promise<TaskRecord | null> {
+  const task = await db.get(`${TASK_SELECT} WHERE t.id = ?`, taskId) as TaskRecord | undefined;
+  return task ? await enrichTask(task) : null;
 }
 
-export function listTaskHistory(db: ReturnType<typeof getDb>, taskId: number) {
-  const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+export async function listTaskHistory(db: ReturnType<typeof getDb>, taskId: number) {
+  const task = await db.get('SELECT id FROM tasks WHERE id = ?', taskId);
   if (!task) {
     const error = new Error('Task not found') as Error & { status?: number };
     error.status = 404;
     throw error;
   }
-  return db.prepare(`
+  return await db.all(`
     SELECT * FROM task_history WHERE task_id = ? ORDER BY created_at DESC
-  `).all(taskId);
+  `, taskId);
 }
 
-export function listTaskNotes(db: ReturnType<typeof getDb>, taskId: number) {
-  const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+export async function listTaskNotes(db: ReturnType<typeof getDb>, taskId: number) {
+  const task = await db.get('SELECT id FROM tasks WHERE id = ?', taskId);
   if (!task) {
     const error = new Error('Task not found') as Error & { status?: number };
     error.status = 404;
     throw error;
   }
-  return db.prepare(`
+  return await db.all(`
     SELECT * FROM task_notes WHERE task_id = ? ORDER BY created_at ASC
-  `).all(taskId);
+  `, taskId);
 }
 
-export function listTaskAttachments(db: ReturnType<typeof getDb>, taskId: number) {
-  return db.prepare(
-    'SELECT * FROM task_attachments WHERE task_id = ? ORDER BY created_at ASC'
-  ).all(taskId);
+export async function listTaskAttachments(db: ReturnType<typeof getDb>, taskId: number) {
+  return await db.all('SELECT * FROM task_attachments WHERE task_id = ? ORDER BY created_at ASC', taskId);
 }
 
-export function listTaskInstances(db: ReturnType<typeof getDb>, taskId: number) {
+export async function listTaskInstances(db: ReturnType<typeof getDb>, taskId: number) {
   if (!Number.isFinite(taskId)) {
     const error = new Error('Invalid task id') as Error & { status?: number };
     error.status = 400;
     throw error;
   }
 
-  return db.prepare(`
+  return await db.all(`
     SELECT ji.*, a.job_title as job_title, a.name as agent_name,
            ia.current_stage, ia.last_agent_heartbeat_at, ia.last_meaningful_output_at,
            ia.latest_commit_hash, ia.branch_name, ia.changed_files_json, ia.changed_files_count,
@@ -738,5 +756,5 @@ export function listTaskInstances(db: ReturnType<typeof getDb>, taskId: number) 
     WHERE ji.task_id = ?
     ORDER BY ji.created_at DESC
     LIMIT 50
-  `).all(taskId);
+  `, taskId);
 }

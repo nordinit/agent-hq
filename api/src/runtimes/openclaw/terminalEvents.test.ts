@@ -23,7 +23,7 @@ describe('OpenClaw terminal event parsing', () => {
       reason: 'completed',
       sessionKey,
       runId,
-      endedAt: '2023-11-14T22:13:20.000Z',
+      endedAt: '2023-11-14 22:13:20',
     }));
     expect(event?.metadata).toEqual(expect.objectContaining({
       openclaw_event_type: 'agent_end',
@@ -51,7 +51,7 @@ describe('OpenClaw terminal event parsing', () => {
       success: false,
       reason: 'error',
       error: JSON.stringify({ code: 'provider_error' }),
-      endedAt: '2026-01-01T00:00:00.000Z',
+      endedAt: '2026-01-01 00:00:00.000',
     }));
     expect(event?.metadata).toEqual(expect.objectContaining({
       reason_detail: 'model failed',

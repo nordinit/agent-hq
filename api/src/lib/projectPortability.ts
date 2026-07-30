@@ -1,8 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import type Database from 'better-sqlite3';
 import { normalizeRepoConfig } from './repoConfig';
 import { writeProjectAudit } from './projectAudit';
+import { nowTimestamp } from './timestamps';
+import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const UPLOADS_BASE = process.env.AGENT_HQ_PROJECT_UPLOADS_DIR ?? path.join(REPO_ROOT, 'uploads', 'projects');
@@ -53,17 +55,16 @@ export interface ProjectImportPreview {
   warnings: ProjectImportWarning[];
 }
 
-function tableExists(db: Database.Database, table: string): boolean {
-  return Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table));
+async function tableExists(db: Db, table: string): Promise<boolean> {
+    return await sharedTableExists(db, table);
 }
 
-function tableColumns(db: Database.Database, table: string): Set<string> {
-  if (!tableExists(db, table)) return new Set();
-  return new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name));
+async function tableColumns(db: Db, table: string): Promise<Set<string>> {
+    return new Set(await sharedTableColumns(db, table));
 }
 
-function tableHasColumns(db: Database.Database, table: string, columns: string[]): boolean {
-  const existing = tableColumns(db, table);
+async function tableHasColumns(db: Db, table: string, columns: string[]): Promise<boolean> {
+  const existing = await tableColumns(db, table);
   return columns.every((column) => existing.has(column));
 }
 
@@ -91,9 +92,9 @@ function sortStable(value: unknown): unknown {
   );
 }
 
-function selectRows(db: Database.Database, table: string, whereSql: string, params: unknown[] = [], orderSql = 'id ASC'): Row[] {
-  if (!tableExists(db, table)) return [];
-  return db.prepare(`SELECT * FROM ${table} ${whereSql} ORDER BY ${orderSql}`).all(...params) as Row[];
+async function selectRows(db: Db, table: string, whereSql: string, params: unknown[] = [], orderSql = 'id ASC'): Promise<Row[]> {
+  if (!await tableExists(db, table)) return [];
+  return await db.all(`SELECT * FROM ${table} ${whereSql} ORDER BY ${orderSql}`, ...params) as Row[];
 }
 
 function countSection(manifest: ProjectManifest, key: keyof ProjectManifest): number {
@@ -101,14 +102,14 @@ function countSection(manifest: ProjectManifest, key: keyof ProjectManifest): nu
   return Array.isArray(value) ? value.length : 0;
 }
 
-function insertDynamic(db: Database.Database, table: string, values: Row): number {
-  const columns = tableColumns(db, table);
+async function insertDynamic(db: Db, table: string, values: Row): Promise<number> {
+  const columns = await tableColumns(db, table);
   const filtered = Object.fromEntries(Object.entries(values).filter(([key]) => columns.has(key) && values[key] !== undefined));
   const keys = Object.keys(filtered);
   if (keys.length === 0) throw new Error(`No insertable columns for ${table}`);
   const placeholders = keys.map(() => '?').join(', ');
-  const result = db.prepare(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`).run(...keys.map((key) => filtered[key]));
-  return Number(result.lastInsertRowid);
+  const result = await db.run(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`, ...keys.map((key) => filtered[key]));
+  return Number(result.lastInsertId);
 }
 
 function countRows(manifest: Partial<ProjectManifest> | null, key: keyof ProjectManifest['routing']): number {
@@ -254,36 +255,36 @@ export interface ProjectManifest {
   }>;
 }
 
-export function exportProjectManifest(db: Database.Database, projectId: number, includeFiles: boolean): { manifest: ProjectManifest; warnings: ProjectImportWarning[] } {
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Row | undefined;
+export async function exportProjectManifest(db: Db, projectId: number, includeFiles: boolean): Promise<{ manifest: ProjectManifest; warnings: ProjectImportWarning[] }> {
+  const project = await db.get('SELECT * FROM projects WHERE id = ?', projectId) as Row | undefined;
   if (!project) throw Object.assign(new Error('Project not found'), { status: 404 });
 
   const warnings: ProjectImportWarning[] = [];
-  const agents = selectRows(db, 'agents', 'WHERE project_id = ?', [projectId], 'name ASC, id ASC').map(portableAgent);
-  const workflows = selectRows(db, 'sprints', 'WHERE project_id = ?', [projectId], 'name ASC, id ASC').map(portableWorkflow);
-  const agentIdToRef = new Map(selectRows(db, 'agents', 'WHERE project_id = ?', [projectId]).map((row) => [Number(row.id), `agent:${row.id}`]));
-  const sprintIdToRef = new Map(selectRows(db, 'sprints', 'WHERE project_id = ?', [projectId]).map((row) => [Number(row.id), `workflow:${row.id}`]));
+  const agents = (await selectRows(db, 'agents', 'WHERE project_id = ?', [projectId], 'name ASC, id ASC')).map(portableAgent);
+  const workflows = (await selectRows(db, 'sprints', 'WHERE project_id = ?', [projectId], 'name ASC, id ASC')).map(portableWorkflow);
+  const agentIdToRef = new Map((await selectRows(db, 'agents', 'WHERE project_id = ?', [projectId])).map((row) => [Number(row.id), `agent:${row.id}`]));
+  const sprintIdToRef = new Map((await selectRows(db, 'sprints', 'WHERE project_id = ?', [projectId])).map((row) => [Number(row.id), `workflow:${row.id}`]));
   const agentsByRef = new Map(agents.map((agent) => [agent.ref, agent]));
   const workflowsByType = new Map(workflows.map((workflow) => [workflow.sprint_type, workflow]));
 
-  for (const assignment of selectRows(db, 'agent_tool_assignments', 'WHERE agent_id IN (SELECT id FROM agents WHERE project_id = ?)', [projectId], 'id ASC')) {
-    const tool = db.prepare('SELECT slug, name FROM tools WHERE id = ?').get(assignment.tool_id) as { slug: string; name: string } | undefined;
+  for (const assignment of await selectRows(db, 'agent_tool_assignments', 'WHERE agent_id IN (SELECT id FROM agents WHERE project_id = ?)', [projectId], 'id ASC')) {
+    const tool = await db.get('SELECT slug, name FROM tools WHERE id = ?', assignment.tool_id) as { slug: string; name: string } | undefined;
     const agent = agentsByRef.get(`agent:${assignment.agent_id}`);
     if (tool && agent) {
       agent.tools.push({ slug: tool.slug, name: tool.name, enabled: Number(assignment.enabled ?? 1) === 1, overrides: parseJson(assignment.overrides, {}) });
     }
   }
 
-  for (const assignment of selectRows(db, 'agent_mcp_assignments', 'WHERE agent_id IN (SELECT id FROM agents WHERE project_id = ?)', [projectId], 'id ASC')) {
-    const server = db.prepare('SELECT slug, name FROM mcp_servers WHERE id = ?').get(assignment.mcp_server_id) as { slug: string; name: string } | undefined;
+  for (const assignment of await selectRows(db, 'agent_mcp_assignments', 'WHERE agent_id IN (SELECT id FROM agents WHERE project_id = ?)', [projectId], 'id ASC')) {
+    const server = await db.get('SELECT slug, name FROM mcp_servers WHERE id = ?', assignment.mcp_server_id) as { slug: string; name: string } | undefined;
     const agent = agentsByRef.get(`agent:${assignment.agent_id}`);
     if (server && agent) {
       agent.mcp_servers.push({ slug: server.slug, name: server.name, enabled: Number(assignment.enabled ?? 1) === 1, overrides: parseJson(assignment.overrides, {}) });
     }
   }
 
-  if (tableExists(db, 'task_field_schemas')) {
-    for (const schema of selectRows(db, 'task_field_schemas', 'WHERE sprint_type_key IN (SELECT DISTINCT sprint_type FROM sprints WHERE project_id = ?)', [projectId], 'sprint_type_key ASC, task_type ASC, id ASC')) {
+  if (await tableExists(db, 'task_field_schemas')) {
+    for (const schema of await selectRows(db, 'task_field_schemas', 'WHERE sprint_type_key IN (SELECT DISTINCT sprint_type FROM sprints WHERE project_id = ?)', [projectId], 'sprint_type_key ASC, task_type ASC, id ASC')) {
       const workflow = workflowsByType.get(String(schema.sprint_type_key));
       if (workflow) {
         workflow.field_schemas.push({
@@ -296,7 +297,7 @@ export function exportProjectManifest(db: Database.Database, projectId: number, 
     }
   }
 
-  const files = selectRows(db, 'project_files', 'WHERE project_id = ?', [projectId], 'original_name ASC, id ASC').map((file) => {
+  const files = (await selectRows(db, 'project_files', 'WHERE project_id = ?', [projectId], 'original_name ASC, id ASC')).map((file) => {
     const entry: ProjectManifest['files'][number] = {
       ref: `file:${file.id}`,
       filename: String(file.filename ?? ''),
@@ -317,15 +318,15 @@ export function exportProjectManifest(db: Database.Database, projectId: number, 
   });
 
   const routing = {
-    status_routes: selectRows(db, 'routing_config', 'WHERE project_id = ?', [projectId]).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    transitions: selectRows(db, 'sprint_task_transitions', 'WHERE project_id = ?', [projectId]).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    transition_requirements: selectRows(db, 'sprint_task_transition_requirements', 'WHERE project_id = ?', [projectId]).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    task_routing_rules: selectRows(db, 'sprint_task_routing_rules', 'WHERE project_id = ?', [projectId]).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    story_point_model_routing: selectRows(db, 'story_point_model_routing', 'WHERE project_id = ?', [projectId]).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    external_event_mappings: selectRows(db, 'external_event_mappings', 'WHERE project_id = ?', [projectId]).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
+    status_routes: (await selectRows(db, 'routing_config', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
+    transitions: (await selectRows(db, 'sprint_task_transitions', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
+    transition_requirements: (await selectRows(db, 'sprint_task_transition_requirements', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
+    task_routing_rules: (await selectRows(db, 'sprint_task_routing_rules', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
+    story_point_model_routing: (await selectRows(db, 'story_point_model_routing', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
+    external_event_mappings: (await selectRows(db, 'external_event_mappings', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
   };
 
-  const recurring_task_templates = selectRows(db, 'recurring_task_series', 'WHERE project_id = ?', [projectId]).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef));
+  const recurring_task_templates = (await selectRows(db, 'recurring_task_series', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef));
   const manifest = sortStable({
     schema_version: PROJECT_MANIFEST_SCHEMA_VERSION,
     project: portableProject(project),
@@ -339,7 +340,7 @@ export function exportProjectManifest(db: Database.Database, projectId: number, 
   return { manifest, warnings };
 }
 
-export function validateProjectManifest(db: Database.Database, input: unknown, options: { projectName?: string; importFiles?: boolean } = {}): ProjectImportPreview {
+export async function validateProjectManifest(db: Db, input: unknown, options: { projectName?: string; importFiles?: boolean } = {}): Promise<ProjectImportPreview> {
   const warnings: ProjectImportWarning[] = [];
   const manifest = input as Partial<ProjectManifest> | null;
   if (!manifest || typeof manifest !== 'object') {
@@ -387,8 +388,8 @@ export function validateProjectManifest(db: Database.Database, input: unknown, o
     }
   }
 
-  const toolSlugs = new Set(tableExists(db, 'tools') ? (db.prepare('SELECT slug FROM tools').all() as Array<{ slug: string }>).map((row) => row.slug) : []);
-  const mcpSlugs = new Set(tableExists(db, 'mcp_servers') ? (db.prepare('SELECT slug FROM mcp_servers').all() as Array<{ slug: string }>).map((row) => row.slug) : []);
+  const toolSlugs = new Set(await tableExists(db, 'tools') ? (await db.all('SELECT slug FROM tools') as Array<{ slug: string }>).map((row) => row.slug) : []);
+  const mcpSlugs = new Set(await tableExists(db, 'mcp_servers') ? (await db.all('SELECT slug FROM mcp_servers') as Array<{ slug: string }>).map((row) => row.slug) : []);
 
   for (const agent of manifest.agents ?? []) {
     for (const tool of agent.tools ?? []) {
@@ -436,25 +437,25 @@ export function validateProjectManifest(db: Database.Database, input: unknown, o
   };
 }
 
-export function importProjectManifest(
-  db: Database.Database,
+export async function importProjectManifest(
+  db: Db,
   input: unknown,
   options: { projectName?: string; enableAgents?: boolean; activateWorkflows?: boolean; importFiles?: boolean; tenantId?: number; actor?: string } = {},
-): { project_id: number; preview: ProjectImportPreview; id_map: { agents: Record<string, number>; workflows: Record<string, number> } } {
-  const preview = validateProjectManifest(db, input, { projectName: options.projectName, importFiles: options.importFiles });
+): Promise<{ project_id: number; preview: ProjectImportPreview; id_map: { agents: Record<string, number>; workflows: Record<string, number> } }> {
+  const preview = await validateProjectManifest(db, input, { projectName: options.projectName, importFiles: options.importFiles });
   if (!preview.valid) throw Object.assign(new Error('Manifest validation failed'), { status: 400, preview });
   const manifest = input as ProjectManifest;
   const agentIdMap: Record<string, number> = {};
   const workflowIdMap: Record<string, number> = {};
   const projectName = preview.proposed_project_name;
 
-  const tx = db.transaction(() => {
-    const projectId = insertDynamic(db, 'projects', {
-      tenant_id: options.tenantId ?? null,
-      name: projectName,
-      description: manifest.project.description ?? '',
-      context_md: manifest.project.context_md ?? '',
-    });
+  const project_id = await db.withTransaction(async (db) => {
+    const projectId = await insertDynamic(db, 'projects', {
+          tenant_id: options.tenantId ?? null,
+          name: projectName,
+          description: manifest.project.description ?? '',
+          context_md: manifest.project.context_md ?? '',
+        });
 
     for (const workflow of manifest.workflows ?? []) {
       const workflowRepoConfig = normalizeRepoConfig({
@@ -462,36 +463,37 @@ export function importProjectManifest(
         repo_path: workflow.repo_config?.mode === 'worktree' ? workflow.repo_config.path : null,
         repo_url: workflow.repo_config?.mode === 'clone' ? workflow.repo_config.url : null,
       });
-      const workflowId = insertDynamic(db, 'sprints', {
-        tenant_id: options.tenantId ?? null,
-        project_id: projectId,
-        name: workflow.name,
-        goal: workflow.goal ?? '',
-        sprint_type: workflow.sprint_type ?? 'generic',
-        workflow_template_key: workflow.workflow_template_key ?? null,
-        status: options.activateWorkflows ? (workflow.status || 'planning') : 'planning',
-        length_kind: workflow.length_kind ?? 'time',
-        length_value: workflow.length_value ?? '',
-        repo_path: workflowRepoConfig.repo_path,
-        repo_url: workflowRepoConfig.repo_url,
-        repo_access_mode: workflowRepoConfig.repo_access_mode,
-      });
-      workflowIdMap[workflow.ref] = workflowId;
-      if (tableExists(db, 'task_field_schemas')) {
-        for (const schema of workflow.field_schemas ?? []) {
-          const existing = db.prepare(`
-            SELECT id FROM task_field_schemas
-            WHERE sprint_type_key = ? AND task_type IS ?
-            LIMIT 1
-          `).get(schema.sprint_type_key, schema.task_type ?? null);
-          if (!existing) {
-            insertDynamic(db, 'task_field_schemas', {
-              sprint_type_key: schema.sprint_type_key,
-              task_type: schema.task_type ?? null,
-              schema_json: stringifyStable(schema.schema ?? {}),
-              is_system: schema.is_system ? 1 : 0,
-              updated_at: new Date().toISOString(),
+      const workflowId = await insertDynamic(db, 'sprints', {
+              tenant_id: options.tenantId ?? null,
+              project_id: projectId,
+              name: workflow.name,
+              goal: workflow.goal ?? '',
+              sprint_type: workflow.sprint_type ?? 'generic',
+              workflow_template_key: workflow.workflow_template_key ?? null,
+              status: options.activateWorkflows ? (workflow.status || 'planning') : 'planning',
+              length_kind: workflow.length_kind ?? 'time',
+              length_value: workflow.length_value ?? '',
+              repo_path: workflowRepoConfig.repo_path,
+              repo_url: workflowRepoConfig.repo_url,
+              repo_access_mode: workflowRepoConfig.repo_access_mode,
             });
+      workflowIdMap[workflow.ref] = workflowId;
+      if (await tableExists(db, 'task_field_schemas')) {
+        for (const schema of workflow.field_schemas ?? []) {
+          const existing = await db.get(`
+            SELECT id FROM task_field_schemas
+            WHERE sprint_type_key = ?
+              AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+            LIMIT 1
+          `, schema.sprint_type_key, schema.task_type ?? null, schema.task_type ?? null);
+          if (!existing) {
+            await insertDynamic(db, 'task_field_schemas', {
+                            sprint_type_key: schema.sprint_type_key,
+                            task_type: schema.task_type ?? null,
+                            schema_json: stringifyStable(schema.schema ?? {}),
+                            is_system: schema.is_system ? 1 : 0,
+                            updated_at: nowTimestamp(),
+                          });
           }
         }
       }
@@ -499,47 +501,47 @@ export function importProjectManifest(
 
     for (const agent of manifest.agents ?? []) {
       const sessionKey = `imported:${projectId}:${agent.ref.replace(/[^a-zA-Z0-9_.:-]/g, '_')}`;
-      const agentId = insertDynamic(db, 'agents', {
-        tenant_id: options.tenantId ?? null,
-        name: agent.name,
-        role: agent.role ?? '',
-        session_key: sessionKey,
-        workspace_path: '',
-        status: 'idle',
-        runtime_type: agent.runtime_type ?? 'openclaw',
-        runtime_config: stringifyStable(agent.runtime_config ?? {}),
-        model: agent.model ?? null,
-        preferred_provider: agent.preferred_provider ?? null,
-        job_title: agent.job_title ?? '',
-        job_instructions: agent.job_instructions ?? '',
-        system_role: agent.system_role ?? null,
-        skill_names: stringifyStable(agent.skill_names ?? []),
-        dispatch_mode: agent.dispatch_mode ?? 'agentTurn',
-        schedule: agent.schedule ?? '',
-        timeout_seconds: agent.timeout_seconds ?? 900,
-        startup_grace_seconds: agent.startup_grace_seconds ?? null,
-        heartbeat_stale_seconds: agent.heartbeat_stale_seconds ?? null,
-        stall_threshold_min: agent.stall_threshold_min ?? 30,
-        max_retries: agent.max_retries ?? 3,
-        sort_rules: stringifyStable(agent.sort_rules ?? []),
-        enabled: options.enableAgents ? 1 : 0,
-        project_id: projectId,
-      });
+      const agentId = await insertDynamic(db, 'agents', {
+              tenant_id: options.tenantId ?? null,
+              name: agent.name,
+              role: agent.role ?? '',
+              session_key: sessionKey,
+              workspace_path: '',
+              status: 'idle',
+              runtime_type: agent.runtime_type ?? 'openclaw',
+              runtime_config: stringifyStable(agent.runtime_config ?? {}),
+              model: agent.model ?? null,
+              preferred_provider: agent.preferred_provider ?? null,
+              job_title: agent.job_title ?? '',
+              job_instructions: agent.job_instructions ?? '',
+              system_role: agent.system_role ?? null,
+              skill_names: stringifyStable(agent.skill_names ?? []),
+              dispatch_mode: agent.dispatch_mode ?? 'agentTurn',
+              schedule: agent.schedule ?? '',
+              timeout_seconds: agent.timeout_seconds ?? 900,
+              startup_grace_seconds: agent.startup_grace_seconds ?? null,
+              heartbeat_stale_seconds: agent.heartbeat_stale_seconds ?? null,
+              stall_threshold_min: agent.stall_threshold_min ?? 30,
+              max_retries: agent.max_retries ?? 3,
+              sort_rules: stringifyStable(agent.sort_rules ?? []),
+              enabled: options.enableAgents ? 1 : 0,
+              project_id: projectId,
+            });
       agentIdMap[agent.ref] = agentId;
 
       for (const tool of agent.tools ?? []) {
-        const resolved = tableExists(db, 'tools') ? db.prepare('SELECT id FROM tools WHERE slug = ?').get(tool.slug) as { id: number } | undefined : undefined;
-        if (resolved) insertDynamic(db, 'agent_tool_assignments', { agent_id: agentId, tool_id: resolved.id, overrides: stringifyStable(tool.overrides ?? {}), enabled: 0 });
+        const resolved = await tableExists(db, 'tools') ? await db.get('SELECT id FROM tools WHERE slug = ?', tool.slug) as { id: number } | undefined : undefined;
+        if (resolved) await insertDynamic(db, 'agent_tool_assignments', { agent_id: agentId, tool_id: resolved.id, overrides: stringifyStable(tool.overrides ?? {}), enabled: 0 });
       }
       for (const server of agent.mcp_servers ?? []) {
-        const resolved = tableExists(db, 'mcp_servers') ? db.prepare('SELECT id FROM mcp_servers WHERE slug = ?').get(server.slug) as { id: number } | undefined : undefined;
-        if (resolved) insertDynamic(db, 'agent_mcp_assignments', { agent_id: agentId, mcp_server_id: resolved.id, overrides: stringifyStable(server.overrides ?? {}), enabled: 0 });
+        const resolved = await tableExists(db, 'mcp_servers') ? await db.get('SELECT id FROM mcp_servers WHERE slug = ?', server.slug) as { id: number } | undefined : undefined;
+        if (resolved) await insertDynamic(db, 'agent_mcp_assignments', { agent_id: agentId, mcp_server_id: resolved.id, overrides: stringifyStable(server.overrides ?? {}), enabled: 0 });
       }
     }
 
-    const scopedRow = (table: string, row: Row): Row => {
+    const scopedRow = async (table: string, row: Row): Promise<Row> => {
       const next: Row = { ...row, project_id: projectId };
-      if (tableColumns(db, table).has('tenant_id')) {
+      if ((await tableColumns(db, table)).has('tenant_id')) {
         next.tenant_id = options.tenantId ?? null;
       }
       if ('workflow_ref' in next) {
@@ -553,13 +555,13 @@ export function importProjectManifest(
       return next;
     };
 
-    for (const row of manifest.routing?.status_routes ?? []) insertDynamic(db, 'routing_config', scopedRow('routing_config', row));
-    for (const row of manifest.routing?.transitions ?? []) insertDynamic(db, 'sprint_task_transitions', scopedRow('sprint_task_transitions', row));
-    for (const row of manifest.routing?.transition_requirements ?? []) insertDynamic(db, 'sprint_task_transition_requirements', scopedRow('sprint_task_transition_requirements', row));
-    for (const row of manifest.routing?.task_routing_rules ?? []) insertDynamic(db, 'sprint_task_routing_rules', scopedRow('sprint_task_routing_rules', row));
-    for (const row of manifest.routing?.story_point_model_routing ?? []) insertDynamic(db, 'story_point_model_routing', scopedRow('story_point_model_routing', row));
-    for (const row of manifest.routing?.external_event_mappings ?? []) insertDynamic(db, 'external_event_mappings', scopedRow('external_event_mappings', row));
-    for (const row of manifest.recurring_task_templates ?? []) insertDynamic(db, 'recurring_task_series', { ...scopedRow('recurring_task_series', row), enabled: 0, next_run_at: null, last_run_at: null });
+    for (const row of manifest.routing?.status_routes ?? []) await insertDynamic(db, 'routing_config', await scopedRow('routing_config', row));
+    for (const row of manifest.routing?.transitions ?? []) await insertDynamic(db, 'sprint_task_transitions', await scopedRow('sprint_task_transitions', row));
+    for (const row of manifest.routing?.transition_requirements ?? []) await insertDynamic(db, 'sprint_task_transition_requirements', await scopedRow('sprint_task_transition_requirements', row));
+    for (const row of manifest.routing?.task_routing_rules ?? []) await insertDynamic(db, 'sprint_task_routing_rules', await scopedRow('sprint_task_routing_rules', row));
+    for (const row of manifest.routing?.story_point_model_routing ?? []) await insertDynamic(db, 'story_point_model_routing', await scopedRow('story_point_model_routing', row));
+    for (const row of manifest.routing?.external_event_mappings ?? []) await insertDynamic(db, 'external_event_mappings', await scopedRow('external_event_mappings', row));
+    for (const row of manifest.recurring_task_templates ?? []) await insertDynamic(db, 'recurring_task_series', { ...(await scopedRow('recurring_task_series', row)), enabled: 0, next_run_at: null, last_run_at: null });
 
     if (options.importFiles) {
       const dir = path.join(UPLOADS_BASE, String(projectId));
@@ -570,54 +572,53 @@ export function importProjectManifest(
         const filename = `import-${projectId}-${safeBase}`;
         const filePath = path.join(dir, filename);
         fs.writeFileSync(filePath, Buffer.from(file.payload_base64, 'base64'));
-        insertDynamic(db, 'project_files', {
-          project_id: projectId,
-          filename,
-          original_name: file.original_name || filename,
-          mime_type: file.mime_type || 'application/octet-stream',
-          size_bytes: fs.statSync(filePath).size,
-          file_path: filePath,
-          uploaded_by: options.actor ?? 'import',
-        });
+        await insertDynamic(db, 'project_files', {
+                    project_id: projectId,
+                    filename,
+                    original_name: file.original_name || filename,
+                    mime_type: file.mime_type || 'application/octet-stream',
+                    size_bytes: fs.statSync(filePath).size,
+                    file_path: filePath,
+                    uploaded_by: options.actor ?? 'import',
+                  });
       }
     }
 
-    writeProjectAudit(db, projectId, 'project', projectId, 'created', options.actor ?? 'api', {
-      import: true,
-      source_project_id: manifest.project.source_id,
-      source_project_name: manifest.project.name,
-      schema_version: manifest.schema_version,
-      agents_enabled: Boolean(options.enableAgents),
-      workflows_activated: Boolean(options.activateWorkflows),
-    });
+    await writeProjectAudit(db, projectId, 'project', projectId, 'created', options.actor ?? 'api', {
+            import: true,
+            source_project_id: manifest.project.source_id,
+            source_project_name: manifest.project.name,
+            schema_version: manifest.schema_version,
+            agents_enabled: Boolean(options.enableAgents),
+            workflows_activated: Boolean(options.activateWorkflows),
+          });
     return projectId;
   });
 
-  const project_id = tx();
   return { project_id, preview, id_map: { agents: agentIdMap, workflows: workflowIdMap } };
 }
 
-export function repairImportedProjectTenantScope(
-  db: Database.Database,
+export async function repairImportedProjectTenantScope(
+  db: Db,
   input: { projectId: number; tenantId?: number | null },
-): { project_id: number; tenant_id: number | null; updated: Record<string, number> } {
-  const project = db.prepare('SELECT id, tenant_id FROM projects WHERE id = ?').get(input.projectId) as { id: number; tenant_id: number | null } | undefined;
+): Promise<{ project_id: number; tenant_id: number | null; updated: Record<string, number> }> {
+  const project = await db.get('SELECT id, tenant_id FROM projects WHERE id = ?', input.projectId) as { id: number; tenant_id: number | null } | undefined;
   if (!project) throw Object.assign(new Error('Project not found'), { status: 404 });
   const tenantId = input.tenantId !== undefined ? input.tenantId : project.tenant_id ?? null;
   const updated: Record<string, number> = {};
 
-  db.transaction(() => {
+  await db.withTransaction(async (db) => {
     for (const table of TENANT_SCOPED_PROJECT_CONFIG_TABLES) {
-      if (!tableHasColumns(db, table, ['project_id', 'tenant_id'])) continue;
-      const result = db.prepare(`
+      if (!await tableHasColumns(db, table, ['project_id', 'tenant_id'])) continue;
+      const result = await db.run(`
         UPDATE ${table}
         SET tenant_id = ?
         WHERE project_id = ?
           AND (tenant_id IS NOT ?)
-      `).run(tenantId, project.id, tenantId);
+      `, tenantId, project.id, tenantId);
       updated[table] = result.changes;
     }
-  })();
+  });
 
   return { project_id: project.id, tenant_id: tenantId, updated };
 }

@@ -13,12 +13,12 @@ import {
 
 let tempDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   closeDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'project-portability-'));
   process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
   process.env.AGENT_HQ_PROJECT_UPLOADS_DIR = path.join(tempDir, 'uploads');
-  initSchema();
+  await initSchema();
 });
 
 afterEach(() => {
@@ -28,19 +28,19 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-function seedPortableProject(): number {
+async function seedPortableProject(): Promise<number> {
   const db = getDb();
-  const projectId = Number(db.prepare(`
+  const projectId = Number((await db.run(`
     INSERT INTO projects (tenant_id, name, description, context_md, repo_path, repo_access_mode)
     VALUES (1, 'Portable Source', 'Source description', '# Context', '/tmp/source-worktree', 'worktree')
-  `).run().lastInsertRowid);
+  `)).lastInsertId);
 
-  const sprintId = Number(db.prepare(`
+  const sprintId = Number((await db.run(`
     INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
     VALUES (1, ?, 'Enhancements', 'Ship portability', 'dev', 'active', 'runs', '5')
-  `).run(projectId).lastInsertRowid);
+  `, projectId)).lastInsertId);
 
-  const agentId = Number(db.prepare(`
+  const agentId = Number((await db.run(`
     INSERT INTO agents (
       tenant_id, name, role, session_key, workspace_path, runtime_type, runtime_config,
       model, preferred_provider, job_title, job_instructions, skill_names, enabled,
@@ -51,70 +51,70 @@ function seedPortableProject(): number {
       'claude-sonnet-4-5', 'anthropic', 'Backend Engineer', 'Build APIs', '["github"]', 1,
       1200, 45, 2, '["priority"]', ?
     )
-  `).run(projectId).lastInsertRowid);
+  `, projectId)).lastInsertId);
 
-  const toolId = Number(db.prepare(`
+  const toolId = Number((await db.run(`
     INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body, enabled)
     VALUES (1, 'Repo Search', 'repo_search', 'bash', 'rg "$QUERY"', 1)
-  `).run().lastInsertRowid);
-  const mcpId = Number(db.prepare(`
+  `)).lastInsertId);
+  const mcpId = Number((await db.run(`
     INSERT INTO mcp_servers (tenant_id, name, slug, command, args, env, enabled)
     VALUES (1, 'Agent HQ', 'agent_hq', 'node', '[]', '{}', 1)
-  `).run().lastInsertRowid);
-  db.prepare(`INSERT INTO agent_tool_assignments (agent_id, tool_id, overrides, enabled) VALUES (?, ?, '{"limit":10}', 1)`).run(agentId, toolId);
-  db.prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled) VALUES (?, ?, '{}', 1)`).run(agentId, mcpId);
+  `)).lastInsertId);
+  await db.run(`INSERT INTO agent_tool_assignments (agent_id, tool_id, overrides, enabled) VALUES (?, ?, '{"limit":10}', 1)`, agentId, toolId);
+  await db.run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled) VALUES (?, ?, '{}', 1)`, agentId, mcpId);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO routing_config (tenant_id, project_id, from_status, outcome, to_status, enabled)
     VALUES (1, ?, 'in_progress', 'completed_for_review', 'review', 1)
-  `).run(projectId);
-  db.prepare(`
+  `, projectId);
+  await db.run(`
     INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_id, sprint_type, task_type, from_status, outcome, to_status, priority)
     VALUES (1, ?, ?, 'dev', 'enhancement', 'ready', 'completed_for_review', 'review', 20)
-  `).run(projectId, sprintId);
-  db.prepare(`
+  `, projectId, sprintId);
+  await db.run(`
     INSERT INTO sprint_task_transition_requirements (tenant_id, project_id, sprint_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, message, priority)
     VALUES (1, ?, ?, 'dev', 'enhancement', 'completed_for_review', 'review_commit', 'required', 'block', 'Commit is required', 30)
-  `).run(projectId, sprintId);
-  db.prepare(`
+  `, projectId, sprintId);
+  await db.run(`
     INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_id, sprint_type, task_type, status, agent_id, priority)
     VALUES (1, ?, ?, 'dev', 'enhancement', 'ready', ?, 10)
-  `).run(projectId, sprintId, agentId);
-  db.prepare(`
+  `, projectId, sprintId, agentId);
+  await db.run(`
     INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, sprint_type, max_points, provider, model, label)
     VALUES (1, ?, ?, 'dev', 5, 'anthropic', 'claude-sonnet-4-5', 'Default')
-  `).run(projectId, sprintId);
-  db.prepare(`
+  `, projectId, sprintId);
+  await db.run(`
     INSERT INTO external_event_mappings (
       tenant_id, project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
       action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
     )
     VALUES (1, ?, 'dev_environment_lease_manager', 'deployed_for_qa', 'enhancement', '[]', '["done"]', 'outcome', 'completed_for_review', 1, 0, 1, 40)
-  `).run(projectId);
-  db.prepare(`
+  `, projectId);
+  await db.run(`
     INSERT INTO recurring_task_series (
       tenant_id, project_id, sprint_id, title_template, description_template, task_type, priority,
       story_points, status_on_create, schedule_expression, timezone, enabled, agent_id
     )
     VALUES (1, ?, ?, 'Weekly cleanup', 'Clean up docs', 'dev', 'medium', 2, 'ready', '0 9 * * 1', 'America/New_York', 1, ?)
-  `).run(projectId, sprintId, agentId);
+  `, projectId, sprintId, agentId);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO tasks (project_id, sprint_id, title, description, status, priority, task_type, story_points)
     VALUES (?, ?, 'Live task must not export', 'Runtime state', 'in_progress', 'high', 'dev', 3)
-  `).run(projectId, sprintId);
-  db.prepare(`
+  `, projectId, sprintId);
+  await db.run(`
     INSERT INTO job_instances (agent_id, status, session_key, payload_sent, response)
     VALUES (?, 'running', 'run:live', '{"secret":"runtime"}', 'still running')
-  `).run(agentId);
+  `, agentId);
 
   return projectId;
 }
 
-it('exports a deterministic v1 manifest without live execution state', () => {
-  const projectId = seedPortableProject();
-  const first = exportProjectManifest(getDb(), projectId, false).manifest;
-  const second = exportProjectManifest(getDb(), projectId, false).manifest;
+it('exports a deterministic v1 manifest without live execution state', async () => {
+  const projectId = await seedPortableProject();
+  const first = (await exportProjectManifest(getDb(), projectId, false)).manifest;
+  const second = (await exportProjectManifest(getDb(), projectId, false)).manifest;
 
   expect(manifestJson(first)).toBe(manifestJson(second));
   expect(first.schema_version).toBe('agent_hq.project_manifest.v1');
@@ -135,10 +135,10 @@ it('exports a deterministic v1 manifest without live execution state', () => {
   expect(serialized).not.toContain('job_instances');
 });
 
-it('previews missing dependencies and imports equivalent portable config with remapped ids disabled by default', () => {
+it('previews missing dependencies and imports equivalent portable config with remapped ids disabled by default', async () => {
   const db = getDb();
-  const projectId = seedPortableProject();
-  const manifest = exportProjectManifest(db, projectId, false).manifest;
+  const projectId = await seedPortableProject();
+  const manifest = (await exportProjectManifest(db, projectId, false)).manifest;
   const missingDependencyManifest = {
     ...manifest,
     agents: manifest.agents.map((agent) => ({
@@ -147,7 +147,7 @@ it('previews missing dependencies and imports equivalent portable config with re
     })),
   };
 
-  const warningPreview = validateProjectManifest(db, missingDependencyManifest);
+  const warningPreview = await validateProjectManifest(db, missingDependencyManifest);
   expect(warningPreview.valid).toBe(true);
   expect(warningPreview.counts).toMatchObject({
     routing_rules: 6,
@@ -163,14 +163,14 @@ it('previews missing dependencies and imports equivalent portable config with re
     expect.objectContaining({ code: 'deprecated_project_repo_config' }),
   ]));
 
-  db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'EcoPool', 'ecopool', 0)`).run();
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'EcoPool', 'ecopool', 0)`);
 
-  const result = importProjectManifest(db, manifest, { projectName: 'Portable Copy', tenantId: 2, actor: 'test' });
+  const result = await importProjectManifest(db, manifest, { projectName: 'Portable Copy', tenantId: 2, actor: 'test' });
   expect(result.project_id).not.toBe(projectId);
   expect(Object.values(result.id_map.agents)[0]).not.toBe(Number(manifest.agents[0].ref.replace('agent:', '')));
   expect(Object.values(result.id_map.workflows)[0]).not.toBe(Number(manifest.workflows[0].ref.replace('workflow:', '')));
 
-  const importedProject = db.prepare(`SELECT name, context_md, repo_access_mode, repo_path, tenant_id FROM projects WHERE id = ?`).get(result.project_id);
+  const importedProject = await db.get(`SELECT name, context_md, repo_access_mode, repo_path, tenant_id FROM projects WHERE id = ?`, result.project_id);
   expect(importedProject).toMatchObject({
     name: 'Portable Copy',
     context_md: '# Context',
@@ -179,7 +179,7 @@ it('previews missing dependencies and imports equivalent portable config with re
     tenant_id: 2,
   });
 
-  const importedAgent = db.prepare(`SELECT id, tenant_id, enabled, runtime_type, model, project_id FROM agents WHERE project_id = ?`).get(result.project_id) as {
+  const importedAgent = await db.get(`SELECT id, tenant_id, enabled, runtime_type, model, project_id FROM agents WHERE project_id = ?`, result.project_id) as {
     id: number;
     tenant_id: number;
     enabled: number;
@@ -189,14 +189,14 @@ it('previews missing dependencies and imports equivalent portable config with re
   };
   expect(importedAgent).toMatchObject({ tenant_id: 2, enabled: 0, runtime_type: 'claude-code', model: 'claude-sonnet-4-5', project_id: result.project_id });
 
-  const importedSprint = db.prepare(`SELECT id, tenant_id, status, sprint_type FROM sprints WHERE project_id = ?`).get(result.project_id) as { id: number; tenant_id: number; status: string; sprint_type: string };
+  const importedSprint = await db.get(`SELECT id, tenant_id, status, sprint_type FROM sprints WHERE project_id = ?`, result.project_id) as { id: number; tenant_id: number; status: string; sprint_type: string };
   expect(importedSprint).toMatchObject({ tenant_id: 2, status: 'planning', sprint_type: 'dev' });
 
-  const assignment = db.prepare(`SELECT enabled FROM agent_tool_assignments WHERE agent_id = ?`).get(importedAgent.id) as { enabled: number };
+  const assignment = await db.get(`SELECT enabled FROM agent_tool_assignments WHERE agent_id = ?`, importedAgent.id) as { enabled: number };
   expect(assignment.enabled).toBe(0);
-  const recurring = db.prepare(`SELECT tenant_id, enabled, next_run_at FROM recurring_task_series WHERE project_id = ?`).get(result.project_id) as { tenant_id: number; enabled: number; next_run_at: string | null };
+  const recurring = await db.get(`SELECT tenant_id, enabled, next_run_at FROM recurring_task_series WHERE project_id = ?`, result.project_id) as { tenant_id: number; enabled: number; next_run_at: string | null };
   expect(recurring).toMatchObject({ tenant_id: 2, enabled: 0, next_run_at: null });
-  const routing = db.prepare(`SELECT agent_id, sprint_id FROM sprint_task_routing_rules WHERE project_id = ?`).get(result.project_id);
+  const routing = await db.get(`SELECT agent_id, sprint_id FROM sprint_task_routing_rules WHERE project_id = ?`, result.project_id);
   expect(routing).toMatchObject({ agent_id: importedAgent.id, sprint_id: importedSprint.id });
   for (const table of [
     'routing_config',
@@ -207,17 +207,17 @@ it('previews missing dependencies and imports equivalent portable config with re
     'external_event_mappings',
     'recurring_task_series',
   ]) {
-    const tenantCounts = db.prepare(`SELECT tenant_id, COUNT(*) AS count FROM ${table} WHERE project_id = ? GROUP BY tenant_id ORDER BY tenant_id`).all(result.project_id) as Array<{ tenant_id: number; count: number }>;
+    const tenantCounts = await db.all(`SELECT tenant_id, COUNT(*) AS count FROM ${table} WHERE project_id = ? GROUP BY tenant_id ORDER BY tenant_id`, result.project_id) as Array<{ tenant_id: number; count: number }>;
     expect(tenantCounts).toEqual([{ tenant_id: 2, count: 1 }]);
   }
-  db.prepare(`UPDATE routing_config SET tenant_id = 1 WHERE project_id = ?`).run(result.project_id);
-  db.prepare(`UPDATE sprint_task_routing_rules SET tenant_id = 1 WHERE project_id = ?`).run(result.project_id);
-  db.prepare(`UPDATE sprint_task_transitions SET tenant_id = 1 WHERE project_id = ?`).run(result.project_id);
-  db.prepare(`UPDATE sprint_task_transition_requirements SET tenant_id = 1 WHERE project_id = ?`).run(result.project_id);
-  db.prepare(`UPDATE story_point_model_routing SET tenant_id = 1 WHERE project_id = ?`).run(result.project_id);
-  db.prepare(`UPDATE external_event_mappings SET tenant_id = 1 WHERE project_id = ?`).run(result.project_id);
-  db.prepare(`UPDATE recurring_task_series SET tenant_id = 1 WHERE project_id = ?`).run(result.project_id);
-  const repair = repairImportedProjectTenantScope(db, { projectId: result.project_id });
+  await db.run(`UPDATE routing_config SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  await db.run(`UPDATE sprint_task_routing_rules SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  await db.run(`UPDATE sprint_task_transitions SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  await db.run(`UPDATE sprint_task_transition_requirements SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  await db.run(`UPDATE story_point_model_routing SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  await db.run(`UPDATE external_event_mappings SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  await db.run(`UPDATE recurring_task_series SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  const repair = await repairImportedProjectTenantScope(db, { projectId: result.project_id });
   expect(repair).toMatchObject({
     project_id: result.project_id,
     tenant_id: 2,
@@ -240,12 +240,12 @@ it('previews missing dependencies and imports equivalent portable config with re
     'external_event_mappings',
     'recurring_task_series',
   ]) {
-    const badRows = db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE project_id = ? AND tenant_id != 2`).get(result.project_id) as { count: number };
+    const badRows = await db.get(`SELECT COUNT(*) AS count FROM ${table} WHERE project_id = ? AND tenant_id != 2`, result.project_id) as { count: number };
     expect(badRows.count).toBe(0);
   }
 
-  const importedLiveTasks = db.prepare(`SELECT COUNT(*) AS count FROM tasks WHERE project_id = ?`).get(result.project_id) as { count: number };
+  const importedLiveTasks = await db.get(`SELECT COUNT(*) AS count FROM tasks WHERE project_id = ?`, result.project_id) as { count: number };
   expect(importedLiveTasks.count).toBe(0);
-  const audit = db.prepare(`SELECT changes FROM project_audit_log WHERE project_id = ? ORDER BY id DESC LIMIT 1`).get(result.project_id) as { changes: string };
+  const audit = await db.get(`SELECT changes FROM project_audit_log WHERE project_id = ? ORDER BY id DESC LIMIT 1`, result.project_id) as { changes: string };
   expect(JSON.parse(audit.changes)).toMatchObject({ import: true, schema_version: 'agent_hq.project_manifest.v1' });
 });

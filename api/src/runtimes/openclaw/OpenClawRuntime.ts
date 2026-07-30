@@ -30,6 +30,7 @@ import { handleOpenClawRuntimeEnd } from './runtimeEnd';
 import {
   startRawSessionTerminalPoll,
 } from './transcript';
+import { nowTimestamp } from '../../lib/timestamps';
 
 function normalizeRepoContextValue(value: string | null | undefined): string | null {
   const normalized = value?.trim();
@@ -412,8 +413,12 @@ export class OpenClawRuntime implements AgentRuntime {
     // Start local/raw terminal observation before chat.send returns. Some OpenClaw
     // failures end the trajectory immediately and never emit a gateway chat
     // terminal event after the RPC resolves.
-    this.persistUserPrompt(params, dispatchMessage);
-    this.startCapture(params, undefined, routedSessionKey);
+    // Both awaited, which is what actually delivers on the comment above: startCapture only
+    // registers the listeners and returns, so unawaited it was racing gatewayWsSend rather than
+    // preceding it, and an OpenClaw run that fails instantly could emit and finish its whole
+    // trajectory before the capture was subscribed — exactly the case this is here to observe.
+    await this.persistUserPrompt(params, dispatchMessage);
+    await this.startCapture(params, undefined, routedSessionKey);
 
     const wsResult = await gatewayWsSend({
       sessionKey: routedSessionKey,
@@ -425,7 +430,9 @@ export class OpenClawRuntime implements AgentRuntime {
       throw new Error(wsResult.error ?? 'WebSocket dispatch failed');
     }
 
-    this.startCapture(params, wsResult.runId, routedSessionKey);
+    // Re-registers the capture now that the real runId is known. Awaited so the capture is in
+    // place before this method returns and the caller treats the dispatch as observed.
+    await this.startCapture(params, wsResult.runId, routedSessionKey);
     return { runId: wsResult.runId ?? '' };
   }
 
@@ -434,13 +441,11 @@ export class OpenClawRuntime implements AgentRuntime {
    * Use the stored short hook:* session key first; current OpenClaw gateway
    * history/subscription resolution is keyed on that form for Agent HQ runs.
    */
-  private startCapture(params: DispatchParams, runId?: string, routedSessionKey?: string): void {
+  private async startCapture(params: DispatchParams, runId?: string, routedSessionKey?: string): Promise<void> {
     if (params.instanceId == null) return;
     try {
       const db = getDb();
-      const instRow = db
-        .prepare('SELECT agent_id, session_key FROM job_instances WHERE id = ?')
-        .get(params.instanceId) as { agent_id: number; session_key: string | null } | undefined;
+      const instRow = await db.get('SELECT agent_id, session_key FROM job_instances WHERE id = ?', params.instanceId) as { agent_id: number; session_key: string | null } | undefined;
       if (!instRow) return;
 
       const agentId = instRow.agent_id;
@@ -458,14 +463,14 @@ export class OpenClawRuntime implements AgentRuntime {
 
       const timeoutSeconds = (params.timeoutSeconds ?? 900) + 120;
       const timeoutMs = timeoutSeconds * 1000;
-      startTranscriptCapture(params.instanceId, agentId, captureSessionKey, {
-        timeoutMs,
-        forceHistoryRefresh: Boolean(runId),
-        runId,
-        onTurnEnd: (event) => {
-          void this.handleTurnEnd(params.instanceId!, event, params.onRuntimeEnd);
-        },
-      });
+      await startTranscriptCapture(params.instanceId, agentId, captureSessionKey, {
+                timeoutMs,
+                forceHistoryRefresh: Boolean(runId),
+                runId,
+                onTurnEnd: (event) => {
+                  void this.handleTurnEnd(params.instanceId!, event, params.onRuntimeEnd);
+                },
+              });
       startRawSessionTerminalPoll({
         instanceId: params.instanceId,
         sessionKey: routedSessionKey ?? captureSessionKey,
@@ -486,16 +491,16 @@ export class OpenClawRuntime implements AgentRuntime {
    * persistUserPrompt — write the dispatched prompt as a user-role chat_messages
    * row so the Chats tab shows what was sent to the agent.
    */
-  private persistUserPrompt(params: DispatchParams, promptContent = params.message): number | null {
+  private async persistUserPrompt(params: DispatchParams, promptContent = params.message): Promise<number | null> {
     try {
       if (params.instanceId == null) return null;
       const db = getDb();
-      const hasJobInstanceDurableRunId = tableHasColumn(db, 'job_instances', 'durable_run_id');
-      const instRow = db.prepare(`
+      const hasJobInstanceDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
+      const instRow = await db.get(`
         SELECT agent_id, session_key${hasJobInstanceDurableRunId ? ', durable_run_id' : ''}
         FROM job_instances
         WHERE id = ?
-      `).get(params.instanceId) as {
+      `, params.instanceId) as {
         agent_id: number;
         session_key?: string | null;
         durable_run_id?: string | null;
@@ -505,22 +510,22 @@ export class OpenClawRuntime implements AgentRuntime {
 
       const identityColumns: string[] = [];
       const identityValues: unknown[] = [];
-      if (tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
+      if (await tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
         identityColumns.push('durable_run_id');
         identityValues.push(instRow?.durable_run_id ?? null);
       }
-      if (tableHasColumn(db, 'chat_messages', 'session_key')) {
+      if (await tableHasColumn(db, 'chat_messages', 'session_key')) {
         identityColumns.push('session_key');
         identityValues.push(instRow?.session_key ?? params.sessionKey ?? null);
       }
       const identityColumnSql = identityColumns.length ? `${identityColumns.join(', ')}, ` : '';
       const identityValueSql = identityColumns.length ? `${identityColumns.map(() => '?').join(', ')}, ` : '';
 
-      const now = new Date().toISOString();
-      db.prepare(`
+      const now = nowTimestamp();
+      await db.run(`
         INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, ${identityColumnSql}role, content, timestamp, event_type, event_meta)
         VALUES (?, ?, ?, ${identityValueSql}'user', ?, ?, 'text', '{}')
-      `).run(`oc-user-${params.instanceId}`, agentId, params.instanceId, ...identityValues, promptContent, now);
+      `, `oc-user-${params.instanceId}`, agentId, params.instanceId, ...identityValues, promptContent, now);
       return agentId;
     } catch (err) {
       console.warn(
@@ -538,8 +543,11 @@ export class OpenClawRuntime implements AgentRuntime {
    * "Already gone" (session not found) is treated as a success.
    */
   async abort(runId: string, sessionKey: string): Promise<void> {
-    // Stop any active background transcript capture for this session
-    stopTranscriptCapture(sessionKey);
+    // Stop any active background transcript capture for this session. Awaited so the final
+    // transcript flush completes before the run is aborted below — otherwise the abort tears
+    // down the session while the capture is still writing, and the tail of the transcript for
+    // the very run being cancelled is the part most likely to be lost.
+    await stopTranscriptCapture(sessionKey);
 
     const result = abortChatRunBySessionKey(sessionKey);
     if (!result.ok) {

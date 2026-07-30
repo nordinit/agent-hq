@@ -1,35 +1,35 @@
-import type Database from 'better-sqlite3';
 import { listSprintTaskStatuses } from './policy/statuses';
 import { seedSprintTaskPolicy } from './policy/seed';
 import { parseObjectJson, parseSprintId, requireSprint, withStatus, StatusError } from './scope';
+import { type Db } from "../../db/adapter/types";
 
-function requireSprintStatusScope(db: Database.Database, sprintIdRaw: unknown, tenantIdRaw?: unknown): number {
+async function requireSprintStatusScope(db: Db, sprintIdRaw: unknown, tenantIdRaw?: unknown): Promise<number> {
   const sprintId = parseSprintId(sprintIdRaw);
   if (!sprintId) throw withStatus('sprint_id is required for sprint task status policy operations', 400);
   const tenantId = Number.isFinite(Number(tenantIdRaw)) ? Number(tenantIdRaw) : null;
-  requireSprint(db, sprintId, tenantId);
+  await requireSprint(db, sprintId, tenantId);
   return sprintId;
 }
 
-export function listRoutingStatuses(db: Database.Database, input: { sprint_id?: unknown; tenant_id?: unknown }) {
-  const sprintId = requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
-  return { statuses: listSprintTaskStatuses(db, sprintId) };
+export async function listRoutingStatuses(db: Db, input: { sprint_id?: unknown; tenant_id?: unknown }) {
+  const sprintId = await requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
+  return { statuses: await listSprintTaskStatuses(db, sprintId) };
 }
 
-export function updateRoutingStatus(
-  db: Database.Database,
+export async function updateRoutingStatus(
+  db: Db,
   input: Record<string, unknown> & { name: string },
 ) {
   const { name } = input;
-  const sprintId = requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
+  const sprintId = await requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
   const { label, color, allowed_transitions, emoji } = input;
 
-  seedSprintTaskPolicy(db, sprintId);
-  const existing = db.prepare(`
+  await seedSprintTaskPolicy(db, sprintId);
+  const existing = await db.get(`
     SELECT *
     FROM sprint_task_statuses
     WHERE sprint_id = ? AND status_key = ?
-  `).get(sprintId, name) as Record<string, unknown> | undefined;
+  `, sprintId, name) as Record<string, unknown> | undefined;
   if (!existing) {
     throw withStatus(`Status '${name}' not found for sprint ${sprintId}`, 404);
   }
@@ -54,19 +54,19 @@ export function updateRoutingStatus(
   }
   if (sets.length === 0) throw withStatus('No fields to update', 400);
   vals.push(sprintId, name);
-  db.prepare(`
+  await db.run(`
     UPDATE sprint_task_statuses
     SET ${sets.join(', ')}, updated_at = datetime('now')
     WHERE sprint_id = ? AND status_key = ?
-  `).run(...vals);
+  `, ...vals);
 
-  const updated = listSprintTaskStatuses(db, sprintId).find(status => status.name === name);
+  const updated = (await listSprintTaskStatuses(db, sprintId)).find(status => status.name === name);
   if (!updated) throw withStatus(`Status '${name}' not found for sprint ${sprintId}`, 404);
   return updated;
 }
 
-export function createRoutingStatus(db: Database.Database, input: Record<string, unknown>) {
-  const sprintId = requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
+export async function createRoutingStatus(db: Db, input: Record<string, unknown>) {
+  const sprintId = await requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
   const name = input.name;
   const label = input.label;
   const color = input.color;
@@ -76,68 +76,66 @@ export function createRoutingStatus(db: Database.Database, input: Record<string,
     throw withStatus('name and label are required', 400);
   }
 
-  seedSprintTaskPolicy(db, sprintId);
-  const existing = db.prepare(`
+  await seedSprintTaskPolicy(db, sprintId);
+  const existing = await db.get(`
     SELECT status_key
     FROM sprint_task_statuses
     WHERE sprint_id = ? AND status_key = ?
-  `).get(sprintId, name);
+  `, sprintId, name);
   if (existing) {
     throw withStatus(`Status '${name}' already exists for sprint ${sprintId}`, 409);
   }
-  db.prepare(`
+  await db.run(`
     INSERT INTO sprint_task_statuses (
       sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
     ) VALUES (?, ?, ?, ?, 0, 0, ?, COALESCE((SELECT MAX(stage_order) + 1 FROM sprint_task_statuses WHERE sprint_id = ?), 0), 0, '{}', datetime('now'), datetime('now'))
-  `).run(sprintId, name, label, color || 'slate', JSON.stringify(allowedTransitions ?? []), sprintId);
+  `, sprintId, name, label, color || 'slate', JSON.stringify(allowedTransitions ?? []), sprintId);
 
-  const created = listSprintTaskStatuses(db, sprintId).find(status => status.name === name);
+  const created = (await listSprintTaskStatuses(db, sprintId)).find(status => status.name === name);
   if (!created) throw withStatus(`Status '${String(name)}' not found for sprint ${sprintId}`, 404);
   return created;
 }
 
-export function deleteRoutingStatus(
-  db: Database.Database,
+export async function deleteRoutingStatus(
+  db: Db,
   input: Record<string, unknown> & { name: string },
 ) {
   const { name } = input;
-  const sprintId = requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
+  const sprintId = await requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
 
-  seedSprintTaskPolicy(db, sprintId);
-  const existing = db.prepare(`
+  await seedSprintTaskPolicy(db, sprintId);
+  const existing = await db.get(`
     SELECT *
     FROM sprint_task_statuses
     WHERE sprint_id = ? AND status_key = ?
-  `).get(sprintId, name) as Record<string, unknown> | undefined;
+  `, sprintId, name) as Record<string, unknown> | undefined;
   if (!existing) {
     throw withStatus(`Status '${name}' not found for sprint ${sprintId}`, 404);
   }
 
-  const taskCount = (db.prepare(
-    'SELECT COUNT(*) as n FROM tasks WHERE sprint_id = ? AND status = ?'
-  ).get(sprintId, name) as { n: number }).n;
+  const taskCount = (await db.get('SELECT COUNT(*) as n FROM tasks WHERE sprint_id = ? AND status = ?', sprintId, name) as { n: number }).n;
   if (taskCount > 0) {
     const error = withStatus(`Cannot delete status '${name}': ${taskCount} task${taskCount !== 1 ? 's' : ''} currently use this status in sprint ${sprintId}`, 409) as StatusError & Record<string, unknown>;
     error.reason = 'tasks_in_use';
     error.task_count = taskCount;
     throw error;
   }
-  const transitionRefs = db.prepare(`
+  const transitionRefs = await db.all(`
     SELECT id, from_status, outcome, to_status
     FROM sprint_task_transitions
     WHERE sprint_id = ? AND (from_status = ? OR to_status = ?)
-  `).all(sprintId, name, name) as { id: number; from_status: string; outcome: string; to_status: string }[];
+  `, sprintId, name, name) as { id: number; from_status: string; outcome: string; to_status: string }[];
   if (transitionRefs.length > 0) {
     const error = withStatus(`Cannot delete status '${name}': referenced by ${transitionRefs.length} sprint transition${transitionRefs.length !== 1 ? 's' : ''}`, 409) as StatusError & Record<string, unknown>;
     error.reason = 'transitions_in_use';
     error.transitions = transitionRefs;
     throw error;
   }
-  const allStatuses = db.prepare(`
+  const allStatuses = await db.all(`
     SELECT status_key, allowed_transitions_json
     FROM sprint_task_statuses
     WHERE sprint_id = ? AND status_key != ?
-  `).all(sprintId, name) as Array<{ status_key: string; allowed_transitions_json: string }>;
+  `, sprintId, name) as Array<{ status_key: string; allowed_transitions_json: string }>;
   const referencingStatuses = allStatuses.filter((row) => {
     try {
       return (JSON.parse(row.allowed_transitions_json || '[]') as string[]).includes(name);
@@ -151,6 +149,6 @@ export function deleteRoutingStatus(
     error.referencing_statuses = referencingStatuses;
     throw error;
   }
-  db.prepare('DELETE FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?').run(sprintId, name);
+  await db.run('DELETE FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?', sprintId, name);
   return { ok: true, deleted: name, sprint_id: sprintId };
 }

@@ -3,6 +3,7 @@ import { getDb } from '../../db/client';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { gatewayWsSend } from '../../runtimes/openclaw/gatewayClient';
 import { abortChatRunBySessionKey } from '../../runtimes/openclaw';
+import { nowTimestamp } from '../../lib/timestamps';
 
 export function registerSendAbortRoutes(router: Router): void {
   router.post('/instances/:id/send', async (req: Request, res: Response) => {
@@ -17,8 +18,7 @@ export function registerSendAbortRoutes(router: Router): void {
 
     try {
       const db = getDb();
-      const inst = db.prepare('SELECT session_key, agent_id FROM job_instances WHERE id = ?')
-        .get(instanceId) as { session_key: string; agent_id: number } | undefined;
+      const inst = await db.get('SELECT session_key, agent_id FROM job_instances WHERE id = ?', instanceId) as { session_key: string; agent_id: number } | undefined;
       if (!inst) {
         return res.status(404).json({ ok: false, error: 'Instance not found' });
       }
@@ -26,11 +26,9 @@ export function registerSendAbortRoutes(router: Router): void {
       let attachmentLines = '';
       if (attachmentIds.length > 0) {
         const placeholders = attachmentIds.map(() => '?').join(',');
-        const attachments = db.prepare(`SELECT * FROM chat_attachments WHERE id IN (${placeholders})`)
-          .all(...attachmentIds) as Array<Record<string, unknown>>;
+        const attachments = await db.all(`SELECT * FROM chat_attachments WHERE id IN (${placeholders})`, ...attachmentIds) as Array<Record<string, unknown>>;
         for (const a of attachments) {
-          db.prepare('UPDATE chat_attachments SET instance_id = ?, agent_id = ? WHERE id = ?')
-            .run(instanceId, inst.agent_id, a.id);
+          await db.run('UPDATE chat_attachments SET instance_id = ?, agent_id = ? WHERE id = ?', instanceId, inst.agent_id, a.id);
         }
         attachmentLines = attachments.map(a => {
           const url = `/api/v1/chat/attachments/${a.id as number}/download`;
@@ -39,13 +37,13 @@ export function registerSendAbortRoutes(router: Router): void {
       }
 
       const fullMessage = [message, attachmentLines].filter(Boolean).join('\n');
-      const now = new Date().toISOString();
-      const tenantId = resolveRuntimeTenantId(db, { instanceId, agentId: inst.agent_id });
-      const tenant = tenantInsertColumns(db, 'chat_messages', tenantId);
-      db.prepare(`
+      const now = nowTimestamp();
+      const tenantId = await resolveRuntimeTenantId(db, { instanceId, agentId: inst.agent_id });
+      const tenant = await tenantInsertColumns(db, 'chat_messages', tenantId);
+      await db.run(`
         INSERT OR IGNORE INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, session_key, role, content, timestamp, event_type, event_meta)
         VALUES (?, ${tenant.valueSql}?, ?, ?, 'user', ?, ?, 'text', '{}')
-      `).run(`oc-chat-user-${instanceId}-${Date.now()}`, ...tenant.values, inst.agent_id, instanceId, inst.session_key, fullMessage, now);
+      `, `oc-chat-user-${instanceId}-${Date.now()}`, ...tenant.values, inst.agent_id, instanceId, inst.session_key, fullMessage, now);
 
       const result = await gatewayWsSend({
         sessionKey: inst.session_key,
@@ -66,8 +64,7 @@ export function registerSendAbortRoutes(router: Router): void {
 
     try {
       const db = getDb();
-      const inst = db.prepare('SELECT session_key FROM job_instances WHERE id = ?')
-        .get(instanceId) as { session_key: string } | undefined;
+      const inst = await db.get('SELECT session_key FROM job_instances WHERE id = ?', instanceId) as { session_key: string } | undefined;
       if (!inst) {
         return res.status(404).json({ ok: false, error: 'Instance not found' });
       }

@@ -1,4 +1,3 @@
-import Database from 'better-sqlite3';
 import { OpenClawRuntime } from './OpenClawRuntime';
 import { recordRunCheckIn } from '../domains/runs/observability';
 import { markTaskNeedsAttentionForMissingSemanticHandoff } from '../domains/runs/lifecycleHandoff';
@@ -6,6 +5,7 @@ import { applyConfiguredRuntimeFailedEvent } from '../domains/runs/runtimeFailur
 import { evaluateOpenClawInstanceSessionState } from '../domains/runs/openclawSessionState';
 import { scheduleEndedActiveInstanceLinkageCleanup } from '../lib/taskLifecycle';
 import { ensureCanonicalSessionForInstance } from '../lib/canonicalSessions';
+import { type Db } from "../db/adapter/types";
 
 jest.mock('../db/client', () => ({
   getDb: jest.fn(),
@@ -42,8 +42,57 @@ jest.mock('../domains/runs/openclawSessionState', () => ({
   })),
 }));
 
+/**
+ * Lifecycle evidence lives in `tasks.custom_fields_json`; the dedicated
+ * review/qa/deploy columns were dropped from the schema. The runtime therefore
+ * probes `PRAGMA table_info(tasks)` before building its task lookup, so the
+ * fake db has to answer that probe with the real column set.
+ */
+/** The tables this fixture models. Anything else must read as absent. */
+const MOCKED_TABLES = new Set(['tasks', 'job_instances', 'chat_messages']);
+
+const TASKS_COLUMNS = [
+  'id',
+  'tenant_id',
+  'title',
+  'description',
+  'status',
+  'priority',
+  'project_id',
+  'sprint_id',
+  'agent_id',
+  'assigned_agent_id',
+  'created_at',
+  'updated_at',
+  'dispatched_at',
+  'active_instance_id',
+  'task_type',
+  'story_points',
+  'recurring_series_id',
+  'scheduled_for',
+  'schedule_run_id',
+  'generated_from',
+  'custom_fields_json',
+].map((name) => ({ name }));
+
+const TASK_EVIDENCE_CUSTOM_FIELDS = {
+  review_branch: 'cinder-backend/task-403-prevent-outcome-less-run-completions-fro',
+  review_commit: '27bf9e9fb2f32af10d3f8cbd067f76a59b535240',
+  review_url: 'http://localhost:3510/tasks/403',
+  qa_verified_commit: '27bf9e9fb2f32af10d3f8cbd067f76a59b535240',
+  qa_tested_url: 'http://localhost:3510/tasks/403',
+};
+
+/** SQL text is compared with insignificant whitespace collapsed. */
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/g, ' ').trim();
+}
+
 describe('OpenClawRuntime terminal failure handling', () => {
-  let db: Pick<Database.Database, 'prepare'>;
+  let db: Db;
+  // Hoisted so the test bodies can assert against the same mocked statements the
+  // adapter mock reads from; it is rebuilt per test in beforeEach.
+  let statements: Map<string, { get?: jest.Mock; all?: jest.Mock; run?: jest.Mock }>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -56,7 +105,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
       backfillReason: 'session_file_not_found',
     });
 
-    const statements = new Map<string, { get?: jest.Mock; run?: jest.Mock }>([
+    const statementEntries: Array<[string, { get?: jest.Mock; run?: jest.Mock; all?: jest.Mock }]> = [
       [
         `
         SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key
@@ -83,8 +132,8 @@ describe('OpenClawRuntime terminal failure handling', () => {
     LIMIT 8
   `,
         {
-          all: jest.fn?.(),
-        } as never,
+          all: jest.fn().mockReturnValue([]),
+        },
       ],
       [
         `
@@ -134,6 +183,29 @@ describe('OpenClawRuntime terminal failure handling', () => {
         },
       ],
       [
+        `PRAGMA table_info(tasks)`,
+        {
+          all: jest.fn().mockReturnValue(TASKS_COLUMNS),
+        },
+      ],
+      [
+        // Schema introspection is now centralised in db/introspection.ts, so this probe
+        // arrives in one canonical spelling instead of the several that used to be scattered
+        // across ~40 local reimplementations. Behaviour is unchanged; only the SQL text this
+        // SQL-keyed mock has to recognise is.
+        //
+        // It must answer PER TABLE, not unconditionally. Returning a row for everything makes
+        // the runtime believe optional tables exist and walk into branches this fixture does
+        // not model — which is a fake failure, not a real one. Only the tables this mock
+        // actually answers for are reported as present.
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
+        {
+          get: jest.fn((table: string) => (
+            MOCKED_TABLES.has(table) ? { name: table } : undefined
+          )),
+        },
+      ],
+      [
         `
           SELECT ji.task_id, ji.agent_id,
                  t.status AS task_status,
@@ -142,15 +214,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
                  t.task_type,
                  t.sprint_id,
                  s.sprint_type,
-                 t.review_branch,
-                 t.review_commit,
-                 t.review_url,
-                 t.qa_verified_commit,
-                 t.qa_tested_url,
-                 t.merged_commit,
-                 t.deployed_commit,
-                 t.deploy_target,
-                 t.deployed_at
+                 t.custom_fields_json
           FROM job_instances ji
           LEFT JOIN tasks t ON t.id = ji.task_id
           LEFT JOIN sprints s ON s.id = t.sprint_id
@@ -166,39 +230,47 @@ describe('OpenClawRuntime terminal failure handling', () => {
             task_type: null,
             sprint_id: 9,
             sprint_type: 'enhancement',
-            review_branch: 'cinder-backend/task-403-prevent-outcome-less-run-completions-fro',
-            review_commit: '27bf9e9fb2f32af10d3f8cbd067f76a59b535240',
-            review_url: 'http://localhost:3510/tasks/403',
-            qa_verified_commit: '27bf9e9fb2f32af10d3f8cbd067f76a59b535240',
-            qa_tested_url: 'http://localhost:3510/tasks/403',
-            merged_commit: null,
-            deployed_commit: null,
-            deploy_target: null,
-            deployed_at: null,
+            custom_fields_json: JSON.stringify(TASK_EVIDENCE_CUSTOM_FIELDS),
           }),
         },
       ],
-    ]);
+    ];
+
+    statements = new Map(statementEntries.map(([sql, stmt]) => [normalizeSql(sql), stmt])) as typeof statements;
+
+    // The mock now presents the Db ADAPTER shape — db.get(sql, ...) / db.all(sql, ...) —
+    // rather than better-sqlite3's prepare(sql).get(). The statements map stays the source
+    // of truth for what each query returns; only the calling convention changed.
+    const lookup = (sql: string) => {
+      const stmt = statements.get(normalizeSql(sql));
+      if (!stmt) throw new Error(`Unexpected SQL: ${sql}`);
+      return stmt as { get?: jest.Mock; all?: jest.Mock; run?: jest.Mock };
+    };
 
     db = {
-      prepare: jest.fn((sql: string) => {
-        const stmt = statements.get(sql);
-        if (!stmt) throw new Error(`Unexpected SQL: ${sql}`);
-        return stmt;
-      }),
-    } as unknown as Pick<Database.Database, 'prepare'>;
+      dialect: 'sqlite',
+      inTransaction: false,
+      get: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).get?.(...params)),
+      all: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).all?.(...params) ?? []),
+      value: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).get?.(...params)),
+      run: jest.fn(async (sql: string, ...params: unknown[]) =>
+        lookup(sql).run?.(...params) ?? { changes: 0, lastInsertId: null }),
+      exec: jest.fn(async () => undefined),
+      withTransaction: jest.fn(async (fn: (tx: Db) => Promise<unknown>) => fn(db)),
+      close: jest.fn(async () => undefined),
+    } as unknown as Db;
 
     const { getDb } = jest.requireMock('../db/client') as { getDb: jest.Mock };
     getDb.mockReturnValue(db);
 
-    (db.prepare(`
+    (statements.get(normalizeSql(`
     SELECT content
     FROM chat_messages
     WHERE instance_id = ?
       AND role = 'assistant'
     ORDER BY timestamp DESC
     LIMIT 8
-  `) as unknown as { all: jest.Mock }).all.mockReturnValue([]);
+  `)) as unknown as { all: jest.Mock }).all.mockReturnValue([]);
   });
 
   it('quarantines missing lifecycle handoff after runtime success on lifecycle-managed workflow states', async () => {
@@ -260,7 +332,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
       },
     });
 
-    const runtimeStateUpdate = db.prepare(`
+    const runtimeStateUpdate = statements.get(normalizeSql(`
         UPDATE job_instances
         SET status = ?,
             started_at = COALESCE(started_at, ?),
@@ -275,7 +347,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
         WHERE id = ?
           AND status IN ('running', 'dispatched')
           AND runtime_ended_at IS NULL
-      `) as unknown as { run: jest.Mock };
+      `)) as unknown as { run: jest.Mock };
     expect(runtimeStateUpdate.run).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
@@ -294,14 +366,14 @@ describe('OpenClawRuntime terminal failure handling', () => {
   it('posts a failed task outcome when provider-limit failure is detected behind a successful terminal event', async () => {
     const { taskRequiresSemanticOutcome } = jest.requireMock('../domains/runs/lifecycleHandoff') as { taskRequiresSemanticOutcome: jest.Mock };
     taskRequiresSemanticOutcome.mockReturnValue(false);
-    (db.prepare(`
+    (statements.get(normalizeSql(`
     SELECT content
     FROM chat_messages
     WHERE instance_id = ?
       AND role = 'assistant'
     ORDER BY timestamp DESC
     LIMIT 8
-  `) as unknown as { all: jest.Mock }).all.mockReturnValue([
+  `)) as unknown as { all: jest.Mock }).all.mockReturnValue([
       { content: 'Agent failed before reply: provider rate limit exceeded (429 too many requests)' },
     ]);
 
@@ -388,11 +460,11 @@ describe('OpenClawRuntime terminal failure handling', () => {
       instanceId: 1757,
       runtimeEndError: "The model 'gpt-image-2' does not exist.",
     }));
-    const responseUpdate = db.prepare(`
+    const responseUpdate = statements.get(normalizeSql(`
         UPDATE job_instances
         SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
         WHERE id = ?
-      `) as unknown as { run: jest.Mock };
+      `)) as unknown as { run: jest.Mock };
     expect(JSON.parse(responseUpdate.run.mock.calls[0][0])).toMatchObject({
       success: false,
       error: "The model 'gpt-image-2' does not exist.",

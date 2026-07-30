@@ -9,7 +9,7 @@ import agentsRouter from './agents';
 let tempDir: string;
 let dbPath: string;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-job-instructions-'));
@@ -17,7 +17,7 @@ function resetDb(): void {
   process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -61,8 +61,7 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`)
-    .run('openai', 'connected');
+  await db.run(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`, 'openai', 'connected');
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -85,10 +84,10 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('agents job_instructions canonical paths', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-job-instructions-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
-    resetDb();
+    await resetDb();
   });
 
   afterEach(() => {
@@ -120,7 +119,7 @@ describe('agents job_instructions canonical paths', () => {
       expect(body).not.toHaveProperty('pre_instructions');
 
       const db = getDb();
-      const row = db.prepare(`SELECT job_instructions FROM agents WHERE session_key = 'agent:created:main'`).get() as { job_instructions: string };
+      const row = await db.get(`SELECT job_instructions FROM agents WHERE session_key = 'agent:created:main'`) as { job_instructions: string };
       expect(row.job_instructions).toBe('Created canonical instructions');
     } finally {
       await stopTestServer(server);
@@ -149,7 +148,7 @@ describe('agents job_instructions canonical paths', () => {
       expect(body.job_instructions).toBe('Created without lane metadata');
 
       const db = getDb();
-      const row = db.prepare(`SELECT job_title FROM agents WHERE session_key = 'agent:no-lane:main'`).get() as { job_title: string };
+      const row = await db.get(`SELECT job_title FROM agents WHERE session_key = 'agent:no-lane:main'`) as { job_title: string };
       expect(row.job_title).toBe('');
     } finally {
       await stopTestServer(server);
@@ -177,10 +176,10 @@ describe('agents job_instructions canonical paths', () => {
       expect(createBody).not.toHaveProperty('job_title');
 
       const db = getDb();
-      const created = db.prepare(`SELECT id, job_title FROM agents WHERE session_key = 'agent:legacy-lane-payload:main'`).get() as { id: number; job_title: string };
+      const created = await db.get(`SELECT id, job_title FROM agents WHERE session_key = 'agent:legacy-lane-payload:main'`) as { id: number; job_title: string };
       expect(created.job_title).toBe('');
 
-      db.prepare(`UPDATE agents SET job_title = 'Historical Label' WHERE id = ?`).run(created.id);
+      await db.run(`UPDATE agents SET job_title = 'Historical Label' WHERE id = ?`, created.id);
 
       const updateResponse = await fetch(`${baseUrl}/api/v1/agents/${created.id}`, {
         method: 'PUT',
@@ -192,7 +191,7 @@ describe('agents job_instructions canonical paths', () => {
       expect(updateResponse.status).toBe(200);
       expect(updateBody).not.toHaveProperty('job_title');
 
-      const updated = db.prepare(`SELECT job_title FROM agents WHERE id = ?`).get(created.id) as { job_title: string };
+      const updated = await db.get(`SELECT job_title FROM agents WHERE id = ?`, created.id) as { job_title: string };
       expect(updated.job_title).toBe('Historical Label');
     } finally {
       await stopTestServer(server);
@@ -220,10 +219,10 @@ describe('agents job_instructions canonical paths', () => {
       expect(createBody.schedule).toBe('');
 
       const db = getDb();
-      const created = db.prepare(`SELECT id, schedule FROM agents WHERE session_key = 'agent:legacy-schedule-payload:main'`).get() as { id: number; schedule: string };
+      const created = await db.get(`SELECT id, schedule FROM agents WHERE session_key = 'agent:legacy-schedule-payload:main'`) as { id: number; schedule: string };
       expect(created.schedule).toBe('');
 
-      db.prepare(`UPDATE agents SET schedule = '*/5 * * * *' WHERE id = ?`).run(created.id);
+      await db.run(`UPDATE agents SET schedule = '*/5 * * * *' WHERE id = ?`, created.id);
 
       const updateResponse = await fetch(`${baseUrl}/api/v1/agents/${created.id}`, {
         method: 'PUT',
@@ -235,7 +234,7 @@ describe('agents job_instructions canonical paths', () => {
       expect(updateResponse.status).toBe(200);
       expect(updateBody.schedule).toBe('');
 
-      const updated = db.prepare(`SELECT schedule FROM agents WHERE id = ?`).get(created.id) as { schedule: string };
+      const updated = await db.get(`SELECT schedule FROM agents WHERE id = ?`, created.id) as { schedule: string };
       expect(updated.schedule).toBe('');
     } finally {
       await stopTestServer(server);
@@ -265,7 +264,7 @@ describe('agents job_instructions canonical paths', () => {
       expect(body.field).toBe('job_instructions');
 
       const db = getDb();
-      const row = db.prepare(`SELECT COUNT(*) AS count FROM agents WHERE session_key = 'agent:legacy-create:main'`).get() as { count: number };
+      const row = await db.get(`SELECT COUNT(*) AS count FROM agents WHERE session_key = 'agent:legacy-create:main'`) as { count: number };
       expect(row.count).toBe(0);
     } finally {
       await stopTestServer(server);
@@ -274,10 +273,10 @@ describe('agents job_instructions canonical paths', () => {
 
   it('updates canonical job_instructions when the legacy pre_instructions column is absent', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, name, role, session_key, runtime_type, job_title, job_instructions)
       VALUES (41, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 'Backend Engineer', 'Initial instructions')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -292,11 +291,11 @@ describe('agents job_instructions canonical paths', () => {
       expect(body.job_instructions).toBe('Updated canonical instructions');
       expect(body).not.toHaveProperty('pre_instructions');
 
-      const row = db.prepare(`
+      const row = await db.get(`
         SELECT job_instructions, job_instructions_updated_at, instructions_version
         FROM agents
         WHERE id = 41
-      `).get() as {
+      `) as {
         job_instructions: string;
         job_instructions_updated_at: string | null;
         instructions_version: number;
@@ -311,10 +310,10 @@ describe('agents job_instructions canonical paths', () => {
 
   it('rejects pre_instructions on update and preserves the canonical stored value', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, name, role, session_key, runtime_type, job_title, job_instructions)
       VALUES (42, 'Cinder', 'Backend Engineer', 'agent:cinder:main-2', 'webhook', 'Backend Engineer', 'Initial instructions')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -329,7 +328,7 @@ describe('agents job_instructions canonical paths', () => {
       expect(body.error).toBe('pre_instructions has been renamed to job_instructions');
       expect(body.field).toBe('job_instructions');
 
-      const row = db.prepare(`SELECT job_instructions FROM agents WHERE id = 42`).get() as { job_instructions: string };
+      const row = await db.get(`SELECT job_instructions FROM agents WHERE id = 42`) as { job_instructions: string };
       expect(row.job_instructions).toBe('Initial instructions');
     } finally {
       await stopTestServer(server);

@@ -1,7 +1,8 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
-import { getDb, getDbPath } from './client';
+import { getDb, getDbPath, getEngine, getRawDb } from './client';
 import { foreignKeyEnforcementIntentionallyDisabled } from './foreignKeyGuard';
+import { type Db } from "./adapter/types";
 
 export const STARTUP_SCHEMA_LEDGER_ID = 'init_schema';
 export const STARTUP_SCHEMA_LEDGER_CHECKSUM = 'initSchema';
@@ -42,8 +43,12 @@ export interface ForeignKeyEnforcementOptions {
  * Returns true when enforcement is on. When it is off, it always logs an unmissable
  * error, optionally forces enforcement back on, and (by default) throws.
  */
+// Takes the RAW connection, not the Db adapter: PRAGMA foreign_keys is SQLite-only and
+// per-connection, and the Db interface deliberately does not expose it. On PostgreSQL
+// foreign keys cannot be switched off per session at all, so this check has no analogue
+// there and simply does not run — see verifyStartupSchema().
 export function assertForeignKeyEnforcementEnabled(
-  db: Database.Database = getDb(),
+  db: Database.Database = getRawDb(),
   context = 'startup',
   options: ForeignKeyEnforcementOptions = {},
 ): boolean {
@@ -91,6 +96,9 @@ function migrationRequired(message: string): SchemaMigrationRequiredError {
   );
 }
 
+// Raw better-sqlite3, NOT the Db adapter: this is a throwaway read-only connection opened
+// purely to inspect the file before the application connection exists, and it queries
+// sqlite_master and PRAGMA integrity_check, neither of which the Db interface exposes.
 function hasTable(db: Database.Database, tableName: string): boolean {
   const row = db.prepare(`
     SELECT 1 AS found
@@ -102,7 +110,14 @@ function hasTable(db: Database.Database, tableName: string): boolean {
   return row?.found === 1;
 }
 
-export function verifyStartupSchemaCurrent(dbPath: string = getDbPath()): void {
+/**
+ * Boot gate for a SQLite database.
+ *
+ * On PostgreSQL this is not used at all: there is no file to stat, no sqlite_master to
+ * read and no PRAGMA integrity_check. That path goes through
+ * db/pg/migrationRunner.verifyMigrationsCurrent() instead — see verifyStartupSchema().
+ */
+export async function verifyStartupSchemaCurrent(dbPath: string = getDbPath()): Promise<void> {
   if (!fs.existsSync(dbPath)) {
     throw migrationRequired(`Agent HQ database does not exist at ${dbPath}.`);
   }
@@ -141,6 +156,30 @@ export function verifyStartupSchemaCurrent(dbPath: string = getDbPath()): void {
   // The handle above is a throwaway read-only connection; foreign-key enforcement
   // only matters on the shared application connection the API actually writes through.
   if (dbPath === getDbPath()) {
-    assertForeignKeyEnforcementEnabled(getDb(), 'startup schema verification');
+    assertForeignKeyEnforcementEnabled(getRawDb(), 'startup schema verification');
   }
+}
+
+/**
+ * Engine-aware boot gate. This is what index.ts should call.
+ *
+ * The two engines verify fundamentally different things, so this dispatches rather than
+ * generalising. On SQLite the question is "does this FILE contain a current schema, and is
+ * it intact" — a file existence check, sqlite_master, a checksum row and PRAGMA
+ * integrity_check. On PostgreSQL none of those exist: there is no file, no sqlite_master,
+ * no integrity_check, and the schema is defined by an ordered set of applied migrations.
+ *
+ * Both paths share one property that matters more than their mechanics: neither MUTATES
+ * anything. Startup verifies and refuses; it never migrates. A process that migrates on
+ * boot lets any instance that happens to start — including a stale one mid-deploy — alter
+ * the schema, and lets two of them race.
+ */
+export async function verifyStartupSchema(): Promise<void> {
+  if (getEngine() === 'postgres') {
+    const { verifyMigrationsCurrent } = await import('./pg/migrationRunner');
+    const path = await import('path');
+    await verifyMigrationsCurrent(getDb(), path.resolve(__dirname, '../../../db/pg-baseline'));
+    return;
+  }
+  await verifyStartupSchemaCurrent();
 }

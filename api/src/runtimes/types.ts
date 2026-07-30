@@ -1,14 +1,5 @@
-/**
- * runtimes/types.ts — AgentRuntime interface and shared dispatch types.
- *
- * Shared runtime end-event contracts live in runtimeEvents.ts.
- * The dispatcher calls AgentRuntime.dispatch() and AgentRuntime.abort()
- * without knowing which runtime backend (OpenClaw, Claude Code, etc.) is
- * in use. Each backend provides a concrete implementation.
- */
-
-import type Database from 'better-sqlite3';
 import type { RuntimeEndEvent, RuntimeEndEventType, RuntimeEventCallbacks } from './runtimeEvents';
+import { type Db } from "../db/adapter/types";
 
 export type { RuntimeEndEvent, RuntimeEndEventType, RuntimeEventCallbacks } from './runtimeEvents';
 
@@ -43,7 +34,7 @@ export interface DispatchParams extends RuntimeEventCallbacks {
    * runtime_ended_at, runtime_end_success/source/error, completed_at, and the
    * derived terminal instance status when instanceId and db are available.
    */
-  db?: Database.Database;
+  db?: Db;
   /** Repo source mode used for this run, when dispatch prepared a repo-backed workspace. */
   repoAccessMode?: 'worktree' | 'clone' | null;
   /** Truthful descriptor of the repo source used for this run, e.g. worktree:/repo or clone:https://... */

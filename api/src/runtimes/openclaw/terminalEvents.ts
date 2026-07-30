@@ -1,4 +1,5 @@
 import type { RuntimeEndEvent } from '../types';
+import { nowTimestamp, timestampFromEpochMs, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 
 export interface OpenClawTerminalEvent {
   type?: string;
@@ -66,7 +67,7 @@ export function terminalEventToRuntimeTurnEnd(
     reason,
     sessionKey,
     runId,
-    endedAt: timestamp ?? new Date().toISOString(),
+    endedAt: toCanonicalTimestampOrNow(timestamp),
     error: typeof rawError === 'string' ? rawError : rawError != null ? JSON.stringify(rawError) : undefined,
     metadata: {
       openclaw_event_type: event.type ?? 'agent_end',
@@ -93,7 +94,7 @@ function mapChatStateToTurnEnd(
       reason: 'completed',
       sessionKey,
       runId,
-      endedAt: new Date().toISOString(),
+      endedAt: nowTimestamp(),
       metadata: { terminal_state: state, payload_event: 'chat' },
     };
   }
@@ -105,7 +106,7 @@ function mapChatStateToTurnEnd(
       reason: 'aborted',
       sessionKey,
       runId,
-      endedAt: new Date().toISOString(),
+      endedAt: nowTimestamp(),
       metadata: {
         terminal_state: state,
         payload_event: 'chat',
@@ -127,7 +128,7 @@ function mapChatStateToTurnEnd(
       reason,
       sessionKey,
       runId,
-      endedAt: new Date().toISOString(),
+      endedAt: nowTimestamp(),
       error: errorMessage,
       metadata: { terminal_state: state, payload_event: 'chat' },
     };
@@ -148,7 +149,7 @@ function extractNativeTurnEnd(
   if (terminalEvent.type !== 'agent_end') return null;
   const rawTimestamp = (message as Record<string, unknown>).timestamp;
   const timestamp = typeof rawTimestamp === 'number'
-    ? new Date(rawTimestamp).toISOString()
+    ? (timestampFromEpochMs(rawTimestamp) ?? nowTimestamp())
     : typeof rawTimestamp === 'string'
       ? rawTimestamp
       : undefined;
@@ -167,10 +168,10 @@ function extractFallbackTurnEnd(
     ? (message as Record<string, unknown>).timestamp
     : undefined;
   const endedAt = typeof rawTimestamp === 'number'
-    ? new Date(rawTimestamp).toISOString()
+    ? (timestampFromEpochMs(rawTimestamp) ?? nowTimestamp())
     : typeof rawTimestamp === 'string'
       ? rawTimestamp
-      : new Date().toISOString();
+      : nowTimestamp();
 
   return {
     type: 'runEnded',

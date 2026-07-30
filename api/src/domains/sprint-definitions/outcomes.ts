@@ -1,4 +1,5 @@
-import type Database from 'better-sqlite3';
+import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export type SprintOutcomeBehavior = 'base' | 'extend' | 'override' | 'disable';
 
@@ -34,16 +35,12 @@ function parseMetadata(value: string | null | undefined): Record<string, unknown
   }
 }
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
-  try {
-    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
-  } catch {
-    return false;
-  }
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
+    return await sharedColumnExists(db, table, column);
 }
 
-function tenantPredicate(db: Database.Database, table: string, tenantId?: number | null): { sql: string; params: unknown[] } {
-  if (tenantId == null || !tableHasColumn(db, table, 'tenant_id')) return { sql: '', params: [] };
+async function tenantPredicate(db: Db, table: string, tenantId?: number | null): Promise<{ sql: string; params: unknown[] }> {
+  if (tenantId == null || !await tableHasColumn(db, table, 'tenant_id')) return { sql: '', params: [] };
   return {
     sql: ` AND (tenant_id = ? OR (tenant_id IS NULL AND NOT EXISTS (
       SELECT 1 FROM ${table} owned
@@ -63,35 +60,35 @@ export function getLegacyOutcomeMeta(outcomeKey: string) {
   };
 }
 
-function getSprintTypeForSprintId(db: Database.Database, sprintId?: number | null): string | null {
+async function getSprintTypeForSprintId(db: Db, sprintId?: number | null): Promise<string | null> {
   if (typeof sprintId !== 'number' || !Number.isFinite(sprintId)) return null;
   try {
-    const row = db.prepare(`SELECT sprint_type FROM sprints WHERE id = ? LIMIT 1`).get(sprintId) as { sprint_type: string | null } | undefined;
+    const row = await db.get(`SELECT sprint_type FROM sprints WHERE id = ? LIMIT 1`, sprintId) as { sprint_type: string | null } | undefined;
     return normalizeSprintType(row?.sprint_type);
   } catch {
     return null;
   }
 }
 
-export function listConfiguredSprintOutcomes(
-  db: Database.Database,
+export async function listConfiguredSprintOutcomes(
+  db: Db,
   sprintTypeOrSprintId?: string | number | null,
   options?: { tenantId?: number | null },
-): SprintOutcomeDefinition[] {
+): Promise<SprintOutcomeDefinition[]> {
   const sprintType = typeof sprintTypeOrSprintId === 'number'
-    ? getSprintTypeForSprintId(db, sprintTypeOrSprintId)
+    ? await getSprintTypeForSprintId(db, sprintTypeOrSprintId)
     : normalizeSprintType(sprintTypeOrSprintId);
   if (!sprintType) return [];
 
   try {
-    const tenant = tenantPredicate(db, 'sprint_type_outcomes', options?.tenantId);
-    const rows = db.prepare(`
+    const tenant = await tenantPredicate(db, 'sprint_type_outcomes', options?.tenantId);
+    const rows = await db.all(`
       SELECT id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at
       FROM sprint_type_outcomes
       WHERE sprint_type_key = ?
         ${tenant.sql}
       ORDER BY CASE WHEN task_type IS NULL THEN 0 ELSE 1 END, task_type ASC, stage_order ASC, id ASC
-    `).all(sprintType, ...tenant.params) as Array<Record<string, unknown>>;
+    `, sprintType, ...tenant.params) as Array<Record<string, unknown>>;
 
     return rows.map((row) => ({
       id: Number(row.id),
@@ -114,13 +111,13 @@ export function listConfiguredSprintOutcomes(
   }
 }
 
-export function resolveSprintOutcomeVocabulary(
-  db: Database.Database,
+export async function resolveSprintOutcomeVocabulary(
+  db: Db,
   options: { sprintId?: number | null; sprintType?: string | null; taskType?: string | null; fallbackOutcomes?: string[]; tenantId?: number | null },
-): SprintOutcomeDefinition[] {
-  const sprintType = normalizeSprintType(options.sprintType) ?? getSprintTypeForSprintId(db, options.sprintId ?? null) ?? 'generic';
+): Promise<SprintOutcomeDefinition[]> {
+  const sprintType = normalizeSprintType(options.sprintType) ?? (await getSprintTypeForSprintId(db, options.sprintId ?? null)) ?? 'generic';
   const taskType = typeof options.taskType === 'string' && options.taskType.trim().length > 0 ? options.taskType.trim() : null;
-  const configured = listConfiguredSprintOutcomes(db, sprintType, { tenantId: options.tenantId });
+  const configured = await listConfiguredSprintOutcomes(db, sprintType, { tenantId: options.tenantId });
   const fallback = (options.fallbackOutcomes ?? []).map((outcomeKey, index) => ({
     id: undefined,
     sprint_type_key: sprintType,
@@ -163,9 +160,9 @@ export function resolveSprintOutcomeVocabulary(
   return [...result.values()].sort((a, b) => a.stage_order - b.stage_order || a.outcome_key.localeCompare(b.outcome_key));
 }
 
-export function resolveSprintOutcomeMap(
-  db: Database.Database,
+export async function resolveSprintOutcomeMap(
+  db: Db,
   options: { sprintId?: number | null; sprintType?: string | null; taskType?: string | null; fallbackOutcomes?: string[] },
-): Map<string, SprintOutcomeDefinition> {
-  return new Map(resolveSprintOutcomeVocabulary(db, options).map((entry) => [entry.outcome_key, entry]));
+): Promise<Map<string, SprintOutcomeDefinition>> {
+  return new Map((await resolveSprintOutcomeVocabulary(db, options)).map((entry) => [entry.outcome_key, entry]));
 }

@@ -1,4 +1,5 @@
-import type Database from 'better-sqlite3';
+import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export interface SprintRecord {
   id: number;
@@ -17,18 +18,13 @@ export interface SprintRecord {
   created_at: string;
 }
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
-  try {
-    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
-      .some((entry) => entry.name === column);
-  } catch {
-    return false;
-  }
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
+    return await sharedColumnExists(db, table, column);
 }
 
-function sprintRoutingAgentCountPredicate(db: Database.Database): string {
-  return tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
-    && tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type')
+async function sprintRoutingAgentCountPredicate(db: Db): Promise<string> {
+  return await tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
+    && await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type')
     ? `rr2.sprint_id = s.id
            OR (
              rr2.project_id = s.project_id
@@ -38,9 +34,9 @@ function sprintRoutingAgentCountPredicate(db: Database.Database): string {
     : `rr2.sprint_id = s.id`;
 }
 
-function sprintRoutingJobsPredicate(db: Database.Database): string {
-  return tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
-    && tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type')
+async function sprintRoutingJobsPredicate(db: Db): Promise<string> {
+  return await tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
+    && await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type')
     ? `rr.sprint_id = s.id
        OR (
          rr.project_id = s.project_id
@@ -50,12 +46,12 @@ function sprintRoutingJobsPredicate(db: Database.Database): string {
     : `rr.sprint_id = s.id`;
 }
 
-export function listSprints(
-  db: Database.Database,
+export async function listSprints(
+  db: Db,
   query: { project_id?: unknown; include_closed?: unknown; tenant_id?: unknown },
 ) {
   const { project_id, tenant_id } = query;
-  const routingAgentCountPredicate = sprintRoutingAgentCountPredicate(db);
+  const routingAgentCountPredicate = await sprintRoutingAgentCountPredicate(db);
 
   let sql = `
     SELECT s.*,
@@ -95,13 +91,13 @@ export function listSprints(
     sql += ` WHERE ${conditions.join(' AND ')}`;
   }
 
-  sql += ` GROUP BY s.id ORDER BY s.created_at DESC`;
-  return db.prepare(sql).all(...params);
+  sql += ` GROUP BY s.id, p.name ORDER BY s.created_at DESC`;
+  return await db.all(sql, ...params);
 }
 
-export function getSprintDetail(db: Database.Database, sprintId: number) {
-  const routingAgentCountPredicate = sprintRoutingAgentCountPredicate(db);
-  return db.prepare(`
+export async function getSprintDetail(db: Db, sprintId: number) {
+  const routingAgentCountPredicate = await sprintRoutingAgentCountPredicate(db);
+  return await db.get(`
     SELECT s.*,
       p.name as project_name,
       (
@@ -119,15 +115,15 @@ export function getSprintDetail(db: Database.Database, sprintId: number) {
     LEFT JOIN projects p ON p.id = s.project_id
     LEFT JOIN tasks t ON t.sprint_id = s.id
     WHERE s.id = ?
-    GROUP BY s.id
-  `).get(sprintId);
+    GROUP BY s.id, p.name
+  `, sprintId);
 }
 
-export function getSprintMetrics(db: Database.Database, sprintId: number) {
-  const sprint = db.prepare('SELECT id FROM sprints WHERE id = ?').get(sprintId);
+export async function getSprintMetrics(db: Db, sprintId: number) {
+  const sprint = await db.get('SELECT id FROM sprints WHERE id = ?', sprintId);
   if (!sprint) return null;
 
-  const taskRow = db.prepare(`
+  const taskRow = await db.get(`
     SELECT
       COUNT(*) as tasks_total,
       COUNT(CASE WHEN status = 'done' THEN 1 END) as tasks_done,
@@ -136,26 +132,26 @@ export function getSprintMetrics(db: Database.Database, sprintId: number) {
       COALESCE(SUM(CASE WHEN status != 'done' THEN COALESCE(story_points, 0) ELSE 0 END), 0) as remaining_story_points
     FROM tasks
     WHERE sprint_id = ?
-  `).get(sprintId) as { tasks_total: number; tasks_done: number; total_story_points: number; done_story_points: number; remaining_story_points: number };
+  `, sprintId) as { tasks_total: number; tasks_done: number; total_story_points: number; done_story_points: number; remaining_story_points: number };
 
-  const blockerRow = db.prepare(`
+  const blockerRow = await db.get(`
     SELECT COUNT(DISTINCT td.blocked_id) as blocker_count
     FROM task_dependencies td
     JOIN tasks blocked ON blocked.id = td.blocked_id
     JOIN tasks blocker ON blocker.id = td.blocker_id
     WHERE blocked.sprint_id = ?
       AND blocker.status != 'done'
-  `).get(sprintId) as { blocker_count: number };
+  `, sprintId) as { blocker_count: number };
 
-  const durationRow = db.prepare(`
+  const durationRow = await db.get(`
     SELECT AVG(
       (strftime('%s', updated_at) - strftime('%s', created_at)) * 1000
     ) as avg_ms
     FROM tasks
     WHERE sprint_id = ? AND status = 'done'
-  `).get(sprintId) as { avg_ms: number | null };
+  `, sprintId) as { avg_ms: number | null };
 
-  const runRow = db.prepare(`
+  const runRow = await db.get(`
     SELECT
       COUNT(*) as job_runs_total,
       COUNT(CASE WHEN ji.status = 'done' THEN 1 END) as job_runs_success,
@@ -163,7 +159,7 @@ export function getSprintMetrics(db: Database.Database, sprintId: number) {
     FROM job_instances ji
     JOIN tasks t ON t.id = ji.task_id
     WHERE t.sprint_id = ?
-  `).get(sprintId) as { job_runs_total: number; job_runs_success: number; job_runs_failed: number };
+  `, sprintId) as { job_runs_total: number; job_runs_success: number; job_runs_failed: number };
 
   const tasks_total = taskRow.tasks_total ?? 0;
   const tasks_done = taskRow.tasks_done ?? 0;
@@ -192,12 +188,12 @@ export function getSprintMetrics(db: Database.Database, sprintId: number) {
   };
 }
 
-export function listSprintJobs(db: Database.Database, sprintId: number) {
-  const sprint = db.prepare('SELECT id FROM sprints WHERE id = ?').get(sprintId);
+export async function listSprintJobs(db: Db, sprintId: number) {
+  const sprint = await db.get('SELECT id FROM sprints WHERE id = ?', sprintId);
   if (!sprint) return null;
-  const routingJobsPredicate = sprintRoutingJobsPredicate(db);
+  const routingJobsPredicate = await sprintRoutingJobsPredicate(db);
 
-  return db.prepare(`
+  return await db.all(`
     SELECT a.*,
       a.name as agent_name,
       a.session_key as agent_session_key,
@@ -218,5 +214,5 @@ export function listSprintJobs(db: Database.Database, sprintId: number) {
     WHERE ${routingJobsPredicate}
     GROUP BY a.id
     ORDER BY a.created_at DESC
-  `).all(sprintId, sprintId);
+  `, sprintId, sprintId);
 }

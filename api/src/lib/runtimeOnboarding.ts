@@ -1,7 +1,7 @@
-import type Database from 'better-sqlite3';
 import { getAgentHqBaseUrl } from './agentHqBaseUrl';
 import { probeGateway, type GatewayProbeResult } from './gatewayHealth';
 import { normalizeGatewayUrl, readGatewaySettings, saveGatewaySettings } from './gatewaySettings';
+import { type Db } from "../db/adapter/types";
 
 export type RuntimeKind = 'openclaw' | 'hermes' | 'custom';
 export type RuntimeHealthState = 'healthy' | 'unreachable' | 'unauthorized' | 'partial' | 'unsupported';
@@ -51,17 +51,17 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function getSetting(db: Database.Database, key: string): string | null {
-  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;
+async function getSetting(db: Db, key: string): Promise<string | null> {
+  const row = await db.get('SELECT value FROM app_settings WHERE key = ?', key) as { value: string } | undefined;
   return row?.value ?? null;
 }
 
-function setSetting(db: Database.Database, key: string, value: string): void {
-  db.prepare(`
+async function setSetting(db: Db, key: string, value: string): Promise<void> {
+  await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `).run(key, value);
+  `, key, value);
 }
 
 function parseSavedConfig(raw: string | null): RuntimeConnectionConfig | null {
@@ -93,32 +93,32 @@ function normalizeEndpoint(kind: RuntimeKind, endpoint: string): string {
   }
 }
 
-export function readRuntimeConnectionConfig(db: Database.Database): RuntimeConnectionConfig | null {
-  return parseSavedConfig(getSetting(db, RUNTIME_CONNECTION_SETTING_KEY));
+export async function readRuntimeConnectionConfig(db: Db): Promise<RuntimeConnectionConfig | null> {
+  return parseSavedConfig(await getSetting(db, RUNTIME_CONNECTION_SETTING_KEY));
 }
 
-export function saveRuntimeConnectionConfig(db: Database.Database, input: RuntimeConnectionConfig): RuntimeConnectionConfig {
+export async function saveRuntimeConnectionConfig(db: Db, input: RuntimeConnectionConfig): Promise<RuntimeConnectionConfig> {
   const normalized: RuntimeConnectionConfig = {
     kind: input.kind,
     endpoint: normalizeEndpoint(input.kind, input.endpoint),
     authToken: typeof input.authToken === 'string' && input.authToken.trim() ? input.authToken.trim() : null,
     label: typeof input.label === 'string' && input.label.trim() ? input.label.trim() : null,
   };
-  setSetting(db, RUNTIME_CONNECTION_SETTING_KEY, JSON.stringify(normalized));
+  await setSetting(db, RUNTIME_CONNECTION_SETTING_KEY, JSON.stringify(normalized));
 
   if (normalized.kind === 'openclaw') {
-    saveGatewaySettings({
-      wsUrl: normalized.endpoint,
-      runtimeHint: 'external',
-      authToken: normalized.authToken,
-    });
+    await saveGatewaySettings({
+            wsUrl: normalized.endpoint,
+            runtimeHint: 'external',
+            authToken: normalized.authToken,
+          });
   }
 
   return normalized;
 }
 
-export function detectRuntimeConnectionConfig(): RuntimeConnectionConfig {
-  const gateway = readGatewaySettings();
+export async function detectRuntimeConnectionConfig(): Promise<RuntimeConnectionConfig> {
+  const gateway = await readGatewaySettings();
   return {
     kind: 'openclaw',
     endpoint: gateway.wsUrl,
@@ -228,12 +228,12 @@ export async function checkRuntimeConnection(config: RuntimeConnectionConfig): P
   if (normalized.kind === 'openclaw') {
     return mapGatewayProbe(normalized, await probeGateway(normalized.endpoint));
   }
-  if (normalized.kind === 'hermes') return httpRuntimeStatus(normalized, HERMES_CAPABILITIES);
-  return httpRuntimeStatus(normalized, CUSTOM_CAPABILITIES);
+  if (normalized.kind === 'hermes') return await httpRuntimeStatus(normalized, HERMES_CAPABILITIES);
+  return await httpRuntimeStatus(normalized, CUSTOM_CAPABILITIES);
 }
 
-export function buildRuntimeConfigDefaults(db: Database.Database): Record<string, unknown> {
-  const config = readRuntimeConnectionConfig(db);
+export async function buildRuntimeConfigDefaults(db: Db): Promise<Record<string, unknown>> {
+  const config = await readRuntimeConnectionConfig(db);
   if (!config) return {};
   return {
     onboarding_runtime: {

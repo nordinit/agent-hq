@@ -40,16 +40,16 @@ function constraintIsTenantNameConflict(err: unknown): boolean {
 // ---------------------------------------------------------------------------
 // GET /api/v1/skills — list tenant-local skills
 // ---------------------------------------------------------------------------
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const rows = db.prepare(`
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const rows = await db.all(`
       SELECT id, tenant_id, name, source, description, created_at, updated_at
       FROM skills
       WHERE tenant_id = ?
       ORDER BY name ASC
-    `).all(tenantId);
+    `, tenantId);
     res.json(rows.map(skillRowToListEntry));
   } catch (err) {
     res.status((err as any)?.status ?? 500).json({ error: String((err as any)?.message ?? err) });
@@ -59,25 +59,25 @@ router.get('/', (req: Request, res: Response) => {
 // Explicit tenant-local import endpoint. It intentionally no longer scans the
 // shared repository filesystem; callers must provide records to import for the
 // resolved tenant.
-router.post('/migrate-from-fs', (req: Request, res: Response) => {
+router.post('/migrate-from-fs', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const requested = Array.isArray(req.body?.skills) ? req.body.skills : [];
     const imported: string[] = [];
     const skipped: string[] = [];
-    const insert = db.prepare(`
+    const insertSql = `
       INSERT INTO skills (tenant_id, name, description, content, source)
       VALUES (?, ?, ?, ?, 'workspace')
       ON CONFLICT(tenant_id, name) DO NOTHING
-    `);
+    `;
     for (const item of requested) {
       const name = normalizeName(item?.name);
       if (!name) {
         skipped.push(String(item?.name ?? '<missing-name>'));
         continue;
       }
-      const result = insert.run(tenantId, name, item?.description ?? '', item?.content ?? '');
+      const result = await db.run(insertSql, tenantId, name, item?.description ?? '', item?.content ?? '');
       if (result.changes > 0) imported.push(name);
       else skipped.push(name);
     }
@@ -87,17 +87,17 @@ router.post('/migrate-from-fs', (req: Request, res: Response) => {
   }
 });
 
-router.get('/:name', (req: Request, res: Response) => {
+router.get('/:name', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const name = normalizeName(req.params.name);
-    const skill = db.prepare(`
+    const skill = await db.get(`
       SELECT id, tenant_id, name, source, description, content, fs_path, created_at, updated_at
       FROM skills
       WHERE tenant_id = ? AND name = ?
       LIMIT 1
-    `).get(tenantId, name) as any | undefined;
+    `, tenantId, name) as any | undefined;
     if (!skill) return res.status(404).json({ error: 'Skill not found' });
     return res.json({ ...skill, files: [] });
   } catch (err) {
@@ -105,14 +105,14 @@ router.get('/:name', (req: Request, res: Response) => {
   }
 });
 
-router.get('/:name/file/*', (req: Request, res: Response) => {
+router.get('/:name/file/*', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const name = normalizeName(req.params.name);
     const relativePath = (req.params as Record<string, string>)[0];
     if (!relativePath) return res.status(400).json({ error: 'File path required' });
-    const skill = db.prepare(`SELECT name FROM skills WHERE tenant_id = ? AND name = ? LIMIT 1`).get(tenantId, name);
+    const skill = await db.get(`SELECT name FROM skills WHERE tenant_id = ? AND name = ? LIMIT 1`, tenantId, name);
     if (!skill) return res.status(404).json({ error: 'Skill not found' });
     return res.status(404).json({ error: 'Tenant-owned skills are stored as database content; linked filesystem files are not exposed through this API' });
   } catch (err) {
@@ -120,19 +120,19 @@ router.get('/:name/file/*', (req: Request, res: Response) => {
   }
 });
 
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const { description, content, source } = req.body as { name?: string; description?: string; content?: string; source?: string };
     const name = normalizeName(req.body?.name);
     if (!name) return res.status(400).json({ error: 'name is required' });
     const sourceValue = source === 'system' || source === 'workspace' ? source : 'atlas';
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO skills (tenant_id, name, description, content, source)
       VALUES (?, ?, ?, ?, ?)
-    `).run(tenantId, name, description ?? '', content ?? `# ${name}\n\n${description ?? 'Describe this skill here.'}\n`, sourceValue);
-    const created = db.prepare(`SELECT * FROM skills WHERE id = ? AND tenant_id = ?`).get(result.lastInsertRowid, tenantId);
+    `, tenantId, name, description ?? '', content ?? `# ${name}\n\n${description ?? 'Describe this skill here.'}\n`, sourceValue);
+    const created = await db.get(`SELECT * FROM skills WHERE id = ? AND tenant_id = ?`, result.lastInsertId, tenantId);
     return res.status(201).json({ ...(created as object), files: [] });
   } catch (err) {
     if (constraintIsTenantNameConflict(err)) return res.status(409).json({ error: 'A skill with this name already exists' });
@@ -140,34 +140,34 @@ router.post('/', (req: Request, res: Response) => {
   }
 });
 
-router.put('/:name', (req: Request, res: Response) => {
+router.put('/:name', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const name = normalizeName(req.params.name);
-    const existing = db.prepare(`SELECT * FROM skills WHERE tenant_id = ? AND name = ? LIMIT 1`).get(tenantId, name) as any | undefined;
+    const existing = await db.get(`SELECT * FROM skills WHERE tenant_id = ? AND name = ? LIMIT 1`, tenantId, name) as any | undefined;
     if (!existing) return res.status(404).json({ error: 'Skill not found' });
     const { description, content, source } = req.body as { content?: string; description?: string; source?: string };
     if (content === undefined && description === undefined && source === undefined) return res.status(400).json({ error: 'No fields to update' });
     const sourceValue = source === 'system' || source === 'workspace' || source === 'atlas' ? source : existing.source;
-    db.prepare(`
+    await db.run(`
       UPDATE skills
       SET description = ?, content = ?, source = ?, updated_at = datetime('now')
       WHERE tenant_id = ? AND name = ?
-    `).run(description ?? existing.description, content ?? existing.content, sourceValue, tenantId, name);
-    const updated = db.prepare(`SELECT * FROM skills WHERE tenant_id = ? AND name = ?`).get(tenantId, name);
+    `, description ?? existing.description, content ?? existing.content, sourceValue, tenantId, name);
+    const updated = await db.get(`SELECT * FROM skills WHERE tenant_id = ? AND name = ?`, tenantId, name);
     return res.json({ ...(updated as object), files: [] });
   } catch (err) {
     return res.status((err as any)?.status ?? 500).json({ error: String((err as any)?.message ?? err) });
   }
 });
 
-router.delete('/:name', (req: Request, res: Response) => {
+router.delete('/:name', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const name = normalizeName(req.params.name);
-    const result = db.prepare(`DELETE FROM skills WHERE tenant_id = ? AND name = ?`).run(tenantId, name);
+    const result = await db.run(`DELETE FROM skills WHERE tenant_id = ? AND name = ?`, tenantId, name);
     if (result.changes === 0) return res.status(404).json({ error: 'Skill not found' });
     return res.json({ ok: true, name });
   } catch (err) {

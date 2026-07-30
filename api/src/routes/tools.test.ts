@@ -3,9 +3,9 @@ import type { Server } from 'http';
 import toolsRouter from './tools';
 import { closeDb, getDb } from '../db/client';
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
-  getDb().exec(`
+  await getDb().exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -62,16 +62,12 @@ describe('OpenClaw materialized tools route', () => {
 
   it('returns materialized assigned tools with real JSON fields by openclaw_agent_id', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO agents (id, name, openclaw_agent_id) VALUES (1, 'Atlas', 'atlas')`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, openclaw_agent_id) VALUES (1, 'Atlas', 'atlas')`);
+    await db.run(`
       INSERT INTO tools (id, name, slug, description, implementation_type, implementation_body, input_schema, permissions, tags, enabled)
       VALUES (10, 'Deploy', 'deploy_dev_worktree', 'Deploy tool', 'shell', ?, ?, 'exec', ?, 1)
-    `).run(
-      JSON.stringify({ command: 'echo "$repo_path"', timeoutMs: 1000 }),
-      JSON.stringify({ type: 'object', properties: { repo_path: { type: 'string' } }, required: ['repo_path'] }),
-      JSON.stringify(['deployment']),
-    );
-    db.prepare(`INSERT INTO agent_tool_assignments (id, agent_id, tool_id, enabled) VALUES (20, 1, 10, 1)`).run();
+    `, JSON.stringify({ command: 'echo "$repo_path"', timeoutMs: 1000 }), JSON.stringify({ type: 'object', properties: { repo_path: { type: 'string' } }, required: ['repo_path'] }), JSON.stringify(['deployment']));
+    await db.run(`INSERT INTO agent_tool_assignments (id, agent_id, tool_id, enabled) VALUES (20, 1, 10, 1)`);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -104,7 +100,7 @@ describe('OpenClaw materialized tools route', () => {
   });
 
   it('returns an empty tools array for a mapped OpenClaw agent with no assignments', async () => {
-    getDb().prepare(`INSERT INTO agents (id, name, openclaw_agent_id) VALUES (1, 'Atlas', 'atlas')`).run();
+    await getDb().run(`INSERT INTO agents (id, name, openclaw_agent_id) VALUES (1, 'Atlas', 'atlas')`);
 
     const { server, baseUrl } = await startTestServer();
     try {

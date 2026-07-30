@@ -12,7 +12,7 @@ let dbPath: string;
 const originalContractRoot = process.env.AGENT_CONTRACT_ROOT;
 const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   jest.resetModules();
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -24,7 +24,7 @@ function resetDb(): void {
   fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'generic.md'), 'Sprint type: {{sprintType}}\n');
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE tenants (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -252,7 +252,7 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
     VALUES
       ('todo', 'To Do', 'slate', 0, 1, '["ready"]'),
@@ -260,43 +260,43 @@ function resetDb(): void {
       ('in_progress', 'In Progress', 'yellow', 0, 1, '["review"]'),
       ('review', 'Review', 'purple', 0, 1, '["done"]'),
       ('done', 'Done', 'green', 1, 1, '[]')
-  `).run();
-  db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Company', 'default', 1), (2, 'Tenant Two', 'tenant-two', 0)`).run();
-  db.prepare(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '2')`).run();
-  db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 2, 'Agent HQ'), (2, 2, 'Other Project')`).run();
-  db.prepare(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1), ('enhancements', 'Enhancements', 1)`).run();
-  db.prepare(`INSERT INTO agents (id, tenant_id, name, role, job_title, system_role, session_key, openclaw_agent_id, model, project_id, sprint_id, enabled) VALUES (7, 2, 'Cinder', 'backend engineer', 'Backend', NULL, NULL, NULL, NULL, 1, NULL, 1)`).run();
-  db.prepare(`
+  `);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Company', 'default', 1), (2, 'Tenant Two', 'tenant-two', 0)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '2')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 2, 'Agent HQ'), (2, 2, 'Other Project')`);
+  await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1), ('enhancements', 'Enhancements', 1)`);
+  await db.run(`INSERT INTO agents (id, tenant_id, name, role, job_title, system_role, session_key, openclaw_agent_id, model, project_id, sprint_id, enabled) VALUES (7, 2, 'Cinder', 'backend engineer', 'Backend', NULL, NULL, NULL, NULL, 1, NULL, 1)`);
+  await db.run(`
     INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, started_at)
     VALUES
       (10, 2, 1, 'Enhancements Source', 'Source goal', 'enhancements', 'active', 'time', '2w', '2026-05-01T00:00:00Z'),
       (20, 2, 2, 'Other Project Source', 'Other goal', 'generic', 'planning', 'time', '1w', NULL)
-  `).run();
+  `);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO sprint_task_statuses (tenant_id, sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
     VALUES (99, 10, 'review_ready', 'Review Ready', 'cyan', 0, 0, '["review"]', 0, 1, '{"source":true}')
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
     VALUES ('enhancements', 'review_ready', 'Review Ready', 'cyan', 0, 0, '["review"]', 0, 1, '{"emoji":"🧪"}')
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
     VALUES (99, 91, 10, 'backend', 'in_progress', 'completed_for_review', 'review', 1, 9, 0)
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO sprint_task_transition_requirements (tenant_id, project_id, sprint_id, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
     VALUES (99, 91, 10, 'backend', 'completed_for_review', 'review_commit', 'required', 'block', 'Need review commit', 1, 12)
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_id, task_type, status, agent_id, priority, is_system)
     VALUES (99, 91, 10, 'backend', 'ready', 7, 50, 0)
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, max_points, provider, model, fallback_model, max_turns, max_budget_usd, thinking_level, label, updated_at)
     VALUES (99, 91, 10, 5, 'openai-codex', 'openai/gpt-5.5', NULL, 12, 1.5, 'high', 'enhancement clone source', datetime('now'))
-  `).run();
+  `);
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -322,10 +322,10 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('sprints API create clone support', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = '';
     dbPath = '';
-    resetDb();
+    await resetDb();
   });
 
   afterEach(() => {
@@ -361,28 +361,28 @@ describe('sprints API create clone support', () => {
       expect(body.project_id).toBe(1);
 
       const db = getDb();
-      const createdSprint = db.prepare(`SELECT * FROM sprints WHERE id = ?`).get(body.id) as { tenant_id: number; project_id: number; sprint_type: string; name: string };
+      const createdSprint = await db.get(`SELECT * FROM sprints WHERE id = ?`, body.id) as { tenant_id: number; project_id: number; sprint_type: string; name: string };
       expect(createdSprint).toEqual(expect.objectContaining({ tenant_id: 2, project_id: 1, sprint_type: 'enhancements', name: 'Enhancements Clone' }));
 
-      const clonedStatus = db.prepare(`SELECT status_key, label, metadata_json FROM sprint_task_statuses WHERE sprint_id = ?`).get(body.id) as { status_key: string; label: string; metadata_json: string };
+      const clonedStatus = await db.get(`SELECT status_key, label, metadata_json FROM sprint_task_statuses WHERE sprint_id = ?`, body.id) as { status_key: string; label: string; metadata_json: string };
       expect(clonedStatus).toEqual(expect.objectContaining({ status_key: 'review_ready', label: 'Review Ready', metadata_json: '{"source":true}' }));
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`).get(body.id) as { n: number }).n).toBe(1);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, body.id) as { n: number }).n).toBe(1);
 
-      const clonedTransition = db.prepare(`SELECT tenant_id, project_id, task_type, from_status, outcome, to_status, priority FROM sprint_task_transitions WHERE sprint_id = ?`).get(body.id) as { tenant_id: number; project_id: number; task_type: string; from_status: string; outcome: string; to_status: string; priority: number };
+      const clonedTransition = await db.get(`SELECT tenant_id, project_id, task_type, from_status, outcome, to_status, priority FROM sprint_task_transitions WHERE sprint_id = ?`, body.id) as { tenant_id: number; project_id: number; task_type: string; from_status: string; outcome: string; to_status: string; priority: number };
       expect(clonedTransition).toEqual(expect.objectContaining({ tenant_id: 2, project_id: 1, task_type: 'backend', from_status: 'in_progress', outcome: 'completed_for_review', to_status: 'review', priority: 9 }));
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`).get(body.id) as { n: number }).n).toBe(1);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`, body.id) as { n: number }).n).toBe(1);
 
-      const clonedRequirement = db.prepare(`SELECT tenant_id, project_id, task_type, outcome, field_name, priority FROM sprint_task_transition_requirements WHERE sprint_id = ?`).get(body.id) as { tenant_id: number; project_id: number; task_type: string; outcome: string; field_name: string; priority: number };
+      const clonedRequirement = await db.get(`SELECT tenant_id, project_id, task_type, outcome, field_name, priority FROM sprint_task_transition_requirements WHERE sprint_id = ?`, body.id) as { tenant_id: number; project_id: number; task_type: string; outcome: string; field_name: string; priority: number };
       expect(clonedRequirement).toEqual(expect.objectContaining({ tenant_id: 2, project_id: 1, task_type: 'backend', outcome: 'completed_for_review', field_name: 'review_commit', priority: 12 }));
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_transition_requirements WHERE sprint_id = ?`).get(body.id) as { n: number }).n).toBe(1);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transition_requirements WHERE sprint_id = ?`, body.id) as { n: number }).n).toBe(1);
 
-      const clonedRoutingRule = db.prepare(`SELECT tenant_id, project_id, task_type, status, agent_id, priority FROM sprint_task_routing_rules WHERE sprint_id = ?`).get(body.id) as { tenant_id: number; project_id: number; task_type: string; status: string; agent_id: number; priority: number };
+      const clonedRoutingRule = await db.get(`SELECT tenant_id, project_id, task_type, status, agent_id, priority FROM sprint_task_routing_rules WHERE sprint_id = ?`, body.id) as { tenant_id: number; project_id: number; task_type: string; status: string; agent_id: number; priority: number };
       expect(clonedRoutingRule).toEqual(expect.objectContaining({ tenant_id: 2, project_id: 1, task_type: 'backend', status: 'ready', agent_id: 7, priority: 50 }));
 
-      const clonedModelRule = db.prepare(`SELECT tenant_id, project_id, sprint_id, max_points, provider, model, label FROM story_point_model_routing WHERE sprint_id = ?`).get(body.id) as { tenant_id: number; project_id: number; sprint_id: number; max_points: number; provider: string; model: string; label: string };
+      const clonedModelRule = await db.get(`SELECT tenant_id, project_id, sprint_id, max_points, provider, model, label FROM story_point_model_routing WHERE sprint_id = ?`, body.id) as { tenant_id: number; project_id: number; sprint_id: number; max_points: number; provider: string; model: string; label: string };
       expect(clonedModelRule).toEqual(expect.objectContaining({ tenant_id: 2, project_id: 1, sprint_id: body.id, max_points: 5, provider: 'openai-codex', model: 'openai/gpt-5.5', label: 'enhancement clone source' }));
 
-      const audit = db.prepare(`SELECT actor, changes FROM project_audit_log WHERE entity_type = 'sprint' AND entity_id = ?`).get(body.id) as { actor: string; changes: string };
+      const audit = await db.get(`SELECT actor, changes FROM project_audit_log WHERE entity_type = 'sprint' AND entity_id = ?`, body.id) as { actor: string; changes: string };
       expect(audit.actor).toBe('test-suite');
       expect(JSON.parse(audit.changes)).toEqual(expect.objectContaining({ source_sprint_id: 10, cloned_setup: true, sprint_type: 'enhancements' }));
     } finally {
@@ -462,10 +462,10 @@ describe('sprints API create clone support', () => {
       expect(body.sprint_type).toBe('generic');
 
       const db = getDb();
-      const statusCount = (db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`).get(body.id) as { n: number }).n;
-      const transitionCount = (db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`).get(body.id) as { n: number }).n;
-      const requirementCount = (db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_transition_requirements WHERE sprint_id = ?`).get(body.id) as { n: number }).n;
-      const modelRuleCount = (db.prepare(`SELECT COUNT(*) AS n FROM story_point_model_routing WHERE sprint_id = ?`).get(body.id) as { n: number }).n;
+      const statusCount = (await db.get(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, body.id) as { n: number }).n;
+      const transitionCount = (await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`, body.id) as { n: number }).n;
+      const requirementCount = (await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transition_requirements WHERE sprint_id = ?`, body.id) as { n: number }).n;
+      const modelRuleCount = (await db.get(`SELECT COUNT(*) AS n FROM story_point_model_routing WHERE sprint_id = ?`, body.id) as { n: number }).n;
       expect(statusCount).toBe(0);
       expect(transitionCount).toBe(0);
       expect(requirementCount).toBe(0);
@@ -479,9 +479,9 @@ describe('sprints API create clone support', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`DELETE FROM sprint_task_statuses WHERE sprint_id = 10`).run();
-      db.prepare(`DELETE FROM sprint_task_transitions WHERE sprint_id = 10`).run();
-      db.prepare(`DELETE FROM sprint_task_transition_requirements WHERE sprint_id = 10`).run();
+      await db.run(`DELETE FROM sprint_task_statuses WHERE sprint_id = 10`);
+      await db.run(`DELETE FROM sprint_task_transitions WHERE sprint_id = 10`);
+      await db.run(`DELETE FROM sprint_task_transition_requirements WHERE sprint_id = 10`);
 
       const response = await fetch(`${baseUrl}/api/v1/sprints`, {
         method: 'POST',
@@ -497,9 +497,9 @@ describe('sprints API create clone support', () => {
 
       expect(response.status).toBe(201);
       expect(body.sprint_type).toBe('enhancements');
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`).get(body.id) as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`).get(body.id) as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_transition_requirements WHERE sprint_id = ?`).get(body.id) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, body.id) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`, body.id) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transition_requirements WHERE sprint_id = ?`, body.id) as { n: number }).n).toBe(0);
     } finally {
       await stopTestServer(server);
     }
@@ -582,14 +582,14 @@ describe('sprints API create clone support', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO tasks (id, sprint_id, status, story_points) VALUES (120, 10, 'ready', 3), (121, 20, 'ready', 5)`).run();
+      await db.run(`INSERT INTO tasks (id, sprint_id, status, story_points) VALUES (120, 10, 'ready', 3), (121, 20, 'ready', 5)`);
 
       const deleteResponse = await fetch(`${baseUrl}/api/v1/workflows/10`, { method: 'DELETE' });
       expect(deleteResponse.status).toBe(200);
       await expect(deleteResponse.json()).resolves.toEqual({ ok: true });
 
-      expect(db.prepare(`SELECT id FROM tasks WHERE id = 120`).get()).toBeUndefined();
-      expect(db.prepare(`SELECT id, sprint_id FROM tasks WHERE id = 121`).get()).toEqual({ id: 121, sprint_id: 20 });
+      expect(await db.get(`SELECT id FROM tasks WHERE id = 120`)).toBeUndefined();
+      expect(await db.get(`SELECT id, sprint_id FROM tasks WHERE id = 121`)).toEqual({ id: 121, sprint_id: 20 });
     } finally {
       await stopTestServer(server);
     }
@@ -599,9 +599,9 @@ describe('sprints API create clone support', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO tasks (id, sprint_id, status, story_points) VALUES (100, 10, 'done', 3), (101, 10, 'ready', 5), (102, NULL, 'ready', 2)`).run();
-      db.prepare(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (101, 100)`).run();
-      db.prepare(`INSERT INTO job_instances (task_id, agent_id, status) VALUES (100, 7, 'done'), (101, 7, 'failed')`).run();
+      await db.run(`INSERT INTO tasks (id, sprint_id, status, story_points) VALUES (100, 10, 'done', 3), (101, 10, 'ready', 5), (102, NULL, 'ready', 2)`);
+      await db.run(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (101, 100)`);
+      await db.run(`INSERT INTO job_instances (task_id, agent_id, status) VALUES (100, 7, 'done'), (101, 7, 'failed')`);
 
       const metricsResponse = await fetch(`${baseUrl}/api/v1/workflows/10/metrics`);
       expect(metricsResponse.status).toBe(200);
@@ -622,7 +622,7 @@ describe('sprints API create clone support', () => {
         workflow_type: 'enhancements',
       }));
 
-      db.prepare(`UPDATE sprints SET status = 'active', ended_at = NULL WHERE id = 10`).run();
+      await db.run(`UPDATE sprints SET status = 'active', ended_at = NULL WHERE id = 10`);
 
       const completeResponse = await fetch(`${baseUrl}/api/v1/workflows/10/complete`, { method: 'POST' });
       const completeBody = await completeResponse.json();
@@ -715,10 +715,10 @@ describe('sprints API create clone support', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
         VALUES ('enhancements', 'metadata_only', 'Metadata Only', 'violet', 0, 0, '[]', 9, 0, '{"emoji":"🧬","source":"legacy"}')
-      `).run();
+      `);
 
       const metadataOnlyListResponse = await fetch(`${baseUrl}/api/v1/sprints/types/enhancements/statuses`);
       expect(metadataOnlyListResponse.status).toBe(200);
@@ -787,27 +787,27 @@ describe('sprints API create clone support', () => {
         metadata: expect.objectContaining({ source: true }),
       }));
 
-      const typeRow = db.prepare(`
+      const typeRow = await db.get(`
         SELECT metadata_json
         FROM sprint_type_task_statuses
         WHERE sprint_type_key = ? AND status_key = ?
-      `).get('enhancements', 'review_ready') as { metadata_json: string } | undefined;
+      `, 'enhancements', 'review_ready') as { metadata_json: string } | undefined;
       expect(typeRow).toBeDefined();
       expect(JSON.parse(typeRow?.metadata_json ?? '{}')).toEqual({});
 
-      const sprintRow = db.prepare(`
+      const sprintRow = await db.get(`
         SELECT metadata_json
         FROM sprint_task_statuses
         WHERE sprint_id = ? AND status_key = ?
-      `).get(10, 'handoff') as { metadata_json: string } | undefined;
+      `, 10, 'handoff') as { metadata_json: string } | undefined;
       expect(sprintRow).toBeDefined();
       expect(JSON.parse(sprintRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ source: true }));
 
-      const typeCreatedRow = db.prepare(`
+      const typeCreatedRow = await db.get(`
         SELECT metadata_json
         FROM sprint_type_task_statuses
         WHERE sprint_type_key = ? AND status_key = ?
-      `).get('enhancements', 'handoff') as { metadata_json: string } | undefined;
+      `, 'enhancements', 'handoff') as { metadata_json: string } | undefined;
       expect(typeCreatedRow).toBeDefined();
       expect(JSON.parse(typeCreatedRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ source: true }));
 
@@ -835,10 +835,10 @@ describe('sprints API create clone support', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
         VALUES ('enhancements', 'seeded_default', 'Seeded Default', 'amber', 0, 1, '[]', 10, 0, '{}')
-      `).run();
+      `);
 
       const deleteResponse = await fetch(`${baseUrl}/api/v1/sprints/types/enhancements/statuses/seeded_default`, {
         method: 'DELETE',
@@ -852,11 +852,11 @@ describe('sprints API create clone support', () => {
       const listBody = await listResponse.json() as { statuses: Array<{ name: string }> };
       expect(listBody.statuses.find((status) => status.name === 'seeded_default')).toBeUndefined();
 
-      const deletedRow = db.prepare(`
+      const deletedRow = await db.get(`
         SELECT id
         FROM sprint_type_task_statuses
         WHERE sprint_type_key = ? AND status_key = ?
-      `).get('enhancements', 'seeded_default');
+      `, 'enhancements', 'seeded_default');
       expect(deletedRow).toBeUndefined();
     } finally {
       await stopTestServer(server);
@@ -867,18 +867,18 @@ describe('sprints API create clone support', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_types (key, name, description, is_system, status_seeded_at)
         VALUES ('custom', 'Custom', '', 1, datetime('now'))
-      `).run();
-      db.prepare(`
+      `);
+      await db.run(`
         INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, started_at)
         VALUES (30, 2, 1, 'Custom Closed', 'Custom goal', 'custom', 'closed', 'time', '1w', NULL)
-      `).run();
-      db.prepare(`
+      `);
+      await db.run(`
         INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
         VALUES ('custom', 'only_status', 'Only Status', 'amber', 0, 1, '[]', 0, 1, '{}')
-      `).run();
+      `);
 
       const deleteResponse = await fetch(`${baseUrl}/api/v1/sprints/types/custom/statuses/only_status`, {
         method: 'DELETE',
@@ -900,19 +900,19 @@ describe('sprints API create clone support', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
         VALUES
           ('enhancements', 'seeded_in_use', 'Seeded In Use', 'amber', 0, 1, '[]', 10, 0, '{}'),
           ('enhancements', 'seeded_transition', 'Seeded Transition', 'amber', 0, 1, '[]', 11, 0, '{}'),
           ('enhancements', 'seeded_hint', 'Seeded Hint', 'amber', 0, 1, '[]', 12, 0, '{}'),
           ('enhancements', 'hint_source', 'Hint Source', 'amber', 0, 0, '["seeded_hint"]', 13, 0, '{}')
-      `).run();
-      db.prepare(`INSERT INTO tasks (sprint_id, status, story_points) VALUES (10, 'seeded_in_use', 3)`).run();
-      db.prepare(`
+      `);
+      await db.run(`INSERT INTO tasks (sprint_id, status, story_points) VALUES (10, 'seeded_in_use', 3)`);
+      await db.run(`
         INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
         VALUES (10, 'backend', 'seeded_transition', 'ship_it', 'review', 1, 1, 0)
-      `).run();
+      `);
 
       const inUseResponse = await fetch(`${baseUrl}/api/v1/sprints/types/enhancements/statuses/seeded_in_use`, {
         method: 'DELETE',
@@ -951,10 +951,10 @@ describe('sprints API create clone support', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority, is_system)
         VALUES (10, 'backend', 'needs_attention', 1, 0, 0)
-      `).run();
+      `);
 
       const workflowResponse = await fetch(`${baseUrl}/api/v1/sprints/workflow-metadata?sprint_id=10`);
       expect(workflowResponse.status).toBe(200);
@@ -979,18 +979,18 @@ describe('sprints API create clone support', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      db.prepare(`INSERT INTO projects (id, name) VALUES (86, 'Agent HQ')`).run();
-      db.prepare(`INSERT INTO sprint_types (key, name, is_system) VALUES ('dev', 'Development', 1)`).run();
+      await db.run(`INSERT INTO projects (id, name) VALUES (86, 'Agent HQ')`);
+      await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('dev', 'Development', 1)`);
 
       const policy = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
       const externalEvents = require('../domains/routing/externalEventMappings') as typeof import('../domains/routing/externalEventMappings');
-      policy.seedSprintTypeTaskStatuses(db, 'dev', { force: true });
-      policy.seedSprintTaskPolicy(db, 57, { force: true });
-      externalEvents.seedDefaultExternalEventMappings(db);
-      db.prepare(`
+      await policy.seedSprintTypeTaskStatuses(db, 'dev', { force: true });
+      await policy.seedSprintTaskPolicy(db, 57, { force: true });
+      await externalEvents.seedDefaultExternalEventMappings(db);
+      await db.run(`
         INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority, is_system)
         VALUES (57, 'backend', 'ready', 1, 0, 0)
-      `).run();
+      `);
 
       const workflowResponse = await fetch(`${baseUrl}/api/v1/sprints/workflow-metadata?sprint_id=57`);
       expect(workflowResponse.status).toBe(200);

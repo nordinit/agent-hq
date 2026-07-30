@@ -8,6 +8,7 @@ import {
   STARTUP_SCHEMA_LEDGER_ID,
   verifyStartupSchemaCurrent,
 } from './startupVerifier';
+import { SqliteAdapter } from "./adapter/SqliteAdapter";
 
 function tempDbPath(prefix: string): { dir: string; dbPath: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -15,40 +16,47 @@ function tempDbPath(prefix: string): { dir: string; dbPath: string } {
 }
 
 describe('verifyStartupSchemaCurrent', () => {
-  it('fails without creating a missing database', () => {
+  it('fails without creating a missing database', async () => {
     const { dir, dbPath } = tempDbPath('agent-hq-missing-schema-');
     try {
-      expect(() => verifyStartupSchemaCurrent(dbPath)).toThrow(SchemaMigrationRequiredError);
+      // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
+      // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
+      // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
+      // async fn simply never matched. Both forms must go through the promise.
+      await expect(verifyStartupSchemaCurrent(dbPath)).rejects.toThrow(SchemaMigrationRequiredError);
       expect(fs.existsSync(dbPath)).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('fails against a legacy database without mutating schema or ledger state', () => {
+  it('fails against a legacy database without mutating schema or ledger state', async () => {
     const { dir, dbPath } = tempDbPath('agent-hq-legacy-schema-');
     try {
-      const db = new Database(dbPath);
-      db.exec(`CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);`);
-      const beforeTables = db.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all();
-      db.close();
+      const dbRaw = new Database(dbPath);
+        const db = new SqliteAdapter(dbRaw);
+      await db.exec(`CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);`);
+      const beforeTables = await db.all(`SELECT name, sql FROM sqlite_master ORDER BY name`);
+      dbRaw.close();
 
-      expect(() => verifyStartupSchemaCurrent(dbPath)).toThrow(/schema_migrations/);
+      await expect(verifyStartupSchemaCurrent(dbPath)).rejects.toThrow(/schema_migrations/);
 
-      const after = new Database(dbPath, { readonly: true, fileMustExist: true });
-      const afterTables = after.prepare(`SELECT name, sql FROM sqlite_master ORDER BY name`).all();
-      after.close();
+      const afterRaw = new Database(dbPath, { readonly: true, fileMustExist: true });
+        const after = new SqliteAdapter(afterRaw);
+      const afterTables = await after.all(`SELECT name, sql FROM sqlite_master ORDER BY name`);
+      afterRaw.close();
       expect(afterTables).toEqual(beforeTables);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('passes when the explicit migration ledger is current', () => {
+  it('passes when the explicit migration ledger is current', async () => {
     const { dir, dbPath } = tempDbPath('agent-hq-current-schema-');
     try {
-      const db = new Database(dbPath);
-      db.exec(`
+      const dbRaw = new Database(dbPath);
+        const db = new SqliteAdapter(dbRaw);
+      await db.exec(`
         CREATE TABLE schema_migrations (
           id         TEXT PRIMARY KEY,
           checksum   TEXT NOT NULL,
@@ -57,13 +65,10 @@ describe('verifyStartupSchemaCurrent', () => {
           app_commit TEXT NOT NULL DEFAULT ''
         );
       `);
-      db.prepare(`INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)`).run(
-        STARTUP_SCHEMA_LEDGER_ID,
-        STARTUP_SCHEMA_LEDGER_CHECKSUM,
-      );
-      db.close();
+      await db.run(`INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)`, STARTUP_SCHEMA_LEDGER_ID, STARTUP_SCHEMA_LEDGER_CHECKSUM);
+      dbRaw.close();
 
-      expect(() => verifyStartupSchemaCurrent(dbPath)).not.toThrow();
+      await verifyStartupSchemaCurrent(dbPath);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { closeDb, getDb } from './client';
+import { closeDb, getRawDb } from './client';
 import { initSchema } from './schema';
 
 /**
@@ -64,14 +64,14 @@ it('a dangling _legacy_global reference breaks writes once enforcement is on', (
   db.close();
 });
 
-it('initSchema re-targets the reference and preserves every row', () => {
+it('initSchema re-targets the reference and preserves every row', async () => {
   seedDanglingReference();
 
   // initSchema() builds the full Agent HQ schema alongside these fixtures; the repair
   // runs over whatever it finds, so the seeded tables are picked up too.
-  initSchema();
+  await initSchema();
 
-  const db = getDb();
+  const db = getRawDb();
   const fks = db.prepare(`PRAGMA foreign_key_list("children")`).all() as { table: string }[];
   expect(fks.map((f) => f.table)).toEqual(['parents']);
 
@@ -92,7 +92,7 @@ it('initSchema re-targets the reference and preserves every row', () => {
   expect(db.prepare(`SELECT COUNT(*) AS c FROM children`).get()).toEqual({ c: 0 });
 });
 
-it('refuses to re-target when a child would lose its parent', () => {
+it('refuses to re-target when a child would lose its parent', async () => {
   const db = new Database(dbPath);
   db.pragma('foreign_keys = OFF');
   db.exec(`
@@ -107,11 +107,11 @@ it('refuses to re-target when a child would lose its parent', () => {
   `);
   db.close();
 
-  initSchema();
+  await initSchema();
 
   // Silently re-targeting would have made this row violate a real constraint, so the
   // repair leaves the reference dangling rather than destroying or orphaning data.
-  const live = getDb();
+  const live = getRawDb();
   const fks = live.prepare(`PRAGMA foreign_key_list("children")`).all() as { table: string }[];
   expect(fks.map((f) => f.table)).toEqual(['parents_legacy_global']);
   expect(live.prepare(`SELECT COUNT(*) AS c FROM children`).get()).toEqual({ c: 1 });

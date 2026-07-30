@@ -8,14 +8,14 @@ import agentsRouter from './agents';
 
 let tempDir: string;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-freeform-model-'));
   process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
   process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = '1';
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE tenants (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -79,9 +79,9 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`).run();
-  db.prepare(`INSERT INTO app_settings (key, value) VALUES ('active_tenant_id', '1')`).run();
-  db.prepare(`INSERT INTO provider_config (tenant_id, slug, status) VALUES (1, 'openai-codex', 'connected')`).run();
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('active_tenant_id', '1')`);
+  await db.run(`INSERT INTO provider_config (tenant_id, slug, status) VALUES (1, 'openai-codex', 'connected')`);
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {

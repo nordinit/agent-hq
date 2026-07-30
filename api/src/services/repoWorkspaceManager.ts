@@ -364,15 +364,19 @@ function classifyWorktreeDirectory(name: string): WorktreePruneCandidate | null 
   return null;
 }
 
-export function pruneOrphanedWorktrees(params: {
+export async function pruneOrphanedWorktrees(params: {
   repoPath?: string | null;
   basePath: string;
   mode?: RepoAccessMode;
   maxAgeHours?: number;
   staleWorkspaceDays?: number;
-  getTaskRecord: (taskId: number) => TaskWorktreeRecord;
-  hasLiveInstance: (worktreePath: string, taskId: number | null) => boolean;
-}): WorktreePruneResult {
+  // Both callbacks query the database, which is async now, so they return promises and
+  // this function must await them. Leaving the declared types synchronous would let a
+  // caller pass an async callback whose promise is silently treated as a truthy object —
+  // hasLiveInstance would then be true for EVERY directory and nothing would ever prune.
+  getTaskRecord: (taskId: number) => TaskWorktreeRecord | Promise<TaskWorktreeRecord>;
+  hasLiveInstance: (worktreePath: string, taskId: number | null) => boolean | Promise<boolean>;
+}): Promise<WorktreePruneResult> {
   const {
     repoPath,
     basePath,
@@ -401,10 +405,10 @@ export function pruneOrphanedWorktrees(params: {
       if (ageMs < maxAgeMs) continue;
 
       const taskId = candidate.kind === 'task' ? candidate.taskId : null;
-      if (hasLiveInstance(fullPath, taskId)) continue;
+      if (await hasLiveInstance(fullPath, taskId)) continue;
 
       if (candidate.kind === 'task') {
-        const task = getTaskRecord(candidate.taskId);
+        const task = await getTaskRecord(candidate.taskId);
         // Terminal tasks are reclaimed as soon as they go idle. Tasks parked in
         // a non-terminal status keep their workspace until it has been
         // untouched past the stale backstop, so work in progress is preserved

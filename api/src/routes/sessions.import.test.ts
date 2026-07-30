@@ -3,7 +3,7 @@ import express from 'express';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-let db: Database.Database;
+let db: Db;
 let mockTranscriptMessages: Array<{
   id: string;
   role: string;
@@ -30,6 +30,8 @@ jest.mock('../domains/runs/transcriptProvider', () => ({
 }));
 
 import sessionsRouter from './sessions';
+import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function postJson(app: express.Express, route: string): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -46,8 +48,8 @@ async function postJson(app: express.Express, route: string): Promise<{ status: 
   }
 }
 
-function setupDb(): void {
-  db.exec(`
+async function setupDb(): Promise<void> {
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       name TEXT,
@@ -130,34 +132,34 @@ function setupDb(): void {
 }
 
 describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
-  beforeEach(() => {
-    db = new Database(':memory:');
+  beforeEach(async () => {
+    db = new SqliteAdapter(new Database(':memory:'));
     mockTranscriptMessages = [];
-    setupDb();
+    await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('creates a canonical active session and backfills prompt-only chat_messages for a dispatched OpenClaw run', async () => {
-    db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`);
+    await db.run(`
       INSERT INTO job_instances (
         id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
       ) VALUES (
         4581, 679, 97, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
         'dispatched', NULL, NULL, '2026-05-01T11:59:00Z', '2026-05-01T11:58:00Z', NULL
       )
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
       VALUES
         (1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
         (2, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
-    `).run();
+    `);
 
     const app = express();
     app.use(express.json());
@@ -174,16 +176,16 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
       project_id: 9,
       status: 'active',
       title: 'Prompt-only run',
-      started_at: '2026-05-01T11:59:00Z',
+      started_at: '2026-05-01 11:59:00',
       message_count: 2,
     });
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT ordinal, role, event_type, content
       FROM session_messages
       WHERE session_id = ?
       ORDER BY ordinal ASC
-    `).all(res.body.id);
+    `, res.body.id);
 
     expect(rows).toEqual([
       { ordinal: 0, role: 'user', event_type: 'text', content: 'Initial task prompt' },
@@ -209,23 +211,23 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
       },
     ];
 
-    db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`);
+    await db.run(`
       INSERT INTO job_instances (
         id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
       ) VALUES (
         4581, 679, 97, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
         'dispatched', NULL, NULL, '2026-05-01T11:59:00Z', '2026-05-01T11:58:00Z', NULL
       )
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
       VALUES
         (1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
         (2, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
-    `).run();
+    `);
 
     const app = express();
     app.use(express.json());
@@ -235,12 +237,12 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ message_count: 2 });
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT ordinal, role, event_type, content, raw_payload
       FROM session_messages
       WHERE session_id = ?
       ORDER BY ordinal ASC
-    `).all(res.body.id);
+    `, res.body.id);
 
     expect(rows).toEqual([
       { ordinal: 0, role: 'user', event_type: 'text', content: 'Initial task prompt', raw_payload: '1' },
@@ -249,23 +251,23 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
   });
 
   it('imports a dispatched prompt-only run from chat_messages when job_instances has no session_key yet', async () => {
-    db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`);
+    await db.run(`
       INSERT INTO job_instances (
         id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
       ) VALUES (
         4581, 679, 97, NULL,
         'dispatched', NULL, NULL, '2026-05-01T11:59:00Z', '2026-05-01T11:58:00Z', NULL
       )
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
       VALUES
         (1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
         (2, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
-    `).run();
+    `);
 
     const app = express();
     app.use(express.json());
@@ -284,12 +286,12 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
       message_count: 2,
     });
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT ordinal, role, event_type, content, raw_payload
       FROM session_messages
       WHERE session_id = ?
       ORDER BY ordinal ASC
-    `).all(res.body.id);
+    `, res.body.id);
 
     expect(rows).toEqual([
       { ordinal: 0, role: 'user', event_type: 'text', content: 'Initial task prompt', raw_payload: '1' },
@@ -307,23 +309,23 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
       event_meta: { source: 'provider' },
     }];
 
-    db.prepare(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
+    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`);
+    await db.run(`
       INSERT INTO job_instances (
         id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
       ) VALUES (
         4581, 679, 97, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
         'dispatched', NULL, NULL, '2026-05-01T11:59:00Z', '2026-05-01T11:58:00Z', NULL
       )
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
       VALUES
         (1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
         (2, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
-    `).run();
+    `);
 
     const app = express();
     app.use(express.json());
@@ -333,12 +335,12 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ message_count: 3 });
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT ordinal, role, event_type, content, raw_payload
       FROM session_messages
       WHERE session_id = ?
       ORDER BY ordinal ASC
-    `).all(res.body.id);
+    `, res.body.id);
 
     expect(rows).toEqual([
       { ordinal: 0, role: 'system', event_type: 'turn_start', content: 'Runtime initialized', raw_payload: null },

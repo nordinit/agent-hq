@@ -1,6 +1,6 @@
-import type Database from 'better-sqlite3';
+import { type Db } from "../../db/adapter/types";
 
-export function getDashboardTokenUsageLast24h(db: Database.Database, projectId: number | null = null, tenantId: number | null = null): number {
+export async function getDashboardTokenUsageLast24h(db: Db, projectId: number | null = null, tenantId: number | null = null): Promise<number> {
   const scopedJobJoin = projectId || tenantId ? 'LEFT JOIN tasks t ON t.id = ji.task_id LEFT JOIN agents a ON a.id = ji.agent_id' : '';
   const scopedJobWhere = tenantId
     ? projectId
@@ -26,11 +26,11 @@ export function getDashboardTokenUsageLast24h(db: Database.Database, projectId: 
     ji.created_at
   )`;
 
-  return (db.prepare(`
+  return (await db.get(`
     SELECT COALESCE(SUM(COALESCE(ji.token_total, COALESCE(ji.token_input, 0) + COALESCE(ji.token_output, 0))), 0) as n
     FROM job_instances ji
     ${scopedJobJoin}
     WHERE datetime(${usageActivityAt}) >= datetime('now', '-24 hours')
     ${scopedJobWhere}
-  `).get(...scopedJobParams) as { n: number }).n;
+  `, ...scopedJobParams) as { n: number }).n;
 }

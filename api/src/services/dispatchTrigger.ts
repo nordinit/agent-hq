@@ -20,12 +20,12 @@ export function triggerDispatch(projectId: number | null | undefined): void {
   if (projectId == null) return;
 
   // Defer to next tick so the calling request path completes first
-  setImmediate(() => {
+  setImmediate(async () => {
     const start = Date.now();
     try {
       const db = getDb();
-      const eligResult = runEligibilityPass(db, projectId);
-      const dispResult = runDispatcher(db, projectId);
+      const eligResult = await runEligibilityPass(db, projectId);
+      const dispResult = await runDispatcher(db, projectId);
 
       // Also trigger QA/review dispatch so tasks entering 'review' get a QA
       // instance immediately rather than waiting for the next reconciler tick.

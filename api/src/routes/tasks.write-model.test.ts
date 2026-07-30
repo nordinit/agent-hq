@@ -33,26 +33,26 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
 }
 
-function seedFixture(): void {
+async function seedFixture(): Promise<void> {
   const db = getDb();
 
-  db.prepare(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`).run();
-  db.prepare(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Backend Domain Refactor', '', 'generic', 'active')`).run();
-  db.prepare(`
+  await db.run(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`);
+  await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Backend Domain Refactor', '', 'generic', 'active')`);
+  await db.run(`
     INSERT INTO agents (id, name, role, session_key, workspace_path, status, preferred_provider)
     VALUES (7, 'Cinder', 'Backend Engineer', 'agent:cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO tasks (id, title, description, status, priority, project_id, sprint_id, agent_id, task_type, custom_fields_json)
     VALUES
       (101, 'Existing blocker', '', 'todo', 'medium', 86, 42, 7, 'backend', '{}'),
       (102, 'Editable task', '', 'todo', 'medium', 86, 42, 7, 'backend', '{}'),
       (103, 'Failed task', '', 'failed', 'medium', 86, 42, 7, 'backend', '{}'),
       (104, 'Prior origin task', '', 'done', 'medium', 86, 42, 7, 'backend', '{}')
-  `).run();
-  db.prepare(`UPDATE tasks SET origin_task_id = 104, defect_type = 'qa_miss' WHERE id = 102`).run();
-  db.prepare(`INSERT INTO task_outcome_metrics (task_id, spawned_defects) VALUES (104, 1)`).run();
-  db.prepare(`UPDATE tasks SET previous_status = 'ready' WHERE id = 103`).run();
+  `);
+  await db.run(`UPDATE tasks SET origin_task_id = 104, defect_type = 'qa_miss' WHERE id = 102`);
+  await db.run(`INSERT INTO task_outcome_metrics (task_id, spawned_defects) VALUES (104, 1)`);
+  await db.run(`UPDATE tasks SET previous_status = 'ready' WHERE id = 103`);
 }
 
 describe('tasks route write-model handoff', () => {
@@ -65,8 +65,8 @@ describe('tasks route write-model handoff', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-write-model-'));
     process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
     closeDb();
-    initSchema();
-    seedFixture();
+    await initSchema();
+    await seedFixture();
     triggerDispatchSpy = jest.spyOn(dispatchTrigger, 'triggerDispatch').mockImplementation(() => {});
     ({ server, baseUrl } = await startServer());
   });
@@ -129,7 +129,7 @@ describe('tasks route write-model handoff', () => {
     await expect(res.json()).resolves.toMatchObject({
       error: 'sprint_id is required',
     });
-    const created = getDb().prepare(`SELECT id FROM tasks WHERE title = 'Workflowless task'`).get();
+    const created = await getDb().get(`SELECT id FROM tasks WHERE title = 'Workflowless task'`);
     expect(created).toBeUndefined();
   });
 
@@ -167,11 +167,11 @@ describe('tasks route write-model handoff', () => {
       }),
     ]);
 
-    const persistedRelationship = getDb().prepare(`
+    const persistedRelationship = await getDb().get(`
       SELECT source_task_id, target_task_id, relationship_type_key, created_by
       FROM task_relationships
       WHERE source_task_id = ? AND target_task_id = 101 AND relationship_type_key = 'defect_of'
-    `).get(body.id);
+    `, body.id);
     expect(persistedRelationship).toEqual({
       source_task_id: body.id,
       target_task_id: 101,
@@ -201,7 +201,7 @@ describe('tasks route write-model handoff', () => {
     await expect(res.json()).resolves.toMatchObject({
       error: expect.stringContaining('Relationship type "not_a_real_relationship" is not defined'),
     });
-    const created = getDb().prepare(`SELECT id FROM tasks WHERE title = 'Invalid related task create'`).get();
+    const created = await getDb().get(`SELECT id FROM tasks WHERE title = 'Invalid related task create'`);
     expect(created).toBeUndefined();
   });
 
@@ -245,12 +245,12 @@ describe('tasks route write-model handoff', () => {
 
   it('creates tasks with custom workflow-specific task types absent from legacy defaults', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`);
+    await db.run(`
       INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
-    `).run();
-    db.prepare(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (43, 86, 'Construction Workflow', '', 'construction', 'active')`).run();
+    `);
+    await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (43, 86, 'Construction Workflow', '', 'construction', 'active')`);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -275,12 +275,12 @@ describe('tasks route write-model handoff', () => {
 
   it('rejects task creation when task_type is not allowed by the selected workflow type', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`);
+    await db.run(`
       INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
-    `).run();
-    db.prepare(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (43, 86, 'Construction Workflow', '', 'construction', 'active')`).run();
+    `);
+    await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (43, 86, 'Construction Workflow', '', 'construction', 'active')`);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -303,12 +303,12 @@ describe('tasks route write-model handoff', () => {
 
   it('updates tasks to custom workflow-specific task types absent from legacy defaults', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`);
+    await db.run(`
       INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
-    `).run();
-    db.prepare(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (43, 86, 'Construction Workflow', '', 'construction', 'active')`).run();
+    `);
+    await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (43, 86, 'Construction Workflow', '', 'construction', 'active')`);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',
@@ -342,7 +342,7 @@ describe('tasks route write-model handoff', () => {
     await expect(res.json()).resolves.toMatchObject({
       error: 'sprint_id is required and cannot be cleared',
     });
-    expect((getDb().prepare(`SELECT sprint_id FROM tasks WHERE id = 102`).get() as { sprint_id: number }).sprint_id).toBe(42);
+    expect((await getDb().get(`SELECT sprint_id FROM tasks WHERE id = 102`) as { sprint_id: number }).sprint_id).toBe(42);
   });
 
   it('updates tasks through the route and replaces blockers without changing the response shape', async () => {
@@ -392,11 +392,11 @@ describe('tasks route write-model handoff', () => {
 
   it('returns migrated lifecycle evidence only through custom_fields on task reads', async () => {
     const db = getDb();
-    db.prepare(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`).run(JSON.stringify({
-      review_branch: 'cinder-backend/task-995',
-      review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
-      qa_verified_commit: 'abcdef1234567890abcdef1234567890abcdef12',
-    }));
+    await db.run(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`, JSON.stringify({
+            review_branch: 'cinder-backend/task-995',
+            review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+            qa_verified_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+          }));
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`);
 
@@ -433,13 +433,13 @@ describe('tasks route write-model handoff', () => {
     });
 
     const db = getDb();
-    expect(db.prepare(`SELECT spawned_defects FROM task_outcome_metrics WHERE task_id = 104`).get()).toMatchObject({ spawned_defects: 0 });
-    expect(db.prepare(`SELECT spawned_defects FROM task_outcome_metrics WHERE task_id = 101`).get()).toMatchObject({ spawned_defects: 1 });
-    const defectRelationship = db.prepare(`
+    expect(await db.get(`SELECT spawned_defects FROM task_outcome_metrics WHERE task_id = 104`)).toMatchObject({ spawned_defects: 0 });
+    expect(await db.get(`SELECT spawned_defects FROM task_outcome_metrics WHERE task_id = 101`)).toMatchObject({ spawned_defects: 1 });
+    const defectRelationship = await db.get(`
       SELECT source_task_id, target_task_id, relationship_type_key, metadata_json
       FROM task_relationships
       WHERE source_task_id = 102 AND target_task_id = 101 AND relationship_type_key = 'defect_of'
-    `).get() as { metadata_json: string };
+    `) as { metadata_json: string };
     expect(JSON.parse(defectRelationship.metadata_json)).toEqual({ legacy_defect_type: 'regression' });
 
     const customTypeRes = await fetch(`${baseUrl}/api/v1/tasks/102`, {
@@ -451,11 +451,11 @@ describe('tasks route write-model handoff', () => {
       }),
     });
     expect(customTypeRes.status).toBe(200);
-    const updatedRelationship = db.prepare(`
+    const updatedRelationship = await db.get(`
       SELECT metadata_json
       FROM task_relationships
       WHERE source_task_id = 102 AND target_task_id = 101 AND relationship_type_key = 'defect_of'
-    `).get() as { metadata_json: string };
+    `) as { metadata_json: string };
     expect(JSON.parse(updatedRelationship.metadata_json)).toEqual({ legacy_defect_type: 'customer_reported_escape' });
 
     const clearRes = await fetch(`${baseUrl}/api/v1/tasks/102`, {
@@ -475,11 +475,11 @@ describe('tasks route write-model handoff', () => {
       origin_task_title: null,
       defect_type: null,
     });
-    expect(db.prepare(`SELECT spawned_defects FROM task_outcome_metrics WHERE task_id = 101`).get()).toMatchObject({ spawned_defects: 0 });
-    const clearedRelationship = db.prepare(`
+    expect(await db.get(`SELECT spawned_defects FROM task_outcome_metrics WHERE task_id = 101`)).toMatchObject({ spawned_defects: 0 });
+    const clearedRelationship = await db.get(`
       SELECT id FROM task_relationships
       WHERE source_task_id = 102 AND target_task_id = 101 AND relationship_type_key = 'defect_of'
-    `).get();
+    `);
     expect(clearedRelationship).toBeUndefined();
   });
 
@@ -515,8 +515,8 @@ describe('tasks route write-model handoff', () => {
     expect(body).toMatchObject({ id: 102, status: 'done' });
 
     const db = getDb();
-    expect((db.prepare(`SELECT status FROM tasks WHERE id = 102`).get() as { status: string }).status).toBe('done');
-    expect(db.prepare(`SELECT changed_by, field, old_value, new_value FROM task_history WHERE task_id = 102 AND field = 'status' ORDER BY id DESC LIMIT 1`).get()).toMatchObject({
+    expect((await db.get(`SELECT status FROM tasks WHERE id = 102`) as { status: string }).status).toBe('done');
+    expect(await db.get(`SELECT changed_by, field, old_value, new_value FROM task_history WHERE task_id = 102 AND field = 'status' ORDER BY id DESC LIMIT 1`)).toMatchObject({
       changed_by: 'operator-recovery',
       field: 'status',
       old_value: 'todo',
@@ -526,12 +526,12 @@ describe('tasks route write-model handoff', () => {
 
   it('allows status-only updates while preserving retired custom field values', async () => {
     const db = getDb();
-    db.prepare(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic' AND task_type IS NULL`).run();
-    db.prepare(`
+    await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic' AND task_type IS NULL`);
+    await db.run(`
       INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
       VALUES (1, 'generic', NULL, ?)
-    `).run(JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text', required: true }] }));
-    db.prepare(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`).run(JSON.stringify({ target_surface: 'api' }));
+    `, JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text', required: true }] }));
+    await db.run(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`, JSON.stringify({ target_surface: 'api' }));
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',
@@ -545,18 +545,18 @@ describe('tasks route write-model handoff', () => {
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ id: 102, status: 'ready' });
-    const stored = db.prepare(`SELECT custom_fields_json FROM tasks WHERE id = 102`).get() as { custom_fields_json: string };
+    const stored = await db.get(`SELECT custom_fields_json FROM tasks WHERE id = 102`) as { custom_fields_json: string };
     expect(JSON.parse(stored.custom_fields_json)).toEqual({ target_surface: 'api' });
   });
 
   it('tolerates unchanged retired custom fields when editing active custom fields', async () => {
     const db = getDb();
-    db.prepare(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic' AND task_type IS NULL`).run();
-    db.prepare(`
+    await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic' AND task_type IS NULL`);
+    await db.run(`
       INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
       VALUES (1, 'generic', NULL, ?)
-    `).run(JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text', required: true }] }));
-    db.prepare(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`).run(JSON.stringify({ target_surface: 'api', active_text: 'old' }));
+    `, JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text', required: true }] }));
+    await db.run(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`, JSON.stringify({ target_surface: 'api', active_text: 'old' }));
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',
@@ -568,22 +568,19 @@ describe('tasks route write-model handoff', () => {
     });
 
     expect(res.status).toBe(200);
-    const stored = db.prepare(`SELECT custom_fields_json FROM tasks WHERE id = 102`).get() as { custom_fields_json: string };
+    const stored = await db.get(`SELECT custom_fields_json FROM tasks WHERE id = 102`) as { custom_fields_json: string };
     expect(JSON.parse(stored.custom_fields_json)).toEqual({ target_surface: 'api', active_text: 'new' });
   });
 
   it('allows editing workflow default and task-type-specific custom fields together', async () => {
     const db = getDb();
-    db.prepare(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic'`).run();
-    db.prepare(`
+    await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic'`);
+    await db.run(`
       INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
       VALUES
         (1, 'generic', NULL, ?),
         (1, 'generic', 'backend', ?)
-    `).run(
-      JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text', required: true }] }),
-      JSON.stringify({ fields: [{ key: 'target_surface', label: 'Target Surface', type: 'select', options: ['api', 'ui'] }] }),
-    );
+    `, JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text', required: true }] }), JSON.stringify({ fields: [{ key: 'target_surface', label: 'Target Surface', type: 'select', options: ['api', 'ui'] }] }));
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',
@@ -595,18 +592,18 @@ describe('tasks route write-model handoff', () => {
     });
 
     expect(res.status).toBe(200);
-    const stored = db.prepare(`SELECT custom_fields_json FROM tasks WHERE id = 102`).get() as { custom_fields_json: string };
+    const stored = await db.get(`SELECT custom_fields_json FROM tasks WHERE id = 102`) as { custom_fields_json: string };
     expect(JSON.parse(stored.custom_fields_json)).toEqual({ active_text: 'default value', target_surface: 'api' });
   });
 
   it('still rejects edits to custom fields outside the active sprint schema', async () => {
     const db = getDb();
-    db.prepare(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic' AND task_type IS NULL`).run();
-    db.prepare(`
+    await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic' AND task_type IS NULL`);
+    await db.run(`
       INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
       VALUES (1, 'generic', NULL, ?)
-    `).run(JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text' }] }));
-    db.prepare(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`).run(JSON.stringify({ target_surface: 'api', active_text: 'old' }));
+    `, JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text' }] }));
+    await db.run(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`, JSON.stringify({ target_surface: 'api', active_text: 'old' }));
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',

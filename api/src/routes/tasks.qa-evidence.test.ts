@@ -11,7 +11,7 @@ import { validateInlineEvidenceForOutcome } from '../lib/evidenceValidation';
 let tempDir: string;
 let dbPath: string;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-qa-evidence-'));
@@ -19,7 +19,7 @@ function resetDb(): void {
   process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL
@@ -207,17 +207,17 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`).run();
-  db.prepare(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1)`).run();
-  db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Bugs', 'generic')`).run();
-  db.prepare(`INSERT INTO agents (id, name, enabled) VALUES (7, 'Talon', 1)`).run();
-  db.prepare(`
+  await db.run(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`);
+  await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1)`);
+  await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Bugs', 'generic')`);
+  await db.run(`INSERT INTO agents (id, name, enabled) VALUES (7, 'Talon', 1)`);
+  await db.run(`
     INSERT INTO tasks (id, title, status, task_type, sprint_id, project_id, agent_id, review_commit, custom_fields_json, active_instance_id)
     VALUES (383, 'Task 383', 'review', 'backend', 10, 1, 7, '6d614b3b104ae36d1dd75210b9f9fb0342673329', ?, 1784)
-  `).run(JSON.stringify({ review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329' }));
-  db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status, dispatched_at) VALUES (1784, 383, 7, 'running', datetime('now'))`).run();
-  db.prepare(`INSERT INTO instance_artifacts (instance_id, task_id, current_stage, stale, updated_at) VALUES (1784, 383, 'progress', 0, datetime('now'))`).run();
-  db.prepare(`INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at) VALUES (383, 0, datetime('now'))`).run();
+  `, JSON.stringify({ review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329' }));
+  await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, dispatched_at) VALUES (1784, 383, 7, 'running', datetime('now'))`);
+  await db.run(`INSERT INTO instance_artifacts (instance_id, task_id, current_stage, stale, updated_at) VALUES (1784, 383, 'progress', 0, datetime('now'))`);
+  await db.run(`INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at) VALUES (383, 0, datetime('now'))`);
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -239,10 +239,10 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('tasks qa-evidence aliases', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-qa-evidence-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
-    resetDb();
+    await resetDb();
   });
 
   afterEach(() => {
@@ -274,7 +274,7 @@ describe('tasks qa-evidence aliases', () => {
       expect(body.custom_fields?.qa_tested_url).toBe('http://localhost:3501/api/v1/tasks/383');
 
       const db = getDb();
-      const row = db.prepare(`SELECT custom_fields_json FROM tasks WHERE id = ?`).get(383) as { custom_fields_json: string };
+      const row = await db.get(`SELECT custom_fields_json FROM tasks WHERE id = ?`, 383) as { custom_fields_json: string };
       expect(JSON.parse(row.custom_fields_json)).toEqual(expect.objectContaining({
         qa_tested_url: 'http://localhost:3501/api/v1/tasks/383',
       }));
@@ -335,7 +335,7 @@ describe('tasks qa-evidence aliases', () => {
       expect(body.custom_fields?.qa_tested_url).toBe('http://localhost:3501/api/v1/tasks/383?contract=old');
 
       const db = getDb();
-      const row = db.prepare(`SELECT custom_fields_json FROM tasks WHERE id = ?`).get(383) as { custom_fields_json: string };
+      const row = await db.get(`SELECT custom_fields_json FROM tasks WHERE id = ?`, 383) as { custom_fields_json: string };
       expect(JSON.parse(row.custom_fields_json)).toEqual(expect.objectContaining({
         qa_verified_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
         qa_tested_url: 'http://localhost:3501/api/v1/tasks/383?contract=old',
@@ -347,8 +347,8 @@ describe('tasks qa-evidence aliases', () => {
 
   it('rejects review evidence from a stopped instance after task linkage is cleared', async () => {
     const db = getDb();
-    db.prepare(`UPDATE tasks SET active_instance_id = NULL WHERE id = ?`).run(383);
-    db.prepare(`UPDATE job_instances SET task_id = NULL, status = 'failed' WHERE id = ?`).run(1784);
+    await db.run(`UPDATE tasks SET active_instance_id = NULL WHERE id = ?`, 383);
+    await db.run(`UPDATE job_instances SET task_id = NULL, status = 'failed' WHERE id = ?`, 1784);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -379,7 +379,7 @@ describe('tasks qa-evidence aliases', () => {
         task_agent_id: 7,
       });
 
-      const row = db.prepare(`SELECT review_commit FROM tasks WHERE id = ?`).get(383) as { review_commit: string | null };
+      const row = await db.get(`SELECT review_commit FROM tasks WHERE id = ?`, 383) as { review_commit: string | null };
       expect(row.review_commit).toBe('6d614b3b104ae36d1dd75210b9f9fb0342673329');
     } finally {
       await stopTestServer(server);
@@ -388,8 +388,8 @@ describe('tasks qa-evidence aliases', () => {
 
   it('rejects QA evidence from a stopped instance after task linkage is cleared', async () => {
     const db = getDb();
-    db.prepare(`UPDATE tasks SET active_instance_id = NULL WHERE id = ?`).run(383);
-    db.prepare(`UPDATE job_instances SET task_id = NULL, status = 'failed' WHERE id = ?`).run(1784);
+    await db.run(`UPDATE tasks SET active_instance_id = NULL WHERE id = ?`, 383);
+    await db.run(`UPDATE job_instances SET task_id = NULL, status = 'failed' WHERE id = ?`, 1784);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -420,7 +420,7 @@ describe('tasks qa-evidence aliases', () => {
         task_agent_id: 7,
       });
 
-      const row = db.prepare(`SELECT custom_fields_json FROM tasks WHERE id = ?`).get(383) as { custom_fields_json: string };
+      const row = await db.get(`SELECT custom_fields_json FROM tasks WHERE id = ?`, 383) as { custom_fields_json: string };
       expect(JSON.parse(row.custom_fields_json)).toEqual({
         review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
       });
@@ -431,7 +431,7 @@ describe('tasks qa-evidence aliases', () => {
 
   it('refreshes review evidence to the latest commit on re-submission for review', async () => {
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       ALTER TABLE tasks ADD COLUMN review_branch TEXT;
       ALTER TABLE tasks ADD COLUMN review_url TEXT;
       ALTER TABLE tasks ADD COLUMN review_owner_agent_id INTEGER;
@@ -486,30 +486,21 @@ describe('tasks qa-evidence aliases', () => {
       );
     `);
 
-    db.prepare(`UPDATE tasks SET status = ?, custom_fields_json = ? WHERE id = ?`).run(
-      'in_progress',
-      JSON.stringify({
-        review_branch: 'feature/task-383-old',
-        review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
-        review_url: 'http://localhost:3510/review/task-383?attempt=1',
-      }),
-      383,
-    );
-    db.prepare(`INSERT INTO routing_config (from_status, outcome, to_status, enabled, project_id) VALUES (?, ?, ?, 1, ?)`).run(
-      'in_progress',
-      'completed_for_review',
-      'review',
-      1,
-    );
+    await db.run(`UPDATE tasks SET status = ?, custom_fields_json = ? WHERE id = ?`, 'in_progress', JSON.stringify({
+              review_branch: 'feature/task-383-old',
+              review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+              review_url: 'http://localhost:3510/review/task-383?attempt=1',
+            }), 383);
+    await db.run(`INSERT INTO routing_config (from_status, outcome, to_status, enabled, project_id) VALUES (?, ?, ?, 1, ?)`, 'in_progress', 'completed_for_review', 'review', 1);
 
     const { server, baseUrl } = await startTestServer();
     try {
       const newCommit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
       const beforePreview = {
-        task: db.prepare(`SELECT status, custom_fields_json FROM tasks WHERE id = ?`).get(383),
-        history: (db.prepare(`SELECT COUNT(*) AS count FROM task_history WHERE task_id = ?`).get(383) as { count: number }).count,
-        notes: (db.prepare(`SELECT COUNT(*) AS count FROM task_notes WHERE task_id = ?`).get(383) as { count: number }).count,
-        instance: db.prepare(`SELECT status, task_outcome, lifecycle_outcome_posted_at FROM job_instances WHERE id = ?`).get(1784),
+        task: await db.get(`SELECT status, custom_fields_json FROM tasks WHERE id = ?`, 383),
+        history: (await db.get(`SELECT COUNT(*) AS count FROM task_history WHERE task_id = ?`, 383) as { count: number }).count,
+        notes: (await db.get(`SELECT COUNT(*) AS count FROM task_notes WHERE task_id = ?`, 383) as { count: number }).count,
+        instance: await db.get(`SELECT status, task_outcome, lifecycle_outcome_posted_at FROM job_instances WHERE id = ?`, 1784),
       };
       const previewResponse = await fetch(`${baseUrl}/api/v1/tasks/383/outcome`, {
         method: 'POST',
@@ -532,10 +523,10 @@ describe('tasks qa-evidence aliases', () => {
       expect(previewBody.dry_run).toBe(true);
       expect(previewBody.proposed_changes?.status).toEqual({ from: 'in_progress', to: 'review' });
       expect(previewBody.validation_errors).toEqual([]);
-      expect(db.prepare(`SELECT status, custom_fields_json FROM tasks WHERE id = ?`).get(383)).toEqual(beforePreview.task);
-      expect((db.prepare(`SELECT COUNT(*) AS count FROM task_history WHERE task_id = ?`).get(383) as { count: number }).count).toBe(beforePreview.history);
-      expect((db.prepare(`SELECT COUNT(*) AS count FROM task_notes WHERE task_id = ?`).get(383) as { count: number }).count).toBe(beforePreview.notes);
-      expect(db.prepare(`SELECT status, task_outcome, lifecycle_outcome_posted_at FROM job_instances WHERE id = ?`).get(1784)).toEqual(beforePreview.instance);
+      expect(await db.get(`SELECT status, custom_fields_json FROM tasks WHERE id = ?`, 383)).toEqual(beforePreview.task);
+      expect((await db.get(`SELECT COUNT(*) AS count FROM task_history WHERE task_id = ?`, 383) as { count: number }).count).toBe(beforePreview.history);
+      expect((await db.get(`SELECT COUNT(*) AS count FROM task_notes WHERE task_id = ?`, 383) as { count: number }).count).toBe(beforePreview.notes);
+      expect(await db.get(`SELECT status, task_outcome, lifecycle_outcome_posted_at FROM job_instances WHERE id = ?`, 1784)).toEqual(beforePreview.instance);
 
       const response = await fetch(`${baseUrl}/api/v1/tasks/383/outcome`, {
         method: 'POST',
@@ -576,7 +567,7 @@ describe('tasks qa-evidence aliases', () => {
       expect(body.task?.custom_fields?.review_commit).toBe(newCommit);
       expect(body.task?.custom_fields?.review_url).toBe('http://localhost:3510/review/task-383?attempt=2');
 
-      const row = db.prepare(`SELECT custom_fields_json, status FROM tasks WHERE id = ?`).get(383) as {
+      const row = await db.get(`SELECT custom_fields_json, status FROM tasks WHERE id = ?`, 383) as {
         custom_fields_json: string;
         status: string;
       };
@@ -587,12 +578,12 @@ describe('tasks qa-evidence aliases', () => {
         review_url: 'http://localhost:3510/review/task-383?attempt=2',
       }));
 
-      const reviewHistory = db.prepare(`
+      const reviewHistory = await db.all(`
         SELECT field, old_value, new_value
         FROM task_history
         WHERE task_id = ? AND field IN ('review_branch', 'review_commit', 'review_url')
         ORDER BY id ASC
-      `).all(383) as Array<{ field: string; old_value: string | null; new_value: string | null }>;
+      `, 383) as Array<{ field: string; old_value: string | null; new_value: string | null }>;
       expect(reviewHistory).toEqual([
         { field: 'review_branch', old_value: 'feature/task-383-old', new_value: 'feature/task-383-rereview' },
         { field: 'review_commit', old_value: '6d614b3b104ae36d1dd75210b9f9fb0342673329', new_value: newCommit },
@@ -632,19 +623,19 @@ describe('tasks qa-evidence aliases', () => {
     }
   });
 
-  it('allows qa_pass release-gate validation for the localhost:3501 review artifact URL', () => {
+  it('allows qa_pass release-gate validation for the localhost:3501 review artifact URL', async () => {
     const db = getDb();
-    db.prepare(`UPDATE tasks SET custom_fields_json = ? WHERE id = ?`).run(JSON.stringify({
-      review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
-      qa_verified_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
-      qa_tested_url: 'http://localhost:3501/review/task/383',
-    }), 383);
+    await db.run(`UPDATE tasks SET custom_fields_json = ? WHERE id = ?`, JSON.stringify({
+            review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+            qa_verified_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+            qa_tested_url: 'http://localhost:3501/review/task/383',
+          }), 383);
 
-    const task = db.prepare(`
+    const task = await db.get(`
       SELECT id, status, task_type, sprint_id, custom_fields_json
       FROM tasks
       WHERE id = ?
-    `).get(383) as {
+    `, 383) as {
       id: number;
       status: string;
       task_type: string | null;
@@ -652,7 +643,7 @@ describe('tasks qa-evidence aliases', () => {
       custom_fields_json: string | null;
     };
 
-    const result = requireReleaseGate(db, task, 'qa_pass', task.task_type);
+    const result = await requireReleaseGate(db, task, 'qa_pass', task.task_type);
     expect(result.errors).toEqual([]);
   });
 
@@ -685,47 +676,47 @@ describe('tasks qa-evidence aliases', () => {
     expect(result.errors).toEqual(['custom gate requires review_commit']);
   });
 
-  it('supports configured OR field expressions for release gates', () => {
+  it('supports configured OR field expressions for release gates', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message)
       VALUES (10, NULL, 'deployed_live', 'merged_commit|deployed_commit', 'required', NULL, 'block', 'deployed_live requires merged_commit or deployed_commit')
-    `).run();
+    `);
 
-    const result = requireReleaseGate(db, {
-      id: 383,
-      status: 'ready_to_merge',
-      task_type: 'backend',
-      sprint_id: 10,
-      custom_fields_json: JSON.stringify({
-        deployed_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
-      }),
-    }, 'deployed_live', 'backend');
+    const result = await requireReleaseGate(db, {
+          id: 383,
+          status: 'ready_to_merge',
+          task_type: 'backend',
+          sprint_id: 10,
+          custom_fields_json: JSON.stringify({
+            deployed_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+          }),
+        }, 'deployed_live', 'backend');
 
     expect(result.errors).toEqual([]);
   });
 
-  it('rejects premature or malformed live_verified release-gate validation when the workflow config requires it', () => {
+  it('rejects premature or malformed live_verified release-gate validation when the workflow config requires it', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message)
       VALUES
         (10, NULL, 'live_verified', 'status', 'from_status', 'deployed', 'block', 'live_verified requires task status deployed'),
         (10, NULL, 'live_verified', 'live_verified_by', 'required', NULL, 'block', 'live_verified requires live_verified_by'),
         (10, NULL, 'live_verified', 'live_verified_at', 'required', NULL, 'block', 'live_verified requires live_verified_at')
-    `).run();
+    `);
 
-    const result = requireReleaseGate(db, {
-      id: 383,
-      status: 'ready_to_merge',
-      task_type: 'backend',
-      sprint_id: 10,
-      custom_fields_json: JSON.stringify({
-        deployed_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
-        live_verified_by: null,
-        live_verified_at: null,
-      }),
-    }, 'live_verified', 'backend');
+    const result = await requireReleaseGate(db, {
+          id: 383,
+          status: 'ready_to_merge',
+          task_type: 'backend',
+          sprint_id: 10,
+          custom_fields_json: JSON.stringify({
+            deployed_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
+            live_verified_by: null,
+            live_verified_at: null,
+          }),
+        }, 'live_verified', 'backend');
 
     expect(result.errors).toEqual(expect.arrayContaining([
       'live_verified requires task status deployed',

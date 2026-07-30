@@ -36,7 +36,7 @@ const chatUpload = multer({
 
 export function registerAttachmentRoutes(router: Router): void {
   router.post('/attachments', (req: Request, res: Response) => {
-    chatUpload.single('file')(req, res, (err) => {
+    chatUpload.single('file')(req, res, async (err) => {
       if (err) {
         if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
           return res.status(413).json({ ok: false, error: 'File too large (max 25 MB)' });
@@ -53,19 +53,18 @@ export function registerAttachmentRoutes(router: Router): void {
         const agentId = body.agent_id ? parseInt(body.agent_id, 10) : null;
         const uploadedBy = body.uploaded_by ?? 'user';
 
-        const result = db.prepare(`
+        const result = await db.run(`
           INSERT INTO chat_attachments (instance_id, agent_id, filename, filepath, mime_type, size, uploaded_by)
           VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(instanceId, agentId, req.file.filename, req.file.path, req.file.mimetype, req.file.size, uploadedBy);
+        `, instanceId, agentId, req.file.filename, req.file.path, req.file.mimetype, req.file.size, uploadedBy);
 
-        const record = db.prepare('SELECT * FROM chat_attachments WHERE id = ?')
-          .get(result.lastInsertRowid) as Record<string, unknown>;
+        const record = await db.get('SELECT * FROM chat_attachments WHERE id = ?', result.lastInsertId) as Record<string, unknown>;
 
         return res.json({
           ok: true,
           attachment: {
             ...record,
-            url: `/api/v1/chat/attachments/${result.lastInsertRowid}/download`,
+            url: `/api/v1/chat/attachments/${result.lastInsertId}/download`,
           },
         });
       } catch (dbErr) {
@@ -75,11 +74,10 @@ export function registerAttachmentRoutes(router: Router): void {
     });
   });
 
-  router.get('/attachments/:id/download', (req: Request, res: Response) => {
+  router.get('/attachments/:id/download', async (req: Request, res: Response) => {
     try {
       const db = getDb();
-      const record = db.prepare('SELECT * FROM chat_attachments WHERE id = ?')
-        .get(parseInt(req.params.id, 10)) as Record<string, unknown> | undefined;
+      const record = await db.get('SELECT * FROM chat_attachments WHERE id = ?', parseInt(req.params.id, 10)) as Record<string, unknown> | undefined;
       if (!record) return res.status(404).json({ error: 'Attachment not found' });
       const filepath = record.filepath as string;
       if (!fs.existsSync(filepath)) return res.status(404).json({ error: 'File not found on disk' });

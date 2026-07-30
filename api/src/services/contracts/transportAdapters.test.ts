@@ -2,7 +2,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import Database from 'better-sqlite3';
-
+import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 let buildContractInstructions: typeof import('./transportAdapters').buildContractInstructions;
 let buildCompletionContractInstructions: typeof import('./transportAdapters').buildCompletionContractInstructions;
@@ -13,7 +14,7 @@ const originalRoot = process.env.AGENT_CONTRACT_ROOT;
 const originalCwd = process.cwd();
 let tempDir: string;
 let extraTempDirs: string[] = [];
-let extraDbs: Database.Database[] = [];
+let extraDbs: Db[] = [];
 
 function loadTransportAdapters() {
   let loaded: typeof import('./transportAdapters');
@@ -52,20 +53,21 @@ function reloadWithoutFileTemplates(): void {
   ({ buildContractInstructions } = loadTransportAdapters());
 }
 
-afterEach(() => {
+afterEach(async () => {
   if (originalRoot == null) delete process.env.AGENT_CONTRACT_ROOT;
   else process.env.AGENT_CONTRACT_ROOT = originalRoot;
   process.chdir(originalCwd);
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   for (const dir of extraTempDirs) fs.rmSync(dir, { recursive: true, force: true });
   extraTempDirs = [];
-  for (const db of extraDbs) db.close();
+  for (const db of extraDbs) await db.close();
   extraDbs = [];
 });
 
-function createGateDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.exec(`
+async function createGateDb(): Promise<Db> {
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
+  await db.exec(`
     CREATE TABLE transition_requirements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       task_type TEXT,
@@ -102,8 +104,8 @@ function buildContext(overrides: Partial<TransportContext> = {}): TransportConte
 describe('dispatch contract template renderer', () => {
   const repoContractRoot = path.resolve(__dirname, '../../../../agent-contracts');
 
-  it('uses the sprint-type text template for remote-direct dispatches', () => {
-    const contract = buildContractInstructions(buildContext());
+  it('uses the sprint-type text template for remote-direct dispatches', async () => {
+    const contract = await buildContractInstructions(buildContext());
 
     expect(contract).toContain('## Agent HQ enhancement contract for this dispatched instance');
     expect(contract).toContain('Sprint type: enhancements');
@@ -112,8 +114,8 @@ describe('dispatch contract template renderer', () => {
     expect(contract).toContain('agent_hq_post_task_outcome task_id=369');
   });
 
-  it('renders the placeholders used by the sprint template fixture', () => {
-    const contract = buildContractInstructions(buildContext());
+  it('renders the placeholders used by the sprint template fixture', async () => {
+    const contract = await buildContractInstructions(buildContext());
 
     expect(contract).toContain('cinder-backend');
     expect(contract).toContain('agent_hq_post_task_outcome task_id=369');
@@ -127,16 +129,16 @@ describe('dispatch contract template renderer', () => {
     expect(contract).not.toContain('{{validOutcomes}}');
   });
 
-  it('falls back to the generic text template for unknown sprint types', () => {
-    const contract = buildContractInstructions(buildContext({ sprintType: 'qa' }));
+  it('falls back to the generic text template for unknown sprint types', async () => {
+    const contract = await buildContractInstructions(buildContext({ sprintType: 'qa' }));
 
     expect(contract).toContain('## Agent HQ run contract for this dispatched instance');
     expect(contract).toContain('Sprint type: qa');
     expect(contract).toContain('Use ONE of these outcomes: completed_for_review, dev_deploy_queued, blocked, failed');
   });
 
-  it('falls back to generic when a sprint type has no dedicated template yet', () => {
-    const devContract = buildContractInstructions(buildContext({ sprintType: 'dev' }));
+  it('falls back to generic when a sprint type has no dedicated template yet', async () => {
+    const devContract = await buildContractInstructions(buildContext({ sprintType: 'dev' }));
     expect(devContract).toContain('## Agent HQ run contract for this dispatched instance');
     expect(devContract).toContain('Sprint type: dev');
     expect(devContract).not.toContain('Workflow lane');
@@ -144,8 +146,8 @@ describe('dispatch contract template renderer', () => {
     expect(devContract).not.toContain('workflow category');
   });
 
-  it('does not inject later release outcomes that are not valid from the current route', () => {
-    const contract = buildContractInstructions(buildContext({
+  it('does not inject later release outcomes that are not valid from the current route', async () => {
+    const contract = await buildContractInstructions(buildContext({
       sprintType: 'generic',
       taskStatus: 'ready_to_merge',
       transportMode: 'remote-direct',
@@ -155,8 +157,8 @@ describe('dispatch contract template renderer', () => {
     expect(contract).not.toContain('Use ONE of these outcomes: deployed_live, live_verified');
   });
 
-  it('does not infer QA evidence fields when no gate rows are configured', () => {
-    const contract = buildContractInstructions(buildContext({
+  it('does not infer QA evidence fields when no gate rows are configured', async () => {
+    const contract = await buildContractInstructions(buildContext({
       taskStatus: 'review',
       transportMode: 'local',
       sprintType: 'generic',
@@ -168,14 +170,14 @@ describe('dispatch contract template renderer', () => {
     expect(contract).not.toMatch(/"qa_url"\s*:/);
   });
 
-  it('renders configured gate fields from the template placeholders', () => {
-    const db = createGateDb();
-    db.prepare(`
+  it('renders configured gate fields from the template placeholders', async () => {
+    const db = await createGateDb();
+    await db.run(`
       INSERT INTO transition_requirements (outcome, field_name, requirement_type, severity, message)
       VALUES ('qa_pass', 'qa_verified_commit', 'required', 'block', 'qa_pass requires qa_verified_commit')
-    `).run();
+    `);
 
-    const contract = buildContractInstructions(buildContext({
+    const contract = await buildContractInstructions(buildContext({
       taskStatus: 'review',
       transportMode: 'local',
       sprintType: 'generic',
@@ -186,9 +188,9 @@ describe('dispatch contract template renderer', () => {
     expect(contract).toContain('qa_verified_commit');
   });
 
-  it('requires implementation dev deployment in the real dev template', () => {
+  it('requires implementation dev deployment in the real dev template', async () => {
     reloadWithContractRoot(repoContractRoot);
-    const contract = buildContractInstructions(buildContext({
+    const contract = await buildContractInstructions(buildContext({
       taskStatus: 'in_progress',
       transportMode: 'local',
       sprintType: 'dev',
@@ -207,9 +209,9 @@ describe('dispatch contract template renderer', () => {
     expect(contract).toContain('agent_hq_record_review_evidence');
   });
 
-  it('requires QA lease validation in the real dev template', () => {
+  it('requires QA lease validation in the real dev template', async () => {
     reloadWithContractRoot(repoContractRoot);
-    const contract = buildContractInstructions(buildContext({
+    const contract = await buildContractInstructions(buildContext({
       taskStatus: 'review',
       transportMode: 'local',
       sprintType: 'dev',
@@ -222,9 +224,9 @@ describe('dispatch contract template renderer', () => {
     expect(contract).toContain('environment mismatch');
   });
 
-  it('spells out config-driven release guidance in the real dev template', () => {
+  it('spells out config-driven release guidance in the real dev template', async () => {
     reloadWithContractRoot(repoContractRoot);
-    const contract = buildContractInstructions(buildContext({
+    const contract = await buildContractInstructions(buildContext({
       taskStatus: 'ready_to_merge',
       transportMode: 'local',
       sprintType: 'dev',
@@ -240,13 +242,13 @@ describe('dispatch contract template renderer', () => {
     expect(contract).not.toContain('live_verified requires live_verified_by');
   });
 
-  it('fails loudly when no editable contract template exists', () => {
+  it('fails loudly when no editable contract template exists', async () => {
     reloadWithoutFileTemplates();
 
-    expect(() => buildContractInstructions(buildContext({
+    await expect(buildContractInstructions(buildContext({
       sprintType: 'generic',
       transportMode: 'local',
-    }))).toThrow('No contract template found for sprint type "generic"');
+    }))).rejects.toThrow('No contract template found for sprint type "generic"');
   });
 
   it('ships dev as the explicit software-delivery contract', () => {

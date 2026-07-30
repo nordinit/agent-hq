@@ -18,13 +18,13 @@ function normalizeJsonText(value: unknown, fallback: string): string {
 }
 
 function scheduleAgentMcpSync(agentId: number): void {
-  setImmediate(() => {
+  setImmediate(async () => {
     try {
-      const result = syncAssignedMcpForAgent({
-        db: getDb(),
-        agentId,
-        materializeOpenClawGlobalConfig: true,
-      });
+      const result = await syncAssignedMcpForAgent({
+              db: getDb(),
+              agentId,
+              materializeOpenClawGlobalConfig: true,
+            });
       for (const warn of result.warnings) {
         console.warn(`[mcp-servers] ${warn}`);
       }
@@ -50,13 +50,13 @@ function scheduleAgentMcpSync(agentId: number): void {
 }
 
 function scheduleServerMcpSync(mcpServerId: number): void {
-  setImmediate(() => {
+  setImmediate(async () => {
     try {
-      const results = syncAssignedMcpForServer({
-        db: getDb(),
-        mcpServerId,
-        materializeOpenClawGlobalConfig: true,
-      });
+      const results = await syncAssignedMcpForServer({
+              db: getDb(),
+              mcpServerId,
+              materializeOpenClawGlobalConfig: true,
+            });
       for (const result of results) {
         for (const warn of result.warnings) {
           console.warn(`[mcp-servers] ${warn}`);
@@ -82,27 +82,27 @@ function scheduleServerMcpSync(mcpServerId: number): void {
   });
 }
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const rows = db.prepare(`
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const rows = await db.all(`
       SELECT *
       FROM mcp_servers
       WHERE tenant_id = ?
       ORDER BY name ASC
-    `).all(tenantId);
+    `, tenantId);
     return res.json(rows);
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
 });
 
-router.get('/:id', (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const row = db.prepare('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const row = await db.get('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
     if (!row) return res.status(404).json({ error: 'MCP server not found' });
     return res.json(row);
   } catch (err) {
@@ -110,10 +110,10 @@ router.get('/:id', (req: Request, res: Response) => {
   }
 });
 
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const {
       name,
       slug,
@@ -130,23 +130,12 @@ router.post('/', (req: Request, res: Response) => {
     if (!slug || typeof slug !== 'string') return res.status(400).json({ error: 'slug is required' });
     if (!command || typeof command !== 'string') return res.status(400).json({ error: 'command is required' });
 
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO mcp_servers (tenant_id, name, slug, description, transport, command, args, env, cwd, enabled)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      tenantId,
-      name.trim(),
-      slug.trim(),
-      typeof description === 'string' ? description.trim() : '',
-      transport === 'stdio' ? 'stdio' : 'stdio',
-      command.trim(),
-      normalizeJsonText(args, '[]'),
-      normalizeJsonText(env, '{}'),
-      typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null,
-      enabled !== undefined ? (enabled ? 1 : 0) : 1,
-    );
+    `, tenantId, name.trim(), slug.trim(), typeof description === 'string' ? description.trim() : '', transport === 'stdio' ? 'stdio' : 'stdio', command.trim(), normalizeJsonText(args, '[]'), normalizeJsonText(env, '{}'), typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null, enabled !== undefined ? (enabled ? 1 : 0) : 1);
 
-    const created = db.prepare('SELECT * FROM mcp_servers WHERE id = ?').get(result.lastInsertRowid);
+    const created = await db.get('SELECT * FROM mcp_servers WHERE id = ?', result.lastInsertId);
     return res.status(201).json(created);
   } catch (err: any) {
     if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
@@ -156,11 +145,11 @@ router.post('/', (req: Request, res: Response) => {
   }
 });
 
-router.put('/:id', (req: Request, res: Response) => {
+router.put('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId) as Record<string, unknown> | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as Record<string, unknown> | undefined;
     if (!existing) return res.status(404).json({ error: 'MCP server not found' });
 
     const {
@@ -175,7 +164,7 @@ router.put('/:id', (req: Request, res: Response) => {
       enabled,
     } = req.body as Record<string, unknown>;
 
-    db.prepare(`
+    await db.run(`
       UPDATE mcp_servers
       SET name = ?,
           slug = ?,
@@ -188,21 +177,9 @@ router.put('/:id', (req: Request, res: Response) => {
           enabled = ?,
           updated_at = datetime('now')
       WHERE id = ? AND tenant_id = ?
-    `).run(
-      typeof name === 'string' ? name.trim() : existing.name,
-      typeof slug === 'string' ? slug.trim() : existing.slug,
-      typeof description === 'string' ? description.trim() : existing.description,
-      transport === 'stdio' ? 'stdio' : existing.transport,
-      typeof command === 'string' ? command.trim() : existing.command,
-      args !== undefined ? normalizeJsonText(args, '[]') : existing.args,
-      env !== undefined ? normalizeJsonText(env, '{}') : existing.env,
-      cwd !== undefined ? (typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null) : existing.cwd,
-      enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled,
-      req.params.id,
-      tenantId,
-    );
+    `, typeof name === 'string' ? name.trim() : existing.name, typeof slug === 'string' ? slug.trim() : existing.slug, typeof description === 'string' ? description.trim() : existing.description, transport === 'stdio' ? 'stdio' : existing.transport, typeof command === 'string' ? command.trim() : existing.command, args !== undefined ? normalizeJsonText(args, '[]') : existing.args, env !== undefined ? normalizeJsonText(env, '{}') : existing.env, cwd !== undefined ? (typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null) : existing.cwd, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
 
-    const updated = db.prepare('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId);
+    const updated = await db.get('SELECT * FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
     scheduleServerMcpSync(Number(req.params.id));
     return res.json(updated);
   } catch (err: any) {
@@ -213,13 +190,13 @@ router.put('/:id', (req: Request, res: Response) => {
   }
 });
 
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare('SELECT id FROM mcp_servers WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get('SELECT id FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
     if (!existing) return res.status(404).json({ error: 'MCP server not found' });
-    db.prepare(`UPDATE mcp_servers SET enabled = 0, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`).run(req.params.id, tenantId);
+    await db.run(`UPDATE mcp_servers SET enabled = 0, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     scheduleServerMcpSync(Number(req.params.id));
     return res.json({ ok: true, id: Number(req.params.id) });
   } catch (err) {
@@ -229,15 +206,15 @@ router.delete('/:id', (req: Request, res: Response) => {
 
 export const agentMcpServersRouter = Router({ mergeParams: true });
 
-agentMcpServersRouter.get('/', (req: Request, res: Response) => {
+agentMcpServersRouter.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const agentId = req.params.agentId ?? req.params.id;
-    const agent = db.prepare('SELECT id FROM agents WHERE id = ? AND tenant_id = ?').get(agentId, tenantId);
+    const agent = await db.get('SELECT id FROM agents WHERE id = ? AND tenant_id = ?', agentId, tenantId);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT ama.id AS assignment_id,
              ama.agent_id,
              ama.mcp_server_id,
@@ -248,38 +225,33 @@ agentMcpServersRouter.get('/', (req: Request, res: Response) => {
       JOIN mcp_servers s ON s.id = ama.mcp_server_id
       WHERE ama.agent_id = ? AND s.tenant_id = ?
       ORDER BY s.name ASC
-    `).all(agentId, tenantId);
+    `, agentId, tenantId);
     return res.json(rows);
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
 });
 
-agentMcpServersRouter.post('/', (req: Request, res: Response) => {
+agentMcpServersRouter.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const agentId = req.params.agentId ?? req.params.id;
     const { mcp_server_id, overrides, enabled } = req.body as Record<string, unknown>;
 
     if (!mcp_server_id) return res.status(400).json({ error: 'mcp_server_id is required' });
 
-    const agent = db.prepare('SELECT id FROM agents WHERE id = ? AND tenant_id = ?').get(agentId, tenantId);
+    const agent = await db.get('SELECT id FROM agents WHERE id = ? AND tenant_id = ?', agentId, tenantId);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    const server = db.prepare('SELECT id FROM mcp_servers WHERE id = ? AND tenant_id = ?').get(mcp_server_id, tenantId);
+    const server = await db.get('SELECT id FROM mcp_servers WHERE id = ? AND tenant_id = ?', mcp_server_id, tenantId);
     if (!server) return res.status(404).json({ error: 'MCP server not found' });
 
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
       VALUES (?, ?, ?, ?)
-    `).run(
-      agentId,
-      mcp_server_id,
-      normalizeJsonText(overrides, '{}'),
-      enabled !== undefined ? (enabled ? 1 : 0) : 1,
-    );
+    `, agentId, mcp_server_id, normalizeJsonText(overrides, '{}'), enabled !== undefined ? (enabled ? 1 : 0) : 1);
 
-    const created = db.prepare(`
+    const created = await db.get(`
       SELECT ama.id AS assignment_id,
              ama.agent_id,
              ama.mcp_server_id,
@@ -289,7 +261,7 @@ agentMcpServersRouter.post('/', (req: Request, res: Response) => {
       FROM agent_mcp_assignments ama
       JOIN mcp_servers s ON s.id = ama.mcp_server_id
       WHERE ama.id = ?
-    `).get(result.lastInsertRowid);
+    `, result.lastInsertId);
     scheduleAgentMcpSync(Number(agentId));
     return res.status(201).json(created);
   } catch (err: any) {
@@ -300,19 +272,19 @@ agentMcpServersRouter.post('/', (req: Request, res: Response) => {
   }
 });
 
-agentMcpServersRouter.delete('/:mcpServerId', (req: Request, res: Response) => {
+agentMcpServersRouter.delete('/:mcpServerId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const agentId = req.params.agentId ?? req.params.id;
     const mcpServerId = req.params.mcpServerId;
-    const existing = db.prepare(`
+    const existing = await db.get(`
       SELECT id FROM agent_mcp_assignments WHERE agent_id = ? AND mcp_server_id = ?
         AND EXISTS (SELECT 1 FROM agents a WHERE a.id = agent_id AND a.tenant_id = ?)
         AND EXISTS (SELECT 1 FROM mcp_servers s WHERE s.id = mcp_server_id AND s.tenant_id = ?)
-    `).get(agentId, mcpServerId, tenantId, tenantId);
+    `, agentId, mcpServerId, tenantId, tenantId);
     if (!existing) return res.status(404).json({ error: 'Assignment not found' });
-    db.prepare(`DELETE FROM agent_mcp_assignments WHERE agent_id = ? AND mcp_server_id = ?`).run(agentId, mcpServerId);
+    await db.run(`DELETE FROM agent_mcp_assignments WHERE agent_id = ? AND mcp_server_id = ?`, agentId, mcpServerId);
     scheduleAgentMcpSync(Number(agentId));
     return res.json({ ok: true });
   } catch (err) {

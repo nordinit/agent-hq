@@ -5,6 +5,7 @@ import { emitIntegrityEvent } from '../domains/tasks/history';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { tenantInsertColumns } from '../lib/runtimeTenantScope';
 import { tableHasColumn } from '../lib/durableRunIdentity';
+import { nowTimestamp } from '../lib/timestamps';
 
 const router = Router();
 
@@ -21,13 +22,13 @@ function buildDateFilter(
   if (to)   { conditions.push(`${alias}.created_at <= ?`); params.push(to);   }
 }
 
-function requireTaskTenant(db: ReturnType<typeof getDb>, taskId: number, tenantId: number): { id: number; tenant_id: number; project_id: number | null; sprint_id: number | null; agent_id: number | null } | null {
-  return db.prepare(`
+async function requireTaskTenant(db: ReturnType<typeof getDb>, taskId: number, tenantId: number): Promise<{ id: number; tenant_id: number; project_id: number | null; sprint_id: number | null; agent_id: number | null } | null> {
+  return await db.get(`
     SELECT id, tenant_id, project_id, sprint_id, agent_id
     FROM tasks
     WHERE id = ? AND tenant_id = ?
     LIMIT 1
-  `).get(taskId, tenantId) as { id: number; tenant_id: number; project_id: number | null; sprint_id: number | null; agent_id: number | null } | undefined ?? null;
+  `, taskId, tenantId) as { id: number; tenant_id: number; project_id: number | null; sprint_id: number | null; agent_id: number | null } | undefined ?? null;
 }
 
 function addTelemetryTenantFilter(tableAlias: string, conditions: string[], params: unknown[], tenantId: number): void {
@@ -38,10 +39,10 @@ function addTelemetryTenantFilter(tableAlias: string, conditions: string[], para
 // ── GET /api/v1/telemetry/overview ───────────────────────────────────────────
 // Overview metrics: counts, pass rates, avg cycle time, top failure reasons.
 // Query params: project_id, sprint_id, job_id, from, to
-router.get('/overview', (req: Request, res: Response) => {
+router.get('/overview', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const { project_id, sprint_id, job_id, from, to } = req.query as Record<string, string | undefined>;
 
     // Build WHERE clauses for creation events & outcome metrics
@@ -71,58 +72,44 @@ router.get('/overview', (req: Request, res: Response) => {
     const omWhere = omConditions.length ? `WHERE ${omConditions.join(' AND ')}` : '';
 
     // Total tasks with creation events
-    const totalCreated = (db.prepare(
-      `SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere}`
-    ).get(...ceParams) as { n: number }).n;
+    const totalCreated = (await db.get(`SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere}`, ...ceParams) as { n: number }).n;
 
     // Source breakdown
-    const bySource = db.prepare(
-      `SELECT source, COUNT(*) as count FROM task_creation_events tce ${ceWhere} GROUP BY source ORDER BY count DESC`
-    ).all(...ceParams) as { source: string; count: number }[];
+    const bySource = await db.all(`SELECT source, COUNT(*) as count FROM task_creation_events tce ${ceWhere} GROUP BY source ORDER BY count DESC`, ...ceParams) as { source: string; count: number }[];
 
     // Confidence breakdown
-    const byConfidence = db.prepare(
-      `SELECT confidence, COUNT(*) as count FROM task_creation_events tce ${ceWhere} GROUP BY confidence ORDER BY count DESC`
-    ).all(...ceParams) as { confidence: string; count: number }[];
+    const byConfidence = await db.all(`SELECT confidence, COUNT(*) as count FROM task_creation_events tce ${ceWhere} GROUP BY confidence ORDER BY count DESC`, ...ceParams) as { confidence: string; count: number }[];
 
     // Scope size breakdown
-    const byScopeSize = db.prepare(
-      `SELECT scope_size, COUNT(*) as count FROM task_creation_events tce ${ceWhere} GROUP BY scope_size ORDER BY count DESC`
-    ).all(...ceParams) as { scope_size: string; count: number }[];
+    const byScopeSize = await db.all(`SELECT scope_size, COUNT(*) as count FROM task_creation_events tce ${ceWhere} GROUP BY scope_size ORDER BY count DESC`, ...ceParams) as { scope_size: string; count: number }[];
 
     // Outcome metrics summary
-    const totalWithOutcome = (db.prepare(
-      `SELECT COUNT(*) as n FROM task_outcome_metrics tom ${omWhere}`
-    ).get(...omParams) as { n: number }).n;
+    const totalWithOutcome = (await db.get(`SELECT COUNT(*) as n FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { n: number }).n;
 
-    const firstPassRate = (db.prepare(
-      `SELECT ROUND(AVG(first_pass_qa) * 100.0, 1) as pct FROM task_outcome_metrics tom ${omWhere}`
-    ).get(...omParams) as { pct: number | null }).pct ?? 0;
+    const firstPassRate = (await db.get(`SELECT ROUND(AVG(first_pass_qa) * 100.0, 1) as pct FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { pct: number | null }).pct ?? 0;
 
-    const avgCycleTime = (db.prepare(
+    const avgCycleTime = (await db.get(
       `SELECT ROUND(AVG(cycle_time_hours), 2) as avg_h FROM task_outcome_metrics tom ${omWhere} AND cycle_time_hours IS NOT NULL`
         .replace('WHERE', omConditions.length ? 'WHERE' : 'WHERE')
-        .replace(/ AND cycle_time_hours/, omConditions.length ? ' AND cycle_time_hours' : ' WHERE cycle_time_hours')
-    ).get(...omParams) as { avg_h: number | null }).avg_h ?? null;
+        .replace(/ AND cycle_time_hours/, omConditions.length ? ' AND cycle_time_hours' : ' WHERE cycle_time_hours'),
+      ...omParams
+    ) as { avg_h: number | null } | undefined)?.avg_h ?? null;
 
     // Simpler version for cycle time
     const cycleParams = [...omParams];
     const cycleConditions = [...omConditions, 'tom.cycle_time_hours IS NOT NULL'];
     const cycleWhere = `WHERE ${cycleConditions.join(' AND ')}`;
-    const avgCycleTimeH = (db.prepare(
-      `SELECT ROUND(AVG(tom.cycle_time_hours), 2) as avg_h FROM task_outcome_metrics tom ${cycleWhere}`
-    ).get(...cycleParams) as { avg_h: number | null }).avg_h ?? null;
+    const avgCycleTimeH = (await db.get(`SELECT ROUND(AVG(tom.cycle_time_hours), 2) as avg_h FROM task_outcome_metrics tom ${cycleWhere}`, ...cycleParams) as { avg_h: number | null }).avg_h ?? null;
 
     // Quality breakdown
-    const byQuality = db.prepare(
-      `SELECT outcome_quality, COUNT(*) as count FROM task_outcome_metrics tom ${omWhere} GROUP BY outcome_quality ORDER BY count DESC`
-    ).all(...omParams) as { outcome_quality: string; count: number }[];
+    const byQuality = await db.all(`SELECT outcome_quality, COUNT(*) as count FROM task_outcome_metrics tom ${omWhere} GROUP BY outcome_quality ORDER BY count DESC`, ...omParams) as { outcome_quality: string; count: number }[];
 
     // Top failure reasons (parse JSON arrays)
-    const rawFailureRows = db.prepare(
+    const rawFailureRows = await db.all(
       `SELECT failure_reasons FROM task_outcome_metrics tom ${omWhere} AND failure_reasons != '[]' AND failure_reasons != ''`
-        .replace(/ AND failure_reasons/, omConditions.length ? ' AND failure_reasons' : ' WHERE failure_reasons')
-    ).all(...omParams) as { failure_reasons: string }[];
+        .replace(/ AND failure_reasons/, omConditions.length ? ' AND failure_reasons' : ' WHERE failure_reasons'),
+      ...omParams
+    ) as { failure_reasons: string }[];
 
     const failureCounts: Record<string, number> = {};
     for (const row of rawFailureRows) {
@@ -138,14 +125,10 @@ router.get('/overview', (req: Request, res: Response) => {
       .map(([reason, count]) => ({ reason, count }));
 
     // Tasks needing split
-    const needsSplit = (db.prepare(
-      `SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere ? ceWhere + ' AND' : 'WHERE'} tce.needs_split = 1`
-    ).get(...ceParams) as { n: number }).n;
+    const needsSplit = (await db.get(`SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere ? ceWhere + ' AND' : 'WHERE'} tce.needs_split = 1`, ...ceParams) as { n: number }).n;
 
     // Avg reopened/rerouted counts
-    const avgReopened = (db.prepare(
-      `SELECT ROUND(AVG(reopened_count), 2) as avg_r FROM task_outcome_metrics tom ${omWhere}`
-    ).get(...omParams) as { avg_r: number | null }).avg_r ?? 0;
+    const avgReopened = (await db.get(`SELECT ROUND(AVG(reopened_count), 2) as avg_r FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { avg_r: number | null }).avg_r ?? 0;
 
     res.json({
       total_created: totalCreated,
@@ -169,10 +152,10 @@ router.get('/overview', (req: Request, res: Response) => {
 // Task review rows with creation + outcome data joined.
 // Query params: project_id, sprint_id, job_id, source, confidence, priority,
 //               date_from, date_to, outcome_quality, limit, offset
-router.get('/review', (req: Request, res: Response) => {
+router.get('/review', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const {
       project_id, sprint_id, job_id, source, confidence, priority,
       date_from, date_to, outcome_quality,
@@ -201,7 +184,7 @@ router.get('/review', (req: Request, res: Response) => {
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT
         t.id, t.title, t.status, t.priority, t.created_at, t.updated_at,
         p.name as project_name,
@@ -226,7 +209,7 @@ router.get('/review', (req: Request, res: Response) => {
       ${where}
       ORDER BY t.created_at DESC
       LIMIT ? OFFSET ?
-    `).all(...params, limit, offset) as Record<string, unknown>[];
+    `, ...params, limit, offset) as Record<string, unknown>[];
 
     // Parse JSON fields
     const enriched = rows.map(r => ({
@@ -242,12 +225,10 @@ router.get('/review', (req: Request, res: Response) => {
       })(),
     }));
 
-    const total = (db.prepare(
-      `SELECT COUNT(*) as n FROM tasks t
+    const total = (await db.get(`SELECT COUNT(*) as n FROM tasks t
        LEFT JOIN task_creation_events tce ON tce.task_id = t.id
        LEFT JOIN task_outcome_metrics tom ON tom.task_id = t.id
-       ${where}`
-    ).get(...params) as { n: number }).n;
+       ${where}`, ...params) as { n: number }).n;
 
     res.json({ tasks: enriched, total, limit, offset });
   } catch (err) {
@@ -257,13 +238,13 @@ router.get('/review', (req: Request, res: Response) => {
 
 // ── GET /api/v1/telemetry/review/:task_id ───────────────────────────────────
 // Full telemetry drilldown for a single task.
-router.get('/review/:task_id', (req: Request, res: Response) => {
+router.get('/review/:task_id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const taskId = Number(req.params.task_id);
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
 
-    const task = db.prepare(`
+    const task = await db.get(`
       SELECT t.*,
         p.name as project_name,
         s.name as sprint_name,
@@ -274,36 +255,28 @@ router.get('/review/:task_id', (req: Request, res: Response) => {
       LEFT JOIN sprints s ON s.id = t.sprint_id
       LEFT JOIN agents a ON a.id = t.agent_id
       WHERE t.id = ? AND t.tenant_id = ?
-    `).get(taskId, tenantId) as Record<string, unknown> | undefined;
+    `, taskId, tenantId) as Record<string, unknown> | undefined;
 
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
-    const creationEvent = db.prepare(
-      `SELECT * FROM task_creation_events WHERE task_id = ?`
-    ).get(taskId) as Record<string, unknown> | null;
+    const creationEvent = await db.get(`SELECT * FROM task_creation_events WHERE task_id = ?`, taskId) as Record<string, unknown> | null;
 
-    const outcomeMetrics = db.prepare(
-      `SELECT * FROM task_outcome_metrics WHERE task_id = ?`
-    ).get(taskId) as Record<string, unknown> | null;
+    const outcomeMetrics = await db.get(`SELECT * FROM task_outcome_metrics WHERE task_id = ?`, taskId) as Record<string, unknown> | null;
 
-    const history = db.prepare(
-      `SELECT * FROM task_history WHERE task_id = ? ORDER BY created_at ASC`
-    ).all(taskId) as Record<string, unknown>[];
+    const history = await db.all(`SELECT * FROM task_history WHERE task_id = ? ORDER BY created_at ASC`, taskId) as Record<string, unknown>[];
 
-    const notes = db.prepare(
-      `SELECT * FROM task_notes WHERE task_id = ? ORDER BY created_at ASC`
-    ).all(taskId) as Record<string, unknown>[];
+    const notes = await db.all(`SELECT * FROM task_notes WHERE task_id = ? ORDER BY created_at ASC`, taskId) as Record<string, unknown>[];
 
     // Blockers + blocking
-    const blockers = db.prepare(`
+    const blockers = await db.all(`
       SELECT t.id, t.title, t.status FROM tasks t
       WHERE t.id IN (SELECT blocker_id FROM task_dependencies WHERE blocked_id = ?)
-    `).all(taskId) as Record<string, unknown>[];
+    `, taskId) as Record<string, unknown>[];
 
-    const blocking = db.prepare(`
+    const blocking = await db.all(`
       SELECT t.id, t.title, t.status FROM tasks t
       WHERE t.id IN (SELECT blocked_id FROM task_dependencies WHERE blocker_id = ?)
-    `).all(taskId) as Record<string, unknown>[];
+    `, taskId) as Record<string, unknown>[];
 
     // Parse JSON in creation event and outcome metrics
     let parsedCreation = creationEvent;
@@ -336,12 +309,10 @@ router.get('/review/:task_id', (req: Request, res: Response) => {
 
 // ── GET /api/v1/telemetry/schema-config ─────────────────────────────────────
 // Returns the metadata schema config (which fields to show in task creation UI).
-router.get('/schema-config', (_req: Request, res: Response) => {
+router.get('/schema-config', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
-    const row = db.prepare(
-      `SELECT * FROM telemetry_schema_config WHERE id = 1`
-    ).get() as Record<string, unknown> | undefined;
+    const row = await db.get(`SELECT * FROM telemetry_schema_config WHERE id = 1`) as Record<string, unknown> | undefined;
 
     if (!row) {
       // Return defaults
@@ -360,7 +331,7 @@ router.get('/schema-config', (_req: Request, res: Response) => {
 // ── PUT /api/v1/telemetry/schema-config ─────────────────────────────────────
 // Update the metadata schema config.
 // Body: { fields: Array<{ key, label, type, required, enabled, options? }> }
-router.put('/schema-config', (req: Request, res: Response) => {
+router.put('/schema-config', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { fields, description } = req.body;
@@ -370,20 +341,20 @@ router.put('/schema-config', (req: Request, res: Response) => {
     }
 
     const fieldsJson = JSON.stringify(fields);
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
 
-    const existing = db.prepare(`SELECT id FROM telemetry_schema_config WHERE id = 1`).get();
+    const existing = await db.get(`SELECT id FROM telemetry_schema_config WHERE id = 1`);
     if (existing) {
-      db.prepare(`
+      await db.run(`
         UPDATE telemetry_schema_config SET fields = ?, description = ?, updated_at = ? WHERE id = 1
-      `).run(fieldsJson, description ?? '', now);
+      `, fieldsJson, description ?? '', now);
     } else {
-      db.prepare(`
+      await db.run(`
         INSERT INTO telemetry_schema_config (id, fields, description, updated_at) VALUES (1, ?, ?, ?)
-      `).run(fieldsJson, description ?? '', now);
+      `, fieldsJson, description ?? '', now);
     }
 
-    const updated = db.prepare(`SELECT * FROM telemetry_schema_config WHERE id = 1`).get() as Record<string, unknown>;
+    const updated = await db.get(`SELECT * FROM telemetry_schema_config WHERE id = 1`) as Record<string, unknown>;
     res.json({
       ...updated,
       fields: (() => { try { return JSON.parse(updated.fields as string); } catch { return []; } })(),
@@ -398,10 +369,10 @@ router.put('/schema-config', (req: Request, res: Response) => {
 // Body: { task_id, project_id?, sprint_id?, job_id?, source, routing?, confidence?,
 //         scope_size?, assumptions?, open_questions?, needs_split?, expected_artifact?,
 //         success_mode?, raw_input? }
-router.post('/creation-events', (req: Request, res: Response) => {
+router.post('/creation-events', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const {
       task_id, project_id, sprint_id, job_id,
       source = 'manual', routing = '', confidence = '', scope_size = '',
@@ -410,27 +381,21 @@ router.post('/creation-events', (req: Request, res: Response) => {
     } = req.body;
 
     if (!task_id) return res.status(400).json({ error: 'task_id required' });
-    const task = requireTaskTenant(db, Number(task_id), tenantId);
+    const task = await requireTaskTenant(db, Number(task_id), tenantId);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const assumptionsStr = typeof assumptions === 'string' ? assumptions : JSON.stringify(assumptions);
     const openQStr = typeof open_questions === 'string' ? open_questions : JSON.stringify(open_questions);
-    const tenant = tenantInsertColumns(db, 'task_creation_events', task.tenant_id);
+    const tenant = await tenantInsertColumns(db, 'task_creation_events', task.tenant_id);
 
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO task_creation_events
         (${tenant.columnSql}task_id, project_id, sprint_id, job_id, source, routing, confidence, scope_size,
          assumptions, open_questions, needs_split, expected_artifact, success_mode, raw_input)
       VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      ...tenant.values,
-      task_id, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null,
-      source, routing, confidence, scope_size,
-      assumptionsStr, openQStr, needs_split ? 1 : 0,
-      expected_artifact, success_mode, raw_input
-    );
+    `, ...tenant.values, task_id, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, source, routing, confidence, scope_size, assumptionsStr, openQStr, needs_split ? 1 : 0, expected_artifact, success_mode, raw_input);
 
-    const created = db.prepare(`SELECT * FROM task_creation_events WHERE id = ?`).get(result.lastInsertRowid) as Record<string, unknown>;
+    const created = await db.get(`SELECT * FROM task_creation_events WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
     res.status(201).json(created);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -439,14 +404,14 @@ router.post('/creation-events', (req: Request, res: Response) => {
 
 // ── PUT /api/v1/telemetry/creation-events/:task_id ───────────────────────────
 // Upsert/update creation event for a task.
-router.put('/creation-events/:task_id', (req: Request, res: Response) => {
+router.put('/creation-events/:task_id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const taskId = Number(req.params.task_id);
-    const task = requireTaskTenant(db, taskId, tenantId);
+    const task = await requireTaskTenant(db, taskId, tenantId);
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    const existing = db.prepare(`SELECT id FROM task_creation_events WHERE task_id = ?`).get(taskId) as { id: number } | undefined;
+    const existing = await db.get(`SELECT id FROM task_creation_events WHERE task_id = ?`, taskId) as { id: number } | undefined;
 
     const {
       project_id, sprint_id, job_id,
@@ -460,20 +425,14 @@ router.put('/creation-events/:task_id', (req: Request, res: Response) => {
       if (!taskId) return res.status(400).json({ error: 'task_id required' });
       const assumptionsStr = typeof assumptions === 'string' ? assumptions : JSON.stringify(assumptions ?? '');
       const openQStr = typeof open_questions === 'string' ? open_questions : JSON.stringify(open_questions ?? '');
-      const tenant = tenantInsertColumns(db, 'task_creation_events', task.tenant_id);
-      const result = db.prepare(`
+      const tenant = await tenantInsertColumns(db, 'task_creation_events', task.tenant_id);
+      const result = await db.run(`
         INSERT INTO task_creation_events
           (${tenant.columnSql}task_id, project_id, sprint_id, job_id, source, routing, confidence, scope_size,
            assumptions, open_questions, needs_split, expected_artifact, success_mode, raw_input)
         VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        ...tenant.values,
-        taskId, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null,
-        source ?? 'manual', routing ?? '', confidence ?? '', scope_size ?? '',
-        assumptionsStr, openQStr, needs_split ? 1 : 0,
-        expected_artifact ?? '', success_mode ?? '', raw_input ?? ''
-      );
-      const created = db.prepare(`SELECT * FROM task_creation_events WHERE id = ?`).get(result.lastInsertRowid) as Record<string, unknown>;
+      `, ...tenant.values, taskId, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, source ?? 'manual', routing ?? '', confidence ?? '', scope_size ?? '', assumptionsStr, openQStr, needs_split ? 1 : 0, expected_artifact ?? '', success_mode ?? '', raw_input ?? '');
+      const created = await db.get(`SELECT * FROM task_creation_events WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
       return res.json(created);
     }
 
@@ -502,13 +461,13 @@ router.put('/creation-events/:task_id', (req: Request, res: Response) => {
     }
 
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
-    if (tableHasColumn(db, 'task_creation_events', 'tenant_id')) {
+    if (await tableHasColumn(db, 'task_creation_events', 'tenant_id')) {
       updates.push('tenant_id = ?');
       vals.push(task.tenant_id);
     }
 
-    db.prepare(`UPDATE task_creation_events SET ${updates.join(', ')} WHERE task_id = ?`).run(...vals, taskId);
-    const updated = db.prepare(`SELECT * FROM task_creation_events WHERE task_id = ?`).get(taskId) as Record<string, unknown>;
+    await db.run(`UPDATE task_creation_events SET ${updates.join(', ')} WHERE task_id = ?`, ...vals, taskId);
+    const updated = await db.get(`SELECT * FROM task_creation_events WHERE task_id = ?`, taskId) as Record<string, unknown>;
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -521,10 +480,10 @@ router.put('/creation-events/:task_id', (req: Request, res: Response) => {
 //         rerouted_count?, split_after_creation?, blocked_after_creation?,
 //         clarification_count?, notes_count?, cycle_time_hours?, outcome_quality?,
 //         failure_reasons?, outcome_summary? }
-router.post('/outcome-metrics', (req: Request, res: Response) => {
+router.post('/outcome-metrics', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const {
       task_id, project_id, sprint_id, job_id,
       first_pass_qa = 0, reopened_count = 0, rerouted_count = 0,
@@ -535,31 +494,24 @@ router.post('/outcome-metrics', (req: Request, res: Response) => {
     } = req.body;
 
     if (!task_id) return res.status(400).json({ error: 'task_id required' });
-    const task = requireTaskTenant(db, Number(task_id), tenantId);
+    const task = await requireTaskTenant(db, Number(task_id), tenantId);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const failureReasonsStr = typeof failure_reasons === 'string'
       ? failure_reasons
       : JSON.stringify(failure_reasons);
-    const tenant = tenantInsertColumns(db, 'task_outcome_metrics', task.tenant_id);
+    const tenant = await tenantInsertColumns(db, 'task_outcome_metrics', task.tenant_id);
 
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO task_outcome_metrics
         (${tenant.columnSql}task_id, project_id, sprint_id, job_id, first_pass_qa, reopened_count,
          rerouted_count, split_after_creation, blocked_after_creation,
          clarification_count, notes_count, cycle_time_hours, outcome_quality,
          failure_reasons, outcome_summary)
       VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      ...tenant.values,
-      task_id, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null,
-      first_pass_qa ? 1 : 0, reopened_count, rerouted_count,
-      split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0,
-      clarification_count, notes_count, cycle_time_hours, outcome_quality,
-      failureReasonsStr, outcome_summary
-    );
+    `, ...tenant.values, task_id, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, first_pass_qa ? 1 : 0, reopened_count, rerouted_count, split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0, clarification_count, notes_count, cycle_time_hours, outcome_quality, failureReasonsStr, outcome_summary);
 
-    const created = db.prepare(`SELECT * FROM task_outcome_metrics WHERE id = ?`).get(result.lastInsertRowid) as Record<string, unknown>;
+    const created = await db.get(`SELECT * FROM task_outcome_metrics WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
     res.status(201).json({
       ...created,
       failure_reasons: (() => { try { return JSON.parse(created.failure_reasons as string); } catch { return []; } })(),
@@ -571,14 +523,14 @@ router.post('/outcome-metrics', (req: Request, res: Response) => {
 
 // ── PUT /api/v1/telemetry/outcome-metrics/:task_id ───────────────────────────
 // Upsert/update outcome metric for a task.
-router.put('/outcome-metrics/:task_id', (req: Request, res: Response) => {
+router.put('/outcome-metrics/:task_id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const taskId = Number(req.params.task_id);
-    const task = requireTaskTenant(db, taskId, tenantId);
+    const task = await requireTaskTenant(db, taskId, tenantId);
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    const existing = db.prepare(`SELECT id FROM task_outcome_metrics WHERE task_id = ?`).get(taskId) as { id: number } | undefined;
+    const existing = await db.get(`SELECT id FROM task_outcome_metrics WHERE task_id = ?`, taskId) as { id: number } | undefined;
 
     if (!existing) {
       // Create it
@@ -592,24 +544,17 @@ router.put('/outcome-metrics/:task_id', (req: Request, res: Response) => {
       } = req.body;
 
       const failureReasonsStr = typeof failure_reasons === 'string' ? failure_reasons : JSON.stringify(failure_reasons);
-      const tenant = tenantInsertColumns(db, 'task_outcome_metrics', task.tenant_id);
+      const tenant = await tenantInsertColumns(db, 'task_outcome_metrics', task.tenant_id);
 
-      const result = db.prepare(`
+      const result = await db.run(`
         INSERT INTO task_outcome_metrics
           (${tenant.columnSql}task_id, project_id, sprint_id, job_id, first_pass_qa, reopened_count,
            rerouted_count, split_after_creation, blocked_after_creation,
            clarification_count, notes_count, cycle_time_hours, outcome_quality,
            failure_reasons, outcome_summary)
         VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        ...tenant.values,
-        taskId, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null,
-        first_pass_qa ? 1 : 0, reopened_count, rerouted_count,
-        split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0,
-        clarification_count, notes_count, cycle_time_hours, outcome_quality,
-        failureReasonsStr, outcome_summary
-      );
-      const created = db.prepare(`SELECT * FROM task_outcome_metrics WHERE id = ?`).get(result.lastInsertRowid) as Record<string, unknown>;
+      `, ...tenant.values, taskId, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, first_pass_qa ? 1 : 0, reopened_count, rerouted_count, split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0, clarification_count, notes_count, cycle_time_hours, outcome_quality, failureReasonsStr, outcome_summary);
+      const created = await db.get(`SELECT * FROM task_outcome_metrics WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
       return res.json({
         ...created,
         failure_reasons: (() => { try { return JSON.parse(created.failure_reasons as string); } catch { return []; } })(),
@@ -619,7 +564,7 @@ router.put('/outcome-metrics/:task_id', (req: Request, res: Response) => {
     // Patch existing
     const updates: string[] = [];
     const vals: unknown[] = [];
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
 
     const numFields = ['reopened_count','rerouted_count','clarification_count','notes_count'];
     const boolFields = ['first_pass_qa','split_after_creation','blocked_after_creation'];
@@ -641,7 +586,7 @@ router.put('/outcome-metrics/:task_id', (req: Request, res: Response) => {
     }
 
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
-    if (tableHasColumn(db, 'task_outcome_metrics', 'tenant_id')) {
+    if (await tableHasColumn(db, 'task_outcome_metrics', 'tenant_id')) {
       updates.push('tenant_id = ?');
       vals.push(task.tenant_id);
     }
@@ -649,8 +594,8 @@ router.put('/outcome-metrics/:task_id', (req: Request, res: Response) => {
     updates.push('updated_at = ?');
     vals.push(now);
 
-    db.prepare(`UPDATE task_outcome_metrics SET ${updates.join(', ')} WHERE task_id = ?`).run(...vals, taskId);
-    const updated = db.prepare(`SELECT * FROM task_outcome_metrics WHERE task_id = ?`).get(taskId) as Record<string, unknown>;
+    await db.run(`UPDATE task_outcome_metrics SET ${updates.join(', ')} WHERE task_id = ?`, ...vals, taskId);
+    const updated = await db.get(`SELECT * FROM task_outcome_metrics WHERE task_id = ?`, taskId) as Record<string, unknown>;
     res.json({
       ...updated,
       failure_reasons: (() => { try { return JSON.parse(updated.failure_reasons as string); } catch { return []; } })(),
@@ -688,7 +633,7 @@ function getDefaultSchemaConfig() {
 // ── GET /api/v1/telemetry/recommendations ────────────────────────────────────
 // Generate recommendations based on telemetry patterns.
 // Query params: project_id, sprint_id, job_id, from, to
-router.get('/recommendations', (req: Request, res: Response) => {
+router.get('/recommendations', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { project_id, sprint_id, job_id, from, to } = req.query as Record<string, string | undefined>;
@@ -700,7 +645,7 @@ router.get('/recommendations', (req: Request, res: Response) => {
     if (from)       filters.from       = from;
     if (to)         filters.to         = to;
 
-    const result = generateRecommendations(db, filters);
+    const result = await generateRecommendations(db, filters);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -717,7 +662,7 @@ router.get('/failure-taxonomy', (_req: Request, res: Response) => {
 // Aggregate session statistics for telemetry: total sessions, avg message count,
 // avg token usage, runtime breakdown, status breakdown, and per-agent summaries.
 // Query params: project_id, agent_id, runtime, status, from, to, limit (default 100)
-router.get('/sessions', (req: Request, res: Response) => {
+router.get('/sessions', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { project_id, agent_id, runtime, status, from, to } = req.query as Record<string, string | undefined>;
@@ -735,7 +680,7 @@ router.get('/sessions', (req: Request, res: Response) => {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     // Aggregate totals
-    const totals = db.prepare(`
+    const totals = await db.get(`
       SELECT
         COUNT(*) AS total_sessions,
         SUM(message_count) AS total_messages,
@@ -748,28 +693,28 @@ router.get('/sessions', (req: Request, res: Response) => {
         COUNT(DISTINCT s.task_id)  AS unique_tasks
       FROM sessions s
       ${where}
-    `).get(...params) as Record<string, unknown>;
+    `, ...params) as Record<string, unknown>;
 
     // Runtime breakdown
-    const byRuntime = db.prepare(`
+    const byRuntime = await db.all(`
       SELECT s.runtime, COUNT(*) AS count
       FROM sessions s
       ${where}
       GROUP BY s.runtime
       ORDER BY count DESC
-    `).all(...params) as Array<{ runtime: string; count: number }>;
+    `, ...params) as Array<{ runtime: string; count: number }>;
 
     // Status breakdown
-    const byStatus = db.prepare(`
+    const byStatus = await db.all(`
       SELECT s.status, COUNT(*) AS count
       FROM sessions s
       ${where}
       GROUP BY s.status
       ORDER BY count DESC
-    `).all(...params) as Array<{ status: string; count: number }>;
+    `, ...params) as Array<{ status: string; count: number }>;
 
     // Per-agent summary (top contributors)
-    const byAgent = db.prepare(`
+    const byAgent = await db.all(`
       SELECT
         s.agent_id,
         a.name AS agent_name,
@@ -781,10 +726,10 @@ router.get('/sessions', (req: Request, res: Response) => {
       FROM sessions s
       LEFT JOIN agents a ON a.id = s.agent_id
       ${where}
-      GROUP BY s.agent_id
+      GROUP BY s.agent_id, a.name
       ORDER BY session_count DESC
       LIMIT 20
-    `).all(...params) as Array<Record<string, unknown>>;
+    `, ...params) as Array<Record<string, unknown>>;
 
     return res.json({
       totals,
@@ -811,7 +756,7 @@ const INTEGRITY_ANOMALY_TYPES = [
 ];
 
 // GET /api/v1/telemetry/pipeline-health
-router.get('/pipeline-health', (req: Request, res: Response) => {
+router.get('/pipeline-health', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { project_id, from, to } = req.query as Record<string, string | undefined>;
@@ -823,25 +768,25 @@ router.get('/pipeline-health', (req: Request, res: Response) => {
     if (project_id) { conds.push('t.project_id = ?'); params.push(Number(project_id)); }
     const w = `WHERE ${conds.join(' AND ')}`;
 
-    const completedInPeriod = (db.prepare(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status = 'done' AND t.updated_at >= ? AND t.updated_at <= ?`).get(...params, startDate, endDate) as { n: number }).n;
-    const boardDist = db.prepare(`SELECT t.status, COUNT(*) as count FROM tasks t ${w} AND t.status NOT IN ('done','cancelled') GROUP BY t.status ORDER BY count DESC`).all(...params) as Array<{ status: string; count: number }>;
-    const totalDispatched = (db.prepare(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.dispatched_at >= ? AND t.dispatched_at <= ?`).get(...params, startDate, endDate) as { n: number }).n;
-    const failedInPeriod = (db.prepare(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status = 'failed' AND t.updated_at >= ? AND t.updated_at <= ?`).get(...params, startDate, endDate) as { n: number }).n;
+    const completedInPeriod = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status = 'done' AND t.updated_at >= ? AND t.updated_at <= ?`, ...params, startDate, endDate) as { n: number }).n;
+    const boardDist = await db.all(`SELECT t.status, COUNT(*) as count FROM tasks t ${w} AND t.status NOT IN ('done','cancelled') GROUP BY t.status ORDER BY count DESC`, ...params) as Array<{ status: string; count: number }>;
+    const totalDispatched = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.dispatched_at >= ? AND t.dispatched_at <= ?`, ...params, startDate, endDate) as { n: number }).n;
+    const failedInPeriod = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status = 'failed' AND t.updated_at >= ? AND t.updated_at <= ?`, ...params, startDate, endDate) as { n: number }).n;
     const failureRate = totalDispatched > 0 ? Math.round((failedInPeriod / totalDispatched) * 1000) / 10 : 0;
-    const staleCount = (db.prepare(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status IN ('in_progress','review','qa_pass','ready_to_merge') AND t.updated_at < datetime('now', '-2 hours')`).get(...params) as { n: number }).n;
+    const staleCount = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status IN ('in_progress','review','qa_pass','ready_to_merge') AND t.updated_at < datetime('now', '-2 hours')`, ...params) as { n: number }).n;
 
     let manualInterventions = 0;
     try {
       const mc = project_id ? `WHERE te.project_id = ? AND te.move_type IN ('manual','rescue') AND te.created_at >= ? AND te.created_at <= ?` : `WHERE te.move_type IN ('manual','rescue') AND te.created_at >= ? AND te.created_at <= ?`;
       const mp = project_id ? [Number(project_id), startDate, endDate] : [startDate, endDate];
-      manualInterventions = (db.prepare(`SELECT COUNT(*) as n FROM task_events te ${mc}`).get(...mp) as { n: number }).n;
+      manualInterventions = (await db.get(`SELECT COUNT(*) as n FROM task_events te ${mc}`, ...mp) as { n: number }).n;
     } catch { /* table may not exist */ }
 
     let integrityCount = 0;
     try {
       const ic = project_id ? `WHERE project_id = ? AND resolved = 0` : `WHERE resolved = 0`;
       const ip = project_id ? [Number(project_id)] : [];
-      integrityCount = (db.prepare(`SELECT COUNT(*) as n FROM integrity_events ${ic}`).get(...ip) as { n: number }).n;
+      integrityCount = (await db.get(`SELECT COUNT(*) as n FROM integrity_events ${ic}`, ...ip) as { n: number }).n;
     } catch { /* table may not exist */ }
 
     res.json({ period: { from: startDate, to: endDate }, completed_in_period: completedInPeriod, board_distribution: boardDist, total_dispatched_in_period: totalDispatched, failure_rate_pct: failureRate, stale_task_count: staleCount, manual_interventions_in_period: manualInterventions, integrity_anomaly_count_open: integrityCount });
@@ -849,7 +794,7 @@ router.get('/pipeline-health', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/telemetry/bottlenecks
-router.get('/bottlenecks', (req: Request, res: Response) => {
+router.get('/bottlenecks', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { project_id, sprint_id, task_type, story_points } = req.query as Record<string, string | undefined>;
@@ -865,14 +810,14 @@ router.get('/bottlenecks', (req: Request, res: Response) => {
     let timeInStatus: Array<{ status: string; median_minutes: number | null; p95_minutes: number | null; count: number }> = [];
     try {
       const ACTIVE = ['todo','ready','in_progress','review','qa_pass','ready_to_merge','deployed'];
-      const durations = db.prepare(`
+      const durations = await db.all(`
         SELECT te.from_status AS status, ROUND((julianday(te.created_at) - julianday(prev.created_at)) * 24 * 60, 1) AS dur
         FROM task_events te
         JOIN task_events prev ON prev.task_id = te.task_id AND prev.to_status = te.from_status
           AND prev.id = (SELECT MAX(p2.id) FROM task_events p2 WHERE p2.task_id = te.task_id AND p2.to_status = te.from_status AND p2.id < te.id)
         WHERE te.from_status IN (${ACTIVE.map(() => '?').join(',')}) AND dur > 0 AND dur < 10080
         ORDER BY te.from_status, dur
-      `).all(...ACTIVE) as Array<{ status: string; dur: number }>;
+      `, ...ACTIVE) as Array<{ status: string; dur: number }>;
       const byStatus: Record<string, number[]> = {};
       for (const r of durations) { if (!byStatus[r.status]) byStatus[r.status] = []; byStatus[r.status].push(r.dur); }
       timeInStatus = ACTIVE.map(s => {
@@ -882,7 +827,7 @@ router.get('/bottlenecks', (req: Request, res: Response) => {
       });
     } catch { /* task_events may not exist */ }
 
-    const agingBuckets = db.prepare(`
+    const agingBuckets = await db.all(`
       SELECT t.status,
         CASE WHEN (julianday('now') - julianday(t.updated_at)) * 24 < 1 THEN '<1h'
              WHEN (julianday('now') - julianday(t.updated_at)) * 24 < 4 THEN '1-4h'
@@ -891,21 +836,21 @@ router.get('/bottlenecks', (req: Request, res: Response) => {
              ELSE '48h+' END AS bucket, COUNT(*) as count
       FROM tasks t ${w} AND t.status NOT IN ('done','cancelled','failed')
       GROUP BY t.status, bucket ORDER BY t.status, count DESC
-    `).all(...params) as Array<{ status: string; bucket: string; count: number }>;
+    `, ...params) as Array<{ status: string; bucket: string; count: number }>;
 
-    const topStuck = db.prepare(`
+    const topStuck = await db.all(`
       SELECT t.id, t.title, t.status, t.priority, ROUND((julianday('now') - julianday(t.updated_at)) * 24, 1) AS hours_stuck, a.name AS agent_name
       FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id
       ${w} AND t.status IN ('in_progress','review','qa_pass','ready_to_merge','stalled','blocked')
       ORDER BY hours_stuck DESC LIMIT 10
-    `).all(...params) as Array<Record<string, unknown>>;
+    `, ...params) as Array<Record<string, unknown>>;
 
     let reviewBounces: Array<Record<string, unknown>> = [];
     try {
-      reviewBounces = db.prepare(`
+      reviewBounces = await db.all(`
         SELECT te.task_id, t.title, COUNT(*) as review_count FROM task_events te JOIN tasks t ON t.id = te.task_id
-        WHERE te.to_status = 'review' GROUP BY te.task_id HAVING review_count >= 2 ORDER BY review_count DESC LIMIT 20
-      `).all() as Array<Record<string, unknown>>;
+        WHERE te.to_status = 'review' GROUP BY te.task_id, t.title HAVING COUNT(*) >= 2 ORDER BY review_count DESC LIMIT 20
+      `) as Array<Record<string, unknown>>;
     } catch { /* task_events may not exist */ }
 
     res.json({ time_in_status: timeInStatus, aging_buckets: agingBuckets, top_stuck: topStuck, review_bounces: reviewBounces });
@@ -913,7 +858,7 @@ router.get('/bottlenecks', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/telemetry/failures
-router.get('/failures', (req: Request, res: Response) => {
+router.get('/failures', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { project_id, sprint_id, agent_id, job_id, outcome, from, to } = req.query as Record<string, string | undefined>;
@@ -935,8 +880,8 @@ router.get('/failures', (req: Request, res: Response) => {
     }
     const w = `WHERE ${c.join(' AND ')}`;
 
-    const totalDispatched = (db.prepare(`SELECT COUNT(*) as n FROM tasks t ${w}`).get(...p) as { n: number }).n;
-    const totalFailed = (db.prepare(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status = 'failed'`).get(...p) as { n: number }).n;
+    const totalDispatched = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w}`, ...p) as { n: number }).n;
+    const totalFailed = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status = 'failed'`, ...p) as { n: number }).n;
     const failureRate = totalDispatched > 0 ? Math.round((totalFailed / totalDispatched) * 1000) / 10 : 0;
 
     const latestOutcomeSql = `
@@ -949,7 +894,7 @@ router.get('/failures', (req: Request, res: Response) => {
                ji2.id DESC
       LIMIT 1
     `;
-    const byOutcome = db.prepare(`
+    const byOutcome = await db.all(`
       WITH failed_tasks AS (
         SELECT t.id, (${latestOutcomeSql}) AS outcome
         FROM tasks t ${w} AND t.status = 'failed'
@@ -958,10 +903,10 @@ router.get('/failures', (req: Request, res: Response) => {
       FROM failed_tasks
       GROUP BY COALESCE(outcome, 'unknown')
       ORDER BY count DESC
-    `).all(...p);
-    const byAgent = db.prepare(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id ${w} AND t.agent_id IS NOT NULL GROUP BY t.agent_id ORDER BY fail_pct DESC LIMIT 20`).all(...p);
-    const byTaskType = db.prepare(`SELECT COALESCE(t.task_type,'unknown') as task_type, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t ${w} GROUP BY t.task_type ORDER BY fail_pct DESC`).all(...p);
-    const topFailing = db.prepare(`
+    `, ...p);
+    const byAgent = await db.all(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id ${w} AND t.agent_id IS NOT NULL GROUP BY t.agent_id, a.name ORDER BY fail_pct DESC LIMIT 20`, ...p);
+    const byTaskType = await db.all(`SELECT COALESCE(t.task_type,'unknown') as task_type, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t ${w} GROUP BY t.task_type ORDER BY fail_pct DESC`, ...p);
+    const topFailing = await db.all(`
       SELECT
         t.id,
         t.title,
@@ -974,7 +919,7 @@ router.get('/failures', (req: Request, res: Response) => {
       FROM tasks t ${w} AND t.status='failed'
       ORDER BY t.retry_count DESC,t.updated_at DESC
       LIMIT 20
-    `).all(...p);
+    `, ...p);
 
     let byStage: Array<Record<string, unknown>> = [];
     try {
@@ -982,7 +927,7 @@ router.get('/failures', (req: Request, res: Response) => {
       if (project_id) { sc.push('t.project_id = ?'); sp.push(Number(project_id)); }
       if (from) { sc.push('ji.created_at >= ?'); sp.push(from); }
       if (to)   { sc.push('ji.created_at <= ?'); sp.push(to); }
-      byStage = db.prepare(`SELECT ji.failure_stage, COUNT(*) as count FROM job_instances ji JOIN tasks t ON t.id=ji.task_id WHERE ${sc.join(' AND ')} GROUP BY ji.failure_stage ORDER BY count DESC`).all(...sp) as Array<Record<string, unknown>>;
+      byStage = await db.all(`SELECT ji.failure_stage, COUNT(*) as count FROM job_instances ji JOIN tasks t ON t.id=ji.task_id WHERE ${sc.join(' AND ')} GROUP BY ji.failure_stage ORDER BY count DESC`, ...sp) as Array<Record<string, unknown>>;
     } catch { /* failure_stage may not exist */ }
 
     res.json({ period: { from: startDate, to: endDate }, total_dispatched: totalDispatched, total_failed: totalFailed, failure_rate_pct: failureRate, by_outcome: byOutcome, by_agent: byAgent, by_task_type: byTaskType, by_stage: byStage, top_failing_tasks: topFailing });
@@ -990,11 +935,11 @@ router.get('/failures', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/telemetry/integrity
-router.get('/integrity', (req: Request, res: Response) => {
+router.get('/integrity', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { project_id, agent_id, anomaly_type, from, to, resolved } = req.query as Record<string, string | undefined>;
-    try { db.prepare(`SELECT id FROM integrity_events LIMIT 1`).get(); } catch {
+    try { await db.get(`SELECT id FROM integrity_events LIMIT 1`); } catch {
       return res.json({ note: 'integrity_events not yet populated', anomaly_counts_by_type: INTEGRITY_ANOMALY_TYPES.map(t => ({ ...t, count: 0 })), anomaly_rate_trend: [], affected_tasks: [], total_anomalies: 0 });
     }
     const c: string[] = ['1=1']; const p: unknown[] = [];
@@ -1006,46 +951,71 @@ router.get('/integrity', (req: Request, res: Response) => {
     if (resolved !== undefined) { c.push('ie.resolved = ?'); p.push(resolved === 'true' || resolved === '1' ? 1 : 0); }
     const w = `WHERE ${c.join(' AND ')}`;
 
-    const total = (db.prepare(`SELECT COUNT(*) as n FROM integrity_events ie ${w}`).get(...p) as { n: number }).n;
-    const countsByType = db.prepare(`SELECT ie.anomaly_type, COUNT(*) as count FROM integrity_events ie ${w} GROUP BY ie.anomaly_type ORDER BY count DESC`).all(...p) as Array<{ anomaly_type: string; count: number }>;
+    const total = (await db.get(`SELECT COUNT(*) as n FROM integrity_events ie ${w}`, ...p) as { n: number }).n;
+    const countsByType = await db.all(`SELECT ie.anomaly_type, COUNT(*) as count FROM integrity_events ie ${w} GROUP BY ie.anomaly_type ORDER BY count DESC`, ...p) as Array<{ anomaly_type: string; count: number }>;
     const anomalyCounts = INTEGRITY_ANOMALY_TYPES.map(entry => ({ ...entry, count: countsByType.find(r => r.anomaly_type === entry.type)?.count ?? 0 }));
 
     let trend: Array<{ date: string; count: number }> = [];
-    try { trend = db.prepare(`SELECT substr(ie.created_at,1,10) as date, COUNT(*) as count FROM integrity_events ie WHERE ${[...c, "ie.created_at >= datetime('now','-30 days')"].join(' AND ')} GROUP BY date ORDER BY date ASC`).all(...p) as Array<{ date: string; count: number }>; } catch { /* non-fatal */ }
+    try { trend = await db.all(`SELECT substr(ie.created_at,1,10) as date, COUNT(*) as count FROM integrity_events ie WHERE ${[...c, "ie.created_at >= datetime('now','-30 days')"].join(' AND ')} GROUP BY date ORDER BY date ASC`, ...p) as Array<{ date: string; count: number }>; } catch { /* non-fatal */ }
 
-    const byAgent2 = db.prepare(`SELECT ie.agent_id, a.name as agent_name, COUNT(*) as count FROM integrity_events ie LEFT JOIN agents a ON a.id=ie.agent_id ${w} AND ie.agent_id IS NOT NULL GROUP BY ie.agent_id ORDER BY count DESC LIMIT 20`).all(...p);
-    const affected = db.prepare(`SELECT t.id,t.title,t.status,t.priority,COUNT(ie.id) as anomaly_count,GROUP_CONCAT(DISTINCT ie.anomaly_type) as anomaly_types FROM integrity_events ie JOIN tasks t ON t.id=ie.task_id ${w} GROUP BY ie.task_id ORDER BY anomaly_count DESC LIMIT 20`).all(...p);
+    const byAgent2 = await db.all(`SELECT ie.agent_id, a.name as agent_name, COUNT(*) as count FROM integrity_events ie LEFT JOIN agents a ON a.id=ie.agent_id ${w} AND ie.agent_id IS NOT NULL GROUP BY ie.agent_id, a.name ORDER BY count DESC LIMIT 20`, ...p);
+    // GROUP_CONCAT(DISTINCT x) cannot take an explicit delimiter, so the distinct anomaly types
+    // are pre-aggregated in a CTE and concatenated with an explicit ',' separator. That keeps the
+    // delimiter identical to SQLite's implicit default and makes the Postgres port a mechanical
+    // GROUP_CONCAT -> string_agg rename. The filtered rows are materialised once so the bound
+    // parameters are unchanged.
+    const affected = await db.all(`
+      WITH filtered AS (
+        SELECT ie.id, ie.task_id, ie.anomaly_type
+        FROM integrity_events ie
+        ${w}
+      ),
+      distinct_types AS (
+        SELECT task_id, GROUP_CONCAT(anomaly_type, ',') AS anomaly_types
+        FROM (SELECT DISTINCT task_id, anomaly_type FROM filtered) d
+        GROUP BY task_id
+      )
+      SELECT t.id, t.title, t.status, t.priority,
+             COUNT(f.id) as anomaly_count,
+             MAX(dt.anomaly_types) as anomaly_types
+      FROM filtered f
+      JOIN tasks t ON t.id = f.task_id
+      LEFT JOIN distinct_types dt ON dt.task_id = f.task_id
+      GROUP BY t.id, t.title, t.status, t.priority
+      ORDER BY anomaly_count DESC
+      LIMIT 20
+    `, ...p);
 
     res.json({ total_anomalies: total, anomaly_counts_by_type: anomalyCounts, anomaly_rate_trend: trend, by_agent: byAgent2, affected_tasks: affected });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
 // POST /api/v1/telemetry/integrity-events
-router.post('/integrity-events', (req: Request, res: Response) => {
+router.post('/integrity-events', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { task_id, anomaly_type, detail, instance_id, project_id, agent_id } = req.body;
     const VALID = INTEGRITY_ANOMALY_TYPES.map(t => t.type);
     if (!task_id) return res.status(400).json({ error: 'task_id required' });
     if (!anomaly_type || !VALID.includes(anomaly_type)) return res.status(400).json({ error: `anomaly_type must be one of: ${VALID.join(', ')}` });
-    emitIntegrityEvent(db, { taskId: task_id, anomalyType: anomaly_type, detail: detail ?? null, instanceId: instance_id ?? null, projectId: project_id ?? null, agentId: agent_id ?? null });
+    await emitIntegrityEvent(db, { taskId: task_id, anomalyType: anomaly_type, detail: detail ?? null, instanceId: instance_id ?? null, projectId: project_id ?? null, agentId: agent_id ?? null });
     res.status(201).json({ ok: true, task_id, anomaly_type });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
 // PUT /api/v1/telemetry/integrity-events/:id/resolve
-router.put('/integrity-events/:id/resolve', (req: Request, res: Response) => {
+router.put('/integrity-events/:id/resolve', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    db.prepare(`UPDATE integrity_events SET resolved = 1, resolved_at = datetime('now') WHERE id = ?`).run(Number(req.params.id));
-    const row = db.prepare(`SELECT * FROM integrity_events WHERE id = ?`).get(Number(req.params.id));
+    await db.run(`UPDATE integrity_events SET resolved = 1, resolved_at = datetime('now') WHERE id = ?`, Number(req.params.id));
+    const row = await db.get(`SELECT * FROM integrity_events WHERE id = ?`, Number(req.params.id));
     if (!row) return res.status(404).json({ error: 'Integrity event not found' });
     res.json(row);
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
 // GET /api/v1/telemetry/routing
-router.get('/routing', (req: Request, res: Response) => {
+router.get('/routing', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { project_id, sprint_id, task_type, from, to } = req.query as Record<string, string | undefined>;
@@ -1057,8 +1027,8 @@ router.get('/routing', (req: Request, res: Response) => {
     if (task_type)  { c.push('t.task_type = ?');  p.push(task_type); }
     const w = `WHERE ${c.join(' AND ')} AND t.routing_reason IS NOT NULL`;
 
-    const routingGroups = db.prepare(`SELECT t.routing_reason, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as success, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, SUM(CASE WHEN t.status IN ('stalled','blocked') THEN 1 ELSE 0 END) as stalled, ROUND(SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t ${w} GROUP BY t.routing_reason ORDER BY dispatched DESC LIMIT 50`).all(...p);
-    const byAgent3 = db.prepare(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id WHERE ${c.join(' AND ')} GROUP BY t.agent_id ORDER BY dispatched DESC LIMIT 20`).all(...p);
+    const routingGroups = await db.all(`SELECT t.routing_reason, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as success, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, SUM(CASE WHEN t.status IN ('stalled','blocked') THEN 1 ELSE 0 END) as stalled, ROUND(SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t ${w} GROUP BY t.routing_reason ORDER BY dispatched DESC LIMIT 50`, ...p);
+    const byAgent3 = await db.all(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id WHERE ${c.join(' AND ')} GROUP BY t.agent_id, a.name ORDER BY dispatched DESC LIMIT 20`, ...p);
 
     const sprintRuleFilters: string[] = [];
     const sprintRuleParams: unknown[] = [];
@@ -1070,7 +1040,7 @@ router.get('/routing', (req: Request, res: Response) => {
       sprintRuleParams.push(Number(project_id));
     }
 
-    const sprintRules = db.prepare(`
+    const sprintRules = await db.all(`
       SELECT
         trr.id,
         s.project_id,
@@ -1089,7 +1059,7 @@ router.get('/routing', (req: Request, res: Response) => {
       LEFT JOIN agents a ON a.id = trr.agent_id
       ${sprintRuleFilters.length > 0 ? `WHERE ${sprintRuleFilters.join(' AND ')}` : ''}
       ORDER BY COALESCE(s.project_id, -1), trr.sprint_id, trr.task_type, trr.priority DESC
-    `).all(...sprintRuleParams);
+    `, ...sprintRuleParams);
 
     const rules = sprintRules;
 
@@ -1098,7 +1068,7 @@ router.get('/routing', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/telemetry/templates
-router.get('/templates', (req: Request, res: Response) => {
+router.get('/templates', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const { project_id, agent_id, from, to } = req.query as Record<string, string | undefined>;
@@ -1109,7 +1079,7 @@ router.get('/templates', (req: Request, res: Response) => {
     if (agent_id)   { c.push('ji.agent_id = ?');  p.push(Number(agent_id)); }
     const w = `WHERE ${c.join(' AND ')}`;
 
-    const byTemplate = db.prepare(`
+    const byTemplate = await db.all(`
       SELECT ji.agent_id, a.name as agent_name, a.job_title, a.job_instructions_updated_at, a.instructions_version,
         COUNT(*) as total_runs, SUM(CASE WHEN ji.status='done' THEN 1 ELSE 0 END) as success,
         SUM(CASE WHEN ji.status='failed' THEN 1 ELSE 0 END) as failed,
@@ -1122,18 +1092,18 @@ router.get('/templates', (req: Request, res: Response) => {
         SUM(CASE WHEN ji.last_meaningful_output_at IS NOT NULL THEN 1 ELSE 0 END) as meaningful_output_count,
         ROUND(SUM(CASE WHEN ji.last_meaningful_output_at IS NOT NULL THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as meaningful_output_rate_pct
       FROM job_instances ji JOIN tasks t ON t.id=ji.task_id LEFT JOIN agents a ON a.id=ji.agent_id
-      ${w} GROUP BY ji.agent_id ORDER BY total_runs DESC LIMIT 30
-    `).all(...p);
+      ${w} GROUP BY ji.agent_id, a.name, a.job_title, a.job_instructions_updated_at, a.instructions_version ORDER BY total_runs DESC LIMIT 30
+    `, ...p);
 
     res.json({ period: { from: startDate, to: endDate }, by_template: byTemplate });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });
 
 // GET /api/v1/telemetry/events — raw task_events with filters
-router.get('/events', (req: Request, res: Response) => {
+router.get('/events', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    try { db.prepare(`SELECT id FROM task_events LIMIT 1`).get(); } catch {
+    try { await db.get(`SELECT id FROM task_events LIMIT 1`); } catch {
       return res.json({ events: [], total: 0, note: 'task_events table not yet populated' });
     }
     const { task_id, project_id, agent_id, move_type, from_status, to_status, from, to, limit: rl = '100', offset: ro = '0' } = req.query as Record<string, string | undefined>;
@@ -1148,8 +1118,8 @@ router.get('/events', (req: Request, res: Response) => {
     if (from)        { c.push('te.created_at >= ?'); p.push(from); }
     if (to)          { c.push('te.created_at <= ?'); p.push(to); }
     const w = `WHERE ${c.join(' AND ')}`;
-    const events = db.prepare(`SELECT te.*, t.title as task_title, a.name as agent_name FROM task_events te LEFT JOIN tasks t ON t.id=te.task_id LEFT JOIN agents a ON a.id=te.agent_id ${w} ORDER BY te.created_at DESC LIMIT ? OFFSET ?`).all(...p, limit, offset);
-    const total = (db.prepare(`SELECT COUNT(*) as n FROM task_events te ${w}`).get(...p) as { n: number }).n;
+    const events = await db.all(`SELECT te.*, t.title as task_title, a.name as agent_name FROM task_events te LEFT JOIN tasks t ON t.id=te.task_id LEFT JOIN agents a ON a.id=te.agent_id ${w} ORDER BY te.created_at DESC LIMIT ? OFFSET ?`, ...p, limit, offset);
+    const total = (await db.get(`SELECT COUNT(*) as n FROM task_events te ${w}`, ...p) as { n: number }).n;
     res.json({ events, total, limit, offset });
   } catch (err) { res.status(500).json({ error: String(err) }); }
 });

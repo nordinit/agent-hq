@@ -16,10 +16,10 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentRuntime, DispatchParams, PrepareAuthProfilesParams, RuntimeAuthProfileSyncResult } from './types';
 import { skippedRuntimeAuthProfileSync } from './types';
-import type Database from 'better-sqlite3';
 import { validateAndLogViolation } from '../lib/workspaceBoundary';
 import { getAgentHqBaseUrl } from '../lib/agentHqBaseUrl';
 import { fetchAgentTools, createAgentToolServer } from './toolInjection';
+import { type Db } from "../db/adapter/types";
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -153,7 +153,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     message: string,
     instanceId: number,
     taskId: number | null,
-    db: Database.Database | null,
+    db: Db | null,
     config: ClaudeCodeRuntimeConfig,
     modelOverride: string | null,
     abortController: AbortController,
@@ -173,7 +173,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
     if (effectiveCwd) {
       if (workspaceRoot && db) {
-        validateAndLogViolation(db, workspaceRoot, effectiveCwd, { instanceId });
+        await validateAndLogViolation(db, workspaceRoot, effectiveCwd, { instanceId });
       }
       console.log(
         `[ClaudeCodeRuntime] instance #${instanceId}: cwd=${effectiveCwd} activeRepoRoot=${activeRepoRoot ?? 'null'} workspaceRoot=${workspaceRoot ?? 'null'} (workspace boundary enforced)`
@@ -186,12 +186,10 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     let agentToolMcpServer: ReturnType<typeof createAgentToolServer> = null;
     if (db) {
       try {
-        const instRow = db.prepare(
-          'SELECT agent_id FROM job_instances WHERE id = ?'
-        ).get(instanceId) as { agent_id: number } | undefined;
+        const instRow = await db.get('SELECT agent_id FROM job_instances WHERE id = ?', instanceId) as { agent_id: number } | undefined;
 
         if (instRow?.agent_id) {
-          const agentTools = fetchAgentTools(db, instRow.agent_id);
+          const agentTools = await fetchAgentTools(db, instRow.agent_id);
           if (agentTools.length > 0) {
             const hardcodedSlugs = new Set(
               (config.allowedTools ?? DEFAULT_ALLOWED_TOOLS).map(t => t.toLowerCase())
@@ -267,8 +265,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         ) {
           const sdkSessionId = (sdkMessage as { session_id?: string }).session_id;
           if (sdkSessionId) {
-            db.prepare('UPDATE job_instances SET session_key = ? WHERE id = ?')
-              .run(`claude-code:${sdkSessionId}`, instanceId);
+            await db.run('UPDATE job_instances SET session_key = ? WHERE id = ?', `claude-code:${sdkSessionId}`, instanceId);
           }
         }
 
@@ -285,9 +282,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         if (sdkMessage.type === 'result') {
           if (db != null && instanceId > 0 && (totalInputTokens > 0 || totalOutputTokens > 0)) {
             const total = totalInputTokens + totalOutputTokens;
-            db.prepare(
-              'UPDATE job_instances SET token_input = ?, token_output = ?, token_total = ? WHERE id = ?'
-            ).run(totalInputTokens, totalOutputTokens, total, instanceId);
+            await db.run('UPDATE job_instances SET token_input = ?, token_output = ?, token_total = ? WHERE id = ?', totalInputTokens, totalOutputTokens, total, instanceId);
           }
           this.abortControllers.delete(instanceId);
         }
@@ -296,7 +291,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       // After the run loop completes, ingest the JSONL transcript into canonical sessions.
       if (instanceId > 0 && db != null) {
         try {
-          const row = db.prepare('SELECT session_key FROM job_instances WHERE id = ?').get(instanceId) as { session_key: string | null } | undefined;
+          const row = await db.get('SELECT session_key FROM job_instances WHERE id = ?', instanceId) as { session_key: string | null } | undefined;
           const externalKey = row?.session_key;
           if (externalKey?.startsWith('claude-code:')) {
             const { ingestSessionByExternalKey } = await import('../lib/canonicalSessions');

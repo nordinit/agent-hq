@@ -10,12 +10,12 @@ import { closeDb, getDbPath } from './client';
 import { initSchema, provisionDefaultMcpRegistry, provisionDefaultToolRegistry } from './schema';
 import { ensureConfiguredRuntimeMcpApiKey } from '../lib/mcpApiAuth';
 
-function main(): void {
-  initSchema();
+async function main(): Promise<void> {
+  await initSchema();
   provisionDefaultToolRegistry();
-  provisionDefaultMcpRegistry();
+  await provisionDefaultMcpRegistry();
 
-  const runtimeMcpKey = ensureConfiguredRuntimeMcpApiKey();
+  const runtimeMcpKey = await ensureConfiguredRuntimeMcpApiKey();
 
   console.log(JSON.stringify({
     ok: true,
@@ -26,8 +26,13 @@ function main(): void {
   }));
 }
 
-try {
-  main();
-} finally {
-  closeDb();
-}
+// See migrate.ts: main() is async, so the original try/finally closed the database before the
+// work finished and let rejections pass silently with exit code 0.
+void main()
+  .catch((error) => {
+    console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    closeDb();
+  });

@@ -1,17 +1,8 @@
-/**
- * lib/githubIdentity.ts — GitHub identity resolution and credential injection.
- *
- * This module provides:
- *   - resolveGitHubIdentity(): look up agent's linked github_identities row
- *   - injectGitHubCredentials(): write token + git config to workspace
- *   - cleanupGitHubCredentials(): remove injected credential files
- *   - buildGitHubIdentityContext(): generate dispatch message context block
- */
-
-import Database from 'better-sqlite3';
 import { execFileSync, type ExecFileSyncOptions } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { type Db } from "../db/adapter/types";
+import { tableColumns as sharedTableColumns , listTables as sharedListTables } from "../db/introspection";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -87,35 +78,35 @@ function configureWorktreeGitIdentity(workingDirectory: string, identity: GitHub
  * Returns null if no identity is found (agent should fall back to whatever
  * GH_TOKEN is in their environment from the host).
  */
-export function resolveGitHubIdentity(
-  db: Database.Database,
+export async function resolveGitHubIdentity(
+  db: Db,
   agentId: number,
   tenantId?: number | null,
-): ResolvedGitHubIdentity | null {
-  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
+): Promise<ResolvedGitHubIdentity | null> {
+  const tables = (await sharedListTables(db)).map((name) => ({ name }));
   const tableNames = new Set(tables.map(row => row.name));
   if (!tableNames.has('github_identities')) {
     return null;
   }
 
   const agentColumns = tableNames.has('agents')
-    ? (db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>).map(col => col.name)
+    ? await sharedTableColumns(db, 'agents')
     : [];
   const hasAgentGithubIdentityId = agentColumns.includes('github_identity_id');
   const hasAgentTenantId = agentColumns.includes('tenant_id');
   const identityColumns = tableNames.has('github_identities')
-    ? (db.prepare(`PRAGMA table_info(github_identities)`).all() as Array<{ name: string }>).map(col => col.name)
+    ? await sharedTableColumns(db, 'github_identities')
     : [];
   const hasIdentityTenantId = identityColumns.includes('tenant_id');
 
   const agent = hasAgentTenantId
-    ? db.prepare(`SELECT tenant_id FROM agents WHERE id = ? LIMIT 1`).get(agentId) as { tenant_id: number | null } | undefined
+    ? await db.get(`SELECT tenant_id FROM agents WHERE id = ? LIMIT 1`, agentId) as { tenant_id: number | null } | undefined
     : undefined;
   const resolvedTenantId = tenantId ?? agent?.tenant_id ?? null;
 
   // 1. Direct FK lookup
   if (hasAgentGithubIdentityId) {
-    const direct = db.prepare(`
+    const direct = await db.get(`
       SELECT gi.*
       FROM agents a
       JOIN github_identities gi ON gi.id = a.github_identity_id
@@ -123,11 +114,7 @@ export function resolveGitHubIdentity(
         AND gi.enabled = 1
         ${hasAgentTenantId && resolvedTenantId != null ? 'AND a.tenant_id = ?' : ''}
         ${hasIdentityTenantId && resolvedTenantId != null ? 'AND gi.tenant_id = ?' : ''}
-    `).get(
-      agentId,
-      ...(hasAgentTenantId && resolvedTenantId != null ? [resolvedTenantId] : []),
-      ...(hasIdentityTenantId && resolvedTenantId != null ? [resolvedTenantId] : []),
-    ) as GitHubIdentity | undefined;
+    `, agentId, ...(hasAgentTenantId && resolvedTenantId != null ? [resolvedTenantId] : []), ...(hasIdentityTenantId && resolvedTenantId != null ? [resolvedTenantId] : [])) as GitHubIdentity | undefined;
 
     if (direct) {
       return { identity: direct, dedicated: true };
@@ -135,13 +122,13 @@ export function resolveGitHubIdentity(
   }
 
   // 2. Shared fallback
-  const shared = db.prepare(`
+  const shared = await db.get(`
     SELECT * FROM github_identities
     WHERE lane = 'shared' AND enabled = 1
       ${hasIdentityTenantId && resolvedTenantId != null ? 'AND tenant_id = ?' : ''}
     ORDER BY id ASC
     LIMIT 1
-  `).get(...(hasIdentityTenantId && resolvedTenantId != null ? [resolvedTenantId] : [])) as GitHubIdentity | undefined;
+  `, ...(hasIdentityTenantId && resolvedTenantId != null ? [resolvedTenantId] : [])) as GitHubIdentity | undefined;
 
   if (shared) {
     return { identity: shared, dedicated: false };

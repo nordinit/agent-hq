@@ -32,134 +32,69 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
 }
 
-function seedTaskContextFixture(): void {
+async function seedTaskContextFixture(): Promise<void> {
   const db = getDb();
 
-  db.prepare(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`).run();
-  db.prepare(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Enhancements', '', 'generic', 'active')`).run();
-  db.prepare(`
+  await db.run(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`);
+  await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Enhancements', '', 'generic', 'active')`);
+  await db.run(`
     INSERT INTO agents (id, name, role, session_key, workspace_path, status)
     VALUES (7, 'Cinder', 'Backend Engineer', 'agent:cinder:test', '/tmp/cinder', 'running')
-  `).run();
+  `);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO tasks (
       id, title, description, status, priority, project_id, sprint_id, agent_id, active_instance_id, task_type, story_points,
       custom_fields_json, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    460,
-    'Add task-context endpoint',
-    'Create a truthful task context surface.',
-    'review',
-    'high',
-    86,
-    42,
-    7,
-    null,
-    'backend',
-    5,
-    JSON.stringify({
-      review_branch: 'cinder-backend/task-460',
-      review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
-      review_url: 'http://localhost:3510/tasks/460/review',
-    }),
-    '2026-05-09 18:31:00',
-  );
+  `, 460, 'Add task-context endpoint', 'Create a truthful task context surface.', 'review', 'high', 86, 42, 7, null, 'backend', 5, JSON.stringify({
+          review_branch: 'cinder-backend/task-460',
+          review_commit: 'abcdef1234567890abcdef1234567890abcdef12',
+          review_url: 'http://localhost:3510/tasks/460/review',
+        }), '2026-05-09 18:31:00');
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO tasks (id, title, description, status, priority, project_id, sprint_id, task_type, custom_fields_json)
     VALUES (461, 'Lease manager follow-up', '', 'in_progress', 'medium', 86, 42, 'backend', '{}')
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO tasks (id, title, description, status, priority, project_id, sprint_id, task_type, custom_fields_json)
     VALUES (462, 'QA downstream task', '', 'todo', 'medium', 86, 42, 'qa', '{}')
-  `).run();
-  db.prepare(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (461, 460), (460, 462)`).run();
+  `);
+  await db.run(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (461, 460), (460, 462)`);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO job_instances (
       id, agent_id, task_id, status, session_key, created_at, dispatched_at, started_at, task_outcome
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    700,
-    7,
-    460,
-    'running',
-    'run:700',
-    '2026-05-09 18:20:00',
-    '2026-05-09 18:21:00',
-    '2026-05-09 18:22:00',
-    null,
-  );
+  `, 700, 7, 460, 'running', 'run:700', '2026-05-09 18:20:00', '2026-05-09 18:21:00', '2026-05-09 18:22:00', null);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO instance_artifacts (
       instance_id, task_id, current_stage, summary, latest_commit_hash, branch_name, changed_files_json, changed_files_count,
       blocker_reason, outcome, last_agent_heartbeat_at, last_meaningful_output_at, started_at, session_key, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    700,
-    460,
-    'progress',
-    'Implemented summary/full task context endpoint and tests.',
-    'abcdef1234567890abcdef1234567890abcdef12',
-    'cinder-backend/task-460',
-    JSON.stringify(['api/src/lib/taskContext.ts', 'api/src/routes/tasks.ts']),
-    2,
-    null,
-    null,
-    '2026-05-09 18:30:00',
-    '2026-05-09 18:29:00',
-    '2026-05-09 18:22:00',
-    'run:700',
-    '2026-05-09 18:30:00',
-  );
+  `, 700, 460, 'progress', 'Implemented summary/full task context endpoint and tests.', 'abcdef1234567890abcdef1234567890abcdef12', 'cinder-backend/task-460', JSON.stringify(['api/src/lib/taskContext.ts', 'api/src/routes/tasks.ts']), 2, null, null, '2026-05-09 18:30:00', '2026-05-09 18:29:00', '2026-05-09 18:22:00', 'run:700', '2026-05-09 18:30:00');
 
-  db.prepare(`UPDATE tasks SET active_instance_id = ? WHERE id = ?`).run(700, 460);
+  await db.run(`UPDATE tasks SET active_instance_id = ? WHERE id = ?`, 700, 460);
 
-  db.prepare(`INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`).run(
-    9001, 460, 'Cinder', 'Agent check-in: Heartbeat\nSummary: still running\nSession: run:700', '2026-05-09 18:23:00',
-    9002, 460, 'Cinder', 'Agent check-in: Progress update\nSummary: Wired the endpoint and initial filters.\nCommit: abcdef1234567890abcdef1234567890abcdef12\nSession: run:700', '2026-05-09 18:25:00',
-    9003, 460, 'Masiah', 'Please keep the summary mode concise and truthful.', '2026-05-09 18:26:00',
-    9004, 460, 'Cinder', 'Agent check-in: Progress update\nSummary: Finalized deterministic meaningful-event grouping.\nCommit: abcdef1234567890abcdef1234567890abcdef12\nSession: run:700', '2026-05-09 18:28:00',
-  );
+  await db.run(`INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`, 9001, 460, 'Cinder', 'Agent check-in: Heartbeat\nSummary: still running\nSession: run:700', '2026-05-09 18:23:00', 9002, 460, 'Cinder', 'Agent check-in: Progress update\nSummary: Wired the endpoint and initial filters.\nCommit: abcdef1234567890abcdef1234567890abcdef12\nSession: run:700', '2026-05-09 18:25:00', 9003, 460, 'Masiah', 'Please keep the summary mode concise and truthful.', '2026-05-09 18:26:00', 9004, 460, 'Cinder', 'Agent check-in: Progress update\nSummary: Finalized deterministic meaningful-event grouping.\nCommit: abcdef1234567890abcdef1234567890abcdef12\nSession: run:700', '2026-05-09 18:28:00');
 
-  db.prepare(`INSERT INTO task_history (id, task_id, changed_by, field, old_value, new_value, created_at) VALUES
+  await db.run(`INSERT INTO task_history (id, task_id, changed_by, field, old_value, new_value, created_at) VALUES
     (8001, 460, 'cinder-backend', 'status', 'in_progress', 'review', '2026-05-09 18:24:00'),
     (8002, 460, 'cinder-backend', 'review_branch', NULL, 'cinder-backend/task-460', '2026-05-09 18:24:30'),
     (8003, 460, 'cinder-backend', 'review_commit', NULL, 'abcdef1234567890abcdef1234567890abcdef12', '2026-05-09 18:24:30'),
     (8004, 460, 'cinder-backend', 'review_url', NULL, 'http://localhost:3510/tasks/460/review', '2026-05-09 18:24:30'),
     (8005, 460, 'cinder-backend', 'runtime_ended_at', NULL, '2026-05-09T18:27:00.000Z', '2026-05-09 18:27:00'),
     (8006, 460, 'cinder-backend', 'lifecycle_outcome', NULL, 'completed_for_review', '2026-05-09 18:27:00')
-  `).run();
+  `);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO external_task_event_receipts (
       id, fingerprint, source, event, task_id, environment_id, queue_id, lease_id, branch, commit_sha, review_url, message, payload_json, received_by,
       processing_state, mapping_action_kind, mapping_action_target, created_at, processed_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    7001,
-    'fp-7001',
-    'dev_environment_lease_manager',
-    'deployed_for_qa',
-    460,
-    'agent-hq-dev',
-    'queue-123',
-    'lease-123',
-    'cinder-backend/task-460',
-    'abcdef1234567890abcdef1234567890abcdef12',
-    'http://localhost:3510/tasks/460/review',
-    'Shared dev is serving the reviewed commit.',
-    JSON.stringify({ ok: true }),
-    'atlas',
-    'processed',
-    'outcome',
-    'completed_for_review',
-    '2026-05-09 18:29:30',
-    '2026-05-09 18:29:30',
-  );
+  `, 7001, 'fp-7001', 'dev_environment_lease_manager', 'deployed_for_qa', 460, 'agent-hq-dev', 'queue-123', 'lease-123', 'cinder-backend/task-460', 'abcdef1234567890abcdef1234567890abcdef12', 'http://localhost:3510/tasks/460/review', 'Shared dev is serving the reviewed commit.', JSON.stringify({ ok: true }), 'atlas', 'processed', 'outcome', 'completed_for_review', '2026-05-09 18:29:30', '2026-05-09 18:29:30');
 }
 
 describe('GET /api/v1/tasks/:id/context', () => {
@@ -171,8 +106,8 @@ describe('GET /api/v1/tasks/:id/context', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-context-'));
     process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
     closeDb();
-    initSchema();
-    seedTaskContextFixture();
+    await initSchema();
+    await seedTaskContextFixture();
     ({ server, baseUrl } = await startServer());
   });
 

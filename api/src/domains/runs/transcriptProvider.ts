@@ -26,6 +26,7 @@ import { normalizeChatMessageRole, type PersistedChatRole } from '../../lib/chat
 import { extractGatewayStructuredEvents, extractTextFromGatewayMessage } from '../../lib/openclawMessageEvents';
 import { buildGatewayRunSessionKey, parseHookSessionKey, resolveRuntimeAgentSlug } from '../../lib/sessionKeys';
 import { backfillOpenClawJsonlTranscript, isRunChatTranscriptSparse } from './openclawJsonlBackfill';
+import { nowTimestamp, timestampFromEpochMs, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -104,14 +105,14 @@ interface RemoteRuntimeConfig {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function getInstanceRow(instanceId: number): InstanceRow | undefined {
+async function getInstanceRow(instanceId: number): Promise<InstanceRow | undefined> {
   const db = getDb();
-  return db.prepare('SELECT * FROM job_instances WHERE id = ?').get(instanceId) as InstanceRow | undefined;
+  return await db.get('SELECT * FROM job_instances WHERE id = ?', instanceId) as InstanceRow | undefined;
 }
 
-function getAgentRow(agentId: number): AgentRow | undefined {
+async function getAgentRow(agentId: number): Promise<AgentRow | undefined> {
   const db = getDb();
-  return db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId) as AgentRow | undefined;
+  return await db.get('SELECT * FROM agents WHERE id = ?', agentId) as AgentRow | undefined;
 }
 
 function parseRuntimeConfig(agent: AgentRow): RemoteRuntimeConfig {
@@ -291,7 +292,7 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
   }
 
   async getTranscript(instanceId: number): Promise<TranscriptResult> {
-    const instance = getInstanceRow(instanceId);
+    const instance = await getInstanceRow(instanceId);
     if (!instance) {
       return { sessionKey: null, source: 'openclaw', messages: [] };
     }
@@ -309,28 +310,28 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
 
     // Try chat_messages table as the authoritative source
     const db = getDb();
-    let chatMessages = db.prepare(`
+    let chatMessages = await db.all(`
       SELECT id, role, content, timestamp, event_type, event_meta
       FROM chat_messages
       WHERE instance_id = ?
       ORDER BY timestamp ASC
-    `).all(instanceId) as Array<{
+    `, instanceId) as Array<{
       id: string; role: string; content: string; timestamp: string;
       event_type?: string; event_meta?: string;
     }>;
 
     let transcriptSource = 'chat_messages';
     try {
-      if (isRunChatTranscriptSparse(db, instanceId)) {
-        const backfill = backfillOpenClawJsonlTranscript(db, instanceId, { forceFull: true });
+      if (await isRunChatTranscriptSparse(db, instanceId)) {
+        const backfill = await backfillOpenClawJsonlTranscript(db, instanceId, { forceFull: true });
         if (backfill.backfilled) {
           transcriptSource = 'openclaw-jsonl';
-          chatMessages = db.prepare(`
+          chatMessages = await db.all(`
             SELECT id, role, content, timestamp, event_type, event_meta
             FROM chat_messages
             WHERE instance_id = ?
             ORDER BY timestamp ASC
-          `).all(instanceId) as Array<{
+          `, instanceId) as Array<{
             id: string; role: string; content: string; timestamp: string;
             event_type?: string; event_meta?: string;
           }>;
@@ -343,7 +344,7 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
       );
     }
 
-    if (chatMessages.length > 0 && !isRunChatTranscriptSparse(db, instanceId)) {
+    if (chatMessages.length > 0 && !await isRunChatTranscriptSparse(db, instanceId)) {
       const messages: TranscriptMessage[] = chatMessages.map(m => ({
         id: m.id,
         role: m.role as TranscriptMessage['role'],
@@ -397,17 +398,17 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
 
         if (histResult?.ok && histResult.messages.length > 0) {
           // Persist the fetched history to chat_messages so subsequent loads are fast
-          const agent = getAgentRow(instance.agent_id);
+          const agent = await getAgentRow(instance.agent_id);
           const agentId = agent?.id ?? instance.agent_id;
-          this.persistGatewayHistory(instanceId, agentId, histResult.messages);
+          await this.persistGatewayHistory(instanceId, agentId, histResult.messages);
 
           // Re-read from chat_messages to get the freshly written rows
-          const refreshed = db.prepare(`
+          const refreshed = await db.all(`
             SELECT id, role, content, timestamp, event_type, event_meta
             FROM chat_messages
             WHERE instance_id = ?
             ORDER BY timestamp ASC
-          `).all(instanceId) as Array<{
+          `, instanceId) as Array<{
             id: string; role: string; content: string; timestamp: string;
             event_type?: string; event_meta?: string;
           }>;
@@ -453,13 +454,13 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
    * Persist gateway history messages to chat_messages, expanding multi-block
    * turns (tool calls, thoughts, tool results) into individual rows.
    */
-  private persistGatewayHistory(
+  private async persistGatewayHistory(
     instanceId: number,
     agentId: number,
     messages: Array<Record<string, unknown>>,
-  ): void {
+  ): Promise<void> {
     const db = getDb();
-    const stmt = db.prepare(`
+    const insertSql = `
       INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
@@ -467,26 +468,26 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
         timestamp = excluded.timestamp,
         event_type = excluded.event_type,
         event_meta = excluded.event_meta
-    `);
+    `;
 
     let rowIndex = 0;
     for (const m of messages) {
       const baseRole = m.role;
-      const ts = typeof m.timestamp === 'number' ? new Date(m.timestamp).toISOString()
+      const ts = typeof m.timestamp === 'number' ? (timestampFromEpochMs(m.timestamp) ?? nowTimestamp())
         : typeof m.timestamp === 'string' ? m.timestamp
-        : new Date().toISOString();
+        : nowTimestamp();
 
       // Expand structured content blocks into individual rows
       for (const evt of extractGatewayEvents(m)) {
         const rowId = `oc-hist-${instanceId}-${rowIndex++}`;
         const role = normalizeTranscriptRole(baseRole, evt.event_type);
-        stmt.run(rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(evt.event_meta));
+        await db.run(insertSql, rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(evt.event_meta));
       }
     }
   }
 
   async resolveSessionKey(instanceId: number): Promise<SessionKeyResult> {
-    const instance = getInstanceRow(instanceId);
+    const instance = await getInstanceRow(instanceId);
     if (!instance) {
       return { sessionKey: null, source: 'not_found' };
     }
@@ -503,7 +504,7 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
     // Reconstruct the full key from the agent's session_key prefix.
     const hook = parseHookSessionKey(sessionKey);
     if (hook) {
-      const agent = getAgentRow(agentId);
+      const agent = await getAgentRow(agentId);
       const fullKey = buildGatewayRunSessionKey(agent ?? null, hook.shortKey);
       if (fullKey) {
         return { sessionKey: fullKey, source: 'instance-reconstructed', agentId };
@@ -537,7 +538,7 @@ export class ClaudeCodeTranscriptProvider implements TranscriptProvider {
   }
 
   async getTranscript(instanceId: number): Promise<TranscriptResult> {
-    const instance = getInstanceRow(instanceId);
+    const instance = await getInstanceRow(instanceId);
     if (!instance) {
       return { sessionKey: null, source: 'claude-code', messages: [] };
     }
@@ -592,7 +593,7 @@ export class ClaudeCodeTranscriptProvider implements TranscriptProvider {
               id: (parsed.id as string) || `sdk-${index}`,
               role: type as TranscriptMessage['role'],
               content: text,
-              timestamp: (parsed.timestamp as string) || new Date().toISOString(),
+              timestamp: toCanonicalTimestampOrNow(parsed.timestamp),
               event_type: (parsed.event_type as string) ?? 'text',
               event_meta: typeof parsed.event_meta === 'object' && parsed.event_meta !== null
                 ? parsed.event_meta as Record<string, unknown>
@@ -612,7 +613,7 @@ export class ClaudeCodeTranscriptProvider implements TranscriptProvider {
   }
 
   async resolveSessionKey(instanceId: number): Promise<SessionKeyResult> {
-    const instance = getInstanceRow(instanceId);
+    const instance = await getInstanceRow(instanceId);
     if (!instance) {
       return { sessionKey: null, source: 'not_found' };
     }
@@ -633,12 +634,12 @@ export class ClaudeCodeTranscriptProvider implements TranscriptProvider {
     sessionKey: string | null,
   ): Promise<TranscriptResult> {
     const db = getDb();
-    const chatMessages = db.prepare(`
+    const chatMessages = await db.all(`
       SELECT id, role, content, timestamp, event_type, event_meta
       FROM chat_messages
       WHERE instance_id = ?
       ORDER BY timestamp ASC
-    `).all(instanceId) as Array<{
+    `, instanceId) as Array<{
       id: string; role: string; content: string; timestamp: string;
       event_type?: string; event_meta?: string;
     }>;
@@ -682,7 +683,7 @@ export class RemoteTranscriptProvider implements TranscriptProvider {
   }
 
   async getTranscript(instanceId: number): Promise<TranscriptResult> {
-    const instance = getInstanceRow(instanceId);
+    const instance = await getInstanceRow(instanceId);
     if (!instance) {
       return { sessionKey: null, source: this.name, messages: [] };
     }
@@ -707,12 +708,12 @@ export class RemoteTranscriptProvider implements TranscriptProvider {
 
     // Fall back to chat_messages table (populated by CustomAgentRuntime or similar)
     const db = getDb();
-    const chatMessages = db.prepare(`
+    const chatMessages = await db.all(`
       SELECT id, role, content, timestamp, event_type, event_meta
       FROM chat_messages
       WHERE instance_id = ?
       ORDER BY timestamp ASC
-    `).all(instanceId) as Array<{
+    `, instanceId) as Array<{
       id: string; role: string; content: string; timestamp: string;
       event_type?: string; event_meta?: string;
     }>;
@@ -744,7 +745,7 @@ export class RemoteTranscriptProvider implements TranscriptProvider {
   }
 
   async resolveSessionKey(instanceId: number): Promise<SessionKeyResult> {
-    const instance = getInstanceRow(instanceId);
+    const instance = await getInstanceRow(instanceId);
     if (!instance) {
       return { sessionKey: null, source: 'not_found' };
     }
@@ -800,7 +801,7 @@ export class RemoteTranscriptProvider implements TranscriptProvider {
       id: (m.id as string) || `remote-${i}`,
       role: (m.role as TranscriptMessage['role']) || 'assistant',
       content: (m.content as string) || '',
-      timestamp: (m.timestamp as string) || new Date().toISOString(),
+      timestamp: toCanonicalTimestampOrNow(m.timestamp),
       event_type: (m.event_type as string) ?? 'text',
       event_meta: typeof m.event_meta === 'object' && m.event_meta !== null
         ? m.event_meta as Record<string, unknown>
@@ -829,21 +830,21 @@ export class RemoteTranscriptProvider implements TranscriptProvider {
  *   - runtime_type='webhook'     → OpenClawTranscriptProvider (hooks dispatch, local chat)
  *   - unknown                    → OpenClawTranscriptProvider (safe fallback)
  */
-export function resolveTranscriptProvider(instanceId: number): TranscriptProvider {
-  const instance = getInstanceRow(instanceId);
+export async function resolveTranscriptProvider(instanceId: number): Promise<TranscriptProvider> {
+  const instance = await getInstanceRow(instanceId);
   if (!instance) {
     return new OpenClawTranscriptProvider();
   }
 
-  return resolveTranscriptProviderByAgent(instance.agent_id);
+  return await resolveTranscriptProviderByAgent(instance.agent_id);
 }
 
 /**
  * resolveTranscriptProviderByAgent — returns the appropriate TranscriptProvider
  * for a given agent ID. Useful when you need the provider without a specific instance.
  */
-export function resolveTranscriptProviderByAgent(agentId: number): TranscriptProvider {
-  const agent = getAgentRow(agentId);
+export async function resolveTranscriptProviderByAgent(agentId: number): Promise<TranscriptProvider> {
+  const agent = await getAgentRow(agentId);
   if (!agent) {
     return new OpenClawTranscriptProvider();
   }

@@ -102,7 +102,7 @@ export class OpenClawSessionAdapter implements SessionAdapter {
     // Resolve instance context
     let ctx: InstanceCtx | undefined;
     if (instanceId) {
-      ctx = db.prepare(`
+      ctx = await db.get(`
         SELECT ji.id, ji.session_key, ji.status, ji.started_at, ji.completed_at,
                ji.dispatched_at, ji.created_at, ji.token_input, ji.token_output,
                ji.agent_id, ji.task_id,
@@ -115,12 +115,12 @@ export class OpenClawSessionAdapter implements SessionAdapter {
         LEFT JOIN tasks t ON t.id = ji.task_id
         LEFT JOIN agents a ON a.id = ji.agent_id
         WHERE ji.id = ?
-      `).get(instanceId) as InstanceCtx | undefined;
+      `, instanceId) as InstanceCtx | undefined;
     }
 
     if (!ctx) {
       // Try to find instance by session_key
-      ctx = db.prepare(`
+      ctx = await db.get(`
         SELECT ji.id, ji.session_key, ji.status, ji.started_at, ji.completed_at,
                ji.dispatched_at, ji.created_at, ji.token_input, ji.token_output,
                ji.agent_id, ji.task_id,
@@ -134,14 +134,14 @@ export class OpenClawSessionAdapter implements SessionAdapter {
         LEFT JOIN agents a ON a.id = ji.agent_id
         WHERE ji.session_key = ?
         LIMIT 1
-      `).get(externalKey) as InstanceCtx | undefined;
+      `, externalKey) as InstanceCtx | undefined;
     }
 
     if (!ctx) {
       // Try parsing instance ID from canonical or legacy run-session patterns
       const hook = parseHookSessionKey(externalKey);
       if (hook) {
-        ctx = db.prepare(`
+        ctx = await db.get(`
           SELECT ji.id, ji.session_key, ji.status, ji.started_at, ji.completed_at,
                  ji.dispatched_at, ji.created_at, ji.token_input, ji.token_output,
                  ji.agent_id, ji.task_id,
@@ -154,7 +154,7 @@ export class OpenClawSessionAdapter implements SessionAdapter {
           LEFT JOIN tasks t ON t.id = ji.task_id
           LEFT JOIN agents a ON a.id = ji.agent_id
           WHERE ji.id = ?
-        `).get(hook.instanceId) as InstanceCtx | undefined;
+        `, hook.instanceId) as InstanceCtx | undefined;
       }
     }
 
@@ -163,12 +163,12 @@ export class OpenClawSessionAdapter implements SessionAdapter {
       if (!effectiveKey) return null;
 
       const startedAt = ctx.started_at ?? ctx.dispatched_at ?? ctx.created_at;
-      const rows = db.prepare(`
+      const rows = await db.all(`
         SELECT id, role, content, timestamp, event_type, event_meta
         FROM chat_messages
         WHERE instance_id = ?
         ORDER BY timestamp ASC
-      `).all(ctx.id) as ChatMessageRow[];
+      `, ctx.id) as ChatMessageRow[];
 
       const messages: SessionMessageInput[] = rows.map((row, idx) => ({
         ordinal: idx,
@@ -209,23 +209,23 @@ export class OpenClawSessionAdapter implements SessionAdapter {
     const slug = sessionSlug(externalKey);
     if (!slug) return null;
 
-    const directCtx = db.prepare(`
+    const directCtx = await db.get(`
       SELECT id, name, session_key, hooks_url
       FROM agents
       WHERE openclaw_agent_id = ?
          OR session_key LIKE ?
       ORDER BY CASE WHEN openclaw_agent_id = ? THEN 0 ELSE 1 END, id DESC
       LIMIT 1
-    `).get(slug, `agent:${slug}:%`, slug) as DirectCtx | undefined;
+    `, slug, `agent:${slug}:%`, slug) as DirectCtx | undefined;
 
     if (!directCtx) return null;
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT id, role, content, timestamp, event_type, event_meta
       FROM chat_messages
       WHERE instance_id IS NULL AND session_key = ?
       ORDER BY timestamp ASC
-    `).all(externalKey) as ChatMessageRow[];
+    `, externalKey) as ChatMessageRow[];
 
     const messages: SessionMessageInput[] = rows.map((row, idx) => ({
       ordinal: idx,
@@ -260,13 +260,13 @@ export class OpenClawSessionAdapter implements SessionAdapter {
 
   async resolveLiveChat(externalKey: string): Promise<LiveChatInfo | null> {
     const db = getDb();
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT ji.session_key, a.hooks_url, a.session_key AS agent_session_key
       FROM job_instances ji
       LEFT JOIN agents a ON a.id = ji.agent_id
       WHERE ji.session_key = ?
       LIMIT 1
-    `).get(externalKey) as { session_key: string | null; hooks_url: string | null; agent_session_key: string | null } | undefined;
+    `, externalKey) as { session_key: string | null; hooks_url: string | null; agent_session_key: string | null } | undefined;
 
     if (!row) return null;
 

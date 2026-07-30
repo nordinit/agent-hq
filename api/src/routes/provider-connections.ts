@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { listProviderDefinitions } from '../domains/providers/registry';
+import { tableColumns as sharedTableColumns } from "../db/introspection";
 import {
   getRuntimeProviderAdapter,
   listRuntimeProviderCapabilities,
@@ -54,15 +55,15 @@ router.get('/registry', (_req: Request, res: Response) => {
   res.json({ providers: listProviderDefinitions(), capabilities: listRuntimeProviderCapabilities() });
 });
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const rows = db.prepare(`
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const rows = await db.all(`
       SELECT * FROM provider_connections
       WHERE tenant_id = ?
       ORDER BY runtime_type, provider_slug, display_name, id
-    `).all(tenantId) as ConnectionRow[];
+    `, tenantId) as ConnectionRow[];
     res.json({ connections: rows.map(serialize) });
   } catch (error) {
     res.status(500).json({ error: String(error) });
@@ -133,31 +134,31 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const mergedMetadata = { ...match.metadata, ...metadata };
-    const existing = db.prepare(`
+    const existing = await db.get(`
       SELECT id FROM provider_connections
       WHERE tenant_id = ? AND runtime_type = ? AND provider_slug = ? AND auth_mode = ? AND external_ref = ?
-    `).get(tenantId, runtime, provider, authMode, externalRef) as { id: number } | undefined;
+    `, tenantId, runtime, provider, authMode, externalRef) as { id: number } | undefined;
     let id: number;
     if (existing) {
-      db.prepare(`
+      await db.run(`
         UPDATE provider_connections
         SET display_name = ?, status = 'connected', metadata = ?, last_validated_at = datetime('now'),
             validation_error = NULL, updated_at = datetime('now')
         WHERE id = ? AND tenant_id = ?
-      `).run(displayName || match.displayName, JSON.stringify(mergedMetadata), existing.id, tenantId);
+      `, displayName || match.displayName, JSON.stringify(mergedMetadata), existing.id, tenantId);
       id = existing.id;
     } else {
-      const result = db.prepare(`
+      const result = await db.run(`
         INSERT INTO provider_connections (
           tenant_id, provider_slug, auth_mode, runtime_type, external_ref, display_name,
           status, metadata, last_validated_at, validation_error
         ) VALUES (?, ?, ?, ?, ?, ?, 'connected', ?, datetime('now'), NULL)
-      `).run(tenantId, provider, authMode, runtime, externalRef, displayName || match.displayName, JSON.stringify(mergedMetadata));
-      id = Number(result.lastInsertRowid);
+      `, tenantId, provider, authMode, runtime, externalRef, displayName || match.displayName, JSON.stringify(mergedMetadata));
+      id = Number(result.lastInsertId);
     }
-    const row = db.prepare('SELECT * FROM provider_connections WHERE id = ? AND tenant_id = ?').get(id, tenantId) as ConnectionRow;
+    const row = await db.get('SELECT * FROM provider_connections WHERE id = ? AND tenant_id = ?', id, tenantId) as ConnectionRow;
     res.status(existing ? 200 : 201).json(serialize(row));
   } catch (error) {
     res.status(500).json({ error: String(error) });
@@ -167,8 +168,8 @@ router.post('/', async (req: Request, res: Response) => {
 router.post('/:id/validate', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const row = db.prepare('SELECT * FROM provider_connections WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId) as ConnectionRow | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const row = await db.get('SELECT * FROM provider_connections WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as ConnectionRow | undefined;
     if (!row) {
       res.status(404).json({ error: 'Provider connection not found.' });
       return;
@@ -185,31 +186,31 @@ router.post('/:id/validate', async (req: Request, res: Response) => {
     const match = discovered.find(connection => connection.externalRef === row.external_ref);
     const status = match ? 'connected' : 'failed';
     const validationError = match ? null : 'The runtime no longer reports this credential reference. Re-authenticate in the runtime.';
-    db.prepare(`
+    await db.run(`
       UPDATE provider_connections
       SET status = ?, last_validated_at = datetime('now'), validation_error = ?, updated_at = datetime('now')
       WHERE id = ? AND tenant_id = ?
-    `).run(status, validationError, row.id, tenantId);
+    `, status, validationError, row.id, tenantId);
     res.status(match ? 200 : 409).json({ ok: Boolean(match), status, error: validationError });
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
 });
 
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const existing = db.prepare('SELECT id FROM provider_connections WHERE id = ? AND tenant_id = ?').get(req.params.id, tenantId) as { id: number } | undefined;
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const existing = await db.get('SELECT id FROM provider_connections WHERE id = ? AND tenant_id = ?', req.params.id, tenantId) as { id: number } | undefined;
     if (!existing) {
       res.status(404).json({ error: 'Provider connection not found.' });
       return;
     }
-    const agentColumns = db.prepare('PRAGMA table_info(agents)').all() as Array<{ name: string }>;
+    const agentColumns = (await sharedTableColumns(db, 'agents')).map((name) => ({ name }));
     if (agentColumns.some(column => column.name === 'provider_connection_id')) {
-      db.prepare('UPDATE agents SET provider_connection_id = NULL WHERE provider_connection_id = ? AND tenant_id = ?').run(existing.id, tenantId);
+      await db.run('UPDATE agents SET provider_connection_id = NULL WHERE provider_connection_id = ? AND tenant_id = ?', existing.id, tenantId);
     }
-    db.prepare('DELETE FROM provider_connections WHERE id = ? AND tenant_id = ?').run(existing.id, tenantId);
+    await db.run('DELETE FROM provider_connections WHERE id = ? AND tenant_id = ?', existing.id, tenantId);
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: String(error) });

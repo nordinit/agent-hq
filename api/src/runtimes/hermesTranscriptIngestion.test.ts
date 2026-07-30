@@ -6,14 +6,17 @@ import {
   buildAgentHqRunContextBlock,
   ingestHermesTranscriptForRun,
 } from './hermesTranscriptIngestion';
+import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-function setupDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.exec(`
+async function setupDb(): Promise<Db> {
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
+  await db.exec(`
     CREATE TABLE chat_messages (
       id TEXT PRIMARY KEY,
       agent_id INTEGER NOT NULL,
@@ -39,8 +42,8 @@ function writeSession(hermesHome: string, name: string, data: Record<string, unk
 }
 
 describe('Hermes transcript ingestion', () => {
-  it('parses user text, assistant text, tool calls, tool results, and plain reasoning into chat_messages', () => {
-    const db = setupDb();
+  it('parses user text, assistant text, tool calls, tool results, and plain reasoning into chat_messages', async () => {
+    const db = await setupDb();
     const hermesHome = makeTempDir('hermes-ingest-');
     const context = {
       instanceId: 4806,
@@ -69,16 +72,16 @@ describe('Hermes transcript ingestion', () => {
       ],
     });
 
-    const result = ingestHermesTranscriptForRun({
-      db,
-      agentId: 17,
-      profile: 'cinder',
-      hermesHome,
-      ...context,
-    });
+    const result = await ingestHermesTranscriptForRun({
+          db,
+          agentId: 17,
+          profile: 'cinder',
+          hermesHome,
+          ...context,
+        });
 
     expect(result).toMatchObject({ imported: 5, skipped: null });
-    const rows = db.prepare('SELECT id, role, content, event_type, durable_run_id, session_key, event_meta FROM chat_messages ORDER BY timestamp, id').all() as Array<Record<string, string>>;
+    const rows = await db.all('SELECT id, role, content, event_type, durable_run_id, session_key, event_meta FROM chat_messages ORDER BY timestamp, id') as Array<Record<string, string>>;
     expect(rows.map((row) => [row.role, row.event_type, row.content])).toEqual([
       ['user', 'text', 'Do the task'],
       ['assistant', 'thought', 'I should inspect the repo first.'],
@@ -91,8 +94,8 @@ describe('Hermes transcript ingestion', () => {
     expect(JSON.parse(rows[3].event_meta).tool_call_id).toBe('call_1');
   });
 
-  it('does not import unmarked or ambiguous Hermes session files', () => {
-    const db = setupDb();
+  it('does not import unmarked or ambiguous Hermes session files', async () => {
+    const db = await setupDb();
     const hermesHome = makeTempDir('hermes-ambiguous-');
     const context = { instanceId: 4806, durableRunId: 'durable-4806', sessionKey: 'run:4806:durable-4806' };
 
@@ -100,7 +103,7 @@ describe('Hermes transcript ingestion', () => {
       messages: [{ role: 'assistant', content: 'wrong run' }],
     });
 
-    expect(ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context })).toMatchObject({
+    expect(await ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context })).toMatchObject({
       imported: 0,
       skipped: 'no-marker',
     });
@@ -114,15 +117,15 @@ describe('Hermes transcript ingestion', () => {
       messages: [{ role: 'assistant', content: 'second' }],
     });
 
-    expect(ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context })).toMatchObject({
+    expect(await ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context })).toMatchObject({
       imported: 0,
       skipped: 'ambiguous',
     });
-    expect((db.prepare('SELECT COUNT(*) AS n FROM chat_messages').get() as { n: number }).n).toBe(0);
+    expect((await db.get('SELECT COUNT(*) AS n FROM chat_messages') as { n: number }).n).toBe(0);
   });
 
-  it('is incremental and idempotent across repeated polls', () => {
-    const db = setupDb();
+  it('is incremental and idempotent across repeated polls', async () => {
+    const db = await setupDb();
     const hermesHome = makeTempDir('hermes-incremental-');
     const context = { instanceId: 4806, durableRunId: 'durable-4806', sessionKey: 'run:4806:durable-4806' };
     const filePath = writeSession(hermesHome, 'active.json', {
@@ -132,9 +135,9 @@ describe('Hermes transcript ingestion', () => {
       ],
     });
 
-    ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context });
-    ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context });
-    expect((db.prepare('SELECT COUNT(*) AS n FROM chat_messages').get() as { n: number }).n).toBe(1);
+    await ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context });
+    await ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context });
+    expect((await db.get('SELECT COUNT(*) AS n FROM chat_messages') as { n: number }).n).toBe(1);
 
     fs.writeFileSync(filePath, JSON.stringify({
       prompt: buildAgentHqRunContextBlock(context),
@@ -144,8 +147,8 @@ describe('Hermes transcript ingestion', () => {
       ],
     }, null, 2), 'utf-8');
 
-    ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context });
-    const rows = db.prepare('SELECT id, content FROM chat_messages ORDER BY timestamp').all() as Array<{ id: string; content: string }>;
+    await ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context });
+    const rows = await db.all('SELECT id, content FROM chat_messages ORDER BY timestamp') as Array<{ id: string; content: string }>;
     expect(rows).toEqual([
       { id: 'hermes-json-4806-0-0', content: 'hello' },
       { id: 'hermes-json-4806-1-0', content: 'world' },

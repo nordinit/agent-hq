@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import { stopTaskActiveInstance } from './taskStop';
 import { stopInstanceExecution } from './stopInstanceExecution';
+import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../domains/runs/stopInstanceExecution', () => ({
   stopInstanceExecution: jest.fn(),
@@ -8,9 +10,10 @@ jest.mock('../domains/runs/stopInstanceExecution', () => ({
 
 const mockedStopInstanceExecution = stopInstanceExecution as jest.MockedFunction<typeof stopInstanceExecution>;
 
-function createDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.exec(`
+async function createDb(): Promise<Db> {
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
+  await db.exec(`
     CREATE TABLE tasks (
       id INTEGER PRIMARY KEY,
       status TEXT NOT NULL,
@@ -48,23 +51,23 @@ function createDb(): Database.Database {
 }
 
 describe('stopTaskActiveInstance', () => {
-  let db: Database.Database;
+  let db: Db;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mockedStopInstanceExecution.mockReset();
-    db = createDb();
+    db = await createDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('aborts the active authoritative instance without pausing the task', async () => {
-    db.prepare(`
+    await db.run(`
       INSERT INTO tasks (id, status, active_instance_id, paused_at, pause_reason)
       VALUES (486, 'in_progress', 91, NULL, NULL)
-    `).run();
-    db.prepare(`INSERT INTO job_instances (id, status) VALUES (91, 'running')`).run();
+    `);
+    await db.run(`INSERT INTO job_instances (id, status) VALUES (91, 'running')`);
     mockedStopInstanceExecution.mockResolvedValue({
       id: 91,
       behavior: 'stop',
@@ -94,11 +97,11 @@ describe('stopTaskActiveInstance', () => {
       stop_result: expect.objectContaining({ id: 91, result: 'confirmed_stopped' }),
     });
 
-    const task = db.prepare(`
+    const task = await db.get(`
       SELECT paused_at, pause_reason, manual_intervention_count
       FROM tasks
       WHERE id = ?
-    `).get(486) as {
+    `, 486) as {
       paused_at: string | null;
       pause_reason: string | null;
       manual_intervention_count: number;
@@ -107,20 +110,20 @@ describe('stopTaskActiveInstance', () => {
     expect(task.pause_reason).toBeNull();
     expect(task.manual_intervention_count).toBe(0);
 
-    const history = db.prepare(`
+    const history = await db.all(`
       SELECT field
       FROM task_history
       WHERE task_id = ?
-    `).all(486) as Array<{ field: string }>;
+    `, 486) as Array<{ field: string }>;
     expect(history).toEqual([]);
 
-    const note = db.prepare(`
+    const note = await db.get(`
       SELECT author, content
       FROM task_notes
       WHERE task_id = ?
       ORDER BY id DESC
       LIMIT 1
-    `).get(486) as { author: string; content: string };
+    `, 486) as { author: string; content: string };
     expect(note).toEqual({
       author: 'cinder-backend',
       content: 'Active instance manually stopped by cinder-backend: Operator clicked Stop',
@@ -128,11 +131,11 @@ describe('stopTaskActiveInstance', () => {
   });
 
   it('preserves existing task pause state when the task was already paused', async () => {
-    db.prepare(`
+    await db.run(`
       INSERT INTO tasks (id, status, active_instance_id, paused_at, pause_reason, manual_intervention_count)
       VALUES (486, 'in_progress', 91, datetime('now'), 'Waiting on review', 2)
-    `).run();
-    db.prepare(`INSERT INTO job_instances (id, status) VALUES (91, 'running')`).run();
+    `);
+    await db.run(`INSERT INTO job_instances (id, status) VALUES (91, 'running')`);
     mockedStopInstanceExecution.mockResolvedValue({
       id: 91,
       behavior: 'stop',
@@ -160,31 +163,31 @@ describe('stopTaskActiveInstance', () => {
       no_op: false,
     });
 
-    const notes = db.prepare(`
+    const notes = await db.all(`
       SELECT content
       FROM task_notes
       WHERE task_id = ?
       ORDER BY id ASC
-    `).all(486) as Array<{ content: string }>;
+    `, 486) as Array<{ content: string }>;
     expect(notes).toEqual([
       { content: 'Active instance manually stopped by cinder-backend.' },
     ]);
 
-    const task = db.prepare(`
+    const task = await db.get(`
       SELECT paused_at, pause_reason, manual_intervention_count
       FROM tasks
       WHERE id = ?
-    `).get(486) as { paused_at: string | null; pause_reason: string | null; manual_intervention_count: number };
+    `, 486) as { paused_at: string | null; pause_reason: string | null; manual_intervention_count: number };
     expect(task.paused_at).not.toBeNull();
     expect(task.pause_reason).toBe('Waiting on review');
     expect(task.manual_intervention_count).toBe(2);
   });
 
   it('is a no-op and does not pause when no active instance is linked', async () => {
-    db.prepare(`
+    await db.run(`
       INSERT INTO tasks (id, status, active_instance_id, paused_at, pause_reason, manual_intervention_count)
       VALUES (486, 'ready', NULL, NULL, NULL, 0)
-    `).run();
+    `);
 
     const result = await stopTaskActiveInstance(db, 486, 'cinder-backend', 'No active run');
 
@@ -196,11 +199,11 @@ describe('stopTaskActiveInstance', () => {
       stop_result: null,
     });
 
-    const task = db.prepare(`
+    const task = await db.get(`
       SELECT paused_at, pause_reason, manual_intervention_count
       FROM tasks
       WHERE id = ?
-    `).get(486) as {
+    `, 486) as {
       paused_at: string | null;
       pause_reason: string | null;
       manual_intervention_count: number;
@@ -209,11 +212,11 @@ describe('stopTaskActiveInstance', () => {
     expect(task.pause_reason).toBeNull();
     expect(task.manual_intervention_count).toBe(0);
 
-    const notes = db.prepare(`
+    const notes = await db.all(`
       SELECT content
       FROM task_notes
       WHERE task_id = ?
-    `).all(486) as Array<{ content: string }>;
+    `, 486) as Array<{ content: string }>;
     expect(notes).toEqual([]);
   });
 });

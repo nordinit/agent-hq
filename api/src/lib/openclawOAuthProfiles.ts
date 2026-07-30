@@ -221,16 +221,16 @@ export function upsertOAuthProfile(
   return true;
 }
 
-function addKnownAgentIds(agentIds: Set<string>): void {
+async function addKnownAgentIds(agentIds: Set<string>): Promise<void> {
   agentIds.add(ATLAS_AGENT_SLUG);
 
   try {
-    const rows = getDb().prepare(`
+    const rows = await getDb().all(`
       SELECT DISTINCT openclaw_agent_id
       FROM agents
       WHERE openclaw_agent_id IS NOT NULL
         AND trim(openclaw_agent_id) <> ''
-    `).all() as Array<{ openclaw_agent_id: string }>;
+    `) as Array<{ openclaw_agent_id: string }>;
     for (const row of rows) {
       if (typeof row.openclaw_agent_id === 'string' && row.openclaw_agent_id.trim()) {
         agentIds.add(row.openclaw_agent_id.trim());
@@ -252,15 +252,15 @@ function addKnownAgentIds(agentIds: Set<string>): void {
   }
 }
 
-export function collectOAuthAuthProfilePaths(): string[] {
+export async function collectOAuthAuthProfilePaths(): Promise<string[]> {
   const agentIds = new Set<string>();
-  addKnownAgentIds(agentIds);
+  await addKnownAgentIds(agentIds);
   return Array.from(agentIds).sort().map(buildAgentAuthProfilesPath);
 }
 
-export function collectOAuthAuthStorePaths(): string[] {
+export async function collectOAuthAuthStorePaths(): Promise<string[]> {
   const agentIds = new Set<string>();
-  addKnownAgentIds(agentIds);
+  await addKnownAgentIds(agentIds);
   return Array.from(agentIds).sort().map(buildAgentAuthStorePath);
 }
 
@@ -306,16 +306,16 @@ function parseProviderConfigCredential(
   };
 }
 
-function providerConfigCandidate(provider: OAuthProviderSlug): OAuthCandidate | null {
+async function providerConfigCandidate(provider: OAuthProviderSlug): Promise<OAuthCandidate | null> {
   try {
     const db = getDb();
-    const tenantId = getActiveTenantId(db);
-    const row = db.prepare(`
+    const tenantId = await getActiveTenantId(db);
+    const row = await db.get(`
       SELECT id, slug, display_name, status, config
       FROM provider_config
       WHERE slug = ? AND tenant_id = ?
       LIMIT 1
-    `).get(provider, tenantId) as ProviderConfigRow | undefined;
+    `, provider, tenantId) as ProviderConfigRow | undefined;
     if (!row) return null;
     const credential = parseProviderConfigCredential(row, provider);
     return credential ? { credential, source: 'provider-config' } : null;
@@ -324,9 +324,11 @@ function providerConfigCandidate(provider: OAuthProviderSlug): OAuthCandidate | 
   }
 }
 
-function profileFromAuthStore(filePath: string, provider: OAuthProviderSlug): OpenClawOAuthCredential | null {
+async function profileFromAuthStore(filePath: string, provider: OAuthProviderSlug): Promise<OpenClawOAuthCredential | null> {
   if (provider !== 'openai-codex' || !fs.existsSync(filePath)) return null;
 
+  // NOT the Agent HQ database: this is OpenClaw's own on-disk SQLite auth store,
+  // read through the raw better-sqlite3 driver. It never moves to PostgreSQL.
   let db: Database.Database | null = null;
   try {
     db = new Database(filePath, { readonly: true, fileMustExist: true });
@@ -371,10 +373,10 @@ function profileFromAuthStore(filePath: string, provider: OAuthProviderSlug): Op
   }
 }
 
-function collectOAuthCandidates(provider: OAuthProviderSlug): OAuthCandidate[] {
+async function collectOAuthCandidates(provider: OAuthProviderSlug): Promise<OAuthCandidate[]> {
   const candidates: OAuthCandidate[] = [];
 
-  for (const filePath of collectOAuthAuthProfilePaths()) {
+  for (const filePath of await collectOAuthAuthProfilePaths()) {
     if (!fs.existsSync(filePath)) continue;
     const credential = profileFromAuthFile(filePath, provider);
     if (credential) {
@@ -382,14 +384,14 @@ function collectOAuthCandidates(provider: OAuthProviderSlug): OAuthCandidate[] {
     }
   }
 
-  for (const filePath of collectOAuthAuthStorePaths()) {
-    const credential = profileFromAuthStore(filePath, provider);
+  for (const filePath of await collectOAuthAuthStorePaths()) {
+    const credential = await profileFromAuthStore(filePath, provider);
     if (credential) {
       candidates.push({ credential, source: 'auth-profile', path: filePath });
     }
   }
 
-  const dbCandidate = providerConfigCandidate(provider);
+  const dbCandidate = await providerConfigCandidate(provider);
   if (dbCandidate) candidates.push(dbCandidate);
 
   return candidates;
@@ -492,16 +494,16 @@ function credentialToStoredOAuthConfig(
   };
 }
 
-export function persistOAuthCredentialToProviderConfig(
+export async function persistOAuthCredentialToProviderConfig(
   provider: OAuthProviderSlug,
   credential: OpenClawOAuthCredential,
-): void {
+): Promise<void> {
   const db = getDb();
-  const tenantId = getActiveTenantId(db);
+  const tenantId = await getActiveTenantId(db);
   const config = JSON.stringify(credentialToStoredOAuthConfig(provider, credential));
-  const existing = db.prepare('SELECT id FROM provider_config WHERE slug = ? AND tenant_id = ?').get(provider, tenantId) as { id: number } | undefined;
+  const existing = await db.get('SELECT id FROM provider_config WHERE slug = ? AND tenant_id = ?', provider, tenantId) as { id: number } | undefined;
   if (existing) {
-    db.prepare(`
+    await db.run(`
       UPDATE provider_config
       SET status = 'connected',
           config = ?,
@@ -509,14 +511,14 @@ export function persistOAuthCredentialToProviderConfig(
           last_validated_at = datetime('now'),
           updated_at = datetime('now')
       WHERE slug = ? AND tenant_id = ?
-    `).run(config, provider, tenantId);
+    `, config, provider, tenantId);
     return;
   }
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO provider_config (tenant_id, slug, display_name, status, config, last_validated_at, validation_error)
     VALUES (?, ?, ?, 'connected', ?, datetime('now'), NULL)
-  `).run(tenantId, provider, 'OpenAI Codex (OAuth)', config);
+  `, tenantId, provider, 'OpenAI Codex (OAuth)', config);
 }
 
 async function refreshOpenAICodexCredential(refreshToken: string): Promise<OpenClawOAuthCredential> {
@@ -561,11 +563,11 @@ export function syncOAuthCredentialToAuthProfiles(
   return updated;
 }
 
-export function syncOAuthCredentialToAllAuthProfiles(
+export async function syncOAuthCredentialToAllAuthProfiles(
   provider: OAuthProviderSlug,
   credential: OpenClawOAuthCredential,
-): string[] {
-  return syncOAuthCredentialToAuthProfiles(provider, credential, collectOAuthAuthProfilePaths());
+): Promise<string[]> {
+  return syncOAuthCredentialToAuthProfiles(provider, credential, await collectOAuthAuthProfilePaths());
 }
 
 function buildRuntimeOAuthProfile(
@@ -594,17 +596,23 @@ function buildRuntimeOAuthProfile(
   };
 }
 
-export function upsertOAuthProfileStore(
+export async function upsertOAuthProfileStore(
   filePath: string,
   provider: OAuthProviderSlug,
   credential: OpenClawOAuthCredential,
-): boolean {
+): Promise<boolean> {
   if (provider !== 'openai-codex' || !fs.existsSync(filePath)) return false;
 
+  // NOT the Agent HQ database: this is OpenClaw's own on-disk SQLite auth store.
+  // It keeps the raw better-sqlite3 driver — including PRAGMA and the synchronous
+  // db.transaction() form — because it is not part of the PostgreSQL migration.
   let db: Database.Database | null = null;
   try {
     db = new Database(filePath, { fileMustExist: true });
     db.pragma('busy_timeout = 5000');
+    // Raw better-sqlite3 on purpose: this opens OPENCLAW'S OWN auth-profile file, an
+    // external SQLite database Agent HQ only reads. It is not Agent HQ's database and does
+    // not migrate to PostgreSQL with it, so sqlite_master here is correct and permanent.
     const table = db.prepare(`
       SELECT 1 AS present
       FROM sqlite_master
@@ -657,14 +665,14 @@ export function upsertOAuthProfileStore(
   }
 }
 
-export function syncOAuthCredentialToAuthStores(
+export async function syncOAuthCredentialToAuthStores(
   provider: OAuthProviderSlug,
   credential: OpenClawOAuthCredential,
   paths: string[],
-): string[] {
+): Promise<string[]> {
   const updated: string[] = [];
   for (const filePath of Array.from(new Set(paths))) {
-    if (upsertOAuthProfileStore(filePath, provider, credential)) {
+    if (await upsertOAuthProfileStore(filePath, provider, credential)) {
       updated.push(filePath);
     }
   }
@@ -707,30 +715,30 @@ export function ensureOpenClawOAuthConfigMapping(
   return true;
 }
 
-export function syncOAuthCredentialToAllOpenClawStores(
+export async function syncOAuthCredentialToAllOpenClawStores(
   provider: OAuthProviderSlug,
   credential: OpenClawOAuthCredential,
-): string[] {
+): Promise<string[]> {
   const updated = [
-    ...syncOAuthCredentialToAllAuthProfiles(provider, credential),
-    ...syncOAuthCredentialToAuthStores(provider, credential, collectOAuthAuthStorePaths()),
+    ...await syncOAuthCredentialToAllAuthProfiles(provider, credential),
+    ...await syncOAuthCredentialToAuthStores(provider, credential, await collectOAuthAuthStorePaths()),
   ];
   const configPath = process.env.OPENCLAW_CONFIG_PATH ?? OPENCLAW_CONFIG_PATH;
   if (ensureOpenClawOAuthConfigMapping(configPath)) updated.push(configPath);
   return Array.from(new Set(updated));
 }
 
-export function syncAvailableOAuthProfilesToAuthFile(agentDirPath: string): string[] {
+export async function syncAvailableOAuthProfilesToAuthFile(agentDirPath: string): Promise<string[]> {
   const synced: string[] = [];
   const authFilePath = path.join(agentDirPath, 'auth-profiles.json');
   const authStorePath = path.join(agentDirPath, OPENCLAW_AUTH_STORE_FILENAME);
   const provider: OAuthProviderSlug = 'openai-codex';
-  const candidate = chooseFreshCandidate(collectOAuthCandidates(provider), 0)
-    ?? chooseBestCandidate(collectOAuthCandidates(provider));
+  const candidate = chooseFreshCandidate(await collectOAuthCandidates(provider), 0)
+    ?? chooseBestCandidate(await collectOAuthCandidates(provider));
   if (!candidate) return synced;
 
   upsertOAuthProfile(authFilePath, provider, candidate.credential);
-  upsertOAuthProfileStore(authStorePath, provider, candidate.credential);
+  await upsertOAuthProfileStore(authStorePath, provider, candidate.credential);
   ensureOpenClawOAuthConfigMapping();
   synced.push(provider);
   return synced;
@@ -743,7 +751,7 @@ export async function resolveOAuthCredentialForProvider(params: {
   const provider = params.provider ?? 'openai-codex';
   const profileKey = getOAuthProfileKey(provider);
   const minTtlMs = params.minTtlMs ?? DEFAULT_MIN_TTL_MS;
-  let candidates = collectOAuthCandidates(provider);
+  let candidates = await collectOAuthCandidates(provider);
 
   let selected = chooseFreshCandidate(candidates, minTtlMs);
   let credential = selected?.credential ?? null;
@@ -770,7 +778,7 @@ export async function resolveOAuthCredentialForProvider(params: {
     } catch (err) {
       // Another OpenClaw session may have refreshed the shared account while we
       // were reading. Reload once and adopt any fresh profile before failing.
-      candidates = collectOAuthCandidates(provider);
+      candidates = await collectOAuthCandidates(provider);
       selected = chooseFreshCandidate(candidates, minTtlMs);
       if (selected) {
         credential = selected.credential;
@@ -788,7 +796,7 @@ export async function resolveOAuthCredentialForProvider(params: {
     }
   }
 
-  persistOAuthCredentialToProviderConfig(provider, credential);
+  await persistOAuthCredentialToProviderConfig(provider, credential);
 
   return {
     ok: true,
@@ -829,13 +837,13 @@ export async function syncOAuthProviderForOpenClawAgent(params: {
   }
 
   const credential = resolved.credential;
-  const paths = params.syncAll ? collectOAuthAuthProfilePaths() : [targetPath];
+  const paths = params.syncAll ? await collectOAuthAuthProfilePaths() : [targetPath];
   const storePaths = params.syncAll
-    ? collectOAuthAuthStorePaths()
+    ? await collectOAuthAuthStorePaths()
     : [buildAgentAuthStorePath(params.agentSlug)];
   const updatedPaths = [
     ...syncOAuthCredentialToAuthProfiles(provider, credential, paths),
-    ...syncOAuthCredentialToAuthStores(provider, credential, storePaths),
+    ...await syncOAuthCredentialToAuthStores(provider, credential, storePaths),
   ];
   const configPath = process.env.OPENCLAW_CONFIG_PATH ?? OPENCLAW_CONFIG_PATH;
   if (ensureOpenClawOAuthConfigMapping(configPath)) updatedPaths.push(configPath);

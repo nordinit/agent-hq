@@ -23,7 +23,7 @@ function readOptionalPositiveInteger(value: unknown): number | null {
 
 // GET /api/v1/instances — recent job runs for chat/run selectors.
 // Include task ownership so pre-canonical starting runs can survive project filters.
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const agentId = readOptionalPositiveInteger(req.query.agent_id);
@@ -45,7 +45,7 @@ router.get('/', (req: Request, res: Response) => {
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     params.push(limit, offset);
 
-    const instances = db.prepare(`
+    const instances = await db.all(`
       SELECT
         ji.*,
         a.job_title AS job_title,
@@ -82,7 +82,7 @@ router.get('/', (req: Request, res: Response) => {
       ${whereClause}
       ORDER BY ji.created_at DESC
       LIMIT ? OFFSET ?
-    `).all(...params);
+    `, ...params);
     return res.json(instances);
   } catch (err) {
     return res.status(500).json({ error: String(err) });
@@ -91,11 +91,11 @@ router.get('/', (req: Request, res: Response) => {
 
 // PUT /api/v1/instances/:id/start
 // Called by agents at the beginning of a job run to register their session key
-router.put('/:id/start', (req: Request, res: Response) => {
+router.put('/:id/start', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
     const { session_key } = req.body as { session_key?: string };
-    return res.json(startRunInstance(getDb(), id, session_key ?? null));
+    return res.json(await startRunInstance(getDb(), id, session_key ?? null));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -104,10 +104,10 @@ router.put('/:id/start', (req: Request, res: Response) => {
 
 // POST /api/v1/instances/:id/check-in
 // Called by agents during a run to mirror progress into Agent HQ
-router.post('/:id/check-in', (req: Request, res: Response) => {
+router.post('/:id/check-in', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    return res.json(recordInstanceCheckIn(getDb(), id, (req.body ?? {}) as Record<string, unknown>));
+    return res.json(await recordInstanceCheckIn(getDb(), id, (req.body ?? {}) as Record<string, unknown>));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -128,9 +128,9 @@ router.put('/:id/complete', async (req: Request, res: Response) => {
 
 // GET /api/v1/instances/:id/session-key
 // Resolves the real session key for a cron-dispatched job by reading the cron run JSONL
-router.get('/:id/session-key', (req: Request, res: Response) => {
+router.get('/:id/session-key', async (req: Request, res: Response) => {
   try {
-    return res.json(resolveInstanceSessionKey(getDb(), Number(req.params.id)));
+    return res.json(await resolveInstanceSessionKey(getDb(), Number(req.params.id)));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
@@ -146,7 +146,7 @@ router.get('/:id/session-key', (req: Request, res: Response) => {
 router.get('/:id/transcript', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);
-    const provider = resolveTranscriptProvider(id);
+    const provider = await resolveTranscriptProvider(id);
     const result = await provider.getTranscript(id);
 
     await ensureCanonicalSessionForInstance(id);
@@ -200,12 +200,12 @@ router.put('/:id/stop', async (req: Request, res: Response) => {
     const rawBehavior = body.behavior ?? body.mode ?? body.action;
     const behavior = rawBehavior !== undefined ? normalizeStopBehavior(rawBehavior) : 'stop';
 
-    const instance = db.prepare(`
+    const instance = await db.get(`
       SELECT ji.*, a.session_key AS agent_session_key, a.runtime_type, a.runtime_config
       FROM job_instances ji
       LEFT JOIN agents a ON a.id = ji.agent_id
       WHERE ji.id = ?
-    `).get(id) as Record<string, unknown> | undefined;
+    `, id) as Record<string, unknown> | undefined;
     if (!instance) return res.status(404).json({ error: 'Instance not found' });
 
     const status = instance.status as string;

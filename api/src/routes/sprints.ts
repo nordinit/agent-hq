@@ -6,6 +6,8 @@ import { attachSprintJob, closeSprint, completeSprintRoute, createSprint, delete
 import { checkSprintCompletion } from '../domains/sprints/lifecycle';
 import { getSprintDetail, getSprintMetrics, listSprintJobs, listSprints } from '../domains/sprints/readModel';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { columnExists as sharedColumnExists } from "../db/introspection";
+import { parseIdParam } from '../lib/routeParams';
 
 export { checkSprintCompletion };
 
@@ -31,42 +33,42 @@ interface Sprint {
 
 router.use(sprintDefinitionsRouter);
 
-function requireSprintVisibleForTenant(db: ReturnType<typeof getDb>, sprintId: number | string, tenantId: number): boolean {
-  if (!routeTableHasColumn(db, 'sprints', 'tenant_id')) {
-    return Boolean(db.prepare(`SELECT id FROM sprints WHERE id = ?`).get(sprintId));
+async function requireSprintVisibleForTenant(db: ReturnType<typeof getDb>, sprintId: number | string, tenantId: number): Promise<boolean> {
+  if (!await routeTableHasColumn(db, 'sprints', 'tenant_id')) {
+    return Boolean(await db.get(`SELECT id FROM sprints WHERE id = ?`, sprintId));
   }
-  return Boolean(db.prepare(`SELECT id FROM sprints WHERE id = ? AND tenant_id = ?`).get(sprintId, tenantId));
+  return Boolean(await db.get(`SELECT id FROM sprints WHERE id = ? AND tenant_id = ?`, sprintId, tenantId));
 }
 
-function routeTableHasColumn(db: ReturnType<typeof getDb>, table: string, column: string): boolean {
+async function routeTableHasColumn(db: ReturnType<typeof getDb>, table: string, column: string): Promise<boolean> {
   try {
-    return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((row) => row.name === column);
+    return await sharedColumnExists(db, `${table}`, column);
   } catch {
     return false;
   }
 }
 
-function requireProjectVisibleForTenant(db: ReturnType<typeof getDb>, projectId: number, tenantId: number): boolean {
-  if (!routeTableHasColumn(db, 'projects', 'tenant_id')) {
-    return Boolean(db.prepare(`SELECT id FROM projects WHERE id = ?`).get(projectId));
+async function requireProjectVisibleForTenant(db: ReturnType<typeof getDb>, projectId: number, tenantId: number): Promise<boolean> {
+  if (!await routeTableHasColumn(db, 'projects', 'tenant_id')) {
+    return Boolean(await db.get(`SELECT id FROM projects WHERE id = ?`, projectId));
   }
-  return Boolean(db.prepare(`SELECT id FROM projects WHERE id = ? AND tenant_id = ?`).get(projectId, tenantId));
+  return Boolean(await db.get(`SELECT id FROM projects WHERE id = ? AND tenant_id = ?`, projectId, tenantId));
 }
 
-function requireAgentVisibleForTenant(db: ReturnType<typeof getDb>, agentId: number, tenantId: number): boolean {
-  if (!routeTableHasColumn(db, 'agents', 'tenant_id')) {
-    return Boolean(db.prepare(`SELECT id FROM agents WHERE id = ?`).get(agentId));
+async function requireAgentVisibleForTenant(db: ReturnType<typeof getDb>, agentId: number, tenantId: number): Promise<boolean> {
+  if (!await routeTableHasColumn(db, 'agents', 'tenant_id')) {
+    return Boolean(await db.get(`SELECT id FROM agents WHERE id = ?`, agentId));
   }
-  return Boolean(db.prepare(`SELECT id FROM agents WHERE id = ? AND tenant_id = ?`).get(agentId, tenantId));
+  return Boolean(await db.get(`SELECT id FROM agents WHERE id = ? AND tenant_id = ?`, agentId, tenantId));
 }
 
 // ── GET /api/v1/sprints ───────────────────────────────────────────────────────
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    res.json(listSprints(db, { ...req.query, tenant_id: tenantId }));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    res.json(await listSprints(db, { ...req.query, tenant_id: tenantId }));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
@@ -74,12 +76,16 @@ router.get('/', (req: Request, res: Response) => {
 
 // ── GET /api/v1/sprints/:id ───────────────────────────────────────────────────
 
-router.get('/:id', (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
+    // Reject a non-numeric id before it reaches the database. SQLite silently returned no
+    // match for `/workflows/types`, so this route 404'd by accident; PostgreSQL rejects the
+    // cast and would 500 with a database error instead.
+    if (parseIdParam(req.params.id) === null) return res.status(404).json({ error: 'Sprint not found' });
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
-    const sprint = getSprintDetail(db, Number(req.params.id));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
+    const sprint = await getSprintDetail(db, Number(req.params.id));
     if (!sprint) return res.status(404).json({ error: 'Sprint not found' });
     return res.json(sprint);
   } catch (err) {
@@ -89,15 +95,15 @@ router.get('/:id', (req: Request, res: Response) => {
 
 // ── POST /api/v1/sprints ──────────────────────────────────────────────────────
 
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const projectId = Number((req.body as Partial<Sprint>)?.project_id);
     if (Number.isInteger(projectId) && projectId > 0) {
-      if (!requireProjectVisibleForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
+      if (!await requireProjectVisibleForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
     }
-    return res.status(201).json(createSprint(db, { ...(req.body as Partial<Sprint>), tenant_id: tenantId } as Partial<Sprint>, extractActor(req)));
+    return res.status(201).json(await createSprint(db, { ...(req.body as Partial<Sprint>), tenant_id: tenantId } as Partial<Sprint>, extractActor(req)));
   } catch (err) {
     const typedErr = err as Error & { status?: number; body?: Record<string, unknown> };
     return res.status(typedErr.status ?? 500).json(typedErr.body ?? { error: typedErr.message });
@@ -106,17 +112,17 @@ router.post('/', (req: Request, res: Response) => {
 
 // ── PUT /api/v1/sprints/:id ───────────────────────────────────────────────────
 
-router.put('/:id', (req: Request, res: Response) => {
+router.put('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
     const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
     if (body.project_id !== undefined) {
       const projectId = Number(body.project_id);
-      if (!requireProjectVisibleForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
+      if (!await requireProjectVisibleForTenant(db, projectId, tenantId)) return res.status(404).json({ error: 'Project not found' });
     }
-    return res.json(updateSprint(db, Number(req.params.id), body, extractActor(req)));
+    return res.json(await updateSprint(db, Number(req.params.id), body, extractActor(req)));
   } catch (err) {
     const typedErr = err as Error & { status?: number; body?: Record<string, unknown> };
     return res.status(typedErr.status ?? 500).json(typedErr.body ?? { error: typedErr.message });
@@ -125,11 +131,11 @@ router.put('/:id', (req: Request, res: Response) => {
 
 // ── DELETE /api/v1/sprints/:id ────────────────────────────────────────────────
 
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    return res.json(deleteSprint(db, Number(req.params.id), extractActor(req), tenantId));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    return res.json(await deleteSprint(db, Number(req.params.id), extractActor(req), tenantId));
   } catch (err) {
     const typedErr = err as Error & { status?: number };
     return res.status(typedErr.status ?? 500).json({ error: typedErr.message });
@@ -138,12 +144,12 @@ router.delete('/:id', (req: Request, res: Response) => {
 
 // ── POST /api/v1/sprints/:id/close ───────────────────────────────────────────
 
-router.post('/:id/close', (req: Request, res: Response) => {
+router.post('/:id/close', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
-    return res.json(closeSprint(db, Number(req.params.id), extractActor(req)));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
+    return res.json(await closeSprint(db, Number(req.params.id), extractActor(req)));
   } catch (err) {
     const typedErr = err as Error & { status?: number };
     return res.status(typedErr.status ?? 500).json({ error: typedErr.message });
@@ -152,12 +158,12 @@ router.post('/:id/close', (req: Request, res: Response) => {
 
 // ── POST /api/v1/sprints/:id/complete ────────────────────────────────────────
 
-router.post('/:id/complete', (req: Request, res: Response) => {
+router.post('/:id/complete', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
-    return res.json(completeSprintRoute(db, Number(req.params.id)));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
+    return res.json(await completeSprintRoute(db, Number(req.params.id)));
   } catch (err) {
     const typedErr = err as Error & { status?: number };
     return res.status(typedErr.status ?? 500).json({ error: typedErr.message });
@@ -166,12 +172,12 @@ router.post('/:id/complete', (req: Request, res: Response) => {
 
 // ── GET /api/v1/sprints/:id/metrics ──────────────────────────────────────────
 
-router.get('/:id/metrics', (req: Request, res: Response) => {
+router.get('/:id/metrics', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
-    const metrics = getSprintMetrics(db, Number(req.params.id));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
+    const metrics = await getSprintMetrics(db, Number(req.params.id));
     if (!metrics) return res.status(404).json({ error: 'Sprint not found' });
     return res.json(metrics);
   } catch (err) {
@@ -181,12 +187,12 @@ router.get('/:id/metrics', (req: Request, res: Response) => {
 
 // ── GET /api/v1/sprints/:id/jobs ─────────────────────────────────────────────
 
-router.get('/:id/jobs', (req: Request, res: Response) => {
+router.get('/:id/jobs', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
-    const jobs = listSprintJobs(db, Number(req.params.id));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
+    const jobs = await listSprintJobs(db, Number(req.params.id));
     if (!jobs) return res.status(404).json({ error: 'Sprint not found' });
     return res.json(jobs);
   } catch (err) {
@@ -196,16 +202,16 @@ router.get('/:id/jobs', (req: Request, res: Response) => {
 
 // ── POST /api/v1/sprints/:id/jobs ────────────────────────────────────────────
 // Task #605: sprint-scoped agents are deprecated. Use sprint_task_routing_rules.
-router.post('/:id/jobs', (req: Request, res: Response) => {
+router.post('/:id/jobs', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
     const { job_id } = req.body as { job_id?: number };
     if (job_id) {
-      if (!requireAgentVisibleForTenant(db, job_id, tenantId)) return res.status(404).json({ error: 'Agent/job not found' });
+      if (!await requireAgentVisibleForTenant(db, job_id, tenantId)) return res.status(404).json({ error: 'Agent/job not found' });
     }
-    return res.status(201).json(attachSprintJob(db, Number(req.params.id), job_id));
+    return res.status(201).json(await attachSprintJob(db, Number(req.params.id), job_id));
   } catch (err) {
     const typedErr = err as Error & { status?: number };
     return res.status(typedErr.status ?? 500).json({ error: typedErr.message });
@@ -214,13 +220,13 @@ router.post('/:id/jobs', (req: Request, res: Response) => {
 
 // ── DELETE /api/v1/sprints/:id/jobs/:jobId ───────────────────────────────────
 // Task #605: sprint-scoped agents are deprecated. Use sprint_task_routing_rules.
-router.delete('/:id/jobs/:jobId', (req: Request, res: Response) => {
+router.delete('/:id/jobs/:jobId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    if (!requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
-    if (!requireAgentVisibleForTenant(db, Number(req.params.jobId), tenantId)) return res.status(404).json({ error: 'Agent/job not found' });
-    return res.json(detachSprintJob(db, Number(req.params.id), Number(req.params.jobId)));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
+    if (!await requireAgentVisibleForTenant(db, Number(req.params.jobId), tenantId)) return res.status(404).json({ error: 'Agent/job not found' });
+    return res.json(await detachSprintJob(db, Number(req.params.id), Number(req.params.jobId)));
   } catch (err) {
     const typedErr = err as Error & { status?: number };
     return res.status(typedErr.status ?? 500).json({ error: typedErr.message });

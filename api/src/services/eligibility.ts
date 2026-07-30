@@ -1,14 +1,7 @@
-/**
- * eligibility.ts — Background lifecycle repair service
- *
- * Background passes must not mutate visible board workflow statuses.
- * Explicit user or agent actions own task progression. This service is limited to
- * recovering execution-state drift and surfacing runtime integrity anomalies.
- */
-
-import Database from 'better-sqlite3';
 import { notifyTelegram } from '../integrations/telegram';
 import { writeTaskStatusChange } from '../domains/tasks/history';
+import { type Db } from "../db/adapter/types";
+import { columnExists as sharedColumnExists } from "../db/introspection";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -45,13 +38,11 @@ interface RoutingConfigRow {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function getRoutingConfig(db: Database.Database, agentId: number | null): RoutingConfigRow {
+async function getRoutingConfig(db: Db, agentId: number | null): Promise<RoutingConfigRow> {
   // Task #596: routing_config_legacy has been removed. Read config from agents table.
   if (agentId == null) return { stall_threshold_min: 30, max_retries: 3 };
   try {
-    const agentRow = db.prepare(
-      `SELECT stall_threshold_min, max_retries FROM agents WHERE id = ?`
-    ).get(agentId) as RoutingConfigRow | undefined;
+    const agentRow = await db.get(`SELECT stall_threshold_min, max_retries FROM agents WHERE id = ?`, agentId) as RoutingConfigRow | undefined;
     return agentRow ?? { stall_threshold_min: 30, max_retries: 3 };
   } catch {
     return { stall_threshold_min: 30, max_retries: 3 };
@@ -61,7 +52,7 @@ function getRoutingConfig(db: Database.Database, agentId: number | null): Routin
 
 // ── Main pass ────────────────────────────────────────────────────────────────
 
-export function runEligibilityPass(db: Database.Database, projectId?: number): EligibilityResult {
+export async function runEligibilityPass(db: Db, projectId?: number): Promise<EligibilityResult> {
   const result: EligibilityResult = { promoted: 0, blocked: 0, stalled: 0, unclaimed: 0 };
 
   const projectFilter = projectId != null ? `AND t.project_id = ${projectId}` : '';
@@ -84,12 +75,12 @@ export function runEligibilityPass(db: Database.Database, projectId?: number): E
   // ── 6. review → ready (QA fail path) — handled by QA agent via PUT /tasks/:id ──
   // The QA agent sets status='todo' and resets agent_id to review_owner_agent_id.
   // This service handles the retry_count increment + failed promotion.
-  const reviewTasks = db.prepare(`
+  const reviewTasks = await db.all(`
     SELECT t.*
     FROM tasks t
     WHERE t.status = 'review'
     ${projectFilter}
-  `).all() as TaskRow[];
+  `) as TaskRow[];
 
   for (const task of reviewTasks) {
     // Only act if review_owner_agent_id is set AND the task has exceeded max_retries
@@ -108,31 +99,31 @@ export function runEligibilityPass(db: Database.Database, projectId?: number): E
  * Increments retry_count. If retry_count >= max_retries: sets failed. Otherwise: resets to ready.
  * Returns the new status.
  */
-export function resetFromQAFail(db: Database.Database, taskId: number): 'ready' | 'failed' {
-  const task = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(taskId) as TaskRow | undefined;
+export async function resetFromQAFail(db: Db, taskId: number): Promise<'ready' | 'failed'> {
+  const task = await db.get(`SELECT * FROM tasks WHERE id = ?`, taskId) as TaskRow | undefined;
   if (!task) throw new Error(`Task ${taskId} not found`);
 
   const assignedAgentId = task.assigned_agent_id ?? task.agent_id;
-  const config = getRoutingConfig(db, assignedAgentId);
+  const config = await getRoutingConfig(db, assignedAgentId);
   const newRetryCount = task.retry_count + 1;
   const maxRetries = config.max_retries ?? task.max_retries ?? 3;
 
   if (newRetryCount >= maxRetries) {
-    db.prepare(`
+    await db.run(`
       UPDATE tasks SET status = 'failed', retry_count = ?, updated_at = datetime('now') WHERE id = ?
-    `).run(newRetryCount, taskId);
-    writeTaskStatusChange(db, taskId, 'eligibility', task.status, 'failed');
+    `, newRetryCount, taskId);
+    await writeTaskStatusChange(db, taskId, 'eligibility', task.status, 'failed');
     return 'failed';
   } else {
     const targetAgentId = task.review_owner_agent_id ?? assignedAgentId;
-    const hasAssignedAgentColumn = (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((col) => col.name === 'assigned_agent_id');
+    const hasAssignedAgentColumn = await sharedColumnExists(db, 'tasks', 'assigned_agent_id');
     const assignmentColumn = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id';
-    db.prepare(`
+    await db.run(`
       UPDATE tasks
       SET status = 'ready', retry_count = ?, ${assignmentColumn} = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(newRetryCount, targetAgentId, taskId);
-    writeTaskStatusChange(db, taskId, 'eligibility', task.status, 'ready');
+    `, newRetryCount, targetAgentId, taskId);
+    await writeTaskStatusChange(db, taskId, 'eligibility', task.status, 'ready');
     return 'ready';
   }
 }

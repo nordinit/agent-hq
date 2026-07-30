@@ -3,13 +3,15 @@ import express from 'express';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-let db: Database.Database;
+let db: Db;
 
 jest.mock('../db/client', () => ({
   getDb: () => db,
 }));
 
 import instancesRouter from './instances';
+import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function getJson(app: express.Express, route: string): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -26,8 +28,8 @@ async function getJson(app: express.Express, route: string): Promise<{ status: n
   }
 }
 
-function setupDb(): void {
-  db.exec(`
+async function setupDb(): Promise<void> {
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       name TEXT,
@@ -79,25 +81,25 @@ function setupDb(): void {
 }
 
 describe('GET /api/v1/instances', () => {
-  beforeEach(() => {
-    db = new Database(':memory:');
-    setupDb();
-    db.prepare(`INSERT INTO agents (id, name, job_title, session_key) VALUES (1, 'Cinder', 'Backend', 'agent:cinder:main')`).run();
-    db.prepare(`INSERT INTO agents (id, name, job_title, session_key) VALUES (2, 'Atlas', 'Assistant', 'agent:atlas:main')`).run();
-    db.prepare(`INSERT INTO tasks (id, title, status, project_id) VALUES (10, 'Backend one', 'ready', 7)`).run();
-    db.prepare(`INSERT INTO tasks (id, title, status, project_id) VALUES (11, 'Backend two', 'ready', 7)`).run();
-    db.prepare(`INSERT INTO tasks (id, title, status, project_id) VALUES (12, 'Mobile', 'ready', 8)`).run();
-    db.prepare(`
+  beforeEach(async () => {
+    db = new SqliteAdapter(new Database(':memory:'));
+    await setupDb();
+    await db.run(`INSERT INTO agents (id, name, job_title, session_key) VALUES (1, 'Cinder', 'Backend', 'agent:cinder:main')`);
+    await db.run(`INSERT INTO agents (id, name, job_title, session_key) VALUES (2, 'Atlas', 'Assistant', 'agent:atlas:main')`);
+    await db.run(`INSERT INTO tasks (id, title, status, project_id) VALUES (10, 'Backend one', 'ready', 7)`);
+    await db.run(`INSERT INTO tasks (id, title, status, project_id) VALUES (11, 'Backend two', 'ready', 7)`);
+    await db.run(`INSERT INTO tasks (id, title, status, project_id) VALUES (12, 'Mobile', 'ready', 8)`);
+    await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, session_key, status, created_at)
       VALUES
         (101, 10, 1, 'run:101', 'done', '2026-06-01T10:00:00Z'),
         (102, 11, 1, 'run:102', 'running', '2026-06-01T11:00:00Z'),
         (103, 12, 2, 'run:103', 'done', '2026-06-01T12:00:00Z')
-    `).run();
+    `);
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('filters server-side by agent_id and project_id', async () => {

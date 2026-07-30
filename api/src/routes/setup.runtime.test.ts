@@ -18,13 +18,13 @@ const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 const originalApiUrl = process.env.AGENT_HQ_API_URL;
 let tempDir = '';
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-setup-runtime-'));
   process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
   process.env.AGENT_HQ_API_URL = 'http://agent-hq.test';
   mockedProbeGateway.mockReset();
-  initSchema();
+  await initSchema();
 }
 
 function cleanup(): void {
@@ -81,7 +81,7 @@ describe('setup runtime onboarding', () => {
       expect(body.status.callback_ready).toBe(true);
       expect(mockedProbeGateway).toHaveBeenCalledWith('ws://127.0.0.1:17601');
 
-      const defaults = buildRuntimeConfigDefaults(getDb());
+      const defaults = await buildRuntimeConfigDefaults(getDb());
       expect(defaults).toMatchObject({
         gateway_ws_url: 'ws://127.0.0.1:17601',
         onboarding_runtime: {

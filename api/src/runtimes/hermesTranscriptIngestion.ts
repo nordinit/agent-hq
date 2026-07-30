@@ -1,9 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type Database from 'better-sqlite3';
 import { tableHasColumn } from '../lib/durableRunIdentity';
 import { normalizeChatMessageRole } from '../lib/chatMessageRoles';
+import { nowTimestamp, timestampFromDate, timestampFromEpochMs, toCanonicalTimestamp } from '../lib/timestamps';
+import { type Db } from "../db/adapter/types";
 
 export interface HermesTranscriptRunContext {
   instanceId: number;
@@ -13,7 +14,7 @@ export interface HermesTranscriptRunContext {
 }
 
 export interface HermesTranscriptIngestParams extends HermesTranscriptRunContext {
-  db: Database.Database;
+  db: Db;
   agentId: number;
   profile: string;
   hermesHome?: string | null;
@@ -230,12 +231,12 @@ export function parseHermesMessageEvents(message: unknown): HermesParsedEvent[] 
 function timestampForMessage(message: unknown, session: Record<string, unknown>, fallback: string): string {
   const record = asRecord(message) ?? {};
   const raw = record.timestamp ?? record.created_at ?? record.createdAt ?? session.updated_at ?? session.created_at ?? session.timestamp;
-  if (typeof raw === 'string' && raw.trim()) return raw;
-  if (typeof raw === 'number' && Number.isFinite(raw)) return new Date(raw).toISOString();
+  if (typeof raw === 'string' && raw.trim()) return toCanonicalTimestamp(raw) ?? fallback;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return timestampFromEpochMs(raw) ?? fallback;
   return fallback;
 }
 
-export function importHermesSessionJson(params: HermesTranscriptIngestParams & { filePath: string }): HermesTranscriptIngestResult {
+export async function importHermesSessionJson(params: HermesTranscriptIngestParams & { filePath: string }): Promise<HermesTranscriptIngestResult> {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(fs.readFileSync(params.filePath, 'utf-8')) as Record<string, unknown>;
@@ -246,32 +247,33 @@ export function importHermesSessionJson(params: HermesTranscriptIngestParams & {
   const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
   if (!messages.length) return { imported: 0, matchedFile: params.filePath, skipped: null };
 
-  const hasDurableRunId = tableHasColumn(params.db, 'chat_messages', 'durable_run_id');
-  const hasSessionKey = tableHasColumn(params.db, 'chat_messages', 'session_key');
+  const hasDurableRunId = await tableHasColumn(params.db, 'chat_messages', 'durable_run_id');
+  const hasSessionKey = await tableHasColumn(params.db, 'chat_messages', 'session_key');
   const optionalColumns = [
     hasDurableRunId ? 'durable_run_id' : null,
     hasSessionKey ? 'session_key' : null,
   ].filter((value): value is string => Boolean(value));
   const optionalSql = optionalColumns.length ? `${optionalColumns.join(', ')}, ` : '';
   const optionalValuesSql = optionalColumns.length ? `${optionalColumns.map(() => '?').join(', ')}, ` : '';
-  const stmt = params.db.prepare(`
+  const insertSql = `
     INSERT INTO chat_messages (id, agent_id, instance_id, ${optionalSql}role, content, timestamp, event_type, event_meta)
     VALUES (?, ?, ?, ${optionalValuesSql}?, ?, ?, ?, ?)
     ON CONFLICT(id) DO NOTHING
-  `);
+  `;
 
-  const fallbackTimestamp = fs.statSync(params.filePath).mtime.toISOString();
+  const fallbackTimestamp = timestampFromDate(fs.statSync(params.filePath).mtime) ?? nowTimestamp();
   let imported = 0;
-  const tx = params.db.transaction(() => {
-    messages.forEach((message, messageIndex) => {
+  await params.db.withTransaction(async (db) => {
+    for (const [messageIndex, message] of messages.entries()) {
       const timestamp = timestampForMessage(message, parsed, fallbackTimestamp);
       const events = parseHermesMessageEvents(message);
-      events.forEach((event, eventIndex) => {
+      for (const [eventIndex, event] of events.entries()) {
         const rowId = `hermes-json-${params.instanceId}-${messageIndex}-${eventIndex}`;
         const optionalValues: unknown[] = [];
         if (hasDurableRunId) optionalValues.push(params.durableRunId ?? null);
         if (hasSessionKey) optionalValues.push(params.sessionKey ?? '');
-        const result = stmt.run(
+        const result = await db.run(
+          insertSql,
           rowId,
           params.agentId,
           params.instanceId,
@@ -288,16 +290,15 @@ export function importHermesSessionJson(params: HermesTranscriptIngestParams & {
           }),
         );
         imported += result.changes;
-      });
-    });
+      }
+    }
   });
-  tx();
 
   return { imported, matchedFile: params.filePath, skipped: null };
 }
 
-export function ingestHermesTranscriptForRun(params: HermesTranscriptIngestParams): HermesTranscriptIngestResult {
+export async function ingestHermesTranscriptForRun(params: HermesTranscriptIngestParams): Promise<HermesTranscriptIngestResult> {
   const match = findHermesSessionFile(params);
   if (!match.filePath) return { imported: 0, matchedFile: null, skipped: match.skipped };
-  return importHermesSessionJson({ ...params, filePath: match.filePath });
+  return await importHermesSessionJson({ ...params, filePath: match.filePath });
 }

@@ -1,3 +1,4 @@
+import type { Db } from '../../db/adapter/types';
 import { getAgentHqBaseUrl } from '../../lib/agentHqBaseUrl';
 import {
   normalizeContractTemplateKey,
@@ -27,7 +28,7 @@ export interface TransportContext {
   sessionKey: string;
   baseUrl?: string;
   transportMode: TransportMode;
-  db?: import('better-sqlite3').Database | null;
+  db?: Db | null;
 }
 
 export interface CompletionContractContext {
@@ -39,11 +40,11 @@ function getPromptOutcomeHelp(workflow: ResolvedWorkflow): Array<{ outcome: stri
   return [...workflow.outcomeHelp];
 }
 
-function getConfiguredEvidenceRequirements(
+async function getConfiguredEvidenceRequirements(
   ctx: TransportContext,
   workflow: ResolvedWorkflow,
   promptOutcomes: string[],
-): EvidenceRequirements {
+): Promise<EvidenceRequirements> {
   return resolveEvidenceRequirements({
     db: ctx.db,
     taskType: ctx.taskType,
@@ -65,14 +66,14 @@ function formatOutcomeHelp(help: Array<{ outcome: string; description: string }>
   return help.map(entry => `  ${entry.outcome} — ${entry.description}`).join('\n');
 }
 
-function buildTemplateValues(
+async function buildTemplateValues(
   ctx: TransportContext,
   workflow: ResolvedWorkflow,
-): Record<string, string | number> {
+): Promise<Record<string, string | number>> {
   const baseUrl = ctx.baseUrl ?? getAgentHqBaseUrl();
   const promptOutcomeHelp = getPromptOutcomeHelp(workflow);
   const promptOutcomes = promptOutcomeHelp.map((entry) => entry.outcome);
-  const evidence = getConfiguredEvidenceRequirements(ctx, workflow, promptOutcomes);
+  const evidence = await getConfiguredEvidenceRequirements(ctx, workflow, promptOutcomes);
   const sprintType = normalizeContractTemplateKey(ctx.sprintType);
   const pipelineStages = PIPELINE_STAGES.join(' -> ');
   const evidenceOutcomes = promptOutcomes
@@ -137,16 +138,16 @@ export const CONTRACT_PLACEHOLDER_DEFINITIONS: ContractPlaceholderDefinition[] =
   { key: 'transportMode', description: 'Dispatch transport mode, such as local or remote-direct, which affects how the agent reaches Agent HQ.' },
 ];
 
-export function buildContractInstructions(ctx: TransportContext): string {
-  const workflow = resolveWorkflow({
-    taskStatus: ctx.taskStatus,
-    taskType: ctx.taskType,
-    sprintId: ctx.sprintId,
-    sprintType: ctx.sprintType,
-    db: ctx.db,
-  });
+export async function buildContractInstructions(ctx: TransportContext): Promise<string> {
+  const workflow = await resolveWorkflow({
+      taskStatus: ctx.taskStatus,
+      taskType: ctx.taskType,
+      sprintId: ctx.sprintId,
+      sprintType: ctx.sprintType,
+      db: ctx.db,
+    });
   const template = readSprintTypeContractTemplate(ctx.sprintType);
-  return renderLoadedContractTemplate(template, buildTemplateValues(ctx, workflow));
+  return renderLoadedContractTemplate(template, await buildTemplateValues(ctx, workflow));
 }
 
 export function buildCompletionContractInstructions(ctx: CompletionContractContext): string {

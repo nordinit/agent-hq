@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { getDb } from '../../db/client';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { tenantInsertColumns, tenantUpsertUpdateSql } from '../../lib/runtimeTenantScope';
+import { nowTimestamp, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { SessionContext } from './sessionContext';
 import { StructuredEvent, extractStructuredEvents, normalizeChatRole } from './structuredEvents';
 
@@ -25,13 +26,13 @@ function stableLiveEventSuffix(evt: StructuredEvent): string {
     .slice(0, 12)}`;
 }
 
-function chatMessageDurableColumns(db: ReturnType<typeof getDb>, ctx: SessionContext): {
+async function chatMessageDurableColumns(db: ReturnType<typeof getDb>, ctx: SessionContext): Promise<{
   insertColumnSql: string;
   valueSql: string;
   updateSql: string;
   values: unknown[];
-} {
-  if (!tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
+}> {
+  if (!await tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
     return { insertColumnSql: '', valueSql: '', updateSql: '', values: [] };
   }
   return {
@@ -42,41 +43,40 @@ function chatMessageDurableColumns(db: ReturnType<typeof getDb>, ctx: SessionCon
   };
 }
 
-export function persistHistoryMessages(ctx: SessionContext, messages: Array<Record<string, unknown>>): void {
+export async function persistHistoryMessages(ctx: SessionContext, messages: Array<Record<string, unknown>>): Promise<void> {
   try {
     const db = getDb();
     const rowScope = contextRowScope(ctx);
-    const durable = chatMessageDurableColumns(db, ctx);
-    const tenant = tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
-    const stmt = db.prepare(`
+    const durable = await chatMessageDurableColumns(db, ctx);
+    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    const insertSql = `
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
-        ${tenantUpsertUpdateSql(db, 'chat_messages')}
+        ${await tenantUpsertUpdateSql(db, 'chat_messages')}
         content = excluded.content,
         timestamp = excluded.timestamp,
         event_type = excluded.event_type,
         event_meta = excluded.event_meta,
         ${durable.updateSql}
         session_key = excluded.session_key
-    `);
+    `;
 
-    db.prepare('DELETE FROM chat_messages WHERE id LIKE ? OR id LIKE ?').run(
-      `oc-hist-${rowScope}-%`,
-      `oc-live-${rowScope}-%`,
-    );
+    await db.run('DELETE FROM chat_messages WHERE id LIKE ? OR id LIKE ?', `oc-hist-${rowScope}-%`, `oc-live-${rowScope}-%`);
 
     let rowIndex = 0;
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
-      const ts = typeof m.timestamp === 'number' ? new Date(m.timestamp).toISOString()
-        : typeof m.timestamp === 'string' ? m.timestamp
-        : new Date().toISOString();
+      // Runtime-supplied timestamps arrive as epoch-ms or as arbitrary ISO
+      // strings; normalize so chat_messages.timestamp only ever holds the
+      // canonical offset-less UTC form its DEFAULT also produces.
+      const ts = toCanonicalTimestampOrNow(m.timestamp);
 
       const events = extractStructuredEvents(m).filter(evt => evt.event_type !== 'text');
       for (const evt of events) {
         const rowId = `oc-hist-${rowScope}-${rowIndex++}`;
-        stmt.run(
+        await db.run(
+          insertSql,
           rowId,
           ...tenant.values,
           ctx.agentId,
@@ -96,26 +96,21 @@ export function persistHistoryMessages(ctx: SessionContext, messages: Array<Reco
   }
 }
 
-export function persistLiveStructuredMessage(ctx: SessionContext, message: Record<string, unknown>): void {
+export async function persistLiveStructuredMessage(ctx: SessionContext, message: Record<string, unknown>): Promise<void> {
   try {
     const events = extractStructuredEvents(message).filter(evt => evt.event_type !== 'text');
     if (events.length === 0) return;
 
     const db = getDb();
     const rowScope = contextRowScope(ctx);
-    const durable = chatMessageDurableColumns(db, ctx);
-    const tenant = tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
-    const ts =
-      typeof message.timestamp === 'number'
-        ? new Date(message.timestamp).toISOString()
-        : typeof message.timestamp === 'string'
-          ? message.timestamp
-          : new Date().toISOString();
-    const stmt = db.prepare(`
+    const durable = await chatMessageDurableColumns(db, ctx);
+    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    const ts = toCanonicalTimestampOrNow(message.timestamp);
+    const insertSql = `
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
-        ${tenantUpsertUpdateSql(db, 'chat_messages')}
+        ${await tenantUpsertUpdateSql(db, 'chat_messages')}
         role = excluded.role,
         content = excluded.content,
         timestamp = excluded.timestamp,
@@ -123,10 +118,11 @@ export function persistLiveStructuredMessage(ctx: SessionContext, message: Recor
         event_meta = excluded.event_meta,
         ${durable.updateSql}
         session_key = excluded.session_key
-    `);
+    `;
 
     for (const evt of events) {
-      stmt.run(
+      await db.run(
+        insertSql,
         `oc-live-${rowScope}-${stableLiveEventSuffix(evt)}`,
         ...tenant.values,
         ctx.agentId,
@@ -145,85 +141,77 @@ export function persistLiveStructuredMessage(ctx: SessionContext, message: Recor
   }
 }
 
-export function persistStreamDelta(ctx: SessionContext, cumulativeText: string): void {
+export async function persistStreamDelta(ctx: SessionContext, cumulativeText: string): Promise<void> {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
-    const durable = chatMessageDurableColumns(db, ctx);
-    const tenant = tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
-    db.prepare(`
+    const now = nowTimestamp();
+    const durable = await chatMessageDurableColumns(db, ctx);
+    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    await db.run(`
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, 'assistant', ?, ?, 'text', '{}')
-      ON CONFLICT(id) DO UPDATE SET ${tenantUpsertUpdateSql(db, 'chat_messages')} content = excluded.content, timestamp = excluded.timestamp, ${durable.updateSql} session_key = excluded.session_key
-    `).run(`oc-stream-${contextRowScope(ctx)}`, ...tenant.values, ctx.agentId, ctx.instanceId, ...durable.values, ctx.sessionKey, cumulativeText, now);
+      ON CONFLICT(id) DO UPDATE SET ${await tenantUpsertUpdateSql(db, 'chat_messages')} content = excluded.content, timestamp = excluded.timestamp, ${durable.updateSql} session_key = excluded.session_key
+    `, `oc-stream-${contextRowScope(ctx)}`, ...tenant.values, ctx.agentId, ctx.instanceId, ...durable.values, ctx.sessionKey, cumulativeText, now);
   } catch { /* non-critical */ }
 }
 
-export function persistFinalMessage(ctx: SessionContext, text: string, msgIndex: number): void {
+export async function persistFinalMessage(ctx: SessionContext, text: string, msgIndex: number): Promise<void> {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     const rowScope = contextRowScope(ctx);
-    const durable = chatMessageDurableColumns(db, ctx);
-    const tenant = tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
-    db.prepare(`
+    const durable = await chatMessageDurableColumns(db, ctx);
+    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    await db.run(`
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, 'assistant', ?, ?, 'text', '{}')
-      ON CONFLICT(id) DO UPDATE SET ${tenantUpsertUpdateSql(db, 'chat_messages')} content = excluded.content, timestamp = excluded.timestamp, ${durable.updateSql} session_key = excluded.session_key
-    `).run(`oc-asst-${rowScope}-${msgIndex}`, ...tenant.values, ctx.agentId, ctx.instanceId, ...durable.values, ctx.sessionKey, text, now);
-    db.prepare('DELETE FROM chat_messages WHERE id = ?').run(`oc-stream-${rowScope}`);
+      ON CONFLICT(id) DO UPDATE SET ${await tenantUpsertUpdateSql(db, 'chat_messages')} content = excluded.content, timestamp = excluded.timestamp, ${durable.updateSql} session_key = excluded.session_key
+    `, `oc-asst-${rowScope}-${msgIndex}`, ...tenant.values, ctx.agentId, ctx.instanceId, ...durable.values, ctx.sessionKey, text, now);
+    await db.run('DELETE FROM chat_messages WHERE id = ?', `oc-stream-${rowScope}`);
   } catch { /* non-critical */ }
 }
 
-export function startChatRunInstance(ctx: SessionContext): { instanceId: number; durableRunId: string } | null {
+export async function startChatRunInstance(ctx: SessionContext): Promise<{ instanceId: number; durableRunId: string } | null> {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
-    db.prepare(
-      `UPDATE job_instances SET status = 'done', completed_at = ?, runtime_ended_at = ?
-       WHERE agent_id = ? AND session_key = ? AND run_stage = 'chat' AND status = 'running'`,
-    ).run(now, now, ctx.agentId, ctx.sessionKey);
+    const now = nowTimestamp();
+    await db.run(`UPDATE job_instances SET status = 'done', completed_at = ?, runtime_ended_at = ?
+       WHERE agent_id = ? AND session_key = ? AND run_stage = 'chat' AND status = 'running'`, now, now, ctx.agentId, ctx.sessionKey);
 
     const durableRunId = `chat-${randomUUID()}`;
-    const hasDurable = tableHasColumn(db, 'job_instances', 'durable_run_id');
-    const tenant = tenantInsertColumns(db, 'job_instances', ctx.tenantId);
+    const hasDurable = await tableHasColumn(db, 'job_instances', 'durable_run_id');
+    const tenant = await tenantInsertColumns(db, 'job_instances', ctx.tenantId);
     const info = hasDurable
-      ? db.prepare(
-          `INSERT INTO job_instances (${tenant.columnSql}agent_id, task_id, status, session_key, run_stage, started_at, durable_run_id)
-           VALUES (${tenant.valueSql}?, NULL, 'running', ?, 'chat', ?, ?)`,
-        ).run(...tenant.values, ctx.agentId, ctx.sessionKey, now, durableRunId)
-      : db.prepare(
-          `INSERT INTO job_instances (${tenant.columnSql}agent_id, task_id, status, session_key, run_stage, started_at)
-           VALUES (${tenant.valueSql}?, NULL, 'running', ?, 'chat', ?)`,
-        ).run(...tenant.values, ctx.agentId, ctx.sessionKey, now);
-    return { instanceId: Number(info.lastInsertRowid), durableRunId };
+      ? await db.run(`INSERT INTO job_instances (${tenant.columnSql}agent_id, task_id, status, session_key, run_stage, started_at, durable_run_id)
+           VALUES (${tenant.valueSql}?, NULL, 'running', ?, 'chat', ?, ?)`, ...tenant.values, ctx.agentId, ctx.sessionKey, now, durableRunId)
+      : await db.run(`INSERT INTO job_instances (${tenant.columnSql}agent_id, task_id, status, session_key, run_stage, started_at)
+           VALUES (${tenant.valueSql}?, NULL, 'running', ?, 'chat', ?)`, ...tenant.values, ctx.agentId, ctx.sessionKey, now);
+    return { instanceId: Number(info.lastInsertId), durableRunId };
   } catch (err) {
     console.warn('[chat-proxy] Failed to start chat run instance:', err instanceof Error ? err.message : String(err));
     return null;
   }
 }
 
-export function completeChatRunInstance(instanceId: number, status: 'done' | 'failed' | 'cancelled'): void {
+export async function completeChatRunInstance(instanceId: number, status: 'done' | 'failed' | 'cancelled'): Promise<void> {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
-    db.prepare(
-      `UPDATE job_instances SET status = ?, completed_at = ?, runtime_ended_at = ?
-       WHERE id = ? AND status = 'running'`,
-    ).run(status, now, now, instanceId);
+    const now = nowTimestamp();
+    await db.run(`UPDATE job_instances SET status = ?, completed_at = ?, runtime_ended_at = ?
+       WHERE id = ? AND status = 'running'`, status, now, now, instanceId);
   } catch { /* non-critical */ }
 }
 
-export function persistUserChatMessage(ctx: SessionContext, message: string): void {
+export async function persistUserChatMessage(ctx: SessionContext, message: string): Promise<void> {
   try {
     const db = getDb();
-    const now = new Date().toISOString();
-    const durable = chatMessageDurableColumns(db, ctx);
-    const tenant = tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    const now = nowTimestamp();
+    const durable = await chatMessageDurableColumns(db, ctx);
+    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
     const msgId = `oc-chat-user-${contextRowScope(ctx)}-${Date.now()}`;
-    db.prepare(`
+    await db.run(`
       INSERT OR IGNORE INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, 'user', ?, ?, 'text', '{}')
-    `).run(msgId, ...tenant.values, ctx.agentId, ctx.instanceId, ...durable.values, ctx.sessionKey, message, now);
+    `, msgId, ...tenant.values, ctx.agentId, ctx.instanceId, ...durable.values, ctx.sessionKey, message, now);
   } catch { /* non-critical */ }
 }

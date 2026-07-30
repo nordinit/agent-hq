@@ -1,10 +1,11 @@
-import type Database from 'better-sqlite3';
 import { getDb } from '../../db/client';
 import { createRelationshipFromBlockedBy, deleteTaskRelationshipByTuple } from './relationships';
 import { triggerDispatch } from '../../services/dispatchTrigger';
 import { writeTaskHistory } from './history';
 import { getCanonicalTaskCustomFields } from './evidence';
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
+import { type Db } from "../../db/adapter/types";
+import { columnExists as sharedColumnExists, tableColumns as sharedTableColumns } from "../../db/introspection";
 
 export interface TaskBlockerInput {
   task_id?: number;
@@ -18,40 +19,40 @@ export function maybeTriggerDispatch(projectId: unknown): void {
   }
 }
 
-export function logHistory(
+export async function logHistory(
   taskId: number,
   changedBy: string,
   field: string,
   oldValue: unknown,
   newValue: unknown,
-): void {
-  writeTaskHistory(getDb(), taskId, changedBy, field, oldValue, newValue, false);
+): Promise<void> {
+  await writeTaskHistory(getDb(), taskId, changedBy, field, oldValue, newValue, false);
 }
 
-export function taskTableHasColumn(db: Database.Database, column: string): boolean {
-  return (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((col) => col.name === column);
+export async function taskTableHasColumn(db: Db, column: string): Promise<boolean> {
+  return await sharedColumnExists(db, 'tasks', column);
 }
 
-export function addTaskNote(taskId: number, author: string, content: string): void {
+export async function addTaskNote(taskId: number, author: string, content: string): Promise<void> {
   const db = getDb();
-  const tenantId = resolveRuntimeTenantId(db, { taskId });
-  const tenant = tenantInsertColumns(db, 'task_notes', tenantId);
-  db.prepare(`
+  const tenantId = await resolveRuntimeTenantId(db, { taskId });
+  const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
+  await db.run(`
     INSERT INTO task_notes (${tenant.columnSql}task_id, author, content)
     VALUES (${tenant.valueSql}?, ?, ?)
-  `).run(...tenant.values, taskId, author, content);
+  `, ...tenant.values, taskId, author, content);
 }
 
-export function updateTaskEvidence(
+export async function updateTaskEvidence(
   taskId: number,
   changedBy: string,
   updates: Record<string, unknown>,
   options?: { explicitClears?: Set<string> },
-): void {
+): Promise<void> {
   const db = getDb();
-  const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown> | undefined;
+  const existing = await db.get('SELECT * FROM tasks WHERE id = ?', taskId) as Record<string, unknown> | undefined;
   if (!existing) throw new Error('Task not found');
-  const taskColumns = new Set((db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).map((col) => col.name));
+  const taskColumns = new Set(await sharedTableColumns(db, 'tasks'));
   const existingCustomFields = taskColumns.has('custom_fields_json') ? getCanonicalTaskCustomFields(existing) : {};
 
   const requestedKeys = Object.keys(updates).filter((key) => updates[key] !== undefined);
@@ -78,7 +79,7 @@ export function updateTaskEvidence(
       : existing[key];
     const newValue = updates[key];
     if (String(oldValue ?? '') !== String(newValue ?? '')) {
-      logHistory(taskId, changedBy, key, oldValue, newValue);
+      await logHistory(taskId, changedBy, key, oldValue, newValue);
     }
   }
 
@@ -98,27 +99,24 @@ export function updateTaskEvidence(
     ...shadowColumnKeys.map((key) => updates[key]),
   ];
   if (assignments.length === 0) return;
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET ${assignments.join(', ')}, updated_at = datetime('now')
     WHERE id = ?
-  `).run(
-    ...values,
-    taskId,
-  );
+  `, ...values, taskId);
 }
 
-export function resolveTaskBlockers(blockers: number[] | undefined): {
+export async function resolveTaskBlockers(blockers: number[] | undefined): Promise<{
   validBlockerIds: number[];
   invalidBlockerIds: number[];
-} {
+}> {
   const db = getDb();
   const validBlockerIds: number[] = [];
   const invalidBlockerIds: number[] = [];
 
   if (Array.isArray(blockers) && blockers.length > 0) {
     for (const blockerId of blockers) {
-      const exists = db.prepare('SELECT id FROM tasks WHERE id = ?').get(blockerId);
+      const exists = await db.get('SELECT id FROM tasks WHERE id = ?', blockerId);
       if (exists) {
         validBlockerIds.push(blockerId);
       } else {
@@ -130,7 +128,7 @@ export function resolveTaskBlockers(blockers: number[] | undefined): {
   return { validBlockerIds, invalidBlockerIds };
 }
 
-export function replaceTaskBlockers(taskId: number, blockers: TaskBlockerInput[]): void {
+export async function replaceTaskBlockers(taskId: number, blockers: TaskBlockerInput[]): Promise<void> {
   const db = getDb();
   const normalizedBlockers = blockers
     .map((entry) => ({
@@ -139,14 +137,14 @@ export function replaceTaskBlockers(taskId: number, blockers: TaskBlockerInput[]
     }))
     .filter((entry) => Number.isInteger(entry.blocker_id) && entry.blocker_id > 0);
 
-  const existing = db.prepare('SELECT blocker_id FROM task_dependencies WHERE blocked_id = ?').all(taskId) as Array<{ blocker_id: number }>;
+  const existing = await db.all('SELECT blocker_id FROM task_dependencies WHERE blocked_id = ?', taskId) as Array<{ blocker_id: number }>;
   for (const row of existing) {
-    deleteTaskRelationshipByTuple(db, taskId, row.blocker_id, 'blocked_by');
+    await deleteTaskRelationshipByTuple(db, taskId, row.blocker_id, 'blocked_by');
   }
-  db.prepare('DELETE FROM task_dependencies WHERE blocked_id = ?').run(taskId);
+  await db.run('DELETE FROM task_dependencies WHERE blocked_id = ?', taskId);
 
   for (const blocker of normalizedBlockers) {
     if (blocker.blocker_id === taskId) continue;
-    createRelationshipFromBlockedBy(db, taskId, blocker.blocker_id, 'legacy-blockers-field');
+    await createRelationshipFromBlockedBy(db, taskId, blocker.blocker_id, 'legacy-blockers-field');
   }
 }

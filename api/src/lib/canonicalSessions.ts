@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { getDb } from '../db/client';
 import { tableHasColumn } from './durableRunIdentity';
 import { resolveTranscriptProvider } from '../domains/runs/transcriptProvider';
@@ -9,6 +8,8 @@ import {
   type AdapterSource,
 } from './sessionAdapters';
 import { resolveRuntimeTenantId, tenantInsertColumns, tenantUpsertUpdateSql } from './runtimeTenantScope';
+import { toCanonicalTimestamp } from './timestamps';
+import { type Db } from "../db/adapter/types";
 
 export type CanonicalSessionStatus = 'active' | 'completed' | 'failed' | 'abandoned';
 
@@ -97,15 +98,15 @@ function buildMetadata(row: InstanceContextRow): string {
   });
 }
 
-function resolveExternalKeyForInstance(
-  db: Database.Database,
+async function resolveExternalKeyForInstance(
+  db: Db,
   row: InstanceContextRow,
   sessionKeyOverride?: string | null,
-): string {
+): Promise<string> {
   const explicitKey = sessionKeyOverride?.trim() || row.session_key?.trim();
   if (explicitKey) return explicitKey;
 
-  const chatMessageKey = db.prepare(`
+  const chatMessageKey = await db.get(`
     SELECT session_key
       FROM chat_messages
      WHERE instance_id = ?
@@ -113,7 +114,7 @@ function resolveExternalKeyForInstance(
        AND TRIM(session_key) != ''
      ORDER BY timestamp ASC, id ASC
      LIMIT 1
-  `).get(row.id) as { session_key?: string | null } | undefined;
+  `, row.id) as { session_key?: string | null } | undefined;
 
   const resolvedChatKey = chatMessageKey?.session_key?.trim();
   if (resolvedChatKey) return resolvedChatKey;
@@ -121,12 +122,27 @@ function resolveExternalKeyForInstance(
   return `run:${row.id}`;
 }
 
-function getInstanceContext(db: Database.Database, instanceId: number): InstanceContextRow | undefined {
-  const optionalInstanceColumn = (column: string): string => (
-    tableHasColumn(db, 'job_instances', column) ? `ji.${column}` : 'NULL'
+async function getInstanceContext(db: Db, instanceId: number): Promise<InstanceContextRow | undefined> {
+  const optionalInstanceColumn = async (column: string): Promise<string> => (
+    await tableHasColumn(db, 'job_instances', column) ? `ji.${column}` : 'NULL'
   );
-  const instanceTenantSelect = tableHasColumn(db, 'job_instances', 'tenant_id') ? 'ji.tenant_id' : 'NULL';
-  return db.prepare(`
+  const [
+    runIdSelect,
+    runtimeEndedAtSelect,
+    runtimeEndErrorSelect,
+    runtimeEndSourceSelect,
+    tokenInputSelect,
+    tokenOutputSelect,
+  ] = await Promise.all([
+    optionalInstanceColumn('run_id'),
+    optionalInstanceColumn('runtime_ended_at'),
+    optionalInstanceColumn('runtime_end_error'),
+    optionalInstanceColumn('runtime_end_source'),
+    optionalInstanceColumn('token_input'),
+    optionalInstanceColumn('token_output'),
+  ]);
+  const instanceTenantSelect = await tableHasColumn(db, 'job_instances', 'tenant_id') ? 'ji.tenant_id' : 'NULL';
+  return await db.get(`
     SELECT
       ji.id,
       ji.session_key,
@@ -135,12 +151,12 @@ function getInstanceContext(db: Database.Database, instanceId: number): Instance
       ji.completed_at,
       ji.dispatched_at,
       ji.created_at,
-      ${optionalInstanceColumn('run_id')} AS run_id,
-      ${optionalInstanceColumn('runtime_ended_at')} AS runtime_ended_at,
-      ${optionalInstanceColumn('runtime_end_error')} AS runtime_end_error,
-      ${optionalInstanceColumn('runtime_end_source')} AS runtime_end_source,
-      ${optionalInstanceColumn('token_input')} AS token_input,
-      ${optionalInstanceColumn('token_output')} AS token_output,
+      ${runIdSelect} AS run_id,
+      ${runtimeEndedAtSelect} AS runtime_ended_at,
+      ${runtimeEndErrorSelect} AS runtime_end_error,
+      ${runtimeEndSourceSelect} AS runtime_end_source,
+      ${tokenInputSelect} AS token_input,
+      ${tokenOutputSelect} AS token_output,
       ${instanceTenantSelect} AS tenant_id,
       ji.agent_id,
       ji.task_id,
@@ -153,41 +169,41 @@ function getInstanceContext(db: Database.Database, instanceId: number): Instance
     LEFT JOIN tasks t ON t.id = ji.task_id
     LEFT JOIN agents a ON a.id = ji.agent_id
     WHERE ji.id = ?
-  `).get(instanceId) as InstanceContextRow | undefined;
+  `, instanceId) as InstanceContextRow | undefined;
 }
 
-function syncSessionMessageCount(db: Database.Database, sessionId: number): void {
-  db.prepare(`
+async function syncSessionMessageCount(db: Db, sessionId: number): Promise<void> {
+  await db.run(`
     UPDATE sessions
     SET message_count = (
       SELECT COUNT(*) FROM session_messages WHERE session_id = ?
     ), updated_at = datetime('now')
     WHERE id = ?
-  `).run(sessionId, sessionId);
+  `, sessionId, sessionId);
 }
 
-function getChatMessageIdsForInstance(db: Database.Database, instanceId: number): Set<string> {
-  const rows = db.prepare(`
+async function getChatMessageIdsForInstance(db: Db, instanceId: number): Promise<Set<string>> {
+  const rows = await db.all(`
     SELECT id
       FROM chat_messages
      WHERE instance_id = ?
-  `).all(instanceId) as Array<{ id: number | string }>;
+  `, instanceId) as Array<{ id: number | string }>;
 
   return new Set(rows.map((row) => String(row.id)));
 }
 
-function insertFailurePlaceholderMessage(
-  db: Database.Database,
+async function insertFailurePlaceholderMessage(
+  db: Db,
   sessionId: number,
   row: InstanceContextRow,
-): boolean {
+): Promise<boolean> {
   if (row.status !== 'failed') return false;
 
-  const existingCount = (db.prepare(`
+  const existingCount = (await db.get(`
     SELECT COUNT(*) AS n
       FROM session_messages
      WHERE session_id = ?
-  `).get(sessionId) as { n: number }).n;
+  `, sessionId) as { n: number }).n;
   if (existingCount > 0) return false;
 
   const error = row.runtime_end_error?.trim() || 'Runtime failed before transcript output was captured';
@@ -199,7 +215,7 @@ function insertFailurePlaceholderMessage(
     `Session key: ${row.session_key?.trim() || 'unavailable'}`,
   ].filter((line): line is string => Boolean(line)).join('\n');
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO session_messages (
       session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
     ) VALUES (?, 0, 'system', 'error', ?, ?, ?, ?, datetime('now'))
@@ -210,31 +226,27 @@ function insertFailurePlaceholderMessage(
       event_meta = excluded.event_meta,
       raw_payload = COALESCE(excluded.raw_payload, session_messages.raw_payload),
       timestamp = excluded.timestamp
-  `).run(
-    sessionId,
-    content,
-    JSON.stringify({
-      source: 'job_instance_runtime_failure',
-      instance_id: row.id,
-      task_id: row.task_id,
-      runtime_end_source: row.runtime_end_source,
-    }),
-    `job-instance-runtime-failure:${row.id}`,
-    row.runtime_ended_at ?? row.completed_at ?? row.started_at ?? row.dispatched_at ?? row.created_at,
-  );
+  `, sessionId, content, JSON.stringify({
+          source: 'job_instance_runtime_failure',
+          instance_id: row.id,
+          task_id: row.task_id,
+          runtime_end_source: row.runtime_end_source,
+        }), `job-instance-runtime-failure:${row.id}`, toCanonicalTimestamp(
+          row.runtime_ended_at ?? row.completed_at ?? row.started_at ?? row.dispatched_at ?? row.created_at,
+        ));
 
-  syncSessionMessageCount(db, sessionId);
+  await syncSessionMessageCount(db, sessionId);
   return true;
 }
 
 
-export function syncSessionMessagesFromChatMessages(db: Database.Database, sessionId: number, instanceId: number): number {
-  const rows = db.prepare(`
+export async function syncSessionMessagesFromChatMessages(db: Db, sessionId: number, instanceId: number): Promise<number> {
+  const rows = await db.all(`
     SELECT id, role, event_type, event_meta, content, timestamp
       FROM chat_messages
      WHERE instance_id = ?
      ORDER BY timestamp ASC, id ASC
-  `).all(instanceId) as Array<{
+  `, instanceId) as Array<{
     id: number | string;
     role: string | null;
     event_type: string | null;
@@ -245,23 +257,23 @@ export function syncSessionMessagesFromChatMessages(db: Database.Database, sessi
 
   if (!rows.length) return 0;
 
-  const existingRows = db.prepare(`
+  const existingRows = await db.all(`
     SELECT raw_payload, ordinal
       FROM session_messages
      WHERE session_id = ?
        AND raw_payload IS NOT NULL
-  `).all(sessionId) as Array<{ raw_payload: string; ordinal: number }>;
+  `, sessionId) as Array<{ raw_payload: string; ordinal: number }>;
   const ordinalByRawPayload = new Map(
     existingRows.map((row) => [String(row.raw_payload), row.ordinal] as const),
   );
 
-  const maxOrdinalRow = db.prepare(`
+  const maxOrdinalRow = await db.get(`
     SELECT COALESCE(MAX(ordinal), -1) AS max_ord
       FROM session_messages
      WHERE session_id = ?
-  `).get(sessionId) as { max_ord: number };
+  `, sessionId) as { max_ord: number };
 
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO session_messages (
       session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -272,15 +284,16 @@ export function syncSessionMessagesFromChatMessages(db: Database.Database, sessi
       event_meta = excluded.event_meta,
       raw_payload = COALESCE(excluded.raw_payload, session_messages.raw_payload),
       timestamp = excluded.timestamp
-  `);
+  `;
 
-  const tx = db.transaction(() => {
+  await db.withTransaction(async (db) => {
     let ordinal = maxOrdinalRow.max_ord + 1;
-    rows.forEach((row) => {
+    for (const row of rows) {
       const rawPayload = String(row.id);
       const existingOrdinal = ordinalByRawPayload.get(rawPayload);
       const nextOrdinal = existingOrdinal ?? ordinal++;
-      insert.run(
+      await db.run(
+        insertSql,
         sessionId,
         nextOrdinal,
         row.role ?? 'system',
@@ -288,41 +301,40 @@ export function syncSessionMessagesFromChatMessages(db: Database.Database, sessi
         row.content ?? '',
         row.event_meta ?? JSON.stringify({ source: 'chat_messages_backfill', chat_message_id: row.id, instance_id: instanceId }),
         rawPayload,
-        row.timestamp,
+        toCanonicalTimestamp(row.timestamp),
       );
-    });
+    }
   });
 
-  tx();
-  syncSessionMessageCount(db, sessionId);
+  await syncSessionMessageCount(db, sessionId);
   return rows.length;
 }
 
-export function upsertCanonicalSessionForInstance(
-  db: Database.Database,
+export async function upsertCanonicalSessionForInstance(
+  db: Db,
   instanceId: number,
   sessionKeyOverride?: string | null,
-): CanonicalSessionRow | null {
-  const row = getInstanceContext(db, instanceId);
+): Promise<CanonicalSessionRow | null> {
+  const row = await getInstanceContext(db, instanceId);
   if (!row) return null;
 
-  const externalKey = resolveExternalKeyForInstance(db, row, sessionKeyOverride);
+  const externalKey = await resolveExternalKeyForInstance(db, row, sessionKeyOverride);
 
   const runtime = inferRuntime(externalKey, row.runtime_type);
-  const tenantId = resolveRuntimeTenantId(db, {
-    taskId: row.task_id,
-    agentId: row.agent_id,
-    projectId: row.project_id,
-    instanceId,
-  }) ?? row.tenant_id ?? null;
-  const tenant = tenantInsertColumns(db, 'sessions', tenantId);
+  const tenantId = (await resolveRuntimeTenantId(db, {
+      taskId: row.task_id,
+      agentId: row.agent_id,
+      projectId: row.project_id,
+      instanceId,
+    })) ?? row.tenant_id ?? null;
+  const tenant = await tenantInsertColumns(db, 'sessions', tenantId);
   const status = mapInstanceStatus(row.status);
-  const startedAt = row.started_at ?? row.dispatched_at ?? row.created_at;
+  const startedAt = toCanonicalTimestamp(row.started_at ?? row.dispatched_at ?? row.created_at);
   const endedAt = status === 'completed' || status === 'failed' || status === 'abandoned'
-    ? (row.completed_at ?? null)
+    ? toCanonicalTimestamp(row.completed_at)
     : null;
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO sessions (
       ${tenant.columnSql}external_key, runtime, agent_id, task_id, instance_id, project_id,
       status, title, started_at, ended_at, token_input, token_output,
@@ -330,7 +342,7 @@ export function upsertCanonicalSessionForInstance(
     )
     VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     ON CONFLICT(external_key) DO UPDATE SET
-      ${tenantUpsertUpdateSql(db, 'sessions')}
+      ${await tenantUpsertUpdateSql(db, 'sessions')}
       runtime = excluded.runtime,
       agent_id = COALESCE(excluded.agent_id, sessions.agent_id),
       task_id = COALESCE(excluded.task_id, sessions.task_id),
@@ -344,24 +356,9 @@ export function upsertCanonicalSessionForInstance(
       token_output = COALESCE(excluded.token_output, sessions.token_output),
       metadata = CASE WHEN excluded.metadata != '{}' THEN excluded.metadata ELSE sessions.metadata END,
       updated_at = datetime('now')
-  `).run(
-    ...tenant.values,
-    externalKey,
-    runtime,
-    row.agent_id,
-    row.task_id,
-    row.id,
-    row.project_id,
-    status,
-    deriveTitle(row),
-    startedAt,
-    endedAt,
-    row.token_input,
-    row.token_output,
-    buildMetadata(row),
-  );
+  `, ...tenant.values, externalKey, runtime, row.agent_id, row.task_id, row.id, row.project_id, status, deriveTitle(row), startedAt, endedAt, row.token_input, row.token_output, buildMetadata(row));
 
-  const session = db.prepare(`SELECT * FROM sessions WHERE external_key = ?`).get(externalKey) as CanonicalSessionRow | undefined;
+  const session = await db.get(`SELECT * FROM sessions WHERE external_key = ?`, externalKey) as CanonicalSessionRow | undefined;
   return session ?? null;
 }
 
@@ -370,30 +367,30 @@ export async function ensureCanonicalSessionForInstance(
   opts: { forceIngest?: boolean; sessionKey?: string | null } = {},
 ): Promise<CanonicalSessionRow | null> {
   const db = getDb();
-  const session = upsertCanonicalSessionForInstance(db, instanceId, opts.sessionKey ?? null);
+  const session = await upsertCanonicalSessionForInstance(db, instanceId, opts.sessionKey ?? null);
   if (!session) return null;
 
-  const existingCount = (db.prepare('SELECT COUNT(*) as n FROM session_messages WHERE session_id = ?').get(session.id) as { n: number }).n;
+  const existingCount = (await db.get('SELECT COUNT(*) as n FROM session_messages WHERE session_id = ?', session.id) as { n: number }).n;
   if (!opts.forceIngest && existingCount > 0) {
-    syncSessionMessagesFromChatMessages(db, session.id, instanceId);
-    syncSessionMessageCount(db, session.id);
-    return db.prepare('SELECT * FROM sessions WHERE id = ?').get(session.id) as CanonicalSessionRow;
+    await syncSessionMessagesFromChatMessages(db, session.id, instanceId);
+    await syncSessionMessageCount(db, session.id);
+    return await db.get('SELECT * FROM sessions WHERE id = ?', session.id) as CanonicalSessionRow;
   }
 
-  const provider = resolveTranscriptProvider(instanceId);
+  const provider = await resolveTranscriptProvider(instanceId);
   const transcript = await provider.getTranscript(instanceId);
   if (!transcript.messages.length) {
-    const inserted = syncSessionMessagesFromChatMessages(db, session.id, instanceId);
+    const inserted = await syncSessionMessagesFromChatMessages(db, session.id, instanceId);
     if (inserted > 0) {
-      return db.prepare('SELECT * FROM sessions WHERE id = ?').get(session.id) as CanonicalSessionRow;
+      return await db.get('SELECT * FROM sessions WHERE id = ?', session.id) as CanonicalSessionRow;
     }
-    const contextRow = getInstanceContext(db, instanceId);
-    if (contextRow && insertFailurePlaceholderMessage(db, session.id, contextRow)) {
-      return db.prepare('SELECT * FROM sessions WHERE id = ?').get(session.id) as CanonicalSessionRow;
+    const contextRow = await getInstanceContext(db, instanceId);
+    if (contextRow && await insertFailurePlaceholderMessage(db, session.id, contextRow)) {
+      return await db.get('SELECT * FROM sessions WHERE id = ?', session.id) as CanonicalSessionRow;
     }
   }
 
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO session_messages (
       session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -404,25 +401,27 @@ export async function ensureCanonicalSessionForInstance(
       event_meta = excluded.event_meta,
       raw_payload = COALESCE(excluded.raw_payload, session_messages.raw_payload),
       timestamp = excluded.timestamp
-  `);
-  const chatMessageIds = getChatMessageIdsForInstance(db, instanceId);
+  `;
+  const chatMessageIds = await getChatMessageIdsForInstance(db, instanceId);
 
-  const tx = db.transaction(() => {
-    transcript.messages.forEach((message, idx) => {
+  await db.withTransaction(async (db) => {
+    let idx = 0;
+    for (const message of transcript.messages) {
       const rawPayload = chatMessageIds.has(String(message.id)) ? String(message.id) : null;
-      insert.run(
+      await db.run(
+        insertSql,
         session.id,
-        idx,
+        idx++,
         message.role,
         message.event_type ?? 'text',
         message.content,
         JSON.stringify(message.event_meta ?? {}),
         rawPayload,
-        message.timestamp,
+        toCanonicalTimestamp(message.timestamp),
       );
-    });
+    }
 
-    db.prepare(`
+    await db.run(`
       UPDATE sessions
       SET message_count = (
             SELECT COUNT(*) FROM session_messages WHERE session_id = ?
@@ -433,28 +432,26 @@ export async function ensureCanonicalSessionForInstance(
           END,
           updated_at = datetime('now')
       WHERE id = ?
-    `).run(session.id, transcript.in_progress ? 1 : 0, session.id);
+    `, session.id, transcript.in_progress ? 1 : 0, session.id);
   });
 
-  tx();
+  await syncSessionMessagesFromChatMessages(db, session.id, instanceId);
 
-  syncSessionMessagesFromChatMessages(db, session.id, instanceId);
-
-  return db.prepare('SELECT * FROM sessions WHERE id = ?').get(session.id) as CanonicalSessionRow;
+  return await db.get('SELECT * FROM sessions WHERE id = ?', session.id) as CanonicalSessionRow;
 }
 
 export async function ensureCanonicalSessionByExternalKey(externalKey: string): Promise<CanonicalSessionRow | null> {
   const db = getDb();
-  const existing = db.prepare('SELECT * FROM sessions WHERE external_key = ?').get(externalKey) as CanonicalSessionRow | undefined;
+  const existing = await db.get('SELECT * FROM sessions WHERE external_key = ?', externalKey) as CanonicalSessionRow | undefined;
   if (existing) return existing;
 
   // Instance-linked path — direct match or hook:atlas:jobrun:<id> pattern
-  const directInstance = db.prepare('SELECT id FROM job_instances WHERE session_key = ? LIMIT 1').get(externalKey) as { id: number } | undefined;
-  if (directInstance) return ensureCanonicalSessionForInstance(directInstance.id);
+  const directInstance = await db.get('SELECT id FROM job_instances WHERE session_key = ? LIMIT 1', externalKey) as { id: number } | undefined;
+  if (directInstance) return await ensureCanonicalSessionForInstance(directInstance.id);
 
   const runIdMatch = externalKey.match(/hook:atlas:jobrun:(\d+)$/);
   if (runIdMatch) {
-    return ensureCanonicalSessionForInstance(Number(runIdMatch[1]));
+    return await ensureCanonicalSessionForInstance(Number(runIdMatch[1]));
   }
 
   // Adapter-based pull ingestion (cron runs, claude-code JSONL, etc.)
@@ -462,7 +459,7 @@ export async function ensureCanonicalSessionByExternalKey(externalKey: string): 
   const source: AdapterSource = { externalKey };
   const result = await adapter.ingest(source);
   if (result) {
-    return writeIngestResult(db, result);
+    return await writeIngestResult(db, result);
   }
 
   return null;
@@ -474,18 +471,18 @@ export async function ensureCanonicalSessionByExternalKey(externalKey: string): 
  * Handles upsert conflicts on external_key and ordinal so it's safe to call
  * repeatedly (idempotent ingestion).
  */
-export function writeIngestResult(db: Database.Database, result: IngestResult): CanonicalSessionRow | null {
+export async function writeIngestResult(db: Db, result: IngestResult): Promise<CanonicalSessionRow | null> {
   const { session, messages } = result;
-  const tenantId = resolveRuntimeTenantId(db, {
-    taskId: session.taskId ?? null,
-    agentId: session.agentId ?? null,
-    projectId: session.projectId ?? null,
-    instanceId: session.instanceId ?? null,
-  });
-  const tenant = tenantInsertColumns(db, 'sessions', tenantId);
+  const tenantId = await resolveRuntimeTenantId(db, {
+      taskId: session.taskId ?? null,
+      agentId: session.agentId ?? null,
+      projectId: session.projectId ?? null,
+      instanceId: session.instanceId ?? null,
+    });
+  const tenant = await tenantInsertColumns(db, 'sessions', tenantId);
 
   // Upsert the session row
-  db.prepare(`
+  await db.run(`
     INSERT INTO sessions (
       ${tenant.columnSql}external_key, runtime, agent_id, task_id, instance_id, project_id,
       status, title, started_at, ended_at, token_input, token_output,
@@ -493,7 +490,7 @@ export function writeIngestResult(db: Database.Database, result: IngestResult): 
     )
     VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     ON CONFLICT(external_key) DO UPDATE SET
-      ${tenantUpsertUpdateSql(db, 'sessions')}
+      ${await tenantUpsertUpdateSql(db, 'sessions')}
       runtime = excluded.runtime,
       agent_id = COALESCE(excluded.agent_id, sessions.agent_id),
       task_id = COALESCE(excluded.task_id, sessions.task_id),
@@ -507,28 +504,13 @@ export function writeIngestResult(db: Database.Database, result: IngestResult): 
       token_output = COALESCE(excluded.token_output, sessions.token_output),
       metadata = CASE WHEN excluded.metadata IS NOT NULL AND excluded.metadata != '{}' THEN excluded.metadata ELSE sessions.metadata END,
       updated_at = datetime('now')
-  `).run(
-    ...tenant.values,
-    session.externalKey,
-    session.runtime,
-    session.agentId ?? null,
-    session.taskId ?? null,
-    session.instanceId ?? null,
-    session.projectId ?? null,
-    session.status,
-    session.title ?? '',
-    session.startedAt ?? null,
-    session.endedAt ?? null,
-    session.tokenInput ?? null,
-    session.tokenOutput ?? null,
-    session.metadata ? JSON.stringify(session.metadata) : '{}',
-  );
+  `, ...tenant.values, session.externalKey, session.runtime, session.agentId ?? null, session.taskId ?? null, session.instanceId ?? null, session.projectId ?? null, session.status, session.title ?? '', toCanonicalTimestamp(session.startedAt), toCanonicalTimestamp(session.endedAt), session.tokenInput ?? null, session.tokenOutput ?? null, session.metadata ? JSON.stringify(session.metadata) : '{}');
 
-  const sessionRow = db.prepare('SELECT * FROM sessions WHERE external_key = ?').get(session.externalKey) as CanonicalSessionRow | undefined;
+  const sessionRow = await db.get('SELECT * FROM sessions WHERE external_key = ?', session.externalKey) as CanonicalSessionRow | undefined;
   if (!sessionRow) return null;
 
   if (messages.length > 0) {
-    const insertMsg = db.prepare(`
+    const insertMsgSql = `
       INSERT INTO session_messages (
         session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -539,11 +521,12 @@ export function writeIngestResult(db: Database.Database, result: IngestResult): 
         event_meta = excluded.event_meta,
         raw_payload = COALESCE(excluded.raw_payload, session_messages.raw_payload),
         timestamp = excluded.timestamp
-    `);
+    `;
 
-    const tx = db.transaction(() => {
+    await db.withTransaction(async (db) => {
       for (const msg of messages) {
-        insertMsg.run(
+        await db.run(
+          insertMsgSql,
           sessionRow.id,
           msg.ordinal,
           msg.role,
@@ -551,16 +534,15 @@ export function writeIngestResult(db: Database.Database, result: IngestResult): 
           msg.content,
           JSON.stringify(msg.eventMeta ?? {}),
           msg.rawPayload ?? null,
-          msg.timestamp,
+          toCanonicalTimestamp(msg.timestamp),
         );
       }
     });
-    tx();
 
-    syncSessionMessageCount(db, sessionRow.id);
+    await syncSessionMessageCount(db, sessionRow.id);
   }
 
-  return db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionRow.id) as CanonicalSessionRow;
+  return await db.get('SELECT * FROM sessions WHERE id = ?', sessionRow.id) as CanonicalSessionRow;
 }
 
 /**
@@ -586,5 +568,5 @@ export async function ingestSessionByExternalKey(
   const result = await adapter.ingest(fullSource);
   if (!result) return null;
 
-  return writeIngestResult(db, result);
+  return await writeIngestResult(db, result);
 }

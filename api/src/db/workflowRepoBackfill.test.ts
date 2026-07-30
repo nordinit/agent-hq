@@ -22,9 +22,9 @@ describe('workflow repo backfill migration', () => {
     tempDir = '';
   });
 
-  function seedLegacyProjectRepoDatabase(): void {
+  async function seedLegacyProjectRepoDatabase(): Promise<void> {
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       CREATE TABLE projects (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
@@ -61,49 +61,49 @@ describe('workflow repo backfill migration', () => {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_types (key, name, repo_required)
       VALUES ('dev', 'Development', 1), ('ops', 'Operations', 0)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO projects (id, name, repo_path, repo_access_mode)
       VALUES (1, 'Repo Project', '/repos/project', 'worktree')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO projects (id, name)
       VALUES (2, 'Manual Project')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, sprint_type, repo_url, repo_access_mode)
       VALUES (10, 1, 'Explicit Dev', 'dev', 'git@github.com:explicit/repo.git', 'clone')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, sprint_type)
       VALUES (11, 1, 'Needs Backfill', 'dev')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, sprint_type)
       VALUES (12, 1, 'Ops Workflow', 'ops')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprints (id, project_id, name, sprint_type)
       VALUES (13, 2, 'Manual Dev', 'dev')
-    `).run();
+    `);
   }
 
-  it('backfills only repo-required workflows without overwriting explicit workflow config', () => {
-    seedLegacyProjectRepoDatabase();
+  it('backfills only repo-required workflows without overwriting explicit workflow config', async () => {
+    await seedLegacyProjectRepoDatabase();
 
-    initSchema();
-    initSchema();
+    await initSchema();
+    await initSchema();
 
     const db = getDb();
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT id, repo_path, repo_url, repo_access_mode
       FROM sprints
       WHERE id IN (10, 11, 12, 13)
       ORDER BY id ASC
-    `).all() as Array<{ id: number; repo_path: string | null; repo_url: string | null; repo_access_mode: string | null }>;
+    `) as Array<{ id: number; repo_path: string | null; repo_url: string | null; repo_access_mode: string | null }>;
 
     expect(rows).toEqual([
       { id: 10, repo_path: null, repo_url: 'git@github.com:explicit/repo.git', repo_access_mode: 'clone' },

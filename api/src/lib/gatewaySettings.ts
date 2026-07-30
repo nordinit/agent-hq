@@ -8,23 +8,23 @@ const GATEWAY_WS_URL_KEY = 'gateway_ws_url';
 const GATEWAY_RUNTIME_HINT_KEY = 'gateway_runtime_hint';
 const GATEWAY_AUTH_TOKEN_KEY = 'gateway_auth_token';
 
-function getSetting(key: string): string | null {
+async function getSetting(key: string): Promise<string | null> {
   const db = getDb();
-  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;
+  const row = await db.get('SELECT value FROM app_settings WHERE key = ?', key) as { value: string } | undefined;
   return row?.value ?? null;
 }
 
-function setSetting(key: string, value: string | null): void {
+async function setSetting(key: string, value: string | null): Promise<void> {
   const db = getDb();
   if (value === null) {
-    db.prepare('DELETE FROM app_settings WHERE key = ?').run(key);
+    await db.run('DELETE FROM app_settings WHERE key = ?', key);
     return;
   }
-  db.prepare(`
+  await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `).run(key, value);
+  `, key, value);
 }
 
 export function normalizeGatewayUrl(raw: string | undefined, target: 'http' | 'ws'): string {
@@ -48,13 +48,13 @@ export function normalizeGatewayUrl(raw: string | undefined, target: 'http' | 'w
   }
 }
 
-export function getConfiguredGatewayWsUrl(): string {
-  const stored = getSetting(GATEWAY_WS_URL_KEY);
+export async function getConfiguredGatewayWsUrl(): Promise<string> {
+  const stored = await getSetting(GATEWAY_WS_URL_KEY);
   return normalizeGatewayUrl(stored ?? OPENCLAW_GATEWAY_WS_URL, 'ws');
 }
 
-export function getConfiguredGatewayHttpUrl(): string {
-  return normalizeGatewayUrl(getConfiguredGatewayWsUrl(), 'http');
+export async function getConfiguredGatewayHttpUrl(): Promise<string> {
+  return normalizeGatewayUrl(await getConfiguredGatewayWsUrl(), 'http');
 }
 
 function readLocalGatewayTokenFromConfig(): string | null {
@@ -68,8 +68,8 @@ function readLocalGatewayTokenFromConfig(): string | null {
   }
 }
 
-export function getGatewayRuntimeHint(): GatewayRuntimeHint {
-  const stored = (getSetting(GATEWAY_RUNTIME_HINT_KEY) ?? '').trim().toLowerCase();
+export async function getGatewayRuntimeHint(): Promise<GatewayRuntimeHint> {
+  const stored = ((await getSetting(GATEWAY_RUNTIME_HINT_KEY)) ?? '').trim().toLowerCase();
   switch (stored) {
     case 'powershell':
     case 'wsl':
@@ -82,11 +82,11 @@ export function getGatewayRuntimeHint(): GatewayRuntimeHint {
   }
 }
 
-export function getConfiguredGatewayAuthToken(): string {
-  const stored = (getSetting(GATEWAY_AUTH_TOKEN_KEY) ?? '').trim();
+export async function getConfiguredGatewayAuthToken(): Promise<string> {
+  const stored = ((await getSetting(GATEWAY_AUTH_TOKEN_KEY)) ?? '').trim();
   if (stored) return stored;
 
-  const runtimeHint = getGatewayRuntimeHint();
+  const runtimeHint = await getGatewayRuntimeHint();
   if (runtimeHint === 'powershell' || runtimeHint === 'macos' || runtimeHint === 'linux') {
     return readLocalGatewayTokenFromConfig() ?? '';
   }
@@ -94,30 +94,30 @@ export function getConfiguredGatewayAuthToken(): string {
   return '';
 }
 
-export function saveGatewaySettings(input: {
+export async function saveGatewaySettings(input: {
   wsUrl: string;
   runtimeHint: GatewayRuntimeHint;
   authToken?: string | null;
-}): {
+}): Promise<{
   wsUrl: string;
   httpUrl: string;
   runtimeHint: GatewayRuntimeHint;
   authToken: string;
-} {
+}> {
   const wsUrl = normalizeGatewayUrl(input.wsUrl, 'ws');
-  setSetting(GATEWAY_WS_URL_KEY, wsUrl);
-  setSetting(GATEWAY_RUNTIME_HINT_KEY, input.runtimeHint);
+  await setSetting(GATEWAY_WS_URL_KEY, wsUrl);
+  await setSetting(GATEWAY_RUNTIME_HINT_KEY, input.runtimeHint);
   const normalizedToken = typeof input.authToken === 'string' ? input.authToken.trim() : '';
-  setSetting(GATEWAY_AUTH_TOKEN_KEY, normalizedToken || null);
+  await setSetting(GATEWAY_AUTH_TOKEN_KEY, normalizedToken || null);
   return {
     wsUrl,
     httpUrl: normalizeGatewayUrl(wsUrl, 'http'),
     runtimeHint: input.runtimeHint,
-    authToken: getConfiguredGatewayAuthToken(),
+    authToken: await getConfiguredGatewayAuthToken(),
   };
 }
 
-export function readGatewaySettings(): {
+export async function readGatewaySettings(): Promise<{
   wsUrl: string;
   httpUrl: string;
   runtimeHint: GatewayRuntimeHint;
@@ -125,12 +125,12 @@ export function readGatewaySettings(): {
   authTokenConfigured: boolean;
   authTokenSource: 'stored' | 'local' | 'none';
   source: 'stored' | 'default';
-} {
-  const storedUrl = getSetting(GATEWAY_WS_URL_KEY);
-  const storedToken = (getSetting(GATEWAY_AUTH_TOKEN_KEY) ?? '').trim();
-  const wsUrl = getConfiguredGatewayWsUrl();
-  const authToken = getConfiguredGatewayAuthToken();
-  const runtimeHint = getGatewayRuntimeHint();
+}> {
+  const storedUrl = await getSetting(GATEWAY_WS_URL_KEY);
+  const storedToken = ((await getSetting(GATEWAY_AUTH_TOKEN_KEY)) ?? '').trim();
+  const wsUrl = await getConfiguredGatewayWsUrl();
+  const authToken = await getConfiguredGatewayAuthToken();
+  const runtimeHint = await getGatewayRuntimeHint();
   return {
     wsUrl,
     httpUrl: normalizeGatewayUrl(wsUrl, 'http'),

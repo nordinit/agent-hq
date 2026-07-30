@@ -15,21 +15,21 @@ import {
 let tempDir = '';
 let originalDbPath: string | undefined;
 
-function devLeaseMappingCount(tenantId: number): number {
+async function devLeaseMappingCount(tenantId: number): Promise<number> {
   const db = getDb();
-  return Number((db.prepare(`
+  return Number((await db.get(`
     SELECT COUNT(*) AS count
     FROM external_event_mappings
     WHERE tenant_id = ?
       AND project_id IS NULL
       AND source = ?
-  `).get(tenantId, DEV_ENV_LEASE_MANAGER_SOURCE) as { count: number }).count);
+  `, tenantId, DEV_ENV_LEASE_MANAGER_SOURCE) as { count: number }).count);
 }
 
-function copyDefaultDevLeaseMappingsToTenant(targetTenantId: number): void {
+async function copyDefaultDevLeaseMappingsToTenant(targetTenantId: number): Promise<void> {
   const db = getDb();
-  db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, 0)`).run(targetTenantId, 'Tenant Two', 'tenant-two');
-  db.prepare(`
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, 0)`, targetTenantId, 'Tenant Two', 'tenant-two');
+  await db.run(`
     INSERT INTO external_event_mappings (
       tenant_id,
       project_id,
@@ -67,18 +67,18 @@ function copyDefaultDevLeaseMappingsToTenant(targetTenantId: number): void {
     WHERE tenant_id = 1
       AND project_id IS NULL
       AND source = ?
-  `).run(targetTenantId, DEV_ENV_LEASE_MANAGER_SOURCE);
+  `, targetTenantId, DEV_ENV_LEASE_MANAGER_SOURCE);
 }
 
-function workflowEventMappingCount(): number {
-  return Number((getDb().prepare(`
+async function workflowEventMappingCount(): Promise<number> {
+  return Number((await getDb().get(`
     SELECT COUNT(*) AS count
     FROM external_event_mappings
-  `).get() as { count: number }).count);
+  `) as { count: number }).count);
 }
 
-function defaultMappingCloneCount(eventName: string): number {
-  return Number((getDb().prepare(`
+async function defaultMappingCloneCount(eventName: string): Promise<number> {
+  return Number((await getDb().get(`
     SELECT COUNT(*) AS count
     FROM external_event_mappings
     WHERE tenant_id = 1
@@ -93,7 +93,7 @@ function defaultMappingCloneCount(eventName: string): number {
       AND apply_failure_detail = 0
       AND enabled = 1
       AND priority = 100
-  `).get(AGENT_HQ_RUNTIME_SOURCE, eventName) as { count: number }).count);
+  `, AGENT_HQ_RUNTIME_SOURCE, eventName) as { count: number }).count);
 }
 
 describe('tenant workflow-event default seeding and repair', () => {
@@ -114,27 +114,27 @@ describe('tenant workflow-event default seeding and repair', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('does not duplicate default-tenant Dev Environment Lease Manager mappings when explicit bootstrap reruns', () => {
+  it('does not duplicate default-tenant Dev Environment Lease Manager mappings when explicit bootstrap reruns', async () => {
     const expectedDevLeaseMappings = DEFAULT_WORKFLOW_EVENT_MAPPINGS.filter((row) => row.source === DEV_ENV_LEASE_MANAGER_SOURCE).length;
 
-    initSchema();
-    bootstrapRoutingAndWorkflowDefaults(getDb());
-    expect(devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
+    await initSchema();
+    await bootstrapRoutingAndWorkflowDefaults(getDb());
+    expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
 
-    bootstrapRoutingAndWorkflowDefaults(getDb());
-    expect(devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
+    await bootstrapRoutingAndWorkflowDefaults(getDb());
+    expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
   });
 
-  it('collapses legacy duplicate default mappings and keeps custom variants across reinstall reruns', () => {
-    initSchema();
-    bootstrapRoutingAndWorkflowDefaults(getDb());
+  it('collapses legacy duplicate default mappings and keeps custom variants across reinstall reruns', async () => {
+    await initSchema();
+    await bootstrapRoutingAndWorkflowDefaults(getDb());
 
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       DROP INDEX IF EXISTS idx_external_event_mappings_effective_unique_no_tenant;
       DROP INDEX IF EXISTS idx_external_event_mappings_effective_unique_tenant;
     `);
-    db.prepare(`
+    await db.run(`
       INSERT INTO external_event_mappings (
         tenant_id, project_id, source, event_name, task_type,
         status_includes_json, status_excludes_json, action_kind, action_target,
@@ -150,17 +150,17 @@ describe('tenant workflow-event default seeding and repair', () => {
         AND project_id IS NULL
         AND source = ?
         AND event_name = 'agent_started'
-    `).run(AGENT_HQ_RUNTIME_SOURCE);
+    `, AGENT_HQ_RUNTIME_SOURCE);
     // The project-scoped variant below needs a real projects row: project_id carries a
     // REFERENCES projects(id) constraint, and this fixture previously hardcoded id 1,
     // which only inserted because foreign-key enforcement had leaked OFF during schema
     // init. Create the parent explicitly rather than assuming an id.
-    const scopedProjectId = Number(db.prepare(`
+    const scopedProjectId = Number((await db.run(`
       INSERT INTO projects (tenant_id, name, description, context_md)
       VALUES (1, 'Workflow event scope fixture', 'project-scoped mapping variant', '')
-    `).run().lastInsertRowid);
+    `)).lastInsertId);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO external_event_mappings (
         tenant_id, project_id, source, event_name, task_type,
         status_includes_json, status_excludes_json, action_kind, action_target,
@@ -170,16 +170,16 @@ describe('tenant workflow-event default seeding and repair', () => {
         (1, NULL, ?, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 0, 100),
         (1, NULL, ?, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 1, 500),
         (1, ?, ?, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 1, 100)
-    `).run(AGENT_HQ_RUNTIME_SOURCE, AGENT_HQ_RUNTIME_SOURCE, AGENT_HQ_RUNTIME_SOURCE, scopedProjectId, AGENT_HQ_RUNTIME_SOURCE);
+    `, AGENT_HQ_RUNTIME_SOURCE, AGENT_HQ_RUNTIME_SOURCE, AGENT_HQ_RUNTIME_SOURCE, scopedProjectId, AGENT_HQ_RUNTIME_SOURCE);
 
-    expect(defaultMappingCloneCount('agent_started')).toBe(3);
-    const beforeRepairTotal = workflowEventMappingCount();
+    expect(await defaultMappingCloneCount('agent_started')).toBe(3);
+    const beforeRepairTotal = await workflowEventMappingCount();
 
-    bootstrapRoutingAndWorkflowDefaults(db);
+    await bootstrapRoutingAndWorkflowDefaults(db);
 
-    expect(defaultMappingCloneCount('agent_started')).toBe(1);
-    expect(workflowEventMappingCount()).toBe(beforeRepairTotal - 2);
-    expect((db.prepare(`
+    expect(await defaultMappingCloneCount('agent_started')).toBe(1);
+    expect(await workflowEventMappingCount()).toBe(beforeRepairTotal - 2);
+    expect((await db.get(`
       SELECT COUNT(*) AS count
       FROM external_event_mappings
       WHERE tenant_id = 1
@@ -190,13 +190,13 @@ describe('tenant workflow-event default seeding and repair', () => {
           OR priority = 500
           OR project_id = 1
         )
-    `).get(AGENT_HQ_RUNTIME_SOURCE) as { count: number }).count).toBe(3);
+    `, AGENT_HQ_RUNTIME_SOURCE) as { count: number }).count).toBe(3);
 
-    const afterRepairTotal = workflowEventMappingCount();
-    bootstrapRoutingAndWorkflowDefaults(db);
-    expect(workflowEventMappingCount()).toBe(afterRepairTotal);
+    const afterRepairTotal = await workflowEventMappingCount();
+    await bootstrapRoutingAndWorkflowDefaults(db);
+    expect(await workflowEventMappingCount()).toBe(afterRepairTotal);
 
-    const body = listWorkflowEventMappings(db, { tenant_id: 1, event_name: 'agent_started' });
+    const body = await listWorkflowEventMappings(db, { tenant_id: 1, event_name: 'agent_started' });
     const defaultRows = body.mappings.filter((mapping) => (
       mapping.project_id === null
       && mapping.source === AGENT_HQ_RUNTIME_SOURCE
@@ -209,23 +209,23 @@ describe('tenant workflow-event default seeding and repair', () => {
     expect(defaultRows[0].conflicts_with).toEqual([]);
   });
 
-  it('repairs leaked non-default tenant Dev Environment Lease Manager mappings without changing default rows', () => {
+  it('repairs leaked non-default tenant Dev Environment Lease Manager mappings without changing default rows', async () => {
     const expectedDevLeaseMappings = DEFAULT_WORKFLOW_EVENT_MAPPINGS.filter((row) => row.source === DEV_ENV_LEASE_MANAGER_SOURCE).length;
 
-    initSchema();
-    bootstrapRoutingAndWorkflowDefaults(getDb());
-    copyDefaultDevLeaseMappingsToTenant(2);
-    expect(devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
-    expect(devLeaseMappingCount(2)).toBe(expectedDevLeaseMappings);
+    await initSchema();
+    await bootstrapRoutingAndWorkflowDefaults(getDb());
+    await copyDefaultDevLeaseMappingsToTenant(2);
+    expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
+    expect(await devLeaseMappingCount(2)).toBe(expectedDevLeaseMappings);
 
-    const result = removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForNonDefaultTenants(getDb());
+    const result = await removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForNonDefaultTenants(getDb());
 
     expect(result).toEqual({ deleted: expectedDevLeaseMappings, tenants: 1 });
-    expect(devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
-    expect(devLeaseMappingCount(2)).toBe(0);
+    expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
+    expect(await devLeaseMappingCount(2)).toBe(0);
 
-    initSchema();
-    expect(devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
-    expect(devLeaseMappingCount(2)).toBe(0);
+    await initSchema();
+    expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
+    expect(await devLeaseMappingCount(2)).toBe(0);
   });
 });

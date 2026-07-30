@@ -9,7 +9,7 @@ import agentsRouter from './agents';
 let tempDir: string;
 let dbPath: string;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-remote-gateway-'));
@@ -17,7 +17,7 @@ function resetDb(): void {
   process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -61,8 +61,7 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`)
-    .run('openai', 'connected');
+  await db.run(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`, 'openai', 'connected');
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -85,10 +84,10 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('agents Remote Gateway compatibility fields', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-remote-gateway-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
-    resetDb();
+    await resetDb();
   });
 
   afterEach(() => {
@@ -120,8 +119,7 @@ describe('agents Remote Gateway compatibility fields', () => {
       expect(body.hooks_auth_header).toBe('Bearer remote-token');
 
       const db = getDb();
-      const row = db.prepare(`SELECT hooks_url, hooks_auth_header FROM agents WHERE session_key = ?`)
-        .get('agent:remote-gateway:main') as { hooks_url: string | null; hooks_auth_header: string | null };
+      const row = await db.get(`SELECT hooks_url, hooks_auth_header FROM agents WHERE session_key = ?`, 'agent:remote-gateway:main') as { hooks_url: string | null; hooks_auth_header: string | null };
       expect(row.hooks_url).toBe('http://localhost:3711');
       expect(row.hooks_auth_header).toBe('Bearer remote-token');
     } finally {
@@ -131,10 +129,10 @@ describe('agents Remote Gateway compatibility fields', () => {
 
   it('updates existing Remote Gateway values without breaking stored agent records', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, name, role, session_key, runtime_type, hooks_url, hooks_auth_header, preferred_provider)
       VALUES (1, 'Existing Gateway Agent', 'Backend Engineer', 'agent:existing-gateway:main', 'webhook', 'http://localhost:3711', 'Bearer old-token', 'openai')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -159,8 +157,7 @@ describe('agents Remote Gateway compatibility fields', () => {
       expect(body.hooks_url).toBe('http://localhost:3712');
       expect(body.hooks_auth_header).toBe('Bearer new-token');
 
-      const row = db.prepare(`SELECT hooks_url, hooks_auth_header FROM agents WHERE id = 1`)
-        .get() as { hooks_url: string | null; hooks_auth_header: string | null };
+      const row = await db.get(`SELECT hooks_url, hooks_auth_header FROM agents WHERE id = 1`) as { hooks_url: string | null; hooks_auth_header: string | null };
       expect(row.hooks_url).toBe('http://localhost:3712');
       expect(row.hooks_auth_header).toBe('Bearer new-token');
     } finally {

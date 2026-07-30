@@ -12,16 +12,16 @@ export interface GatewayDeviceIdentity {
   createdAtMs: number;
 }
 
-export function readGatewayTokenFromConfig(): string | null {
-  const token = getConfiguredGatewayAuthToken();
+export async function readGatewayTokenFromConfig(): Promise<string | null> {
+  const token = await getConfiguredGatewayAuthToken();
   return token || null;
 }
 
-export function getGatewayAuthToken(): string {
+export async function getGatewayAuthToken(): Promise<string> {
   return (
     process.env.GATEWAY_TOKEN
     ?? process.env.OPENCLAW_GATEWAY_TOKEN
-    ?? getConfiguredGatewayAuthToken()
+    ?? (await getConfiguredGatewayAuthToken())
     ?? ''
   );
 }

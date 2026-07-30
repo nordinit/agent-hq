@@ -1,16 +1,16 @@
-import type Database from 'better-sqlite3';
+import { type Db } from "../../db/adapter/types";
 
-export function getTaskInstanceAuthorityFailure(
-  db: Database.Database,
+export async function getTaskInstanceAuthorityFailure(
+  db: Db,
   taskId: number,
   callbackInstanceId: number,
   writeLabel: string,
-): { status: number; body: Record<string, unknown> } | null {
-  const task = db.prepare(`
+): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  const task = await db.get(`
     SELECT id, agent_id, active_instance_id
     FROM tasks
     WHERE id = ?
-  `).get(taskId) as {
+  `, taskId) as {
     id: number;
     agent_id: number | null;
     active_instance_id: number | null;
@@ -20,11 +20,11 @@ export function getTaskInstanceAuthorityFailure(
     return { status: 404, body: { error: 'Task not found' } };
   }
 
-  const callbackInstance = db.prepare(`
+  const callbackInstance = await db.get(`
     SELECT id, agent_id, task_id
     FROM job_instances
     WHERE id = ?
-  `).get(callbackInstanceId) as {
+  `, callbackInstanceId) as {
     id: number;
     agent_id: number;
     task_id: number | null;

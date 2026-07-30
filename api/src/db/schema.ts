@@ -1,7 +1,12 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
-import { getDb } from './client';
+// schema.ts is the SQLite schema-migration engine: it reads PRAGMA table_info, toggles
+// PRAGMA foreign_keys around table rebuilds, and performs SQLite's create-copy-drop-rename
+// dance. None of that is expressible through the Db interface — deliberately, since none
+// of it has a PostgreSQL equivalent. It therefore holds the raw driver. This whole module
+// is replaced by the generated Postgres baseline and deleted by task #766.
+import { getRawDb } from './client';
 import { NODE_BIN_DIR } from '../config';
 import { RELEASE_TASK_STATUSES, taskStatusesSqlList } from '../lib/taskStatuses';
 import { extractTokenUsage } from '../domains/runs/tokenUsage';
@@ -43,6 +48,7 @@ import { beginIntentionalForeignKeyDisable, endIntentionalForeignKeyDisable, wit
 import { tableHasColumn } from '../lib/durableRunIdentity';
 import { syncAllTaskActiveAgentsFromInstances } from '../domains/tasks/ownership';
 import { ensureNotificationTables } from '../lib/notifications';
+import { SqliteAdapter } from "./adapter/SqliteAdapter";
 
 const HOME = process.env.HOME ?? os.homedir();
 const OPENCLAW_DIR = process.env.WORKSPACE_PARENT ?? `${HOME}/.openclaw`;
@@ -56,8 +62,8 @@ function tableExists(db: Database.Database, table: string): boolean {
   return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(table) as { name?: string } | undefined)?.name);
 }
 
-function ensureTableColumn(db: Database.Database, table: string, column: string, ddl: string): void {
-  if (tableHasColumn(db, table, column)) return;
+async function ensureTableColumn(db: Database.Database, table: string, column: string, ddl: string): Promise<void> {
+  if (await tableHasColumn(new SqliteAdapter(db), table, column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   console.log(`[schema] Migrated: added ${table}.${column}`);
 }
@@ -139,14 +145,14 @@ function stripTasksStatusCheck(ddl: string): string {
   return ddl.replace(TASKS_STATUS_CHECK_RE, '');
 }
 
-function tenantDefaultIdForSchemaInit(db: Database.Database): number {
+async function tenantDefaultIdForSchemaInit(db: Database.Database): Promise<number> {
   return activeTenantMode === 'verify'
-    ? verifyTenantSchemaForStartup(db)
-    : ensureTenantSchema(db);
+    ? await verifyTenantSchemaForStartup(new SqliteAdapter(db))
+    : await ensureTenantSchema(new SqliteAdapter(db));
 }
 
-function backfillJobInstanceDurableRunIds(db: Database.Database): void {
-  if (!tableHasColumn(db, 'job_instances', 'durable_run_id')) return;
+async function backfillJobInstanceDurableRunIds(db: Database.Database): Promise<void> {
+  if (!await tableHasColumn(new SqliteAdapter(db), 'job_instances', 'durable_run_id')) return;
   const rows = db.prepare(`
     SELECT id
     FROM job_instances
@@ -777,8 +783,8 @@ function repairDanglingLegacyGlobalReferences(db: Database.Database): void {
   }
 }
 
-export function initSchema(options: InitSchemaOptions = {}): void {
-  const db = getDb();
+export async function initSchema(options: InitSchemaOptions = {}): Promise<void> {
+  const db = getRawDb();
   const tenantMode = options.tenantMode ?? 'repair';
   activeTenantMode = tenantMode;
 
@@ -1141,7 +1147,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   } catch (_) { /* column already exists */ }
   try {
     db.exec(`UPDATE tasks SET assigned_agent_id = agent_id WHERE assigned_agent_id IS NULL`);
-    syncAllTaskActiveAgentsFromInstances(db);
+    await syncAllTaskActiveAgentsFromInstances(new SqliteAdapter(db));
     db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_agent ON tasks(assigned_agent_id)`);
   } catch (_) { /* minimal schema or transient migration ordering */ }
 
@@ -1448,7 +1454,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   ensureColumn('sprint_types', 'status_seeded_at', `status_seeded_at TEXT`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_types_project ON sprint_types(project_id)`);
   db.exec(`UPDATE sprint_types SET description = COALESCE(description, ''), is_system = COALESCE(is_system, 1), created_at = COALESCE(created_at, datetime('now')), updated_at = COALESCE(updated_at, datetime('now'))`);
-  const sprintTypesTenantScoped = tableHasColumn(db, 'sprint_types', 'tenant_id');
+  const sprintTypesTenantScoped = await tableHasColumn(new SqliteAdapter(db), 'sprint_types', 'tenant_id');
   if (sprintTypesTenantScoped) {
     for (const table of [
       'task_field_schemas',
@@ -1476,19 +1482,32 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     if (duplicateSprintTypeKeys.length > 0) {
       restoreSprintTypeForeignKeys = (db.pragma('foreign_keys', { simple: true }) as number) === 1;
       if (restoreSprintTypeForeignKeys) db.pragma('foreign_keys = OFF');
+      // sprint_types has no surrogate id and its `key` is duplicated here by definition, so
+      // there is no per-row identifier to delete by. rowid is SQLite-only, so instead of
+      // deleting losers by rowid we read the winning row, delete every row for the key, and
+      // re-insert the winner. Foreign keys are already disabled around this block.
+      const sprintTypeColumns = (db.prepare(`PRAGMA table_info(sprint_types)`).all() as Array<{ name: string }>)
+        .map((column) => column.name);
       const selectSprintTypeRows = db.prepare(`
-        SELECT rowid
+        SELECT *
         FROM sprint_types
         WHERE key = ?
-        ORDER BY COALESCE(is_system, 1) ASC, COALESCE(updated_at, created_at, datetime('now')) DESC, rowid DESC
+        ORDER BY COALESCE(is_system, 1) ASC,
+                 COALESCE(updated_at, created_at, datetime('now')) DESC,
+                 COALESCE(created_at, '') DESC
       `);
-      const deleteSprintType = db.prepare(`DELETE FROM sprint_types WHERE rowid = ?`);
+      const deleteSprintTypesByKey = db.prepare(`DELETE FROM sprint_types WHERE key = ?`);
+      const reinsertSprintType = db.prepare(`
+        INSERT INTO sprint_types (${sprintTypeColumns.map((column) => `"${column}"`).join(', ')})
+        VALUES (${sprintTypeColumns.map(() => '?').join(', ')})
+      `);
       const dedupeSprintTypes = db.transaction(() => {
         for (const { key } of duplicateSprintTypeKeys) {
-          const rows = selectSprintTypeRows.all(key) as Array<{ rowid: number }>;
-          for (const row of rows.slice(1)) {
-            deleteSprintType.run(row.rowid);
-          }
+          const rows = selectSprintTypeRows.all(key) as Array<Record<string, unknown>>;
+          if (rows.length <= 1) continue;
+          const keep = rows[0];
+          deleteSprintTypesByKey.run(key);
+          reinsertSprintType.run(...sprintTypeColumns.map((column) => keep[column] ?? null));
         }
       });
       dedupeSprintTypes();
@@ -1516,14 +1535,14 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       SELECT id
       FROM task_field_schemas
       WHERE sprint_type_key = ? AND task_type IS NULL
-        ${taskFieldSchemasHasTenantId ? 'AND tenant_id IS ?' : ''}
+        ${taskFieldSchemasHasTenantId ? 'AND (tenant_id = ? OR (tenant_id IS NULL AND ? IS NULL))' : ''}
       ORDER BY COALESCE(updated_at, created_at, datetime('now')) DESC, id DESC
     `);
     const deleteFieldSchema = db.prepare(`DELETE FROM task_field_schemas WHERE id = ?`);
     const dedupeBaseFieldSchemas = db.transaction(() => {
       for (const { tenant_id, sprint_type_key } of duplicateBaseSchemaSprintTypes) {
         const rows = (taskFieldSchemasHasTenantId
-          ? selectBaseSchemaRows.all(sprint_type_key, tenant_id)
+          ? selectBaseSchemaRows.all(sprint_type_key, tenant_id, tenant_id)
           : selectBaseSchemaRows.all(sprint_type_key)) as Array<{ id: number }>;
         for (const row of rows.slice(1)) {
           deleteFieldSchema.run(row.id);
@@ -1558,18 +1577,19 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   db.exec(`UPDATE sprint_workflow_templates SET updated_at = COALESCE(updated_at, datetime('now'))`);
 
   const defaultTenantIdSql = `(SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1)`;
-  const sprintTypesHasTenantId = tableHasColumn(db, 'sprint_types', 'tenant_id');
-  const workflowConfigTenantPredicate = (tableName: string): string => tableHasColumn(db, tableName, 'tenant_id')
+  const sprintTypesHasTenantId = await tableHasColumn(new SqliteAdapter(db), 'sprint_types', 'tenant_id');
+  const workflowConfigTenantPredicate = async (tableName: string): Promise<string> => await tableHasColumn(new SqliteAdapter(db), tableName, 'tenant_id')
     ? `AND (tenant_id IS NULL OR tenant_id = ${defaultTenantIdSql})`
     : '';
 
   ensureColumn('sprint_types', 'repo_required', `repo_required INTEGER NOT NULL DEFAULT 0`);
+  const sprintTypesTenantPredicate = await workflowConfigTenantPredicate('sprint_types');
   const syncStarterRepoRequirement = db.prepare(`
     UPDATE sprint_types
     SET repo_required = ?, updated_at = datetime('now')
     WHERE key = ?
       AND COALESCE(is_system, 0) = 1
-      ${workflowConfigTenantPredicate('sprint_types')}
+      ${sprintTypesTenantPredicate}
   `);
   for (const sprintType of STARTER_SPRINT_TYPE_SEEDS) {
     syncStarterRepoRequirement.run(sprintType.repoRequired ? 1 : 0, sprintType.key);
@@ -1579,7 +1599,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     UPDATE sprint_types
     SET name = ?, description = ?, repo_required = ?, is_system = 1, updated_at = datetime('now')
     WHERE key = ?
-      ${workflowConfigTenantPredicate('sprint_types')}
+      ${sprintTypesTenantPredicate}
   `);
   const insertStarterSprintType = db.prepare(sprintTypesHasTenantId
     ? `
@@ -1597,11 +1617,12 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     }
   };
 
+  const taskFieldSchemasTenantPredicate = await workflowConfigTenantPredicate('task_field_schemas');
   const updateBaseFieldSchema = db.prepare(`
     UPDATE task_field_schemas
     SET schema_json = ?, is_system = 1, updated_at = datetime('now')
     WHERE sprint_type_key = ? AND task_type IS NULL
-      ${workflowConfigTenantPredicate('task_field_schemas')}
+      ${taskFieldSchemasTenantPredicate}
   `);
   const insertBaseFieldSchema = db.prepare(taskFieldSchemasHasTenantId
     ? `
@@ -1619,12 +1640,13 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     }
   };
 
-  const sprintTypeTaskTypesHasTenantId = tableHasColumn(db, 'sprint_type_task_types', 'tenant_id');
+  const sprintTypeTaskTypesHasTenantId = await tableHasColumn(new SqliteAdapter(db), 'sprint_type_task_types', 'tenant_id');
+  const sprintTypeTaskTypesTenantPredicate = await workflowConfigTenantPredicate('sprint_type_task_types');
   const updateSprintTypeTaskType = db.prepare(`
     UPDATE sprint_type_task_types
     SET is_system = 1, updated_at = datetime('now')
     WHERE sprint_type_key = ? AND task_type = ?
-      ${workflowConfigTenantPredicate('sprint_type_task_types')}
+      ${sprintTypeTaskTypesTenantPredicate}
   `);
   const insertSprintTypeTaskType = db.prepare(sprintTypeTaskTypesHasTenantId
     ? `
@@ -1642,12 +1664,15 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     }
   };
 
-  const sprintTypeOutcomesHasTenantId = tableHasColumn(db, 'sprint_type_outcomes', 'tenant_id');
+  const sprintTypeOutcomesHasTenantId = await tableHasColumn(new SqliteAdapter(db), 'sprint_type_outcomes', 'tenant_id');
+  const sprintTypeOutcomesTenantPredicate = await workflowConfigTenantPredicate('sprint_type_outcomes');
   const updateSprintOutcome = db.prepare(`
     UPDATE sprint_type_outcomes
     SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
-    WHERE sprint_type_key = ? AND task_type IS ? AND outcome_key = ?
-      ${workflowConfigTenantPredicate('sprint_type_outcomes')}
+    WHERE sprint_type_key = ?
+      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND outcome_key = ?
+      ${sprintTypeOutcomesTenantPredicate}
   `);
   const insertSprintOutcome = db.prepare(sprintTypeOutcomesHasTenantId
     ? `
@@ -1670,7 +1695,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     stageOrder: number,
     metadataJson: string,
   ): void => {
-    const result = updateSprintOutcome.run(label, description, enabled, behavior, badgeVariant, stageOrder, metadataJson, sprintTypeKey, taskType, outcomeKey);
+    const result = updateSprintOutcome.run(label, description, enabled, behavior, badgeVariant, stageOrder, metadataJson, sprintTypeKey, taskType, taskType, outcomeKey);
     if (result.changes === 0) {
       insertSprintOutcome.run(sprintTypeKey, taskType, outcomeKey, label, description, enabled, behavior, badgeVariant, stageOrder, metadataJson);
     }
@@ -1698,7 +1723,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
                  MIN(id) AS keep_id
           FROM sprint_type_outcomes
           WHERE sprint_type_key = ?
-            AND task_type IS ?
+            AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
             AND outcome_key = ?
             AND COALESCE(is_system, 0) = 1
           GROUP BY ${tenantGroup} sprint_type_key, COALESCE(task_type, ''), outcome_key
@@ -1714,7 +1739,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     `);
     const tx = db.transaction(() => {
       for (const seed of seedPairs) {
-        dedupeOne.run(seed.sprintType, seed.taskType, seed.outcomeKey);
+        dedupeOne.run(seed.sprintType, seed.taskType, seed.taskType, seed.outcomeKey);
       }
     });
     tx();
@@ -1878,10 +1903,10 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   `);
   ensureTaskRelationshipModel(db, { sprintTypesTenantScoped, rebuildWithoutSprintTypeKeyForeignKey });
   if (!sprintTypesTenantScoped) {
-    pruneUnexpectedStarterWorkflowRelationshipTypes(db);
+    await pruneUnexpectedStarterWorkflowRelationshipTypes(new SqliteAdapter(db));
   }
   if (shouldSeedStarterSprintDefinitions) {
-    seedStarterWorkflowRelationshipTypes(db);
+    await seedStarterWorkflowRelationshipTypes(new SqliteAdapter(db));
   }
 
   // Safe migration: add branch_url to tasks
@@ -1993,7 +2018,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     } catch (_) { /* column already exists */ }
   }
 
-  backfillProjectFileVersionHistory(db);
+  await backfillProjectFileVersionHistory(db);
 
   // Task history / audit log
   db.exec(`
@@ -2121,7 +2146,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     console.log('[schema] Migrated: added durable_run_id to job_instances');
   } catch (_) { /* column already exists */ }
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_job_instances_durable_run_id ON job_instances(durable_run_id) WHERE durable_run_id IS NOT NULL`);
-  backfillJobInstanceDurableRunIds(db);
+  await backfillJobInstanceDurableRunIds(db);
 
   try {
     db.exec(`ALTER TABLE job_instances ADD COLUMN abort_attempted_at TEXT`);
@@ -2413,7 +2438,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   // "restore foreign-key enforcement" below. Do not narrow it to this block; the
   // compatibility DDL that needs enforcement off continues for several hundred lines.
   let foreignKeysDisabledForLegacyWorkflowDdl = false;
-  if (tableHasColumn(db, 'sprint_types', 'tenant_id')) {
+  if (await tableHasColumn(new SqliteAdapter(db), 'sprint_types', 'tenant_id')) {
     db.pragma('foreign_keys = OFF');
     // Register the window so the startup tripwire does not mistake this deliberate
     // disable for a leak. It matters because initSchema() calls ensureTenantSchema()
@@ -2541,7 +2566,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
 
   if (!sprintTypesTenantScoped || shouldSeedStarterSprintTypeStatuses) {
     for (const sprintType of sprintTypeSeeds) {
-      seedSprintTypeTaskStatuses(db, sprintType.key);
+      await seedSprintTypeTaskStatuses(new SqliteAdapter(db), sprintType.key);
     }
   }
   ensureColumn('sprint_task_transitions', 'project_id', `project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
@@ -2669,8 +2694,20 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       ON sprint_task_routing_rules(project_id, sprint_type, sprint_id, task_type, status)
   `);
   db.exec(`DROP INDEX IF EXISTS idx_sprint_task_routing_rules_scope_unique`);
+  // The grouping keys are the COALESCE expressions, so the projection selects those same
+  // expressions rather than the bare columns: a bare column that is neither aggregated nor
+  // grouped is accepted by SQLite but rejected by Postgres. Matching rows back below uses the
+  // identical COALESCE expressions, which keeps the NULL-vs-sentinel semantics unchanged and
+  // avoids SQLite-only `IS ?` NULL-safe comparisons.
   const duplicateScopedRoutingRules = db.prepare(`
-    SELECT project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, COUNT(*) as row_count
+    SELECT project_id,
+           sprint_type,
+           COALESCE(sprint_id, -1) AS sprint_key,
+           COALESCE(task_type, '') AS task_type_key,
+           status,
+           COALESCE(agent_id, -1) AS agent_key,
+           priority,
+           COUNT(*) as row_count
     FROM sprint_task_routing_rules
     WHERE project_id IS NOT NULL
       AND sprint_type IS NOT NULL
@@ -2679,10 +2716,10 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   `).all() as Array<{
     project_id: number;
     sprint_type: string;
-    sprint_id: number | null;
-    task_type: string | null;
+    sprint_key: number;
+    task_type_key: string;
     status: string;
-    agent_id: number | null;
+    agent_key: number;
     priority: number;
     row_count: number;
   }>;
@@ -2692,10 +2729,10 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       FROM sprint_task_routing_rules
       WHERE project_id = ?
         AND sprint_type = ?
-        AND ((sprint_id IS NULL AND ? IS NULL) OR sprint_id = ?)
-        AND task_type IS ?
+        AND COALESCE(sprint_id, -1) = ?
+        AND COALESCE(task_type, '') = ?
         AND status = ?
-        AND agent_id IS ?
+        AND COALESCE(agent_id, -1) = ?
         AND priority = ?
       ORDER BY COALESCE(updated_at, created_at, datetime('now')) DESC, id DESC
     `);
@@ -2705,11 +2742,10 @@ export function initSchema(options: InitSchemaOptions = {}): void {
         const ids = selectScopedRoutingRuleIds.all(
           row.project_id,
           row.sprint_type,
-          row.sprint_id,
-          row.sprint_id,
-          row.task_type,
+          row.sprint_key,
+          row.task_type_key,
           row.status,
-          row.agent_id,
+          row.agent_key,
           row.priority,
         ) as Array<{ id: number }>;
         for (const duplicateRow of ids.slice(1)) {
@@ -2769,7 +2805,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
       )
       WHERE project_id IS NOT NULL AND sprint_type IS NOT NULL;
   `);
-  normalizeSprintTaskRoutingRuleTaskTypes(db);
+  await normalizeSprintTaskRoutingRuleTaskTypes(new SqliteAdapter(db));
   db.exec(`
     UPDATE sprints
     SET task_policy_seeded_at = COALESCE(task_policy_seeded_at, datetime('now'))
@@ -2824,7 +2860,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   ensureProjectAuditLogTable();
   ensureAppSettingsTable();
   if (activeTenantMode !== 'verify') {
-    ensureDefaultProjectId(db);
+    await ensureDefaultProjectId(new SqliteAdapter(db));
   }
   try {
     db.exec(`ALTER TABLE agents ADD COLUMN system_role TEXT`);
@@ -2833,13 +2869,13 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   ensureDefectTrackingColumns();
   ensureTaskRelationshipModel(db, { sprintTypesTenantScoped, rebuildWithoutSprintTypeKeyForeignKey });
   ensureToolRegistryTables();
-  ensureProviderConfigTable();
+  await ensureProviderConfigTable();
   ensureProviderConnectionsTable();
-  ensureGitHubIdentitiesTable();
+  await ensureGitHubIdentitiesTable();
   ensureFailureDetailAndWorkflowColumns();
-  seedInitialData();
-  ensureMcpApiKeyTable(db);
-  ensureMcpRegistryTables();
+  await seedInitialData();
+  await ensureMcpApiKeyTable(new SqliteAdapter(db));
+  await ensureMcpRegistryTables();
   ensureLifecycleRulesTable();
   ensureDataMigration593();
 
@@ -2907,7 +2943,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
 
   // Backfill os_user on known agents (must run after os_user column exists)
   backfillAgentOsUsers();
-  migrateAtlasToDedicatedAgent();
+  await migrateAtlasToDedicatedAgent();
 
   // Safe migration: add effective_model to job_instances
   // Stores the model actually used (or selected at dispatch time) for that run.
@@ -2970,9 +3006,9 @@ export function initSchema(options: InitSchemaOptions = {}): void {
     db.exec(`UPDATE agents SET repo_access_mode = 'worktree' WHERE repo_access_mode IS NULL AND repo_path IS NOT NULL AND repo_path != ''`);
   } catch (_) { /* ignore */ }
 
-  ensureTableColumn(db, 'sprints', 'repo_path', `repo_path TEXT`);
-  ensureTableColumn(db, 'sprints', 'repo_url', `repo_url TEXT`);
-  ensureTableColumn(db, 'sprints', 'repo_access_mode', `repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone'))`);
+  await ensureTableColumn(db, 'sprints', 'repo_path', `repo_path TEXT`);
+  await ensureTableColumn(db, 'sprints', 'repo_url', `repo_url TEXT`);
+  await ensureTableColumn(db, 'sprints', 'repo_access_mode', `repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone'))`);
 
   backfillProjectRepoConfigs(db);
   backfillWorkflowRepoConfigs(db);
@@ -3161,7 +3197,7 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   }
 
   // Task #586 / Task #407 cleanup needs the canonical agents.job_instructions column to exist first.
-  ensurePipelineIntelligenceTelemetry();
+  await ensurePipelineIntelligenceTelemetry();
 
   // Now that agents.job_instructions exists, align instructions.
   alignAgencyReleaseJobInstructions();
@@ -3193,8 +3229,8 @@ export function initSchema(options: InitSchemaOptions = {}): void {
   } catch { /* column already exists */ }
 
   try {
-    const defaultTenantId = tenantDefaultIdForSchemaInit(db);
-    ensureDefaultProjectId(db);
+    const defaultTenantId = await tenantDefaultIdForSchemaInit(db);
+    await ensureDefaultProjectId(new SqliteAdapter(db));
   } catch (err) {
     console.error('[schema] Failed to ensure default project:', err);
   }
@@ -3223,7 +3259,7 @@ function ensureAgencyDevOpsReleaseLane(): void {
 }
 
 function backfillJobInstanceTokenUsage(): void {
-  const db = getDb();
+  const db = getRawDb();
   const rows = db.prepare(`
     SELECT id, response, payload_sent, error
     FROM job_instances
@@ -3271,7 +3307,7 @@ function rewriteInstructionPaths(text: string): string {
 }
 
 function alignAgencyReleaseJobInstructions(): void {
-  const db = getDb();
+  const db = getRawDb();
   const rawInstructionsByTitle: Record<string, string> = {
     'Agency — Frontend': `You are Pixel, the Agency Frontend Engineer. Your session is starting because a frontend task has been assigned.
 
@@ -3458,7 +3494,7 @@ If blocked by missing product direction or unclear constraints:
 }
 
 function normalizeAgentHqProjectLifecycleInstructions(): void {
-  const db = getDb();
+  const db = getRawDb();
   try {
     const agentColumns = new Set(
       (db.prepare(`PRAGMA table_info(agents)`).all() as Array<{ name: string }>).map((col) => col.name),
@@ -3551,7 +3587,7 @@ function normalizeAgentHqProjectLifecycleInstructions(): void {
  *   details     — JSON blob with attempted_path, resolved_path, workspace_root, detail
  */
 function ensureSecurityEventsTable(): void {
-  const db = getDb();
+  const db = getRawDb();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS security_events (
@@ -3591,7 +3627,7 @@ function ensureSecurityEventsTable(): void {
  * Only sets os_user where it is currently NULL (idempotent, respects manual overrides).
  */
 function backfillAgentOsUsers(): void {
-  const db = getDb();
+  const db = getRawDb();
 
   const mapping: Record<string, string> = {
     'agent:agency-backend:main':    'agent-forge',
@@ -3635,7 +3671,7 @@ function backfillAgentOsUsers(): void {
  *   changes     — JSON blob with field-level diffs ({ field: { old, new } })
  */
 function ensureProjectAuditLogTable(): void {
-  const db = getDb();
+  const db = getRawDb();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS project_audit_log (
@@ -3659,7 +3695,7 @@ function ensureProjectAuditLogTable(): void {
  * to tasks, spawned_defects to task_outcome_metrics, and backfill task #534.
  */
 function ensureDefectTrackingColumns(): void {
-  const db = getDb();
+  const db = getRawDb();
 
   // 1. Add origin_task_id to tasks
   try {
@@ -3713,7 +3749,7 @@ function ensureDefectTrackingColumns(): void {
 }
 
 function ensureAppSettingsTable(): void {
-  const db = getDb();
+  const db = getRawDb();
   db.exec(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key        TEXT PRIMARY KEY,
@@ -3734,7 +3770,7 @@ type RegistryProvisionOptions = {
  * assignments are explicit bootstrap/admin provisioning, not restart side effects.
  */
 export function ensureToolRegistryTables(options: RegistryProvisionOptions = {}): void {
-  const db = getDb();
+  const db = getRawDb();
 
   const tableExists = (name: string): boolean => {
     const row = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
@@ -4637,8 +4673,8 @@ export function provisionDefaultToolRegistry(): void {
   ensureToolRegistryTables({ provisionDefaults: true });
 }
 
-function ensureMcpRegistryTables(options: RegistryProvisionOptions = {}): void {
-  const db = getDb();
+async function ensureMcpRegistryTables(options: RegistryProvisionOptions = {}): Promise<void> {
+  const db = getRawDb();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS mcp_servers (
@@ -4693,7 +4729,7 @@ function ensureMcpRegistryTables(options: RegistryProvisionOptions = {}): void {
       enabled = 1,
       updated_at = datetime('now')
   `).run(
-    tenantDefaultIdForSchemaInit(db),
+    await tenantDefaultIdForSchemaInit(db),
     'Agent HQ MCP Server',
     'agent-hq',
     'Local stdio MCP server exposing Agent HQ projects, sprints, tasks, and agents.',
@@ -4724,15 +4760,15 @@ function ensureMcpRegistryTables(options: RegistryProvisionOptions = {}): void {
   console.log('[schema] Ensured MCP registry defaults (agent-hq)');
 }
 
-export function provisionDefaultMcpRegistry(): void {
-  ensureMcpRegistryTables({ provisionDefaults: true });
+export async function provisionDefaultMcpRegistry(): Promise<void> {
+  await ensureMcpRegistryTables({ provisionDefaults: true });
 }
 
-function seedInitialData(): void {
-  const db = getDb();
+async function seedInitialData(): Promise<void> {
+  const db = getRawDb();
   const existing = db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number };
   if (existing.count === 0) {
-    const defaultTenantId = tenantDefaultIdForSchemaInit(db);
+    const defaultTenantId = await tenantDefaultIdForSchemaInit(db);
     db.prepare(`
       INSERT INTO agents (tenant_id, name, role, session_key, workspace_path, status, openclaw_agent_id, system_role)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -4751,13 +4787,13 @@ function seedInitialData(): void {
 }
 
 function getAppSetting(key: string): string | null {
-  const db = getDb();
+  const db = getRawDb();
   const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;
   return row?.value ?? null;
 }
 
 function setAppSetting(key: string, value: string): void {
-  const db = getDb();
+  const db = getRawDb();
   db.prepare(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
@@ -4950,12 +4986,12 @@ function migrateOpenClawConfigForAtlas(telegramChatId: string | null): boolean {
   }
 }
 
-function migrateAtlasToDedicatedAgent(): void {
+async function migrateAtlasToDedicatedAgent(): Promise<void> {
   if (getAppSetting(ATLAS_MIGRATION_SETTING_KEY) === 'true') return;
 
-  const db = getDb();
+  const db = getRawDb();
   const skipExternalMigration = process.env.JEST_WORKER_ID !== undefined || process.env.NODE_ENV === 'test';
-  const atlas = getAtlasAgentRecord();
+  const atlas = await getAtlasAgentRecord();
   const hasLegacyWorkspace = looksLikeAtlasWorkspace(LEGACY_MAIN_WORKSPACE_PATH);
   if (!atlas && !hasLegacyWorkspace) return;
 
@@ -5046,7 +5082,7 @@ function migrateAtlasToDedicatedAgent(): void {
 // lifecycle_rules replaces the hardcoded canonicalOutcomeRoute map.
 // transition_requirements replaces the hardcoded requireReleaseGate checks.
 export function ensureLifecycleRulesTable(): void {
-  const db = getDb();
+  const db = getRawDb();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS lifecycle_rules (
@@ -5469,8 +5505,8 @@ export function ensureLifecycleRulesTable(): void {
  * ensureProviderConfigTable — Task #573: provider configuration for onboarding.
  * Stores API keys / connection details for Anthropic, OpenAI, Google, Ollama.
  */
-function ensureProviderConfigTable(): void {
-  const db = getDb();
+async function ensureProviderConfigTable(): Promise<void> {
+  const db = getRawDb();
   db.exec(`
     CREATE TABLE IF NOT EXISTS provider_config (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5488,7 +5524,7 @@ function ensureProviderConfigTable(): void {
     CREATE INDEX IF NOT EXISTS idx_provider_config_status ON provider_config(status);
   `);
 
-  const defaultTenantId = tenantDefaultIdForSchemaInit(db);
+  const defaultTenantId = await tenantDefaultIdForSchemaInit(db);
   const providerCols = (db.prepare(`PRAGMA table_info(provider_config)`).all() as { name: string }[]).map(c => c.name);
   if (!providerCols.includes('tenant_id')) {
     if (activeTenantMode === 'verify') {
@@ -5554,7 +5590,7 @@ function ensureProviderConfigTable(): void {
  * an opaque reference to the credential in the runtime's own auth store.
  */
 function ensureProviderConnectionsTable(): void {
-  const db = getDb();
+  const db = getRawDb();
   db.exec(`
     CREATE TABLE IF NOT EXISTS provider_connections (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5595,8 +5631,8 @@ function ensureProviderConnectionsTable(): void {
  *
  * Workflow role labels (informational): dev, qa, release, shared.
  */
-function ensureGitHubIdentitiesTable(): void {
-  const db = getDb();
+async function ensureGitHubIdentitiesTable(): Promise<void> {
+  const db = getRawDb();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS github_identities (
@@ -5620,7 +5656,7 @@ function ensureGitHubIdentitiesTable(): void {
     CREATE INDEX IF NOT EXISTS idx_github_identities_enabled ON github_identities(enabled);
   `);
 
-  const defaultTenantId = tenantDefaultIdForSchemaInit(db);
+  const defaultTenantId = await tenantDefaultIdForSchemaInit(db);
   const githubCols = (db.prepare(`PRAGMA table_info(github_identities)`).all() as { name: string }[]).map(c => c.name);
   if (!githubCols.includes('tenant_id')) {
     if (activeTenantMode === 'verify') {
@@ -5697,7 +5733,7 @@ function ensureGitHubIdentitiesTable(): void {
  * stores human-readable details and workflow recovery state.
  */
 function ensureFailureDetailAndWorkflowColumns(): void {
-  const db = getDb();
+  const db = getRawDb();
 
   // Add failure_detail to tasks (human-readable explanation)
   try {
@@ -5763,7 +5799,7 @@ function ensureFailureDetailAndWorkflowColumns(): void {
  *   4. Log a validation summary of all pre-conditions for Phase 5 (safe drop).
  */
 export function ensureDataMigration593(): void {
-  const db = getDb();
+  const db = getRawDb();
   const getTableSql = (name: string): string => {
     return ((db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(name) as { sql?: string } | undefined)?.sql ?? '');
   };
@@ -6009,8 +6045,8 @@ export function ensureDataMigration593(): void {
 }
 
 // ── Task #586: Pipeline Intelligence Telemetry — Event Model ─────────────────
-export function ensurePipelineIntelligenceTelemetry(): void {
-  const db = getDb();
+export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
+  const db = getRawDb();
 
   // 1. task_events table
   db.exec(`
@@ -6207,125 +6243,6 @@ export function ensurePipelineIntelligenceTelemetry(): void {
     console.error('[schema] Task #53: failed to drop job_template_id from agents:', err);
   }
 
-  // ── Task #56: Drop stale job_templates FK from task_creation_events and task_outcome_metrics ──
-  // After Task #579 dropped job_templates, the original DDL stored in sqlite_master for
-  // task_creation_events and task_outcome_metrics still contains:
-  //   job_id INTEGER REFERENCES job_templates(id) ON DELETE SET NULL
-  // With foreign_keys = ON, any CASCADE DELETE from tasks (or direct delete on these tables)
-  // causes SQLite to validate this FK against the now-missing job_templates table, producing:
-  //   SqliteError: no such table: main.job_templates
-  // SQLite does not support dropping a column that has an index on it, so we do a
-  // full table rebuild (rename → recreate → copy → drop old).
-  try {
-    const tceDdl56 = (db.prepare(
-      `SELECT sql FROM sqlite_master WHERE type='table' AND name='task_creation_events'`
-    ).get() as { sql: string } | undefined)?.sql ?? '';
-
-    if (tceDdl56.includes('job_templates')) {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        ALTER TABLE task_creation_events RENAME TO task_creation_events_old;
-
-        CREATE TABLE task_creation_events (
-          id                INTEGER PRIMARY KEY AUTOINCREMENT,
-          task_id           INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-          project_id        INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-          sprint_id         INTEGER REFERENCES sprints(id) ON DELETE SET NULL,
-          job_id            INTEGER,
-          source            TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','skill','agent','api','import')),
-          routing           TEXT NOT NULL DEFAULT '',
-          confidence        TEXT NOT NULL DEFAULT '' CHECK(confidence IN ('','low','medium','high')),
-          scope_size        TEXT NOT NULL DEFAULT '' CHECK(scope_size IN ('','xs','small','medium','large','xl')),
-          assumptions       TEXT NOT NULL DEFAULT '',
-          open_questions    TEXT NOT NULL DEFAULT '',
-          needs_split       INTEGER NOT NULL DEFAULT 0,
-          expected_artifact TEXT NOT NULL DEFAULT '',
-          success_mode      TEXT NOT NULL DEFAULT '',
-          raw_input         TEXT NOT NULL DEFAULT '',
-          created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-          agent_id          INTEGER REFERENCES agents(id)
-        );
-
-        INSERT INTO task_creation_events
-          SELECT id, task_id, project_id, sprint_id, job_id, source, routing, confidence,
-                 scope_size, assumptions, open_questions, needs_split, expected_artifact,
-                 success_mode, raw_input, created_at, agent_id
-          FROM task_creation_events_old;
-
-        DROP TABLE task_creation_events_old;
-
-        CREATE INDEX IF NOT EXISTS idx_tce_task      ON task_creation_events(task_id);
-        CREATE INDEX IF NOT EXISTS idx_tce_project   ON task_creation_events(project_id);
-        CREATE INDEX IF NOT EXISTS idx_tce_sprint    ON task_creation_events(sprint_id);
-        CREATE INDEX IF NOT EXISTS idx_tce_job       ON task_creation_events(job_id);
-        CREATE INDEX IF NOT EXISTS idx_tce_source    ON task_creation_events(source);
-        CREATE INDEX IF NOT EXISTS idx_tce_created   ON task_creation_events(created_at);
-      `);
-      db.pragma('foreign_keys = ON');
-      console.log('[schema] Task #56: rebuilt task_creation_events without stale job_templates FK');
-    }
-  } catch (err) {
-    db.pragma('foreign_keys = ON');
-    console.error('[schema] Task #56: task_creation_events rebuild failed:', err);
-  }
-
-  try {
-    const tomDdl56 = (db.prepare(
-      `SELECT sql FROM sqlite_master WHERE type='table' AND name='task_outcome_metrics'`
-    ).get() as { sql: string } | undefined)?.sql ?? '';
-
-    if (tomDdl56.includes('job_templates')) {
-      db.pragma('foreign_keys = OFF');
-      db.exec(`
-        ALTER TABLE task_outcome_metrics RENAME TO task_outcome_metrics_old;
-
-        CREATE TABLE task_outcome_metrics (
-          id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-          task_id                 INTEGER NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
-          project_id              INTEGER REFERENCES projects(id) ON DELETE SET NULL,
-          sprint_id               INTEGER REFERENCES sprints(id) ON DELETE SET NULL,
-          job_id                  INTEGER,
-          first_pass_qa           INTEGER NOT NULL DEFAULT 0,
-          reopened_count          INTEGER NOT NULL DEFAULT 0,
-          rerouted_count          INTEGER NOT NULL DEFAULT 0,
-          split_after_creation    INTEGER NOT NULL DEFAULT 0,
-          blocked_after_creation  INTEGER NOT NULL DEFAULT 0,
-          clarification_count     INTEGER NOT NULL DEFAULT 0,
-          notes_count             INTEGER NOT NULL DEFAULT 0,
-          cycle_time_hours        REAL,
-          outcome_quality         TEXT NOT NULL DEFAULT '' CHECK(outcome_quality IN ('','good','acceptable','poor')),
-          failure_reasons         TEXT NOT NULL DEFAULT '[]',
-          outcome_summary         TEXT NOT NULL DEFAULT '',
-          recorded_at             TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
-          agent_id                INTEGER REFERENCES agents(id),
-          spawned_defects         INTEGER NOT NULL DEFAULT 0
-        );
-
-        INSERT INTO task_outcome_metrics
-          SELECT id, task_id, project_id, sprint_id, job_id, first_pass_qa, reopened_count,
-                 rerouted_count, split_after_creation, blocked_after_creation, clarification_count,
-                 notes_count, cycle_time_hours, outcome_quality, failure_reasons, outcome_summary,
-                 recorded_at, updated_at, agent_id, spawned_defects
-          FROM task_outcome_metrics_old;
-
-        DROP TABLE task_outcome_metrics_old;
-
-        CREATE INDEX IF NOT EXISTS idx_tom_task      ON task_outcome_metrics(task_id);
-        CREATE INDEX IF NOT EXISTS idx_tom_project   ON task_outcome_metrics(project_id);
-        CREATE INDEX IF NOT EXISTS idx_tom_sprint    ON task_outcome_metrics(sprint_id);
-        CREATE INDEX IF NOT EXISTS idx_tom_job       ON task_outcome_metrics(job_id);
-        CREATE INDEX IF NOT EXISTS idx_tom_quality   ON task_outcome_metrics(outcome_quality);
-        CREATE INDEX IF NOT EXISTS idx_tom_recorded  ON task_outcome_metrics(recorded_at);
-      `);
-      db.pragma('foreign_keys = ON');
-      console.log('[schema] Task #56: rebuilt task_outcome_metrics without stale job_templates FK');
-    }
-  } catch (err) {
-    db.pragma('foreign_keys = ON');
-    console.error('[schema] Task #56: task_outcome_metrics rebuild failed:', err);
-  }
-
   // Task #449: idempotent receipts for trusted external task event callbacks.
   db.exec(`
     CREATE TABLE IF NOT EXISTS external_task_event_receipts (
@@ -6364,7 +6281,7 @@ export function ensurePipelineIntelligenceTelemetry(): void {
     ['mapping_action_target', 'TEXT'],
     ['request_metadata_json', 'TEXT'],
   ] as const) {
-    if (!tableHasColumn(db, 'external_task_event_receipts', column)) {
+    if (!await tableHasColumn(new SqliteAdapter(db), 'external_task_event_receipts', column)) {
       db.prepare(`ALTER TABLE external_task_event_receipts ADD COLUMN ${column} ${definition}`).run();
     }
   }
@@ -6394,8 +6311,8 @@ export function ensurePipelineIntelligenceTelemetry(): void {
     CREATE INDEX IF NOT EXISTS idx_external_event_mappings_lookup
       ON external_event_mappings(event_name, source, project_id, task_type, enabled, priority);
   `);
-  ensureTableColumn(db, 'external_event_mappings', 'sprint_id', `sprint_id INTEGER REFERENCES sprints(id) ON DELETE CASCADE`);
-  ensureTableColumn(db, 'external_event_mappings', 'sprint_type', `sprint_type TEXT`);
+  await ensureTableColumn(db, 'external_event_mappings', 'sprint_id', `sprint_id INTEGER REFERENCES sprints(id) ON DELETE CASCADE`);
+  await ensureTableColumn(db, 'external_event_mappings', 'sprint_type', `sprint_type TEXT`);
   db.exec(`
     UPDATE external_event_mappings
     SET project_id = COALESCE(project_id, (SELECT s.project_id FROM sprints s WHERE s.id = external_event_mappings.sprint_id)),
@@ -6426,14 +6343,14 @@ export function ensurePipelineIntelligenceTelemetry(): void {
   `);
   ensureTasksRequireWorkflow(db);
   if (activeTenantMode === 'verify') {
-    verifyTenantSchemaForStartup(db);
+    await verifyTenantSchemaForStartup(new SqliteAdapter(db));
   } else {
-    ensureTenantSchema(db);
+    await ensureTenantSchema(new SqliteAdapter(db));
     // Legacy upgrade path: projects.tenant_id is only added by ensureTenantSchema,
     // so repeat the version-history backfill that was skipped earlier in this run.
-    backfillProjectFileVersionHistory(db);
+    await backfillProjectFileVersionHistory(db);
   }
-  ensureNotificationTables(db);
+  await ensureNotificationTables(new SqliteAdapter(db));
 
   try {
     migrateAgentSessionKeysToCanonical(db);
@@ -6442,11 +6359,11 @@ export function ensurePipelineIntelligenceTelemetry(): void {
   }
 }
 
-function backfillProjectFileVersionHistory(db: Database.Database): void {
+async function backfillProjectFileVersionHistory(db: Database.Database): Promise<void> {
   // Requires projects.tenant_id, which legacy databases gain only once
   // ensureTenantSchema has run. Idempotent: INSERT OR IGNORE + NOT EXISTS,
   // and the UPDATE only touches rows that still need backfilling.
-  if (!tableHasColumn(db, 'projects', 'tenant_id')) return;
+  if (!await tableHasColumn(new SqliteAdapter(db), 'projects', 'tenant_id')) return;
   if (!tableExists(db, 'project_files') || !tableExists(db, 'project_file_versions')) return;
 
   db.exec(`

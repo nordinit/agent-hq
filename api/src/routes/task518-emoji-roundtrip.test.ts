@@ -11,7 +11,7 @@ let dbPath: string;
 const originalContractRoot = process.env.AGENT_CONTRACT_ROOT;
 const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   jest.resetModules();
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -23,7 +23,7 @@ function resetDb(): void {
   fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'generic.md'), 'Sprint type: {{sprintType}}\n');
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE sprint_types (
       key TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -172,17 +172,17 @@ function resetDb(): void {
     CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, sprint_id INTEGER, status TEXT, story_points INTEGER);
   `);
 
-  db.prepare(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`).run();
-  db.prepare(`INSERT INTO sprint_types (key, name, is_system) VALUES ('enhancements', 'Enhancements', 1)`).run();
-  db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type, status) VALUES (10, 1, 'Enhancements', 'enhancements', 'active')`).run();
-  db.prepare(`INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions) VALUES ('review', 'Review', 'purple', 0, 1, '[]')`).run();
-  db.prepare(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES ('enhancements', 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`).run();
-  db.prepare(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES (10, 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`).run();
+  await db.run(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`);
+  await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('enhancements', 'Enhancements', 1)`);
+  await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type, status) VALUES (10, 1, 'Enhancements', 'enhancements', 'active')`);
+  await db.run(`INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions) VALUES ('review', 'Review', 'purple', 0, 1, '[]')`);
+  await db.run(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES ('enhancements', 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`);
+  await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES (10, 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task518-emoji-bootstrap-'));
-  resetDb();
+  await resetDb();
 });
 
 afterEach(() => {
@@ -240,8 +240,8 @@ test('sprint type status emoji persists and round-trips on repeated reload fetch
     }
 
     const db = getDb();
-    const sprintTypeRow = db.prepare(`SELECT metadata_json FROM sprint_type_task_statuses WHERE sprint_type_key = ? AND status_key = ?`).get('enhancements', 'review') as { metadata_json: string } | undefined;
-    const sprintRow = db.prepare(`SELECT metadata_json FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`).get(10, 'review') as { metadata_json: string } | undefined;
+    const sprintTypeRow = await db.get(`SELECT metadata_json FROM sprint_type_task_statuses WHERE sprint_type_key = ? AND status_key = ?`, 'enhancements', 'review') as { metadata_json: string } | undefined;
+    const sprintRow = await db.get(`SELECT metadata_json FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`, 10, 'review') as { metadata_json: string } | undefined;
     expect(JSON.parse(sprintTypeRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🚦' }));
     expect(JSON.parse(sprintRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🚦' }));
 
@@ -258,14 +258,14 @@ test('sprint type status emoji persists and round-trips on repeated reload fetch
   }
 });
 
-test('seedSprintTaskPolicy preserves sprint-type metadata when cloning statuses into a sprint', () => {
+test('seedSprintTaskPolicy preserves sprint-type metadata when cloning statuses into a sprint', async () => {
   const db = getDb();
-  db.prepare(`UPDATE sprint_type_task_statuses SET metadata_json = ? WHERE sprint_type_key = ? AND status_key = ?`).run('{"source":"legacy-seed"}', 'enhancements', 'review');
-  db.prepare(`DELETE FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`).run(10, 'review');
+  await db.run(`UPDATE sprint_type_task_statuses SET metadata_json = ? WHERE sprint_type_key = ? AND status_key = ?`, '{"source":"legacy-seed"}', 'enhancements', 'review');
+  await db.run(`DELETE FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`, 10, 'review');
 
-  const { seedSprintTaskPolicy } = require('../domains/routing/policy');
-  seedSprintTaskPolicy(db, 10, { force: true });
+  const { seedSprintTaskPolicy } = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
+  await seedSprintTaskPolicy(db, 10, { force: true });
 
-  const sprintSeedRow = db.prepare(`SELECT metadata_json FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`).get(10, 'review') as { metadata_json: string } | undefined;
+  const sprintSeedRow = await db.get(`SELECT metadata_json FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`, 10, 'review') as { metadata_json: string } | undefined;
   expect(JSON.parse(sprintSeedRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ source: 'legacy-seed' }));
 });

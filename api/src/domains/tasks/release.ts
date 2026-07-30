@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { applyTaskOutcome, RefusedTaskOutcomeError, resolveRefusedTaskOutcome } from '../../lib/taskOutcome';
 import {
   extractInlineEvidence,
@@ -22,13 +21,15 @@ import {
 } from './mutations';
 import { enrichTask, TASK_SELECT } from './readModel';
 import { INLINE_EVIDENCE_FIELD_KEYS } from '../../lib/starterCatalog';
+import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
+import { type Db } from "../../db/adapter/types";
 
-function loadTask(taskId: number, db: Database.Database): Record<string, unknown> | undefined {
-  return db.prepare(`${TASK_SELECT} WHERE t.id = ?`).get(taskId) as Record<string, unknown> | undefined;
+async function loadTask(taskId: number, db: Db): Promise<Record<string, unknown> | undefined> {
+  return await db.get(`${TASK_SELECT} WHERE t.id = ?`, taskId) as Record<string, unknown> | undefined;
 }
 
-function requireTask(taskId: number, db: Database.Database): Record<string, unknown> {
-  const task = loadTask(taskId, db);
+async function requireTask(taskId: number, db: Db): Promise<Record<string, unknown>> {
+  const task = await loadTask(taskId, db);
   if (!task) {
     const error = new Error('Task not found') as Error & { status?: number };
     error.status = 404;
@@ -78,12 +79,12 @@ function errorWithBody(status: number, body: Record<string, unknown>): Error & {
   return error;
 }
 
-function resolveMcpActiveOutcomeInstance(
-  db: Database.Database,
+async function resolveMcpActiveOutcomeInstance(
+  db: Db,
   taskId: number,
   identity: McpApiIdentity,
-): number {
-  const row = db.prepare(`
+): Promise<number> {
+  const row = await db.get(`
     SELECT
       t.id AS task_id,
       t.active_instance_id,
@@ -93,7 +94,7 @@ function resolveMcpActiveOutcomeInstance(
     FROM tasks t
     LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
     WHERE t.id = ?
-  `).get(taskId) as {
+  `, taskId) as {
     task_id: number;
     active_instance_id: number | null;
     instance_id: number | null;
@@ -134,7 +135,7 @@ function resolveMcpActiveOutcomeInstance(
 }
 
 export async function postTaskOutcome(
-  db: Database.Database,
+  db: Db,
   taskId: number,
   body: Record<string, unknown>,
   changedBy: string,
@@ -151,11 +152,9 @@ export async function postTaskOutcome(
   }
   const normalizedBody = normalizeOutcomeBody(body);
   const dryRun = normalizedBody.dry_run === true || normalizedBody.dry_run === 'true';
-  const customFieldsSelect = taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
-  const existing = db.prepare(
-    `SELECT id, status, task_type, sprint_id, ${customFieldsSelect}
-     FROM tasks WHERE id = ?`,
-  ).get(taskId) as {
+  const customFieldsSelect = await taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
+  const existing = await db.get(`SELECT id, status, task_type, sprint_id, ${customFieldsSelect}
+     FROM tasks WHERE id = ?`, taskId) as {
     id: number;
     status: string;
     task_type: string | null;
@@ -179,7 +178,7 @@ export async function postTaskOutcome(
 
   const inlineEvidence = extractInlineEvidence(normalizedBody);
   const hasInline = hasAnyEvidence(inlineEvidence);
-  const transitionRequirements = loadSprintTaskTransitionRequirements(db, existing.sprint_id ?? null, outcome, existing.task_type ?? null)
+  const transitionRequirements = (await loadSprintTaskTransitionRequirements(db, existing.sprint_id ?? null, outcome, existing.task_type ?? null))
     .map((row): GateRequirement => ({
       field_name: row.field_name,
       requirement_type: row.requirement_type,
@@ -207,10 +206,10 @@ export async function postTaskOutcome(
   }, transitionRequirements);
 
   const authoritativeInstanceId = options.mcpIdentity
-    ? resolveMcpActiveOutcomeInstance(db, taskId, options.mcpIdentity)
+    ? await resolveMcpActiveOutcomeInstance(db, taskId, options.mcpIdentity)
     : normalizeOptionalInstanceId(normalizedBody.instance_id ?? normalizedBody.instanceId);
   if (!options.mcpIdentity && authoritativeInstanceId != null) {
-    const authorityFailure = getTaskInstanceAuthorityFailure(db, taskId, authoritativeInstanceId, 'task outcome');
+    const authorityFailure = await getTaskInstanceAuthorityFailure(db, taskId, authoritativeInstanceId, 'task outcome');
     if (authorityFailure) {
       throw errorWithBody(authorityFailure.status, authorityFailure.body);
     }
@@ -235,14 +234,14 @@ export async function postTaskOutcome(
         },
       };
     }
-    resolveRefusedTaskOutcome(db, {
-      taskId,
-      outcome,
-      changedBy,
-      reason: evidenceValidation.errors[0] ?? 'Evidence validation failed',
-      summary,
-      instanceId: authoritativeInstanceId,
-    });
+    await resolveRefusedTaskOutcome(db, {
+            taskId,
+            outcome,
+            changedBy,
+            reason: evidenceValidation.errors[0] ?? 'Evidence validation failed',
+            summary,
+            instanceId: authoritativeInstanceId,
+          });
     const error = new Error('Evidence validation failed') as Error & {
       status?: number;
       validation_errors?: string[];
@@ -252,15 +251,15 @@ export async function postTaskOutcome(
     throw error;
   }
 
-  const persistOutcomeRefusal = (reason: string) => {
-    resolveRefusedTaskOutcome(db, {
-      taskId,
-      outcome,
-      changedBy,
-      reason,
-      summary,
-      instanceId: authoritativeInstanceId,
-    });
+  const persistOutcomeRefusal = async (reason: string) => {
+    await resolveRefusedTaskOutcome(db, {
+            taskId,
+            outcome,
+            changedBy,
+            reason,
+            summary,
+            instanceId: authoritativeInstanceId,
+          });
   };
 
   const isOutcomeRefusalMessage = (message: string) => (
@@ -274,7 +273,7 @@ export async function postTaskOutcome(
     await db.exec('BEGIN');
     try {
       if (hasInline) {
-        updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>);
+        await updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>);
       }
       const result = await applyTaskOutcome(db, {
         taskId,
@@ -344,7 +343,7 @@ export async function postTaskOutcome(
   let result;
   try {
     if (hasInline) {
-      updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>);
+      await updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>);
 
       const evFields: string[] = [];
       if (inlineEvidence.review_branch) evFields.push(`Branch: ${inlineEvidence.review_branch}`);
@@ -358,7 +357,7 @@ export async function postTaskOutcome(
       if (inlineEvidence.deployed_at) evFields.push(`At: ${inlineEvidence.deployed_at}`);
       if (inlineEvidence.live_verified_by) evFields.push(`Verified by: ${inlineEvidence.live_verified_by}`);
       if (evFields.length > 0) {
-        addTaskNote(taskId, changedBy, `Atomic evidence (with ${outcome})\n${evFields.join('\n')}`);
+        await addTaskNote(taskId, changedBy, `Atomic evidence (with ${outcome})\n${evFields.join('\n')}`);
       }
     }
 
@@ -379,12 +378,21 @@ export async function postTaskOutcome(
     }
     const message = error instanceof Error ? error.message : String(error);
     if (isOutcomeRefusalMessage(message) && !(error instanceof RefusedTaskOutcomeError)) {
-      persistOutcomeRefusal(message);
+      // Awaited so the refusal is recorded before the original error propagates and the request
+      // unwinds — unawaited, the write was still pending when the caller had already failed the
+      // release, and its own rejection would have escaped as an unhandled rejection. Contained
+      // in a try/catch because this runs on an error path: a failure to record the refusal must
+      // not replace the error that caused it, which is the more useful of the two.
+      try {
+        await persistOutcomeRefusal(message);
+      } catch (refusalError) {
+        console.warn('[release] could not record the outcome refusal:', refusalError);
+      }
     }
     throw error;
   }
 
-  const task = requireTask(taskId, db);
+  const task = await requireTask(taskId, db);
   maybeTriggerDispatch(task.project_id as number | null | undefined);
   return {
     ok: true,
@@ -398,12 +406,12 @@ export async function postTaskOutcome(
     evidence_written: hasInline,
     auto_recovered: result.autoRecovered ?? false,
     recovery_description: result.recoveryDescription ?? null,
-    task: enrichTask(task),
+    task: await enrichTask(task),
   };
 }
 
-export function putReviewEvidence(
-  db: Database.Database,
+export async function putReviewEvidence(
+  db: Db,
   taskId: number,
   body: Record<string, unknown>,
   changedBy: string,
@@ -420,7 +428,7 @@ export function putReviewEvidence(
     throw error;
   }
   if (authoritativeInstanceId != null) {
-    const authorityFailure = getTaskInstanceAuthorityFailure(db, taskId, authoritativeInstanceId, 'review evidence write');
+    const authorityFailure = await getTaskInstanceAuthorityFailure(db, taskId, authoritativeInstanceId, 'review evidence write');
     if (authorityFailure) {
       const error = new Error(String(authorityFailure.body.error ?? 'Review evidence rejected')) as Error & {
         status?: number;
@@ -447,23 +455,23 @@ export function putReviewEvidence(
     throw error;
   }
 
-  updateTaskEvidence(taskId, changedBy, {
-    review_branch: reviewBranch ?? null,
-    review_commit: reviewCommit ?? null,
-    review_url: reviewUrl ?? null,
-  });
+  await updateTaskEvidence(taskId, changedBy, {
+        review_branch: reviewBranch ?? null,
+        review_commit: reviewCommit ?? null,
+        review_url: reviewUrl ?? null,
+      });
 
-  addTaskNote(
-    taskId,
-    changedBy,
-    `Review evidence recorded\nBranch: ${reviewBranch ?? '—'}\nCommit: ${reviewCommit ?? '—'}\nURL: ${reviewUrl ?? '—'}${summary ? `\nSummary: ${summary}` : ''}`,
-  );
+  await addTaskNote(
+        taskId,
+        changedBy,
+        `Review evidence recorded\nBranch: ${reviewBranch ?? '—'}\nCommit: ${reviewCommit ?? '—'}\nURL: ${reviewUrl ?? '—'}${summary ? `\nSummary: ${summary}` : ''}`,
+      );
 
-  return enrichTask(requireTask(taskId, db));
+  return await enrichTask(await requireTask(taskId, db));
 }
 
-export function putQaEvidence(
-  db: Database.Database,
+export async function putQaEvidence(
+  db: Db,
   taskId: number,
   body: Record<string, unknown>,
   changedBy: string,
@@ -479,7 +487,7 @@ export function putQaEvidence(
     throw error;
   }
   if (authoritativeInstanceId != null) {
-    const authorityFailure = getTaskInstanceAuthorityFailure(db, taskId, authoritativeInstanceId, 'QA evidence write');
+    const authorityFailure = await getTaskInstanceAuthorityFailure(db, taskId, authoritativeInstanceId, 'QA evidence write');
     if (authorityFailure) {
       const error = new Error(String(authorityFailure.body.error ?? 'QA evidence rejected')) as Error & {
         status?: number;
@@ -510,8 +518,8 @@ export function putQaEvidence(
 
   const hasSubstantiveCommit = resolvedQaVerifiedCommit !== undefined && resolvedQaVerifiedCommit !== null && resolvedQaVerifiedCommit !== '';
   if (explicitClears.size === 0 && hasSubstantiveCommit) {
-    const customFieldsSelect = taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
-    const taskRow = db.prepare(`SELECT ${customFieldsSelect} FROM tasks WHERE id = ?`).get(taskId) as {
+    const customFieldsSelect = await taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
+    const taskRow = await db.get(`SELECT ${customFieldsSelect} FROM tasks WHERE id = ?`, taskId) as {
       custom_fields_json: string | null;
     } | undefined;
     const canonicalTaskRow = taskRow ? getCanonicalTaskRecord(taskRow as unknown as Record<string, unknown>) : null;
@@ -534,26 +542,26 @@ export function putQaEvidence(
     }
   }
 
-  updateTaskEvidence(taskId, changedBy, {
-    qa_verified_commit: resolvedQaVerifiedCommit ?? null,
-    qa_tested_url: resolvedQaTestedUrl ?? null,
-  }, { explicitClears });
+  await updateTaskEvidence(taskId, changedBy, {
+        qa_verified_commit: resolvedQaVerifiedCommit ?? null,
+        qa_tested_url: resolvedQaTestedUrl ?? null,
+      }, { explicitClears });
 
   const commitDisplay = explicitClears.has('qa_verified_commit') ? '[cleared]' : (resolvedQaVerifiedCommit ?? '—');
   const urlDisplay = explicitClears.has('qa_tested_url') ? '[cleared]' : (resolvedQaTestedUrl ?? '—');
   const actionLabel = explicitClears.size > 0 ? 'QA evidence reset (intentional clear)' : 'QA evidence recorded';
 
-  addTaskNote(
-    taskId,
-    changedBy,
-    `${actionLabel}\nVerified commit: ${String(commitDisplay)}\nTested URL: ${String(urlDisplay)}${summary ? `\nSummary: ${summary}` : ''}`,
-  );
+  await addTaskNote(
+        taskId,
+        changedBy,
+        `${actionLabel}\nVerified commit: ${String(commitDisplay)}\nTested URL: ${String(urlDisplay)}${summary ? `\nSummary: ${summary}` : ''}`,
+      );
 
-  return enrichTask(requireTask(taskId, db));
+  return await enrichTask(await requireTask(taskId, db));
 }
 
-export function putDeployEvidence(
-  db: Database.Database,
+export async function putDeployEvidence(
+  db: Db,
   taskId: number,
   body: Record<string, unknown>,
   changedBy: string,
@@ -580,24 +588,24 @@ export function putDeployEvidence(
     throw error;
   }
 
-  updateTaskEvidence(taskId, changedBy, {
-    merged_commit: mergedCommit ?? null,
-    deployed_commit: deployedCommit ?? null,
-    deploy_target: deployTarget ?? null,
-    deployed_at: deployedAt ?? null,
-  });
+  await updateTaskEvidence(taskId, changedBy, {
+        merged_commit: mergedCommit ?? null,
+        deployed_commit: deployedCommit ?? null,
+        deploy_target: deployTarget ?? null,
+        deployed_at: deployedAt ?? null,
+      });
 
-  addTaskNote(
-    taskId,
-    changedBy,
-    `Deploy evidence recorded\nMerged commit: ${mergedCommit ?? '—'}\nDeployed commit: ${deployedCommit ?? '—'}\nDeploy target: ${deployTarget ?? '—'}\nDeployed at: ${deployedAt ?? '—'}${summary ? `\nSummary: ${summary}` : ''}`,
-  );
+  await addTaskNote(
+        taskId,
+        changedBy,
+        `Deploy evidence recorded\nMerged commit: ${mergedCommit ?? '—'}\nDeployed commit: ${deployedCommit ?? '—'}\nDeploy target: ${deployTarget ?? '—'}\nDeployed at: ${deployedAt ?? '—'}${summary ? `\nSummary: ${summary}` : ''}`,
+      );
 
-  return enrichTask(requireTask(taskId, db));
+  return await enrichTask(await requireTask(taskId, db));
 }
 
-export function putLiveVerification(
-  db: Database.Database,
+export async function putLiveVerification(
+  db: Db,
   taskId: number,
   body: Record<string, unknown>,
   changedBy: string,
@@ -605,18 +613,18 @@ export function putLiveVerification(
   const liveVerifiedBy = typeof body.live_verified_by === 'string' || body.live_verified_by === null ? body.live_verified_by : undefined;
   const liveVerifiedAt = typeof body.live_verified_at === 'string' || body.live_verified_at === null ? body.live_verified_at : undefined;
   const summary = typeof body.summary === 'string' || body.summary === null ? body.summary : null;
-  const verifiedAt = liveVerifiedAt ?? new Date().toISOString();
+  const verifiedAt = toCanonicalTimestampOrNow(liveVerifiedAt);
 
-  updateTaskEvidence(taskId, changedBy, {
-    live_verified_by: liveVerifiedBy ?? null,
-    live_verified_at: verifiedAt,
-  });
+  await updateTaskEvidence(taskId, changedBy, {
+        live_verified_by: liveVerifiedBy ?? null,
+        live_verified_at: verifiedAt,
+      });
 
-  addTaskNote(
-    taskId,
-    changedBy,
-    `Live verification recorded\nVerified by: ${liveVerifiedBy ?? '—'}\nVerified at: ${verifiedAt}${summary ? `\nSummary: ${summary}` : ''}`,
-  );
+  await addTaskNote(
+        taskId,
+        changedBy,
+        `Live verification recorded\nVerified by: ${liveVerifiedBy ?? '—'}\nVerified at: ${verifiedAt}${summary ? `\nSummary: ${summary}` : ''}`,
+      );
 
-  return enrichTask(requireTask(taskId, db));
+  return await enrichTask(await requireTask(taskId, db));
 }

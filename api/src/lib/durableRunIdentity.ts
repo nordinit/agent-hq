@@ -1,28 +1,27 @@
-import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
+import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export function createDurableRunId(): string {
   return randomUUID();
 }
 
-export function tableHasColumn(db: Database.Database, tableName: string, columnName: string): boolean {
-  return (db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>)
-    .some((col) => col.name === columnName);
+export async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
-export function ensureJobInstanceDurableRunId(
-  db: Database.Database,
+export async function ensureJobInstanceDurableRunId(
+  db: Db,
   instanceId: number,
-): string {
-  if (!tableHasColumn(db, 'job_instances', 'durable_run_id')) return '';
+): Promise<string> {
+  if (!await tableHasColumn(db, 'job_instances', 'durable_run_id')) return '';
 
-  const row = db.prepare(`SELECT durable_run_id FROM job_instances WHERE id = ?`)
-    .get(instanceId) as { durable_run_id: string | null } | undefined;
+  const row = await db.get(`SELECT durable_run_id FROM job_instances WHERE id = ?`, instanceId) as { durable_run_id: string | null } | undefined;
   const existing = typeof row?.durable_run_id === 'string' ? row.durable_run_id.trim() : '';
   if (existing) return existing;
 
   const durableRunId = createDurableRunId();
-  db.prepare(`UPDATE job_instances SET durable_run_id = ? WHERE id = ?`).run(durableRunId, instanceId);
+  await db.run(`UPDATE job_instances SET durable_run_id = ? WHERE id = ?`, durableRunId, instanceId);
   return durableRunId;
 }
 

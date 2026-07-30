@@ -56,32 +56,32 @@ export const PROVIDER_MODEL_SOURCES: Record<ConnectableProviderSlug, AgentModelS
 
 const DEFAULT_SCHEMA_SAFE_AGENT_PROVIDER = 'anthropic';
 
-export function getConnectedProviderSlugs(tenantId: number): string[] {
+export async function getConnectedProviderSlugs(tenantId: number): Promise<string[]> {
   const db = getDb();
-  const rows = db.prepare(`SELECT slug FROM provider_config WHERE tenant_id = ? AND status = 'connected'`).all(tenantId) as Array<{ slug: string }>;
+  const rows = await db.all(`SELECT slug FROM provider_config WHERE tenant_id = ? AND status = 'connected'`, tenantId) as Array<{ slug: string }>;
   const slugs = new Set(rows.map(row => row.slug));
   try {
-    const connections = db.prepare(`SELECT provider_slug FROM provider_connections WHERE tenant_id = ? AND status = 'connected'`).all(tenantId) as Array<{ provider_slug: string }>;
+    const connections = await db.all(`SELECT provider_slug FROM provider_connections WHERE tenant_id = ? AND status = 'connected'`, tenantId) as Array<{ provider_slug: string }>;
     connections.forEach(row => slugs.add(row.provider_slug));
   } catch { /* schema bootstrap tests may not create provider_connections */ }
   return Array.from(slugs);
 }
 
-export function validateAgentProviderConnection(
+export async function validateAgentProviderConnection(
   tenantId: number,
   runtimeType: string,
   preferredProvider: string | null | undefined,
   providerConnectionId: number | null | undefined,
-): string | null {
+): Promise<string | null> {
   if (providerConnectionId == null) return null;
   const db = getDb();
   let row: { provider_slug: string; runtime_type: string; status: string } | undefined;
   try {
-    row = db.prepare(`
+    row = await db.get(`
       SELECT provider_slug, runtime_type, status
       FROM provider_connections
       WHERE id = ? AND tenant_id = ?
-    `).get(providerConnectionId, tenantId) as typeof row;
+    `, providerConnectionId, tenantId) as typeof row;
   } catch {
     return 'provider connections are not available in the current schema';
   }
@@ -94,12 +94,12 @@ export function validateAgentProviderConnection(
   return null;
 }
 
-export function validateAgentProviderSelection(tenantId: number, preferredProvider: string | null | undefined, model: string | null | undefined): string | null {
+export async function validateAgentProviderSelection(tenantId: number, preferredProvider: string | null | undefined, model: string | null | undefined): Promise<string | null> {
   if (!preferredProvider) return null;
   if (!CONNECTABLE_PROVIDER_SLUGS.includes(preferredProvider as typeof CONNECTABLE_PROVIDER_SLUGS[number])) {
     return `preferred_provider must be one of: ${CONNECTABLE_PROVIDER_SLUGS.join(', ')}`;
   }
-  const connectedProviders = getConnectedProviderSlugs(tenantId);
+  const connectedProviders = await getConnectedProviderSlugs(tenantId);
   if (!connectedProviders.includes(preferredProvider)) {
     return `preferred_provider '${preferredProvider}' is not currently connected`;
   }

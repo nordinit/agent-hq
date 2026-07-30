@@ -22,11 +22,11 @@ describe('dispatch log schema', () => {
     tempDir = '';
   });
 
-  it('creates dispatch_log on a fresh database for dispatch status and log endpoints', () => {
-    initSchema();
+  it('creates dispatch_log on a fresh database for dispatch status and log endpoints', async () => {
+    await initSchema();
 
     const db = getDb();
-    const columns = db.prepare(`PRAGMA table_info(dispatch_log)`).all() as Array<{ name: string }>;
+    const columns = await db.all(`PRAGMA table_info(dispatch_log)`) as Array<{ name: string }>;
 
     expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
       'id',
@@ -38,20 +38,20 @@ describe('dispatch log schema', () => {
       'dispatched_at',
     ]));
 
-    const total = db.prepare(`SELECT COUNT(*) AS n FROM dispatch_log`).get() as { n: number };
+    const total = await db.get(`SELECT COUNT(*) AS n FROM dispatch_log`) as { n: number };
     expect(total.n).toBe(0);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO dispatch_log (task_id, agent_id, routing_reason, candidate_count, candidates_skipped)
       VALUES (NULL, NULL, 'schema smoke', 0, '[]')
-    `).run();
+    `);
 
-    const latest = db.prepare(`
+    const latest = await db.get(`
       SELECT routing_reason, candidate_count, candidates_skipped, dispatched_at
       FROM dispatch_log
       ORDER BY id DESC
       LIMIT 1
-    `).get() as { routing_reason: string; candidate_count: number; candidates_skipped: string; dispatched_at: string };
+    `) as { routing_reason: string; candidate_count: number; candidates_skipped: string; dispatched_at: string };
 
     expect(latest).toEqual(expect.objectContaining({
       routing_reason: 'schema smoke',

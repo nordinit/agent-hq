@@ -23,9 +23,9 @@ export function isAtlasAgentRecord(agent: Record<string, unknown> | null | undef
     || agent.name === ATLAS_AGENT_NAME;
 }
 
-export function getAtlasAgentRecord(): Record<string, unknown> | null {
+export async function getAtlasAgentRecord(): Promise<Record<string, unknown> | null> {
   const db = getDb();
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT *
     FROM agents
     WHERE system_role = ?
@@ -44,24 +44,13 @@ export function getAtlasAgentRecord(): Record<string, unknown> | null {
       END,
       id ASC
     LIMIT 1
-  `).get(
-    ATLAS_SYSTEM_ROLE,
-    ATLAS_AGENT_SLUG,
-    ATLAS_SESSION_KEY,
-    LEGACY_ATLAS_SESSION_KEY,
-    ATLAS_AGENT_NAME,
-    ATLAS_SYSTEM_ROLE,
-    ATLAS_AGENT_SLUG,
-    ATLAS_SESSION_KEY,
-    ATLAS_AGENT_NAME,
-    LEGACY_ATLAS_SESSION_KEY,
-  ) as Record<string, unknown> | undefined;
+  `, ATLAS_SYSTEM_ROLE, ATLAS_AGENT_SLUG, ATLAS_SESSION_KEY, LEGACY_ATLAS_SESSION_KEY, ATLAS_AGENT_NAME, ATLAS_SYSTEM_ROLE, ATLAS_AGENT_SLUG, ATLAS_SESSION_KEY, ATLAS_AGENT_NAME, LEGACY_ATLAS_SESSION_KEY) as Record<string, unknown> | undefined;
 
   return row ?? null;
 }
 
-export function resolveAtlasWorkspaceRoot(): string {
-  const atlas = getAtlasAgentRecord();
+export async function resolveAtlasWorkspaceRoot(): Promise<string> {
+  const atlas = await getAtlasAgentRecord();
   if (!atlas) return ATLAS_WORKSPACE_PATH;
 
   if (typeof atlas.workspace_path === 'string' && atlas.workspace_path.trim()) {

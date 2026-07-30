@@ -10,7 +10,7 @@ import { ensureTenantSchema } from '../lib/tenantContext';
 let tempDir: string;
 let dbPath: string;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-routing-'));
@@ -18,7 +18,7 @@ function resetDb(): void {
   process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -107,10 +107,10 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('model-routing aliases', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-routing-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
-    resetDb();
+    await resetDb();
   });
 
   afterEach(() => {
@@ -138,10 +138,10 @@ describe('model-routing aliases', () => {
 
   it('lists serialized story point aliases for existing rules', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, fallback_model, thinking_level, fast_mode, label)
       VALUES (1, NULL, 3, 'anthropic', 'claude-sonnet-4-5', NULL, 'low', 0, 'small')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -516,14 +516,14 @@ describe('model-routing aliases', () => {
 
   it('preserves nullable fields when updating only the provider', async () => {
     const db = getDb();
-    const inserted = db.prepare(`
+    const inserted = await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, fallback_model, thinking_level, label)
       VALUES (1, NULL, 4, 'openai', 'openai/gpt-5.5', 'openai/gpt-5.4', 'high', 'Medium - OpenAI GPT-5.5')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
-      const response = await fetch(`${baseUrl}/api/v1/model-routing/${inserted.lastInsertRowid}`, {
+      const response = await fetch(`${baseUrl}/api/v1/model-routing/${inserted.lastInsertId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: 'openai-codex' }),
@@ -543,23 +543,23 @@ describe('model-routing aliases', () => {
 
   it('blocks cross-tenant by-id reads, updates, deletes, and foreign scopes', async () => {
     const db = getDb();
-    const defaultTenantId = ensureTenantSchema(db);
-    const betaTenantId = Number(db.prepare(`
+    const defaultTenantId = await ensureTenantSchema(db);
+    const betaTenantId = Number((await db.run(`
       INSERT INTO tenants (name, slug, is_default)
       VALUES ('Beta Tenant', 'beta-tenant', 0)
-    `).run().lastInsertRowid);
-    db.prepare(`UPDATE projects SET tenant_id = ? WHERE id = 2`).run(betaTenantId);
-    db.prepare(`UPDATE sprints SET tenant_id = ? WHERE id = 20`).run(betaTenantId);
-    const inserted = db.prepare(`
+    `)).lastInsertId);
+    await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
+    await db.run(`UPDATE sprints SET tenant_id = ? WHERE id = 20`, betaTenantId);
+    const inserted = await db.run(`
       INSERT INTO story_point_model_routing
         (tenant_id, project_id, sprint_id, max_points, provider, model, label)
       VALUES (?, 2, 20, 8, 'openai', 'openai/gpt-5.5', 'Beta private rule')
-    `).run(betaTenantId);
-    const betaRuleId = Number(inserted.lastInsertRowid);
+    `, betaTenantId);
+    const betaRuleId = Number(inserted.lastInsertId);
 
     const { server, baseUrl } = await startTestServer();
     try {
-      db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run(String(defaultTenantId));
+      await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(defaultTenantId));
       const alphaGet = await fetch(`${baseUrl}/api/v1/model-routing/${betaRuleId}`);
       expect(alphaGet.status).toBe(404);
 
@@ -575,7 +575,7 @@ describe('model-routing aliases', () => {
       });
       expect(alphaDelete.status).toBe(404);
 
-      db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run(String(betaTenantId));
+      await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(betaTenantId));
       const betaGet = await fetch(`${baseUrl}/api/v1/model-routing/${betaRuleId}`);
       const betaBody = await betaGet.json();
       expect(betaGet.status).toBe(200);
@@ -585,7 +585,7 @@ describe('model-routing aliases', () => {
         label: 'Beta private rule',
       }));
 
-      db.prepare(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`).run(String(defaultTenantId));
+      await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(defaultTenantId));
       const alphaForeignScope = await fetch(`${baseUrl}/api/v1/model-routing`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

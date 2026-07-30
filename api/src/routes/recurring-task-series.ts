@@ -38,11 +38,11 @@ function sendError(res: Response, err: unknown): void {
   });
 }
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    res.json(listRecurringTaskSeries(db, { ...req.query, tenant_id: tenantId }));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    res.json(await listRecurringTaskSeries(db, { ...req.query, tenant_id: tenantId }));
   } catch (err) {
     sendError(res, err);
   }
@@ -59,59 +59,59 @@ router.post('/preview', (req: Request, res: Response) => {
   }
 });
 
-router.post('/', (req: Request, res: Response) => {
+router.post('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const actor = resolveRequestActor(req, req.body?.created_by ?? req.body?.changed_by ?? 'system').changedBy;
-    const series = createRecurringTaskSeries(db, {
-      ...(req.body as CreateRecurringTaskSeriesInput),
-      tenant_id: tenantId,
-      created_by: actor,
-      updated_by: actor,
-    });
-    res.status(201).json(getRecurringTaskSeries(db, series.id, tenantId));
+    const series = await createRecurringTaskSeries(db, {
+          ...(req.body as CreateRecurringTaskSeriesInput),
+          tenant_id: tenantId,
+          created_by: actor,
+          updated_by: actor,
+        });
+    res.status(201).json(await getRecurringTaskSeries(db, series.id, tenantId));
   } catch (err) {
     sendError(res, err);
   }
 });
 
-router.get('/:id', (req: Request, res: Response) => {
+router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = parseSeriesId(req.params.id);
-    const series = getRecurringTaskSeries(db, id, tenantId);
+    const series = await getRecurringTaskSeries(db, id, tenantId);
     if (!series) return res.status(404).json({ error: 'Recurring task series not found', code: 'series_not_found' });
     res.json({
       ...series,
-      runs: listRecurringTaskRuns(db, id, req.query.limit, tenantId),
+      runs: await listRecurringTaskRuns(db, id, req.query.limit, tenantId),
     });
   } catch (err) {
     sendError(res, err);
   }
 });
 
-router.get('/:id/history', (req: Request, res: Response) => {
+router.get('/:id/history', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = parseSeriesId(req.params.id);
-    if (!getRecurringTaskSeries(db, id, tenantId)) {
+    if (!await getRecurringTaskSeries(db, id, tenantId)) {
       return res.status(404).json({ error: 'Recurring task series not found', code: 'series_not_found' });
     }
-    res.json({ series_id: id, runs: listRecurringTaskRuns(db, id, req.query.limit, tenantId) });
+    res.json({ series_id: id, runs: await listRecurringTaskRuns(db, id, req.query.limit, tenantId) });
   } catch (err) {
     sendError(res, err);
   }
 });
 
-router.post('/:id/preview', (req: Request, res: Response) => {
+router.post('/:id/preview', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = parseSeriesId(req.params.id);
-    const series = getRecurringTaskSeries(db, id, tenantId) as Record<string, unknown> | null;
+    const series = await getRecurringTaskSeries(db, id, tenantId) as Record<string, unknown> | null;
     if (!series) return res.status(404).json({ error: 'Recurring task series not found', code: 'series_not_found' });
     res.json(previewRecurringTaskSchedule(
       String(series.schedule_expression ?? series.schedule),
@@ -123,66 +123,66 @@ router.post('/:id/preview', (req: Request, res: Response) => {
   }
 });
 
-router.put('/:id', (req: Request, res: Response) => {
+router.put('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = parseSeriesId(req.params.id);
     const actor = resolveRequestActor(req, req.body?.updated_by ?? req.body?.changed_by ?? 'system').changedBy;
-    const series = updateRecurringTaskSeries(db, id, {
-      ...(req.body as UpdateRecurringTaskSeriesInput),
-      tenant_id: tenantId,
-      updated_by: actor,
-    }, tenantId);
-    res.json(getRecurringTaskSeries(db, series.id, tenantId));
+    const series = await updateRecurringTaskSeries(db, id, {
+          ...(req.body as UpdateRecurringTaskSeriesInput),
+          tenant_id: tenantId,
+          updated_by: actor,
+        }, tenantId);
+    res.json(await getRecurringTaskSeries(db, series.id, tenantId));
   } catch (err) {
     sendError(res, err);
   }
 });
 
-router.post('/:id/enable', (req: Request, res: Response) => {
+router.post('/:id/enable', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = parseSeriesId(req.params.id);
     const actor = resolveRequestActor(req, req.body?.updated_by ?? req.body?.changed_by ?? 'system').changedBy;
-    const series = setRecurringTaskSeriesEnabled(db, id, true, actor, tenantId);
-    res.json(getRecurringTaskSeries(db, series.id, tenantId));
+    const series = await setRecurringTaskSeriesEnabled(db, id, true, actor, tenantId);
+    res.json(await getRecurringTaskSeries(db, series.id, tenantId));
   } catch (err) {
     sendError(res, err);
   }
 });
 
-router.post('/:id/disable', (req: Request, res: Response) => {
+router.post('/:id/disable', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = parseSeriesId(req.params.id);
     const actor = resolveRequestActor(req, req.body?.updated_by ?? req.body?.changed_by ?? 'system').changedBy;
-    const series = setRecurringTaskSeriesEnabled(db, id, false, actor, tenantId);
-    res.json(getRecurringTaskSeries(db, series.id, tenantId));
+    const series = await setRecurringTaskSeriesEnabled(db, id, false, actor, tenantId);
+    res.json(await getRecurringTaskSeries(db, series.id, tenantId));
   } catch (err) {
     sendError(res, err);
   }
 });
 
-router.post('/:id/run-now', (req: Request, res: Response) => {
+router.post('/:id/run-now', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const id = parseSeriesId(req.params.id);
     const actor = resolveRequestActor(req, req.body?.changed_by ?? 'recurring-task-series-api').changedBy;
-    res.status(201).json(runRecurringTaskSeriesNow(db, id, actor, tenantId));
+    res.status(201).json(await runRecurringTaskSeriesNow(db, id, actor, tenantId));
   } catch (err) {
     sendError(res, err);
   }
 });
 
-router.delete('/:id', (req: Request, res: Response) => {
+router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    res.json(deleteRecurringTaskSeries(db, parseSeriesId(req.params.id), tenantId));
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    res.json(await deleteRecurringTaskSeries(db, parseSeriesId(req.params.id), tenantId));
   } catch (err) {
     sendError(res, err);
   }

@@ -1,17 +1,17 @@
-import type Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { startRunInstance } from './callbacks';
 import { buildGatewayRunSessionKey, parseHookSessionKey, parseRunSessionKey } from '../../lib/sessionKeys';
+import { type Db } from "../../db/adapter/types";
 
 const CRON_RUNS_DIR = path.join(os.homedir(), '.openclaw', 'cron', 'runs');
 
-export function resolveInstanceSessionKey(
-  db: Database.Database,
+export async function resolveInstanceSessionKey(
+  db: Db,
   instanceId: number,
-): Record<string, unknown> {
-  const instance = db.prepare('SELECT * FROM job_instances WHERE id = ?').get(instanceId) as Record<string, unknown> | undefined;
+): Promise<Record<string, unknown>> {
+  const instance = await db.get('SELECT * FROM job_instances WHERE id = ?', instanceId) as Record<string, unknown> | undefined;
   if (!instance) {
     const error = new Error('Instance not found') as Error & { status?: number };
     error.status = 404;
@@ -27,12 +27,12 @@ export function resolveInstanceSessionKey(
 
   const hook = parseHookSessionKey(storedKey);
   if (hook) {
-    const agentRow = db.prepare(`
+    const agentRow = await db.get(`
       SELECT a.session_key as agent_session_key, a.openclaw_agent_id, a.name
       FROM job_instances ji
       JOIN agents a ON a.id = ji.agent_id
       WHERE ji.id = ?
-    `).get(instanceId) as {
+    `, instanceId) as {
       agent_session_key: string | null;
       openclaw_agent_id: string | null;
       name: string | null;
@@ -84,7 +84,7 @@ export function resolveInstanceSessionKey(
     try {
       const event = JSON.parse(line) as { sessionKey?: string };
       if (event.sessionKey) {
-        startRunInstance(db, instanceId, event.sessionKey);
+        await startRunInstance(db, instanceId, event.sessionKey);
         return { sessionKey: event.sessionKey, source: 'cron-run', cronJobId, agentId };
       }
     } catch {

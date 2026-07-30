@@ -9,7 +9,7 @@ if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') {
 import express, { type Request } from 'express';
 import cors from 'cors';
 import { getDb } from './db/client';
-import { verifyStartupSchemaCurrent } from './db/startupVerifier';
+import { verifyStartupSchema } from './db/startupVerifier';
 import tasksRouter from './domains/tasks';
 import routingRouter, { dispatchRouter, modelRoutingRouter } from './domains/routing';
 import agentsRouter from './routes/agents';
@@ -482,11 +482,11 @@ app.use('/api/v1/github-identities', githubIdentitiesRouter);
 app.use('/api/v1/sessions', sessionsRouter);
 
 // Instances route (shortcut for Kanban)
-app.get('/api/v1/instances', (_req, res) => {
+app.get('/api/v1/instances', async (_req, res) => {
   try {
     const { getDb } = require('./db/client');
     const db = getDb();
-    const instances = db.prepare(`
+    const instances = await db.all(`
       SELECT ji.*, a.job_title as job_title, a.name as agent_name, a.session_key as agent_session_key,
              t.title as task_title, t.status as task_status, t.project_id as project_id
       FROM job_instances ji
@@ -494,7 +494,7 @@ app.get('/api/v1/instances', (_req, res) => {
       LEFT JOIN tasks t ON t.id = ji.task_id
       ORDER BY ji.created_at DESC
       LIMIT 200
-    `).all();
+    `);
     res.json(instances);
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -502,11 +502,11 @@ app.get('/api/v1/instances', (_req, res) => {
 });
 
 // Dashboard stats
-app.get('/api/v1/stats', (req, res) => {
+app.get('/api/v1/stats', async (req, res) => {
   try {
     const { getDb } = require('./db/client');
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const projectId = Number(req.query.project_id) || null;
     const agentProjectWhere = projectId ? 'WHERE tenant_id = ? AND project_id = ?' : 'WHERE tenant_id = ?';
     const enabledAgentProjectWhere = projectId ? 'AND tenant_id = ? AND project_id = ?' : 'AND tenant_id = ?';
@@ -517,17 +517,17 @@ app.get('/api/v1/stats', (req, res) => {
       : ' AND (t.tenant_id = ? OR (ji.task_id IS NULL AND a.tenant_id = ?))';
     const scopedJobParams = projectId ? [tenantId, projectId, tenantId, projectId] : [tenantId, tenantId];
 
-    const totalAgents = (db.prepare(`SELECT COUNT(*) as n FROM agents ${agentProjectWhere}`).get(...agentProjectParams) as { n: number }).n;
-    const activeJobs = (db.prepare(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status IN ('queued','dispatched','running')${scopedJobWhere}`).get(...scopedJobParams) as { n: number }).n;
-    const runningJobs = (db.prepare(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'running'${scopedJobWhere}`).get(...scopedJobParams) as { n: number }).n;
-    const pendingJobs = (db.prepare(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status IN ('queued','dispatched')${scopedJobWhere}`).get(...scopedJobParams) as { n: number }).n;
-    const recentRuns = (db.prepare(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.created_at >= datetime('now', '-24 hours')${scopedJobWhere}`).get(...scopedJobParams) as { n: number }).n;
-    const failedRecent = (db.prepare(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'failed' AND ji.created_at >= datetime('now', '-24 hours')${scopedJobWhere}`).get(...scopedJobParams) as { n: number }).n;
-    const doneRecent = (db.prepare(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'done' AND ji.created_at >= datetime('now', '-24 hours')${scopedJobWhere}`).get(...scopedJobParams) as { n: number }).n;
-    const enabledTemplates = (db.prepare(`SELECT COUNT(*) as n FROM agents WHERE enabled = 1 ${enabledAgentProjectWhere}`).get(...agentProjectParams) as { n: number }).n;
-    const tokensLast24h = getDashboardTokenUsageLast24h(db, projectId, tenantId);
+    const totalAgents = (await db.get(`SELECT COUNT(*) as n FROM agents ${agentProjectWhere}`, ...agentProjectParams) as { n: number }).n;
+    const activeJobs = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status IN ('queued','dispatched','running')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
+    const runningJobs = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'running'${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
+    const pendingJobs = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status IN ('queued','dispatched')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
+    const recentRuns = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.created_at >= datetime('now', '-24 hours')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
+    const failedRecent = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'failed' AND ji.created_at >= datetime('now', '-24 hours')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
+    const doneRecent = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'done' AND ji.created_at >= datetime('now', '-24 hours')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
+    const enabledTemplates = (await db.get(`SELECT COUNT(*) as n FROM agents WHERE enabled = 1 ${enabledAgentProjectWhere}`, ...agentProjectParams) as { n: number }).n;
+    const tokensLast24h = await getDashboardTokenUsageLast24h(db, projectId, tenantId);
 
-    const recentFailed = db.prepare(`
+    const recentFailed = await db.all(`
       SELECT ji.*, a.job_title as job_title, a.name as agent_name
       FROM job_instances ji
       LEFT JOIN agents a ON a.id = ji.agent_id
@@ -536,7 +536,7 @@ app.get('/api/v1/stats', (req, res) => {
       ${scopedJobWhere}
       ORDER BY ji.created_at DESC
       LIMIT 5
-    `).all(...scopedJobParams);
+    `, ...scopedJobParams);
 
     res.json({
       totalAgents,
@@ -557,7 +557,12 @@ app.get('/api/v1/stats', (req, res) => {
 });
 
 // Verify DB schema and start. Startup must not run schema/data migrations.
-verifyStartupSchemaCurrent();
+// Engine-aware and non-mutating: verifies the schema matches the repository and refuses
+// to start if it does not. It never migrates — see verifyStartupSchema().
+void verifyStartupSchema().catch((err) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});
 
 const automationDisabled = process.env.AGENT_HQ_DISABLE_AUTOMATION === '1';
 if (automationDisabled) {
@@ -570,8 +575,8 @@ if (automationDisabled) {
 }
 
 // Sprint heartbeat: check every 5 min for time/run-limit exceeded sprints
-setInterval(() => {
-  try { checkSprintCompletion(); } catch (err) { console.error('[sprints] Heartbeat error:', err); }
+setInterval(async () => {
+  try { await checkSprintCompletion(); } catch (err) { console.error('[sprints] Heartbeat error:', err); }
 }, 5 * 60 * 1000);
 
 const server = http.createServer(app);

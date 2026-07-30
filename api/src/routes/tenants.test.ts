@@ -24,6 +24,7 @@ import {
   removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant,
 } from '../domains/routing/externalEventMappings';
 import { materializeAgentMcpConfig } from '../runtimes/mcpMaterialization';
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 const originalWorkspaceParent = process.env.WORKSPACE_PARENT;
@@ -55,12 +56,12 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 }
 
-function resetFullDb(): void {
+async function resetFullDb(): Promise<void> {
   closeDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenants-'));
   process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
   process.env.WORKSPACE_PARENT = path.join(tempDir, 'openclaw');
-  initSchema();
+  await initSchema();
 }
 
 function cleanup(): void {
@@ -93,10 +94,11 @@ async function setActiveTenant(baseUrl: string, tenantId: number): Promise<void>
 describe('tenant workspace isolation', () => {
   afterEach(cleanup);
 
-  it('backfills legacy tenant-owned rows into the default tenant', () => {
+  it('backfills legacy tenant-owned rows into the default tenant', async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-backfill-'));
-    const db = new Database(path.join(tempDir, 'legacy.db'));
-    db.exec(`
+    const dbRaw = new Database(path.join(tempDir, 'legacy.db'));
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT (datetime('now')));
       CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);
       CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);
@@ -106,19 +108,20 @@ describe('tenant workspace isolation', () => {
       INSERT INTO agents (name) VALUES ('Legacy Agent');
     `);
 
-    const defaultTenantId = ensureTenantSchema(db);
+    const defaultTenantId = await ensureTenantSchema(db);
 
     expect(defaultTenantId).toBeGreaterThan(0);
-    expect((db.prepare(`SELECT tenant_id FROM projects LIMIT 1`).get() as { tenant_id: number }).tenant_id).toBe(defaultTenantId);
-    expect((db.prepare(`SELECT tenant_id FROM tasks LIMIT 1`).get() as { tenant_id: number }).tenant_id).toBe(defaultTenantId);
-    expect((db.prepare(`SELECT tenant_id FROM agents LIMIT 1`).get() as { tenant_id: number }).tenant_id).toBe(defaultTenantId);
-    db.close();
+    expect((await db.get(`SELECT tenant_id FROM projects LIMIT 1`) as { tenant_id: number }).tenant_id).toBe(defaultTenantId);
+    expect((await db.get(`SELECT tenant_id FROM tasks LIMIT 1`) as { tenant_id: number }).tenant_id).toBe(defaultTenantId);
+    expect((await db.get(`SELECT tenant_id FROM agents LIMIT 1`) as { tenant_id: number }).tenant_id).toBe(defaultTenantId);
+    dbRaw.close();
   });
 
-  it('renames the legacy default company tenant label during tenant schema repair', () => {
+  it('renames the legacy default company tenant label during tenant schema repair', async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-name-repair-'));
-    const db = new Database(path.join(tempDir, 'legacy-name.db'));
-    db.exec(`
+    const dbRaw = new Database(path.join(tempDir, 'legacy-name.db'));
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT (datetime('now')));
       CREATE TABLE tenants (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,16 +137,16 @@ describe('tenant workspace isolation', () => {
         (2, 'Acme Company', 'acme-company', 0);
     `);
 
-    const defaultTenantId = ensureTenantSchema(db);
+    const defaultTenantId = await ensureTenantSchema(db);
 
     expect(defaultTenantId).toBe(1);
-    expect((db.prepare(`SELECT name FROM tenants WHERE id = 1`).get() as { name: string }).name).toBe('Default Tenant');
-    expect((db.prepare(`SELECT name FROM tenants WHERE id = 2`).get() as { name: string }).name).toBe('Acme Company');
-    db.close();
+    expect((await db.get(`SELECT name FROM tenants WHERE id = 1`) as { name: string }).name).toBe('Default Tenant');
+    expect((await db.get(`SELECT name FROM tenants WHERE id = 2`) as { name: string }).name).toBe('Acme Company');
+    dbRaw.close();
   });
 
   it('creates tenants with default starter data idempotently by slug', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const first = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -157,40 +160,40 @@ describe('tenant workspace isolation', () => {
 
       expect(retry.tenant.id).toBe(first.tenant.id);
       const db = getDb();
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM tenants WHERE slug = 'acme'`).get() as { n: number }).n).toBe(1);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ?`).get(first.tenant.id) as { n: number }).n).toBe(1);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ? AND name = ?`).get(first.tenant.id, DEFAULT_PROJECT_NAME) as { n: number }).n).toBe(1);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprints WHERE tenant_id = ?`).get(first.tenant.id) as { n: number }).n).toBe(4);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM agents WHERE tenant_id = ? AND system_role = ?`).get(first.tenant.id, ATLAS_SYSTEM_ROLE) as { n: number }).n).toBe(1);
-      const atlasAgent = db.prepare(`
+      expect((await db.get(`SELECT COUNT(*) AS n FROM tenants WHERE slug = 'acme'`) as { n: number }).n).toBe(1);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ?`, first.tenant.id) as { n: number }).n).toBe(1);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ? AND name = ?`, first.tenant.id, DEFAULT_PROJECT_NAME) as { n: number }).n).toBe(1);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprints WHERE tenant_id = ?`, first.tenant.id) as { n: number }).n).toBe(4);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM agents WHERE tenant_id = ? AND system_role = ?`, first.tenant.id, ATLAS_SYSTEM_ROLE) as { n: number }).n).toBe(1);
+      const atlasAgent = await db.get(`
         SELECT id, workspace_path
         FROM agents
         WHERE tenant_id = ? AND system_role = ?
-      `).get(first.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
+      `, first.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
       expect(atlasAgent.workspace_path).toContain(path.join('openclaw', 'workspace-atlas-acme'));
       expect(fs.existsSync(atlasAgent.workspace_path)).toBe(true);
-      const atlasSync = materializeAgentMcpConfig({
-        db,
-        agentId: atlasAgent.id,
-        workingDirectory: atlasAgent.workspace_path,
-      });
+      const atlasSync = await materializeAgentMcpConfig({
+              db,
+              agentId: atlasAgent.id,
+              workingDirectory: atlasAgent.workspace_path,
+            });
       expect(atlasSync.ok).toBe(true);
       expect(atlasSync.count).toBe(1);
       const atlasMcpConfig = JSON.parse(fs.readFileSync(path.join(atlasAgent.workspace_path, '.mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
       expect(Object.keys(atlasMcpConfig.mcpServers).filter((key) => key.startsWith('agent-hq__agent-'))).toEqual([`agent-hq__agent-${atlasAgent.id}`]);
-      expect((db.prepare(`
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agents
         WHERE tenant_id = ?
           AND system_role IN (${STARTER_AGENT_DEFINITIONS.map(() => '?').join(', ')})
-      `).get(first.tenant.id, ...STARTER_AGENT_DEFINITIONS.map((definition) => definition.systemRole)) as { n: number }).n).toBe(4);
-      const starterAgents = db.prepare(`
+      `, first.tenant.id, ...STARTER_AGENT_DEFINITIONS.map((definition) => definition.systemRole)) as { n: number }).n).toBe(4);
+      const starterAgents = await db.all(`
         SELECT id, name, enabled, workspace_path, openclaw_agent_id, runtime_type, runtime_config, preferred_provider, model, job_instructions, skill_names
         FROM agents
         WHERE tenant_id = ?
           AND system_role IN (${STARTER_AGENT_DEFINITIONS.map(() => '?').join(', ')})
         ORDER BY name ASC
-      `).all(first.tenant.id, ...STARTER_AGENT_DEFINITIONS.map((definition) => definition.systemRole)) as Array<{
+      `, first.tenant.id, ...STARTER_AGENT_DEFINITIONS.map((definition) => definition.systemRole)) as Array<{
         id: number;
         name: string;
         enabled: number;
@@ -244,35 +247,35 @@ describe('tenant workspace isolation', () => {
         expect(runtimeConfig.provisioning_template?.mcp_server_slugs).toEqual(['agent-hq']);
         expect(runtimeConfig.provisioning_template?.tool_slugs).toEqual(definition.toolSlugs);
         expect(runtimeConfig.provisioning_template?.skill_names).toEqual(definition.skillNames);
-        const agentSync = materializeAgentMcpConfig({
-          db,
-          agentId: agent.id,
-          workingDirectory: agent.workspace_path,
-        });
+        const agentSync = await materializeAgentMcpConfig({
+                  db,
+                  agentId: agent.id,
+                  workingDirectory: agent.workspace_path,
+                });
         expect(agentSync.ok).toBe(true);
         expect(agentSync.count).toBe(1);
         const mcpConfig = JSON.parse(fs.readFileSync(path.join(agent.workspace_path, '.mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
         expect(Object.keys(mcpConfig.mcpServers).filter((key) => key.startsWith('agent-hq__agent-'))).toEqual([`agent-hq__agent-${agent.id}`]);
-        const assignedToolSlugs = db.prepare(`
+        const assignedToolSlugs = (await db.all(`
           SELECT t.slug
           FROM agent_tool_assignments ata
           JOIN tools t ON t.id = ata.tool_id
           WHERE ata.agent_id = ? AND ata.enabled = 1
           ORDER BY t.slug ASC
-        `).all(agent.id).map((row: any) => row.slug);
+        `, agent.id)).map((row: any) => row.slug);
         expect(assignedToolSlugs).toEqual([...definition.toolSlugs].sort());
       }
-      const pmAgent = db.prepare(`
+      const pmAgent = await db.get(`
         SELECT id
         FROM agents
         WHERE tenant_id = ? AND system_role = ?
-      `).get(first.tenant.id, STARTER_AGENT_DEFINITIONS[0].systemRole) as { id: number };
-      expect((db.prepare(`
+      `, first.tenant.id, STARTER_AGENT_DEFINITIONS[0].systemRole) as { id: number };
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agent_mcp_capability_policies
         WHERE agent_id = ? AND enabled = 1
-      `).get(pmAgent.id) as { n: number }).n).toBeGreaterThan(0);
-      expect((db.prepare(`
+      `, pmAgent.id) as { n: number }).n).toBeGreaterThan(0);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agent_mcp_assignments ama
         JOIN agents a ON a.id = ama.agent_id
@@ -281,31 +284,31 @@ describe('tenant workspace isolation', () => {
           AND s.slug = 'agent-hq'
           AND s.tenant_id = a.tenant_id
           AND ama.enabled = 1
-      `).get(first.tenant.id) as { n: number }).n).toBe(STARTER_AGENT_DEFINITIONS.length + 1);
-      expect((db.prepare(`
+      `, first.tenant.id) as { n: number }).n).toBe(STARTER_AGENT_DEFINITIONS.length + 1);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agent_mcp_assignments ama
         JOIN agents a ON a.id = ama.agent_id
         JOIN mcp_servers s ON s.id = ama.mcp_server_id
         WHERE s.slug = 'agent-hq'
           AND a.tenant_id != s.tenant_id
-      `).get() as { n: number }).n).toBe(0);
-      const starterSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(first.tenant.id) as { id: number };
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`).get(starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
+      `) as { n: number }).n).toBe(0);
+      const starterSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, first.tenant.id) as { id: number };
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
       const expectedRelationshipCounts: Record<string, number> = { dev: 5, generic: 1, ops: 1, lead_generation: 1 };
       for (const sprintType of ['dev', 'generic', 'ops', 'lead_generation']) {
-        const starterSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? AND sprint_type = ? LIMIT 1`).get(first.tenant.id, sprintType) as { id: number };
+        const starterSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? AND sprint_type = ? LIMIT 1`, first.tenant.id, sprintType) as { id: number };
         expect(starterSprint).toBeTruthy();
-        expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`).get(starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
-        expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`).get(starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
-        expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_type_task_statuses WHERE sprint_type_key = ?`).get(sprintType) as { n: number }).n).toBeGreaterThan(0);
-        expect((db.prepare(`
+        expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
+        expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`, starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
+        expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_type_task_statuses WHERE sprint_type_key = ?`, sprintType) as { n: number }).n).toBeGreaterThan(0);
+        expect((await db.get(`
           SELECT COUNT(*) AS n
           FROM sprint_type_relationship_types
           WHERE tenant_id = ? AND sprint_type_key = ?
-        `).get(first.tenant.id, sprintType) as { n: number }).n).toBe(expectedRelationshipCounts[sprintType]);
+        `, first.tenant.id, sprintType) as { n: number }).n).toBe(expectedRelationshipCounts[sprintType]);
       }
-      expect((db.prepare(`
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM sprint_task_routing_rules rr
         JOIN agents a ON a.id = rr.agent_id
@@ -316,8 +319,8 @@ describe('tenant workspace isolation', () => {
           AND rr.task_type = 'backend'
           AND rr.status = 'ready'
           AND a.system_role = ?
-      `).get(first.tenant.id, DEFAULT_PROJECT_NAME, STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Developer Agent')?.systemRole) as { n: number }).n).toBe(1);
-      expect((db.prepare(`
+      `, first.tenant.id, DEFAULT_PROJECT_NAME, STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Developer Agent')?.systemRole) as { n: number }).n).toBe(1);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM sprint_task_routing_rules rr
         JOIN agents a ON a.id = rr.agent_id
@@ -328,14 +331,14 @@ describe('tenant workspace isolation', () => {
           AND rr.task_type = 'backend'
           AND rr.status = 'review'
           AND a.system_role = ?
-      `).get(first.tenant.id, DEFAULT_PROJECT_NAME, STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Review Agent')?.systemRole) as { n: number }).n).toBe(1);
-      const defaultProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? AND name = ?`).get(first.tenant.id, DEFAULT_PROJECT_NAME) as { id: number };
-      const devWorkflow = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? AND project_id = ? AND sprint_type = 'dev'`).get(first.tenant.id, defaultProject.id) as { id: number };
-      const sampleTaskId = Number(db.prepare(`
+      `, first.tenant.id, DEFAULT_PROJECT_NAME, STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Review Agent')?.systemRole) as { n: number }).n).toBe(1);
+      const defaultProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = ?`, first.tenant.id, DEFAULT_PROJECT_NAME) as { id: number };
+      const devWorkflow = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? AND project_id = ? AND sprint_type = 'dev'`, first.tenant.id, defaultProject.id) as { id: number };
+      const sampleTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority, task_type, story_points)
         VALUES (?, ?, ?, 'Sample backend task', '', 'ready', 'medium', 'backend', 3)
-      `).run(first.tenant.id, defaultProject.id, devWorkflow.id).lastInsertRowid);
-      expect((db.prepare(`
+      `, first.tenant.id, defaultProject.id, devWorkflow.id)).lastInsertId);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM tasks t
         JOIN sprints s ON s.id = t.sprint_id
@@ -349,27 +352,27 @@ describe('tenant workspace isolation', () => {
         JOIN agents a ON a.id = rr.agent_id AND a.enabled = 0
         WHERE t.id = ?
           AND a.system_role = ?
-      `).get(sampleTaskId, STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Developer Agent')?.systemRole) as { n: number }).n).toBeGreaterThan(0);
-      expect((db.prepare(`
+      `, sampleTaskId, STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Developer Agent')?.systemRole) as { n: number }).n).toBeGreaterThan(0);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM story_point_model_routing mr
         JOIN projects p ON p.id = mr.project_id
         WHERE mr.tenant_id = ?
           AND p.name = ?
           AND mr.provider = 'anthropic'
-      `).get(first.tenant.id, DEFAULT_PROJECT_NAME) as { n: number }).n).toBe(3);
-      expect((db.prepare(`
+      `, first.tenant.id, DEFAULT_PROJECT_NAME) as { n: number }).n).toBe(3);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM sprint_type_relationship_types
         WHERE tenant_id != ? AND sprint_type_key IN ('dev', 'generic', 'ops')
-      `).get(first.tenant.id) as { n: number }).n).toBeGreaterThan(0);
+      `, first.tenant.id) as { n: number }).n).toBeGreaterThan(0);
     } finally {
       await stopServer(server);
     }
   });
 
   it('does not restore a deleted starter workflow during ordinary tenant and startup paths', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const created = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -377,52 +380,52 @@ describe('tenant workspace isolation', () => {
         body: JSON.stringify({ name: 'No Reseed', slug: 'no-reseed', set_active: true }),
       });
       const db = getDb();
-      const opsWorkflow = db.prepare(`
+      const opsWorkflow = await db.get(`
         SELECT id
         FROM sprints
         WHERE tenant_id = ? AND sprint_type = 'ops'
         LIMIT 1
-      `).get(created.tenant.id) as { id: number };
+      `, created.tenant.id) as { id: number };
       expect(opsWorkflow).toBeTruthy();
-      const defaultTenantId = (db.prepare(`SELECT id FROM tenants WHERE slug = 'default'`).get() as { id: number }).id;
-      const defaultServer = db.prepare(`
+      const defaultTenantId = (await db.get(`SELECT id FROM tenants WHERE slug = 'default'`) as { id: number }).id;
+      const defaultServer = await db.get(`
         SELECT id
         FROM mcp_servers
         WHERE tenant_id = ? AND slug = 'agent-hq'
-      `).get(defaultTenantId) as { id: number };
-      const localServer = db.prepare(`
+      `, defaultTenantId) as { id: number };
+      const localServer = await db.get(`
         SELECT id
         FROM mcp_servers
         WHERE tenant_id = ? AND slug = 'agent-hq'
-      `).get(created.tenant.id) as { id: number };
-      const developer = db.prepare(`
+      `, created.tenant.id) as { id: number };
+      const developer = await db.get(`
         SELECT id
         FROM agents
         WHERE tenant_id = ? AND name = 'Developer Agent'
         ORDER BY id ASC
         LIMIT 1
-      `).get(created.tenant.id) as { id: number } | undefined;
+      `, created.tenant.id) as { id: number } | undefined;
       expect(developer).toBeTruthy();
-      db.prepare(`
+      await db.run(`
         DELETE FROM agent_mcp_assignments
         WHERE agent_id = ? AND mcp_server_id = ?
-      `).run(developer!.id, localServer.id);
-      db.prepare(`
+      `, developer!.id, localServer.id);
+      await db.run(`
         INSERT OR IGNORE INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
         VALUES (?, ?, '{"repair":"preserve"}', 1)
-      `).run(developer!.id, defaultServer.id);
+      `, developer!.id, defaultServer.id);
 
-      db.prepare(`DELETE FROM sprints WHERE id = ?`).run(opsWorkflow.id);
-      const ledgerCountBefore = (db.prepare(`
+      await db.run(`DELETE FROM sprints WHERE id = ?`, opsWorkflow.id);
+      const ledgerCountBefore = (await db.get(`
         SELECT COUNT(*) AS n
         FROM default_package_applications
         WHERE tenant_id = ?
-      `).get(created.tenant.id) as { n: number }).n;
-      const installLedgerCountBefore = (db.prepare(`
+      `, created.tenant.id) as { n: number }).n;
+      const installLedgerCountBefore = (await db.get(`
         SELECT COUNT(*) AS n
         FROM default_package_applications
         WHERE tenant_id = ? AND mode = 'install'
-      `).get(created.tenant.id) as { n: number }).n;
+      `, created.tenant.id) as { n: number }).n;
 
       await json(`${baseUrl}/api/v1/tenants`);
       await json(`${baseUrl}/api/v1/tenants/active`);
@@ -433,46 +436,46 @@ describe('tenant workspace isolation', () => {
         body: JSON.stringify({ name: 'No Reseed', slug: 'no-reseed', set_active: true }),
       });
       expect(retry.tenant.id).toBe(created.tenant.id);
-      ensureTenantSchema(db);
-      initSchema();
+      await ensureTenantSchema(db);
+      await initSchema();
 
-      expect((db.prepare(`
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM sprints
         WHERE tenant_id = ? AND sprint_type = 'ops'
-      `).get(created.tenant.id) as { n: number }).n).toBe(0);
-      expect((db.prepare(`
+      `, created.tenant.id) as { n: number }).n).toBe(0);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM sprints
         WHERE tenant_id = ? AND name = 'Operations'
-      `).get(created.tenant.id) as { n: number }).n).toBe(0);
-      expect((db.prepare(`
+      `, created.tenant.id) as { n: number }).n).toBe(0);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM default_package_applications
         WHERE tenant_id = ?
-      `).get(created.tenant.id) as { n: number }).n).toBe(ledgerCountBefore);
-      expect((db.prepare(`
+      `, created.tenant.id) as { n: number }).n).toBe(ledgerCountBefore);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM default_package_applications
         WHERE tenant_id = ? AND mode = 'install'
-      `).get(created.tenant.id) as { n: number }).n).toBe(installLedgerCountBefore);
-      expect((db.prepare(`
+      `, created.tenant.id) as { n: number }).n).toBe(installLedgerCountBefore);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agent_mcp_assignments
         WHERE agent_id = ? AND mcp_server_id = ?
-      `).get(developer!.id, defaultServer.id) as { n: number }).n).toBe(0);
-      expect(db.prepare(`
+      `, developer!.id, defaultServer.id) as { n: number }).n).toBe(0);
+      expect(await db.get(`
         SELECT overrides, enabled
         FROM agent_mcp_assignments
         WHERE agent_id = ? AND mcp_server_id = ?
-      `).get(developer!.id, localServer.id)).toMatchObject({ overrides: '{"repair":"preserve"}', enabled: 1 });
+      `, developer!.id, localServer.id)).toMatchObject({ overrides: '{"repair":"preserve"}', enabled: 1 });
     } finally {
       await stopServer(server);
     }
   });
 
   it('restores deleted starter workflows when default package reinstall is explicitly requested', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const created = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -480,14 +483,14 @@ describe('tenant workspace isolation', () => {
         body: JSON.stringify({ name: 'Repair Co', slug: 'repair-co', set_active: true }),
       });
       const db = getDb();
-      const opsWorkflow = db.prepare(`
+      const opsWorkflow = await db.get(`
         SELECT id
         FROM sprints
         WHERE tenant_id = ? AND sprint_type = 'ops'
         LIMIT 1
-      `).get(created.tenant.id) as { id: number };
+      `, created.tenant.id) as { id: number };
       expect(opsWorkflow).toBeTruthy();
-      db.prepare(`DELETE FROM sprints WHERE id = ?`).run(opsWorkflow.id);
+      await db.run(`DELETE FROM sprints WHERE id = ?`, opsWorkflow.id);
 
       const reinstall = await json<{ ok: boolean; result: { mode: string; created: Record<string, number> } }>(`${baseUrl}/api/v1/tenants/${created.tenant.id}/default-package/reinstall`, {
         method: 'POST',
@@ -495,23 +498,23 @@ describe('tenant workspace isolation', () => {
 
       expect(reinstall).toMatchObject({ ok: true, result: { mode: 'reinstall' } });
       expect(reinstall.result.created.workflows).toBeGreaterThanOrEqual(1);
-      expect((db.prepare(`
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM sprints
         WHERE tenant_id = ? AND sprint_type = 'ops' AND name = 'Operations'
-      `).get(created.tenant.id) as { n: number }).n).toBe(1);
-      expect((db.prepare(`
+      `, created.tenant.id) as { n: number }).n).toBe(1);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM default_package_applications
         WHERE tenant_id = ? AND mode = 'reinstall'
-      `).get(created.tenant.id) as { n: number }).n).toBe(1);
+      `, created.tenant.id) as { n: number }).n).toBe(1);
     } finally {
       await stopServer(server);
     }
   });
 
   it('creates a tenant when migrated starter workflow status config exists for multiple tenants', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -524,8 +527,8 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const defaultTenant = db.prepare(`SELECT id FROM tenants WHERE is_default = 1 LIMIT 1`).get() as { id: number };
-      const insertStatus = db.prepare(`
+      const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 LIMIT 1`) as { id: number };
+      const insertStatus = (db as unknown as { raw: import('better-sqlite3').Database }).raw.prepare(`
         INSERT OR IGNORE INTO sprint_type_task_statuses (
           tenant_id, sprint_type_key, status_key, label, color, terminal, is_system,
           allowed_transitions_json, stage_order, is_default_entry, metadata_json,
@@ -541,24 +544,24 @@ describe('tenant workspace isolation', () => {
         body: JSON.stringify({ name: 'Gamma', slug: 'gamma' }),
       });
 
-      const starterSprint = db.prepare(`
+      const starterSprint = await db.get(`
         SELECT id
         FROM sprints
         WHERE tenant_id = ? AND sprint_type = 'generic'
         LIMIT 1
-      `).get(created.tenant.id) as { id: number };
-      expect((db.prepare(`
+      `, created.tenant.id) as { id: number };
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM sprint_task_statuses
         WHERE sprint_id = ? AND status_key = 'todo'
-      `).get(starterSprint.id) as { n: number }).n).toBe(1);
+      `, starterSprint.id) as { n: number }).n).toBe(1);
     } finally {
       await stopServer(server);
     }
   });
 
   it('scopes workflow metadata readback to the active tenant starter definitions', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -571,16 +574,16 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      db.prepare(`
+      await db.run(`
         UPDATE sprint_type_task_statuses
         SET label = 'Acme Todo'
         WHERE tenant_id = ? AND sprint_type_key = 'generic' AND status_key = 'todo'
-      `).run(acme.tenant.id);
-      db.prepare(`
+      `, acme.tenant.id);
+      await db.run(`
         UPDATE sprint_type_task_statuses
         SET label = 'Beta Todo'
         WHERE tenant_id = ? AND sprint_type_key = 'generic' AND status_key = 'todo'
-      `).run(beta.tenant.id);
+      `, beta.tenant.id);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       const acmeMetadata = await json<{
@@ -609,7 +612,7 @@ describe('tenant workspace isolation', () => {
   });
 
   it('keeps legacy company routes and request aliases working for compatibility', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const created = await json<{ tenant: { id: number; name: string } }>(`${baseUrl}/api/v1/companies`, {
@@ -634,11 +637,11 @@ describe('tenant workspace isolation', () => {
   });
 
   it('blocks deleting the default tenant through the tenant API', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const db = getDb();
-      const defaultTenant = db.prepare(`SELECT id, name FROM tenants WHERE is_default = 1`).get() as { id: number; name: string };
+      const defaultTenant = await db.get(`SELECT id, name FROM tenants WHERE is_default = 1`) as { id: number; name: string };
       const response = await fetch(`${baseUrl}/api/v1/tenants/${defaultTenant.id}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -648,14 +651,14 @@ describe('tenant workspace isolation', () => {
 
       expect(response.status).toBe(409);
       expect(body.error).toMatch(/Default tenant cannot be deleted/);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM tenants WHERE is_default = 1`).get() as { n: number }).n).toBe(1);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM tenants WHERE is_default = 1`) as { n: number }).n).toBe(1);
     } finally {
       await stopServer(server);
     }
   });
 
   it('requires the exact tenant name before deletion', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -672,14 +675,14 @@ describe('tenant workspace isolation', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toMatch(/requires typing the exact tenant name/);
-      expect((getDb().prepare(`SELECT COUNT(*) AS n FROM tenants WHERE id = ?`).get(acme.tenant.id) as { n: number }).n).toBe(1);
+      expect((await getDb().get(`SELECT COUNT(*) AS n FROM tenants WHERE id = ?`, acme.tenant.id) as { n: number }).n).toBe(1);
     } finally {
       await stopServer(server);
     }
   });
 
   it('deletes an active non-default tenant and switches to a remaining tenant', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number; name: string } }>(`${baseUrl}/api/v1/tenants`, {
@@ -692,43 +695,43 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const defaultTenant = db.prepare(`SELECT id FROM tenants WHERE is_default = 1`).get() as { id: number };
-      const acmeAgent = db.prepare(`SELECT id FROM agents WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const acmeProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const acmeSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
+      const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1`) as { id: number };
+      const acmeAgent = await db.get(`SELECT id FROM agents WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
       const acmeTask = {
-        id: Number(db.prepare(`
+        id: Number((await db.run(`
           INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
           VALUES (?, ?, ?, 'Acme cleanup task', '', 'todo', 'medium')
-        `).run(acme.tenant.id, acmeProject.id, acmeSprint.id).lastInsertRowid),
+        `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId),
       };
-      const acmeToolId = Number(db.prepare(`
+      const acmeToolId = Number((await db.run(`
         INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body)
         VALUES (?, 'Acme Tool', 'acme-delete-tool', 'bash', 'echo ok')
-      `).run(acme.tenant.id).lastInsertRowid);
-      const acmeServerId = Number(db.prepare(`
+      `, acme.tenant.id)).lastInsertId);
+      const acmeServerId = Number((await db.run(`
         INSERT INTO mcp_servers (tenant_id, name, slug, command)
         VALUES (?, 'Acme MCP', 'acme-delete-mcp', 'node')
-      `).run(acme.tenant.id).lastInsertRowid);
-      db.prepare(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (?, ?)`).run(acmeAgent.id, acmeToolId);
-      db.prepare(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (?, ?)`).run(acmeAgent.id, acmeServerId);
-      db.prepare(`INSERT INTO mcp_api_keys (agent_id, name, key_prefix, key_hash) VALUES (?, 'Acme Key', 'acme', 'hash-acme')`).run(acmeAgent.id);
-      const instanceId = Number(db.prepare(`INSERT INTO job_instances (agent_id, task_id, status) VALUES (?, ?, 'done')`).run(acmeAgent.id, acmeTask.id).lastInsertRowid);
-      const sessionId = Number(db.prepare(`
+      `, acme.tenant.id)).lastInsertId);
+      await db.run(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (?, ?)`, acmeAgent.id, acmeToolId);
+      await db.run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (?, ?)`, acmeAgent.id, acmeServerId);
+      await db.run(`INSERT INTO mcp_api_keys (agent_id, name, key_prefix, key_hash) VALUES (?, 'Acme Key', 'acme', 'hash-acme')`, acmeAgent.id);
+      const instanceId = Number((await db.run(`INSERT INTO job_instances (agent_id, task_id, status) VALUES (?, ?, 'done')`, acmeAgent.id, acmeTask.id)).lastInsertId);
+      const sessionId = Number((await db.run(`
         INSERT INTO sessions (tenant_id, external_key, runtime, agent_id, task_id, instance_id, project_id)
         VALUES (?, 'acme-session', 'openclaw', ?, ?, ?, ?)
-      `).run(acme.tenant.id, acmeAgent.id, acmeTask.id, instanceId, acmeProject.id).lastInsertRowid);
-      db.prepare(`INSERT INTO session_messages (session_id, ordinal, role, content, timestamp) VALUES (?, 1, 'user', 'hi', datetime('now'))`).run(sessionId);
-      db.prepare(`INSERT INTO chat_messages (id, agent_id, role, content, session_key) VALUES ('acme-chat', ?, 'user', 'hi', 'acme-session')`).run(acmeAgent.id);
-      db.prepare(`INSERT INTO canonical_chat_sessions (agent_id, channel, session_key) VALUES (?, 'web', 'acme-session')`).run(acmeAgent.id);
-      db.prepare(`
+      `, acme.tenant.id, acmeAgent.id, acmeTask.id, instanceId, acmeProject.id)).lastInsertId);
+      await db.run(`INSERT INTO session_messages (session_id, ordinal, role, content, timestamp) VALUES (?, 1, 'user', 'hi', datetime('now'))`, sessionId);
+      await db.run(`INSERT INTO chat_messages (id, agent_id, role, content, session_key) VALUES ('acme-chat', ?, 'user', 'hi', 'acme-session')`, acmeAgent.id);
+      await db.run(`INSERT INTO canonical_chat_sessions (agent_id, channel, session_key) VALUES (?, 'web', 'acme-session')`, acmeAgent.id);
+      await db.run(`
         INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, sprint_type, max_points, model)
         VALUES (?, ?, ?, 'generic', 1, 'test-model')
-      `).run(acme.tenant.id, acmeProject.id, acmeSprint.id);
-      db.prepare(`
+      `, acme.tenant.id, acmeProject.id, acmeSprint.id);
+      await db.run(`
         INSERT INTO external_event_mappings (tenant_id, project_id, event_name)
         VALUES (?, ?, 'acme.delete.test')
-      `).run(acme.tenant.id, acmeProject.id);
+      `, acme.tenant.id, acmeProject.id);
 
       const response = await fetch(`${baseUrl}/api/v1/tenants/${acme.tenant.id}`, {
         method: 'DELETE',
@@ -756,23 +759,23 @@ describe('tenant workspace isolation', () => {
       expect(body.deleted_counts?.tenants).toBe(1);
 
       for (const table of ['projects', 'sprints', 'tasks', 'agents', 'tools', 'mcp_servers', 'sessions', 'story_point_model_routing', 'external_event_mappings']) {
-        expect((db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ?`).get(acme.tenant.id) as { n: number }).n).toBe(0);
+        expect((await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ?`, acme.tenant.id) as { n: number }).n).toBe(0);
       }
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM session_messages WHERE session_id = ?`).get(sessionId) as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM chat_messages WHERE id = 'acme-chat'`).get() as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM canonical_chat_sessions WHERE agent_id = ?`).get(acmeAgent.id) as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM job_instances WHERE id = ?`).get(instanceId) as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM agent_tool_assignments WHERE tool_id = ?`).get(acmeToolId) as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM agent_mcp_assignments WHERE mcp_server_id = ?`).get(acmeServerId) as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM mcp_api_keys WHERE agent_id = ?`).get(acmeAgent.id) as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ?`).get(beta.tenant.id) as { n: number }).n).toBeGreaterThan(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM session_messages WHERE session_id = ?`, sessionId) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM chat_messages WHERE id = 'acme-chat'`) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM canonical_chat_sessions WHERE agent_id = ?`, acmeAgent.id) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM job_instances WHERE id = ?`, instanceId) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM agent_tool_assignments WHERE tool_id = ?`, acmeToolId) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM agent_mcp_assignments WHERE mcp_server_id = ?`, acmeServerId) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM mcp_api_keys WHERE agent_id = ?`, acmeAgent.id) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ?`, beta.tenant.id) as { n: number }).n).toBeGreaterThan(0);
     } finally {
       await stopServer(server);
     }
   });
 
   it('seeds each new tenant with its own project-scoped Atlas agent', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -785,20 +788,20 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const defaultTenantId = (db.prepare(`SELECT id FROM tenants WHERE slug = 'default'`).get() as { id: number }).id;
-      const acmeAtlas = db.prepare(`
+      const defaultTenantId = (await db.get(`SELECT id FROM tenants WHERE slug = 'default'`) as { id: number }).id;
+      const acmeAtlas = await db.get(`
         SELECT id, tenant_id, project_id, name, session_key, openclaw_agent_id, workspace_path, system_role, job_instructions
         FROM agents
         WHERE tenant_id = ? AND system_role = ?
-      `).get(acme.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; tenant_id: number; project_id: number; name: string; session_key: string; openclaw_agent_id: string; workspace_path: string; system_role: string; job_instructions: string };
-      const betaAtlas = db.prepare(`
+      `, acme.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; tenant_id: number; project_id: number; name: string; session_key: string; openclaw_agent_id: string; workspace_path: string; system_role: string; job_instructions: string };
+      const betaAtlas = await db.get(`
         SELECT id, tenant_id, project_id, name, session_key, openclaw_agent_id, workspace_path, system_role
         FROM agents
         WHERE tenant_id = ? AND system_role = ?
-      `).get(beta.tenant.id, ATLAS_SYSTEM_ROLE) as typeof acmeAtlas;
-      const acmeProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? AND name = ?`).get(acme.tenant.id, DEFAULT_PROJECT_NAME) as { id: number };
-      const betaProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? AND name = ?`).get(beta.tenant.id, DEFAULT_PROJECT_NAME) as { id: number };
-      const defaultAtlas = db.prepare(`SELECT id, tenant_id, session_key, openclaw_agent_id FROM agents WHERE tenant_id = ? AND system_role = ?`).get(defaultTenantId, ATLAS_SYSTEM_ROLE) as { id: number; tenant_id: number; session_key: string; openclaw_agent_id: string };
+      `, beta.tenant.id, ATLAS_SYSTEM_ROLE) as typeof acmeAtlas;
+      const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = ?`, acme.tenant.id, DEFAULT_PROJECT_NAME) as { id: number };
+      const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = ?`, beta.tenant.id, DEFAULT_PROJECT_NAME) as { id: number };
+      const defaultAtlas = await db.get(`SELECT id, tenant_id, session_key, openclaw_agent_id FROM agents WHERE tenant_id = ? AND system_role = ?`, defaultTenantId, ATLAS_SYSTEM_ROLE) as { id: number; tenant_id: number; session_key: string; openclaw_agent_id: string };
 
       expect(acmeAtlas.name).toBe(ATLAS_AGENT_NAME);
       expect(acmeAtlas.tenant_id).toBe(acme.tenant.id);
@@ -843,7 +846,7 @@ describe('tenant workspace isolation', () => {
   });
 
   it('provisions tenant-local Agent HQ MCP servers and materializes only the local assignment', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -852,63 +855,60 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const defaultTenantId = (db.prepare(`SELECT id FROM tenants WHERE slug = 'default'`).get() as { id: number }).id;
-      const defaultServer = db.prepare(`
+      const defaultTenantId = (await db.get(`SELECT id FROM tenants WHERE slug = 'default'`) as { id: number }).id;
+      const defaultServer = await db.get(`
         SELECT id, tenant_id, slug
         FROM mcp_servers
         WHERE tenant_id = ? AND slug = 'agent-hq'
-      `).get(defaultTenantId) as { id: number; tenant_id: number; slug: string };
-      const acmeServer = db.prepare(`
+      `, defaultTenantId) as { id: number; tenant_id: number; slug: string };
+      const acmeServer = await db.get(`
         SELECT id, tenant_id, slug
         FROM mcp_servers
         WHERE tenant_id = ? AND slug = 'agent-hq'
-      `).get(acme.tenant.id) as { id: number; tenant_id: number; slug: string };
+      `, acme.tenant.id) as { id: number; tenant_id: number; slug: string };
 
       expect(defaultServer).toMatchObject({ tenant_id: defaultTenantId, slug: 'agent-hq' });
       expect(acmeServer).toMatchObject({ tenant_id: acme.tenant.id, slug: 'agent-hq' });
       expect(acmeServer.id).not.toBe(defaultServer.id);
 
       for (const definition of STARTER_AGENT_DEFINITIONS) {
-        const agent = db.prepare(`
+        const agent = await db.get(`
           SELECT id
           FROM agents
           WHERE tenant_id = ? AND system_role = ?
-        `).get(acme.tenant.id, definition.systemRole) as { id: number };
-        const assignment = db.prepare(`
+        `, acme.tenant.id, definition.systemRole) as { id: number };
+        const assignment = await db.all(`
           SELECT s.id AS server_id, s.tenant_id AS server_tenant_id, ama.enabled
           FROM agent_mcp_assignments ama
           JOIN mcp_servers s ON s.id = ama.mcp_server_id
           WHERE ama.agent_id = ? AND s.slug = 'agent-hq'
-        `).all(agent.id) as Array<{ server_id: number; server_tenant_id: number; enabled: number }>;
+        `, agent.id) as Array<{ server_id: number; server_tenant_id: number; enabled: number }>;
         expect(assignment).toEqual([{ server_id: acmeServer.id, server_tenant_id: acme.tenant.id, enabled: 1 }]);
       }
-      expect((db.prepare(`
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agent_mcp_assignments ama
         JOIN agents a ON a.id = ama.agent_id
         JOIN mcp_servers s ON s.id = ama.mcp_server_id
         WHERE a.tenant_id != s.tenant_id
-      `).get() as { n: number }).n).toBe(0);
+      `) as { n: number }).n).toBe(0);
 
-      const acmeDeveloper = db.prepare(`
+      const acmeDeveloper = await db.get(`
         SELECT id
         FROM agents
         WHERE tenant_id = ? AND system_role = ?
-      `).get(
-        acme.tenant.id,
-        STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Developer Agent')?.systemRole,
-      ) as { id: number };
-      db.prepare(`
+      `, acme.tenant.id, STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Developer Agent')?.systemRole) as { id: number };
+      await db.run(`
         INSERT OR IGNORE INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
         VALUES (?, ?, '{}', 1)
-      `).run(acmeDeveloper.id, defaultServer.id);
+      `, acmeDeveloper.id, defaultServer.id);
 
       const workingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-mcp-materialize-'));
-      const result = materializeAgentMcpConfig({
-        db,
-        agentId: acmeDeveloper.id,
-        workingDirectory,
-      });
+      const result = await materializeAgentMcpConfig({
+              db,
+              agentId: acmeDeveloper.id,
+              workingDirectory,
+            });
       const config = JSON.parse(fs.readFileSync(path.join(workingDirectory, '.mcp.json'), 'utf8')) as {
         mcpServers: Record<string, unknown>;
         agentHqManagedMcpServers: string[];
@@ -919,13 +919,13 @@ describe('tenant workspace isolation', () => {
       expect(result.count).toBe(1);
       expect(agentHqKeys).toEqual([`agent-hq__agent-${acmeDeveloper.id}`]);
       expect(config.agentHqManagedMcpServers).toEqual([`agent-hq__agent-${acmeDeveloper.id}`]);
-      expect((db.prepare(`
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM agent_mcp_assignments ama
         JOIN agents a ON a.id = ama.agent_id
         JOIN mcp_servers s ON s.id = ama.mcp_server_id
         WHERE a.tenant_id != s.tenant_id
-      `).get() as { n: number }).n).toBe(0);
+      `) as { n: number }).n).toBe(0);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       const visibleServers = await json<Array<{ id: number; tenant_id: number; slug: string }>>(`${baseUrl}/api/v1/mcp-servers`);
@@ -938,7 +938,7 @@ describe('tenant workspace isolation', () => {
   });
 
   it('resolves the default artifact workspace to the active tenant Atlas, not the default tenant Atlas', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -947,8 +947,8 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const defaultAtlas = db.prepare(`SELECT id, workspace_path FROM agents WHERE tenant_id = (SELECT id FROM tenants WHERE slug = 'default') AND system_role = ?`).get(ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
-      const acmeAtlas = db.prepare(`SELECT id, workspace_path FROM agents WHERE tenant_id = ? AND system_role = ?`).get(acme.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
+      const defaultAtlas = await db.get(`SELECT id, workspace_path FROM agents WHERE tenant_id = (SELECT id FROM tenants WHERE slug = 'default') AND system_role = ?`, ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
+      const acmeAtlas = await db.get(`SELECT id, workspace_path FROM agents WHERE tenant_id = ? AND system_role = ?`, acme.tenant.id, ATLAS_SYSTEM_ROLE) as { id: number; workspace_path: string };
       fs.mkdirSync(defaultAtlas.workspace_path, { recursive: true });
       fs.mkdirSync(acmeAtlas.workspace_path, { recursive: true });
       fs.writeFileSync(path.join(defaultAtlas.workspace_path, 'default-only.md'), 'default workspace', 'utf-8');
@@ -968,15 +968,15 @@ describe('tenant workspace isolation', () => {
   });
 
   it('returns empty workspace state for an existing tenant with no provisioned agents', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const db = getDb();
-      const tenantId = Number(db.prepare(`
+      const tenantId = Number((await db.run(`
         INSERT INTO tenants (name, slug, is_default)
         VALUES ('Legacy Empty', 'legacy-empty', 0)
-      `).run().lastInsertRowid);
-      const defaultAtlas = db.prepare(`SELECT workspace_path FROM agents WHERE tenant_id = (SELECT id FROM tenants WHERE slug = 'default') AND system_role = ?`).get(ATLAS_SYSTEM_ROLE) as { workspace_path: string };
+      `)).lastInsertId);
+      const defaultAtlas = await db.get(`SELECT workspace_path FROM agents WHERE tenant_id = (SELECT id FROM tenants WHERE slug = 'default') AND system_role = ?`, ATLAS_SYSTEM_ROLE) as { workspace_path: string };
       fs.mkdirSync(defaultAtlas.workspace_path, { recursive: true });
       fs.writeFileSync(path.join(defaultAtlas.workspace_path, 'default-only.md'), 'default workspace', 'utf-8');
 
@@ -993,7 +993,7 @@ describe('tenant workspace isolation', () => {
   });
 
   it('seeds fresh tenants with only Agent HQ runtime and dispatcher workflow events', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -1002,38 +1002,38 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const sources = db.prepare(`
+      const sources = await db.all(`
         SELECT DISTINCT source
         FROM external_event_mappings
         WHERE tenant_id = ?
         ORDER BY source ASC
-      `).all(acme.tenant.id) as Array<{ source: string }>;
+      `, acme.tenant.id) as Array<{ source: string }>;
       expect(sources.map((row) => row.source)).toEqual([
         AGENT_HQ_DISPATCHER_SOURCE,
         AGENT_HQ_RUNTIME_SOURCE,
       ]);
-      expect((db.prepare(`
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM external_event_mappings
         WHERE tenant_id = ? AND source = ?
-      `).get(acme.tenant.id, AGENT_HQ_RUNTIME_SOURCE) as { n: number }).n).toBeGreaterThan(0);
-      expect((db.prepare(`
+      `, acme.tenant.id, AGENT_HQ_RUNTIME_SOURCE) as { n: number }).n).toBeGreaterThan(0);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM external_event_mappings
         WHERE tenant_id = ? AND source = ?
-      `).get(acme.tenant.id, AGENT_HQ_DISPATCHER_SOURCE) as { n: number }).n).toBeGreaterThan(0);
-      expect((db.prepare(`
+      `, acme.tenant.id, AGENT_HQ_DISPATCHER_SOURCE) as { n: number }).n).toBeGreaterThan(0);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM external_event_mappings
         WHERE tenant_id = ? AND source = ?
-      `).get(acme.tenant.id, DEV_ENV_LEASE_MANAGER_SOURCE) as { n: number }).n).toBe(0);
+      `, acme.tenant.id, DEV_ENV_LEASE_MANAGER_SOURCE) as { n: number }).n).toBe(0);
     } finally {
       await stopServer(server);
     }
   });
 
   it('repairs only tenant-scoped Dev lease-manager workflow event defaults', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -1042,41 +1042,41 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const defaultTenant = db.prepare(`SELECT id FROM tenants WHERE is_default = 1`).get() as { id: number };
-      const defaultDevRowsBefore = (db.prepare(`
+      const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1`) as { id: number };
+      const defaultDevRowsBefore = (await db.get(`
         SELECT COUNT(*) AS n
         FROM external_event_mappings
         WHERE tenant_id = ? AND source = ?
-      `).get(defaultTenant.id, DEV_ENV_LEASE_MANAGER_SOURCE) as { n: number }).n;
+      `, defaultTenant.id, DEV_ENV_LEASE_MANAGER_SOURCE) as { n: number }).n;
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO external_event_mappings (
           tenant_id, project_id, source, event_name, task_type,
           status_includes_json, status_excludes_json, action_kind, action_target,
           apply_review_evidence, apply_failure_detail, enabled, priority
         ) VALUES (?, NULL, ?, 'deploy_failed', NULL, '[]', '["stalled","failed","done","cancelled"]', 'outcome', 'env_blocked', 0, 1, 1, 100)
-      `).run(acme.tenant.id, DEV_ENV_LEASE_MANAGER_SOURCE);
+      `, acme.tenant.id, DEV_ENV_LEASE_MANAGER_SOURCE);
 
-      const result = removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant(db, acme.tenant.id);
+      const result = await removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForTenant(db, acme.tenant.id);
 
       expect(result.deleted).toBe(1);
-      expect((db.prepare(`
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM external_event_mappings
         WHERE tenant_id = ? AND source = ?
-      `).get(acme.tenant.id, DEV_ENV_LEASE_MANAGER_SOURCE) as { n: number }).n).toBe(0);
-      expect((db.prepare(`
+      `, acme.tenant.id, DEV_ENV_LEASE_MANAGER_SOURCE) as { n: number }).n).toBe(0);
+      expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM external_event_mappings
         WHERE tenant_id = ? AND source = ?
-      `).get(defaultTenant.id, DEV_ENV_LEASE_MANAGER_SOURCE) as { n: number }).n).toBe(defaultDevRowsBefore);
+      `, defaultTenant.id, DEV_ENV_LEASE_MANAGER_SOURCE) as { n: number }).n).toBe(defaultDevRowsBefore);
     } finally {
       await stopServer(server);
     }
   });
 
   it('isolates projects, workflows, tasks, and agents by active tenant context', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -1089,18 +1089,18 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const acmeProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const betaProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`).get(beta.tenant.id) as { id: number };
-      const acmeSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const betaSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(beta.tenant.id) as { id: number };
-      db.prepare(`
+      const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, ?, '', 'todo', 'medium'), (?, ?, ?, ?, '', 'todo', 'medium')
-      `).run(acme.tenant.id, acmeProject.id, acmeSprint.id, 'Acme Task', beta.tenant.id, betaProject.id, betaSprint.id, 'Beta Task');
-      db.prepare(`
+      `, acme.tenant.id, acmeProject.id, acmeSprint.id, 'Acme Task', beta.tenant.id, betaProject.id, betaSprint.id, 'Beta Task');
+      await db.run(`
         INSERT INTO agents (tenant_id, project_id, name, role, session_key, workspace_path)
         VALUES (?, ?, 'Acme Agent', 'Agent', 'acme-agent', ''), (?, ?, 'Beta Agent', 'Agent', 'beta-agent', '')
-      `).run(acme.tenant.id, acmeProject.id, beta.tenant.id, betaProject.id);
+      `, acme.tenant.id, acmeProject.id, beta.tenant.id, betaProject.id);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       const acmeProjects = await json<Array<{ tenant_id: number; name: string }>>(`${baseUrl}/api/v1/projects`);
@@ -1131,7 +1131,7 @@ describe('tenant workspace isolation', () => {
   });
 
   it('uses tenant route guards for project audit reads and project mutations', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -1179,7 +1179,7 @@ describe('tenant workspace isolation', () => {
         body: JSON.stringify({ name: 'Beta should not update this' }),
       });
       expect(crossTenantUpdate.status).toBe(400);
-      expect((getDb().prepare(`SELECT name, tenant_id FROM projects WHERE id = ?`).get(forgedCreate.id) as { name: string; tenant_id: number })).toMatchObject({
+      expect((await getDb().get(`SELECT name, tenant_id FROM projects WHERE id = ?`, forgedCreate.id) as { name: string; tenant_id: number })).toMatchObject({
         name: 'Forged tenant body project',
         tenant_id: acme.tenant.id,
       });
@@ -1189,7 +1189,7 @@ describe('tenant workspace isolation', () => {
   });
 
   it('scopes workflow delete and workflow-type active counts to the selected tenant', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -1202,47 +1202,47 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const acmeStarter = db.prepare(`
+      const acmeStarter = await db.get(`
         SELECT key, tenant_id FROM sprint_types WHERE tenant_id = ? AND key = 'generic' LIMIT 1
-      `).get(acme.tenant.id) as { key: string; tenant_id: number } | undefined;
-      const betaStarter = db.prepare(`
+      `, acme.tenant.id) as { key: string; tenant_id: number } | undefined;
+      const betaStarter = await db.get(`
         SELECT key, tenant_id FROM sprint_types WHERE tenant_id = ? AND key = 'generic' LIMIT 1
-      `).get(beta.tenant.id) as { key: string; tenant_id: number } | undefined;
+      `, beta.tenant.id) as { key: string; tenant_id: number } | undefined;
       expect(acmeStarter).toMatchObject({ key: 'generic', tenant_id: acme.tenant.id });
       expect(betaStarter).toMatchObject({ key: 'generic', tenant_id: beta.tenant.id });
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_types WHERE tenant_id IS NULL`).get() as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_types WHERE tenant_id IS NULL`) as { n: number }).n).toBe(0);
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
         VALUES (?, 'tenant_leak_regression', 'Tenant Leak Regression', '', 0)
-      `).run(acme.tenant.id);
-      db.prepare(`
+      `, acme.tenant.id);
+      await db.run(`
         INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
         VALUES (?, 'tenant_leak_regression_beta', 'Tenant Leak Regression Beta', '', 0)
-      `).run(beta.tenant.id);
+      `, beta.tenant.id);
 
-      const acmeProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const betaProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`).get(beta.tenant.id) as { id: number };
-      const acmeSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const betaSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(beta.tenant.id) as { id: number };
-      const acmeAgent = db.prepare(`SELECT id FROM agents WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
+      const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeAgent = await db.get(`SELECT id FROM agents WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
 
-      db.prepare(`
+      await db.run(`
         UPDATE sprints
         SET sprint_type = 'tenant_leak_regression', status = 'active'
         WHERE id = ?
-      `).run(acmeSprint.id);
-      db.prepare(`
+      `, acmeSprint.id);
+      await db.run(`
         UPDATE sprints
         SET sprint_type = 'tenant_leak_regression', status = 'closed'
         WHERE id = ?
-      `).run(betaSprint.id);
+      `, betaSprint.id);
 
-      const acmeTaskId = Number(db.prepare(`
+      const acmeTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Acme Active Task', '', 'in_progress', 'medium')
-      `).run(acme.tenant.id, acmeProject.id, acmeSprint.id).lastInsertRowid);
-      db.prepare(`INSERT INTO job_instances (task_id, agent_id, status) VALUES (?, ?, 'running')`).run(acmeTaskId, acmeAgent.id);
+      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId);
+      await db.run(`INSERT INTO job_instances (task_id, agent_id, status) VALUES (?, ?, 'running')`, acmeTaskId, acmeAgent.id);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       const acmeTypeDelete = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_leak_regression`, { method: 'DELETE' });
@@ -1261,8 +1261,8 @@ describe('tenant workspace isolation', () => {
       const betaDelete = await fetch(`${baseUrl}/api/v1/sprints/${betaSprint.id}`, { method: 'DELETE' });
       expect(betaDelete.status).toBe(200);
       await expect(betaDelete.json()).resolves.toEqual({ ok: true });
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprints WHERE id = ?`).get(betaSprint.id) as { n: number }).n).toBe(0);
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprints WHERE id = ?`).get(acmeSprint.id) as { n: number }).n).toBe(1);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprints WHERE id = ?`, betaSprint.id) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprints WHERE id = ?`, acmeSprint.id) as { n: number }).n).toBe(1);
 
       const betaTypeResponse = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_leak_regression_beta`);
       expect(betaTypeResponse.status).toBe(200);
@@ -1275,7 +1275,7 @@ describe('tenant workspace isolation', () => {
       const betaTypeDelete = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_leak_regression_beta`, { method: 'DELETE' });
       expect(betaTypeDelete.status).toBe(200);
       await expect(betaTypeDelete.json()).resolves.toEqual({ ok: true });
-      expect((db.prepare(`SELECT COUNT(*) AS n FROM sprint_types WHERE key = 'tenant_leak_regression_beta'`).get() as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_types WHERE key = 'tenant_leak_regression_beta'`) as { n: number }).n).toBe(0);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       const acmeSameKeyCreate = await fetch(`${baseUrl}/api/v1/sprints/types`, {
@@ -1365,7 +1365,7 @@ describe('tenant workspace isolation', () => {
   });
 
   it('isolates direct task lookups and capability registries by tenant context', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -1378,26 +1378,26 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const acmeProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const betaProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`).get(beta.tenant.id) as { id: number };
-      const acmeSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const betaSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(beta.tenant.id) as { id: number };
-      const acmeTaskId = Number(db.prepare(`
+      const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Acme direct task', '', 'todo', 'medium')
-      `).run(acme.tenant.id, acmeProject.id, acmeSprint.id).lastInsertRowid);
-      const betaTaskId = Number(db.prepare(`
+      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId);
+      const betaTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Beta direct task', '', 'todo', 'medium')
-      `).run(beta.tenant.id, betaProject.id, betaSprint.id).lastInsertRowid);
-      const acmeAgentId = Number(db.prepare(`
+      `, beta.tenant.id, betaProject.id, betaSprint.id)).lastInsertId);
+      const acmeAgentId = Number((await db.run(`
         INSERT INTO agents (tenant_id, project_id, name, role, session_key, workspace_path)
         VALUES (?, ?, 'Acme Tool Agent', 'Agent', 'acme-tool-agent', '')
-      `).run(acme.tenant.id, acmeProject.id).lastInsertRowid);
-      const betaAgentId = Number(db.prepare(`
+      `, acme.tenant.id, acmeProject.id)).lastInsertId);
+      const betaAgentId = Number((await db.run(`
         INSERT INTO agents (tenant_id, project_id, name, role, session_key, workspace_path)
         VALUES (?, ?, 'Beta Tool Agent', 'Agent', 'beta-tool-agent', '')
-      `).run(beta.tenant.id, betaProject.id).lastInsertRowid);
+      `, beta.tenant.id, betaProject.id)).lastInsertId);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       const acmeTask = await json<{ id: number; title: string }>(`${baseUrl}/api/v1/tasks/${acmeTaskId}`);
@@ -1451,7 +1451,7 @@ describe('tenant workspace isolation', () => {
   });
 
   it('rejects cross-tenant workflow and task relationship mutations', async () => {
-    resetFullDb();
+    await resetFullDb();
     const { server, baseUrl } = await startServer();
     try {
       const acme = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
@@ -1464,18 +1464,18 @@ describe('tenant workspace isolation', () => {
       });
 
       const db = getDb();
-      const acmeProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const betaProject = db.prepare(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`).get(beta.tenant.id) as { id: number };
-      const acmeSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(acme.tenant.id) as { id: number };
-      const betaSprint = db.prepare(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`).get(beta.tenant.id) as { id: number };
-      const acmeTaskId = Number(db.prepare(`
+      const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Acme relationship source', '', 'todo', 'medium')
-      `).run(acme.tenant.id, acmeProject.id, acmeSprint.id).lastInsertRowid);
-      const betaTaskId = Number(db.prepare(`
+      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId);
+      const betaTaskId = Number((await db.run(`
         INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Beta relationship target', '', 'todo', 'medium')
-      `).run(beta.tenant.id, betaProject.id, betaSprint.id).lastInsertRowid);
+      `, beta.tenant.id, betaProject.id, betaSprint.id)).lastInsertId);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       await expect(fetch(`${baseUrl}/api/v1/sprints/${betaSprint.id}`)).resolves.toMatchObject({ status: 404 });

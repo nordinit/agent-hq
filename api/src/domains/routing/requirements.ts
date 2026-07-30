@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { isValidTaskType } from '../../lib/taskTypes';
 import { getGateRequirementFieldDefinitions, resolveTaskFieldSchemaForSprint } from '../sprint-definitions/config';
 import { seedSprintTaskPolicy, rememberDeletedSprintTaskTransitionRequirement } from './policy/seed';
@@ -16,9 +15,10 @@ import {
   TransitionRequirementRecord,
 } from './scope';
 import { requireTransitionRequirementFieldsForScope, requireTransitionRequirementFieldsForSprint } from './validation';
+import { type Db } from "../../db/adapter/types";
 
-export function listTransitionRequirementFields(
-  db: Database.Database,
+export async function listTransitionRequirementFields(
+  db: Db,
   input: { sprint_id?: unknown; sprint_type?: unknown; task_type?: unknown; tenant_id?: unknown },
 ) {
   const sprintId = parseSprintId(input.sprint_id);
@@ -26,12 +26,12 @@ export function listTransitionRequirementFields(
     throw withStatus('sprint_id or sprint_type is required', 400);
   }
   const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-  if (sprintId) requireSprint(db, sprintId, tenantId);
-  const resolved = resolveTaskFieldSchemaForSprint(db, {
-    sprintId,
-    sprintType: input.sprint_type,
-    taskType: input.task_type,
-  });
+  if (sprintId) await requireSprint(db, sprintId, tenantId);
+  const resolved = await resolveTaskFieldSchemaForSprint(db, {
+      sprintId,
+      sprintType: input.sprint_type,
+      taskType: input.task_type,
+    });
   const fields = getGateRequirementFieldDefinitions(resolved.schema.fields);
   return {
     sprint_type: resolved.sprint_type,
@@ -41,16 +41,16 @@ export function listTransitionRequirementFields(
   };
 }
 
-export function listTransitionRequirements(
-  db: Database.Database,
+export async function listTransitionRequirements(
+  db: Db,
   input: { project_id?: unknown; sprint_id?: unknown; sprint_type?: unknown; task_type?: unknown; outcome?: unknown; tenant_id?: unknown },
 ) {
   const taskType = input.task_type;
   const outcomeFilter = input.outcome;
 
   if (input.project_id != null || input.sprint_id != null || input.sprint_type != null) {
-    const scope = requireTransitionRequirementScope(db, input);
-    let rows = annotateRequirementScope(selectRequirementScopeRows(db, scope), scope.sprintId);
+    const scope = await requireTransitionRequirementScope(db, input);
+    let rows = annotateRequirementScope(await selectRequirementScopeRows(db, scope), scope.sprintId);
     if (taskType) {
       rows = rows.filter((row) => row.task_type == null || row.task_type === String(taskType));
     }
@@ -86,10 +86,10 @@ export function listTransitionRequirements(
 
   query += ` ORDER BY task_type NULLS LAST, outcome, priority DESC, id ASC`;
 
-  return { transition_requirements: db.prepare(query).all(...params) };
+  return { transition_requirements: await db.all(query, ...params) };
 }
 
-export function createTransitionRequirement(db: Database.Database, input: Record<string, unknown>) {
+export async function createTransitionRequirement(db: Db, input: Record<string, unknown>) {
   const sprintId = parseSprintId(input.sprint_id);
   const hasDefaultScope = input.project_id != null || input.sprint_type != null;
   const {
@@ -114,61 +114,61 @@ export function createTransitionRequirement(db: Database.Database, input: Record
   }
 
   if (sprintId || hasDefaultScope) {
-    if (!tableHasRequirementScopeColumns(db)) {
+    if (!await tableHasRequirementScopeColumns(db)) {
       if (!sprintId) throw withStatus('sprint_id is required', 400);
       const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-      requireSprint(db, sprintId, tenantId);
-      seedSprintTaskPolicy(db, sprintId);
-      requireTransitionRequirementFieldsForSprint(db, sprintId, task_type ?? null, field_name, match_field ?? null, requirement_type);
-      const tenant = tenantInsertFragment(db, 'sprint_task_transition_requirements', tenantId);
-      const result = db.prepare(`
+      await requireSprint(db, sprintId, tenantId);
+      await seedSprintTaskPolicy(db, sprintId);
+      await requireTransitionRequirementFieldsForSprint(db, sprintId, task_type ?? null, field_name, match_field ?? null, requirement_type);
+      const tenant = await tenantInsertFragment(db, 'sprint_task_transition_requirements', tenantId);
+      const result = await db.run(`
         INSERT INTO sprint_task_transition_requirements (${tenant.columns}sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at)
         VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `).run(...tenant.params, sprintId, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
-      const readTenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', tenantId);
-      return db.prepare(`SELECT * FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${readTenant.sql}`).get(result.lastInsertRowid, sprintId, ...readTenant.params);
+      `, ...tenant.params, sprintId, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
+      const readTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', tenantId);
+      return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${readTenant.sql}`, result.lastInsertId, sprintId, ...readTenant.params);
     }
 
-    const scope = requireTransitionRequirementScope(db, input);
-    if (scope.sprintId != null) seedSprintTaskPolicy(db, scope.sprintId);
-    requireTransitionRequirementFieldsForScope(db, { sprintId: scope.sprintId, sprintType: scope.sprintType }, task_type ?? null, field_name, match_field ?? null, requirement_type);
-    const tenant = tenantInsertFragment(db, 'sprint_task_transition_requirements', scope.tenantId);
-    const result = db.prepare(`
+    const scope = await requireTransitionRequirementScope(db, input);
+    if (scope.sprintId != null) await seedSprintTaskPolicy(db, scope.sprintId);
+    await requireTransitionRequirementFieldsForScope(db, { sprintId: scope.sprintId, sprintType: scope.sprintType }, task_type ?? null, field_name, match_field ?? null, requirement_type);
+    const tenant = await tenantInsertFragment(db, 'sprint_task_transition_requirements', scope.tenantId);
+    const result = await db.run(`
       INSERT INTO sprint_task_transition_requirements (${tenant.columns}sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at)
       VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-    `).run(...tenant.params, scope.sprintId, scope.projectId, scope.sprintType, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
-    const readTenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
-    return db.prepare(`SELECT * FROM sprint_task_transition_requirements WHERE id = ?${readTenant.sql}`).get(result.lastInsertRowid, ...readTenant.params);
+    `, ...tenant.params, scope.sprintId, scope.projectId, scope.sprintType, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
+    const readTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
+    return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ?${readTenant.sql}`, result.lastInsertId, ...readTenant.params);
   }
 
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO transition_requirements (task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
+  `, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
 
-  return db.prepare('SELECT * FROM transition_requirements WHERE id = ?').get(result.lastInsertRowid);
+  return await db.get('SELECT * FROM transition_requirements WHERE id = ?', result.lastInsertId);
 }
 
-export function updateTransitionRequirement(db: Database.Database, input: Record<string, unknown> & { id: unknown; sprint_id?: unknown; project_id?: unknown; sprint_type?: unknown; tenant_id?: unknown }) {
+export async function updateTransitionRequirement(db: Db, input: Record<string, unknown> & { id: unknown; sprint_id?: unknown; project_id?: unknown; sprint_type?: unknown; tenant_id?: unknown }) {
   const id = Number(input.id);
   const sprintId = parseSprintId(input.sprint_id);
   const hasScopedInput = input.project_id != null || input.sprint_type != null;
   if (sprintId || hasScopedInput) {
-    if (!tableHasRequirementScopeColumns(db)) {
+    if (!await tableHasRequirementScopeColumns(db)) {
       if (!sprintId) throw withStatus('sprint_id is required', 400);
       const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-      requireSprint(db, sprintId, tenantId);
-      seedSprintTaskPolicy(db, sprintId);
-      const tenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', tenantId);
-      const existing = db.prepare(`SELECT * FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${tenant.sql}`).get(id, sprintId, ...tenant.params) as TransitionRequirementRecord | undefined;
+      await requireSprint(db, sprintId, tenantId);
+      await seedSprintTaskPolicy(db, sprintId);
+      const tenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', tenantId);
+      const existing = await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${tenant.sql}`, id, sprintId, ...tenant.params) as TransitionRequirementRecord | undefined;
       if (!existing) throw withStatus('Transition requirement not found', 404);
-      return updateScopedTransitionRequirementRow(db, id, existing, { ...input, sprint_id: sprintId }, { sprintId, sprintType: null, tenantId }, `WHERE id = ? AND sprint_id = ?${tenant.sql}`, [id, sprintId, ...tenant.params]);
+      return await updateScopedTransitionRequirementRow(db, id, existing, { ...input, sprint_id: sprintId }, { sprintId, sprintType: null, tenantId }, `WHERE id = ? AND sprint_id = ?${tenant.sql}`, [id, sprintId, ...tenant.params]);
     }
 
-    const scope = requireTransitionRequirementScope(db, input);
-    if (scope.sprintId != null) seedSprintTaskPolicy(db, scope.sprintId);
-    const tenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'req', scope.tenantId);
-    const existing = db.prepare(`
+    const scope = await requireTransitionRequirementScope(db, input);
+    if (scope.sprintId != null) await seedSprintTaskPolicy(db, scope.sprintId);
+    const tenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'req', scope.tenantId);
+    const existing = await db.get(`
       SELECT req.*
       FROM sprint_task_transition_requirements req
       LEFT JOIN sprints s ON s.id = req.sprint_id
@@ -177,13 +177,13 @@ export function updateTransitionRequirement(db: Database.Database, input: Record
         AND COALESCE(req.project_id, s.project_id) = ?
         AND COALESCE(req.sprint_type, s.sprint_type) = ?
         ${tenant.sql}
-    `).get(id, scope.sprintId, scope.sprintId, scope.projectId, scope.sprintType, ...tenant.params) as TransitionRequirementRecord | undefined;
+    `, id, scope.sprintId, scope.sprintId, scope.projectId, scope.sprintType, ...tenant.params) as TransitionRequirementRecord | undefined;
     if (!existing) throw withStatus('Transition requirement not found', 404);
-    const updateTenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
-    return updateScopedTransitionRequirementRow(db, id, existing, input, { sprintId: scope.sprintId, sprintType: scope.sprintType, tenantId: scope.tenantId }, `WHERE id = ?${updateTenant.sql}`, [id, ...updateTenant.params]);
+    const updateTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
+    return await updateScopedTransitionRequirementRow(db, id, existing, input, { sprintId: scope.sprintId, sprintType: scope.sprintType, tenantId: scope.tenantId }, `WHERE id = ?${updateTenant.sql}`, [id, ...updateTenant.params]);
   }
 
-  const existing = db.prepare('SELECT * FROM transition_requirements WHERE id = ?').get(id) as TransitionRequirementRecord | undefined;
+  const existing = await db.get('SELECT * FROM transition_requirements WHERE id = ?', id) as TransitionRequirementRecord | undefined;
   if (!existing) throw withStatus('Transition requirement not found', 404);
 
   const { task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority } = input;
@@ -192,7 +192,7 @@ export function updateTransitionRequirement(db: Database.Database, input: Record
     throw withStatus(`Invalid task_type "${task_type}". Task type keys must use lowercase letters, numbers, underscores, or hyphens.`, 400);
   }
 
-  db.prepare(`
+  await db.run(`
     UPDATE transition_requirements SET
       task_type = ?,
       outcome = ?,
@@ -205,24 +205,13 @@ export function updateTransitionRequirement(db: Database.Database, input: Record
       priority = ?,
       updated_at = datetime('now')
     WHERE id = ?
-  `).run(
-    task_type !== undefined ? (task_type ?? null) : existing.task_type,
-    outcome ?? existing.outcome,
-    field_name ?? existing.field_name,
-    requirement_type ?? existing.requirement_type,
-    match_field !== undefined ? (match_field ?? null) : existing.match_field,
-    severity ?? existing.severity,
-    message ?? existing.message,
-    enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled,
-    priority ?? existing.priority,
-    id,
-  );
+  `, task_type !== undefined ? (task_type ?? null) : existing.task_type, outcome ?? existing.outcome, field_name ?? existing.field_name, requirement_type ?? existing.requirement_type, match_field !== undefined ? (match_field ?? null) : existing.match_field, severity ?? existing.severity, message ?? existing.message, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, priority ?? existing.priority, id);
 
-  return db.prepare('SELECT * FROM transition_requirements WHERE id = ?').get(id);
+  return await db.get('SELECT * FROM transition_requirements WHERE id = ?', id);
 }
 
-function updateScopedTransitionRequirementRow(
-  db: Database.Database,
+async function updateScopedTransitionRequirementRow(
+  db: Db,
   id: number,
   existing: TransitionRequirementRecord,
   input: Record<string, unknown>,
@@ -244,8 +233,8 @@ function updateScopedTransitionRequirementRow(
   const nextFieldName = field_name ?? existing.field_name;
   const nextRequirementType = requirement_type ?? existing.requirement_type;
   const nextMatchField = match_field !== undefined ? (match_field ?? null) : existing.match_field;
-  requireTransitionRequirementFieldsForScope(db, scope, nextTaskType, nextFieldName, nextMatchField, nextRequirementType);
-  db.prepare(`
+  await requireTransitionRequirementFieldsForScope(db, scope, nextTaskType, nextFieldName, nextMatchField, nextRequirementType);
+  await db.run(`
     UPDATE sprint_task_transition_requirements SET
       task_type = ?,
       outcome = ?,
@@ -258,37 +247,26 @@ function updateScopedTransitionRequirementRow(
       priority = ?,
       updated_at = datetime('now')
     ${whereClause}
-  `).run(
-    nextTaskType,
-    outcome ?? existing.outcome,
-    nextFieldName,
-    nextRequirementType,
-    nextMatchField,
-    severity ?? existing.severity,
-    message ?? existing.message,
-    enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled,
-    priority ?? existing.priority,
-    ...whereParams,
-  );
-  const readTenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
-  return db.prepare(`SELECT * FROM sprint_task_transition_requirements WHERE id = ?${readTenant.sql}`).get(id, ...readTenant.params);
+  `, nextTaskType, outcome ?? existing.outcome, nextFieldName, nextRequirementType, nextMatchField, severity ?? existing.severity, message ?? existing.message, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, priority ?? existing.priority, ...whereParams);
+  const readTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
+  return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ?${readTenant.sql}`, id, ...readTenant.params);
 }
 
-export function deleteTransitionRequirement(db: Database.Database, input: { id: unknown; sprint_id?: unknown; project_id?: unknown; sprint_type?: unknown; tenant_id?: unknown }) {
+export async function deleteTransitionRequirement(db: Db, input: { id: unknown; sprint_id?: unknown; project_id?: unknown; sprint_type?: unknown; tenant_id?: unknown }) {
   const id = Number(input.id);
   const sprintId = parseSprintId(input.sprint_id);
   const hasScopedInput = input.project_id != null || input.sprint_type != null;
   if (sprintId || hasScopedInput) {
-    if (!tableHasRequirementScopeColumns(db)) {
+    if (!await tableHasRequirementScopeColumns(db)) {
       if (!sprintId) throw withStatus('sprint_id is required', 400);
       const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-      requireSprint(db, sprintId, tenantId);
-      const tenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', tenantId);
-      const existing = db.prepare(`
+      await requireSprint(db, sprintId, tenantId);
+      const tenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', tenantId);
+      const existing = await db.get(`
         SELECT id, task_type, outcome, field_name, requirement_type, match_field
         FROM sprint_task_transition_requirements
         WHERE id = ? AND sprint_id = ?${tenant.sql}
-      `).get(id, sprintId, ...tenant.params) as {
+      `, id, sprintId, ...tenant.params) as {
         id: number;
         task_type: string | null;
         outcome: string;
@@ -297,14 +275,14 @@ export function deleteTransitionRequirement(db: Database.Database, input: { id: 
         match_field: string | null;
       } | undefined;
       if (!existing) throw withStatus('Transition requirement not found', 404);
-      rememberDeletedSprintTaskTransitionRequirement(db, sprintId, existing);
-      db.prepare(`DELETE FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${tenant.sql}`).run(id, sprintId, ...tenant.params);
+      await rememberDeletedSprintTaskTransitionRequirement(db, sprintId, existing);
+      await db.run(`DELETE FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${tenant.sql}`, id, sprintId, ...tenant.params);
       return { ok: true };
     }
 
-    const scope = requireTransitionRequirementScope(db, input);
-    const tenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'req', scope.tenantId);
-    const existing = db.prepare(`
+    const scope = await requireTransitionRequirementScope(db, input);
+    const tenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'req', scope.tenantId);
+    const existing = await db.get(`
       SELECT req.id, req.sprint_id, req.task_type, req.outcome, req.field_name, req.requirement_type, req.match_field
       FROM sprint_task_transition_requirements req
       LEFT JOIN sprints s ON s.id = req.sprint_id
@@ -313,7 +291,7 @@ export function deleteTransitionRequirement(db: Database.Database, input: { id: 
         AND COALESCE(req.project_id, s.project_id) = ?
         AND COALESCE(req.sprint_type, s.sprint_type) = ?
         ${tenant.sql}
-    `).get(id, scope.sprintId, scope.sprintId, scope.projectId, scope.sprintType, ...tenant.params) as {
+    `, id, scope.sprintId, scope.sprintId, scope.projectId, scope.sprintType, ...tenant.params) as {
       id: number;
       sprint_id: number | null;
       task_type: string | null;
@@ -323,14 +301,14 @@ export function deleteTransitionRequirement(db: Database.Database, input: { id: 
       match_field: string | null;
     } | undefined;
     if (!existing) throw withStatus('Transition requirement not found', 404);
-    if (existing.sprint_id != null) rememberDeletedSprintTaskTransitionRequirement(db, existing.sprint_id, existing);
-    const deleteTenant = tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
-    db.prepare(`DELETE FROM sprint_task_transition_requirements WHERE id = ?${deleteTenant.sql}`).run(id, ...deleteTenant.params);
+    if (existing.sprint_id != null) await rememberDeletedSprintTaskTransitionRequirement(db, existing.sprint_id, existing);
+    const deleteTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
+    await db.run(`DELETE FROM sprint_task_transition_requirements WHERE id = ?${deleteTenant.sql}`, id, ...deleteTenant.params);
     return { ok: true };
   }
-  const existing = db.prepare('SELECT id FROM transition_requirements WHERE id = ?').get(id);
+  const existing = await db.get('SELECT id FROM transition_requirements WHERE id = ?', id);
   if (!existing) throw withStatus('Transition requirement not found', 404);
 
-  db.prepare('DELETE FROM transition_requirements WHERE id = ?').run(id);
+  await db.run('DELETE FROM transition_requirements WHERE id = ?', id);
   return { ok: true };
 }

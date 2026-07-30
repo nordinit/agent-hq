@@ -3,7 +3,7 @@ import express from 'express';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-let db: Database.Database;
+let db: Db;
 
 jest.mock('../db/client', () => ({
   getDb: () => db,
@@ -25,7 +25,15 @@ import chatRouter from './chat';
 import logsRouter from './logs';
 import sessionsRouter from './sessions';
 import telemetryRouter from './telemetry';
-import { insertRuntimeLog } from '../lib/runtimeTenantScope';
+import {
+  chatMessageTenantScope,
+  insertRuntimeLog,
+  instanceTenantScope,
+  logTenantScope,
+  sessionTenantScope,
+} from '../lib/runtimeTenantScope';
+import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function requestJson(app: express.Express, route: string, init?: RequestInit): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -39,16 +47,16 @@ async function requestJson(app: express.Express, route: string, init?: RequestIn
   }
 }
 
-function setActiveTenant(tenantId: number): void {
-  db.prepare(`
+async function setActiveTenant(tenantId: number): Promise<void> {
+  await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES ('active_tenant_id', ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `).run(String(tenantId));
+  `, String(tenantId));
 }
 
-function setupDb(): void {
-  db.exec(`
+async function setupDb(): Promise<void> {
+  await db.exec(`
     CREATE TABLE app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL DEFAULT '',
@@ -267,17 +275,17 @@ function buildApp(): express.Express {
 }
 
 describe('runtime tenant scope', () => {
-  beforeEach(() => {
-    db = new Database(':memory:');
-    setupDb();
+  beforeEach(async () => {
+    db = new SqliteAdapter(new Database(':memory:'));
+    await setupDb();
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('filters chat sessions, canonical sessions, logs, instance history, and telemetry to the active tenant', async () => {
-    setActiveTenant(2);
+    await setActiveTenant(2);
     const app = buildApp();
 
     const chatSessions = await requestJson(app, '/api/v1/chat/sessions');
@@ -310,8 +318,8 @@ describe('runtime tenant scope', () => {
   });
 
   it('imports canonical sessions with tenant ownership derived from the owning task', async () => {
-    setActiveTenant(2);
-    db.prepare(`DELETE FROM sessions WHERE id = 2`).run();
+    await setActiveTenant(2);
+    await db.run(`DELETE FROM sessions WHERE id = 2`);
 
     const app = buildApp();
     const imported = await requestJson(app, '/api/v1/sessions/import/instance/602', { method: 'POST' });
@@ -324,31 +332,81 @@ describe('runtime tenant scope', () => {
       agent_id: 202,
       project_id: 22,
     });
-    const row = db.prepare(`SELECT tenant_id FROM sessions WHERE external_key = 'run:602'`).get() as { tenant_id: number };
+    const row = await db.get(`SELECT tenant_id FROM sessions WHERE external_key = 'run:602'`) as { tenant_id: number };
     expect(row.tenant_id).toBe(2);
   });
 
-  it('writes runtime logs with tenant ownership derived from the owning instance', () => {
-    setActiveTenant(1);
+  it('writes runtime logs with tenant ownership derived from the owning instance', async () => {
+    await setActiveTenant(1);
 
-    insertRuntimeLog(db, {
-      instanceId: 602,
-      agentId: 202,
-      jobTitle: 'writer-test',
-      level: 'info',
-      message: 'tenant two derived runtime log',
-    });
+    await insertRuntimeLog(db, {
+            instanceId: 602,
+            agentId: 202,
+            jobTitle: 'writer-test',
+            level: 'info',
+            message: 'tenant two derived runtime log',
+          });
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT tenant_id, instance_id, agent_id, message
       FROM logs
       WHERE message = 'tenant two derived runtime log'
-    `).get() as { tenant_id: number; instance_id: number; agent_id: number; message: string };
+    `) as { tenant_id: number; instance_id: number; agent_id: number; message: string };
     expect(row).toEqual({
       tenant_id: 2,
       instance_id: 602,
       agent_id: 202,
       message: 'tenant two derived runtime log',
     });
+  });
+
+  // Regression guard for a defect class the type system cannot see, and which the tenant
+  // isolation tests above did NOT catch.
+  //
+  // Each scope builder assembles `conditions` and `params` partly through an async helper
+  // (pushTenantSubquery). Dropping the `await` on such a call is valid TypeScript and
+  // produces no diagnostic, but the append then happens on a later microtask — after
+  // `conditions.join(' OR ')` has already frozen the SQL string. That yields two distinct
+  // symptoms depending on how the builder returns its params, so both are asserted:
+  //
+  //   1. Builders that return `params` BY REFERENCE keep growing the array the caller is
+  //      already holding, so the bind count drifts past the placeholder count — PostgreSQL
+  //      rejects that bind outright.
+  //   2. Builders that COPY their params on return (logTenantScope) stay aligned but emit
+  //      SQL missing an OR-branch, silently narrowing or widening tenant scope instead.
+  //
+  // Verified by deleting the awaits and re-running: only instanceTenantScope failed. The
+  // other three await a tableExists() query after their pushTenantSubquery calls, and that
+  // round trip is long enough for the pending appends to land, so they were correct purely by
+  // accident. These assertions therefore pin down intent as much as behaviour — they are what
+  // makes a future reordering of those awaits fail loudly instead of quietly unscoping a
+  // tenant query.
+  describe('scope builders emit SQL and params that agree', () => {
+    const builders = [
+      { name: 'sessionTenantScope', build: sessionTenantScope, alias: 's', branches: ['task_id', 'agent_id', 'project_id'] },
+      { name: 'chatMessageTenantScope', build: chatMessageTenantScope, alias: 'c', branches: ['agent_id'] },
+      { name: 'instanceTenantScope', build: instanceTenantScope, alias: 'ji', branches: ['task_id', 'agent_id'] },
+      { name: 'logTenantScope', build: logTenantScope, alias: 'l', branches: ['agent_id'] },
+    ];
+
+    for (const { name, build, alias, branches } of builders) {
+      it(`${name} binds exactly one param per placeholder`, async () => {
+        const { sql, params } = await build(db, alias, 1);
+        // Draining the microtask queue is what gives this assertion teeth: comparing the
+        // counts on return would pass even with the await missing, because the extra
+        // appends have not run yet.
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(sql.match(/\?/g)?.length ?? 0).toBe(params.length);
+      });
+
+      it(`${name} includes every relationship branch it can resolve`, async () => {
+        // The fixture gives every referenced table a tenant_id column, so no branch is
+        // legitimately skippable here — anything missing was dropped, not filtered out.
+        const { sql } = await build(db, alias, 1);
+        for (const column of branches) {
+          expect(sql).toContain(`${alias}.${column} IN (SELECT id FROM`);
+        }
+      });
+    }
   });
 });

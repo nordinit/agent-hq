@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { resolveSprintOutcomeVocabulary, type SprintOutcomeDefinition } from './outcomes';
 import { isRuntimeFailureOutcome } from '../../lib/outcomeCatalog';
 import {
@@ -8,6 +7,8 @@ import {
 } from '../routing/policy/statuses';
 import { listExternalEventMappings } from '../routing/externalEventMappings';
 import { listRelationshipTypesForSprintType, type TaskRelationshipTypeConfig } from '../tasks/relationships';
+import { type Db } from "../../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
 export interface WorkflowTaskTypeMeta {
   value: string;
@@ -86,76 +87,64 @@ function labelFromKey(value: string): string {
     .replace(/\b\w/g, char => char.toUpperCase());
 }
 
-function tableExists(db: Database.Database, tableName: string): boolean {
-  try {
-    const row = db.prepare(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name = ?
-      LIMIT 1
-    `).get(tableName) as { name?: string } | undefined;
-    return Boolean(row?.name);
-  } catch {
-    return false;
-  }
+async function tableExists(db: Db, tableName: string): Promise<boolean> {
+    return await sharedTableExists(db, tableName);
 }
 
-function defaultSprintType(db: Database.Database): string {
-  if (!tableExists(db, 'sprint_types')) return 'generic';
-  const preferred = db.prepare(`
+async function defaultSprintType(db: Db): Promise<string> {
+  if (!await tableExists(db, 'sprint_types')) return 'generic';
+  const preferred = await db.get(`
     SELECT key
     FROM sprint_types
     WHERE key IN ('dev', 'generic')
     ORDER BY CASE key WHEN 'dev' THEN 0 WHEN 'generic' THEN 1 ELSE 2 END
     LIMIT 1
-  `).get() as { key?: string } | undefined;
+  `) as { key?: string } | undefined;
   return normalizeKey(preferred?.key) ?? 'generic';
 }
 
-function resolveContext(
-  db: Database.Database,
+async function resolveContext(
+  db: Db,
   input: { sprintId?: unknown; sprintType?: unknown; tenantId?: number | null },
-): SprintContext {
+): Promise<SprintContext> {
   const sprintId = Number(input.sprintId);
-  if (Number.isFinite(sprintId) && sprintId > 0 && tableExists(db, 'sprints')) {
-    const tenantColumn = tableExists(db, 'sprints') && db.prepare(`PRAGMA table_info(sprints)`).all()
-      .some((row) => (row as { name: string }).name === 'tenant_id');
+  if (Number.isFinite(sprintId) && sprintId > 0 && await tableExists(db, 'sprints')) {
+    const tenantColumn = await sharedColumnExists(db, 'sprints', 'tenant_id');
     const tenantSql = tenantColumn && input.tenantId != null ? ' AND tenant_id = ?' : '';
     const tenantParams = tenantSql ? [input.tenantId] : [];
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT id, sprint_type
       FROM sprints
       WHERE id = ?
         ${tenantSql}
       LIMIT 1
-    `).get(sprintId, ...tenantParams) as { id: number; sprint_type: string | null } | undefined;
+    `, sprintId, ...tenantParams) as { id: number; sprint_type: string | null } | undefined;
     if (row) {
       return {
         sprintId: row.id,
-        sprintType: normalizeKey(row.sprint_type) ?? defaultSprintType(db),
+        sprintType: normalizeKey(row.sprint_type) ?? (await defaultSprintType(db)),
       };
     }
   }
 
   return {
     sprintId: null,
-    sprintType: normalizeKey(input.sprintType) ?? defaultSprintType(db),
+    sprintType: normalizeKey(input.sprintType) ?? (await defaultSprintType(db)),
   };
 }
 
-function loadTaskTypes(db: Database.Database, sprintType: string, tenantId?: number | null): WorkflowTaskTypeMeta[] {
-  if (!tableExists(db, 'sprint_type_task_types')) return [];
-  const tenantColumn = db.prepare(`PRAGMA table_info(sprint_type_task_types)`).all()
-    .some((row) => (row as { name: string }).name === 'tenant_id');
+async function loadTaskTypes(db: Db, sprintType: string, tenantId?: number | null): Promise<WorkflowTaskTypeMeta[]> {
+  if (!await tableExists(db, 'sprint_type_task_types')) return [];
+  const tenantColumn = await sharedColumnExists(db, 'sprint_type_task_types', 'tenant_id');
   const tenantSql = tenantColumn && tenantId != null ? ' AND tenant_id = ?' : '';
   const tenantParams = tenantSql ? [tenantId] : [];
-  const rows = db.prepare(`
+  const rows = await db.all(`
     SELECT task_type, is_system
     FROM sprint_type_task_types
     WHERE sprint_type_key = ?
       ${tenantSql}
     ORDER BY task_type ASC
-  `).all(sprintType, ...tenantParams) as Array<{ task_type: string | null; is_system: number | null }>;
+  `, sprintType, ...tenantParams) as Array<{ task_type: string | null; is_system: number | null }>;
 
   return rows
     .map(row => {
@@ -165,9 +154,9 @@ function loadTaskTypes(db: Database.Database, sprintType: string, tenantId?: num
     .filter((value): value is WorkflowTaskTypeMeta => Boolean(value));
 }
 
-function loadTransitions(db: Database.Database, sprintId: number | null): WorkflowTransitionMeta[] {
+async function loadTransitions(db: Db, sprintId: number | null): Promise<WorkflowTransitionMeta[]> {
   if (!sprintId) return [];
-  return listSprintTaskTransitions(db, sprintId).map((transition, index) => ({
+  return (await listSprintTaskTransitions(db, sprintId)).map((transition, index) => ({
     from_status: transition.from_status,
     to_status: transition.to_status,
     transition_key: `${transition.from_status}-${transition.outcome}-${transition.to_status}`,
@@ -214,10 +203,10 @@ function statusesWithEffectiveTransitions(
   }));
 }
 
-function loadStatuses(db: Database.Database, sprintId: number | null, sprintType: string, transitions: WorkflowTransitionMeta[], tenantId?: number | null): WorkflowStatusMeta[] {
+async function loadStatuses(db: Db, sprintId: number | null, sprintType: string, transitions: WorkflowTransitionMeta[], tenantId?: number | null): Promise<WorkflowStatusMeta[]> {
   const statuses = sprintId
-    ? listSprintTaskStatuses(db, sprintId)
-    : listSprintTypeTaskStatuses(db, sprintType, { tenantId });
+    ? await listSprintTaskStatuses(db, sprintId)
+    : await listSprintTypeTaskStatuses(db, sprintType, { tenantId });
   const allowedByStatus = new Map<string, Set<string>>();
   for (const transition of transitions) {
     if (transition.metadata.enabled === false) continue;
@@ -239,26 +228,26 @@ function loadStatuses(db: Database.Database, sprintId: number | null, sprintType
   })).sort((left, right) => left.stage_order - right.stage_order);
 }
 
-function loadRoutingWarnings(
-  db: Database.Database,
+async function loadRoutingWarnings(
+  db: Db,
   sprintId: number | null,
   sprintType: string,
   statuses: WorkflowStatusMeta[],
-): WorkflowRoutingWarning[] {
+): Promise<WorkflowRoutingWarning[]> {
   if (!sprintId) return [];
 
-  const routingRules = db.prepare(`
+  const routingRules = await db.all(`
     SELECT id, task_type, status
     FROM sprint_task_routing_rules
     WHERE sprint_id = ?
     ORDER BY status ASC, task_type ASC, id ASC
-  `).all(sprintId) as Array<{ id: number; task_type: string | null; status: string }>;
+  `, sprintId) as Array<{ id: number; task_type: string | null; status: string }>;
 
   if (routingRules.length === 0) return [];
 
-  const transitionRows = listSprintTaskTransitions(db, sprintId)
+  const transitionRows = (await listSprintTaskTransitions(db, sprintId))
     .filter((transition) => transition.enabled === 1);
-  const externalMappings = listExternalEventMappings(db, {}).mappings.filter((mapping) => {
+  const externalMappings = (await listExternalEventMappings(db, {})).mappings.filter((mapping) => {
     if (mapping.enabled !== 1) return false;
     if (mapping.action_kind === 'ignore') return false;
     if (mapping.project_id !== null) return false;
@@ -318,30 +307,30 @@ function loadRoutingWarnings(
   return warnings.sort((left, right) => left.status.localeCompare(right.status));
 }
 
-export function resolveWorkflowMetadata(
-  db: Database.Database,
+export async function resolveWorkflowMetadata(
+  db: Db,
   input: { sprintId?: unknown; sprintType?: unknown; taskType?: unknown; tenantId?: number | null } = {},
-): ResolvedWorkflowMetadata {
-  const context = resolveContext(db, input);
+): Promise<ResolvedWorkflowMetadata> {
+  const context = await resolveContext(db, input);
   const taskType = normalizeTaskType(input.taskType);
-  const rawTransitions = loadTransitions(db, context.sprintId);
-  const rawStatuses = loadStatuses(db, context.sprintId, context.sprintType, rawTransitions, input.tenantId);
+  const rawTransitions = await loadTransitions(db, context.sprintId);
+  const rawStatuses = await loadStatuses(db, context.sprintId, context.sprintType, rawTransitions, input.tenantId);
   const transitions = effectiveTransitionsForStatuses(rawTransitions, rawStatuses);
   const statuses = statusesWithEffectiveTransitions(rawStatuses, transitions);
-  const routingWarnings = loadRoutingWarnings(db, context.sprintId, context.sprintType, statuses);
-  const outcomes = resolveSprintOutcomeVocabulary(db, {
-    sprintId: context.sprintId,
-    sprintType: context.sprintType,
-    taskType,
-    tenantId: input.tenantId,
-  });
-  const relationshipTypes = listRelationshipTypesForSprintType(db, context.sprintType, input.tenantId);
+  const routingWarnings = await loadRoutingWarnings(db, context.sprintId, context.sprintType, statuses);
+  const outcomes = await resolveSprintOutcomeVocabulary(db, {
+      sprintId: context.sprintId,
+      sprintType: context.sprintType,
+      taskType,
+      tenantId: input.tenantId,
+    });
+  const relationshipTypes = await listRelationshipTypesForSprintType(db, context.sprintType, input.tenantId);
 
   return {
     sprint_id: context.sprintId,
     sprint_type: context.sprintType,
     task_type: taskType,
-    task_types: loadTaskTypes(db, context.sprintType, input.tenantId),
+    task_types: await loadTaskTypes(db, context.sprintType, input.tenantId),
     statuses,
     transitions,
     outcomes,

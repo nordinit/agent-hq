@@ -38,7 +38,7 @@ import { cleanupTaskExecutionLinkageForStatus } from '../lib/taskLifecycle';
 let tempDir: string;
 let dbPath: string;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'external-task-events-'));
@@ -46,7 +46,7 @@ function resetDb(): void {
   process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  db.exec(`
+  await db.exec(`
     CREATE TABLE projects (
       id INTEGER PRIMARY KEY,
       tenant_id INTEGER DEFAULT 1,
@@ -310,25 +310,25 @@ function resetDb(): void {
     );
   `);
 
-  db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`).run();
-  db.prepare(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1)`).run();
-  db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Enhancements', 'generic')`).run();
-  db.prepare(`INSERT INTO agents (id, tenant_id, project_id, name, slug, openclaw_agent_id, job_title, enabled) VALUES (7, 1, 1, 'Lease Manager', ?, ?, 'Service', 1)`).run(DEV_ENV_LEASE_MANAGER_SOURCE, DEV_ENV_LEASE_MANAGER_SOURCE);
-  db.prepare(`INSERT INTO agents (id, tenant_id, project_id, name, slug, job_title, enabled) VALUES (42, 1, 1, 'Cinder', 'cinder-backend', 'Backend Engineer', 1)`).run();
-  db.prepare(`INSERT INTO agents (id, tenant_id, project_id, name, slug, job_title, enabled) VALUES (43, 1, 1, 'Scoped No Access', 'scoped-no-access', 'Backend Engineer', 1)`).run();
-  db.prepare(`
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
+  await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1)`);
+  await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Enhancements', 'generic')`);
+  await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, slug, openclaw_agent_id, job_title, enabled) VALUES (7, 1, 1, 'Lease Manager', ?, ?, 'Service', 1)`, DEV_ENV_LEASE_MANAGER_SOURCE, DEV_ENV_LEASE_MANAGER_SOURCE);
+  await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, slug, job_title, enabled) VALUES (42, 1, 1, 'Cinder', 'cinder-backend', 'Backend Engineer', 1)`);
+  await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, slug, job_title, enabled) VALUES (43, 1, 1, 'Scoped No Access', 'scoped-no-access', 'Backend Engineer', 1)`);
+  await db.run(`
     INSERT INTO tasks (
       id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
     ) VALUES (449, 1, 'External task event callback', 'in_progress', 'backend', 10, 1, 42, 1784, 42, datetime('now'))
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO job_instances (
       id, task_id, agent_id, status, session_key, dispatched_at
     ) VALUES (1784, 449, 42, 'running', 'run:1784', datetime('now'))
-  `).run();
-  db.prepare(`INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at) VALUES (449, 0, datetime('now'))`).run();
-  seedDefaultExternalEventMappings(db);
-  db.prepare(`
+  `);
+  await db.run(`INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at) VALUES (449, 0, datetime('now'))`);
+  await seedDefaultExternalEventMappings(db);
+  await db.run(`
     INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status)
     VALUES
       (10, 'backend', 'in_progress', 'completed_for_review', 'review'),
@@ -339,13 +339,13 @@ function resetDb(): void {
       (10, 'backend', 'dev_deploying', 'completed_for_review', 'review'),
       (10, 'backend', 'dev_deploying', 'blocked', 'stalled'),
       (10, 'backend', 'in_progress', 'blocked', 'stalled')
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, message)
     VALUES
       (10, 'backend', 'completed_for_review', 'review_branch', 'review_branch required'),
       (10, 'backend', 'completed_for_review', 'review_commit', 'review_commit required')
-  `).run();
+  `);
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -368,25 +368,25 @@ async function stopTestServer(server: Server): Promise<void> {
   });
 }
 
-function issueLeaseManagerApiKey(): string {
-  return issueMcpApiKeyForAgent(getDb(), 7, 'lease manager test key').apiKey;
+async function issueLeaseManagerApiKey(): Promise<string> {
+  return (await issueMcpApiKeyForAgent(getDb(), 7, 'lease manager test key')).apiKey;
 }
 
-function issueScopedApiKey(agentId: number, capabilities: string[]): string {
+async function issueScopedApiKey(agentId: number, capabilities: string[]): Promise<string> {
   const db = getDb();
-  replaceAgentMcpPermissionPolicy(db, agentId, capabilities);
-  return issueMcpApiKeyForAgent(db, agentId, 'scoped test key').apiKey;
+  await replaceAgentMcpPermissionPolicy(db, agentId, capabilities);
+  return (await issueMcpApiKeyForAgent(db, agentId, 'scoped test key')).apiKey;
 }
 
-function issueCinderApiKey(capabilities: string[]): string {
-  return issueScopedApiKey(42, capabilities);
+async function issueCinderApiKey(capabilities: string[]): Promise<string> {
+  return await issueScopedApiKey(42, capabilities);
 }
 
 describe('external task events route', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'external-task-events-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
-    resetDb();
+    await resetDb();
   });
 
   afterEach(() => {
@@ -397,28 +397,15 @@ describe('external task events route', () => {
 
   it('resolves deployed_for_qa through a configurable mapping row', async () => {
     const db = getDb();
-    db.prepare(`DELETE FROM external_event_mappings`).run();
-    db.prepare(`
+    await db.run(`DELETE FROM external_event_mappings`);
+    await db.run(`
       INSERT INTO external_event_mappings (
         project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
         action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      null,
-      null,
-      'deployed_for_qa',
-      'backend',
-      JSON.stringify(['in_progress']),
-      JSON.stringify([]),
-      'outcome',
-      'completed_for_review',
-      1,
-      0,
-      1,
-      900,
-    );
+    `, null, null, 'deployed_for_qa', 'backend', JSON.stringify(['in_progress']), JSON.stringify([]), 'outcome', 'completed_for_review', 1, 0, 1, 900);
 
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -449,7 +436,7 @@ describe('external task events route', () => {
       expect(payload.outcome).toBe('completed_for_review');
       expect(payload.next_status).toBe('review');
 
-      const task = db.prepare(`SELECT status, custom_fields_json FROM tasks WHERE id = 449`).get() as {
+      const task = await db.get(`SELECT status, custom_fields_json FROM tasks WHERE id = 449`) as {
         status: string;
         custom_fields_json: string | null;
       };
@@ -464,11 +451,11 @@ describe('external task events route', () => {
   });
 
   it('allows scoped non-admin agents to list and get external task-event receipts for their assigned project', async () => {
-    const leaseManagerKey = issueLeaseManagerApiKey();
-    const cinderKey = issueCinderApiKey([
-      'discovery.read_catalog',
-      'external.manage_project_task_events',
-    ]);
+    const leaseManagerKey = await issueLeaseManagerApiKey();
+    const cinderKey = await issueCinderApiKey([
+          'discovery.read_catalog',
+          'external.manage_project_task_events',
+        ]);
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -532,12 +519,12 @@ describe('external task events route', () => {
 
   it('denies scoped external task-event management without capability and across project boundaries', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (2, 1, 'Other Project')`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (2, 1, 'Other Project')`);
+    await db.run(`
       INSERT INTO tasks (
         id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
       ) VALUES (450, 1, 'Other project event', 'in_progress', 'backend', NULL, 2, 42, NULL, 42, datetime('now'))
-    `).run();
+    `);
     const payload = {
       source: DEV_ENV_LEASE_MANAGER_SOURCE,
       event: 'dev_deploy_queued',
@@ -553,33 +540,18 @@ describe('external task events route', () => {
       error: null,
       message: 'Other project receipt.',
     };
-    const otherReceipt = db.prepare(`
+    const otherReceipt = (await db.run(`
       INSERT INTO external_task_event_receipts (
         fingerprint, source, event, task_id, environment_id, queue_id, lease_id,
         branch, commit_sha, review_url, message, payload_json, received_by, processing_state
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      'other-project-fingerprint',
-      DEV_ENV_LEASE_MANAGER_SOURCE,
-      'dev_deploy_queued',
-      450,
-      'agent-hq-dev',
-      'queue-other-project',
-      'lease-other-project',
-      'other/project',
-      'def456',
-      'http://127.0.0.1:3510',
-      'Other project receipt.',
-      JSON.stringify(payload),
-      DEV_ENV_LEASE_MANAGER_SOURCE,
-      'processed',
-    ).lastInsertRowid;
+    `, 'other-project-fingerprint', DEV_ENV_LEASE_MANAGER_SOURCE, 'dev_deploy_queued', 450, 'agent-hq-dev', 'queue-other-project', 'lease-other-project', 'other/project', 'def456', 'http://127.0.0.1:3510', 'Other project receipt.', JSON.stringify(payload), DEV_ENV_LEASE_MANAGER_SOURCE, 'processed')).lastInsertId;
 
-    const missingCapabilityKey = issueScopedApiKey(43, ['discovery.read_catalog']);
-    const scopedKey = issueCinderApiKey([
-      'discovery.read_catalog',
-      'external.manage_project_task_events',
-    ]);
+    const missingCapabilityKey = await issueScopedApiKey(43, ['discovery.read_catalog']);
+    const scopedKey = await issueCinderApiKey([
+          'discovery.read_catalog',
+          'external.manage_project_task_events',
+        ]);
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -617,28 +589,15 @@ describe('external task events route', () => {
 
   it('resolves deploy_failed through a configurable failure mapping row', async () => {
     const db = getDb();
-    db.prepare(`DELETE FROM external_event_mappings`).run();
-    db.prepare(`
+    await db.run(`DELETE FROM external_event_mappings`);
+    await db.run(`
       INSERT INTO external_event_mappings (
         project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
         action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      null,
-      DEV_ENV_LEASE_MANAGER_SOURCE,
-      'deploy_failed',
-      'backend',
-      JSON.stringify(['in_progress']),
-      JSON.stringify([]),
-      'outcome',
-      'blocked',
-      0,
-      1,
-      1,
-      900,
-    );
+    `, null, DEV_ENV_LEASE_MANAGER_SOURCE, 'deploy_failed', 'backend', JSON.stringify(['in_progress']), JSON.stringify([]), 'outcome', 'blocked', 0, 1, 1, 900);
 
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -668,7 +627,7 @@ describe('external task events route', () => {
       expect(payload.outcome).toBe('blocked');
       expect(payload.next_status).toBe('stalled');
 
-      const task = db.prepare(`SELECT status, failure_detail FROM tasks WHERE id = 449`).get() as {
+      const task = await db.get(`SELECT status, failure_detail FROM tasks WHERE id = 449`) as {
         status: string;
         failure_detail: string;
       };
@@ -681,7 +640,7 @@ describe('external task events route', () => {
   });
 
   it('accepts deployed_for_qa and records review evidence plus canonical review transition', async () => {
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -715,10 +674,10 @@ describe('external task events route', () => {
         next_status: 'review',
       });
 
-      const task = getDb().prepare(`
+      const task = await getDb().get(`
         SELECT status, custom_fields_json
         FROM tasks WHERE id = 449
-      `).get() as {
+      `) as {
         status: string;
         custom_fields_json: string | null;
       };
@@ -729,7 +688,7 @@ describe('external task events route', () => {
         review_url: 'http://127.0.0.1:3510',
       });
 
-      const notes = getDb().prepare(`SELECT author, content FROM task_notes WHERE task_id = 449 ORDER BY id ASC`).all() as Array<{
+      const notes = await getDb().all(`SELECT author, content FROM task_notes WHERE task_id = 449 ORDER BY id ASC`) as Array<{
         author: string;
         content: string;
       }>;
@@ -739,26 +698,26 @@ describe('external task events route', () => {
       expect(notes[0].content).toContain('Event: deployed_for_qa');
       expect(notes[1].content).toContain('Outcome: completed_for_review');
 
-      const statusHistory = getDb().prepare(`
+      const statusHistory = await getDb().get(`
         SELECT old_value, new_value FROM task_history
         WHERE task_id = 449 AND field = 'status'
         ORDER BY id DESC LIMIT 1
-      `).get() as { old_value: string; new_value: string };
+      `) as { old_value: string; new_value: string };
       expect(statusHistory).toMatchObject({ old_value: 'in_progress', new_value: 'review' });
 
-      const eventHistory = getDb().prepare(`
+      const eventHistory = await getDb().get(`
         SELECT new_value FROM task_history
         WHERE task_id = 449 AND field = 'external_event_name'
         ORDER BY id DESC LIMIT 1
-      `).get() as { new_value: string };
+      `) as { new_value: string };
       expect(eventHistory.new_value).toBe('deployed_for_qa');
 
-      const taskEvent = getDb().prepare(`
+      const taskEvent = await getDb().get(`
         SELECT from_status, to_status, moved_by, move_type
         FROM task_events
         WHERE task_id = 449
         ORDER BY id DESC LIMIT 1
-      `).get() as { from_status: string; to_status: string; moved_by: string; move_type: string };
+      `) as { from_status: string; to_status: string; moved_by: string; move_type: string };
       expect(taskEvent).toMatchObject({
         from_status: 'in_progress',
         to_status: 'review',
@@ -766,7 +725,7 @@ describe('external task events route', () => {
         move_type: 'outcome',
       });
 
-      const receipts = getDb().prepare(`SELECT COUNT(*) as count FROM external_task_event_receipts WHERE task_id = 449`).get() as { count: number };
+      const receipts = await getDb().get(`SELECT COUNT(*) as count FROM external_task_event_receipts WHERE task_id = 449`) as { count: number };
       expect(receipts.count).toBe(1);
     } finally {
       await stopTestServer(server);
@@ -774,7 +733,7 @@ describe('external task events route', () => {
   });
 
   it('accepts queued and deploying events as workflow status updates without blocking the task', async () => {
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -807,7 +766,7 @@ describe('external task events route', () => {
         next_status: 'dev_deploy_queued',
       });
 
-      const queuedTask = getDb().prepare(`SELECT status FROM tasks WHERE id = 449`).get() as { status: string };
+      const queuedTask = await getDb().get(`SELECT status FROM tasks WHERE id = 449`) as { status: string };
       expect(queuedTask.status).toBe('dev_deploy_queued');
 
       const deploying = await fetch(`${baseUrl}/api/v1/external/task-events`, {
@@ -839,24 +798,24 @@ describe('external task events route', () => {
         next_status: 'dev_deploying',
       });
 
-      const task = getDb().prepare(`SELECT status FROM tasks WHERE id = 449`).get() as { status: string };
+      const task = await getDb().get(`SELECT status FROM tasks WHERE id = 449`) as { status: string };
       expect(task.status).toBe('dev_deploying');
 
-      const statusHistory = getDb().prepare(`
+      const statusHistory = await getDb().all(`
         SELECT old_value, new_value FROM task_history
         WHERE task_id = 449 AND field = 'status'
         ORDER BY id ASC
-      `).all() as Array<{ old_value: string; new_value: string }>;
+      `) as Array<{ old_value: string; new_value: string }>;
       expect(statusHistory).toEqual(expect.arrayContaining([
         { old_value: 'in_progress', new_value: 'dev_deploy_queued' },
         { old_value: 'dev_deploy_queued', new_value: 'dev_deploying' },
       ]));
 
-      const blockedCount = getDb().prepare(`
+      const blockedCount = await getDb().get(`
         SELECT COUNT(*) AS count
         FROM task_history
         WHERE task_id = 449 AND field = 'status' AND new_value IN ('blocked', 'stalled')
-      `).get() as { count: number };
+      `) as { count: number };
       expect(blockedCount.count).toBe(0);
     } finally {
       await stopTestServer(server);
@@ -864,7 +823,7 @@ describe('external task events route', () => {
   });
 
   it('accepts dev environment lease manager events authenticated with the calling agent key', async () => {
-    const apiKey = issueMcpApiKeyForAgent(getDb(), 42, 'agent lease manager callback key').apiKey;
+    const apiKey = (await issueMcpApiKeyForAgent(getDb(), 42, 'agent lease manager callback key')).apiKey;
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -894,11 +853,11 @@ describe('external task events route', () => {
         next_status: 'dev_deploying',
       });
 
-      const receipt = getDb().prepare(`
+      const receipt = await getDb().get(`
         SELECT received_by
         FROM external_task_event_receipts
         WHERE queue_id = 'queue-agent-key'
-      `).get() as { received_by: string };
+      `) as { received_by: string };
       expect(receipt.received_by).toBe('cinder-backend');
     } finally {
       await stopTestServer(server);
@@ -906,9 +865,9 @@ describe('external task events route', () => {
   });
 
   it('promotes a queued dev deploy to review when deployed_for_qa arrives', async () => {
-    getDb().prepare(`UPDATE tasks SET status = 'dev_deploy_queued' WHERE id = 449`).run();
+    await getDb().run(`UPDATE tasks SET status = 'dev_deploy_queued' WHERE id = 449`);
 
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -941,7 +900,7 @@ describe('external task events route', () => {
         next_status: 'review',
       });
 
-      const task = getDb().prepare(`SELECT status, custom_fields_json FROM tasks WHERE id = 449`).get() as { status: string; custom_fields_json: string | null };
+      const task = await getDb().get(`SELECT status, custom_fields_json FROM tasks WHERE id = 449`) as { status: string; custom_fields_json: string | null };
       expect(task.status).toBe('review');
       expect(JSON.parse(task.custom_fields_json ?? '{}')).toMatchObject({
         review_commit: '1234567890abcdef1234567890abcdef12345678',
@@ -954,13 +913,13 @@ describe('external task events route', () => {
   it('reprocesses a rejected deployed_for_qa receipt after missing configuration evidence is recorded', async () => {
     const db = getDb();
     (cleanupTaskExecutionLinkageForStatus as jest.Mock).mockClear();
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, message)
       VALUES (10, 'backend', 'completed_for_review', 'configuration_resource', 'configuration_resource required')
-    `).run();
-    db.prepare(`UPDATE tasks SET status = 'dev_deploying' WHERE id = 449`).run();
+    `);
+    await db.run(`UPDATE tasks SET status = 'dev_deploying' WHERE id = 449`);
 
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
     const payload = {
       source: DEV_ENV_LEASE_MANAGER_SOURCE,
@@ -994,11 +953,11 @@ describe('external task events route', () => {
         action_target: 'completed_for_review',
       });
 
-      let task = db.prepare(`
+      let task = await db.get(`
         SELECT status, active_instance_id, custom_fields_json
         FROM tasks
         WHERE id = 449
-      `).get() as {
+      `) as {
         status: string;
         active_instance_id: number | null;
         custom_fields_json: string | null;
@@ -1009,15 +968,15 @@ describe('external task events route', () => {
       expect(JSON.parse(task.custom_fields_json ?? '{}').review_commit ?? null).toBeNull();
       expect(cleanupTaskExecutionLinkageForStatus).not.toHaveBeenCalled();
 
-      db.prepare(`
+      await db.run(`
         UPDATE tasks
         SET custom_fields_json = ?
         WHERE id = 449
-      `).run(JSON.stringify({
-        configuration_resource: 'dev-environment-lease-manager:lease-config-retry/configuration',
-        configuration_review_hash: 'config-hash-980',
-        configuration_review_receipt: 'receipt-config-980',
-      }));
+      `, JSON.stringify({
+                configuration_resource: 'dev-environment-lease-manager:lease-config-retry/configuration',
+                configuration_review_hash: 'config-hash-980',
+                configuration_review_receipt: 'receipt-config-980',
+              }));
 
       const recovered = await fetch(`${baseUrl}/api/v1/external/task-events`, {
         method: 'POST',
@@ -1038,11 +997,11 @@ describe('external task events route', () => {
         next_status: 'review',
       });
 
-      const recoveredTask = db.prepare(`
+      const recoveredTask = await db.get(`
         SELECT status, custom_fields_json
         FROM tasks
         WHERE id = 449
-      `).get() as {
+      `) as {
         status: string;
         custom_fields_json: string | null;
       };
@@ -1082,11 +1041,11 @@ describe('external task events route', () => {
       });
       expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledTimes(1);
 
-      const receipt = db.prepare(`
+      const receipt = await db.get(`
         SELECT COUNT(*) AS count, processing_state, processing_error, mapping_action_target
         FROM external_task_event_receipts
         WHERE queue_id = 'queue-config-retry'
-      `).get() as {
+      `) as {
         count: number;
         processing_state: string;
         processing_error: string | null;
@@ -1099,21 +1058,21 @@ describe('external task events route', () => {
         mapping_action_target: 'completed_for_review',
       });
 
-      const outcomeNotes = db.prepare(`
+      const outcomeNotes = await db.get(`
         SELECT COUNT(*) AS count
         FROM task_notes
         WHERE task_id = 449 AND content LIKE 'Outcome: completed_for_review%'
-      `).get() as { count: number };
-      const workflowNotes = db.prepare(`
+      `) as { count: number };
+      const workflowNotes = await db.get(`
         SELECT COUNT(*) AS count
         FROM task_notes
         WHERE task_id = 449 AND content LIKE 'Workflow event received%'
-      `).get() as { count: number };
-      const transitions = db.prepare(`
+      `) as { count: number };
+      const transitions = await db.get(`
         SELECT COUNT(*) AS count
         FROM task_events
         WHERE task_id = 449 AND from_status = 'dev_deploying' AND to_status = 'review'
-      `).get() as { count: number };
+      `) as { count: number };
       expect(outcomeNotes.count).toBe(1);
       expect(workflowNotes.count).toBe(1);
       expect(transitions.count).toBe(1);
@@ -1123,7 +1082,7 @@ describe('external task events route', () => {
   });
 
   it('accepts deploy_failed and records blocked failure metadata', async () => {
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -1148,7 +1107,7 @@ describe('external task events route', () => {
       const body = await response.json() as { ok: boolean; outcome?: string | null; next_status?: string };
       expect(body).toMatchObject({ ok: true, outcome: 'env_blocked', next_status: 'stalled' });
 
-      const task = getDb().prepare(`SELECT status, failure_detail FROM tasks WHERE id = 449`).get() as {
+      const task = await getDb().get(`SELECT status, failure_detail FROM tasks WHERE id = 449`) as {
         status: string;
         failure_detail: string | null;
       };
@@ -1161,29 +1120,16 @@ describe('external task events route', () => {
 
   it('durably records deploy_failed before rejecting an invalid mapped outcome', async () => {
     const db = getDb();
-    db.prepare(`DELETE FROM external_event_mappings`).run();
-    db.prepare(`
+    await db.run(`DELETE FROM external_event_mappings`);
+    await db.run(`
       INSERT INTO external_event_mappings (
         project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
         action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      null,
-      DEV_ENV_LEASE_MANAGER_SOURCE,
-      'deploy_failed',
-      'backend',
-      JSON.stringify(['dev_deploying']),
-      JSON.stringify([]),
-      'outcome',
-      'not_a_configured_outcome',
-      0,
-      1,
-      1,
-      900,
-    );
-    db.prepare(`UPDATE tasks SET status = 'dev_deploying' WHERE id = 449`).run();
+    `, null, DEV_ENV_LEASE_MANAGER_SOURCE, 'deploy_failed', 'backend', JSON.stringify(['dev_deploying']), JSON.stringify([]), 'outcome', 'not_a_configured_outcome', 0, 1, 1, 900);
+    await db.run(`UPDATE tasks SET status = 'dev_deploying' WHERE id = 449`);
 
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -1223,7 +1169,7 @@ describe('external task events route', () => {
       });
       expect(body.receipt_id).toBeTruthy();
 
-      const receipt = db.prepare(`
+      const receipt = await db.get(`
         SELECT processing_state,
                processing_error,
                mapping_id,
@@ -1234,7 +1180,7 @@ describe('external task events route', () => {
                processed_at
         FROM external_task_event_receipts
         WHERE queue_id = ?
-      `).get('c3ff00e4-b37e-4f2c-b902-374f34d396c4') as {
+      `, 'c3ff00e4-b37e-4f2c-b902-374f34d396c4') as {
         processing_state: string;
         processing_error: string;
         mapping_id: number;
@@ -1254,15 +1200,15 @@ describe('external task events route', () => {
       expect(receipt.request_metadata_json).toContain('lease-manager-test');
       expect(receipt.processed_at).toBeTruthy();
 
-      const task = db.prepare(`SELECT status, failure_detail FROM tasks WHERE id = 449`).get() as {
+      const task = await db.get(`SELECT status, failure_detail FROM tasks WHERE id = 449`) as {
         status: string;
         failure_detail: string | null;
       };
       expect(task.status).toBe('dev_deploying');
       expect(task.failure_detail).toBeNull();
 
-      const notes = db.prepare(`SELECT COUNT(*) as count FROM task_notes WHERE task_id = 449`).get() as { count: number };
-      const history = db.prepare(`SELECT COUNT(*) as count FROM task_history WHERE task_id = 449`).get() as { count: number };
+      const notes = await db.get(`SELECT COUNT(*) as count FROM task_notes WHERE task_id = 449`) as { count: number };
+      const history = await db.get(`SELECT COUNT(*) as count FROM task_history WHERE task_id = 449`) as { count: number };
       expect(notes.count).toBe(0);
       expect(history.count).toBe(0);
     } finally {
@@ -1272,13 +1218,13 @@ describe('external task events route', () => {
 
   it('seeds deploy failure classes as workflow events mapped to env_blocked', async () => {
     const db = getDb();
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT event_name, action_kind, action_target, apply_failure_detail
       FROM external_event_mappings
       WHERE source = ?
         AND event_name IN (${DEV_ENV_DEPLOY_FAILURE_EVENTS.map(() => '?').join(',')})
       ORDER BY event_name
-    `).all(DEV_ENV_LEASE_MANAGER_SOURCE, ...DEV_ENV_DEPLOY_FAILURE_EVENTS) as Array<{
+    `, DEV_ENV_LEASE_MANAGER_SOURCE, ...DEV_ENV_DEPLOY_FAILURE_EVENTS) as Array<{
       event_name: string;
       action_kind: string;
       action_target: string;
@@ -1297,7 +1243,7 @@ describe('external task events route', () => {
   });
 
   it('accepts a structured database_migration_failed event and preserves failure details', async () => {
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -1331,7 +1277,7 @@ describe('external task events route', () => {
         next_status: 'stalled',
       });
 
-      const task = getDb().prepare(`SELECT status, failure_detail FROM tasks WHERE id = 449`).get() as {
+      const task = await getDb().get(`SELECT status, failure_detail FROM tasks WHERE id = 449`) as {
         status: string;
         failure_detail: string | null;
       };
@@ -1345,7 +1291,7 @@ describe('external task events route', () => {
   });
 
   it('rejects malformed deployed_for_qa events without mutating the task but keeps the receipt', async () => {
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -1372,23 +1318,23 @@ describe('external task events route', () => {
       const body = await response.json() as { code?: string };
       expect(body.code).toBe('external_task_event_validation_failed');
 
-      const task = getDb().prepare(`SELECT status, review_branch, review_commit FROM tasks WHERE id = 449`).get() as {
+      const task = await getDb().get(`SELECT status, review_branch, review_commit FROM tasks WHERE id = 449`) as {
         status: string;
         review_branch: string | null;
         review_commit: string | null;
       };
       expect(task).toMatchObject({ status: 'in_progress', review_branch: null, review_commit: null });
 
-      const notes = getDb().prepare(`SELECT COUNT(*) as count FROM task_notes WHERE task_id = 449`).get() as { count: number };
-      const history = getDb().prepare(`SELECT COUNT(*) as count FROM task_history WHERE task_id = 449`).get() as { count: number };
-      const receipts = getDb().prepare(`
+      const notes = await getDb().get(`SELECT COUNT(*) as count FROM task_notes WHERE task_id = 449`) as { count: number };
+      const history = await getDb().get(`SELECT COUNT(*) as count FROM task_history WHERE task_id = 449`) as { count: number };
+      const receipts = await getDb().get(`
         SELECT COUNT(*) as count,
                processing_state,
                processing_error,
                mapping_action_target
         FROM external_task_event_receipts
         WHERE task_id = 449
-      `).get() as {
+      `) as {
         count: number;
         processing_state: string;
         processing_error: string;
@@ -1406,7 +1352,7 @@ describe('external task events route', () => {
   });
 
   it('deduplicates identical accepted events without repeating notes or history', async () => {
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
     const payload = {
       source: DEV_ENV_LEASE_MANAGER_SOURCE,
@@ -1441,9 +1387,9 @@ describe('external task events route', () => {
       expect(second.status).toBe(200);
       expect((await second.json() as { duplicate: boolean }).duplicate).toBe(true);
 
-      const noteCount = getDb().prepare(`SELECT COUNT(*) as count FROM task_notes WHERE task_id = 449`).get() as { count: number };
-      const historyCount = getDb().prepare(`SELECT COUNT(*) as count FROM task_history WHERE task_id = 449 AND field = 'external_event_name'`).get() as { count: number };
-      const receiptCount = getDb().prepare(`SELECT COUNT(*) as count FROM external_task_event_receipts WHERE task_id = 449`).get() as { count: number };
+      const noteCount = await getDb().get(`SELECT COUNT(*) as count FROM task_notes WHERE task_id = 449`) as { count: number };
+      const historyCount = await getDb().get(`SELECT COUNT(*) as count FROM task_history WHERE task_id = 449 AND field = 'external_event_name'`) as { count: number };
+      const receiptCount = await getDb().get(`SELECT COUNT(*) as count FROM external_task_event_receipts WHERE task_id = 449`) as { count: number };
       expect(noteCount.count).toBe(1);
       expect(historyCount.count).toBe(1);
       expect(receiptCount.count).toBe(1);
@@ -1453,7 +1399,7 @@ describe('external task events route', () => {
   });
 
   it('rejects unauthorized or unknown-source callers', async () => {
-    const apiKey = issueLeaseManagerApiKey();
+    const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -1490,7 +1436,7 @@ describe('external task events route', () => {
       });
       expect(unknownSource.status).toBe(403);
 
-      const noteCount = getDb().prepare(`SELECT COUNT(*) as count FROM task_notes WHERE task_id = 449`).get() as { count: number };
+      const noteCount = await getDb().get(`SELECT COUNT(*) as count FROM task_notes WHERE task_id = 449`) as { count: number };
       expect(noteCount.count).toBe(0);
     } finally {
       await stopTestServer(server);

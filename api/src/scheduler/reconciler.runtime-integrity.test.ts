@@ -1,10 +1,12 @@
 import Database from 'better-sqlite3';
 import { reconcileOrphanInProgressTasks, startReconciler } from './reconciler';
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 describe('reconciler runtime integrity recovery', () => {
-  function createDb() {
-    const db = new Database(':memory:');
-    db.exec(`
+  async function createDb() {
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE tasks (
         id INTEGER PRIMARY KEY,
         title TEXT NOT NULL,
@@ -44,35 +46,35 @@ describe('reconciler runtime integrity recovery', () => {
     return db;
   }
 
-  it('logs orphaned in_progress tasks after grace without changing visible status', () => {
-    const db = createDb();
-    db.prepare(`INSERT INTO agents (id, name) VALUES (7, 'Cinder')`).run();
-    db.prepare(`INSERT INTO job_instances (id, status, runtime_ended_at) VALUES (90, 'failed', datetime('now'))`).run();
-    db.prepare(`
+  it('logs orphaned in_progress tasks after grace without changing visible status', async () => {
+    const db = await createDb();
+    await db.run(`INSERT INTO agents (id, name) VALUES (7, 'Cinder')`);
+    await db.run(`INSERT INTO job_instances (id, status, runtime_ended_at) VALUES (90, 'failed', datetime('now'))`);
+    await db.run(`
       INSERT INTO tasks (id, title, status, agent_id, active_instance_id, paused_at, updated_at)
       VALUES (501, 'Lost linkage task', 'in_progress', 7, 90, NULL, '2026-05-16T19:30:00.000Z')
-    `).run();
+    `);
 
     const realNow = Date.now;
     Date.now = () => new Date('2026-05-16T19:40:00.000Z').getTime();
     try {
-      reconcileOrphanInProgressTasks(db);
+      await reconcileOrphanInProgressTasks(db);
     } finally {
       Date.now = realNow;
     }
 
-    const task = db.prepare(`SELECT status FROM tasks WHERE id = 501`).get() as { status: string };
+    const task = await db.get(`SELECT status FROM tasks WHERE id = 501`) as { status: string };
     expect(task.status).toBe('in_progress');
 
-    const historyCount = (db.prepare(`SELECT COUNT(*) as count FROM task_history WHERE task_id = 501 AND field = 'status'`).get() as { count: number }).count;
+    const historyCount = (await db.get(`SELECT COUNT(*) as count FROM task_history WHERE task_id = 501 AND field = 'status'`) as { count: number }).count;
     expect(historyCount).toBe(0);
 
-    const logs = db.prepare(`SELECT message FROM logs WHERE message LIKE '%task #501%' ORDER BY id ASC`).all() as Array<{ message: string }>;
+    const logs = await db.all(`SELECT message FROM logs WHERE message LIKE '%task #501%' ORDER BY id ASC`) as Array<{ message: string }>;
     expect(logs.some(row => row.message.includes('Orphan in_progress: task #501'))).toBe(true);
     expect(logs.some(row => row.message.includes('Orphan in_progress integrity anomaly: task #501'))).toBe(true);
     expect(logs.every(row => !row.message.includes('→ stalled'))).toBe(true);
 
-    db.close();
+    await db.close();
   });
 
   it('releases the scheduler overlap guard after a hung tick times out', async () => {

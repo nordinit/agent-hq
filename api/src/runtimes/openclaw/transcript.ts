@@ -9,6 +9,7 @@ import {
   buildOpenClawGatewayConnectParams,
   GATEWAY_WS_URL,
 } from './gatewayClient';
+import { nowTimestamp, timestampFromEpochMs, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 
 const activeTerminalSignalCaptures = new Map<string, { stop: () => void }>();
 const activeRawSessionTerminalPolls = new Map<number, { stop: () => void }>();
@@ -125,9 +126,9 @@ export function extractGatewayEvents(msg: Record<string, unknown>): PersistedGat
   return [{ event_type: 'text', content: plainText, event_meta: {} }];
 }
 
-export function persistGatewayHistory(instanceId: number, agentId: number, messages: Array<Record<string, unknown>>): void {
+export async function persistGatewayHistory(instanceId: number, agentId: number, messages: Array<Record<string, unknown>>): Promise<void> {
   const db = getDb();
-  const stmt = db.prepare(`
+  const insertSql = `
     INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
@@ -135,28 +136,28 @@ export function persistGatewayHistory(instanceId: number, agentId: number, messa
       timestamp = excluded.timestamp,
       event_type = excluded.event_type,
       event_meta = excluded.event_meta
-  `);
+  `;
 
   let rowIndex = 0;
   for (const m of messages) {
     const sourceRole = typeof m.role === 'string' ? m.role : 'assistant';
     const role = sourceRole === 'user' ? 'user' : 'assistant';
-    const ts = typeof m.timestamp === 'number' ? new Date(m.timestamp).toISOString()
+    const ts = typeof m.timestamp === 'number' ? (timestampFromEpochMs(m.timestamp) ?? nowTimestamp())
       : typeof m.timestamp === 'string' ? m.timestamp
-      : new Date().toISOString();
+      : nowTimestamp();
 
     for (const evt of extractGatewayEvents(m)) {
       const rowId = `oc-hist-${instanceId}-${rowIndex++}`;
       const meta = { ...evt.event_meta, ...(sourceRole !== role ? { source_role: sourceRole } : {}) };
-      stmt.run(rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(meta));
+      await db.run(insertSql, rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(meta));
     }
   }
 }
 
-function isInstanceStillActive(instanceId: number): boolean {
+async function isInstanceStillActive(instanceId: number): Promise<boolean> {
   try {
     const db = getDb();
-    const row = db.prepare('SELECT status FROM job_instances WHERE id = ?').get(instanceId) as { status?: string } | undefined;
+    const row = await db.get('SELECT status FROM job_instances WHERE id = ?', instanceId) as { status?: string } | undefined;
     return row?.status === 'dispatched' || row?.status === 'running';
   } catch {
     return false;
@@ -290,10 +291,10 @@ export function startRawSessionTerminalPoll(params: {
     timer = setTimeout(tick, delayMs);
   };
 
-  const tick = () => {
+  const tick = async () => {
     if (stopped) return;
     try {
-      if (!isInstanceStillActive(params.instanceId)) {
+      if (!await isInstanceStillActive(params.instanceId)) {
         stop();
         return;
       }
@@ -303,7 +304,7 @@ export function startRawSessionTerminalPoll(params: {
       }
 
       const db = getDb();
-      const evaluation = evaluateOpenClawInstanceSessionState(db, params.instanceId);
+      const evaluation = await evaluateOpenClawInstanceSessionState(db, params.instanceId);
       if (evaluation.decision?.terminal) {
         params.onTurnEnd({
           type: 'runEnded',
@@ -312,7 +313,7 @@ export function startRawSessionTerminalPoll(params: {
           reason: evaluation.decision.reason,
           sessionKey: params.sessionKey,
           runId: evaluation.state?.trajectoryRunId ?? undefined,
-          endedAt: evaluation.state?.trajectoryEndedAt ?? evaluation.state?.lastEventAt ?? new Date().toISOString(),
+          endedAt: toCanonicalTimestampOrNow(evaluation.state?.trajectoryEndedAt ?? evaluation.state?.lastEventAt),
           error: evaluation.decision.error,
           metadata: {
             raw_session_terminal_poll: true,

@@ -1,19 +1,3 @@
-/**
- * dispatcher.ts — Deterministic task dispatcher service
- *
- * Selects the best candidate task for each enabled job and fires
- * an isolated agent turn via the AgentRuntime interface. Each job instance
- * gets its own session, distinct from the agent's main session.
- *
- * The runtime backend (OpenClaw, Claude Code, etc.) is resolved per-agent
- * via resolveRuntime(). The dispatcher no longer imports OpenClaw-specific
- * functions directly.
- *
- * Call runDispatcher(db, projectId?) after runEligibilityPass()
- * so blocker/lifecycle state is current before selecting explicit ready tasks.
- */
-
-import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { notifyTaskStatusChange } from '../lib/taskNotifications';
@@ -43,6 +27,7 @@ import {
 import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization';
 import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { getDb } from '../db/client';
+import { nowTimestamp } from '../lib/timestamps';
 import { getAgentHqBaseUrl } from '../lib/agentHqBaseUrl';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn as durableTableHasColumn } from '../lib/durableRunIdentity';
@@ -72,6 +57,8 @@ import {
   buildTaskMessage,
   getDispatchTaskNotesContext,
 } from './dispatch/prompt';
+import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 function hasMaterializedAgentHqLifecycleMcp(bundlePath: string | undefined, agentId: number | null | undefined): boolean {
   if (!bundlePath || agentId == null || !fs.existsSync(bundlePath)) return false;
@@ -341,10 +328,8 @@ interface DispatcherRoutingConfig {
  * getAgentRoutingConfig — reads routing config from agents table.
  * Task #596: routing_config_legacy has been removed; agents table is the sole source.
  */
-function getAgentRoutingConfig(db: Database.Database, agentId: number): DispatcherRoutingConfig {
-  const agentRow = db.prepare(
-    `SELECT sort_rules FROM agents WHERE id = ?`
-  ).get(agentId) as { sort_rules: string } | undefined;
+async function getAgentRoutingConfig(db: Db, agentId: number): Promise<DispatcherRoutingConfig> {
+  const agentRow = await db.get(`SELECT sort_rules FROM agents WHERE id = ?`, agentId) as { sort_rules: string } | undefined;
 
   if (agentRow) {
     let sort_rules: string[] = [];
@@ -362,23 +347,23 @@ function getAgentRoutingConfig(db: Database.Database, agentId: number): Dispatch
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function hasActiveInstance(db: Database.Database, agentId: number): boolean {
-  const row = db.prepare(`
+async function hasActiveInstance(db: Db, agentId: number): Promise<boolean> {
+  const row = await db.get(`
     SELECT COUNT(*) as n
     FROM job_instances
     WHERE agent_id = ?
       AND status IN ('queued', 'dispatched', 'running')
-  `).get(agentId) as { n: number };
+  `, agentId) as { n: number };
   return row.n > 0;
 }
 
-function hasTaskLiveInstance(db: Database.Database, taskId: number): boolean {
-  const row = db.prepare(`
+async function hasTaskLiveInstance(db: Db, taskId: number): Promise<boolean> {
+  const row = await db.get(`
     SELECT COUNT(*) as n
     FROM job_instances
     WHERE task_id = ?
       AND status IN ('queued', 'dispatched', 'running')
-  `).get(taskId) as { n: number };
+  `, taskId) as { n: number };
   return row.n > 0;
 }
 
@@ -467,8 +452,8 @@ function classifyDispatchStartupFailure(reason: string): {
   };
 }
 
-function persistDispatchStartupFailure(
-  db: Database.Database,
+async function persistDispatchStartupFailure(
+  db: Db,
   params: {
     taskId: number;
     matchedAgentId: number | null;
@@ -485,25 +470,25 @@ function persistDispatchStartupFailure(
     keepAutoRetry?: boolean;
     tenantId?: number | null;
   },
-): string {
+): Promise<string> {
   const classification = classifyDispatchStartupFailure(params.reason);
   const fallbackStatus = deriveDispatchFailureFallbackStatus(params.priorStatus);
   const terminalFailureStatus = classification.failureOutcome === 'env_blocked' ? 'stalled' : 'failed';
   const legacySafeStatus = classification.failureOutcome === 'env_blocked'
     ? terminalFailureStatus
     : (params.keepAutoRetry ? fallbackStatus : terminalFailureStatus);
-  const hasWorkflowEventMappings = tableHasColumn(db, 'external_event_mappings', 'event_name');
+  const hasWorkflowEventMappings = await tableHasColumn(db, 'external_event_mappings', 'event_name');
   const mapping = hasWorkflowEventMappings
-    ? resolveWorkflowEventMapping(db, {
-        source: AGENT_HQ_DISPATCHER_SOURCE,
-        eventName: DISPATCH_STARTUP_FAILED_EVENT,
-        tenantId: params.tenantId ?? null,
-        projectId: params.projectId ?? null,
-        sprintId: params.sprintId ?? null,
-        sprintType: params.sprintType ?? null,
-        taskType: params.taskType ?? null,
-        currentStatus: params.priorStatus,
-      })
+    ? await resolveWorkflowEventMapping(db, {
+              source: AGENT_HQ_DISPATCHER_SOURCE,
+              eventName: DISPATCH_STARTUP_FAILED_EVENT,
+              tenantId: params.tenantId ?? null,
+              projectId: params.projectId ?? null,
+              sprintId: params.sprintId ?? null,
+              sprintType: params.sprintType ?? null,
+              taskType: params.taskType ?? null,
+              currentStatus: params.priorStatus,
+            })
     : null;
   const nextStatus = mapping?.action_kind === 'status' && mapping.action_target
     ? mapping.action_target
@@ -522,21 +507,21 @@ function persistDispatchStartupFailure(
     `Action: ${mapping?.action_kind ?? 'legacy_safe_default'}${mapping?.action_target ? ` → ${mapping.action_target}` : ''}`,
   ].join('\n');
 
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_source', null, AGENT_HQ_DISPATCHER_SOURCE, false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_source_kind', null, 'agent_hq_internal', false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_name', null, DISPATCH_STARTUP_FAILED_EVENT, false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_matched_agent_id', null, params.matchedAgentId, false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_matched_agent_name', null, params.matchedAgentLabel, false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_routing_reason', null, params.routingReason, false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_failure_category', null, classification.category, false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_failure_message', null, params.reason, false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_prior_status', null, params.priorStatus, false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_mapping_id', null, mapping?.id ?? null, false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_action_kind', null, mapping?.action_kind ?? (hasWorkflowEventMappings ? null : 'legacy_safe_default'), false);
-  writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_action_target', null, mapping?.action_target ?? (hasWorkflowEventMappings ? null : nextStatus), false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_source', null, AGENT_HQ_DISPATCHER_SOURCE, false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_source_kind', null, 'agent_hq_internal', false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_name', null, DISPATCH_STARTUP_FAILED_EVENT, false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_matched_agent_id', null, params.matchedAgentId, false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_matched_agent_name', null, params.matchedAgentLabel, false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_routing_reason', null, params.routingReason, false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_failure_category', null, classification.category, false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_failure_message', null, params.reason, false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_prior_status', null, params.priorStatus, false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_mapping_id', null, mapping?.id ?? null, false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_action_kind', null, mapping?.action_kind ?? (hasWorkflowEventMappings ? null : 'legacy_safe_default'), false);
+  await writeTaskHistory(db, params.taskId, 'dispatcher', 'workflow_event_action_target', null, mapping?.action_target ?? (hasWorkflowEventMappings ? null : nextStatus), false);
 
-  const hasAssignedAgentColumn = tableHasColumn(db, 'tasks', 'assigned_agent_id');
-  const hasClaimedAtColumn = tableHasColumn(db, 'tasks', 'claimed_at');
+  const hasAssignedAgentColumn = await tableHasColumn(db, 'tasks', 'assigned_agent_id');
+  const hasClaimedAtColumn = await tableHasColumn(db, 'tasks', 'claimed_at');
   const assignments = [
     'status = ?',
     hasAssignedAgentColumn ? 'assigned_agent_id = ?' : 'agent_id = ?',
@@ -548,122 +533,108 @@ function persistDispatchStartupFailure(
   ];
   const values: Array<string | number | null> = [nextStatus, params.matchedAgentId];
 
-  if (tableHasColumn(db, 'tasks', 'routing_reason')) {
+  if (await tableHasColumn(db, 'tasks', 'routing_reason')) {
     assignments.push('routing_reason = ?');
     values.push(params.routingReason);
   }
-  if (tableHasColumn(db, 'tasks', 'failure_detail')) {
+  if (await tableHasColumn(db, 'tasks', 'failure_detail')) {
     assignments.push('failure_detail = ?');
     values.push(failureDetail);
   }
-  if (tableHasColumn(db, 'tasks', 'previous_status')) {
+  if (await tableHasColumn(db, 'tasks', 'previous_status')) {
     assignments.push('previous_status = ?');
     values.push(params.priorStatus);
   }
-  if (params.retryCount != null && tableHasColumn(db, 'tasks', 'retry_count')) {
+  if (params.retryCount != null && await tableHasColumn(db, 'tasks', 'retry_count')) {
     assignments.push('retry_count = ?');
     values.push(params.retryCount);
   }
 
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET ${assignments.join(',\n        ')}
     WHERE id = ?
-  `).run(...values, params.taskId);
+  `, ...values, params.taskId);
 
   const attemptSuffix = params.retryCount != null && params.maxRetries != null
     ? ` (attempt ${params.retryCount}/${params.maxRetries})`
     : '';
   const resultLabel = nextStatus === 'stalled' ? 'blocked' : (nextStatus === params.priorStatus ? 'partial' : 'failed');
 
-  const startupFailureNoteTenant = tenantInsertColumns(
-    db,
-    'task_notes',
-    resolveRuntimeTenantId(db, { taskId: params.taskId }) ?? params.tenantId ?? null,
-  );
-  db.prepare(`INSERT INTO task_notes (${startupFailureNoteTenant.columnSql}task_id, author, content) VALUES (${startupFailureNoteTenant.valueSql}?, ?, ?)`).run(
-    ...startupFailureNoteTenant.values,
-    params.taskId,
-    'Agent HQ',
-    [
-      'Agent check-in: Blocked',
-      `Summary: Dispatch startup failed after routing matched ${params.matchedAgentLabel}${attemptSuffix}`,
-      `Work completed: The dispatcher matched route "${params.routingReason}" but execution never started.`,
-      `Tests run: Dispatch startup attempted the matched route's repo/runtime setup path.`,
-      `Result: ${resultLabel}`,
-      `Failure or issue observed: ${params.reason}`,
-      `Root cause assessment: ${classification.rootCauseAssessment}`,
-      `Evidence: workflow_event=${DISPATCH_STARTUP_FAILED_EVENT}; source=${AGENT_HQ_DISPATCHER_SOURCE}; mapping=${mapping ? `#${mapping.id}` : 'none'}; action=${mapping?.action_kind ?? 'legacy_safe_default'}${mapping?.action_target ? `→${mapping.action_target}` : ''}; legacy_outcome=${classification.failureOutcome}; status=${nextStatus}; routing_reason=${params.routingReason}`,
-      `Next action: ${classification.nextAction}`,
-      `Next owner: ${classification.nextOwner}`,
-    ].join('\n'),
-  );
+  const startupFailureNoteTenant = await tenantInsertColumns(
+      db,
+      'task_notes',
+      (await resolveRuntimeTenantId(db, { taskId: params.taskId })) ?? params.tenantId ?? null,
+    );
+  await db.run(`INSERT INTO task_notes (${startupFailureNoteTenant.columnSql}task_id, author, content) VALUES (${startupFailureNoteTenant.valueSql}?, ?, ?)`, ...startupFailureNoteTenant.values, params.taskId, 'Agent HQ', [
+          'Agent check-in: Blocked',
+          `Summary: Dispatch startup failed after routing matched ${params.matchedAgentLabel}${attemptSuffix}`,
+          `Work completed: The dispatcher matched route "${params.routingReason}" but execution never started.`,
+          `Tests run: Dispatch startup attempted the matched route's repo/runtime setup path.`,
+          `Result: ${resultLabel}`,
+          `Failure or issue observed: ${params.reason}`,
+          `Root cause assessment: ${classification.rootCauseAssessment}`,
+          `Evidence: workflow_event=${DISPATCH_STARTUP_FAILED_EVENT}; source=${AGENT_HQ_DISPATCHER_SOURCE}; mapping=${mapping ? `#${mapping.id}` : 'none'}; action=${mapping?.action_kind ?? 'legacy_safe_default'}${mapping?.action_target ? `→${mapping.action_target}` : ''}; legacy_outcome=${classification.failureOutcome}; status=${nextStatus}; routing_reason=${params.routingReason}`,
+          `Next action: ${classification.nextAction}`,
+          `Next owner: ${classification.nextOwner}`,
+        ].join('\n'));
 
-  recordDispatchStartupFailureNotification(db, {
-    taskId: params.taskId,
-    tenantId: resolveRuntimeTenantId(db, { taskId: params.taskId }) ?? params.tenantId ?? null,
-    matchedAgentId: params.matchedAgentId,
-    matchedAgentLabel: params.matchedAgentLabel,
-    routingReason: params.routingReason,
-    failureCategory: classification.category,
-    failureMessage: params.reason,
-    mappingId: mapping?.id ?? null,
-    mappingActionKind: mapping?.action_kind ?? (hasWorkflowEventMappings ? null : 'legacy_safe_default'),
-    mappingActionTarget: mapping?.action_target ?? (hasWorkflowEventMappings ? null : nextStatus),
-    nextAction: classification.nextAction,
-    nextOwner: classification.nextOwner,
-    priorStatus: params.priorStatus,
-    resolvedStatus: nextStatus,
-  });
+  await recordDispatchStartupFailureNotification(db, {
+        taskId: params.taskId,
+        tenantId: (await resolveRuntimeTenantId(db, { taskId: params.taskId })) ?? params.tenantId ?? null,
+        matchedAgentId: params.matchedAgentId,
+        matchedAgentLabel: params.matchedAgentLabel,
+        routingReason: params.routingReason,
+        failureCategory: classification.category,
+        failureMessage: params.reason,
+        mappingId: mapping?.id ?? null,
+        mappingActionKind: mapping?.action_kind ?? (hasWorkflowEventMappings ? null : 'legacy_safe_default'),
+        mappingActionTarget: mapping?.action_target ?? (hasWorkflowEventMappings ? null : nextStatus),
+        nextAction: classification.nextAction,
+        nextOwner: classification.nextOwner,
+        priorStatus: params.priorStatus,
+        resolvedStatus: nextStatus,
+      });
 
   if (nextStatus !== params.priorStatus) {
-    writeTaskStatusChange(db, params.taskId, 'dispatcher', params.priorStatus, nextStatus, {
-      reason: params.routingReason,
-    });
-    notifyTaskStatusChange(db, {
-      taskId: params.taskId,
-      fromStatus: params.priorStatus,
-      toStatus: nextStatus,
-      source: 'dispatcher',
-    });
+    await writeTaskStatusChange(db, params.taskId, 'dispatcher', params.priorStatus, nextStatus, {
+            reason: params.routingReason,
+          });
+    await notifyTaskStatusChange(db, {
+            taskId: params.taskId,
+            fromStatus: params.priorStatus,
+            toStatus: nextStatus,
+            source: 'dispatcher',
+          });
   }
 
   return nextStatus;
 }
 
-function tableHasColumn(db: Database.Database, tableName: string, columnName: string): boolean {
-  try {
-    const cols = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
-    return cols.some(col => col.name === columnName);
-  } catch {
-    return false;
-  }
+async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
+    return await sharedColumnExists(db, tableName, columnName);
 }
 
-function tableExists(db: Database.Database, tableName: string): boolean {
-  try {
-    return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(tableName) as { name?: string } | undefined)?.name);
-  } catch {
-    return false;
-  }
+async function tableExists(db: Db, tableName: string): Promise<boolean> {
+    return await sharedTableExists(db, tableName);
 }
 
-function resolveDispatchAgentSlug(
-  db: Database.Database,
+async function resolveDispatchAgentSlug(
+  db: Db,
   params: {
     agentId: number;
     openclawAgentId?: string | null;
     sessionKey?: string | null;
     name?: string | null;
   },
-): string | null {
+): Promise<string | null> {
   let openclawAgentId = params.openclawAgentId ?? null;
 
   // The stable runtime ID is authoritative. Read it from the agent record as a
   // fallback so canonical Agent HQ session keys never become OpenClaw agent IDs
   // when a dispatch caller omits the field.
-  if (!openclawAgentId && tableHasColumn(db, 'agents', 'openclaw_agent_id')) {
-    const row = db.prepare(`SELECT openclaw_agent_id FROM agents WHERE id = ?`).get(params.agentId) as {
+  if (!openclawAgentId && await tableHasColumn(db, 'agents', 'openclaw_agent_id')) {
+    const row = await db.get(`SELECT openclaw_agent_id FROM agents WHERE id = ?`, params.agentId) as {
       openclaw_agent_id?: string | null;
     } | undefined;
     openclawAgentId = row?.openclaw_agent_id ?? null;
@@ -691,19 +662,19 @@ function relationshipResolvedStatuses(raw: unknown): string[] {
   return configured.length > 0 ? configured : [...TERMINAL_TASK_STATUSES];
 }
 
-function isRelationshipModelAvailable(db: Database.Database): boolean {
-  return tableExists(db, 'task_relationships')
-    && tableExists(db, 'sprint_type_relationship_types')
-    && tableHasColumn(db, 'sprint_type_relationship_types', 'affects_dispatch_eligibility')
-    && tableHasColumn(db, 'sprint_type_relationship_types', 'direction_semantics');
+async function isRelationshipModelAvailable(db: Db): Promise<boolean> {
+  return await tableExists(db, 'task_relationships')
+    && await tableExists(db, 'sprint_type_relationship_types')
+    && await tableHasColumn(db, 'sprint_type_relationship_types', 'affects_dispatch_eligibility')
+    && await tableHasColumn(db, 'sprint_type_relationship_types', 'direction_semantics');
 }
 
-function getRelationshipDispatchEligibility(db: Database.Database, projectId?: number | null): RelationshipDispatchEligibility | null {
-  if (!isRelationshipModelAvailable(db)) return null;
+async function getRelationshipDispatchEligibility(db: Db, projectId?: number | null): Promise<RelationshipDispatchEligibility | null> {
+  if (!await isRelationshipModelAvailable(db)) return null;
 
   const projectFilter = projectId == null ? '' : 'AND (source.project_id = ? OR target.project_id = ?)';
   const params = projectId == null ? [] : [projectId, projectId];
-  const rows = db.prepare(`
+  const rows = await db.all(`
     SELECT tr.id,
            tr.source_task_id,
            tr.target_task_id,
@@ -731,7 +702,7 @@ function getRelationshipDispatchEligibility(db: Database.Database, projectId?: n
       ${projectFilter}
     ORDER BY tr.id ASC,
              CASE WHEN rt.sprint_type_key = COALESCE(source_sprint.sprint_type, 'generic') THEN 0 ELSE 1 END ASC
-  `).all(...params) as Array<Record<string, unknown>>;
+  `, ...params) as Array<Record<string, unknown>>;
 
   const seenRelationshipIds = new Set<number>();
   const blockedByTaskId = new Map<number, RelationshipDispatchReason[]>();
@@ -776,20 +747,20 @@ function formatRelationshipDispatchReason(reason: RelationshipDispatchReason): s
   return `${reason.relationshipLabel} (${reason.relationshipTypeKey}) task #${reason.relatedTaskId}${title} is ${reason.relatedTaskStatus}`;
 }
 
-function annotateRelationshipDispatchBlocks(db: Database.Database, blockedByTaskId: Map<number, RelationshipDispatchReason[]>): void {
-  if (!tableExists(db, 'task_history')) return;
+async function annotateRelationshipDispatchBlocks(db: Db, blockedByTaskId: Map<number, RelationshipDispatchReason[]>): Promise<void> {
+  if (!await tableExists(db, 'task_history')) return;
   for (const [taskId, reasons] of blockedByTaskId.entries()) {
     if (reasons.length === 0) continue;
     const reasonText = `Dispatch ineligible: ${reasons.map(formatRelationshipDispatchReason).join('; ')}`;
-    const latest = db.prepare(`
+    const latest = await db.get(`
       SELECT new_value
       FROM task_history
       WHERE task_id = ? AND changed_by = 'dispatcher' AND field = 'dispatch_eligibility'
       ORDER BY id DESC
       LIMIT 1
-    `).get(taskId) as { new_value?: string | null } | undefined;
+    `, taskId) as { new_value?: string | null } | undefined;
     if (latest?.new_value === reasonText) continue;
-    writeTaskHistory(db, taskId, 'dispatcher', 'dispatch_eligibility', null, reasonText, false);
+    await writeTaskHistory(db, taskId, 'dispatcher', 'dispatch_eligibility', null, reasonText, false);
   }
 }
 
@@ -835,16 +806,16 @@ export const DISPATCHABLE_ROUTED_STATUSES = TASK_STATUSES.filter(
   (status): status is typeof TASK_STATUSES[number] => !(TERMINAL_TASK_STATUSES as readonly string[]).includes(status),
 );
 
-function buildResolvedTaskTerminalityExpression(
-  db: Database.Database,
+async function buildResolvedTaskTerminalityExpression(
+  db: Db,
   taskAlias: string,
   sprintAlias: string | null,
-): { sql: string; params: unknown[] } {
+): Promise<{ sql: string; params: unknown[] }> {
   const sources: string[] = [];
   const params: unknown[] = [];
 
-  if (tableExists(db, 'sprint_task_statuses') && tableHasColumn(db, 'sprint_task_statuses', 'terminal')) {
-    const workflowStatusOrder = tableHasColumn(db, 'sprint_task_statuses', 'id') ? 'ORDER BY sprint_status.id DESC' : '';
+  if (await tableExists(db, 'sprint_task_statuses') && await tableHasColumn(db, 'sprint_task_statuses', 'terminal')) {
+    const workflowStatusOrder = await tableHasColumn(db, 'sprint_task_statuses', 'id') ? 'ORDER BY sprint_status.id DESC' : '';
     sources.push(`
       (
         SELECT sprint_status.terminal
@@ -859,12 +830,12 @@ function buildResolvedTaskTerminalityExpression(
 
   if (
     sprintAlias
-    && tableExists(db, 'sprint_type_task_statuses')
-    && tableHasColumn(db, 'sprint_type_task_statuses', 'terminal')
+    && await tableExists(db, 'sprint_type_task_statuses')
+    && await tableHasColumn(db, 'sprint_type_task_statuses', 'terminal')
   ) {
-    const hasTaskTenant = tableHasColumn(db, 'tasks', 'tenant_id');
-    const hasSprintTypeTenant = tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
-    const sprintTypeStatusOrder = tableHasColumn(db, 'sprint_type_task_statuses', 'id') ? 'ORDER BY sprint_type_status.id DESC' : '';
+    const hasTaskTenant = await tableHasColumn(db, 'tasks', 'tenant_id');
+    const hasSprintTypeTenant = await tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
+    const sprintTypeStatusOrder = await tableHasColumn(db, 'sprint_type_task_statuses', 'id') ? 'ORDER BY sprint_type_status.id DESC' : '';
     sources.push(hasTaskTenant && hasSprintTypeTenant
       ? `
         COALESCE(
@@ -900,9 +871,9 @@ function buildResolvedTaskTerminalityExpression(
       `);
   }
 
-  if (tableExists(db, 'task_statuses') && tableHasColumn(db, 'task_statuses', 'terminal')) {
-    const statusKeyColumn = tableHasColumn(db, 'task_statuses', 'name') ? 'name' : 'status_key';
-    const globalStatusOrder = tableHasColumn(db, 'task_statuses', 'id') ? 'ORDER BY global_status.id DESC' : '';
+  if (await tableExists(db, 'task_statuses') && await tableHasColumn(db, 'task_statuses', 'terminal')) {
+    const statusKeyColumn = await tableHasColumn(db, 'task_statuses', 'name') ? 'name' : 'status_key';
+    const globalStatusOrder = await tableHasColumn(db, 'task_statuses', 'id') ? 'ORDER BY global_status.id DESC' : '';
     sources.push(`
       (
         SELECT global_status.terminal
@@ -924,12 +895,12 @@ function buildResolvedTaskTerminalityExpression(
   return { sql: `COALESCE(${sources.join(', ')})`, params };
 }
 
-export function getNonDispatchableTaskStatusPredicate(
-  db: Database.Database,
+export async function getNonDispatchableTaskStatusPredicate(
+  db: Db,
   taskAlias = 't',
   sprintAlias: string | null = 's',
-): { sql: string; params: unknown[] } {
-  const resolvedTerminality = buildResolvedTaskTerminalityExpression(db, taskAlias, sprintAlias);
+): Promise<{ sql: string; params: unknown[] }> {
+  const resolvedTerminality = await buildResolvedTaskTerminalityExpression(db, taskAlias, sprintAlias);
   return {
     sql: `(${resolvedTerminality.sql}) = 0`,
     params: resolvedTerminality.params,
@@ -945,12 +916,12 @@ export function getNonDispatchableTaskStatusPredicate(
  * (set by the failure handler) are excluded until DISPATCH_FAILURE_BACKOFF_SECONDS
  * have elapsed, preventing a spin-loop when the gateway/API is down.
  */
-function getAllDispatchableTasks(db: Database.Database, projectId?: number | null): CandidateTask[] {
-  const assignmentColumn = tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id' : 'agent_id';
-  const relationshipEligibility = getRelationshipDispatchEligibility(db, projectId);
-  const statusEligibility = getNonDispatchableTaskStatusPredicate(db, 't', 's');
+async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promise<CandidateTask[]> {
+  const assignmentColumn = await tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id' : 'agent_id';
+  const relationshipEligibility = await getRelationshipDispatchEligibility(db, projectId);
+  const statusEligibility = await getNonDispatchableTaskStatusPredicate(db, 't', 's');
   if (relationshipEligibility) {
-    annotateRelationshipDispatchBlocks(db, relationshipEligibility.blockedByTaskId);
+    await annotateRelationshipDispatchBlocks(db, relationshipEligibility.blockedByTaskId);
   }
 
   const legacyBlockingCountSelect = relationshipEligibility
@@ -973,7 +944,7 @@ function getAllDispatchableTasks(db: Database.Database, projectId?: number | nul
   let sql = `
     SELECT t.id, t.title, t.description, t.status, t.priority,
            t.${assignmentColumn} as agent_id,
-           ${tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
+           ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
            t.project_id, t.task_type, t.sprint_id, s.name as sprint_name, s.sprint_type,
            t.created_at, t.story_points, t.active_instance_id,
            ${legacyBlockingCountSelect}
@@ -1001,7 +972,7 @@ function getAllDispatchableTasks(db: Database.Database, projectId?: number | nul
       CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
       t.created_at ASC
   `;
-  const candidates = db.prepare(sql).all(...params) as CandidateTask[];
+  const candidates = await db.all(sql, ...params) as CandidateTask[];
   if (!relationshipEligibility) return candidates;
   return candidates
     .filter(task => !relationshipEligibility.blockedByTaskId.has(task.id))
@@ -1017,16 +988,24 @@ function getAllDispatchableTasks(db: Database.Database, projectId?: number | nul
  * specificity, priority DESC, and stable id tiebreaker. Each row includes full
  * agent fields for dispatch.
  */
-function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): RoutingRuleRow[] {
-  const hasProjectsTable = tableHasColumn(db, 'projects', 'id');
-  const hasProjectRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every((column) => tableHasColumn(db, 'projects', column));
-  const hasWorkflowRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every((column) => tableHasColumn(db, 'sprints', column));
-  const hasScopedRoutingColumns = tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
-    && tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
-  const hasRoutingTenantColumn = tableHasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
-  const routingRuleEnabledCondition = tableHasColumn(db, 'sprint_task_routing_rules', 'enabled') ? 'AND rr.enabled = 1' : '';
-  const hasAgentTenantColumn = tableHasColumn(db, 'agents', 'tenant_id');
-  const hasProviderConnectionColumn = tableHasColumn(db, 'agents', 'provider_connection_id');
+async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<RoutingRuleRow[]> {
+  const hasProjectsTable = await tableHasColumn(db, 'projects', 'id');
+  // Array.prototype.every is SYNCHRONOUS. An async callback returns a Promise, which is
+  // always truthy, so `.every(async ...)` unconditionally returns true and the column check
+  // never actually runs. The columns must be resolved first, then reduced.
+  const REPO_COLUMNS = ['repo_path', 'repo_url', 'repo_access_mode'];
+  const hasProjectRepoColumns = (await Promise.all(
+    REPO_COLUMNS.map((column) => tableHasColumn(db, 'projects', column)),
+  )).every(Boolean);
+  const hasWorkflowRepoColumns = (await Promise.all(
+    REPO_COLUMNS.map((column) => tableHasColumn(db, 'sprints', column)),
+  )).every(Boolean);
+  const hasScopedRoutingColumns = await tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
+    && await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
+  const hasRoutingTenantColumn = await tableHasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
+  const routingRuleEnabledCondition = await tableHasColumn(db, 'sprint_task_routing_rules', 'enabled') ? 'AND rr.enabled = 1' : '';
+  const hasAgentTenantColumn = await tableHasColumn(db, 'agents', 'tenant_id');
+  const hasProviderConnectionColumn = await tableHasColumn(db, 'agents', 'provider_connection_id');
   const projectRepoSelect = hasProjectRepoColumns
     ? 'p.repo_path as project_repo_path, p.repo_url as project_repo_url, p.repo_access_mode as project_repo_access_mode,'
     : 'NULL as project_repo_path, NULL as project_repo_url, NULL as project_repo_access_mode,';
@@ -1045,7 +1024,7 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
     ...(hasAgentTenantColumn && task.tenant_id != null ? [task.tenant_id] : []),
   ];
 
-  const runRuleQuery = (scopeCondition: string, params: unknown[], status: string): RoutingRuleRow[] => db.prepare(`
+  const runRuleQuery = async (scopeCondition: string, params: unknown[], status: string): Promise<RoutingRuleRow[]> => await db.all(`
       SELECT rr.*,
              a.id as agent_id,
              a.job_instructions, a.enabled, a.timeout_seconds, a.model,
@@ -1071,22 +1050,22 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
                CASE WHEN rr.task_type = ? THEN 0 ELSE 1 END,
                rr.priority DESC,
                rr.id ASC
-    `).all(...(hasWorkflowRepoColumns ? [task.sprint_id ?? null] : []), ...params, ...tenantParams, status, task.task_type ?? null, task.sprint_id ?? null, task.task_type ?? null) as RoutingRuleRow[];
+    `, ...(hasWorkflowRepoColumns ? [task.sprint_id ?? null] : []), ...params, ...tenantParams, status, task.task_type ?? null, task.sprint_id ?? null, task.task_type ?? null) as RoutingRuleRow[];
 
-  const loadSprintScopedRules = (status: string): RoutingRuleRow[] => {
+  const loadSprintScopedRules = async (status: string): Promise<RoutingRuleRow[]> => {
     if (!task.sprint_id) return [];
     if (hasScopedRoutingColumns && task.project_id && task.sprint_type) {
-      return runRuleQuery(
+      return await runRuleQuery(
         'rr.project_id = ? AND rr.sprint_type = ? AND (rr.sprint_id = ? OR rr.sprint_id IS NULL)',
         [task.project_id, task.sprint_type, task.sprint_id],
         status,
       );
     }
-    return runRuleQuery('rr.sprint_id = ?', [task.sprint_id], status);
+    return await runRuleQuery('rr.sprint_id = ?', [task.sprint_id], status);
   };
 
   try {
-    const sprintRules = loadSprintScopedRules(task.status);
+    const sprintRules = await loadSprintScopedRules(task.status);
     if (sprintRules.length > 0) return sprintRules;
   } catch {
     // sprint-scoped tables may not exist in minimal test DBs; fall through
@@ -1094,7 +1073,7 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
 
   if (task.status === 'in_progress' && task.sprint_id) {
     try {
-      const sprintFallback = loadSprintScopedRules('ready');
+      const sprintFallback = await loadSprintScopedRules('ready');
       if (sprintFallback.length > 0) return sprintFallback;
     } catch {
       // sprint-scoped tables may not exist in minimal test DBs
@@ -1104,20 +1083,20 @@ function getMatchingRoutingRules(db: Database.Database, task: CandidateTask): Ro
   return [];
 }
 
-function isWorkflowRepoRequiredForTask(db: Database.Database, task: CandidateTask): boolean {
+async function isWorkflowRepoRequiredForTask(db: Db, task: CandidateTask): Promise<boolean> {
   if (!task.sprint_id) return false;
-  if (!tableHasColumn(db, 'sprint_types', 'repo_required')) {
+  if (!await tableHasColumn(db, 'sprint_types', 'repo_required')) {
     return task.sprint_type === 'dev';
   }
 
   try {
-    const hasSprintTypesTenant = tableHasColumn(db, 'sprint_types', 'tenant_id');
-    const hasSprintsTenant = tableHasColumn(db, 'sprints', 'tenant_id');
+    const hasSprintTypesTenant = await tableHasColumn(db, 'sprint_types', 'tenant_id');
+    const hasSprintsTenant = await tableHasColumn(db, 'sprints', 'tenant_id');
     const tenantJoin = hasSprintTypesTenant && hasSprintsTenant
       ? 'AND (st.tenant_id IS NULL OR st.tenant_id = s.tenant_id)'
       : '';
     const tenantOrder = hasSprintTypesTenant ? 'ORDER BY st.tenant_id IS NULL ASC' : '';
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT COALESCE(st.repo_required, 0) AS repo_required
       FROM sprints s
       LEFT JOIN sprint_types st
@@ -1126,7 +1105,7 @@ function isWorkflowRepoRequiredForTask(db: Database.Database, task: CandidateTas
       WHERE s.id = ?
       ${tenantOrder}
       LIMIT 1
-    `).get(task.sprint_id) as { repo_required?: number | null } | undefined;
+    `, task.sprint_id) as { repo_required?: number | null } | undefined;
     return row?.repo_required === 1;
   } catch {
     return task.sprint_type === 'dev';
@@ -1416,7 +1395,7 @@ export function syncSkillDirs(params: {
  * OpenClawRuntime; future backends (ClaudeCodeRuntime, etc.) plug in here.
  */
 async function fireAgentRun(
-  db: Database.Database,
+  db: Db,
   job: JobRow,
   message: string,
   instanceId: number,
@@ -1434,7 +1413,7 @@ async function fireAgentRun(
   modelScope?: { projectId?: number | null; sprintId?: number | null; sprintType?: string | null; tenantId?: number | null },
 ): Promise<void> {
   const timeoutSec = job.timeout_seconds || 900;
-  const durableRunId = ensureJobInstanceDurableRunId(db, instanceId);
+  const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
   const sessionKey = buildSessionKey(instanceId, durableRunId);
   const pathContext = resolveDispatchPathContext({
     worktreePath,
@@ -1457,9 +1436,7 @@ async function fireAgentRun(
 
   // Store the deterministic session key on the instance BEFORE dispatch
   // so it's always available for transcript lookups even if dispatch fails.
-  db.prepare(`UPDATE job_instances SET session_key = ? WHERE id = ?`).run(
-    sessionKey, instanceId
-  );
+  await db.run(`UPDATE job_instances SET session_key = ? WHERE id = ?`, sessionKey, instanceId);
 
   // Model precedence (highest wins):
   //   1. story_point_model_routing (provider-aware: preferred_provider > NULL-provider)
@@ -1471,7 +1448,7 @@ async function fireAgentRun(
   // CustomAgentRuntime falls through to its DEFAULT_VERI_MODEL.
   const isCustomRuntime = job.runtime_type === 'veri';
   const preferredProvider = job.preferred_provider ?? null;
-  const spModel = isCustomRuntime ? null : resolveModelFromStoryPoints(db, storyPoints ?? null, preferredProvider, modelScope);
+  const spModel = isCustomRuntime ? null : await resolveModelFromStoryPoints(db, storyPoints ?? null, preferredProvider, modelScope);
   const model = isCustomRuntime ? null : (spModel?.model || job.model || job.agent_model || null);
   const thinking = isCustomRuntime ? null : (spModel?.thinking_level ?? null);
   const fastMode = isCustomRuntime ? null : (spModel?.fast_mode ?? null);
@@ -1492,10 +1469,10 @@ async function fireAgentRun(
 
   // Persist resolved runtime routing on the instance so it's visible in the UI/audit log.
   if (model || thinking || fastMode !== null) {
-    if (tableHasColumn(db, 'job_instances', 'effective_fast_mode')) {
-      db.prepare(`UPDATE job_instances SET effective_model = ?, effective_thinking_level = ?, effective_fast_mode = ? WHERE id = ?`).run(model ?? null, thinking ?? null, fastMode === null ? null : (fastMode ? 1 : 0), instanceId);
+    if (await tableHasColumn(db, 'job_instances', 'effective_fast_mode')) {
+      await db.run(`UPDATE job_instances SET effective_model = ?, effective_thinking_level = ?, effective_fast_mode = ? WHERE id = ?`, model ?? null, thinking ?? null, fastMode === null ? null : (fastMode ? 1 : 0), instanceId);
     } else {
-      db.prepare(`UPDATE job_instances SET effective_model = ?, effective_thinking_level = ? WHERE id = ?`).run(model ?? null, thinking ?? null, instanceId);
+      await db.run(`UPDATE job_instances SET effective_model = ?, effective_thinking_level = ? WHERE id = ?`, model ?? null, thinking ?? null, instanceId);
     }
   }
 
@@ -1530,7 +1507,7 @@ async function fireAgentRun(
     if (workingDirectory) {
       const adapter = getSkillMaterializationAdapter(job.runtime_type);
       try {
-        const materializeResult = adapter.materialize({
+        const materializeResult = await adapter.materialize({
           workingDirectory,
           skillNames,
           skillsBasePath: OPENCLAW_SKILLS_PATH,
@@ -1542,20 +1519,20 @@ async function fireAgentRun(
         for (const warn of materializeResult.warnings) {
           console.warn(`[dispatcher] ${warn}`);
         }
-        recordSkillMaterializationIssues(db, materializeResult, {
-          runtimeType: adapter.adapterName,
-          agentId: job.agent_id ?? null,
-          agentName: job.agent_name ?? null,
-          instanceId,
-          taskId,
-          tenantId: Number(job.tenant_id ?? 0) || null,
-          requestedSkillNames: skillNames,
-        });
-        if (!materializeResult.ok && materializeResult.error) {
-          console.warn(`[dispatcher] skill materialization error for instance #${instanceId}: ${materializeResult.error}`);
-        } else if (materializeResult.count > 0) {
+        await recordSkillMaterializationIssues(db, materializeResult, {
+                    runtimeType: adapter.adapterName,
+                    agentId: job.agent_id ?? null,
+                    agentName: job.agent_name ?? null,
+                    instanceId,
+                    taskId,
+                    tenantId: Number(job.tenant_id ?? 0) || null,
+                    requestedSkillNames: skillNames,
+                  });
+        if (!(await materializeResult).ok && (await materializeResult).error) {
+          console.warn(`[dispatcher] skill materialization error for instance #${instanceId}: ${(await materializeResult).error}`);
+        } else if ((await materializeResult).count > 0) {
           console.log(
-            `[dispatcher] skill materialization (${adapter.adapterName}): ${materializeResult.count} skill(s) for instance #${instanceId}`,
+            `[dispatcher] skill materialization (${adapter.adapterName}): ${(await materializeResult).count} skill(s) for instance #${instanceId}`,
           );
         }
       } catch (matErr) {
@@ -1576,16 +1553,16 @@ async function fireAgentRun(
     const effectiveMcpDir: string | null = runtimeTypeForMcp === 'openclaw' ? workspaceContainerRoot : activeRepoRoot;
     if (effectiveMcpDir) {
       try {
-        const mcpResult = syncAssignedMcpForAgent({
-          db,
-          agentId: job.agent_id,
-          workingDirectory: effectiveMcpDir,
-          // The routed session key is `agent:<agentSlug>:run:*`, so OpenClaw
-          // discovers the bundle in this slug's workspace — keep them aligned.
-          dispatchAgentSlug: agentSlug,
-          activateOpenClawWorkspaceBundle: runtimeTypeForMcp === 'openclaw',
-          refreshPluginRegistry: runtimeTypeForMcp === 'openclaw',
-        });
+        const mcpResult = await syncAssignedMcpForAgent({
+                  db,
+                  agentId: job.agent_id,
+                  workingDirectory: effectiveMcpDir,
+                  // The routed session key is `agent:<agentSlug>:run:*`, so OpenClaw
+                  // discovers the bundle in this slug's workspace — keep them aligned.
+                  dispatchAgentSlug: agentSlug,
+                  activateOpenClawWorkspaceBundle: runtimeTypeForMcp === 'openclaw',
+                  refreshPluginRegistry: runtimeTypeForMcp === 'openclaw',
+                });
         for (const warn of mcpResult.warnings) {
           console.warn(`[dispatcher] ${warn}`);
         }
@@ -1675,15 +1652,15 @@ async function fireAgentRun(
       runtimeConfigOverride.workingDirectory = activeRepoRoot;
     }
     const dispatchRuntimeConfig = buildDispatchRuntimeConfig(job.runtime_config, runtimeConfigOverride);
-    const providerDispatch = resolveRuntimeProviderDispatchSelection({
-      db,
-      tenantId: Number(job.tenant_id ?? modelScope?.tenantId ?? 1),
-      runtimeType: job.runtime_type ?? 'openclaw',
-      providerConnectionId: job.provider_connection_id ?? null,
-      preferredProvider,
-      model,
-      runtimeConfig: dispatchRuntimeConfig,
-    });
+    const providerDispatch = await resolveRuntimeProviderDispatchSelection({
+          db,
+          tenantId: Number(job.tenant_id ?? modelScope?.tenantId ?? 1),
+          runtimeType: job.runtime_type ?? 'openclaw',
+          providerConnectionId: job.provider_connection_id ?? null,
+          preferredProvider,
+          model,
+          runtimeConfig: dispatchRuntimeConfig,
+        });
 
     console.log(
       `[dispatcher] Instance #${instanceId} runtime config handoff: mode=${pathMode} workingDirectory=${typeof dispatchRuntimeConfig.workingDirectory === 'string' ? dispatchRuntimeConfig.workingDirectory : 'null'} activeRepoRoot=${activeRepoRoot ?? 'null'} workspaceRoot=${workspaceContainerRoot ?? 'null'} worktreePath=${worktreeRoot ?? 'null'} runtimeConfigWorkingDirectory=${runtimeConfigWorkingDirectory ?? 'null'} repoRootSource=${repoRootSource} workspaceRootSource=${workspaceContainerSource}`
@@ -1735,8 +1712,7 @@ async function fireAgentRun(
     );
 
     // Store run handle for audit / future abort
-    db.prepare(`UPDATE job_instances SET response = ? WHERE id = ?`)
-      .run(JSON.stringify({ runId }), instanceId);
+    await db.run(`UPDATE job_instances SET response = ? WHERE id = ?`, JSON.stringify({ runId }), instanceId);
 
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -1749,11 +1725,11 @@ async function fireAgentRun(
       cleanupGitHubCredentials(effectiveWorkDir);
     }
 
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET status = 'failed', error = ?, completed_at = datetime('now')
       WHERE id = ? AND status IN ('dispatched', 'running')
-    `).run(errorMsg, instanceId);
+    `, errorMsg, instanceId);
 
     // Reset linked task back to the correct workflow status, but apply retry backoff
     // to prevent a spin-loop when the gateway/API is persistently down.
@@ -1764,16 +1740,14 @@ async function fireAgentRun(
     //  - Otherwise → reset to fallback status AND set dispatched_at = now so the
     //    dispatcher's eligibility gate (dispatched_at + backoff check) prevents
     //    immediate re-dispatch on the next reconciler tick.
-    const taskRoutingReasonSelect = tableHasColumn(db, 'tasks', 'routing_reason')
+    const taskRoutingReasonSelect = await tableHasColumn(db, 'tasks', 'routing_reason')
       ? 'routing_reason'
       : 'NULL AS routing_reason';
-    const taskRow = db.prepare(
-      `SELECT id, retry_count, max_retries, ${taskRoutingReasonSelect},
-              ${tableHasColumn(db, 'tasks', 'tenant_id') ? 'tenant_id' : 'NULL'} AS tenant_id,
+    const taskRow = await db.get(`SELECT id, retry_count, max_retries, ${taskRoutingReasonSelect},
+              ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 'tenant_id' : 'NULL'} AS tenant_id,
               project_id, task_type
        FROM tasks
-       WHERE active_instance_id = ?`
-    ).get(instanceId) as { id: number; retry_count: number; max_retries: number; routing_reason: string | null; tenant_id: number | null; project_id: number | null; task_type: string | null } | undefined;
+       WHERE active_instance_id = ?`, instanceId) as { id: number; retry_count: number; max_retries: number; routing_reason: string | null; tenant_id: number | null; project_id: number | null; task_type: string | null } | undefined;
 
     const newRetryCount = (taskRow?.retry_count ?? 0) + 1;
     const maxRetries = taskRow?.max_retries ?? 3;
@@ -1785,20 +1759,20 @@ async function fireAgentRun(
         ` (retry_count=${newRetryCount}, max_retries=${maxRetries}) — marking failed.`
       );
       if (taskRow?.id != null) {
-        persistDispatchStartupFailure(db, {
-          taskId: taskRow.id,
-          matchedAgentId: job.agent_id,
-          matchedAgentLabel: job.agent_name ?? job.title,
-          routingReason: taskRow.routing_reason ?? `Dispatch launched for ${job.agent_name ?? job.title}`,
-          priorStatus: taskStatusAtDispatch,
-          tenantId: taskRow.tenant_id ?? null,
-          projectId: taskRow.project_id ?? null,
-          taskType: taskRow.task_type ?? null,
-          reason: errorMsg,
-          retryCount: newRetryCount,
-          maxRetries,
-          keepAutoRetry: false,
-        });
+        await persistDispatchStartupFailure(db, {
+                    taskId: taskRow.id,
+                    matchedAgentId: job.agent_id,
+                    matchedAgentLabel: job.agent_name ?? job.title,
+                    routingReason: taskRow.routing_reason ?? `Dispatch launched for ${job.agent_name ?? job.title}`,
+                    priorStatus: taskStatusAtDispatch,
+                    tenantId: taskRow.tenant_id ?? null,
+                    projectId: taskRow.project_id ?? null,
+                    taskType: taskRow.task_type ?? null,
+                    reason: errorMsg,
+                    retryCount: newRetryCount,
+                    maxRetries,
+                    keepAutoRetry: false,
+                  });
       }
     } else {
       // Increment retry_count and keep dispatched_at = now as the backoff timestamp.
@@ -1809,20 +1783,20 @@ async function fireAgentRun(
         ` — retry_count=${newRetryCount}/${maxRetries}, resetting to ${deriveDispatchFailureFallbackStatus(taskStatusAtDispatch)} with backoff.`
       );
       if (taskRow?.id != null) {
-        persistDispatchStartupFailure(db, {
-          taskId: taskRow.id,
-          matchedAgentId: job.agent_id,
-          matchedAgentLabel: job.agent_name ?? job.title,
-          routingReason: taskRow.routing_reason ?? `Dispatch launched for ${job.agent_name ?? job.title}`,
-          priorStatus: taskStatusAtDispatch,
-          tenantId: taskRow.tenant_id ?? null,
-          projectId: taskRow.project_id ?? null,
-          taskType: taskRow.task_type ?? null,
-          reason: errorMsg,
-          retryCount: newRetryCount,
-          maxRetries,
-          keepAutoRetry: true,
-        });
+        await persistDispatchStartupFailure(db, {
+                    taskId: taskRow.id,
+                    matchedAgentId: job.agent_id,
+                    matchedAgentLabel: job.agent_name ?? job.title,
+                    routingReason: taskRow.routing_reason ?? `Dispatch launched for ${job.agent_name ?? job.title}`,
+                    priorStatus: taskStatusAtDispatch,
+                    tenantId: taskRow.tenant_id ?? null,
+                    projectId: taskRow.project_id ?? null,
+                    taskType: taskRow.task_type ?? null,
+                    reason: errorMsg,
+                    retryCount: newRetryCount,
+                    maxRetries,
+                    keepAutoRetry: true,
+                  });
       }
     }
   }
@@ -1833,13 +1807,13 @@ async function fireAgentRun(
  * Used by the explicit sprint-routing path.
  * Returns true if dispatch succeeded.
  */
-export function dispatchTaskToJob(
-  db: Database.Database,
+export async function dispatchTaskToJob(
+  db: Db,
   job: JobRow,
   task: CandidateTask,
   candidateCount: number,
   ruleLabel?: string,
-): boolean {
+): Promise<boolean> {
   const routingReason = [
     `Priority: ${task.priority}`,
     task.blocking_count > 0 ? `Blocking ${task.blocking_count} task(s)` : null,
@@ -1847,12 +1821,12 @@ export function dispatchTaskToJob(
     ruleLabel ?? `Selected from ${candidateCount} candidate(s)`,
   ].filter(Boolean).join(' | ');
 
-  const agentSlug = resolveDispatchAgentSlug(db, {
-    agentId: job.agent_id,
-    openclawAgentId: job.openclaw_agent_id ?? null,
-    sessionKey: job.agent_session_key,
-    name: job.agent_name ?? null,
-  }) ?? String(job.agent_id);
+  const agentSlug = (await resolveDispatchAgentSlug(db, {
+      agentId: job.agent_id,
+      openclawAgentId: job.openclaw_agent_id ?? null,
+      sessionKey: job.agent_session_key,
+      name: job.agent_name ?? null,
+    })) ?? String(job.agent_id);
 
   const repoAccessMode: RepoAccessMode | null = job.repo_access_mode ?? (job.repo_path ? 'worktree' : null);
   const repoOwnerLabel = job.repo_config_source === 'workflow'
@@ -1863,23 +1837,23 @@ export function dispatchTaskToJob(
   let repoSourceDescriptor: string | null = null;
   let repoDependencySetup: RepoWorkspaceDependencySetupResult[] = [];
 
-  const repoRequired = isWorkflowRepoRequiredForTask(db, task);
+  const repoRequired = await isWorkflowRepoRequiredForTask(db, task);
   if (repoRequired && job.repo_config_source !== 'workflow') {
     const reason = `Workflow-level repository configuration is required for repo-backed workflow dispatch (workflow_id=${task.sprint_id ?? 'none'}, workflow_type=${task.sprint_type ?? 'unknown'}). Configure repo_access_mode plus repo_path or repo_url on the workflow.`;
     console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
-    persistDispatchStartupFailure(db, {
-      taskId: task.id,
-      matchedAgentId: job.agent_id,
-      matchedAgentLabel: job.agent_name ?? job.title,
-      routingReason,
-      priorStatus: task.status,
-      tenantId: task.tenant_id,
-      projectId: task.project_id,
-      sprintId: task.sprint_id,
-      sprintType: task.sprint_type,
-      taskType: task.task_type,
-      reason,
-    });
+    await persistDispatchStartupFailure(db, {
+            taskId: task.id,
+            matchedAgentId: job.agent_id,
+            matchedAgentLabel: job.agent_name ?? job.title,
+            routingReason,
+            priorStatus: task.status,
+            tenantId: task.tenant_id,
+            projectId: task.project_id,
+            sprintId: task.sprint_id,
+            sprintType: task.sprint_type,
+            taskType: task.task_type,
+            reason,
+          });
     return false;
   }
 
@@ -1887,19 +1861,19 @@ export function dispatchTaskToJob(
     if (!job.workspace_path || !job.repo_path) {
       const reason = `${repoOwnerLabel} repo_access_mode=worktree requires workspace_path and repo_path (workspace_path=${job.workspace_path ? 'set' : 'missing'}, repo_path=${job.repo_path ? 'set' : 'missing'})`;
       console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
-      persistDispatchStartupFailure(db, {
-        taskId: task.id,
-        matchedAgentId: job.agent_id,
-        matchedAgentLabel: job.agent_name ?? job.title,
-        routingReason,
-        priorStatus: task.status,
-        tenantId: task.tenant_id,
-        projectId: task.project_id,
-        sprintId: task.sprint_id,
-        sprintType: task.sprint_type,
-        taskType: task.task_type,
-        reason,
-      });
+      await persistDispatchStartupFailure(db, {
+                taskId: task.id,
+                matchedAgentId: job.agent_id,
+                matchedAgentLabel: job.agent_name ?? job.title,
+                routingReason,
+                priorStatus: task.status,
+                tenantId: task.tenant_id,
+                projectId: task.project_id,
+                sprintId: task.sprint_id,
+                sprintType: task.sprint_type,
+                taskType: task.task_type,
+                reason,
+              });
       return false;
     }
 
@@ -1908,19 +1882,19 @@ export function dispatchTaskToJob(
     if (wtResult.error) {
       const reason = `Worktree creation failed for task #${task.id}: ${wtResult.error}`;
       console.warn(`[dispatcher] ${reason}`);
-      persistDispatchStartupFailure(db, {
-        taskId: task.id,
-        matchedAgentId: job.agent_id,
-        matchedAgentLabel: job.agent_name ?? job.title,
-        routingReason,
-        priorStatus: task.status,
-        tenantId: task.tenant_id,
-        projectId: task.project_id,
-        sprintId: task.sprint_id,
-        sprintType: task.sprint_type,
-        taskType: task.task_type,
-        reason,
-      });
+      await persistDispatchStartupFailure(db, {
+                taskId: task.id,
+                matchedAgentId: job.agent_id,
+                matchedAgentLabel: job.agent_name ?? job.title,
+                routingReason,
+                priorStatus: task.status,
+                tenantId: task.tenant_id,
+                projectId: task.project_id,
+                sprintId: task.sprint_id,
+                sprintType: task.sprint_type,
+                taskType: task.task_type,
+                reason,
+              });
       return false;
     }
     repoWorkspacePath = wtResult.workspacePath;
@@ -1931,19 +1905,19 @@ export function dispatchTaskToJob(
     if (!job.workspace_path || !job.repo_url) {
       const reason = `${repoOwnerLabel} repo_access_mode=clone requires workspace_path and repo_url (workspace_path=${job.workspace_path ? 'set' : 'missing'}, repo_url=${job.repo_url ? 'set' : 'missing'})`;
       console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
-      persistDispatchStartupFailure(db, {
-        taskId: task.id,
-        matchedAgentId: job.agent_id,
-        matchedAgentLabel: job.agent_name ?? job.title,
-        routingReason,
-        priorStatus: task.status,
-        tenantId: task.tenant_id,
-        projectId: task.project_id,
-        sprintId: task.sprint_id,
-        sprintType: task.sprint_type,
-        taskType: task.task_type,
-        reason,
-      });
+      await persistDispatchStartupFailure(db, {
+                taskId: task.id,
+                matchedAgentId: job.agent_id,
+                matchedAgentLabel: job.agent_name ?? job.title,
+                routingReason,
+                priorStatus: task.status,
+                tenantId: task.tenant_id,
+                projectId: task.project_id,
+                sprintId: task.sprint_id,
+                sprintType: task.sprint_type,
+                taskType: task.task_type,
+                reason,
+              });
       return false;
     }
 
@@ -1952,19 +1926,19 @@ export function dispatchTaskToJob(
     if (cloneResult.error) {
       const reason = `Clone workspace creation failed for task #${task.id}: ${cloneResult.error}`;
       console.warn(`[dispatcher] ${reason}`);
-      persistDispatchStartupFailure(db, {
-        taskId: task.id,
-        matchedAgentId: job.agent_id,
-        matchedAgentLabel: job.agent_name ?? job.title,
-        routingReason,
-        priorStatus: task.status,
-        tenantId: task.tenant_id,
-        projectId: task.project_id,
-        sprintId: task.sprint_id,
-        sprintType: task.sprint_type,
-        taskType: task.task_type,
-        reason,
-      });
+      await persistDispatchStartupFailure(db, {
+                taskId: task.id,
+                matchedAgentId: job.agent_id,
+                matchedAgentLabel: job.agent_name ?? job.title,
+                routingReason,
+                priorStatus: task.status,
+                tenantId: task.tenant_id,
+                projectId: task.project_id,
+                sprintId: task.sprint_id,
+                sprintType: task.sprint_type,
+                taskType: task.task_type,
+                reason,
+              });
       return false;
     }
     repoWorkspacePath = cloneResult.workspacePath;
@@ -1985,33 +1959,33 @@ export function dispatchTaskToJob(
     repoDependencySetup,
   };
 
-  const supportsDurableRunId = durableTableHasColumn(db, 'job_instances', 'durable_run_id');
+  const supportsDurableRunId = await durableTableHasColumn(db, 'job_instances', 'durable_run_id');
   const initialDurableRunId = supportsDurableRunId ? createDurableRunId() : null;
-  const instanceTenant = tenantInsertColumns(db, 'job_instances', task.tenant_id ?? job.tenant_id ?? null);
+  const instanceTenant = await tenantInsertColumns(db, 'job_instances', task.tenant_id ?? job.tenant_id ?? null);
   const instanceResult = supportsDurableRunId
-    ? db.prepare(`
+    ? await db.run(`
         INSERT INTO job_instances (${instanceTenant.columnSql}agent_id, status, dispatched_at, payload_sent, task_id, worktree_path, durable_run_id)
         VALUES (${instanceTenant.valueSql}?, 'dispatched', datetime('now'), ?, ?, ?, ?)
-      `).run(...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath, initialDurableRunId)
-    : db.prepare(`
+      `, ...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath, initialDurableRunId)
+    : await db.run(`
         INSERT INTO job_instances (${instanceTenant.columnSql}agent_id, status, dispatched_at, payload_sent, task_id, worktree_path)
         VALUES (${instanceTenant.valueSql}?, 'dispatched', datetime('now'), ?, ?, ?)
-      `).run(...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath);
-  const instanceId = instanceResult.lastInsertRowid as number;
-  const durableRunId = ensureJobInstanceDurableRunId(db, instanceId);
+      `, ...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath);
+  const instanceId = instanceResult.lastInsertId as number;
+  const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
   const sessionKey = buildSessionKey(instanceId, durableRunId);
-  const taskNotesSection = buildDispatchTaskNotesSection(getDispatchTaskNotesContext(db, {
-    taskId: task.id,
-    agentId: job.agent_id,
-    currentInstanceId: instanceId,
-  }));
+  const taskNotesSection = buildDispatchTaskNotesSection(await getDispatchTaskNotesContext(db, {
+          taskId: task.id,
+          agentId: job.agent_id,
+          currentInstanceId: instanceId,
+        }));
   const baseMessage = [buildTaskMessage(job, task), taskNotesSection].filter(Boolean).join('\n\n');
 
   const nextTaskStatus = deriveDispatchTaskStatus(task.status);
-  const hasFirstDispatchedAt = tableHasColumn(db, 'tasks', 'first_dispatched_at');
-  const hasTotalDispatchCount = tableHasColumn(db, 'tasks', 'total_dispatch_count');
-  const hasClaimedAtColumn = tableHasColumn(db, 'tasks', 'claimed_at');
-  const hasRoutingReasonColumn = tableHasColumn(db, 'tasks', 'routing_reason');
+  const hasFirstDispatchedAt = await tableHasColumn(db, 'tasks', 'first_dispatched_at');
+  const hasTotalDispatchCount = await tableHasColumn(db, 'tasks', 'total_dispatch_count');
+  const hasClaimedAtColumn = await tableHasColumn(db, 'tasks', 'claimed_at');
+  const hasRoutingReasonColumn = await tableHasColumn(db, 'tasks', 'routing_reason');
 
   const firstDispatchClause = hasFirstDispatchedAt
     ? "first_dispatched_at = COALESCE(first_dispatched_at, datetime('now')),"
@@ -2019,15 +1993,15 @@ export function dispatchTaskToJob(
   const dispatchCountClause = hasTotalDispatchCount
     ? 'total_dispatch_count = total_dispatch_count + 1,'
     : '';
-  const clearFailureDetailClause = tableHasColumn(db, 'tasks', 'failure_detail') ? 'failure_detail = NULL,' : '';
-  const clearPreviousStatusClause = tableHasColumn(db, 'tasks', 'previous_status') ? 'previous_status = NULL,' : '';
-  const assignedAgentClause = tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id = ?,' : '';
+  const clearFailureDetailClause = await tableHasColumn(db, 'tasks', 'failure_detail') ? 'failure_detail = NULL,' : '';
+  const clearPreviousStatusClause = await tableHasColumn(db, 'tasks', 'previous_status') ? 'previous_status = NULL,' : '';
+  const assignedAgentClause = await tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id = ?,' : '';
   const claimedAtClause = hasClaimedAtColumn ? 'claimed_at = NULL,' : '';
   const routingReasonClause = hasRoutingReasonColumn ? 'routing_reason = ?,' : '';
   const assignedAgentValues = assignedAgentClause ? [job.agent_id] : [];
   const routingReasonValues = routingReasonClause ? [routingReason] : [];
 
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET status = ?,
         ${assignedAgentClause}
@@ -2042,14 +2016,14 @@ export function dispatchTaskToJob(
         ${dispatchCountClause}
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(nextTaskStatus, ...assignedAgentValues, job.agent_id, instanceId, ...routingReasonValues, task.id);
-  syncTaskActiveAgentFromInstance(db, task.id);
+  `, nextTaskStatus, ...assignedAgentValues, job.agent_id, instanceId, ...routingReasonValues, task.id);
+  await syncTaskActiveAgentFromInstance(db, task.id);
 
   if (nextTaskStatus !== task.status) {
-    writeTaskStatusChange(db, task.id, 'dispatcher', task.status, nextTaskStatus, {
-      instanceId,
-      reason: routingReason ?? null,
-    });
+    await writeTaskStatusChange(db, task.id, 'dispatcher', task.status, nextTaskStatus, {
+            instanceId,
+            reason: routingReason ?? null,
+          });
   }
 
   // Remote agents (Custom) need the external Tailscale URL; local agents use localhost.
@@ -2068,7 +2042,7 @@ export function dispatchTaskToJob(
     workspacePath: job.workspace_path,
   });
   const ghIdentityEffectiveWorkDir = dispatchPathContext.activeRepoRoot;
-  const ghIdentity = resolveGitHubIdentity(db, job.agent_id);
+  const ghIdentity = await resolveGitHubIdentity(db, job.agent_id);
   if (ghIdentity && ghIdentityEffectiveWorkDir) {
     injectGitHubCredentials(ghIdentityEffectiveWorkDir, ghIdentity.identity);
   }
@@ -2095,10 +2069,10 @@ export function dispatchTaskToJob(
     hooksUrl: job.agent_hooks_url,
   });
 
-  const fullMessage = appendInstanceInstructions(
-    [baseMessage, pathContextSection].filter(Boolean).join('\n\n'), instanceId, durableRunId, task.id, task.status, agentSlug, sessionKey,
-    callbackBaseUrl, task.task_type, task.sprint_id, task.sprint_type, transportMode,
-  ) + ghIdentityContext;
+  const fullMessage = await appendInstanceInstructions(
+      [baseMessage, pathContextSection].filter(Boolean).join('\n\n'), instanceId, durableRunId, task.id, task.status, agentSlug, sessionKey,
+      callbackBaseUrl, task.task_type, task.sprint_id, task.sprint_type, transportMode,
+    ) + ghIdentityContext;
 
   fireAgentRun(
     db,
@@ -2126,22 +2100,22 @@ export function dispatchTaskToJob(
     console.error(`[dispatcher] Unhandled error in fireAgentRun for instance #${instanceId}:`, err);
   });
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO dispatch_log (task_id, agent_id, routing_reason, candidate_count, candidates_skipped)
     VALUES (?, ?, ?, ?, ?)
-  `).run(task.id, job.agent_id, routingReason, candidateCount, JSON.stringify([]));
+  `, task.id, job.agent_id, routingReason, candidateCount, JSON.stringify([]));
 
   console.log(`[dispatcher] Dispatched Task #${task.id} → ${job.title} (${job.agent_name ?? job.agent_id}) — instance #${instanceId}`);
-  notifyTaskStatusChange(db, {
-    taskId: task.id,
-    fromStatus: task.status,
-    toStatus: nextTaskStatus,
-    source: job.agent_name ?? job.title,
-  });
+  await notifyTaskStatusChange(db, {
+        taskId: task.id,
+        fromStatus: task.status,
+        toStatus: nextTaskStatus,
+        source: job.agent_name ?? job.title,
+      });
   return true;
 }
 
-export function runDispatcher(db: Database.Database, projectId?: number): DispatchResult {
+export async function runDispatcher(db: Db, projectId?: number): Promise<DispatchResult> {
   const result: DispatchResult = { dispatched: 0, skipped: 0, errors: [] };
 
   // ── Phase 1: Task-first routing (universal multi-agent fallback) ──────────
@@ -2151,17 +2125,17 @@ export function runDispatcher(db: Database.Database, projectId?: number): Dispat
   // try each rule's agent until one is free. This allows any role to have
   // multiple agents and the dispatcher will always pick the first available one.
 
-  const allTasks = getAllDispatchableTasks(db, projectId ?? null);
+  const allTasks = await getAllDispatchableTasks(db, projectId ?? null);
 
   for (const task of allTasks) {
     try {
       // Skip if task already got an instance earlier in this loop
-      if (hasTaskLiveInstance(db, task.id)) {
+      if (await hasTaskLiveInstance(db, task.id)) {
         result.skipped++;
         continue;
       }
 
-      const rules = getMatchingRoutingRules(db, task);
+      const rules = await getMatchingRoutingRules(db, task);
       if (rules.length === 0) {
         console.log(
           `[dispatcher] Task #${task.id} not dispatched: no matching routing rule for sprint_id=${task.sprint_id ?? 'none'} status=${task.status} task_type=${task.task_type ?? 'null'}`
@@ -2173,10 +2147,10 @@ export function runDispatcher(db: Database.Database, projectId?: number): Dispat
       let dispatched = false;
       for (const rule of rules) {
         // Skip if this rule's job agent already has an active run
-        if (hasActiveInstance(db, rule.agent_id)) continue;
+        if (await hasActiveInstance(db, rule.agent_id)) continue;
 
         // Race condition guard: re-check task is still free
-        if (hasTaskLiveInstance(db, task.id)) break;
+        if (await hasTaskLiveInstance(db, task.id)) break;
 
         const resolvedRepo = resolveRepoConfig({
           workflow: {
@@ -2225,13 +2199,13 @@ export function runDispatcher(db: Database.Database, projectId?: number): Dispat
           os_user: rule.os_user ?? null,
         };
 
-        const ok = dispatchTaskToJob(
-          db,
-          jobForDispatch,
-          task,
-          allTasks.length,
-          `Rule: ${rule.agent_name ?? `agent`} (agent #${rule.agent_id})`,
-        );
+        const ok = await dispatchTaskToJob(
+                  db,
+                  jobForDispatch,
+                  task,
+                  allTasks.length,
+                  `Rule: ${rule.agent_name ?? `agent`} (agent #${rule.agent_id})`,
+                );
         if (ok) {
           result.dispatched++;
           dispatched = true;
@@ -2336,11 +2310,14 @@ export interface DispatchInstanceParams {
  */
 export async function dispatchInstance(params: DispatchInstanceParams): Promise<void> {
   const db = getDb();
-  const now = new Date().toISOString();
+  // Canonical (offset-less UTC) so this write of job_instances.dispatched_at is
+  // indistinguishable from the `datetime('now')` DEFAULT and the inline
+  // `dispatched_at = datetime('now')` writes elsewhere in this file.
+  const now = nowTimestamp();
 
   let existingPayload: Record<string, unknown> = {};
   try {
-    const row = db.prepare(`SELECT payload_sent FROM job_instances WHERE id = ?`).get(params.instanceId) as { payload_sent: string | null } | undefined;
+    const row = await db.get(`SELECT payload_sent FROM job_instances WHERE id = ?`, params.instanceId) as { payload_sent: string | null } | undefined;
     if (row?.payload_sent) {
       const parsed = JSON.parse(row.payload_sent);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -2351,27 +2328,27 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
     existingPayload = {};
   }
 
-  const durableRunId = ensureJobInstanceDurableRunId(db, params.instanceId);
+  const durableRunId = await ensureJobInstanceDurableRunId(db, params.instanceId);
   const runSessionKey = buildSessionKey(params.instanceId, durableRunId);
-  const agentSlug = resolveDispatchAgentSlug(db, {
-    agentId: params.agentId,
-    openclawAgentId: params.openclawAgentId ?? null,
-    sessionKey: params.sessionKey,
-    name: params.jobTitle,
-  }) ?? params.sessionKey.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  const agentSlug = (await resolveDispatchAgentSlug(db, {
+      agentId: params.agentId,
+      openclawAgentId: params.openclawAgentId ?? null,
+      sessionKey: params.sessionKey,
+      name: params.jobTitle,
+    })) ?? params.sessionKey.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
 
   // Model precedence: story_points → caller-provided → gateway default
   const preferredProvider = params.preferredProvider ?? null;
-  const tenantId = resolveRuntimeTenantId(db, {
-    instanceId: params.instanceId,
-    agentId: params.agentId,
-    projectId: params.projectId ?? null,
-  }) ?? 1;
-  const spModel = resolveModelFromStoryPoints(db, params.storyPoints ?? null, preferredProvider, {
-    projectId: params.projectId ?? null,
-    sprintId: params.sprintId ?? null,
-    tenantId,
-  });
+  const tenantId = (await resolveRuntimeTenantId(db, {
+      instanceId: params.instanceId,
+      agentId: params.agentId,
+      projectId: params.projectId ?? null,
+    })) ?? 1;
+  const spModel = await resolveModelFromStoryPoints(db, params.storyPoints ?? null, preferredProvider, {
+      projectId: params.projectId ?? null,
+      sprintId: params.sprintId ?? null,
+      tenantId,
+    });
   const effectiveModel = spModel?.model || params.model || null;
   const effectiveThinking = spModel?.thinking_level ?? null;
   const effectiveFastMode = spModel?.fast_mode ?? null;
@@ -2406,26 +2383,26 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
   };
 
   if (effectiveModel || effectiveThinking || effectiveFastMode !== null) {
-    if (tableHasColumn(db, 'job_instances', 'effective_fast_mode')) {
-      db.prepare(`UPDATE job_instances SET effective_model = ?, effective_thinking_level = ?, effective_fast_mode = ? WHERE id = ?`).run(effectiveModel ?? null, effectiveThinking ?? null, effectiveFastMode === null ? null : (effectiveFastMode ? 1 : 0), params.instanceId);
-    } else if (tableHasColumn(db, 'job_instances', 'effective_model') && tableHasColumn(db, 'job_instances', 'effective_thinking_level')) {
-      db.prepare(`UPDATE job_instances SET effective_model = ?, effective_thinking_level = ? WHERE id = ?`).run(effectiveModel ?? null, effectiveThinking ?? null, params.instanceId);
+    if (await tableHasColumn(db, 'job_instances', 'effective_fast_mode')) {
+      await db.run(`UPDATE job_instances SET effective_model = ?, effective_thinking_level = ?, effective_fast_mode = ? WHERE id = ?`, effectiveModel ?? null, effectiveThinking ?? null, effectiveFastMode === null ? null : (effectiveFastMode ? 1 : 0), params.instanceId);
+    } else if (await tableHasColumn(db, 'job_instances', 'effective_model') && await tableHasColumn(db, 'job_instances', 'effective_thinking_level')) {
+      await db.run(`UPDATE job_instances SET effective_model = ?, effective_thinking_level = ? WHERE id = ?`, effectiveModel ?? null, effectiveThinking ?? null, params.instanceId);
     }
   }
 
-  db.prepare(`
+  await db.run(`
     UPDATE job_instances
     SET status = 'dispatched', dispatched_at = ?, payload_sent = ?, session_key = ?
     WHERE id = ?
-  `).run(now, JSON.stringify(runtimeDispatchPayload), runSessionKey, params.instanceId);
+  `, now, JSON.stringify(runtimeDispatchPayload), runSessionKey, params.instanceId);
 
-  insertRuntimeLog(db, {
-    instanceId: params.instanceId,
-    agentId: params.agentId,
-    jobTitle: params.jobTitle,
-    level: 'info',
-    message: `Dispatching job "${params.jobTitle}" via AgentRuntime (sessionKey=${runSessionKey})`,
-  });
+  await insertRuntimeLog(db, {
+        instanceId: params.instanceId,
+        agentId: params.agentId,
+        jobTitle: params.jobTitle,
+        level: 'info',
+        message: `Dispatching job "${params.jobTitle}" via AgentRuntime (sessionKey=${runSessionKey})`,
+      });
 
   const runtime = resolveRuntime({
     runtime_type: params.runtimeType ?? 'openclaw',
@@ -2443,15 +2420,15 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
     const dispatchRuntimeConfig = Object.keys(runtimeConfigOverride).length > 0
       ? { ...baseRuntimeConfig, ...runtimeConfigOverride }
       : baseRuntimeConfig;
-    const providerDispatch = resolveRuntimeProviderDispatchSelection({
-      db,
-      tenantId,
-      runtimeType: params.runtimeType ?? 'openclaw',
-      providerConnectionId: params.providerConnectionId ?? null,
-      preferredProvider,
-      model: effectiveModel,
-      runtimeConfig: dispatchRuntimeConfig,
-    });
+    const providerDispatch = await resolveRuntimeProviderDispatchSelection({
+          db,
+          tenantId,
+          runtimeType: params.runtimeType ?? 'openclaw',
+          providerConnectionId: params.providerConnectionId ?? null,
+          preferredProvider,
+          model: effectiveModel,
+          runtimeConfig: dispatchRuntimeConfig,
+        });
 
     const runtimeParams = {
       message: params.message,
@@ -2481,37 +2458,37 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
     await prepareRuntimeAuthProfiles(runtime, runtimeParams);
     const { runId } = await runtime.dispatch(runtimeParams);
 
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET status = 'running',
           response = ?,
           run_id = COALESCE(?, run_id)
       WHERE id = ?
-    `).run(JSON.stringify({ runId }), runId, params.instanceId);
+    `, JSON.stringify({ runId }), runId, params.instanceId);
 
-    insertRuntimeLog(db, {
-      instanceId: params.instanceId,
-      agentId: params.agentId,
-      jobTitle: params.jobTitle,
-      level: 'info',
-      message: `Job dispatched via AgentRuntime. sessionKey=${runSessionKey}${runId ? ` runId=${runId}` : ''}`,
-    });
+    await insertRuntimeLog(db, {
+            instanceId: params.instanceId,
+            agentId: params.agentId,
+            jobTitle: params.jobTitle,
+            level: 'info',
+            message: `Job dispatched via AgentRuntime. sessionKey=${runSessionKey}${runId ? ` runId=${runId}` : ''}`,
+          });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
 
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET status = 'failed', error = ?, completed_at = ?
       WHERE id = ?
-    `).run(errorMsg, new Date().toISOString(), params.instanceId);
+    `, errorMsg, nowTimestamp(), params.instanceId);
 
-    insertRuntimeLog(db, {
-      instanceId: params.instanceId,
-      agentId: params.agentId,
-      jobTitle: params.jobTitle,
-      level: 'error',
-      message: `Failed to dispatch job: ${errorMsg}`,
-    });
+    await insertRuntimeLog(db, {
+            instanceId: params.instanceId,
+            agentId: params.agentId,
+            jobTitle: params.jobTitle,
+            level: 'error',
+            message: `Failed to dispatch job: ${errorMsg}`,
+          });
 
     throw err;
   }

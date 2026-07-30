@@ -1,0 +1,391 @@
+{
+  "generatedFrom": "live catalog",
+  "tableRenames": [
+    {
+      "from": "sprint_task_routing_rules",
+      "to": "workflow_task_routing_rules"
+    },
+    {
+      "from": "sprint_task_statuses",
+      "to": "workflow_task_statuses"
+    },
+    {
+      "from": "sprint_task_transition_requirement_tombstones",
+      "to": "workflow_task_transition_requirement_tombstones"
+    },
+    {
+      "from": "sprint_task_transition_requirements",
+      "to": "workflow_task_transition_requirements"
+    },
+    {
+      "from": "sprint_task_transitions",
+      "to": "workflow_task_transitions"
+    },
+    {
+      "from": "sprint_type_outcomes",
+      "to": "workflow_type_outcomes"
+    },
+    {
+      "from": "sprint_type_relationship_types",
+      "to": "workflow_type_relationship_types"
+    },
+    {
+      "from": "sprint_type_task_statuses",
+      "to": "workflow_type_task_statuses"
+    },
+    {
+      "from": "sprint_type_task_types",
+      "to": "workflow_type_task_types"
+    },
+    {
+      "from": "sprint_types",
+      "to": "workflow_types"
+    },
+    {
+      "from": "sprint_workflow_statuses",
+      "to": "workflow_statuses"
+    },
+    {
+      "from": "sprint_workflow_templates",
+      "to": "workflow_templates"
+    },
+    {
+      "from": "sprint_workflow_transitions",
+      "to": "workflow_transitions"
+    },
+    {
+      "from": "sprints",
+      "to": "workflows"
+    }
+  ],
+  "columnRenames": [
+    {
+      "table": "agents",
+      "from": "job_title",
+      "to": "title"
+    },
+    {
+      "table": "agents",
+      "from": "job_instructions",
+      "to": "instructions"
+    },
+    {
+      "table": "agents",
+      "from": "job_instructions_updated_at",
+      "to": "instructions_updated_at"
+    },
+    {
+      "table": "external_event_mappings",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "external_event_mappings",
+      "from": "sprint_type",
+      "to": "workflow_type"
+    },
+    {
+      "table": "recurring_task_series",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "sprint_task_routing_rules",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "sprint_task_routing_rules",
+      "from": "sprint_type",
+      "to": "workflow_type"
+    },
+    {
+      "table": "sprint_task_statuses",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "sprint_task_transition_requirement_tombstones",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "sprint_task_transition_requirements",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "sprint_task_transition_requirements",
+      "from": "sprint_type",
+      "to": "workflow_type"
+    },
+    {
+      "table": "sprint_task_transitions",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "sprint_task_transitions",
+      "from": "sprint_type",
+      "to": "workflow_type"
+    },
+    {
+      "table": "sprint_type_outcomes",
+      "from": "sprint_type_key",
+      "to": "workflow_type_key"
+    },
+    {
+      "table": "sprint_type_relationship_types",
+      "from": "sprint_type_key",
+      "to": "workflow_type_key"
+    },
+    {
+      "table": "sprint_type_task_statuses",
+      "from": "sprint_type_key",
+      "to": "workflow_type_key"
+    },
+    {
+      "table": "sprint_type_task_types",
+      "from": "sprint_type_key",
+      "to": "workflow_type_key"
+    },
+    {
+      "table": "sprint_workflow_templates",
+      "from": "sprint_type_key",
+      "to": "workflow_type_key"
+    },
+    {
+      "table": "sprints",
+      "from": "sprint_type",
+      "to": "workflow_type"
+    },
+    {
+      "table": "story_point_model_routing",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "story_point_model_routing",
+      "from": "sprint_type",
+      "to": "workflow_type"
+    },
+    {
+      "table": "task_creation_events",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "task_events",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "task_field_schemas",
+      "from": "sprint_type_key",
+      "to": "workflow_type_key"
+    },
+    {
+      "table": "task_outcome_metrics",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    },
+    {
+      "table": "tasks",
+      "from": "sprint_id",
+      "to": "workflow_id"
+    }
+  ],
+  "columnDrops": [
+    {
+      "table": "agents",
+      "column": "sprint_id",
+      "reason": "populated on 0 of 66 agents"
+    },
+    {
+      "table": "agents",
+      "column": "schedule",
+      "reason": "populated on 0 of 66 agents"
+    },
+    {
+      "table": "task_creation_events",
+      "column": "job_id",
+      "reason": "unpopulated, no foreign key"
+    },
+    {
+      "table": "task_outcome_metrics",
+      "column": "job_id",
+      "reason": "unpopulated, no foreign key"
+    }
+  ],
+  "indexRenames": [
+    {
+      "from": "idx_sprint_requirement_tombstones_sprint",
+      "to": "idx_workflow_requirement_tombstones_workflow"
+    },
+    {
+      "from": "idx_sprint_task_routing_rules_candidate_unique",
+      "to": "idx_workflow_task_routing_rules_candidate_unique"
+    },
+    {
+      "from": "idx_sprint_task_routing_rules_lookup",
+      "to": "idx_workflow_task_routing_rules_lookup"
+    },
+    {
+      "from": "idx_sprint_task_routing_rules_scope_lookup",
+      "to": "idx_workflow_task_routing_rules_scope_lookup"
+    },
+    {
+      "from": "idx_sprint_task_routing_rules_tenant",
+      "to": "idx_workflow_task_routing_rules_tenant"
+    },
+    {
+      "from": "idx_sprint_task_statuses_lookup",
+      "to": "idx_workflow_task_statuses_lookup"
+    },
+    {
+      "from": "idx_sprint_task_transition_requirements_lookup",
+      "to": "idx_workflow_task_transition_requirements_lookup"
+    },
+    {
+      "from": "idx_sprint_task_transition_requirements_scope_lookup",
+      "to": "idx_workflow_task_transition_requirements_scope_lookup"
+    },
+    {
+      "from": "idx_sprint_task_transition_requirements_tenant",
+      "to": "idx_workflow_task_transition_requirements_tenant"
+    },
+    {
+      "from": "idx_sprint_task_transitions_lookup",
+      "to": "idx_workflow_task_transitions_lookup"
+    },
+    {
+      "from": "idx_sprint_task_transitions_scope_lookup",
+      "to": "idx_workflow_task_transitions_scope_lookup"
+    },
+    {
+      "from": "idx_sprint_task_transitions_tenant",
+      "to": "idx_workflow_task_transitions_tenant"
+    },
+    {
+      "from": "idx_sprint_type_outcomes_lookup",
+      "to": "idx_workflow_type_outcomes_lookup"
+    },
+    {
+      "from": "idx_sprint_type_relationship_types_lookup",
+      "to": "idx_workflow_type_relationship_types_lookup"
+    },
+    {
+      "from": "idx_sprint_type_task_statuses_lookup",
+      "to": "idx_workflow_type_task_statuses_lookup"
+    },
+    {
+      "from": "idx_sprint_type_task_types_lookup",
+      "to": "idx_workflow_type_task_types_lookup"
+    },
+    {
+      "from": "idx_sprint_types_project",
+      "to": "idx_workflow_types_project"
+    },
+    {
+      "from": "idx_sprint_types_system",
+      "to": "idx_workflow_types_system"
+    },
+    {
+      "from": "idx_sprint_types_tenant_key",
+      "to": "idx_workflow_types_tenant_key"
+    },
+    {
+      "from": "idx_sprint_workflow_statuses_template_order",
+      "to": "idx_workflow_statuses_template_order"
+    },
+    {
+      "from": "idx_sprint_workflow_templates_lookup",
+      "to": "idx_workflow_templates_lookup"
+    },
+    {
+      "from": "idx_sprint_workflow_transitions_template_from",
+      "to": "idx_workflow_transitions_template_from"
+    },
+    {
+      "from": "idx_sprints_project",
+      "to": "idx_workflows_project"
+    },
+    {
+      "from": "idx_sprints_status",
+      "to": "idx_workflows_status"
+    },
+    {
+      "from": "idx_sprints_tenant",
+      "to": "idx_workflows_tenant"
+    },
+    {
+      "from": "idx_tce_sprint",
+      "to": "idx_tce_workflow"
+    },
+    {
+      "from": "idx_tom_sprint",
+      "to": "idx_tom_workflow"
+    },
+    {
+      "from": "sprint_task_routing_rules_pkey",
+      "to": "workflow_task_routing_rules_pkey"
+    },
+    {
+      "from": "sprint_task_statuses_pkey",
+      "to": "workflow_task_statuses_pkey"
+    },
+    {
+      "from": "sprint_task_transition_requirement_tombstones_pkey",
+      "to": "workflow_task_transition_requirement_tombstones_pkey"
+    },
+    {
+      "from": "sprint_task_transition_requirements_pkey",
+      "to": "workflow_task_transition_requirements_pkey"
+    },
+    {
+      "from": "sprint_task_transitions_pkey",
+      "to": "workflow_task_transitions_pkey"
+    },
+    {
+      "from": "sprint_type_outcomes_pkey",
+      "to": "workflow_type_outcomes_pkey"
+    },
+    {
+      "from": "sprint_type_relationship_types_pkey",
+      "to": "workflow_type_relationship_types_pkey"
+    },
+    {
+      "from": "sprint_type_task_statuses_pkey",
+      "to": "workflow_type_task_statuses_pkey"
+    },
+    {
+      "from": "sprint_type_task_types_pkey",
+      "to": "workflow_type_task_types_pkey"
+    },
+    {
+      "from": "sprint_types_pkey",
+      "to": "workflow_types_pkey"
+    },
+    {
+      "from": "sprint_workflow_statuses_pkey",
+      "to": "workflow_statuses_pkey"
+    },
+    {
+      "from": "sprint_workflow_templates_pkey",
+      "to": "workflow_templates_pkey"
+    },
+    {
+      "from": "sprint_workflow_transitions_pkey",
+      "to": "workflow_transitions_pkey"
+    },
+    {
+      "from": "sprints_pkey",
+      "to": "workflows_pkey"
+    }
+  ],
+  "intentionalNonGoals": {
+    "job_instances": "Not renamed: 7,773 rows on the dispatch hot path, referenced by tasks.active_instance_id. A rename here buys naming consistency at the cost of touching the most failure-sensitive table in the system during a migration that is already changing engines.",
+    "job_instance_id": "Not renamed: follows job_instances, which is out of scope for the same reason.",
+    "logs.job_title": "Not renamed: this is a RUN LABEL, not the legacy \"job\" concept. It is populated on all 62,954 log rows and is written on the logging hot path. Task #779 already draws this distinction and scopes run labels out of the jobs-to-agents cleanup. Renaming it is a separate, product-facing decision about what the field is called in the log stream."
+  }
+}

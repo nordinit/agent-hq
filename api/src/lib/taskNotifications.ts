@@ -1,20 +1,8 @@
-/**
- * taskNotifications.ts — Task status-change Telegram notification layer
- *
- * Sends a Telegram notification whenever a task changes status.
- * Covers outcome-driven, user-driven, agent-driven, dispatcher-driven,
- * and cancel-driven transitions.
- *
- * Deduplication: An in-memory map tracks (taskId, fromStatus, toStatus)
- * with a short TTL so rapid duplicate calls (e.g. race conditions or
- * retries) don't produce duplicate messages.
- */
-
-import type Database from 'better-sqlite3';
 import { notifyTelegram } from '../integrations/telegram';
 import { createNotificationRecord, readNotificationPreferences } from './notifications';
 import { canonicalTaskStatusEmoji, listSprintTaskStatuses, listSprintTypeTaskStatuses } from './sprintTaskPolicy';
 import { getActiveTenantId } from './tenantContext';
+import { type Db } from "../db/adapter/types";
 
 // ── Deduplication ─────────────────────────────────────────────────────────────
 
@@ -55,17 +43,17 @@ interface TaskContext {
   sprintType: string | null;
 }
 
-function loadTaskContext(db: Database.Database, taskId: number): TaskContext | null {
+async function loadTaskContext(db: Db, taskId: number): Promise<TaskContext | null> {
   // Use a resilient query: first try with project/sprint JOIN, fall back to
   // title-only if those tables don't exist (e.g. in test environments).
   try {
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT t.id, t.tenant_id, t.title, t.sprint_id, p.name as project_name, s.name as sprint_name, s.sprint_type
       FROM tasks t
       LEFT JOIN projects p ON p.id = t.project_id
       LEFT JOIN sprints  s ON s.id = t.sprint_id
       WHERE t.id = ?
-    `).get(taskId) as {
+    `, taskId) as {
       id: number;
       tenant_id: number | null;
       title: string;
@@ -78,7 +66,7 @@ function loadTaskContext(db: Database.Database, taskId: number): TaskContext | n
     if (!row) return null;
     return {
       id: row.id,
-      tenantId: Number.isFinite(Number(row.tenant_id)) ? Number(row.tenant_id) : getActiveTenantId(db),
+      tenantId: Number.isFinite(Number(row.tenant_id)) ? Number(row.tenant_id) : await getActiveTenantId(db),
       title: row.title,
       projectName: row.project_name ?? null,
       sprintName: row.sprint_name ?? null,
@@ -87,11 +75,11 @@ function loadTaskContext(db: Database.Database, taskId: number): TaskContext | n
     };
   } catch {
     // Fallback: minimal query without optional JOINs (e.g. test DBs missing projects/sprints tables)
-    const row = db.prepare(`SELECT id, title, sprint_id FROM tasks WHERE id = ?`).get(taskId) as { id: number; title: string; sprint_id?: number | null } | undefined;
+    const row = await db.get(`SELECT id, title, sprint_id FROM tasks WHERE id = ?`, taskId) as { id: number; title: string; sprint_id?: number | null } | undefined;
     if (!row) return null;
     return {
       id: row.id,
-      tenantId: getActiveTenantId(db),
+      tenantId: await getActiveTenantId(db),
       title: row.title,
       projectName: null,
       sprintName: null,
@@ -101,9 +89,9 @@ function loadTaskContext(db: Database.Database, taskId: number): TaskContext | n
   }
 }
 
-function buildRecordBody(db: Database.Database, ctx: TaskContext, fromStatus: string, toStatus: string, source: string): string {
-  const fromEmoji = resolveStatusEmoji(db, ctx, fromStatus);
-  const toEmoji = resolveStatusEmoji(db, ctx, toStatus);
+async function buildRecordBody(db: Db, ctx: TaskContext, fromStatus: string, toStatus: string, source: string): Promise<string> {
+  const fromEmoji = await resolveStatusEmoji(db, ctx, fromStatus);
+  const toEmoji = await resolveStatusEmoji(db, ctx, toStatus);
   const meta: string[] = [];
   if (ctx.projectName) meta.push(`Project: ${ctx.projectName}`);
   if (ctx.sprintName) meta.push(`Workflow: ${ctx.sprintName}`);
@@ -117,36 +105,36 @@ function statusEmoji(status: string): string {
   return canonicalTaskStatusEmoji(status) ?? '⚙️';
 }
 
-function resolveConfiguredStatusEmoji(db: Database.Database, ctx: TaskContext, status: string): string | null {
+async function resolveConfiguredStatusEmoji(db: Db, ctx: TaskContext, status: string): Promise<string | null> {
   if (ctx.sprintId != null) {
-    const sprintStatus = listSprintTaskStatuses(db, ctx.sprintId).find((candidate) => candidate.name === status);
+    const sprintStatus = (await listSprintTaskStatuses(db, ctx.sprintId)).find((candidate) => candidate.name === status);
     if (sprintStatus?.emoji) return sprintStatus.emoji;
   }
 
   if (ctx.sprintType) {
-    const sprintTypeStatus = listSprintTypeTaskStatuses(db, ctx.sprintType).find((candidate) => candidate.name === status);
+    const sprintTypeStatus = (await listSprintTypeTaskStatuses(db, ctx.sprintType)).find((candidate) => candidate.name === status);
     if (sprintTypeStatus?.emoji) return sprintTypeStatus.emoji;
   }
 
   return null;
 }
 
-function resolveStatusEmoji(db: Database.Database, ctx: TaskContext, status: string): string {
-  return resolveConfiguredStatusEmoji(db, ctx, status) ?? statusEmoji(status);
+async function resolveStatusEmoji(db: Db, ctx: TaskContext, status: string): Promise<string> {
+  return (await resolveConfiguredStatusEmoji(db, ctx, status)) ?? statusEmoji(status);
 }
 
 // ── Message builder ───────────────────────────────────────────────────────────
 
-function buildMessage(
-  db: Database.Database,
+async function buildMessage(
+  db: Db,
   ctx: TaskContext,
   fromStatus: string,
   toStatus: string,
   source: string,
-): string {
+): Promise<string> {
   const lines: string[] = [];
-  const fromEmoji = resolveStatusEmoji(db, ctx, fromStatus);
-  const toEmoji = resolveStatusEmoji(db, ctx, toStatus);
+  const fromEmoji = await resolveStatusEmoji(db, ctx, fromStatus);
+  const toEmoji = await resolveStatusEmoji(db, ctx, toStatus);
 
   lines.push(`${toEmoji} <b>Task #${ctx.id} — Status Changed</b>`);
   lines.push(`<b>${escapeHtml(ctx.title)}</b>`);
@@ -186,10 +174,10 @@ export interface TaskStatusChangeEvent {
  * No-ops silently on duplicates, missing task, or missing env vars.
  * Never throws — caller must not depend on outcome.
  */
-export function notifyTaskStatusChange(
-  db: Database.Database,
+export async function notifyTaskStatusChange(
+  db: Db,
   event: TaskStatusChangeEvent,
-): void {
+): Promise<void> {
   const { taskId, fromStatus, toStatus, source = 'system' } = event;
 
   // No-op if the status didn't actually change
@@ -200,27 +188,27 @@ export function notifyTaskStatusChange(
 
   // Fire-and-forget: load context + send
   try {
-    const ctx = loadTaskContext(db, taskId);
+    const ctx = await loadTaskContext(db, taskId);
     if (!ctx) return;
 
-    const message = buildMessage(db, ctx, fromStatus, toStatus, source);
-    const toEmoji = resolveStatusEmoji(db, ctx, toStatus);
-    createNotificationRecord(db, {
-      tenantId: ctx.tenantId,
-      type: 'task_status_change',
-      title: `${toEmoji} Task #${ctx.id} status changed`,
-      body: buildRecordBody(db, ctx, fromStatus, toStatus, source),
-      source,
-      outlet: 'telegram',
-      metadata: {
-        taskId: ctx.id,
-        fromStatus,
-        toStatus,
-        projectName: ctx.projectName,
-        sprintName: ctx.sprintName,
-      },
-    });
-    const preferences = readNotificationPreferences(db, ctx.tenantId);
+    const message = await buildMessage(db, ctx, fromStatus, toStatus, source);
+    const toEmoji = await resolveStatusEmoji(db, ctx, toStatus);
+    await createNotificationRecord(db, {
+            tenantId: ctx.tenantId,
+            type: 'task_status_change',
+            title: `${toEmoji} Task #${ctx.id} status changed`,
+            body: await buildRecordBody(db, ctx, fromStatus, toStatus, source),
+            source,
+            outlet: 'telegram',
+            metadata: {
+              taskId: ctx.id,
+              fromStatus,
+              toStatus,
+              projectName: ctx.projectName,
+              sprintName: ctx.sprintName,
+            },
+          });
+    const preferences = await readNotificationPreferences(db, ctx.tenantId);
     if (preferences.enabled && preferences.outlets.telegram) {
       notifyTelegram(message).catch((err) => {
         console.error('[taskNotifications] notifyTelegram error:', err);

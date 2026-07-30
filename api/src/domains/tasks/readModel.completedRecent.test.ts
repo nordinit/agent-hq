@@ -1,12 +1,14 @@
 import Database from 'better-sqlite3';
 import { listRecentlyCompletedTasks } from './readModel';
+import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 describe('listRecentlyCompletedTasks tenant isolation', () => {
-  let db: Database.Database;
+  let db: Db;
 
-  beforeEach(() => {
-    db = new Database(':memory:');
-    db.exec(`
+  beforeEach(async () => {
+    db = new SqliteAdapter(new Database(':memory:'));
+    await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         name TEXT,
@@ -49,12 +51,12 @@ describe('listRecentlyCompletedTasks tenant isolation', () => {
     `);
   });
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
-  it('returns only recently completed tasks for the requested tenant', () => {
-    db.exec(`
+  it('returns only recently completed tasks for the requested tenant', async () => {
+    await db.exec(`
       INSERT INTO projects (id, name) VALUES (10, 'Default Project'), (20, 'EcoPool Project');
       INSERT INTO sprints (id, name) VALUES (100, 'Default Workflow'), (200, 'EcoPool Workflow');
       INSERT INTO tasks (id, tenant_id, title, status, priority, project_id, sprint_id, updated_at)
@@ -69,15 +71,15 @@ describe('listRecentlyCompletedTasks tenant isolation', () => {
         (3, 'status', 'done', datetime('now', '-25 hours'));
     `);
 
-    const ecoPool = listRecentlyCompletedTasks(db, 24, undefined, 2);
+    const ecoPool = await listRecentlyCompletedTasks(db, 24, undefined, 2);
     expect(ecoPool.tasks.map(task => task.title)).toEqual(['EcoPool completed task']);
 
-    const defaultCompany = listRecentlyCompletedTasks(db, 24, undefined, 1);
+    const defaultCompany = await listRecentlyCompletedTasks(db, 24, undefined, 1);
     expect(defaultCompany.tasks.map(task => task.title)).toEqual(['Default completed task']);
   });
 
-  it('applies project and tenant scope together', () => {
-    db.exec(`
+  it('applies project and tenant scope together', async () => {
+    await db.exec(`
       INSERT INTO projects (id, name) VALUES (10, 'Default Project'), (20, 'EcoPool Project');
       INSERT INTO sprints (id, name) VALUES (100, 'Default Workflow'), (200, 'EcoPool Workflow');
       INSERT INTO tasks (id, tenant_id, title, status, priority, project_id, sprint_id, updated_at)
@@ -86,7 +88,7 @@ describe('listRecentlyCompletedTasks tenant isolation', () => {
         (2, 2, 'EcoPool project task', 'done', 'medium', 20, 200, datetime('now', '-1 hour'));
     `);
 
-    expect(listRecentlyCompletedTasks(db, 24, 10, 2).tasks).toEqual([]);
-    expect(listRecentlyCompletedTasks(db, 24, 20, 2).tasks.map(task => task.title)).toEqual(['EcoPool project task']);
+    expect((await listRecentlyCompletedTasks(db, 24, 10, 2)).tasks).toEqual([]);
+    expect((await listRecentlyCompletedTasks(db, 24, 20, 2)).tasks.map(task => task.title)).toEqual(['EcoPool project task']);
   });
 });

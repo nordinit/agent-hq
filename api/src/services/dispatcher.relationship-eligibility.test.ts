@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../runtimes', () => ({
   resolveRuntime: jest.fn(() => ({
@@ -27,10 +29,11 @@ jest.mock('../lib/githubIdentity', () => ({
 
 const { resolveRuntime } = jest.requireMock('../runtimes') as { resolveRuntime: jest.Mock };
 
-function setupDb(options: { includeTaskDispatchMetadataColumns?: boolean } = {}): Database.Database {
+async function setupDb(options: { includeTaskDispatchMetadataColumns?: boolean } = {}): Promise<Db> {
   const includeTaskDispatchMetadataColumns = options.includeTaskDispatchMetadataColumns ?? true;
-  const db = new Database(':memory:');
-  db.exec(`
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       name TEXT,
@@ -161,28 +164,28 @@ function setupDb(options: { includeTaskDispatchMetadataColumns?: boolean } = {})
     );
   `);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO agents (id, name, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, runtime_type, sort_rules)
     VALUES (1, 'Cinder', 'Backend Engineer', 86, 'Do the task', 1, 900, 'agent:cinder:main', 'openclaw', '[]')
-  `).run();
-  db.prepare(`INSERT INTO sprint_types (key, repo_required) VALUES ('dev', 0)`).run();
-  db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type, status) VALUES (10, 86, 'Enhancements', 'dev', 'active')`).run();
-  db.prepare(`INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (10, 86, 'dev', 'backend', 'ready', 1, 10)`).run();
-  db.prepare(`
+  `);
+  await db.run(`INSERT INTO sprint_types (key, repo_required) VALUES ('dev', 0)`);
+  await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type, status) VALUES (10, 86, 'Enhancements', 'dev', 'active')`);
+  await db.run(`INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (10, 86, 'dev', 'backend', 'ready', 1, 10)`);
+  await db.run(`
     INSERT INTO sprint_type_relationship_types (sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility, direction_semantics, resolved_statuses_json)
     VALUES
       ('dev', 'blocked_by', 'Blocked by', 'Blocks', 'dependency', 1, 'target_blocks_source', '["done","cancelled"]'),
       ('dev', 'blocks', 'Blocks', 'Blocked by', 'dependency', 1, 'source_blocks_target', '["done","cancelled"]'),
       ('dev', 'defect_of', 'Defect of', 'Has defect', 'quality', 0, 'informational', '[]')
-  `).run();
+  `);
   return db;
 }
 
-function insertTask(db: Database.Database, id: number, status = 'ready', taskType = 'backend'): void {
-  db.prepare(`
+async function insertTask(db: Db, id: number, status = 'ready', taskType = 'backend'): Promise<void> {
+  await db.run(`
     INSERT INTO tasks (id, title, description, status, priority, project_id, tenant_id, task_type, sprint_id, created_at, updated_at)
     VALUES (?, ?, 'Task', ?, 'high', 86, 1, ?, 10, '2026-05-20T12:00:00.000Z', '2026-05-20T12:00:00.000Z')
-  `).run(id, `Task ${id}`, status, taskType);
+  `, id, `Task ${id}`, status, taskType);
 }
 
 describe('dispatcher relationship-driven eligibility', () => {
@@ -191,186 +194,186 @@ describe('dispatcher relationship-driven eligibility', () => {
   });
 
   it('keeps a task ineligible when a blocking relationship points to an unresolved related task', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    insertTask(db, 530, 'ready');
-    insertTask(db, 567, 'in_progress', 'frontend');
-    db.prepare(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'blocked_by')`).run();
+    await insertTask(db, 530, 'ready');
+    await insertTask(db, 567, 'in_progress', 'frontend');
+    await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'blocked_by')`);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(0);
     expect(resolveRuntime).not.toHaveBeenCalled();
-    const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 530`).get() as { status: string; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeNull();
-    const history = db.prepare(`SELECT new_value FROM task_history WHERE task_id = 530 AND field = 'dispatch_eligibility'`).get() as { new_value: string };
+    const history = await db.get(`SELECT new_value FROM task_history WHERE task_id = 530 AND field = 'dispatch_eligibility'`) as { new_value: string };
     expect(history.new_value).toContain('Dispatch ineligible: Blocked by (blocked_by) task #567');
     expect(history.new_value).toContain('is in_progress');
-    db.close();
+    await db.close();
   });
 
   it('keeps sprint overrides ahead of higher-priority sprint-type fallback candidates', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, name, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, runtime_type, sort_rules)
       VALUES (2, 'Vulcan', 'Backend Engineer', 86, 'Do the task', 1, 900, 'agent:vulcan:main', 'openclaw', '[]')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES (NULL, 86, 'dev', 'backend', 'ready', 2, 100)
-    `).run();
-    insertTask(db, 608, 'ready');
+    `);
+    await insertTask(db, 608, 'ready');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(1);
-    const task = db.prepare(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 608`).get() as { status: string; agent_id: number | null; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 608`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'ready', agent_id: 1, active_instance_id: 1 });
-    db.close();
+    await db.close();
   });
 
   it('dispatches workflow-defined custom statuses when a matching routing rule exists', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'intake', 1, 10)
-    `).run();
-    insertTask(db, 797, 'intake');
+    `);
+    await insertTask(db, 797, 'intake');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(1);
-    const task = db.prepare(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 797`).get() as { status: string; agent_id: number | null; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 797`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'intake', agent_id: 1, active_instance_id: 1 });
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('does not dispatch custom statuses without a matching routing rule', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    insertTask(db, 798, 'field_reported');
+    await insertTask(db, 798, 'field_reported');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(0);
-    const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 798`).get() as { status: string; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 798`) as { status: string; active_instance_id: number | null };
     expect(task).toEqual({ status: 'field_reported', active_instance_id: null });
-    db.close();
+    await db.close();
   });
 
   it('does not dispatch workflow terminal statuses even when a routing rule exists', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
       VALUES (10, 'archived', 'Archived', 1, 99)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'archived', 1, 10)
-    `).run();
-    insertTask(db, 799, 'archived');
+    `);
+    await insertTask(db, 799, 'archived');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(0);
-    const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 799`).get() as { status: string; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 799`) as { status: string; active_instance_id: number | null };
     expect(task).toEqual({ status: 'archived', active_instance_id: null });
-    db.close();
+    await db.close();
   });
 
   it('dispatches legacy failed when workflow configuration marks it non-terminal', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
       VALUES (10, 'failed', 'Failed', 0, 80)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
-    `).run();
-    insertTask(db, 800, 'failed');
+    `);
+    await insertTask(db, 800, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(1);
-    const task = db.prepare(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 800`).get() as { status: string; agent_id: number | null; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, agent_id, active_instance_id FROM tasks WHERE id = 800`) as { status: string; agent_id: number | null; active_instance_id: number | null };
     expect(task).toEqual({ status: 'failed', agent_id: 1, active_instance_id: 1 });
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('uses workflow-specific terminality before sprint-type and global fallbacks', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`).run();
-    db.prepare(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 1)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
+    await db.run(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 1)`);
+    await db.run(`
       INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
       VALUES (10, 'failed', 'Failed', 0, 80)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
-    `).run();
-    insertTask(db, 801, 'failed');
+    `);
+    await insertTask(db, 801, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(1);
-    const task = db.prepare(`SELECT active_instance_id FROM tasks WHERE id = 801`).get() as { active_instance_id: number | null };
+    const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 801`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('keeps workflow-specific terminal statuses non-dispatchable before non-terminal fallbacks', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 0)`).run();
-    db.prepare(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 0)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 0)`);
+    await db.run(`
       INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
       VALUES (10, 'failed', 'Failed', 1, 80)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
-    `).run();
-    insertTask(db, 806, 'failed');
+    `);
+    await insertTask(db, 806, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(0);
-    const task = db.prepare(`SELECT active_instance_id FROM tasks WHERE id = 806`).get() as { active_instance_id: number | null };
+    const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 806`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBeNull();
-    db.close();
+    await db.close();
   });
 
   it('dispatches configured non-terminal failed tasks on legacy task schemas without dispatch metadata columns', async () => {
-    const db = setupDb({ includeTaskDispatchMetadataColumns: false });
+    const db = await setupDb({ includeTaskDispatchMetadataColumns: false });
     const { runDispatcher } = await import('./dispatcher');
-    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`).run();
-    db.prepare(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 1)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
+    await db.run(`INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, terminal) VALUES ('dev', 'failed', 'Failed', 1)`);
+    await db.run(`
       INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
       VALUES (10, 'failed', 'Failed', 0, 80)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
-    `).run();
-    insertTask(db, 805, 'failed');
+    `);
+    await insertTask(db, 805, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result).toEqual({ dispatched: 1, skipped: 0, errors: [] });
-    const task = db.prepare(`SELECT status, agent_id, active_instance_id, dispatched_at FROM tasks WHERE id = 805`).get() as {
+    const task = await db.get(`SELECT status, agent_id, active_instance_id, dispatched_at FROM tasks WHERE id = 805`) as {
       status: string;
       agent_id: number | null;
       active_instance_id: number | null;
@@ -380,113 +383,113 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect(task.agent_id).toBe(1);
     expect(task.active_instance_id).toBe(1);
     expect(task.dispatched_at).toBeTruthy();
-    const instance = db.prepare(`SELECT task_id, status FROM job_instances WHERE id = ?`).get(task.active_instance_id) as { task_id: number; status: string };
+    const instance = await db.get(`SELECT task_id, status FROM job_instances WHERE id = ?`, task.active_instance_id) as { task_id: number; status: string };
     expect(instance).toEqual({ task_id: 805, status: 'dispatched' });
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('uses tenant-specific sprint-type terminality before default sprint-type fallback', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, tenant_id, terminal)
       VALUES
         ('dev', 'failed', 'Failed', NULL, 1),
         ('dev', 'failed', 'Failed', 1, 0)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 1, 10)
-    `).run();
-    insertTask(db, 802, 'failed');
+    `);
+    await insertTask(db, 802, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(1);
-    const task = db.prepare(`SELECT active_instance_id FROM tasks WHERE id = 802`).get() as { active_instance_id: number | null };
+    const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 802`) as { active_instance_id: number | null };
     expect(task.active_instance_id).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('keeps globally configured terminal statuses and legacy terminal fallback non-dispatchable', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('done', 'Done', 1)`).run();
-    db.prepare(`INSERT INTO task_statuses (name, label, terminal) VALUES ('cancelled', 'Cancelled', 1)`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('done', 'Done', 1)`);
+    await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('cancelled', 'Cancelled', 1)`);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES
         (10, 86, 'dev', 'backend', 'done', 1, 10),
         (10, 86, 'dev', 'backend', 'cancelled', 1, 10),
         (10, 86, 'dev', 'backend', 'failed', 1, 10)
-    `).run();
-    insertTask(db, 802, 'done');
-    insertTask(db, 803, 'cancelled');
-    insertTask(db, 804, 'failed');
+    `);
+    await insertTask(db, 802, 'done');
+    await insertTask(db, 803, 'cancelled');
+    await insertTask(db, 804, 'failed');
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(0);
-    const tasks = db.prepare(`SELECT id, active_instance_id FROM tasks WHERE id IN (802, 803, 804) ORDER BY id`).all() as Array<{ id: number; active_instance_id: number | null }>;
+    const tasks = await db.all(`SELECT id, active_instance_id FROM tasks WHERE id IN (802, 803, 804) ORDER BY id`) as Array<{ id: number; active_instance_id: number | null }>;
     expect(tasks).toEqual([
       { id: 802, active_instance_id: null },
       { id: 803, active_instance_id: null },
       { id: 804, active_instance_id: null },
     ]);
-    db.close();
+    await db.close();
   });
 
   it('uses relationship direction semantics to resolve which side blocks dispatch', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    insertTask(db, 530, 'ready');
-    insertTask(db, 567, 'in_progress', 'frontend');
-    db.prepare(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (567, 530, 'blocks')`).run();
+    await insertTask(db, 530, 'ready');
+    await insertTask(db, 567, 'in_progress', 'frontend');
+    await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (567, 530, 'blocks')`);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(0);
-    const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 530`).get() as { status: string; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeNull();
-    const history = db.prepare(`SELECT new_value FROM task_history WHERE task_id = 530 AND field = 'dispatch_eligibility'`).get() as { new_value: string };
+    const history = await db.get(`SELECT new_value FROM task_history WHERE task_id = 530 AND field = 'dispatch_eligibility'`) as { new_value: string };
     expect(history.new_value).toContain('Dispatch ineligible: Blocks (blocks) task #567');
-    db.close();
+    await db.close();
   });
 
   it('dispatches when the related blocking task is resolved', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    insertTask(db, 530, 'ready');
-    insertTask(db, 567, 'done');
-    db.prepare(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'blocked_by')`).run();
+    await insertTask(db, 530, 'ready');
+    await insertTask(db, 567, 'done');
+    await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'blocked_by')`);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(1);
-    const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 530`).get() as { status: string; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeGreaterThan(0);
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 
   it('ignores non-blocking relationship types for dispatch eligibility', async () => {
-    const db = setupDb();
+    const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
-    insertTask(db, 530, 'ready');
-    insertTask(db, 567, 'in_progress', 'frontend');
-    db.prepare(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'defect_of')`).run();
+    await insertTask(db, 530, 'ready');
+    await insertTask(db, 567, 'in_progress', 'frontend');
+    await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'defect_of')`);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
 
     expect(result.dispatched).toBe(1);
-    const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 530`).get() as { status: string; active_instance_id: number | null };
+    const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 530`) as { status: string; active_instance_id: number | null };
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeGreaterThan(0);
     await new Promise(resolve => setImmediate(resolve));
-    db.close();
+    await db.close();
   });
 });

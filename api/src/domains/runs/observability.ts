@@ -1,7 +1,9 @@
-import type Database from 'better-sqlite3';
 import { cleanupImpossibleTaskLifecycleStates } from '../../lib/taskLifecycle';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
+import { nowTimestamp } from '../../lib/timestamps';
+import { type Db } from "../../db/adapter/types";
+import { columnExists as sharedColumnExists } from "../../db/introspection";
 
 export const START_CHECKIN_GRACE_MS = 5 * 60 * 1000;
 export const HEARTBEAT_STALE_MS = 10 * 60 * 1000;
@@ -50,8 +52,8 @@ const AGENT_DRIVEN_STAGES: ReadonlySet<CheckInStage> = new Set(['dispatch', 'sta
  * Resolve the agent's display name from the agents table for a given agent_id.
  * Returns null if the agent is not found.
  */
-function resolveAgentName(db: Database.Database, agentId: number): string | null {
-  const row = db.prepare('SELECT name FROM agents WHERE id = ?').get(agentId) as { name: string } | undefined;
+async function resolveAgentName(db: Db, agentId: number): Promise<string | null> {
+  const row = await db.get('SELECT name FROM agents WHERE id = ?', agentId) as { name: string } | undefined;
   return row?.name ?? null;
 }
 
@@ -72,17 +74,17 @@ function parseChangedFiles(value: unknown): string[] {
 }
 
 /** @deprecated Use selectTaskForAgent instead */
-export function selectTaskForJob(db: Database.Database, jobId: number): number | null {
-  return selectTaskForAgent(db, jobId);
+export async function selectTaskForJob(db: Db, jobId: number): Promise<number | null> {
+  return await selectTaskForAgent(db, jobId);
 }
 
-export function selectTaskForAgent(db: Database.Database, agentId: number): number | null {
-  cleanupImpossibleTaskLifecycleStates(db);
-  const assignmentColumn = (db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>).some((col) => col.name === 'assigned_agent_id')
+export async function selectTaskForAgent(db: Db, agentId: number): Promise<number | null> {
+  await cleanupImpossibleTaskLifecycleStates(db);
+  const assignmentColumn = await sharedColumnExists(db, 'tasks', 'assigned_agent_id')
     ? 'assigned_agent_id'
     : 'agent_id';
 
-  const row = db.prepare(`
+  const row = await db.get(`
     SELECT id
     FROM tasks
     WHERE ${assignmentColumn} = ?
@@ -100,26 +102,26 @@ export function selectTaskForAgent(db: Database.Database, agentId: number): numb
       updated_at ASC,
       created_at ASC
     LIMIT 1
-  `).get(agentId) as { id: number } | undefined;
+  `, agentId) as { id: number } | undefined;
 
   return row?.id ?? null;
 }
 
-export function attachInstanceToTask(db: Database.Database, instanceId: number, taskId: number | null): void {
-  db.prepare(`UPDATE job_instances SET task_id = ? WHERE id = ?`).run(taskId, instanceId);
+export async function attachInstanceToTask(db: Db, instanceId: number, taskId: number | null): Promise<void> {
+  await db.run(`UPDATE job_instances SET task_id = ? WHERE id = ?`, taskId, instanceId);
 
   if (taskId) {
-    db.prepare(`
+    await db.run(`
       UPDATE tasks
       SET active_instance_id = ?, updated_at = datetime('now')
       WHERE id = ?
-    `).run(instanceId, taskId);
-    syncTaskActiveAgentFromInstance(db, taskId);
+    `, instanceId, taskId);
+    await syncTaskActiveAgentFromInstance(db, taskId);
   }
 }
 
-export function resolveTaskIdForInstance(db: Database.Database, instanceId: number): number | null {
-  const instance = db.prepare(`SELECT id, task_id FROM job_instances WHERE id = ?`).get(instanceId) as {
+export async function resolveTaskIdForInstance(db: Db, instanceId: number): Promise<number | null> {
+  const instance = await db.get(`SELECT id, task_id FROM job_instances WHERE id = ?`, instanceId) as {
     id: number;
     task_id: number | null;
   } | undefined;
@@ -127,16 +129,16 @@ export function resolveTaskIdForInstance(db: Database.Database, instanceId: numb
   if (!instance) return null;
   if (instance.task_id) return instance.task_id;
 
-  const linkedTask = db.prepare(`
+  const linkedTask = await db.get(`
     SELECT id
     FROM tasks
     WHERE active_instance_id = ?
     LIMIT 1
-  `).get(instanceId) as { id: number } | undefined;
+  `, instanceId) as { id: number } | undefined;
 
   if (!linkedTask) return null;
 
-  attachInstanceToTask(db, instanceId, linkedTask.id);
+  await attachInstanceToTask(db, instanceId, linkedTask.id);
   return linkedTask.id;
 }
 
@@ -196,18 +198,18 @@ function isMissingLifecycleHandoffCompletion(input: RunCheckInInput, instance: (
     && mentionsMissingOutcome;
 }
 
-export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput): { taskId: number | null; noteCreated: boolean } {
-  const nowIso = new Date().toISOString();
+export async function recordRunCheckIn(db: Db, input: RunCheckInInput): Promise<{ taskId: number | null; noteCreated: boolean }> {
+  const nowTs = nowTimestamp();
   const changedFiles = parseChangedFiles(input.changedFiles);
   const changedFilesCount = input.changedFilesCount ?? (changedFiles.length > 0 ? changedFiles.length : null);
-  const taskId = resolveTaskIdForInstance(db, input.instanceId);
+  const taskId = await resolveTaskIdForInstance(db, input.instanceId);
 
-  const hasDurableRunId = tableHasColumn(db, 'job_instances', 'durable_run_id');
-  const instance = db.prepare(`
+  const hasDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
+  const instance = await db.get(`
     SELECT id, task_id, agent_id, status, session_key, ${hasDurableRunId ? 'durable_run_id' : 'NULL AS durable_run_id'}, started_at, lifecycle_outcome_posted_at, task_outcome
     FROM job_instances
     WHERE id = ?
-  `).get(input.instanceId) as (InstanceRow & {
+  `, input.instanceId) as (InstanceRow & {
     lifecycle_outcome_posted_at?: string | null;
     task_outcome?: string | null;
   }) | undefined;
@@ -222,7 +224,7 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
   const trustedStartSignal = ['start', 'heartbeat', 'progress', 'blocker', 'completion'].includes(input.stage);
   const suppressCompletionNote = isMissingLifecycleHandoffCompletion(input, instance);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO instance_artifacts (
       instance_id,
       task_id,
@@ -262,30 +264,13 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
       stale_at = NULL,
       session_key = COALESCE(excluded.session_key, instance_artifacts.session_key),
       updated_at = excluded.updated_at
-  `).run(
-    input.instanceId,
-    taskId,
-    input.stage,
-    input.summary ?? null,
-    input.commitHash ?? null,
-    input.branchName ?? null,
-    JSON.stringify(changedFiles),
-    changedFilesCount,
-    input.blockerReason ?? null,
-    input.outcome ?? null,
-    trustedStartSignal ? nowIso : null,
-    input.meaningfulOutput || ['progress', 'blocker', 'completion'].includes(input.stage) ? nowIso : null,
-    trustedStartSignal ? nowIso : null,
-    input.stage === 'completion' ? nowIso : null,
-    input.sessionKey ?? instance.session_key ?? null,
-    nowIso,
-  );
+  `, input.instanceId, taskId, input.stage, input.summary ?? null, input.commitHash ?? null, input.branchName ?? null, JSON.stringify(changedFiles), changedFilesCount, input.blockerReason ?? null, input.outcome ?? null, trustedStartSignal ? nowTs : null, input.meaningfulOutput || ['progress', 'blocker', 'completion'].includes(input.stage) ? nowTs : null, trustedStartSignal ? nowTs : null, input.stage === 'completion' ? nowTs : null, input.sessionKey ?? instance.session_key ?? null, nowTs);
 
-  const artifact = db.prepare(`
+  const artifact = await db.get(`
     SELECT summary, current_stage, last_note_at, changed_files_json, latest_commit_hash, branch_name, blocker_reason, outcome
     FROM instance_artifacts
     WHERE instance_id = ?
-  `).get(input.instanceId) as {
+  `, input.instanceId) as {
     summary: string | null;
     current_stage: string | null;
     last_note_at: string | null;
@@ -325,21 +310,21 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
     if (input.author !== undefined) {
       noteAuthor = input.author;
     } else if (AGENT_DRIVEN_STAGES.has(input.stage)) {
-      noteAuthor = resolveAgentName(db, instance.agent_id) ?? 'Agent HQ';
+      noteAuthor = (await resolveAgentName(db, instance.agent_id)) ?? 'Agent HQ';
     } else {
       noteAuthor = 'Agent HQ';
     }
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO task_notes (task_id, author, content)
       VALUES (?, ?, ?)
-    `).run(taskId, noteAuthor, note);
+    `, taskId, noteAuthor, note);
 
-    db.prepare(`
+    await db.run(`
       UPDATE instance_artifacts
       SET last_note_at = ?
       WHERE instance_id = ?
-    `).run(nowIso, input.instanceId);
+    `, nowTs, input.instanceId);
 
     noteCreated = true;
   }
@@ -350,7 +335,7 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
     // agent's start callback, which is sent before the SDK updates the key.
     // Runtime bookkeeping may advance the internal instance row to running, but it must
     // not silently mutate visible task workflow state here.
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET session_key = CASE
             WHEN session_key LIKE 'claude-code:%' THEN session_key
@@ -359,17 +344,17 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
           status = CASE WHEN status IN ('queued', 'dispatched') THEN 'running' ELSE status END,
           started_at = COALESCE(started_at, ?)
       WHERE id = ?
-    `).run(input.sessionKey ?? null, nowIso, input.instanceId);
+    `, input.sessionKey ?? null, nowTs, input.instanceId);
   }
 
   if (input.stage === 'completion') {
     const runtimeEndSuccess = input.runtimeEndSuccess ?? (input.statusLabel ? input.statusLabel !== 'failed' : !['failed', 'runtime_failed', 'infra_failed'].includes(input.outcome ?? ''));
     const runtimeEndError = input.runtimeEndError ?? (runtimeEndSuccess ? null : (input.summary ?? input.blockerReason ?? null));
-    const existingInstance = db.prepare(`
+    const existingInstance = await db.get(`
       SELECT status, lifecycle_outcome_posted_at, task_outcome
       FROM job_instances
       WHERE id = ?
-    `).get(input.instanceId) as {
+    `, input.instanceId) as {
       status: string;
       lifecycle_outcome_posted_at: string | null;
       task_outcome: string | null;
@@ -382,7 +367,7 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
     const nextStatus = input.statusLabel
       ?? existingInstance?.status
       ?? 'done';
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET status = ?,
           started_at = COALESCE(started_at, ?),
@@ -392,30 +377,21 @@ export function recordRunCheckIn(db: Database.Database, input: RunCheckInInput):
           runtime_end_error = COALESCE(?, runtime_end_error),
           runtime_end_source = COALESCE(?, runtime_end_source)
       WHERE id = ?
-    `).run(
-      nextStatus,
-      nowIso,
-      nowIso,
-      nowIso,
-      runtimeEndSuccess ? 1 : 0,
-      runtimeEndError,
-      input.runtimeEndSource ?? 'instance_complete',
-      input.instanceId,
-    );
+    `, nextStatus, nowTs, nowTs, nowTs, runtimeEndSuccess ? 1 : 0, runtimeEndError, input.runtimeEndSource ?? 'instance_complete', input.instanceId);
   }
 
   return { taskId, noteCreated };
 }
 
-export function markInstanceStale(db: Database.Database, instanceId: number, reason: string): { taskId: number | null; changed: boolean } {
-  const taskId = resolveTaskIdForInstance(db, instanceId);
-  const existing = db.prepare(`SELECT stale FROM instance_artifacts WHERE instance_id = ?`).get(instanceId) as { stale: number } | undefined;
+export async function markInstanceStale(db: Db, instanceId: number, reason: string): Promise<{ taskId: number | null; changed: boolean }> {
+  const taskId = await resolveTaskIdForInstance(db, instanceId);
+  const existing = await db.get(`SELECT stale FROM instance_artifacts WHERE instance_id = ?`, instanceId) as { stale: number } | undefined;
   if (existing?.stale) {
     return { taskId, changed: false };
   }
 
-  const nowIso = new Date().toISOString();
-  db.prepare(`
+  const nowTs = nowTimestamp();
+  await db.run(`
     INSERT INTO instance_artifacts (instance_id, task_id, current_stage, stale, stale_at, updated_at)
     VALUES (?, ?, 'heartbeat', 1, ?, ?)
     ON CONFLICT(instance_id) DO UPDATE SET
@@ -423,13 +399,13 @@ export function markInstanceStale(db: Database.Database, instanceId: number, rea
       stale = 1,
       stale_at = excluded.stale_at,
       updated_at = excluded.updated_at
-  `).run(instanceId, taskId, nowIso, nowIso);
+  `, instanceId, taskId, nowTs, nowTs);
 
   if (taskId) {
-    db.prepare(`
+    await db.run(`
       INSERT INTO task_notes (task_id, author, content)
       VALUES (?, 'Agent HQ', ?)
-    `).run(taskId, `Agent run appears stale\nReason: ${reason}`);
+    `, taskId, `Agent run appears stale\nReason: ${reason}`);
   }
 
   return { taskId, changed: true };

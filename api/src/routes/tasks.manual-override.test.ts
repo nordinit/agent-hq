@@ -7,10 +7,10 @@ import { getDefaultTenantId } from '../lib/tenantContext';
 import tasksRouter from './tasks';
 
 describe('manual MCP/admin task moves', () => {
-  beforeEach(() => {
-    initSchema();
+  beforeEach(async () => {
+    await initSchema();
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       DELETE FROM sprint_task_transitions;
       DELETE FROM sprint_type_task_types;
       DELETE FROM sprint_type_outcomes;
@@ -21,28 +21,28 @@ describe('manual MCP/admin task moves', () => {
       DELETE FROM agents;
     `);
 
-    const tenantId = getDefaultTenantId(db);
-    db.prepare(`INSERT INTO projects (id, tenant_id, name, description, context_md, created_at) VALUES (1, ?, 'Agent HQ', '', '', datetime('now'))`).run(tenantId);
-    db.prepare(`INSERT INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'bugs', 'Bugs', '', 0, datetime('now'), datetime('now'))`).run(tenantId);
-    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at) VALUES (56, ?, 1, 'Bugs', '', 'bugs', 'active', 'time', '2w', datetime('now'))`).run(tenantId);
-    db.prepare(`INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES
+    const tenantId = await getDefaultTenantId(db);
+    await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md, created_at) VALUES (1, ?, 'Agent HQ', '', '', datetime('now'))`, tenantId);
+    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'bugs', 'Bugs', '', 0, datetime('now'), datetime('now'))`, tenantId);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at) VALUES (56, ?, 1, 'Bugs', '', 'bugs', 'active', 'time', '2w', datetime('now'))`, tenantId);
+    await db.run(`INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES
       (?, 56, NULL, 'dev_deploy_queued', 'completed_for_review', 'review', 1, 30, 0, datetime('now'), datetime('now')),
       (?, 56, NULL, 'dev_deploy_queued', 'blocked', 'blocked', 1, 20, 0, datetime('now'), datetime('now')),
       (?, 56, NULL, 'dev_deploy_queued', 'failed', 'failed', 1, 10, 0, datetime('now'), datetime('now'))
-    `).run(tenantId, tenantId, tenantId);
-    db.prepare(`INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES
+    `, tenantId, tenantId, tenantId);
+    await db.run(`INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES
       (?, 'bugs', NULL, 'completed_for_review', 'Completed for Review', '', 1, 'base', NULL, 0, 0, '{}', datetime('now'), datetime('now')),
       (?, 'bugs', NULL, 'blocked', 'Blocked', '', 1, 'base', NULL, 1, 0, '{}', datetime('now'), datetime('now')),
       (?, 'bugs', NULL, 'failed', 'Failed', '', 1, 'base', NULL, 2, 0, '{}', datetime('now'), datetime('now'))
-    `).run(tenantId, tenantId, tenantId);
-    db.prepare(`INSERT INTO tasks (id, tenant_id, title, status, sprint_id, task_type, created_at, updated_at) VALUES
+    `, tenantId, tenantId, tenantId);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, sprint_id, task_type, created_at, updated_at) VALUES
       (455, ?, 'Queued task', 'dev_deploy_queued', 56, 'backend', datetime('now'), datetime('now')),
       (456, ?, 'Blocked task', 'blocked', 56, 'backend', datetime('now'), datetime('now'))
-    `).run(tenantId, tenantId);
-    db.prepare(`INSERT INTO agents (id, tenant_id, name, enabled, system_role, session_key, created_at) VALUES
+    `, tenantId, tenantId);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, enabled, system_role, session_key, created_at) VALUES
       (8, ?, 'Atlas', 1, 'admin', 'session:test-atlas', datetime('now'))
-    `).run(tenantId);
-    ensureMcpApiKeyTable(db);
+    `, tenantId);
+    await ensureMcpApiKeyTable(db);
   });
 
   afterEach(() => {
@@ -71,7 +71,7 @@ describe('manual MCP/admin task moves', () => {
 
   it('allows manual MCP move from dev_deploy_queued to ready', async () => {
     const db = getDb();
-    const adminKey = issueMcpApiKeyForAgent(db, 8).apiKey;
+    const adminKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
 
     await withApp(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/v1/tasks/455`, {
@@ -87,12 +87,12 @@ describe('manual MCP/admin task moves', () => {
       expect(response.status).toBe(200);
     });
 
-    expect((db.prepare(`SELECT status FROM tasks WHERE id = 455`).get() as { status: string }).status).toBe('ready');
+    expect((await db.get(`SELECT status FROM tasks WHERE id = 455`) as { status: string }).status).toBe('ready');
   });
 
   it('allows manual MCP move from another constrained status to a normally disallowed target', async () => {
     const db = getDb();
-    const adminKey = issueMcpApiKeyForAgent(db, 8).apiKey;
+    const adminKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
 
     await withApp(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/v1/tasks/456`, {
@@ -108,7 +108,7 @@ describe('manual MCP/admin task moves', () => {
       expect(response.status).toBe(200);
     });
 
-    expect((db.prepare(`SELECT status FROM tasks WHERE id = 456`).get() as { status: string }).status).toBe('done');
+    expect((await db.get(`SELECT status FROM tasks WHERE id = 456`) as { status: string }).status).toBe('done');
   });
 
   it('keeps automatic/non-manual direct move path rejected when no explicit override authority is present', async () => {

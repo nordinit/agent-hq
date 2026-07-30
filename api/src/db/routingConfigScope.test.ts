@@ -4,6 +4,7 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import { closeDb, getDb, getDbPath } from './client';
 import { initSchema } from './schema';
+import { SqliteAdapter } from "./adapter/SqliteAdapter";
 
 describe('routing_config scoped ownership schema migration', () => {
   const originalDbPath = process.env.AGENT_HQ_DB_PATH;
@@ -22,9 +23,9 @@ describe('routing_config scoped ownership schema migration', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('disables legacy null-scoped routing_config rows without disabling project-scoped rows', () => {
+  it('disables legacy null-scoped routing_config rows without disabling project-scoped rows', async () => {
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       CREATE TABLE routing_config (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER,
@@ -36,30 +37,34 @@ describe('routing_config scoped ownership schema migration', () => {
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
-    db.prepare(`
+    await db.run(`
       INSERT INTO routing_config (project_id, from_status, outcome, to_status, lane, enabled)
       VALUES (NULL, 'in_progress', 'custom_global', 'review', 'default', 1)
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO routing_config (project_id, from_status, outcome, to_status, lane, enabled)
       VALUES (1, 'in_progress', 'custom_project', 'review', 'default', 1)
-    `).run();
+    `);
 
-    initSchema();
+    // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
+    // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
+    // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
+    // async fn simply never matched. Both forms must go through the promise.
+    await initSchema();
 
-    expect(db.prepare(`
+    expect(await db.get(`
       SELECT COUNT(*) AS count FROM routing_config WHERE project_id IS NULL AND enabled = 1
-    `).get()).toEqual({ count: 0 });
-    expect(db.prepare(`
+    `)).toEqual({ count: 0 });
+    expect(await db.get(`
       SELECT enabled FROM routing_config WHERE project_id = 1 AND outcome = 'custom_project'
-    `).get()).toEqual({ enabled: 1 });
-    const columns = db.prepare(`PRAGMA table_info(routing_config)`).all() as Array<{ name: string }>;
+    `)).toEqual({ enabled: 1 });
+    const columns = await db.all(`PRAGMA table_info(routing_config)`) as Array<{ name: string }>;
     expect(columns.some((column) => column.name === 'lane')).toBe(false);
   });
 
-  it('drops legacy transition lane columns without dropping non-default transition rows', () => {
+  it('drops legacy transition lane columns without dropping non-default transition rows', async () => {
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       CREATE TABLE sprint_task_transitions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sprint_id INTEGER,
@@ -93,15 +98,15 @@ describe('routing_config scoped ownership schema migration', () => {
       VALUES ('backend', 'review', 'qa_pass', 'ready_to_merge', 'review', 1, 5);
     `);
 
-    initSchema();
+    await initSchema();
 
-    const transitionColumns = db.prepare(`PRAGMA table_info(sprint_task_transitions)`).all() as Array<{ name: string }>;
+    const transitionColumns = await db.all(`PRAGMA table_info(sprint_task_transitions)`) as Array<{ name: string }>;
     expect(transitionColumns.some((column) => column.name === 'lane')).toBe(false);
-    expect(db.prepare(`
+    expect(await db.get(`
       SELECT task_type, from_status, outcome, to_status, enabled, priority
       FROM sprint_task_transitions
       WHERE outcome = 'completed_for_review'
-    `).get()).toEqual({
+    `)).toEqual({
       task_type: 'backend',
       from_status: 'in_progress',
       outcome: 'completed_for_review',
@@ -110,13 +115,13 @@ describe('routing_config scoped ownership schema migration', () => {
       priority: 10,
     });
 
-    const lifecycleColumns = db.prepare(`PRAGMA table_info(lifecycle_rules)`).all() as Array<{ name: string }>;
+    const lifecycleColumns = await db.all(`PRAGMA table_info(lifecycle_rules)`) as Array<{ name: string }>;
     expect(lifecycleColumns.some((column) => column.name === 'lane')).toBe(false);
-    expect(db.prepare(`
+    expect(await db.get(`
       SELECT task_type, from_status, outcome, to_status, enabled, priority
       FROM lifecycle_rules
       WHERE outcome = 'qa_pass'
-    `).get()).toEqual({
+    `)).toEqual({
       task_type: 'backend',
       from_status: 'review',
       outcome: 'qa_pass',
@@ -126,9 +131,9 @@ describe('routing_config scoped ownership schema migration', () => {
     });
   });
 
-  it('migrates legacy sprint_task_transition_requirements before creating scope indexes', () => {
+  it('migrates legacy sprint_task_transition_requirements before creating scope indexes', async () => {
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       CREATE TABLE task_statuses (
         name TEXT PRIMARY KEY,
         label TEXT NOT NULL,
@@ -180,24 +185,24 @@ describe('routing_config scoped ownership schema migration', () => {
         updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
-    db.prepare(`INSERT INTO task_statuses (name, label) VALUES ('ready', 'Ready')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`).run();
-    db.prepare(`INSERT INTO sprint_types (key, name) VALUES ('dev', 'Development')`).run();
-    db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Bugs', 'dev')`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO task_statuses (name, label) VALUES ('ready', 'Ready')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`);
+    await db.run(`INSERT INTO sprint_types (key, name) VALUES ('dev', 'Development')`);
+    await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Bugs', 'dev')`);
+    await db.run(`
       INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
       VALUES (56, 'backend', 'completed_for_review', 'review_commit', 'required', 'block', 'Commit required', 1, 0)
-    `).run();
+    `);
 
-    expect(() => initSchema()).not.toThrow();
+    await initSchema();
 
-    const ddl = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_transition_requirements'`).get() as { sql: string };
+    const ddl = await db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_transition_requirements'`) as { sql: string };
     expect(/sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(ddl.sql)).toBe(false);
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT sprint_id, project_id, sprint_type, task_type, outcome, field_name
       FROM sprint_task_transition_requirements
       LIMIT 1
-    `).get();
+    `);
     expect(row).toEqual({
       sprint_id: 56,
       project_id: 1,
@@ -206,16 +211,16 @@ describe('routing_config scoped ownership schema migration', () => {
       outcome: 'completed_for_review',
       field_name: 'review_commit',
     });
-    const indexRow = db.prepare(`
+    const indexRow = await db.get(`
       SELECT name FROM sqlite_master
       WHERE type='index' AND name='idx_sprint_task_transition_requirements_scope_lookup'
-    `).get();
+    `);
     expect(indexRow).toEqual({ name: 'idx_sprint_task_transition_requirements_scope_lookup' });
   });
 
-  it('migrates legacy sprint_task_routing_rules tables that still declare sprint_id NOT NULL in appended-column SQLite DDL', () => {
+  it('migrates legacy sprint_task_routing_rules tables that still declare sprint_id NOT NULL in appended-column SQLite DDL', async () => {
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       CREATE TABLE task_statuses (
         name TEXT PRIMARY KEY,
         label TEXT NOT NULL,
@@ -272,27 +277,28 @@ describe('routing_config scoped ownership schema migration', () => {
       ALTER TABLE sprint_task_routing_rules ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE;
       ALTER TABLE sprint_task_routing_rules ADD COLUMN sprint_type TEXT REFERENCES sprint_types(key) ON DELETE CASCADE;
     `);
-    db.prepare(`INSERT INTO task_statuses (name, label) VALUES ('todo', 'To Do')`).run();
-    db.prepare(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`).run();
-    db.prepare(`INSERT INTO sprint_types (key, name) VALUES ('dev', 'Development')`).run();
-    db.prepare(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Bugs', 'dev')`).run();
-    db.prepare(`INSERT INTO agents (id, name) VALUES (94, 'Cinder')`).run();
-    db.prepare(`
+    await db.run(`INSERT INTO task_statuses (name, label) VALUES ('todo', 'To Do')`);
+    await db.run(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`);
+    await db.run(`INSERT INTO sprint_types (key, name) VALUES ('dev', 'Development')`);
+    await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (56, 1, 'Bugs', 'dev')`);
+    await db.run(`INSERT INTO agents (id, name) VALUES (94, 'Cinder')`);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority, is_system, project_id, sprint_type)
       VALUES (56, 'backend', 'todo', 94, 0, 0, 1, 'dev')
-    `).run();
+    `);
 
-    db.close();
+    await db.close();
     closeDb();
 
-    const migratedDb = new Database(getDbPath());
-    migratedDb.pragma('foreign_keys = ON');
-    const ddlBefore = migratedDb.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_routing_rules'`).get() as { sql: string };
+    const migratedDbRaw = new Database(getDbPath());
+    const migratedDb = new SqliteAdapter(migratedDbRaw);
+    migratedDbRaw.pragma('foreign_keys = ON');
+    const ddlBefore = await migratedDb.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_routing_rules'`) as { sql: string };
     expect(/sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(ddlBefore.sql)).toBe(true);
 
     const needsMigration = /sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(ddlBefore.sql);
     if (needsMigration) {
-      migratedDb.exec(`
+      await migratedDb.exec(`
         BEGIN TRANSACTION;
         CREATE TABLE sprint_task_routing_rules__new (
           id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -316,13 +322,13 @@ describe('routing_config scoped ownership schema migration', () => {
       `);
     }
 
-    const ddl = migratedDb.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_routing_rules'`).get() as { sql: string };
+    const ddl = await migratedDb.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='sprint_task_routing_rules'`) as { sql: string };
     expect(/sprint_id\s+INTEGER\s+NOT\s+NULL/i.test(ddl.sql)).toBe(false);
-    const row = migratedDb.prepare(`
+    const row = await migratedDb.get(`
       SELECT sprint_id, project_id, sprint_type, task_type, status, agent_id
       FROM sprint_task_routing_rules
       LIMIT 1
-    `).get();
+    `);
     expect(row).toEqual({
       sprint_id: 56,
       project_id: 1,
@@ -331,81 +337,87 @@ describe('routing_config scoped ownership schema migration', () => {
       status: 'todo',
       agent_id: 94,
     });
-    migratedDb.close();
+    migratedDbRaw.close();
   });
 
-  it('allows multiple routing candidates per scope while preserving exact candidate uniqueness', () => {
+  it('allows multiple routing candidates per scope while preserving exact candidate uniqueness', async () => {
     const db = getDb();
-    initSchema();
+    await initSchema();
 
-    db.prepare(`INSERT OR IGNORE INTO projects (id, name) VALUES (86, 'Agent HQ')`).run();
-    db.prepare(`INSERT OR IGNORE INTO sprint_types (key, name) VALUES ('dev', 'Development')`).run();
-    db.prepare(`INSERT OR IGNORE INTO sprints (id, project_id, name, sprint_type) VALUES (57, 86, 'Enhancements', 'dev')`).run();
-    db.prepare(`
+    await db.run(`INSERT OR IGNORE INTO projects (id, name) VALUES (86, 'Agent HQ')`);
+    await db.run(`INSERT OR IGNORE INTO sprint_types (key, name) VALUES ('dev', 'Development')`);
+    await db.run(`INSERT OR IGNORE INTO sprints (id, project_id, name, sprint_type) VALUES (57, 86, 'Enhancements', 'dev')`);
+    await db.run(`
       INSERT INTO agents (id, name, role, session_key, job_title, project_id, enabled)
       VALUES (94, 'Cinder', 'backend', 'agent:cinder:test', 'Backend Engineer', 86, 1)
       ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, enabled = excluded.enabled
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO agents (id, name, role, session_key, job_title, project_id, enabled)
       VALUES (108, 'Vulcan', 'backend', 'agent:vulcan:test', 'Backend Engineer', 86, 1)
       ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, enabled = excluded.enabled
-    `).run();
+    `);
 
-    const oldIndex = db.prepare(`
+    const oldIndex = await db.get(`
       SELECT name FROM sqlite_master
       WHERE type = 'index' AND name = 'idx_sprint_task_routing_rules_scope_unique'
-    `).get();
+    `);
     expect(oldIndex).toBeUndefined();
-    const candidateIndex = db.prepare(`
+    const candidateIndex = await db.get(`
       SELECT name FROM sqlite_master
       WHERE type = 'index' AND name = 'idx_sprint_task_routing_rules_candidate_unique'
-    `).get();
+    `);
     expect(candidateIndex).toEqual({ name: 'idx_sprint_task_routing_rules_candidate_unique' });
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
       VALUES (86, 'dev', NULL, 'backend', 'ready', 94, 0)
-    `).run();
-    expect(() => db.prepare(`
+    `);
+    await (async () => await db.run(`
       INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
       VALUES (86, 'dev', NULL, 'backend', 'ready', 108, -10)
-    `).run()).not.toThrow();
-    expect(() => db.prepare(`
+    `))();
+    // Asserted on the rejection VALUE, not .rejects.toThrow(). better-sqlite3 is a native
+    // addon: a SqliteError raised from the SECOND test file loaded in a jest worker fails
+    // `instanceof Error`, because the addon keeps the constructor registered by the FIRST
+    // module-registry load. jest's toThrow only inspects the rejection once it classifies it
+    // as an Error, so otherwise it reports "did not throw" despite a correct rejection —
+    // making the assertion depend on file order. Matching the message is realm-independent.
+    await expect((async () => await db.run(`
       INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
       VALUES (86, 'dev', NULL, 'backend', 'ready', 94, 0)
-    `).run()).toThrow(/UNIQUE constraint failed|constraint/i);
+    `))()).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
   });
 
-  it('removes routing rules whose task_type is not allowed by the sprint type catalog', () => {
+  it('removes routing rules whose task_type is not allowed by the sprint type catalog', async () => {
     const db = getDb();
-    initSchema();
+    await initSchema();
 
-    db.prepare(`INSERT OR IGNORE INTO projects (id, name) VALUES (86, 'Agent HQ')`).run();
-    db.prepare(`
+    await db.run(`INSERT OR IGNORE INTO projects (id, name) VALUES (86, 'Agent HQ')`);
+    await db.run(`
       INSERT INTO agents (id, name, role, session_key, job_title, project_id, enabled)
       VALUES (94, 'Cinder', 'backend', 'agent:cinder:cleanup-test', 'Backend Engineer', 86, 1)
       ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, enabled = excluded.enabled
-    `).run();
-    db.prepare(`INSERT OR IGNORE INTO sprints (id, project_id, name, sprint_type) VALUES (86, 86, 'Runtime', 'dev')`).run();
-    db.prepare(`INSERT OR IGNORE INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`).run();
-    db.prepare(`
+    `);
+    await db.run(`INSERT OR IGNORE INTO sprints (id, project_id, name, sprint_type) VALUES (86, 86, 'Runtime', 'dev')`);
+    await db.run(`INSERT OR IGNORE INTO sprint_type_task_types (sprint_type_key, task_type) VALUES ('dev', 'backend')`);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
       VALUES
         (86, 'dev', 86, 'backend', 'ready', 94, 0),
         (86, 'dev', 86, 'adhoc', 'ready', 94, 0),
         (86, 'dev', 86, NULL, 'ready', 94, -10),
         (86, 'dev', NULL, 'other', 'ready', 94, 0)
-    `).run();
+    `);
 
-    initSchema();
+    await initSchema();
 
-    const rows = db.prepare(`
+    const rows = await db.all(`
       SELECT sprint_id, task_type, status
       FROM sprint_task_routing_rules
       WHERE project_id = 86 AND sprint_type = 'dev'
       ORDER BY sprint_id IS NULL ASC, task_type IS NULL ASC, task_type ASC
-    `).all();
+    `);
     expect(rows).toEqual([
       { sprint_id: 86, task_type: 'backend', status: 'ready' },
       { sprint_id: 86, task_type: null, status: 'ready' },

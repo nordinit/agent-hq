@@ -1,5 +1,7 @@
 import Database from 'better-sqlite3';
 import { completeRunInstance, startRunInstance } from './callbacks';
+import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 jest.mock('../../services/browserPool', () => ({
   createAgentContext: jest.fn(() => Promise.resolve({})),
@@ -10,9 +12,10 @@ jest.mock('../../integrations/telegram', () => ({
   notifyTelegram: jest.fn(() => Promise.resolve()),
 }));
 
-function createDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.exec(`
+async function createDb(): Promise<Db> {
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
+  await db.exec(`
     CREATE TABLE agents (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -178,58 +181,58 @@ function createDb(): Database.Database {
     );
   `);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO external_event_mappings (
       project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
       action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
     )
     VALUES (NULL, NULL, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 1, 100)
-  `).run();
+  `);
 
-  db.prepare(`
+  await db.run(`
     INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type)
     VALUES (94, 'Cinder (Backend)', 'cinder-backend', 'cinder-backend', 'openclaw')
-  `).run();
+  `);
 
   return db;
 }
 
-function seedReadyTaskRun(db: Database.Database, activeInstanceId: number | null = null): void {
-  db.prepare(`
+async function seedReadyTaskRun(db: Db, activeInstanceId: number | null = null): Promise<void> {
+  await db.run(`
     INSERT INTO tasks (id, title, status, task_type, project_id, agent_id, active_instance_id, updated_at)
     VALUES (552, 'Allow task routing rules that apply to all task types', 'ready', 'backend', 86, 94, ?, datetime('now'))
-  `).run(activeInstanceId);
-  db.prepare(`
+  `, activeInstanceId);
+  await db.run(`
     INSERT INTO job_instances (id, agent_id, task_id, status, dispatched_at)
     VALUES (3461, 94, 552, 'running', datetime('now'))
-  `).run();
+  `);
 }
 
 describe('startRunInstance task ownership repair', () => {
-  let db: Database.Database;
+  let db: Db;
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
-  it('reattaches a matching live instance before applying the agent_started status mapping', () => {
-    db = createDb();
-    seedReadyTaskRun(db);
+  it('reattaches a matching live instance before applying the agent_started status mapping', async () => {
+    db = await createDb();
+    await seedReadyTaskRun(db);
 
-    expect(startRunInstance(db, 3461, 'run:3461')).toEqual({ ok: true, id: 3461, session_key: 'run:3461' });
+    expect(await startRunInstance(db, 3461, 'run:3461')).toEqual({ ok: true, id: 3461, session_key: 'run:3461' });
 
-    const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 552`).get() as {
+    const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 552`) as {
       status: string;
       active_instance_id: number | null;
     };
     expect(task).toEqual({ status: 'in_progress', active_instance_id: 3461 });
 
-    const history = db.prepare(`
+    const history = await db.all(`
       SELECT field, old_value, new_value
       FROM task_history
       WHERE task_id = 552
       ORDER BY id
-    `).all();
+    `);
     expect(history).toEqual([
       { field: 'active_instance_id', old_value: null, new_value: '3461' },
       { field: 'workflow_event_source', old_value: null, new_value: 'agent_hq_runtime' },
@@ -240,13 +243,13 @@ describe('startRunInstance task ownership repair', () => {
     ]);
   });
 
-  it('does not let a stale start callback steal a task owned by another instance', () => {
-    db = createDb();
-    seedReadyTaskRun(db, 9999);
+  it('does not let a stale start callback steal a task owned by another instance', async () => {
+    db = await createDb();
+    await seedReadyTaskRun(db, 9999);
 
-    expect(startRunInstance(db, 3461, 'run:3461')).toEqual({ ok: true, id: 3461, session_key: 'run:3461' });
+    expect(await startRunInstance(db, 3461, 'run:3461')).toEqual({ ok: true, id: 3461, session_key: 'run:3461' });
 
-    const task = db.prepare(`SELECT status, active_instance_id FROM tasks WHERE id = 552`).get() as {
+    const task = await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = 552`) as {
       status: string;
       active_instance_id: number | null;
     };
@@ -255,45 +258,45 @@ describe('startRunInstance task ownership repair', () => {
 });
 
 describe('completeRunInstance runtime failure workflow event', () => {
-  let db: Database.Database;
+  let db: Db;
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
-  function seedInProgressRun(actionKind: 'status' | 'ignore', actionTarget: string | null): void {
-    seedReadyTaskRun(db, 3461);
-    db.prepare(`UPDATE tasks SET status = 'in_progress' WHERE id = 552`).run();
-    db.prepare(`UPDATE job_instances SET session_key = 'run:3461' WHERE id = 3461`).run();
-    db.prepare(`
+  async function seedInProgressRun(actionKind: 'status' | 'ignore', actionTarget: string | null): Promise<void> {
+    await seedReadyTaskRun(db, 3461);
+    await db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = 552`);
+    await db.run(`UPDATE job_instances SET session_key = 'run:3461' WHERE id = 3461`);
+    await db.run(`
       INSERT INTO external_event_mappings (
         project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
         action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
       )
       VALUES (NULL, 'agent_hq_runtime', 'runtime_failed', NULL, '[]', '[]', ?, ?, 0, 1, 1, 200)
-    `).run(actionKind, actionTarget);
+    `, actionKind, actionTarget);
   }
 
   it('applies the configured visible status for a runtime_failed workflow event', async () => {
-    db = createDb();
-    seedInProgressRun('status', 'blocked');
+    db = await createDb();
+    await seedInProgressRun('status', 'blocked');
 
     await expect(completeRunInstance(db, 3461, {
       status: 'failed',
       summary: 'Runtime process exited with code 1',
     })).resolves.toEqual({ ok: true, id: 3461, status: 'failed' });
 
-    const task = db.prepare(`SELECT status, failure_detail FROM tasks WHERE id = 552`).get() as { status: string; failure_detail: string | null };
+    const task = await db.get(`SELECT status, failure_detail FROM tasks WHERE id = 552`) as { status: string; failure_detail: string | null };
     expect(task.status).toBe('blocked');
     expect(task.failure_detail).toContain('Runtime failure workflow event');
     expect(task.failure_detail).toContain('Event: runtime_failed');
 
-    const history = db.prepare(`
+    const history = await db.all(`
       SELECT field, new_value
       FROM task_history
       WHERE task_id = 552
       ORDER BY id
-    `).all() as Array<{ field: string; new_value: string | null }>;
+    `) as Array<{ field: string; new_value: string | null }>;
     expect(history).toEqual(expect.arrayContaining([
       { field: 'workflow_event_source', new_value: 'agent_hq_runtime' },
       { field: 'workflow_event_name', new_value: 'runtime_failed' },
@@ -302,28 +305,28 @@ describe('completeRunInstance runtime failure workflow event', () => {
       { field: 'status', new_value: 'blocked' },
     ]));
 
-    const note = db.prepare(`SELECT content FROM task_notes WHERE task_id = 552 ORDER BY id DESC LIMIT 1`).get() as { content: string };
+    const note = await db.get(`SELECT content FROM task_notes WHERE task_id = 552 ORDER BY id DESC LIMIT 1`) as { content: string };
     expect(note.content).toContain('Classification: runtime/control-plane failure event, not an agent-authored product failure outcome');
   });
 
   it('records runtime_failed workflow event history when configured action is ignore', async () => {
-    db = createDb();
-    seedInProgressRun('ignore', null);
+    db = await createDb();
+    await seedInProgressRun('ignore', null);
 
     await completeRunInstance(db, 3461, {
       status: 'failed',
       summary: 'Runtime monitor failed',
     });
 
-    const task = db.prepare(`SELECT status FROM tasks WHERE id = 552`).get() as { status: string };
+    const task = await db.get(`SELECT status FROM tasks WHERE id = 552`) as { status: string };
     expect(task.status).toBe('in_progress');
 
-    const history = db.prepare(`
+    const history = await db.all(`
       SELECT field, new_value
       FROM task_history
       WHERE task_id = 552
       ORDER BY id
-    `).all() as Array<{ field: string; new_value: string | null }>;
+    `) as Array<{ field: string; new_value: string | null }>;
     expect(history).toEqual(expect.arrayContaining([
       { field: 'workflow_event_source', new_value: 'agent_hq_runtime' },
       { field: 'workflow_event_name', new_value: 'runtime_failed' },

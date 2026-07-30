@@ -60,9 +60,9 @@ const CHAT_JSONL_POLL_MS = 750;
 // ─── WebSocket Proxy ──────────────────────────────────────────────────────────
 
 export function setupChatProxy(wss: WebSocketServer): void {
-  wss.on('connection', (clientWs: WsClient, _req: IncomingMessage) => {
+  wss.on('connection', async (clientWs: WsClient, _req: IncomingMessage) => {
     // Connect to the host gateway initially; may switch to a container gateway on first chat.history
-    let currentGatewayUrl = getDefaultGatewayUrl();
+    let currentGatewayUrl = await getDefaultGatewayUrl();
     let gatewayWs = new WsClient(currentGatewayUrl, openClawGatewayWsOptions(currentGatewayUrl));
     let pairingRetryAttempted = false;
     let pairingRetryInFlight = false;
@@ -96,22 +96,22 @@ export function setupChatProxy(wss: WebSocketServer): void {
       return false;
     }
 
-    function ingestJsonlStructuredRows(instanceId: number): void {
+    async function ingestJsonlStructuredRows(instanceId: number): Promise<void> {
       try {
-        backfillOpenClawJsonlTranscript(getDb(), instanceId, { structuredOnly: true });
+        await backfillOpenClawJsonlTranscript(getDb(), instanceId, { structuredOnly: true });
       } catch (err) {
         console.warn('[chat-proxy] Failed to ingest OpenClaw JSONL transcript:', err instanceof Error ? err.message : String(err));
       }
     }
 
-    function startJsonlIngestPolling(instanceId: number): void {
-      stopJsonlIngestPolling();
+    async function startJsonlIngestPolling(instanceId: number): Promise<void> {
+      await stopJsonlIngestPolling();
       jsonlPollInstanceId = instanceId;
-      ingestJsonlStructuredRows(instanceId);
-      jsonlPollTimer = setInterval(() => ingestJsonlStructuredRows(instanceId), CHAT_JSONL_POLL_MS);
+      await ingestJsonlStructuredRows(instanceId);
+      jsonlPollTimer = setInterval(async () => await ingestJsonlStructuredRows(instanceId), CHAT_JSONL_POLL_MS);
     }
 
-    function stopJsonlIngestPolling(finalPoll = false): void {
+    async function stopJsonlIngestPolling(finalPoll = false): Promise<void> {
       const instanceId = jsonlPollInstanceId;
       if (jsonlPollTimer) {
         clearInterval(jsonlPollTimer);
@@ -119,7 +119,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
       }
       jsonlPollInstanceId = null;
       if (finalPoll && instanceId != null) {
-        ingestJsonlStructuredRows(instanceId);
+        await ingestJsonlStructuredRows(instanceId);
       }
     }
 
@@ -127,7 +127,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
 
     /** Attach gateway event handlers. Re-called when gateway is switched. */
     function attachGatewayHandlers(gw: WsClient): void {
-    gw.on('message', (raw) => {
+    gw.on('message', async (raw) => {
       if (clientWs.readyState !== WsClient.OPEN) return;
       let frame: Record<string, unknown>;
       try {
@@ -173,7 +173,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
           if (state === 'delta') {
             pendingAssistantResponse = true;
             if (sessionCtx && payload?.message && typeof payload.message === 'object') {
-              persistLiveStructuredMessage(sessionCtx, payload.message as Record<string, unknown>);
+              await persistLiveStructuredMessage(sessionCtx, payload.message as Record<string, unknown>);
             }
             const newText = extractText(payload?.message);
             // Gateway sends cumulative text; compute incremental delta
@@ -184,13 +184,13 @@ export function setupChatProxy(wss: WebSocketServer): void {
             }
             // Persist streaming content periodically
             if (sessionCtx && streamText.length - lastStreamFlushLen >= STREAM_FLUSH_THRESHOLD) {
-              persistStreamDelta(sessionCtx, streamText);
+              await persistStreamDelta(sessionCtx, streamText);
               lastStreamFlushLen = streamText.length;
             }
           } else if (state === 'final') {
             pendingAssistantResponse = false;
             if (sessionCtx && payload?.message && typeof payload.message === 'object') {
-              persistLiveStructuredMessage(sessionCtx, payload.message as Record<string, unknown>);
+              await persistLiveStructuredMessage(sessionCtx, payload.message as Record<string, unknown>);
             }
             // Final event contains the complete text — flush any remaining delta
             const finalText = extractText(payload?.message);
@@ -204,12 +204,12 @@ export function setupChatProxy(wss: WebSocketServer): void {
             }
             // Persist final assistant message
             if (sessionCtx) {
-              persistFinalMessage(sessionCtx, finalText || streamText, assistantMsgIndex++);
+              await persistFinalMessage(sessionCtx, finalText || streamText, assistantMsgIndex++);
               lastStreamFlushLen = 0;
-              stopJsonlIngestPolling(true);
+              await stopJsonlIngestPolling(true);
             }
             if (currentChatInstanceId != null) {
-              completeChatRunInstance(currentChatInstanceId, 'done');
+              await completeChatRunInstance(currentChatInstanceId, 'done');
               currentChatInstanceId = null;
             }
             streamText = '';
@@ -217,16 +217,16 @@ export function setupChatProxy(wss: WebSocketServer): void {
           } else if (state === 'aborted' || state === 'error') {
             pendingAssistantResponse = false;
             if (sessionCtx && payload?.message && typeof payload.message === 'object') {
-              persistLiveStructuredMessage(sessionCtx, payload.message as Record<string, unknown>);
+              await persistLiveStructuredMessage(sessionCtx, payload.message as Record<string, unknown>);
             }
             // Persist whatever was streamed before abort
             if (sessionCtx && streamText) {
-              persistFinalMessage(sessionCtx, streamText, assistantMsgIndex++);
+              await persistFinalMessage(sessionCtx, streamText, assistantMsgIndex++);
               lastStreamFlushLen = 0;
             }
-            stopJsonlIngestPolling(true);
+            await stopJsonlIngestPolling(true);
             if (currentChatInstanceId != null) {
-              completeChatRunInstance(currentChatInstanceId, state === 'aborted' ? 'cancelled' : 'failed');
+              await completeChatRunInstance(currentChatInstanceId, state === 'aborted' ? 'cancelled' : 'failed');
               currentChatInstanceId = null;
             }
             const hadPartialStream = Boolean(streamText);
@@ -241,7 +241,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
               }));
             }
           } else if (sessionCtx && payload?.message && typeof payload.message === 'object') {
-            persistLiveStructuredMessage(sessionCtx, payload.message as Record<string, unknown>);
+            await persistLiveStructuredMessage(sessionCtx, payload.message as Record<string, unknown>);
           }
           return;
         }
@@ -255,12 +255,12 @@ export function setupChatProxy(wss: WebSocketServer): void {
 
           // Preserve any streamed partial response before surfacing the provider error.
           if (sessionCtx && streamText) {
-            persistFinalMessage(sessionCtx, streamText, assistantMsgIndex++);
+            await persistFinalMessage(sessionCtx, streamText, assistantMsgIndex++);
             lastStreamFlushLen = 0;
           }
-          stopJsonlIngestPolling(true);
+          await stopJsonlIngestPolling(true);
           if (currentChatInstanceId != null) {
-            completeChatRunInstance(currentChatInstanceId, 'failed');
+            await completeChatRunInstance(currentChatInstanceId, 'failed');
             currentChatInstanceId = null;
           }
           const hadPartialStream = Boolean(streamText);
@@ -302,7 +302,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
             // Flush any messages that arrived before auth completed
             gatewayReady = true;
             for (const queued of clientMsgQueue) {
-              processClientMessage(queued);
+              await processClientMessage(queued);
             }
             clientMsgQueue.length = 0;
           }
@@ -333,7 +333,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
             clientWs.send(JSON.stringify({ type: 'chat.history', messages: uiMessages }));
             // Persist history to chat_messages for transcript API
             if (sessionCtx && msgs.length > 0) {
-              persistHistoryMessages(sessionCtx, msgs as Array<Record<string, unknown>>);
+              await persistHistoryMessages(sessionCtx, msgs as Array<Record<string, unknown>>);
               assistantMsgIndex = msgs.filter((m: unknown) =>
                 typeof m === 'object' && m !== null && (m as Record<string, unknown>).role === 'assistant'
               ).length;
@@ -355,11 +355,11 @@ export function setupChatProxy(wss: WebSocketServer): void {
       }
     });
 
-    gw.on('error', (err) => {
+    gw.on('error', async (err) => {
       console.error('[chat-proxy] Gateway WS error:', err.message);
-      stopJsonlIngestPolling(true);
+      await stopJsonlIngestPolling(true);
       if (currentChatInstanceId != null) {
-        completeChatRunInstance(currentChatInstanceId, 'failed');
+        await completeChatRunInstance(currentChatInstanceId, 'failed');
         currentChatInstanceId = null;
       }
       if (clientWs.readyState === WsClient.OPEN) {
@@ -376,13 +376,13 @@ export function setupChatProxy(wss: WebSocketServer): void {
       }
     });
 
-    gw.on('close', (code, reason) => {
+    gw.on('close', async (code, reason) => {
       if (gw !== gatewayWs || clientWs.readyState !== WsClient.OPEN) return;
       if (isPairingRequiredClose(code, reason) && retryGatewayAfterPairing()) {
         return;
       }
       if (pendingAssistantResponse) {
-        stopJsonlIngestPolling(true);
+        await stopJsonlIngestPolling(true);
         pendingAssistantResponse = false;
         streamText = '';
         clientWs.send(JSON.stringify({
@@ -401,7 +401,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
     // ── Client → Gateway ──────────────────────────────────────────────────
 
     /** Process a parsed client message once gateway is authenticated */
-    function processClientMessage(msg: Record<string, unknown>): void {
+    async function processClientMessage(msg: Record<string, unknown>): Promise<void> {
       if (gatewayWs.readyState !== WsClient.OPEN) return;
 
       const type = msg.type as string;
@@ -410,13 +410,13 @@ export function setupChatProxy(wss: WebSocketServer): void {
         const sessionKey = msg.sessionKey as string | undefined;
         if (sessionKey) {
           activeSessionKey = sessionKey;
-          sessionCtx = resolveSessionContext(sessionKey);
+          sessionCtx = await resolveSessionContext(sessionKey);
           assistantMsgIndex = 0;
           lastStreamFlushLen = 0;
         }
 
         // Resolve correct gateway — container agents have their own WS endpoint
-        const targetUrl = resolveGatewayUrl(sessionKey ?? null);
+        const targetUrl = await resolveGatewayUrl(sessionKey ?? null);
         if (targetUrl !== currentGatewayUrl) {
           console.log(`[chat-proxy] Switching gateway ${currentGatewayUrl} → ${targetUrl} for "${sessionKey}"`);
           const oldGw = gatewayWs;
@@ -436,7 +436,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
         pending.set(reqId, 'chat.history');
         const gatewaySessionKey = toGatewaySessionKey(
           msg.sessionKey as string | null | undefined,
-          resolveAgentRowForSessionKey(msg.sessionKey as string | null | undefined),
+          await resolveAgentRowForSessionKey(msg.sessionKey as string | null | undefined),
         );
         gatewayWs.send(JSON.stringify({
           type: 'req',
@@ -457,20 +457,20 @@ export function setupChatProxy(wss: WebSocketServer): void {
           clientWs.send(JSON.stringify({ type: 'error', message: 'No active session to rotate' }));
           return;
         }
-        const currentCtx = resolveSessionContext(currentKey);
+        const currentCtx = await resolveSessionContext(currentKey);
         if (!currentCtx || currentCtx.instanceId !== null) {
           clientWs.send(JSON.stringify({ type: 'error', message: 'Session rotation only supports direct chats' }));
           return;
         }
 
-        const newSessionKey = buildDerivedDirectSessionKey(currentKey, channel, currentCtx.agentId, true);
+        const newSessionKey = await buildDerivedDirectSessionKey(currentKey, channel, currentCtx.agentId, true);
         if (!newSessionKey) {
           clientWs.send(JSON.stringify({ type: 'error', message: 'Session rotation only supports agent direct chats' }));
           return;
         }
 
         activeSessionKey = newSessionKey;
-        sessionCtx = resolveSessionContext(newSessionKey);
+        sessionCtx = await resolveSessionContext(newSessionKey);
         assistantMsgIndex = 0;
         lastStreamFlushLen = 0;
         streamText = '';
@@ -493,9 +493,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
           try {
             const db = getDb();
             const placeholders = attachmentIds.map(() => '?').join(',');
-            const attachments = db.prepare(
-              `SELECT * FROM chat_attachments WHERE id IN (${placeholders})`
-            ).all(...attachmentIds) as Array<Record<string, unknown>>;
+            const attachments = await db.all(`SELECT * FROM chat_attachments WHERE id IN (${placeholders})`, ...attachmentIds) as Array<Record<string, unknown>>;
             for (const a of attachments) {
               const apiPort = process.env.AGENT_HQ_API_PORT ?? '3501';
               const url = `http://localhost:${apiPort}/api/v1/chat/attachments/${a.id as number}/download`;
@@ -511,23 +509,23 @@ export function setupChatProxy(wss: WebSocketServer): void {
         }
 
         // Persist user message to chat_messages
-        if (activeSessionKey) sessionCtx = resolveSessionContext(activeSessionKey);
+        if (activeSessionKey) sessionCtx = await resolveSessionContext(activeSessionKey);
         // Save this chat turn as a job_instance (like every other agent run) so it picks
         // up the instance-based transcript/capture machinery. Only for instance-less
         // direct/agent chats — sessions that are already a run keep their instance.
         if (sessionCtx && sessionCtx.instanceId === null) {
-          const chatRun = startChatRunInstance(sessionCtx);
+          const chatRun = await startChatRunInstance(sessionCtx);
           if (chatRun) {
             sessionCtx = { ...sessionCtx, instanceId: chatRun.instanceId, durableRunId: chatRun.durableRunId };
             currentChatInstanceId = chatRun.instanceId;
             assistantMsgIndex = 0;
-            startJsonlIngestPolling(chatRun.instanceId);
+            await startJsonlIngestPolling(chatRun.instanceId);
           }
         }
         if (sessionCtx && fullMessage) {
-          persistUserChatMessage(sessionCtx, fullMessage);
+          await persistUserChatMessage(sessionCtx, fullMessage);
         }
-        const gatewaySessionKey = toGatewaySessionKey(msg.sessionKey as string | null | undefined, resolveAgentRowForSessionKey(msg.sessionKey as string | null | undefined));
+        const gatewaySessionKey = toGatewaySessionKey(msg.sessionKey as string | null | undefined, await resolveAgentRowForSessionKey(msg.sessionKey as string | null | undefined));
         const reqId = randomUUID();
         pending.set(reqId, 'chat.send');
         const chatSendParams: Record<string, unknown> = {
@@ -554,7 +552,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
       if (type === 'chat.abort') {
         pendingAssistantResponse = false;
         streamText = '';
-        const gatewaySessionKey = toGatewaySessionKey(msg.sessionKey as string | null | undefined, resolveAgentRowForSessionKey(msg.sessionKey as string | null | undefined));
+        const gatewaySessionKey = toGatewaySessionKey(msg.sessionKey as string | null | undefined, await resolveAgentRowForSessionKey(msg.sessionKey as string | null | undefined));
         const reqId = randomUUID();
         pending.set(reqId, 'chat.abort');
         gatewayWs.send(JSON.stringify({
@@ -572,7 +570,7 @@ export function setupChatProxy(wss: WebSocketServer): void {
       console.warn('[chat-proxy] Unknown client message type:', type);
     }
 
-    clientWs.on('message', (raw) => {
+    clientWs.on('message', async (raw) => {
       let msg: Record<string, unknown>;
       try {
         msg = JSON.parse(raw.toString());
@@ -593,24 +591,24 @@ export function setupChatProxy(wss: WebSocketServer): void {
         return;
       }
 
-      processClientMessage(msg);
+      await processClientMessage(msg);
     });
 
     // ── Error / Close handling ─────────────────────────────────────────────
 
-    clientWs.on('close', () => {
+    clientWs.on('close', async () => {
       // Don't leave a chat run 'running' if the client disconnects mid-turn.
-      stopJsonlIngestPolling(true);
+      await stopJsonlIngestPolling(true);
       if (currentChatInstanceId != null) {
-        completeChatRunInstance(currentChatInstanceId, pendingAssistantResponse ? 'failed' : 'done');
+        await completeChatRunInstance(currentChatInstanceId, pendingAssistantResponse ? 'failed' : 'done');
         currentChatInstanceId = null;
       }
       if (gatewayWs.readyState === WsClient.OPEN) gatewayWs.close();
     });
 
-    clientWs.on('error', (err) => {
+    clientWs.on('error', async (err) => {
       console.error('[chat-proxy] Client WS error:', err.message);
-      stopJsonlIngestPolling(true);
+      await stopJsonlIngestPolling(true);
       if (gatewayWs.readyState === WsClient.OPEN) gatewayWs.close();
     });
   });

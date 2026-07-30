@@ -1,9 +1,9 @@
-import type Database from 'better-sqlite3';
 import { getDb } from './client';
 import { ensureRoutingMetadata } from '../domains/routing/policy/metadata';
 import { seedDefaultWorkflowEventMappings } from '../domains/routing/externalEventMappings';
+import { type Db } from "./adapter/types";
 
-export function bootstrapRoutingAndWorkflowDefaults(db: Database.Database = getDb()): void {
-  ensureRoutingMetadata(db);
-  seedDefaultWorkflowEventMappings(db);
+export async function bootstrapRoutingAndWorkflowDefaults(db: Db = getDb()): Promise<void> {
+  await ensureRoutingMetadata(db);
+  await seedDefaultWorkflowEventMappings(db);
 }

@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { cleanupTaskExecutionLinkageForStatus } from './taskLifecycle';
 import { canonicalOutcomeRoute, requireReleaseGate, resolveSprintWorkflowOutcome } from './taskRelease';
 import { notifyTaskStatusChange } from './taskNotifications';
@@ -15,6 +14,9 @@ import {
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
+import { nowTimestamp } from './timestamps';
+import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export interface ApplyTaskOutcomeInput {
   taskId: number;
@@ -87,56 +89,56 @@ type OutcomeAuthorityDecision =
   | { kind: 'allow'; mode: 'active_instance' | 'linked_instance' }
   | { kind: 'ignore'; reason: ApplyTaskOutcomeResult['reason']; auditMessage: string; auditNote: string };
 
-function logHistory(
-  db: Database.Database,
+async function logHistory(
+  db: Db,
   taskId: number,
   changedBy: string,
   field: string,
   oldValue: unknown,
   newValue: unknown,
-): void {
-  const tenantId = resolveRuntimeTenantId(db, { taskId });
-  const tenant = tenantInsertColumns(db, 'task_history', tenantId);
-  db.prepare(`
+): Promise<void> {
+  const tenantId = await resolveRuntimeTenantId(db, { taskId });
+  const tenant = await tenantInsertColumns(db, 'task_history', tenantId);
+  await db.run(`
     INSERT INTO task_history (${tenant.columnSql}task_id, changed_by, field, old_value, new_value)
     VALUES (${tenant.valueSql}?, ?, ?, ?, ?)
-  `).run(...tenant.values, taskId, changedBy, field, oldValue == null ? null : String(oldValue), newValue == null ? null : String(newValue));
+  `, ...tenant.values, taskId, changedBy, field, oldValue == null ? null : String(oldValue), newValue == null ? null : String(newValue));
 }
 
-function insertAuditLog(db: Database.Database, message: string, taskId?: number | null, instanceId?: number | null): void {
-  insertRuntimeLog(db, {
-    taskId: taskId ?? null,
-    instanceId: instanceId ?? null,
-    jobTitle: 'outcome-api',
-    level: 'info',
-    message,
-  });
+async function insertAuditLog(db: Db, message: string, taskId?: number | null, instanceId?: number | null): Promise<void> {
+  await insertRuntimeLog(db, {
+        taskId: taskId ?? null,
+        instanceId: instanceId ?? null,
+        jobTitle: 'outcome-api',
+        level: 'info',
+        message,
+      });
 }
 
-function resolveAgentName(db: Database.Database, agentId: number | null): string | null {
+async function resolveAgentName(db: Db, agentId: number | null): Promise<string | null> {
   if (agentId == null) return null;
-  const row = db.prepare(`SELECT name, job_title FROM agents WHERE id = ?`).get(agentId) as { name: string; job_title: string | null } | undefined;
+  const row = await db.get(`SELECT name, job_title FROM agents WHERE id = ?`, agentId) as { name: string; job_title: string | null } | undefined;
   return row?.job_title || row?.name || String(agentId);
 }
 
-function addAuditNote(db: Database.Database, taskId: number, author: string, content: string): void {
-  const tenantId = resolveRuntimeTenantId(db, { taskId });
-  const tenant = tenantInsertColumns(db, 'task_notes', tenantId);
-  db.prepare(`
+async function addAuditNote(db: Db, taskId: number, author: string, content: string): Promise<void> {
+  const tenantId = await resolveRuntimeTenantId(db, { taskId });
+  const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
+  await db.run(`
     INSERT INTO task_notes (${tenant.columnSql}task_id, author, content)
     VALUES (${tenant.valueSql}?, ?, ?)
-  `).run(...tenant.values, taskId, author, content);
+  `, ...tenant.values, taskId, author, content);
 }
 
 function withCanonicalFieldValues(task: TaskOutcomeTaskRow): TaskOutcomeTaskRow {
   return getCanonicalTaskRecord(task as unknown as Record<string, unknown>) as TaskOutcomeTaskRow;
 }
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(col => col.name === column);
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
+    return await sharedColumnExists(db, table, column);
 }
 
-function selectTaskEvidenceColumns(db: Database.Database): string {
+async function selectTaskEvidenceColumns(db: Db): Promise<string> {
   const lifecycleColumns = [
     'review_branch',
     'review_commit',
@@ -156,17 +158,19 @@ function selectTaskEvidenceColumns(db: Database.Database): string {
   ];
   return [
     ...lifecycleColumns.map((column) => `NULL AS ${column}`),
-    ...compatibilityColumns.map((column) => (tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`)),
+    ...await Promise.all(
+      compatibilityColumns.map(async (column) => (await tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`)),
+    ),
   ]
     .join(',\n      ');
 }
 
-function selectTaskColumnOrNull(db: Database.Database, column: string): string {
-  return tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`;
+async function selectTaskColumnOrNull(db: Db, column: string): Promise<string> {
+  return await tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`;
 }
 
-export function resolveRefusedTaskOutcome(
-  db: Database.Database,
+export async function resolveRefusedTaskOutcome(
+  db: Db,
   input: {
     taskId: number;
     outcome: string;
@@ -175,17 +179,17 @@ export function resolveRefusedTaskOutcome(
     summary?: string | null;
     instanceId?: number | null;
   },
-): void {
-  const task = db.prepare(`
+): Promise<void> {
+  const task = await db.get(`
     SELECT id
     FROM tasks
     WHERE id = ?
-  `).get(input.taskId) as { id: number } | undefined;
+  `, input.taskId) as { id: number } | undefined;
 
   if (!task) return;
 
-  insertAuditLog(db, `Refused outcome for task #${input.taskId}: outcome="${input.outcome}", actor="${input.changedBy}", reason="${input.reason}"`, input.taskId, input.instanceId);
-  addAuditNote(db, input.taskId, input.changedBy, `Outcome refused: ${input.outcome} — ${input.reason}`);
+  await insertAuditLog(db, `Refused outcome for task #${input.taskId}: outcome="${input.outcome}", actor="${input.changedBy}", reason="${input.reason}"`, input.taskId, input.instanceId);
+  await addAuditNote(db, input.taskId, input.changedBy, `Outcome refused: ${input.outcome} — ${input.reason}`);
 }
 
 function buildMissingRouteErrorMessage(priorStatus: string, outcome: string, taskType: string | null, sprintId: number | null): string {
@@ -195,28 +199,28 @@ function buildMissingRouteErrorMessage(priorStatus: string, outcome: string, tas
   return `Cannot apply outcome "${outcome}" from "${priorStatus}": no explicit sprint_task_transitions route is configured (${scope.join(', ')})`;
 }
 
-function resolveTaskRoutingAssignment(
-  db: Database.Database,
+async function resolveTaskRoutingAssignment(
+  db: Db,
   sprintId: number | null,
   _projectId: number | null,
   taskType: string | null,
   status: string,
-): { agent_id: number | null } {
+): Promise<{ agent_id: number | null }> {
   if (!taskType) return { agent_id: null };
 
   try {
-    return resolveSprintTaskRoutingAssignment(db, sprintId, taskType, status);
+    return await resolveSprintTaskRoutingAssignment(db, sprintId, taskType, status);
   } catch {
     return { agent_id: null };
   }
 }
 
-function loadInstanceAuthorityRow(db: Database.Database, instanceId: number): InstanceAuthorityRow | null {
-  return db.prepare(`
+async function loadInstanceAuthorityRow(db: Db, instanceId: number): Promise<InstanceAuthorityRow | null> {
+  return await db.get(`
     SELECT id, agent_id, task_id, status
     FROM job_instances
     WHERE id = ?
-  `).get(instanceId) as InstanceAuthorityRow | undefined ?? null;
+  `, instanceId) as InstanceAuthorityRow | undefined ?? null;
 }
 
 function buildIgnoredOutcomeDecision(
@@ -232,12 +236,12 @@ function buildIgnoredOutcomeDecision(
   };
 }
 
-function resolveOutcomeAuthority(
-  db: Database.Database,
+async function resolveOutcomeAuthority(
+  db: Db,
   task: TaskOutcomeTaskRow,
   input: ApplyTaskOutcomeInput,
   changedBy: string,
-): OutcomeAuthorityDecision {
+): Promise<OutcomeAuthorityDecision> {
   if (task.active_instance_id != null && input.instanceId == null) {
     return buildIgnoredOutcomeDecision(
       'missing_authoritative_instance',
@@ -250,7 +254,7 @@ function resolveOutcomeAuthority(
     return { kind: 'allow', mode: 'linked_instance' };
   }
 
-  const callbackInstance = loadInstanceAuthorityRow(db, input.instanceId);
+  const callbackInstance = await loadInstanceAuthorityRow(db, input.instanceId);
   if (!callbackInstance) {
     return buildIgnoredOutcomeDecision(
       'instance_not_authoritative',
@@ -294,11 +298,11 @@ function resolveOutcomeAuthority(
   );
 }
 
-function reloadTaskOutcomeTaskRow(db: Database.Database, taskId: number): TaskOutcomeTaskRow {
-  const customFieldsSelect = tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
-  const assignedAgentSelect = tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id' : 'agent_id AS assigned_agent_id';
-  const evidenceSelect = selectTaskEvidenceColumns(db);
-  const reloaded = db.prepare(`
+async function reloadTaskOutcomeTaskRow(db: Db, taskId: number): Promise<TaskOutcomeTaskRow> {
+  const customFieldsSelect = await tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
+  const assignedAgentSelect = await tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id' : 'agent_id AS assigned_agent_id';
+  const evidenceSelect = await selectTaskEvidenceColumns(db);
+  const reloaded = await db.get(`
     SELECT
       id,
       status,
@@ -309,28 +313,28 @@ function reloadTaskOutcomeTaskRow(db: Database.Database, taskId: number): TaskOu
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
-      ${selectTaskColumnOrNull(db, 'review_owner_agent_id')},
+      ${await selectTaskColumnOrNull(db, 'review_owner_agent_id')},
       ${evidenceSelect},
       ${customFieldsSelect}
     FROM tasks
     WHERE id = ?
-  `).get(taskId) as TaskOutcomeTaskRow | undefined;
+  `, taskId) as TaskOutcomeTaskRow | undefined;
 
   if (!reloaded) throw new Error('Task not found');
   return withCanonicalFieldValues(reloaded);
 }
 
-function loadOutcomeMeta(
-  db: Database.Database,
+async function loadOutcomeMeta(
+  db: Db,
   task: TaskOutcomeTaskRow,
   outcome: string,
 ) {
-  return resolveSprintOutcomeMap(db, {
-    sprintId: task.sprint_id,
-    sprintType: task.sprint_type,
-    taskType: task.task_type,
-    fallbackOutcomes: [outcome],
-  }).get(outcome) ?? null;
+  return (await resolveSprintOutcomeMap(db, {
+      sprintId: task.sprint_id,
+      sprintType: task.sprint_type,
+      taskType: task.task_type,
+      fallbackOutcomes: [outcome],
+    })).get(outcome) ?? null;
 }
 
 function routeFallbackOutcomes(outcome: string, semantics: { failureLike: boolean; blockedLike: boolean }): string[] {
@@ -341,13 +345,13 @@ function routeFallbackOutcomes(outcome: string, semantics: { failureLike: boolea
   return [...new Set(fallbacks)];
 }
 
-export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOutcomeInput): Promise<ApplyTaskOutcomeResult> {
+export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Promise<ApplyTaskOutcomeResult> {
   const changedBy = input.changedBy ?? 'system';
-  const customFieldsSelect = tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
-  const hasAssignedAgentColumn = tableHasColumn(db, 'tasks', 'assigned_agent_id');
+  const customFieldsSelect = await tableHasColumn(db, 'tasks', 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
+  const hasAssignedAgentColumn = await tableHasColumn(db, 'tasks', 'assigned_agent_id');
   const assignedAgentSelect = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id AS assigned_agent_id';
-  const evidenceSelect = selectTaskEvidenceColumns(db);
-  const existing = db.prepare(`
+  const evidenceSelect = await selectTaskEvidenceColumns(db);
+  const existing = await db.get(`
     SELECT
       id,
       status,
@@ -358,12 +362,12 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
-      ${selectTaskColumnOrNull(db, 'review_owner_agent_id')},
+      ${await selectTaskColumnOrNull(db, 'review_owner_agent_id')},
       ${evidenceSelect},
       ${customFieldsSelect}
     FROM tasks
     WHERE id = ?
-  `).get(input.taskId) as TaskOutcomeTaskRow | undefined;
+  `, input.taskId) as TaskOutcomeTaskRow | undefined;
 
   if (!existing) {
     throw new Error('Task not found');
@@ -376,9 +380,9 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
 
   if (priorStatus === 'cancelled' || priorStatus === 'done') {
     const message = `Ignored stale outcome for task #${input.taskId}: task is ${priorStatus}, outcome="${input.outcome}", actor="${changedBy}"${input.instanceId != null ? `, instance_id=${input.instanceId}` : ''}${input.summary ? `, summary: ${input.summary}` : ''}`;
-    insertAuditLog(db, message, input.taskId, input.instanceId);
+    await insertAuditLog(db, message, input.taskId, input.instanceId);
     if (input.summary) {
-      addAuditNote(db, input.taskId, changedBy, `Ignored stale outcome: ${input.outcome} — ${input.summary}`);
+      await addAuditNote(db, input.taskId, changedBy, `Ignored stale outcome: ${input.outcome} — ${input.summary}`);
     }
 
     return {
@@ -392,23 +396,23 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
     };
   }
 
-  const authorityDecision = resolveOutcomeAuthority(db, existing, input, changedBy);
+  const authorityDecision = await resolveOutcomeAuthority(db, existing, input, changedBy);
   if (authorityDecision.kind === 'ignore') {
-    insertAuditLog(db, authorityDecision.auditMessage, input.taskId, input.instanceId);
+    await insertAuditLog(db, authorityDecision.auditMessage, input.taskId, input.instanceId);
     if (input.summary) {
-      addAuditNote(db, input.taskId, changedBy, authorityDecision.auditNote);
+      await addAuditNote(db, input.taskId, changedBy, authorityDecision.auditNote);
     }
 
     // Emit stale_outcome_write integrity event for instance_not_authoritative cases
     if (authorityDecision.reason === 'instance_not_authoritative') {
-      emitIntegrityEvent(db, {
-        taskId: input.taskId,
-        anomalyType: 'stale_outcome_write',
-        detail: `${authorityDecision.auditNote}${input.instanceId != null ? ` (instance #${input.instanceId})` : ''}`,
-        instanceId: input.instanceId ?? null,
-        projectId: existing.project_id,
-        agentId: existing.agent_id,
-      });
+      await emitIntegrityEvent(db, {
+                taskId: input.taskId,
+                anomalyType: 'stale_outcome_write',
+                detail: `${authorityDecision.auditNote}${input.instanceId != null ? ` (instance #${input.instanceId})` : ''}`,
+                instanceId: input.instanceId ?? null,
+                projectId: existing.project_id,
+                agentId: existing.agent_id,
+              });
     }
 
     return {
@@ -422,13 +426,13 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
     };
   }
 
-  const reloadedExisting = reloadTaskOutcomeTaskRow(db, input.taskId);
+  const reloadedExisting = await reloadTaskOutcomeTaskRow(db, input.taskId);
   const projectId = reloadedExisting.project_id;
 
   // ── Outcome semantics ─────────────────────────────────────────────────────
   // Failure/blocker behavior is owned by the configured outcome vocabulary.
   const effectiveOutcome = input.outcome;
-  const outcomeMeta = loadOutcomeMeta(db, reloadedExisting, effectiveOutcome);
+  const outcomeMeta = await loadOutcomeMeta(db, reloadedExisting, effectiveOutcome);
   const outcomeSemantics = {
     failureLike: isFailureLikeOutcome(effectiveOutcome, outcomeMeta),
     blockedLike: isBlockerLikeOutcome(effectiveOutcome, outcomeMeta),
@@ -438,24 +442,24 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
   let routingOutcome = effectiveOutcome;
   const isUnsuccessfulOutcome = outcomeSemantics.failureLike || outcomeSemantics.blockedLike;
 
-  let sprintWorkflowRoute: ReturnType<typeof resolveSprintWorkflowOutcome> = null;
+  let sprintWorkflowRoute: Awaited<ReturnType<typeof resolveSprintWorkflowOutcome>> = null;
   try {
-    sprintWorkflowRoute = resolveSprintWorkflowOutcome(db, {
-      status: routingBaseStatus,
-      task_type: reloadedExisting.task_type,
-      sprint_id: reloadedExisting.sprint_id,
-      sprint_type: reloadedExisting.sprint_type,
-    }, routingOutcome);
-  } catch (error) {
-    let fallbackRoute: ReturnType<typeof resolveSprintWorkflowOutcome> = null;
-    for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
-      try {
-        fallbackRoute = resolveSprintWorkflowOutcome(db, {
+    sprintWorkflowRoute = await resolveSprintWorkflowOutcome(db, {
           status: routingBaseStatus,
           task_type: reloadedExisting.task_type,
           sprint_id: reloadedExisting.sprint_id,
           sprint_type: reloadedExisting.sprint_type,
-        }, fallbackOutcome);
+        }, routingOutcome);
+  } catch (error) {
+    let fallbackRoute: Awaited<ReturnType<typeof resolveSprintWorkflowOutcome>> = null;
+    for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
+      try {
+        fallbackRoute = await resolveSprintWorkflowOutcome(db, {
+                  status: routingBaseStatus,
+                  task_type: reloadedExisting.task_type,
+                  sprint_id: reloadedExisting.sprint_id,
+                  sprint_type: reloadedExisting.sprint_type,
+                }, fallbackOutcome);
         if (fallbackRoute) {
           routingOutcome = fallbackOutcome;
           break;
@@ -468,25 +472,25 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
     sprintWorkflowRoute = fallbackRoute;
   }
 
-  const gateResult = requireReleaseGate(db, { ...reloadedExisting, status: routingBaseStatus }, routingOutcome, reloadedExisting.task_type);
+  const gateResult = await requireReleaseGate(db, { ...reloadedExisting, status: routingBaseStatus }, routingOutcome, reloadedExisting.task_type);
   if (gateResult.errors.length > 0) {
     const refusal = gateResult.errors[0];
-    resolveRefusedTaskOutcome(db, {
-      taskId: input.taskId,
-      outcome: input.outcome,
-      changedBy,
-      reason: refusal,
-      summary: input.summary ?? null,
-      instanceId: input.instanceId ?? reloadedExisting.active_instance_id,
-    });
+    await resolveRefusedTaskOutcome(db, {
+            taskId: input.taskId,
+            outcome: input.outcome,
+            changedBy,
+            reason: refusal,
+            summary: input.summary ?? null,
+            instanceId: input.instanceId ?? reloadedExisting.active_instance_id,
+          });
     throw new RefusedTaskOutcomeError(refusal);
   }
 
-  let canonicalNextStatus = sprintWorkflowRoute?.nextStatus
-    ?? canonicalOutcomeRoute(db, routingBaseStatus, routingOutcome, reloadedExisting.task_type, reloadedExisting.sprint_id, reloadedExisting.sprint_type);
+  let canonicalNextStatus = (await sprintWorkflowRoute)?.nextStatus
+    ?? (await canonicalOutcomeRoute(db, routingBaseStatus, routingOutcome, reloadedExisting.task_type, reloadedExisting.sprint_id, reloadedExisting.sprint_type));
   if (!canonicalNextStatus) {
     for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
-      const fallbackNextStatus = canonicalOutcomeRoute(db, routingBaseStatus, fallbackOutcome, reloadedExisting.task_type, reloadedExisting.sprint_id, reloadedExisting.sprint_type);
+      const fallbackNextStatus = await canonicalOutcomeRoute(db, routingBaseStatus, fallbackOutcome, reloadedExisting.task_type, reloadedExisting.sprint_id, reloadedExisting.sprint_type);
       if (fallbackNextStatus) {
         canonicalNextStatus = fallbackNextStatus;
         routingOutcome = fallbackOutcome;
@@ -497,24 +501,24 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
 
   let route: { to_status: string } | undefined;
   if (!canonicalNextStatus) {
-    route = db.prepare(`
+    route = await db.get(`
       SELECT to_status
       FROM routing_config
       WHERE from_status = ? AND outcome = ? AND enabled = 1
         AND project_id = ?
       LIMIT 1
-    `).get(routingBaseStatus, routingOutcome, projectId) as { to_status: string } | undefined;
+    `, routingBaseStatus, routingOutcome, projectId) as { to_status: string } | undefined;
 
     if (!route) {
       for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
         if (fallbackOutcome === routingOutcome) continue;
-        route = db.prepare(`
+        route = await db.get(`
           SELECT to_status
           FROM routing_config
           WHERE from_status = ? AND outcome = ? AND enabled = 1
             AND project_id = ?
           LIMIT 1
-        `).get(routingBaseStatus, fallbackOutcome, projectId) as { to_status: string } | undefined;
+        `, routingBaseStatus, fallbackOutcome, projectId) as { to_status: string } | undefined;
         if (route) {
           routingOutcome = fallbackOutcome;
           break;
@@ -523,13 +527,13 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
     }
 
     if (!route && effectiveOutcome !== input.outcome) {
-      route = db.prepare(`
+      route = await db.get(`
         SELECT to_status
         FROM routing_config
         WHERE from_status = ? AND outcome = ? AND enabled = 1
           AND project_id = ?
         LIMIT 1
-      `).get(routingBaseStatus, input.outcome, projectId) as { to_status: string } | undefined;
+      `, routingBaseStatus, input.outcome, projectId) as { to_status: string } | undefined;
 
       if (route) routingOutcome = input.outcome;
     }
@@ -537,14 +541,14 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
 
   if (!canonicalNextStatus && !route) {
     const refusal = buildMissingRouteErrorMessage(routingBaseStatus, effectiveOutcome, reloadedExisting.task_type, reloadedExisting.sprint_id);
-    resolveRefusedTaskOutcome(db, {
-      taskId: input.taskId,
-      outcome: input.outcome,
-      changedBy,
-      reason: refusal,
-      summary: input.summary ?? null,
-      instanceId: input.instanceId ?? reloadedExisting.active_instance_id,
-    });
+    await resolveRefusedTaskOutcome(db, {
+            taskId: input.taskId,
+            outcome: input.outcome,
+            changedBy,
+            reason: refusal,
+            summary: input.summary ?? null,
+            instanceId: input.instanceId ?? reloadedExisting.active_instance_id,
+          });
     throw new WorkflowAllowedValuesError({
       message: refusal,
       code: 'task_outcome_not_allowed_for_workflow',
@@ -561,10 +565,10 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
   }
 
   const nextStatus = canonicalNextStatus ?? route!.to_status;
-  assertTaskStatusDefinedForWorkflow(db, nextStatus, {
-    sprintId: reloadedExisting.sprint_id,
-    sprintType: reloadedExisting.sprint_type,
-  });
+  await assertTaskStatusDefinedForWorkflow(db, nextStatus, {
+        sprintId: reloadedExisting.sprint_id,
+        sprintType: reloadedExisting.sprint_type,
+      });
   if (isUnsuccessfulOutcome) {
     autoRecovered = outcomeSemantics.failureLike && nextStatus !== 'failed' && nextStatus !== 'stalled' && nextStatus !== 'blocked';
     recoveryDescription = outcomeSemantics.blockedLike
@@ -574,7 +578,7 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
         : 'Failure-like outcome routed to failure triage';
   }
   const reviewOwnerAgentId = reloadedExisting.review_owner_agent_id ?? reloadedExisting.agent_id ?? null;
-  const routedAssignment = resolveTaskRoutingAssignment(db, reloadedExisting.sprint_id, reloadedExisting.project_id, reloadedExisting.task_type, nextStatus);
+  const routedAssignment = await resolveTaskRoutingAssignment(db, reloadedExisting.sprint_id, reloadedExisting.project_id, reloadedExisting.task_type, nextStatus);
   const nextAssignedAgentId = routingOutcome === 'qa_fail' || effectiveOutcome === 'qa_fail'
     ? (reviewOwnerAgentId ?? reloadedExisting.assigned_agent_id ?? null)
     : (routedAssignment.agent_id ?? reloadedExisting.assigned_agent_id);
@@ -588,7 +592,7 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
   const preserveFailureMetadata = isUnsuccessfulOutcome || nextStatus === 'failed' || nextStatus === 'stalled';
   const assignmentColumn = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id';
   if (isUnsuccessfulOutcome) {
-    db.prepare(`
+    await db.run(`
       UPDATE tasks
       SET status = ?,
           ${assignmentColumn} = ?,
@@ -597,11 +601,9 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
           previous_status = ?,
           updated_at = datetime('now')
       WHERE id = ?
-    `).run(nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.failureDetail ?? input.summary ?? null,
-           preserveFailureMetadata ? priorStatus : null,
-           input.taskId);
+    `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.failureDetail ?? input.summary ?? null, preserveFailureMetadata ? priorStatus : null, input.taskId);
   } else {
-    db.prepare(`
+    await db.run(`
       UPDATE tasks
       SET status = ?,
           ${assignmentColumn} = ?,
@@ -610,19 +612,18 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
           previous_status = NULL,
           updated_at = datetime('now')
       WHERE id = ?
-    `).run(nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId,
-           input.taskId);
+    `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.taskId);
   }
-  syncTaskActiveAgentFromInstance(db, input.taskId);
+  await syncTaskActiveAgentFromInstance(db, input.taskId);
 
   // Record the task outcome on the authoritative instance so the Jobs UI can
   // distinguish execution status (done/failed) from task workflow outcome.
-  const lifecyclePostedAt = new Date().toISOString();
+  const lifecyclePostedAt = nowTimestamp();
   let runtimeEndedBeforeOutcome = false;
   if (input.instanceId != null) {
-    const runtimeState = db.prepare(`SELECT runtime_ended_at FROM job_instances WHERE id = ?`).get(input.instanceId) as { runtime_ended_at: string | null } | undefined;
+    const runtimeState = await db.get(`SELECT runtime_ended_at FROM job_instances WHERE id = ?`, input.instanceId) as { runtime_ended_at: string | null } | undefined;
     runtimeEndedBeforeOutcome = Boolean(runtimeState?.runtime_ended_at);
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET task_outcome = ?,
           lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, datetime('now')),
@@ -633,11 +634,11 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
           semantic_outcome_missing = 0,
           runtime_completed_at = COALESCE(runtime_completed_at, runtime_ended_at)
       WHERE id = ?
-    `).run(effectiveOutcome, input.instanceId);
+    `, effectiveOutcome, input.instanceId);
   } else if (reloadedExisting.active_instance_id != null) {
-    const runtimeState = db.prepare(`SELECT runtime_ended_at FROM job_instances WHERE id = ?`).get(reloadedExisting.active_instance_id) as { runtime_ended_at: string | null } | undefined;
+    const runtimeState = await db.get(`SELECT runtime_ended_at FROM job_instances WHERE id = ?`, reloadedExisting.active_instance_id) as { runtime_ended_at: string | null } | undefined;
     runtimeEndedBeforeOutcome = Boolean(runtimeState?.runtime_ended_at);
-    db.prepare(`
+    await db.run(`
       UPDATE job_instances
       SET task_outcome = ?,
           lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, datetime('now')),
@@ -648,102 +649,101 @@ export async function applyTaskOutcome(db: Database.Database, input: ApplyTaskOu
           semantic_outcome_missing = 0,
           runtime_completed_at = COALESCE(runtime_completed_at, runtime_ended_at)
       WHERE id = ?
-    `).run(effectiveOutcome, reloadedExisting.active_instance_id);
+    `, effectiveOutcome, reloadedExisting.active_instance_id);
   }
 
-  cleanupTaskExecutionLinkageForStatus(db, input.taskId, nextStatus, {
-    authoritativeInstanceId: input.instanceId ?? reloadedExisting.active_instance_id,
-    changedBy: 'task_outcome',
-  });
-  writeTaskLifecycleOutcomeHistory(db, input.taskId, changedBy, {
-    outcome: effectiveOutcome,
-    postedAt: lifecyclePostedAt,
-    postedAfterRuntimeEnd: runtimeEndedBeforeOutcome,
-  });
+  await cleanupTaskExecutionLinkageForStatus(db, input.taskId, nextStatus, {
+        authoritativeInstanceId: input.instanceId ?? reloadedExisting.active_instance_id,
+        changedBy: 'task_outcome',
+      });
+  await writeTaskLifecycleOutcomeHistory(db, input.taskId, changedBy, {
+        outcome: effectiveOutcome,
+        postedAt: lifecyclePostedAt,
+        postedAfterRuntimeEnd: runtimeEndedBeforeOutcome,
+      });
   if (nextAssignedAgentId !== reloadedExisting.assigned_agent_id) {
-    logHistory(
-      db,
-      input.taskId,
-      changedBy,
-      'assigned_agent_id',
-      resolveAgentName(db, reloadedExisting.assigned_agent_id),
-      resolveAgentName(db, nextAssignedAgentId),
-    );
+    await logHistory(
+            db,
+            input.taskId,
+            changedBy,
+            'assigned_agent_id',
+            await resolveAgentName(db, reloadedExisting.assigned_agent_id),
+            await resolveAgentName(db, nextAssignedAgentId),
+          );
   }
 
   // ── Emit task_event for this outcome-driven status transition (#586) ─────
-  writeTaskStatusChange(db, input.taskId, changedBy, priorStatus, nextStatus, {
-    instanceId: input.instanceId ?? reloadedExisting.active_instance_id,
-    reason: input.summary ?? null,
-    projectId: reloadedExisting.project_id,
-    agentId: reloadedExisting.agent_id,
-  });
+  await writeTaskStatusChange(db, input.taskId, changedBy, priorStatus, nextStatus, {
+        instanceId: input.instanceId ?? reloadedExisting.active_instance_id,
+        reason: input.summary ?? null,
+        projectId: reloadedExisting.project_id,
+        agentId: reloadedExisting.agent_id,
+      });
 
   // ── Record failure_stage on instance (#586) ──────────────────────────────
   if (isUnsuccessfulOutcome || effectiveOutcome.startsWith('failed:')) {
     const failInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
     if (failInstanceId != null) {
       try {
-        db.prepare(`UPDATE job_instances SET failure_stage = ? WHERE id = ?`)
-          .run(priorStatus, failInstanceId);
+        await db.run(`UPDATE job_instances SET failure_stage = ? WHERE id = ?`, priorStatus, failInstanceId);
       } catch { /* non-fatal */ }
     }
   }
 
   // ── Integrity anomaly detection (#586) ───────────────────────────────────
-  const finalTaskState = reloadTaskOutcomeTaskRow(db, input.taskId);
+  const finalTaskState = await reloadTaskOutcomeTaskRow(db, input.taskId);
   const iProjectId = finalTaskState.project_id;
   const iInstanceId = input.instanceId ?? finalTaskState.active_instance_id;
   const iAgentId = finalTaskState.agent_id;
 
   if (nextStatus === 'review' && !finalTaskState.review_branch && !finalTaskState.review_commit) {
-    emitIntegrityEvent(db, {
-      taskId: input.taskId, anomalyType: 'missing_review_evidence',
-      detail: `Task moved to review (outcome: ${effectiveOutcome}) with no review_branch or review_commit`,
-      instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-    });
+    await emitIntegrityEvent(db, {
+            taskId: input.taskId, anomalyType: 'missing_review_evidence',
+            detail: `Task moved to review (outcome: ${effectiveOutcome}) with no review_branch or review_commit`,
+            instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
+          });
   }
 
   if (effectiveOutcome === 'qa_pass' && !finalTaskState.qa_verified_commit) {
-    emitIntegrityEvent(db, {
-      taskId: input.taskId, anomalyType: 'missing_qa_evidence',
-      detail: `Task posted qa_pass (next status: ${nextStatus}) with no qa_verified_commit`,
-      instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-    });
+    await emitIntegrityEvent(db, {
+            taskId: input.taskId, anomalyType: 'missing_qa_evidence',
+            detail: `Task posted qa_pass (next status: ${nextStatus}) with no qa_verified_commit`,
+            instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
+          });
   }
 
   if (effectiveOutcome === 'qa_pass' && finalTaskState.review_commit && finalTaskState.qa_verified_commit
     && finalTaskState.review_commit !== finalTaskState.qa_verified_commit) {
-    emitIntegrityEvent(db, {
-      taskId: input.taskId, anomalyType: 'commit_mismatch',
-      detail: `review_commit=${finalTaskState.review_commit} ≠ qa_verified_commit=${finalTaskState.qa_verified_commit}`,
-      instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-    });
+    await emitIntegrityEvent(db, {
+            taskId: input.taskId, anomalyType: 'commit_mismatch',
+            detail: `review_commit=${finalTaskState.review_commit} ≠ qa_verified_commit=${finalTaskState.qa_verified_commit}`,
+            instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
+          });
   }
 
   if (nextStatus === 'done' && finalTaskState.deployed_at && !finalTaskState.live_verified_at) {
-    emitIntegrityEvent(db, {
-      taskId: input.taskId, anomalyType: 'deployed_not_verified',
-      detail: `Task reached done without live_verified_at being set`,
-      instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-    });
+    await emitIntegrityEvent(db, {
+            taskId: input.taskId, anomalyType: 'deployed_not_verified',
+            detail: `Task reached done without live_verified_at being set`,
+            instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
+          });
   }
 
   const failureInfo = isUnsuccessfulOutcome ? `${autoRecovered ? ', auto-recovered' : ''}` : '';
   const message = `Outcome transition: task #${input.taskId} (${priorStatus} → ${nextStatus}), outcome="${effectiveOutcome}"${input.outcome !== effectiveOutcome ? `, requested_outcome="${input.outcome}"` : ''}${failureInfo}, actor="${changedBy}"${finalTaskState.agent_id ? `, agent_id=${finalTaskState.agent_id}` : ''}${input.instanceId != null ? `, instance_id=${input.instanceId}` : ''}${input.summary ? `, summary: ${input.summary}` : ''}`;
-  insertAuditLog(db, message, input.taskId, input.instanceId);
+  await insertAuditLog(db, message, input.taskId, input.instanceId);
 
   if (input.summary) {
-    addAuditNote(db, input.taskId, changedBy, `Outcome: ${effectiveOutcome} — ${input.summary}`);
+    await addAuditNote(db, input.taskId, changedBy, `Outcome: ${effectiveOutcome} — ${input.summary}`);
   }
 
   if (!input.dryRun) {
-    notifyTaskStatusChange(db, {
-      taskId: input.taskId,
-      fromStatus: priorStatus,
-      toStatus: nextStatus,
-      source: changedBy,
-    });
+    await notifyTaskStatusChange(db, {
+            taskId: input.taskId,
+            fromStatus: priorStatus,
+            toStatus: nextStatus,
+            source: changedBy,
+          });
   }
 
   // ── Auto-close instance on terminal outcomes ──────────────────────────────

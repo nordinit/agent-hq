@@ -53,7 +53,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     closeDb();
 
     const db = getDb();
-    db.exec(`
+    await db.exec(`
       CREATE TABLE tenants (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
@@ -186,57 +186,36 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       );
     `);
 
-    ensureMcpApiKeyTable(db);
+    await ensureMcpApiKeyTable(db);
 
-    db.prepare(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`)
-      .run(1, 'Default Tenant', 'default', 1, 2, 'EcoPool', 'ecopool', 0);
-    db.prepare(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`).run();
-    db.prepare(`INSERT INTO agents (id, tenant_id, project_id, name, enabled, system_role) VALUES (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, 'admin'), (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, NULL)`)
-      .run(7, 1, 86, 'Cinder', 8, 1, 86, 'Atlas', 9, 1, 86, 'QA', 10, 2, 99, 'EcoPool Worker', 11, 1, null, 'No Project Agent');
-    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`)
-      .run(86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project');
-    db.prepare(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`)
-      .run(42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint');
-    db.prepare(`UPDATE sprints SET sprint_type = ? WHERE id = ?`).run('dev', 42);
-    db.prepare(`UPDATE sprints SET sprint_type = ? WHERE id = ?`).run('dev', 44);
-    db.prepare(`UPDATE sprints SET sprint_type = ? WHERE id = ?`).run('dev', 43);
-    db.prepare(`
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`, 1, 'Default Tenant', 'default', 1, 2, 'EcoPool', 'ecopool', 0);
+    await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, enabled, system_role) VALUES (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, 'admin'), (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, NULL)`, 7, 1, 86, 'Cinder', 8, 1, 86, 'Atlas', 9, 1, 86, 'QA', 10, 2, 99, 'EcoPool Worker', 11, 1, null, 'No Project Agent');
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`, 86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project');
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint');
+    await db.run(`UPDATE sprints SET sprint_type = ? WHERE id = ?`, 'dev', 42);
+    await db.run(`UPDATE sprints SET sprint_type = ? WHERE id = ?`, 'dev', 44);
+    await db.run(`UPDATE sprints SET sprint_type = ? WHERE id = ?`, 'dev', 43);
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (id, tenant_id, project_id, sprint_id, sprint_type, task_type, status, agent_id, priority)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      501, 1, 86, null, 'dev', 'backend', 'ready', 7, 10,
-      502, 1, 86, 42, 'dev', 'qa', 'review', 9, 20,
-      503, 1, 87, null, 'dev', 'backend', 'ready', 9, 10,
-      504, 2, 99, null, 'dev', 'backend', 'ready', 10, 10,
-    );
-    db.prepare(`
+    `, 501, 1, 86, null, 'dev', 'backend', 'ready', 7, 10, 502, 1, 86, 42, 'dev', 'qa', 'review', 9, 20, 503, 1, 87, null, 'dev', 'backend', 'ready', 9, 10, 504, 2, 99, null, 'dev', 'backend', 'ready', 10, 10);
+    await db.run(`
       INSERT INTO sprint_task_transition_requirements (id, tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      601, 1, null, 86, 'dev', null, 'completed_for_review', 'review_commit', 'required', null, 'block', 'Review commit is required', 1, 10,
-      602, 1, 42, 86, 'dev', 'backend', 'completed_for_review', 'review_branch', 'required', null, 'block', 'Review branch is required', 1, 20,
-      603, 1, null, 87, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Other project row', 1, 10,
-      604, 2, null, 99, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Cross tenant row', 1, 10,
-    );
-    db.prepare(`
+    `, 601, 1, null, 86, 'dev', null, 'completed_for_review', 'review_commit', 'required', null, 'block', 'Review commit is required', 1, 10, 602, 1, 42, 86, 'dev', 'backend', 'completed_for_review', 'review_branch', 'required', null, 'block', 'Review branch is required', 1, 20, 603, 1, null, 87, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Other project row', 1, 10, 604, 2, null, 99, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Cross tenant row', 1, 10);
+    await db.run(`
       INSERT INTO sprint_types (key, tenant_id, project_id, name, description, is_system)
       VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)
-    `).run(
-      'dev', 1, 86, 'Development', 'Agent HQ project development workflow', 0,
-      'other-project-dev', 1, 87, 'Other project development', 'Other project workflow', 0,
-      'eco-dev', 2, 99, 'Eco development', 'EcoPool workflow', 0,
-    );
-    db.prepare(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`)
-      .run(2551, 448, 7, 'running', 2552, 449, 9, 'running', 2553, 450, 10, 'running');
-    db.prepare(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`)
-      .run(448, 1, 86, 42, 7, 9, 2551, 449, 2, 99, 43, 9, 9, 2552, 450, 2, 99, 43, 10, 10, 2553, 451, 1, 86, 42, null, null, null, 452, 1, 87, 44, null, null, null);
-    db.prepare(`INSERT INTO task_relationships (id, source_task_id, target_task_id, relationship_type_key) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`)
-      .run(12, 451, 448, 'relates_to', 13, 451, 452, 'relates_to');
+    `, 'dev', 1, 86, 'Development', 'Agent HQ project development workflow', 0, 'other-project-dev', 1, 87, 'Other project development', 'Other project workflow', 0, 'eco-dev', 2, 99, 'Eco development', 'EcoPool workflow', 0);
+    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`, 2551, 448, 7, 'running', 2552, 449, 9, 'running', 2553, 450, 10, 'running');
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`, 448, 1, 86, 42, 7, 9, 2551, 449, 2, 99, 43, 9, 9, 2552, 450, 2, 99, 43, 10, 10, 2553, 451, 1, 86, 42, null, null, null, 452, 1, 87, 44, null, null, null);
+    await db.run(`INSERT INTO task_relationships (id, source_task_id, target_task_id, relationship_type_key) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`, 12, 451, 448, 'relates_to', 13, 451, 452, 'relates_to');
 
-    normalKey = issueMcpApiKeyForAgent(db, 7).apiKey;
-    adminKey = issueMcpApiKeyForAgent(db, 8).apiKey;
-    ecoKey = issueMcpApiKeyForAgent(db, 10).apiKey;
-    noProjectKey = issueMcpApiKeyForAgent(db, 11).apiKey;
+    normalKey = (await issueMcpApiKeyForAgent(db, 7)).apiKey;
+    adminKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
+    ecoKey = (await issueMcpApiKeyForAgent(db, 10)).apiKey;
+    noProjectKey = (await issueMcpApiKeyForAgent(db, 11)).apiKey;
 
     const app = express();
     app.use(express.json());
@@ -244,7 +223,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.use('/api/v1', authenticateMcpApiKeyIfPresent);
     app.use('/api/v1', authorizeMcpApiRequestIfPresent);
 
-    app.get('/api/v1/tasks/:id', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), tenant_id: resolveTenantIdFromRequest(getDb(), req) }));
+    app.get('/api/v1/tasks/:id', async (req, res) => res.json({ ok: true, task_id: Number(req.params.id), tenant_id: await resolveTenantIdFromRequest(getDb(), req) }));
     app.get('/api/v1/tasks/:id/context', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), mode: req.query.mode ?? 'summary' }));
     app.get('/api/v1/tasks/:id/notes', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), notes: [] }));
     app.get('/api/v1/tasks/:id/history', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), history: [] }));
@@ -252,10 +231,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.get('/api/v1/tasks/:id/relationships', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationships: [] }));
     app.get('/api/v1/tasks/:id/relationship-types', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationship_types: [] }));
     app.get('/api/v1/tasks/:id/active-owner', (req, res) => res.json({ ok: true, task_id: Number(req.params.id) }));
-    app.get('/api/v1/agents/:id/mcp-permissions', (req, res) => res.json(getAgentMcpPermissionPolicy(getDb(), Number(req.params.id))));
-    app.post('/api/v1/agents/:id/mcp-permissions', (req, res) => res.json(replaceAgentMcpPermissionPolicy(getDb(), Number(req.params.id), req.body.enabled_capabilities)));
-    app.put('/api/v1/agents/:id/mcp-permissions', (req, res) => res.json(replaceAgentMcpPermissionPolicy(getDb(), Number(req.params.id), req.body.enabled_capabilities)));
-    app.delete('/api/v1/agents/:id/mcp-permissions', (req, res) => res.json(resetAgentMcpPermissionPolicy(getDb(), Number(req.params.id))));
+    app.get('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await getAgentMcpPermissionPolicy(getDb(), Number(req.params.id))));
+    app.post('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await replaceAgentMcpPermissionPolicy(getDb(), Number(req.params.id), req.body.enabled_capabilities)));
+    app.put('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await replaceAgentMcpPermissionPolicy(getDb(), Number(req.params.id), req.body.enabled_capabilities)));
+    app.delete('/api/v1/agents/:id/mcp-permissions', async (req, res) => res.json(await resetAgentMcpPermissionPolicy(getDb(), Number(req.params.id))));
     app.post('/api/v1/tasks/project-search', (_req, res) => res.json({ ok: true, tasks: [] }));
     app.post('/api/v1/tasks/:id/relationships', (req, res) => res.status(201).json({ ok: true, task_id: Number(req.params.id), body: req.body }));
     app.delete('/api/v1/tasks/:id/relationships/:relationshipId', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), relationship_id: Number(req.params.relationshipId) }));
@@ -267,9 +246,9 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.delete('/api/v1/projects/:id', (req, res) => res.json({ ok: true, project_id: Number(req.params.id) }));
     app.post('/api/v1/mcp-servers', (_req, res) => res.status(201).json({ ok: true }));
     app.use('/api/v1/projects/:id/files', projectFilesRouter);
-    app.get('/api/v1/sprints/workflow-metadata', (req, res) => res.json({
+    app.get('/api/v1/sprints/workflow-metadata', async (req, res) => res.json({
       ok: true,
-      tenant_id: resolveTenantIdFromRequest(getDb(), req),
+      tenant_id: await resolveTenantIdFromRequest(getDb(), req),
       sprint_type: req.query.sprint_type ?? 'generic',
       task_type: req.query.task_type ?? null,
       statuses: [],
@@ -417,7 +396,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('defaults MCP requests to the key tenant instead of the UI active tenant', async () => {
-    getDb().prepare(`UPDATE app_settings SET value = '2' WHERE key = 'active_tenant_id'`).run();
+    await getDb().run(`UPDATE app_settings SET value = '2' WHERE key = 'active_tenant_id'`);
 
     const taskRes = await fetch(`${baseUrl}/api/v1/tasks/448`, { headers: authHeaders(normalKey) });
     expect(taskRes.status).toBe(200);
@@ -439,10 +418,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(unscopedSameProjectActiveOwnerRes.status).toBe(403);
   });
 
-  it('persists explicit per-agent MCP capability policy snapshots', () => {
+  it('persists explicit per-agent MCP capability policy snapshots', async () => {
     const db = getDb();
 
-    const defaultSnapshot = getAgentMcpPermissionPolicy(db, 7);
+    const defaultSnapshot = await getAgentMcpPermissionPolicy(db, 7);
     expect(defaultSnapshot.policy_mode).toBe('default');
     expect(defaultSnapshot.default_policy).toBe('scoped_runtime');
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'tasks.create')).toMatchObject({
@@ -492,10 +471,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.full_access')?.enabled).toBe(false);
     expect(defaultSnapshot.capabilities.find((capability) => capability.key === 'admin.cross_tenant')?.enabled).toBe(false);
 
-    const explicitSnapshot = replaceAgentMcpPermissionPolicy(db, 7, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-    ]);
+    const explicitSnapshot = await replaceAgentMcpPermissionPolicy(db, 7, [
+          'discovery.read_catalog',
+          'tasks.read_active_context',
+        ]);
     expect(explicitSnapshot.policy_mode).toBe('explicit');
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.read_active_context')?.enabled).toBe(true);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.create')?.enabled).toBe(false);
@@ -504,17 +483,17 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'transition_requirements.manage_project_scope')?.enabled).toBe(false);
     expect(explicitSnapshot.capabilities.find((capability) => capability.key === 'tasks.write_active_lifecycle')?.enabled).toBe(false);
 
-    const resetSnapshot = resetAgentMcpPermissionPolicy(db, 7);
+    const resetSnapshot = await resetAgentMcpPermissionPolicy(db, 7);
     expect(resetSnapshot.policy_mode).toBe('default');
     expect(resetSnapshot.capabilities.find((capability) => capability.key === 'tasks.write_active_lifecycle')?.enabled).toBe(true);
   });
 
   it('allows scoped MCP capability policy edits for another same-project agent', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'mcp_capability_policies.read',
-      'mcp_capability_policies.write',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'mcp_capability_policies.read',
+            'mcp_capability_policies.write',
+          ]);
 
     const createResponse = await fetch(`${baseUrl}/api/v1/agents/9/mcp-permissions`, {
       method: 'POST',
@@ -587,11 +566,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows project-scoped workflow definition read and mutation with explicit capabilities', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'workflow_definitions.read_project_scope',
-      'workflow_definitions.manage_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'workflow_definitions.read_project_scope',
+            'workflow_definitions.manage_project_scope',
+          ]);
 
     const configResponse = await fetch(`${baseUrl}/api/v1/sprints/config?project_id=86`, {
       headers: authHeaders(normalKey),
@@ -728,10 +707,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('denies scoped MCP capability policy self-escalation and unsafe grants', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'mcp_capability_policies.write',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'mcp_capability_policies.write',
+          ]);
 
     const selfResponse = await fetch(`${baseUrl}/api/v1/agents/7/mcp-permissions`, {
       method: 'PUT',
@@ -785,11 +764,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('denies scoped MCP capability policy access outside the caller project and tenant', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'mcp_capability_policies.read',
-      'mcp_capability_policies.write',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'mcp_capability_policies.read',
+            'mcp_capability_policies.write',
+          ]);
 
     const noProjectTargetResponse = await fetch(`${baseUrl}/api/v1/agents/11/mcp-permissions`, {
       headers: authHeaders(normalKey),
@@ -813,10 +792,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('keeps secret-bearing and unrelated admin MCP routes denied for scoped policy editors', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'mcp_capability_policies.write',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'mcp_capability_policies.write',
+          ]);
 
     const response = await fetch(`${baseUrl}/api/v1/mcp-servers`, {
       method: 'POST',
@@ -855,11 +834,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'workflow_definitions.read_project_scope' },
     });
 
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'workflow_definitions.read_project_scope',
-      'workflow_definitions.manage_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'workflow_definitions.read_project_scope',
+            'workflow_definitions.manage_project_scope',
+          ]);
 
     const unscopedList = await fetch(`${baseUrl}/api/v1/sprints/types/list`, {
       headers: authHeaders(normalKey),
@@ -955,11 +934,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for workflow definition management when the agent has no canonical project', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 11, [
-      'discovery.read_catalog',
-      'workflow_definitions.read_project_scope',
-      'workflow_definitions.manage_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+            'discovery.read_catalog',
+            'workflow_definitions.read_project_scope',
+            'workflow_definitions.manage_project_scope',
+          ]);
 
     const response = await fetch(`${baseUrl}/api/v1/sprints/types/list?project_id=86`, {
       headers: authHeaders(noProjectKey),
@@ -971,12 +950,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
   });
 
-  function seedRecurringTaskSeries(seriesId: number, projectId: number, sprintId: number): void {
+  async function seedRecurringTaskSeries(seriesId: number, projectId: number, sprintId: number): Promise<void> {
     const db = getDb();
     // The auth fixture does not build this table, and the gate only reads
     // project_id, so a minimal shape without foreign keys is enough here and
     // lets the cross-project case use a project id the fixture never created.
-    db.prepare(`
+    await db.run(`
       CREATE TABLE IF NOT EXISTS recurring_task_series (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER NOT NULL,
@@ -1000,8 +979,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         tenant_id INTEGER
       )
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT OR REPLACE INTO recurring_task_series (
         id, project_id, sprint_id, title_template, description_template, task_type,
         priority, story_points, status_on_create, schedule_expression, timezone,
@@ -1009,15 +988,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       ) VALUES (?, ?, ?, 'Series', 'Series body', 'ops', 'high', 2, 'ready',
         'every monday 09:00', 'America/New_York', 0, 'skip_if_active', 'test', 'test',
         '2026-07-01 00:00:00', '2026-07-01 00:00:00')
-    `).run(seriesId, projectId, sprintId);
+    `, seriesId, projectId, sprintId);
   }
 
   it('allows an owning agent to persist custom fields on its own active task', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-      'tasks.write_active_custom_fields',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.read_active_context',
+            'tasks.write_active_custom_fields',
+          ]);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/448`, {
       method: 'PUT',
@@ -1028,11 +1007,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('refuses non-custom-field task edits under the active custom-field capability', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-      'tasks.write_active_custom_fields',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.read_active_context',
+            'tasks.write_active_custom_fields',
+          ]);
 
     // Status changes, retitles, and reassignment are task-column edits and must
     // still require the broad project task management capability.
@@ -1052,11 +1031,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('refuses active custom-field writes to a task the agent does not actively own', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-      'tasks.write_active_custom_fields',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.read_active_context',
+            'tasks.write_active_custom_fields',
+          ]);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/449`, {
       method: 'PUT',
@@ -1067,11 +1046,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('refuses active custom-field writes without the capability', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-      'tasks.write_active_lifecycle',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.read_active_context',
+            'tasks.write_active_lifecycle',
+          ]);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/448`, {
       method: 'PUT',
@@ -1082,12 +1061,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows project-scoped recurring task series reads and management with explicit capabilities', async () => {
-    seedRecurringTaskSeries(9001, 86, 42);
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'recurring_task_series.read_project_scope',
-      'recurring_task_series.manage_project_scope',
-    ]);
+    await seedRecurringTaskSeries(9001, 86, 42);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'recurring_task_series.read_project_scope',
+            'recurring_task_series.manage_project_scope',
+          ]);
 
     // These assert the authorization boundary only. The auth fixture does not
     // stand up the recurring-series service, so an authorized request may still
@@ -1115,12 +1094,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('denies recurring task series access without the matching capability', async () => {
-    seedRecurringTaskSeries(9002, 86, 42);
+    await seedRecurringTaskSeries(9002, 86, 42);
     // Read capability only: reads pass, management must still be refused.
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'recurring_task_series.read_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'recurring_task_series.read_project_scope',
+          ]);
 
     const getRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9002`, {
       headers: authHeaders(normalKey),
@@ -1140,7 +1119,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(runNowRes.status).toBe(403);
 
     // No recurring capabilities at all: even reads are refused.
-    replaceAgentMcpPermissionPolicy(getDb(), 7, ['discovery.read_catalog']);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['discovery.read_catalog']);
     const deniedReadRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9002`, {
       headers: authHeaders(normalKey),
     });
@@ -1148,12 +1127,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('denies recurring task series outside the assigned project and for unknown series', async () => {
-    seedRecurringTaskSeries(9003, 999, 42);
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'recurring_task_series.read_project_scope',
-      'recurring_task_series.manage_project_scope',
-    ]);
+    await seedRecurringTaskSeries(9003, 999, 42);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'recurring_task_series.read_project_scope',
+            'recurring_task_series.manage_project_scope',
+          ]);
 
     const crossProjectRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/9003`, {
       headers: authHeaders(normalKey),
@@ -1271,7 +1250,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     const db = getDb();
-    const deniedNote = db.prepare(`SELECT author, content FROM task_notes WHERE task_id = ? ORDER BY id DESC LIMIT 1`).get(449) as {
+    const deniedNote = await db.get(`SELECT author, content FROM task_notes WHERE task_id = ? ORDER BY id DESC LIMIT 1`, 449) as {
       author: string;
       content: string;
     } | undefined;
@@ -1282,12 +1261,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows task creation when the Create Tasks capability is explicitly enabled', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-      'tasks.write_active_lifecycle',
-      'tasks.create',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.read_active_context',
+            'tasks.write_active_lifecycle',
+            'tasks.create',
+          ]);
 
     const createTaskRes = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -1305,10 +1284,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows generic project task CRUD only inside the assigned project', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.manage_project_tasks',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.manage_project_tasks',
+          ]);
 
     const createTaskRes = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -1452,10 +1431,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('keeps project task CRUD separate from active lifecycle routes', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.manage_project_tasks',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.manage_project_tasks',
+          ]);
 
     const lifecycleNoteRes = await fetch(`${baseUrl}/api/v1/tasks/448/notes`, {
       method: 'POST',
@@ -1488,10 +1467,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'tasks.search_project_tasks' },
     });
 
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.search_project_tasks',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.search_project_tasks',
+          ]);
 
     const allowed = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
       method: 'POST',
@@ -1502,10 +1481,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows scoped routing rule read/create/update/delete when the assigned-project capability is enabled', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'routing_rules.manage_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'routing_rules.manage_project_scope',
+          ]);
 
     const listResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&sprint_type=dev`, {
       headers: authHeaders(normalKey),
@@ -1567,10 +1546,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'routing_rules.manage_project_scope' },
     });
 
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'routing_rules.manage_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'routing_rules.manage_project_scope',
+          ]);
 
     const unscopedList = await fetch(`${baseUrl}/api/v1/routing/assignment-rules`, {
       headers: authHeaders(normalKey),
@@ -1626,10 +1605,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for routing rule management when the agent has no canonical project', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 11, [
-      'discovery.read_catalog',
-      'routing_rules.manage_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+            'discovery.read_catalog',
+            'routing_rules.manage_project_scope',
+          ]);
 
     const response = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&sprint_type=dev`, {
       headers: authHeaders(noProjectKey),
@@ -1642,10 +1621,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows scoped transition requirement CRUD for project defaults and workflow overrides', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'transition_requirements.manage_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'transition_requirements.manage_project_scope',
+          ]);
 
     const listDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&sprint_type=dev`, {
       headers: authHeaders(normalKey),
@@ -1724,10 +1703,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'workflow.read_active_configuration' },
     });
 
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'transition_requirements.manage_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'transition_requirements.manage_project_scope',
+          ]);
 
     const unscopedList = await fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
       headers: authHeaders(normalKey),
@@ -1779,10 +1758,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for transition requirement CRUD when the agent has no canonical project', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 11, [
-      'discovery.read_catalog',
-      'transition_requirements.manage_project_scope',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+            'discovery.read_catalog',
+            'transition_requirements.manage_project_scope',
+          ]);
 
     const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&sprint_type=dev`, {
       headers: authHeaders(noProjectKey),
@@ -1795,11 +1774,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows read-only access to project task context when Read project task context is enabled', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.read_project_context',
-      'tasks.create',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.read_project_context',
+            'tasks.create',
+          ]);
 
     for (const suffix of ['', '/context', '/notes', '/history', '/instances', '/relationships', '/relationship-types', '/active-owner']) {
       const response = await fetch(`${baseUrl}/api/v1/tasks/451${suffix}`, { headers: authHeaders(normalKey) });
@@ -1869,10 +1848,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for project task context reads when the agent has no canonical project', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 11, [
-      'discovery.read_catalog',
-      'tasks.read_project_context',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+            'discovery.read_catalog',
+            'tasks.read_project_context',
+          ]);
 
     const response = await fetch(`${baseUrl}/api/v1/tasks/451`, { headers: authHeaders(noProjectKey) });
     expect(response.status).toBe(403);
@@ -1886,10 +1865,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('fails closed for project task search when the agent has no canonical project', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 11, [
-      'discovery.read_catalog',
-      'tasks.search_project_tasks',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 11, [
+            'discovery.read_catalog',
+            'tasks.search_project_tasks',
+          ]);
 
     const response = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
       method: 'POST',
@@ -1904,13 +1883,13 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('invalidates legacy tenant-wide read_any_context assignments', async () => {
-    getAgentMcpPermissionPolicy(getDb(), 7);
-    getDb().prepare(`
+    await getAgentMcpPermissionPolicy(getDb(), 7);
+    await getDb().run(`
       INSERT INTO agent_mcp_capability_policies (agent_id, capability_key, enabled)
       VALUES (?, ?, ?)
-    `).run(7, 'tasks.read_any_context', 1);
+    `, 7, 'tasks.read_any_context', 1);
 
-    const snapshot = getAgentMcpPermissionPolicy(getDb(), 7);
+    const snapshot = await getAgentMcpPermissionPolicy(getDb(), 7);
     expect(snapshot.policy_mode).toBe('explicit');
     expect(snapshot.capabilities.some((capability) => capability.key === 'tasks.read_any_context')).toBe(false);
     expect(snapshot.capabilities.find((capability) => capability.key === 'tasks.read_project_context')).toMatchObject({
@@ -1930,14 +1909,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('enforces explicit capability denies even for otherwise scoped routes', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.read_active_context',
-      'tasks.write_active_lifecycle',
-      'sprints.read_active_sprint',
-      'workflow.read_active_configuration',
-      'external.write_task_events',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.read_active_context',
+            'tasks.write_active_lifecycle',
+            'sprints.read_active_sprint',
+            'workflow.read_active_configuration',
+            'external.write_task_events',
+          ]);
 
     const projectRes = await fetch(`${baseUrl}/api/v1/projects/86`, { headers: authHeaders(normalKey) });
     expect(projectRes.status).toBe(403);
@@ -1962,13 +1941,13 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const relationshipsRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationships`, { headers: authHeaders(normalKey) });
     expect(relationshipsRes.status).toBe(200);
 
-    replaceAgentMcpPermissionPolicy(getDb(), 7, [
-      'discovery.read_catalog',
-      'tasks.write_active_lifecycle',
-      'sprints.read_active_sprint',
-      'workflow.read_active_configuration',
-      'external.write_task_events',
-    ]);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+            'discovery.read_catalog',
+            'tasks.write_active_lifecycle',
+            'sprints.read_active_sprint',
+            'workflow.read_active_configuration',
+            'external.write_task_events',
+          ]);
 
     const disabledRelationshipsRes = await fetch(`${baseUrl}/api/v1/tasks/448/relationships`, { headers: authHeaders(normalKey) });
     expect(disabledRelationshipsRes.status).toBe(403);
@@ -1992,7 +1971,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows explicit full administrative MCP access for a non-admin agent when granted inside its own tenant', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, ['admin.full_access']);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['admin.full_access']);
 
     const createProjectRes = await fetch(`${baseUrl}/api/v1/projects`, {
       method: 'POST',
@@ -2090,8 +2069,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       },
     });
 
-    const adminIdentity = resolveMcpApiIdentityForKey(getDb(), adminKey, { updateLastUsed: false });
-    getDb().prepare(`UPDATE mcp_api_keys SET global_admin = 1 WHERE id = ?`).run(adminIdentity.keyId);
+    const adminIdentity = await resolveMcpApiIdentityForKey(getDb(), adminKey, { updateLastUsed: false });
+    await getDb().run(`UPDATE mcp_api_keys SET global_admin = 1 WHERE id = ?`, adminIdentity.keyId);
 
     const allowed = await fetch(`${baseUrl}/api/v1/projects/99?tenant_id=2`, {
       method: 'DELETE',
@@ -2113,7 +2092,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('allows explicit super-admin capability policy to operate across tenants', async () => {
-    replaceAgentMcpPermissionPolicy(getDb(), 7, ['admin.full_access', 'admin.cross_tenant']);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['admin.full_access', 'admin.cross_tenant']);
 
     const allowed = await fetch(`${baseUrl}/api/v1/projects/99?tenant_id=2`, {
       method: 'DELETE',
@@ -2122,7 +2101,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(allowed.status).toBe(200);
     await expect(allowed.json()).resolves.toMatchObject({ ok: true, project_id: 99 });
 
-    const identity = resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+    const identity = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
     expect(identity.globalAdminAccess).toBe(true);
   });
 
@@ -2192,7 +2171,7 @@ describe('ensureConfiguredRuntimeMcpApiKey', () => {
   let tempDir: string;
   let dbPath: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-api-auth-'));
     dbPath = path.join(tempDir, 'agent-hq-test.db');
     closeDb();
@@ -2203,7 +2182,7 @@ describe('ensureConfiguredRuntimeMcpApiKey', () => {
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_SESSION_KEY;
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_SLUG;
     delete process.env.AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN;
-    initSchema();
+    await initSchema();
   });
 
   afterEach(() => {
@@ -2218,19 +2197,19 @@ describe('ensureConfiguredRuntimeMcpApiKey', () => {
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('does not materialize configured runtime keys during schema startup', () => {
+  it('does not materialize configured runtime keys during schema startup', async () => {
     process.env.AGENT_HQ_MCP_API_KEY = 'ahq_mcp_runtime_bootstrap_test';
 
-    initSchema();
+    await initSchema();
 
-    expect(getDb().prepare(`SELECT COUNT(*) AS count FROM mcp_api_keys`).get()).toEqual({ count: 0 });
+    expect(await getDb().get(`SELECT COUNT(*) AS count FROM mcp_api_keys`)).toEqual({ count: 0 });
   });
 
-  it('materializes a configured runtime key against Atlas when the key is missing from the current DB', () => {
+  it('materializes a configured runtime key against Atlas when the key is missing from the current DB', async () => {
     process.env.AGENT_HQ_MCP_API_KEY = 'ahq_mcp_runtime_bootstrap_test';
 
-    const result = ensureConfiguredRuntimeMcpApiKey();
-    const identity = resolveMcpApiIdentityForKey(getDb(), process.env.AGENT_HQ_MCP_API_KEY!, { updateLastUsed: false });
+    const result = await ensureConfiguredRuntimeMcpApiKey();
+    const identity = await resolveMcpApiIdentityForKey(getDb(), process.env.AGENT_HQ_MCP_API_KEY!, { updateLastUsed: false });
 
     expect(result).toMatchObject({
       status: 'created',
@@ -2242,12 +2221,12 @@ describe('ensureConfiguredRuntimeMcpApiKey', () => {
     expect(identity.globalAdminAccess).toBe(false);
   });
 
-  it('materializes configured runtime keys as global only when explicitly requested', () => {
+  it('materializes configured runtime keys as global only when explicitly requested', async () => {
     process.env.AGENT_HQ_MCP_API_KEY = 'ahq_mcp_runtime_global_bootstrap_test';
     process.env.AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN = 'true';
 
-    const result = ensureConfiguredRuntimeMcpApiKey();
-    const identity = resolveMcpApiIdentityForKey(getDb(), process.env.AGENT_HQ_MCP_API_KEY!, { updateLastUsed: false });
+    const result = await ensureConfiguredRuntimeMcpApiKey();
+    const identity = await resolveMcpApiIdentityForKey(getDb(), process.env.AGENT_HQ_MCP_API_KEY!, { updateLastUsed: false });
 
     expect(result).toMatchObject({ status: 'created', agentId: identity.agentId });
     expect(identity.agentSlug).toBe('atlas');
@@ -2255,19 +2234,19 @@ describe('ensureConfiguredRuntimeMcpApiKey', () => {
     expect(identity.globalAdminAccess).toBe(true);
   });
 
-  it('uses the configured runtime agent selector and reuses the same key on later boots', () => {
+  it('uses the configured runtime agent selector and reuses the same key on later boots', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, tenant_id, name, role, session_key, workspace_path, openclaw_agent_id, status)
       VALUES (410, 1, 'Cinder (Backend)', 'Backend Engineer', 'agent:agent-hq:cinder-backend:backend-engineer:main', '', 'cinder-backend', 'idle')
-    `).run();
+    `);
 
     process.env.AGENT_HQ_MCP_API_KEY = 'ahq_mcp_runtime_cinder_test';
     process.env.AGENT_HQ_MCP_API_KEY_AGENT_OPENCLAW_ID = 'cinder-backend';
 
-    const first = ensureConfiguredRuntimeMcpApiKey();
-    const second = ensureConfiguredRuntimeMcpApiKey();
-    const identity = resolveMcpApiIdentityForKey(getDb(), process.env.AGENT_HQ_MCP_API_KEY!, { updateLastUsed: false });
+    const first = await ensureConfiguredRuntimeMcpApiKey();
+    const second = await ensureConfiguredRuntimeMcpApiKey();
+    const identity = await resolveMcpApiIdentityForKey(getDb(), process.env.AGENT_HQ_MCP_API_KEY!, { updateLastUsed: false });
 
     expect(first).toMatchObject({ status: 'created', agentId: 410, keyPrefix: 'ahq_mcp_runtime_' });
     expect(second).toMatchObject({ status: 'reused', agentId: 410, keyId: first.keyId, keyPrefix: 'ahq_mcp_runtime_' });

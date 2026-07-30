@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { getDb } from '../db/client';
 import { notifyTelegram } from '../integrations/telegram';
 import { HEARTBEAT_STALE_MS, START_CHECKIN_GRACE_MS } from '../domains/runs/observability';
@@ -17,6 +16,9 @@ import { normalizeTokenUsage } from '../domains/runs/tokenUsage';
 import { createNotificationRecord } from '../lib/notifications';
 import { getActiveTenantId } from '../lib/tenantContext';
 import { insertRuntimeLog } from '../lib/runtimeTenantScope';
+import { nowTimestamp, timestampFromDate, toCanonicalTimestamp } from '../lib/timestamps';
+import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 const DEFAULT_TIMEOUT_MINUTES = 20;
 const DEFAULT_TIMEOUT_MS = DEFAULT_TIMEOUT_MINUTES * 60_000;
@@ -75,69 +77,64 @@ const WATCHDOG_ROW_SELECT = `
     LEFT JOIN tasks t ON t.id = ji.task_id
 `;
 
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
-  try {
-    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-    return columns.some((entry) => entry.name === column);
-  } catch {
-    return false;
-  }
+async function tableHasColumn(db: Db, table: string, column: string): Promise<boolean> {
+    return await sharedColumnExists(db, table, column);
 }
 
-function resolveNotificationTenantId(db: Database.Database, taskId: number | null): number {
-  if (taskId && tableHasColumn(db, 'tasks', 'tenant_id')) {
+async function resolveNotificationTenantId(db: Db, taskId: number | null): Promise<number> {
+  if (taskId && await tableHasColumn(db, 'tasks', 'tenant_id')) {
     try {
-      const row = db.prepare(`SELECT tenant_id FROM tasks WHERE id = ?`).get(taskId) as { tenant_id: number | null } | undefined;
+      const row = await db.get(`SELECT tenant_id FROM tasks WHERE id = ?`, taskId) as { tenant_id: number | null } | undefined;
       const tenantId = Number(row?.tenant_id);
       if (Number.isInteger(tenantId) && tenantId > 0) return tenantId;
     } catch {
       // Fall through to active tenant.
     }
   }
-  return getActiveTenantId(db);
+  return await getActiveTenantId(db);
 }
 
-function recordWatchdogStaleNotification(
-  db: Database.Database,
+async function recordWatchdogStaleNotification(
+  db: Db,
   inst: WatchdogRow,
   params: { actorLabel: string; elapsedMin: number; reason: string },
-): void {
+): Promise<void> {
   try {
     const taskPart = inst.task_id ? `Task #${inst.task_id}` : 'No linked task';
     const agentPart = inst.agent_name || inst.job_title
       ? `Agent: ${[inst.agent_name, inst.job_title].filter(Boolean).join(' / ')}`
       : `Agent #${inst.agent_id}`;
-    createNotificationRecord(db, {
-      tenantId: resolveNotificationTenantId(db, inst.task_id),
-      type: 'watchdog_stale_run',
-      title: `⏰ Watchdog auto-failed ${taskPart}`,
-      body: [
-        `${params.actorLabel} auto-failed after ${params.elapsedMin}m.`,
-        `Reason: ${params.reason}`,
-        `Instance #${inst.id}${inst.task_id ? ` · Task #${inst.task_id}` : ''} · ${agentPart}`,
-      ].join('\n'),
-      source: 'watchdog',
-      outlet: 'agent_hq',
-      metadata: {
-        instanceId: inst.id,
-        taskId: inst.task_id,
-        agentId: inst.agent_id,
-        agentName: inst.agent_name,
-        jobTitle: inst.job_title,
-        reason: params.reason,
-        elapsedMin: params.elapsedMin,
-      },
-    });
+    await createNotificationRecord(db, {
+            tenantId: await resolveNotificationTenantId(db, inst.task_id),
+            type: 'watchdog_stale_run',
+            title: `⏰ Watchdog auto-failed ${taskPart}`,
+            body: [
+              `${params.actorLabel} auto-failed after ${params.elapsedMin}m.`,
+              `Reason: ${params.reason}`,
+              `Instance #${inst.id}${inst.task_id ? ` · Task #${inst.task_id}` : ''} · ${agentPart}`,
+            ].join('\n'),
+            source: 'watchdog',
+            outlet: 'agent_hq',
+            metadata: {
+              instanceId: inst.id,
+              taskId: inst.task_id,
+              agentId: inst.agent_id,
+              agentName: inst.agent_name,
+              jobTitle: inst.job_title,
+              reason: params.reason,
+              elapsedMin: params.elapsedMin,
+            },
+          });
   } catch (err) {
     console.error('[watchdog] Failed to record stale-run notification:', err);
   }
 }
 
-function recordWorktreePruneNotification(
-  db: Database.Database,
+async function recordWorktreePruneNotification(
+  db: Db,
   agent: { id: number; name: string | null; tenant_id?: number | null; project_tenant_id?: number | null },
   prunedCount: number,
-): void {
+): Promise<void> {
   try {
     const agentLabel = agent.name || `agent #${agent.id}`;
     const agentTenantId = Number(agent.tenant_id);
@@ -146,34 +143,41 @@ function recordWorktreePruneNotification(
       ? agentTenantId
       : Number.isInteger(projectTenantId) && projectTenantId > 0
         ? projectTenantId
-        : getActiveTenantId(db);
-    createNotificationRecord(db, {
-      tenantId,
-      type: 'worktree_pruned',
-      title: `🧹 Watchdog pruned ${prunedCount} worktree${prunedCount === 1 ? '' : 's'}`,
-      body: `Pruned ${prunedCount} orphaned worktree${prunedCount === 1 ? '' : 's'} for ${agentLabel}.`,
-      source: 'watchdog',
-      outlet: 'agent_hq',
-      metadata: {
-        agentId: agent.id,
-        agentName: agent.name,
-        prunedCount,
-      },
-    });
+        : await getActiveTenantId(db);
+    await createNotificationRecord(db, {
+            tenantId,
+            type: 'worktree_pruned',
+            title: `🧹 Watchdog pruned ${prunedCount} worktree${prunedCount === 1 ? '' : 's'}`,
+            body: `Pruned ${prunedCount} orphaned worktree${prunedCount === 1 ? '' : 's'} for ${agentLabel}.`,
+            source: 'watchdog',
+            outlet: 'agent_hq',
+            metadata: {
+              agentId: agent.id,
+              agentName: agent.name,
+              prunedCount,
+            },
+          });
   } catch (err) {
     console.error('[watchdog] Failed to record worktree prune notification:', err);
   }
 }
 
-export function runWorktreePrunePass(db: Database.Database = getDb()): void {
-  const hasAgentTenantId = tableHasColumn(db, 'agents', 'tenant_id');
-  const hasAgentProjectId = tableHasColumn(db, 'agents', 'project_id');
-  const hasProjectRepoColumns = hasAgentProjectId && ['repo_path', 'repo_url', 'repo_access_mode'].every((column) => tableHasColumn(db, 'projects', column));
-  const hasWorkflowRepoColumns = ['repo_path', 'repo_url', 'repo_access_mode'].every((column) => tableHasColumn(db, 'sprints', column));
-  const hasWorkflowRoutingColumns = ['agent_id', 'sprint_id', 'project_id', 'sprint_type'].every((column) => tableHasColumn(db, 'sprint_task_routing_rules', column));
-  const hasProjectTenantId = hasAgentProjectId && tableHasColumn(db, 'projects', 'tenant_id');
+export async function runWorktreePrunePass(db: Db = getDb()): Promise<void> {
+  const hasAgentTenantId = await tableHasColumn(db, 'agents', 'tenant_id');
+  const hasAgentProjectId = await tableHasColumn(db, 'agents', 'project_id');
+  // All three were `.every(async ...)`, which is unconditionally true — every one of these
+  // capability flags reported "present" regardless of the actual schema.
+  const allColumnsPresent = async (table: string, columns: string[]): Promise<boolean> =>
+    (await Promise.all(columns.map((column) => tableHasColumn(db, table, column)))).every(Boolean);
+  const REPO_COLUMNS = ['repo_path', 'repo_url', 'repo_access_mode'];
+  const hasProjectRepoColumns = hasAgentProjectId && await allColumnsPresent('projects', REPO_COLUMNS);
+  const hasWorkflowRepoColumns = await allColumnsPresent('sprints', REPO_COLUMNS);
+  const hasWorkflowRoutingColumns = await allColumnsPresent(
+    'sprint_task_routing_rules', ['agent_id', 'sprint_id', 'project_id', 'sprint_type'],
+  );
+  const hasProjectTenantId = hasAgentProjectId && await tableHasColumn(db, 'projects', 'tenant_id');
 
-  const agents = db.prepare(`
+  const agents = await db.all(`
     SELECT a.id, a.name, a.workspace_path, a.repo_path, a.repo_url, a.repo_access_mode, a.os_user,
            ${hasAgentTenantId ? 'a.tenant_id' : 'NULL'} AS tenant_id,
            ${hasAgentProjectId ? 'a.project_id' : 'NULL'} AS project_id,
@@ -190,7 +194,7 @@ export function runWorktreePrunePass(db: Database.Database = getDb()): void {
     ) wr ON wr.agent_id = a.id
     LEFT JOIN sprints s ON s.id = wr.sprint_id` : ''}
     WHERE a.workspace_path IS NOT NULL AND a.workspace_path != ''
-  `).all() as Array<{ id: number; name: string | null; tenant_id: number | null; project_id: number | null; project_tenant_id: number | null; workspace_path: string; repo_path: string | null; repo_url: string | null; repo_access_mode: RepoAccessMode | null; os_user: string | null; project_repo_path: string | null; project_repo_url: string | null; project_repo_access_mode: RepoAccessMode | null; workflow_repo_path: string | null; workflow_repo_url: string | null; workflow_repo_access_mode: RepoAccessMode | null }>;
+  `) as Array<{ id: number; name: string | null; tenant_id: number | null; project_id: number | null; project_tenant_id: number | null; workspace_path: string; repo_path: string | null; repo_url: string | null; repo_access_mode: RepoAccessMode | null; os_user: string | null; project_repo_path: string | null; project_repo_url: string | null; project_repo_access_mode: RepoAccessMode | null; workflow_repo_path: string | null; workflow_repo_url: string | null; workflow_repo_access_mode: RepoAccessMode | null }>;
 
   for (const agent of agents) {
     const effectiveRepo = resolveRepoConfig({
@@ -223,19 +227,19 @@ export function runWorktreePrunePass(db: Database.Database = getDb()): void {
       basePath,
       mode: repoAccessMode,
       maxAgeHours: 24,
-      getTaskRecord: (taskId: number) => {
-        const row = db.prepare(`
+      getTaskRecord: async (taskId: number) => {
+        const row = await db.get(`
           SELECT status
           FROM tasks
           WHERE id = ?
-        `).get(taskId) as { status: string } | undefined;
+        `, taskId) as { status: string } | undefined;
         return row
           ? { exists: true, status: row.status }
           : { exists: false, status: null };
       },
-      hasLiveInstance: (worktreePath: string, taskId: number | null) => {
+      hasLiveInstance: async (worktreePath: string, taskId: number | null) => {
         const folderName = worktreePath.split('/').pop() ?? worktreePath;
-        const row = db.prepare(`
+        const row = await db.get(`
           SELECT COUNT(*) as n
           FROM job_instances
           WHERE status IN ('queued', 'dispatched', 'running')
@@ -245,21 +249,16 @@ export function runWorktreePrunePass(db: Database.Database = getDb()): void {
               OR worktree_path = ?
               OR worktree_path LIKE ?
             )
-        `).get(
-          taskId,
-          worktreePath,
-          folderName,
-          `%/${folderName}`,
-        ) as { n: number };
+        `, taskId, worktreePath, folderName, `%/${folderName}`) as { n: number };
         return row.n > 0;
       },
     });
 
-    if (result.pruned.length > 0) {
+    if ((await result).pruned.length > 0) {
       const agentLabel = agent.name || `agent #${agent.id}`;
-      console.log(`[watchdog] Pruned ${result.pruned.length} orphaned worktree(s) for ${agentLabel}`);
-      recordWorktreePruneNotification(db, agent, result.pruned.length);
-      notifyTelegram(`🧹 Watchdog: pruned ${result.pruned.length} orphaned worktree(s) for ${agentLabel}`);
+      console.log(`[watchdog] Pruned ${(await result).pruned.length} orphaned worktree(s) for ${agentLabel}`);
+      await recordWorktreePruneNotification(db, agent, (await result).pruned.length);
+      await notifyTelegram(`🧹 Watchdog: pruned ${(await result).pruned.length} orphaned worktree(s) for ${agentLabel}`);
     }
   }
 }
@@ -368,43 +367,44 @@ interface WatchdogTaskRuntimeContext {
   custom_fields_json?: string | null;
 }
 
-function loadTaskRuntimeContext(db: Database.Database, taskId: number | null): WatchdogTaskRuntimeContext | null {
+async function loadTaskRuntimeContext(db: Db, taskId: number | null): Promise<WatchdogTaskRuntimeContext | null> {
   if (!taskId) return null;
   try {
-    const row = db.prepare(`
+    const hasCustomFields = await tableHasColumn(db, 'tasks', 'custom_fields_json');
+    const row = await db.get(`
       SELECT t.status AS task_status,
              t.task_type,
              t.sprint_id,
              s.sprint_type,
-             ${((db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).some((row) => row.name === 'custom_fields_json')) ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
+             ${hasCustomFields ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
       FROM tasks t
       LEFT JOIN sprints s ON s.id = t.sprint_id
       WHERE t.id = ?
-    `).get(taskId) as WatchdogTaskRuntimeContext | undefined;
+    `, taskId) as WatchdogTaskRuntimeContext | undefined;
     return row ? getCanonicalTaskRecord(row as unknown as Record<string, unknown>) as unknown as WatchdogTaskRuntimeContext : null;
   } catch {
     return null;
   }
 }
 
-function safeTaskRequiresSemanticOutcome(db: Database.Database, taskId: number | null): boolean {
+async function safeTaskRequiresSemanticOutcome(db: Db, taskId: number | null): Promise<boolean> {
   try {
-    return taskRequiresSemanticOutcome(db, taskId);
+    return await taskRequiresSemanticOutcome(db, taskId);
   } catch {
     return false;
   }
 }
 
-function safeResolveWorkflow(db: Database.Database, task: WatchdogTaskRuntimeContext | null) {
+async function safeResolveWorkflow(db: Db, task: WatchdogTaskRuntimeContext | null) {
   if (!task?.task_status) return null;
   try {
-    return resolveWorkflow({
-      taskStatus: task.task_status,
-      taskType: task.task_type,
-      sprintId: task.sprint_id,
-      sprintType: task.sprint_type,
-      db,
-    });
+    return await resolveWorkflow({
+          taskStatus: task.task_status,
+          taskType: task.task_type,
+          sprintId: task.sprint_id,
+          sprintType: task.sprint_type,
+          db,
+        });
   } catch {
     return null;
   }
@@ -449,11 +449,7 @@ function booleanField(value: unknown): boolean | null {
 
 function normalizeIsoTimestamp(raw: unknown, fallback?: string | null): string | null {
   const candidate = stringField(raw) ?? fallback ?? null;
-  if (!candidate) return null;
-  const normalized = candidate.includes('T') ? candidate : candidate.replace(' ', 'T');
-  const withZ = normalized.endsWith('Z') ? normalized : `${normalized}Z`;
-  const ms = new Date(withZ).getTime();
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  return toCanonicalTimestamp(candidate);
 }
 
 function runtimeEndFromObject(raw: Record<string, unknown>, fallback: { source?: string | null; endedAt?: string | null } = {}): WatchdogRuntimeEndEvent | null {
@@ -496,16 +492,16 @@ function inferRuntimeEndSource(inst: WatchdogRow, messageId: string, meta: Recor
     ?? inst.runtime_type;
 }
 
-function runtimeEndFromTerminalChatMessage(db: Database.Database, inst: WatchdogRow): WatchdogRuntimeEndEvent | null {
+async function runtimeEndFromTerminalChatMessage(db: Db, inst: WatchdogRow): Promise<WatchdogRuntimeEndEvent | null> {
   try {
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT id, timestamp, event_meta
       FROM chat_messages
       WHERE instance_id = ?
         AND event_type = 'turn_end'
       ORDER BY timestamp DESC, id DESC
       LIMIT 1
-    `).get(inst.id) as { id: string; timestamp: string; event_meta: string | null } | undefined;
+    `, inst.id) as { id: string; timestamp: string; event_meta: string | null } | undefined;
     if (!row) return null;
     const meta = parseJsonObject(row.event_meta);
     if (!meta) return null;
@@ -518,14 +514,14 @@ function runtimeEndFromTerminalChatMessage(db: Database.Database, inst: Watchdog
   }
 }
 
-function applyWatchdogRuntimeEnd(
-  db: Database.Database,
+async function applyWatchdogRuntimeEnd(
+  db: Db,
   inst: WatchdogRow,
   event: WatchdogRuntimeEndEvent,
   discoveredFrom: 'response.runtimeEnd' | 'chat_messages.turn_end' | 'openclaw.raw_session',
-): boolean {
-  const task = loadTaskRuntimeContext(db, inst.task_id);
-  const requiresSemanticOutcome = event.success && safeTaskRequiresSemanticOutcome(db, inst.task_id);
+): Promise<boolean> {
+  const task = await loadTaskRuntimeContext(db, inst.task_id);
+  const requiresSemanticOutcome = event.success && await safeTaskRequiresSemanticOutcome(db, inst.task_id);
   const missingRequiredLifecycleOutcome = Boolean(
     event.success
     && requiresSemanticOutcome
@@ -541,7 +537,7 @@ function applyWatchdogRuntimeEnd(
   const finalStatus = event.success && !missingRequiredLifecycleOutcome ? 'done' : 'failed';
   const tokenUsage = normalizeTokenUsage(event.metadata, event);
 
-  const updated = db.prepare(`
+  const updated = await db.run(`
     UPDATE job_instances
     SET status = ?,
         started_at = COALESCE(started_at, ?),
@@ -556,96 +552,85 @@ function applyWatchdogRuntimeEnd(
     WHERE id = ?
       AND runtime_ended_at IS NULL
       AND status IN ('running', 'dispatched', 'queued')
-  `).run(
-    finalStatus,
-    event.endedAt,
-    event.endedAt,
-    event.endedAt,
-    event.success ? 1 : 0,
-    runtimeEndError,
-    event.source,
-    tokenUsage.input,
-    tokenUsage.output,
-    tokenUsage.total,
-    inst.id,
-  );
+  `, finalStatus, event.endedAt, event.endedAt, event.endedAt, event.success ? 1 : 0, runtimeEndError, event.source, tokenUsage.input, tokenUsage.output, tokenUsage.total, inst.id);
   if (updated.changes === 0) return false;
 
   if (inst.task_id) {
-    scheduleEndedActiveInstanceLinkageCleanup(db, inst.task_id, inst.id, {
-      changedBy: 'watchdog',
-    });
-    writeTaskRuntimeEndHistory(db, inst.task_id, 'watchdog', {
-      endedAt: event.endedAt,
-      success: event.success,
-      source: event.source,
-      error: runtimeEndError,
-      lifecycleHandoff: missingRequiredLifecycleOutcome
-        ? 'missing_after_runtime_end'
-        : inst.lifecycle_outcome_posted_at || inst.task_outcome
-          ? 'posted'
-          : 'pending',
-    });
+    await scheduleEndedActiveInstanceLinkageCleanup(db, inst.task_id, inst.id, {
+            changedBy: 'watchdog',
+          });
+    await writeTaskRuntimeEndHistory(db, inst.task_id, 'watchdog', {
+            endedAt: event.endedAt,
+            success: event.success,
+            source: event.source,
+            error: runtimeEndError,
+            lifecycleHandoff: missingRequiredLifecycleOutcome
+              ? 'missing_after_runtime_end'
+              : inst.lifecycle_outcome_posted_at || inst.task_outcome
+                ? 'posted'
+                : 'pending',
+          });
   }
 
   if (missingRequiredLifecycleOutcome && inst.task_id) {
-    const resolvedWorkflow = safeResolveWorkflow(db, task);
-    markTaskNeedsAttentionForMissingSemanticHandoff(db, {
-      taskId: inst.task_id,
-      instanceId: inst.id,
-      changedBy: 'watchdog',
-      workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
-      priorTaskStatus: task?.task_status ?? inst.status,
-      sessionKey: inst.session_key,
-      reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, task),
-      runtimeEnd: {
-        source: event.source,
-        success: event.success,
-        endedAt: event.endedAt,
-        error: runtimeEndError,
-      },
-    });
+    const resolvedWorkflow = await safeResolveWorkflow(db, task);
+    await markTaskNeedsAttentionForMissingSemanticHandoff(db, {
+            taskId: inst.task_id,
+            instanceId: inst.id,
+            changedBy: 'watchdog',
+            workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
+            priorTaskStatus: task?.task_status ?? inst.status,
+            sessionKey: inst.session_key,
+            reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, task),
+            runtimeEnd: {
+              source: event.source,
+              success: event.success,
+              endedAt: event.endedAt,
+              error: runtimeEndError,
+            },
+          });
   }
 
   const message = event.success
     ? `Watchdog: reconciled persisted runtimeEnd for instance #${inst.id} from ${discoveredFrom} as ${finalStatus} (source=${event.source}, reason=${event.reason ?? 'completed'}, endedAt=${event.endedAt})`
     : `Watchdog: reconciled persisted runtimeEnd for instance #${inst.id} from ${discoveredFrom} as failed (source=${event.source}, reason=${event.reason ?? 'error'}) — ${runtimeEndError}`;
-  insertRuntimeLog(db, {
-    instanceId: inst.id,
-    agentId: inst.agent_id,
-    level: 'info',
-    message,
-  });
+  await insertRuntimeLog(db, {
+        instanceId: inst.id,
+        agentId: inst.agent_id,
+        level: 'info',
+        message,
+      });
 
   console.log(`[watchdog] ${message}`);
   return true;
 }
 
-function reconcilePersistedRuntimeEnd(db: Database.Database, inst: WatchdogRow): boolean {
+async function reconcilePersistedRuntimeEnd(db: Db, inst: WatchdogRow): Promise<boolean> {
   if (inst.runtime_ended_at) return false;
   const responseEvent = runtimeEndFromResponse(inst.response);
-  if (responseEvent && applyWatchdogRuntimeEnd(db, inst, responseEvent, 'response.runtimeEnd')) {
+  if (responseEvent && await applyWatchdogRuntimeEnd(db, inst, responseEvent, 'response.runtimeEnd')) {
     return true;
   }
-  const chatEvent = runtimeEndFromTerminalChatMessage(db, inst);
-  if (chatEvent && applyWatchdogRuntimeEnd(db, inst, chatEvent, 'chat_messages.turn_end')) {
+  const chatEvent = await runtimeEndFromTerminalChatMessage(db, inst);
+  if (chatEvent && await applyWatchdogRuntimeEnd(db, inst, chatEvent, 'chat_messages.turn_end')) {
     return true;
   }
   return false;
 }
 
-function reconcileTerminalOpenClawSession(
-  db: Database.Database,
+async function reconcileTerminalOpenClawSession(
+  db: Db,
   inst: WatchdogRow,
   rawSession: OpenClawInstanceSessionStateResult,
   now: Date,
-): boolean {
+): Promise<boolean> {
   const decision = rawSession.decision;
   if (!decision?.terminal) return false;
 
-  const endedAt = rawSession.state?.trajectoryEndedAt ?? rawSession.state?.lastEventAt ?? now.toISOString();
-  const task = loadTaskRuntimeContext(db, inst.task_id);
-  const requiresSemanticOutcome = decision.success && safeTaskRequiresSemanticOutcome(db, inst.task_id);
+  const endedAt = toCanonicalTimestamp(rawSession.state?.trajectoryEndedAt ?? rawSession.state?.lastEventAt)
+    ?? timestampFromDate(now) ?? nowTimestamp();
+  const task = await loadTaskRuntimeContext(db, inst.task_id);
+  const requiresSemanticOutcome = decision.success && await safeTaskRequiresSemanticOutcome(db, inst.task_id);
   const missingRequiredLifecycleOutcome = Boolean(
     decision.success
     && requiresSemanticOutcome
@@ -661,7 +646,7 @@ function reconcileTerminalOpenClawSession(
   const source = 'watchdog_raw_session';
   const tokenUsage = normalizeTokenUsage(decision.metadata, rawSession.state, rawSession);
 
-  const updated = db.prepare(`
+  const updated = await db.run(`
     UPDATE job_instances
     SET status = ?,
         started_at = COALESCE(started_at, ?),
@@ -675,44 +660,32 @@ function reconcileTerminalOpenClawSession(
         token_total = COALESCE(?, token_total)
     WHERE id = ?
       AND status IN ('running', 'dispatched', 'queued')
-  `).run(
-    finalStatus,
-    endedAt,
-    endedAt,
-    endedAt,
-    decision.success ? 1 : 0,
-    runtimeEndError,
-    source,
-    tokenUsage.input,
-    tokenUsage.output,
-    tokenUsage.total,
-    inst.id,
-  );
+  `, finalStatus, endedAt, endedAt, endedAt, decision.success ? 1 : 0, runtimeEndError, source, tokenUsage.input, tokenUsage.output, tokenUsage.total, inst.id);
   if (updated.changes === 0) return false;
 
   if (inst.task_id) {
-    scheduleEndedActiveInstanceLinkageCleanup(db, inst.task_id, inst.id, {
-      changedBy: 'watchdog',
-    });
+    await scheduleEndedActiveInstanceLinkageCleanup(db, inst.task_id, inst.id, {
+            changedBy: 'watchdog',
+          });
   }
 
   if (missingRequiredLifecycleOutcome && inst.task_id) {
-    const resolvedWorkflow = safeResolveWorkflow(db, task);
-    markTaskNeedsAttentionForMissingSemanticHandoff(db, {
-      taskId: inst.task_id,
-      instanceId: inst.id,
-      changedBy: 'watchdog',
-      workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
-      priorTaskStatus: task?.task_status ?? inst.status,
-      sessionKey: inst.session_key,
-      reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, task),
-      runtimeEnd: {
-        source,
-        success: decision.success,
-        endedAt,
-        error: runtimeEndError,
-      },
-    });
+    const resolvedWorkflow = await safeResolveWorkflow(db, task);
+    await markTaskNeedsAttentionForMissingSemanticHandoff(db, {
+            taskId: inst.task_id,
+            instanceId: inst.id,
+            changedBy: 'watchdog',
+            workflowPhase: resolvedWorkflow?.workflowPhase ?? null,
+            priorTaskStatus: task?.task_status ?? inst.status,
+            sessionKey: inst.session_key,
+            reviewQaDeployEvidenceRecorded: determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, task),
+            runtimeEnd: {
+              source,
+              success: decision.success,
+              endedAt,
+              error: runtimeEndError,
+            },
+          });
   }
 
   const stateDetails = rawSession.state?.trajectoryFile
@@ -721,25 +694,25 @@ function reconcileTerminalOpenClawSession(
   const message = decision.success
     ? `Watchdog: reconciled terminal OpenClaw session for instance #${inst.id} as ${finalStatus} (${stateDetails})`
     : `Watchdog: reconciled terminal OpenClaw session for instance #${inst.id} as failed (${stateDetails}) — ${runtimeEndError ?? decision.reason}`;
-  insertRuntimeLog(db, {
-    instanceId: inst.id,
-    agentId: inst.agent_id,
-    level: 'info',
-    message,
-  });
+  await insertRuntimeLog(db, {
+        instanceId: inst.id,
+        agentId: inst.agent_id,
+        level: 'info',
+        message,
+      });
 
   console.log(`[watchdog] ${message}`);
   return true;
 }
 
-export function runWatchdogPass(db: Database.Database, now = new Date()): void {
-  const stuck = db.prepare(`
+export async function runWatchdogPass(db: Db, now = new Date()): Promise<void> {
+  const stuck = await db.all(`
     ${WATCHDOG_ROW_SELECT}
     WHERE ji.status IN ('running', 'dispatched', 'queued')
-  `).all() as WatchdogRow[];
+  `) as WatchdogRow[];
 
   for (const inst of stuck) {
-    if (reconcilePersistedRuntimeEnd(db, inst)) continue;
+    if (await reconcilePersistedRuntimeEnd(db, inst)) continue;
 
     let currentInst = inst;
     let decision = evaluateWatchdogDecision(currentInst, now);
@@ -747,7 +720,7 @@ export function runWatchdogPass(db: Database.Database, now = new Date()): void {
     let decisionReason = decision.reason;
 
     try {
-      const rawSession = evaluateOpenClawInstanceSessionState(db, inst.id, { now });
+      const rawSession = await evaluateOpenClawInstanceSessionState(db, inst.id, { now });
       const hasRuntimeActivity = Boolean(
         rawSession.state?.lastAssistantAt
         || rawSession.state?.lastToolUseAt
@@ -770,14 +743,14 @@ export function runWatchdogPass(db: Database.Database, now = new Date()): void {
         );
       }
       if (rawSession.decision?.terminal) {
-        reconcileTerminalOpenClawSession(db, currentInst, rawSession, now);
+        await reconcileTerminalOpenClawSession(db, currentInst, rawSession, now);
         continue;
       }
       if (rawSession.state?.lastEventAt) {
-        const refreshed = db.prepare(`
+        const refreshed = await db.get(`
           ${WATCHDOG_ROW_SELECT}
           WHERE ji.id = ? AND ji.status IN ('running', 'dispatched', 'queued')
-        `).get(inst.id) as WatchdogRow | undefined;
+        `, inst.id) as WatchdogRow | undefined;
         if (refreshed) {
           currentInst = refreshed;
           decision = evaluateWatchdogDecision(currentInst, now);
@@ -793,8 +766,8 @@ export function runWatchdogPass(db: Database.Database, now = new Date()): void {
     }
 
     const elapsedMin = Math.floor(decision.elapsedMs / 60000);
-    const completedAt = now.toISOString();
-    db.prepare(`
+    const completedAt = timestampFromDate(now) ?? nowTimestamp();
+    await db.run(`
       UPDATE job_instances
       SET status = 'failed',
           error  = ?,
@@ -804,48 +777,42 @@ export function runWatchdogPass(db: Database.Database, now = new Date()): void {
           runtime_end_error = COALESCE(runtime_end_error, ?),
           runtime_end_source = COALESCE(runtime_end_source, 'watchdog')
       WHERE id = ? AND status IN ('running', 'dispatched', 'queued')
-    `).run(
-      `Watchdog: ${decisionReason}`,
-      completedAt,
-      completedAt,
-      `Watchdog: ${decisionReason}`,
-      currentInst.id
-    );
+    `, `Watchdog: ${decisionReason}`, completedAt, completedAt, `Watchdog: ${decisionReason}`, currentInst.id);
 
     if (currentInst.task_id) {
-      const cleared = db.prepare(`
+      const cleared = await db.run(`
         UPDATE tasks
         SET active_instance_id = NULL,
-            ${taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
+            ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
             updated_at = datetime('now')
         WHERE id = ? AND active_instance_id = ?
-      `).run(currentInst.task_id, currentInst.id);
+      `, currentInst.task_id, currentInst.id);
       if (cleared.changes > 0) {
-        writeTaskHistory(db, currentInst.task_id, 'watchdog', 'active_instance_id', String(currentInst.id), null);
+        await writeTaskHistory(db, currentInst.task_id, 'watchdog', 'active_instance_id', String(currentInst.id), null);
       }
     }
 
-    insertRuntimeLog(db, {
-      instanceId: currentInst.id,
-      agentId: currentInst.agent_id,
-      taskId: currentInst.task_id,
-      level: 'warn',
-      message: `Watchdog: instance #${currentInst.id} was auto-failed from "${currentInst.status}" after ${elapsedMin}m — ${decisionReason} (task_id=${currentInst.task_id ?? 'none'})`,
-    });
+    await insertRuntimeLog(db, {
+            instanceId: currentInst.id,
+            agentId: currentInst.agent_id,
+            taskId: currentInst.task_id,
+            level: 'warn',
+            message: `Watchdog: instance #${currentInst.id} was auto-failed from "${currentInst.status}" after ${elapsedMin}m — ${decisionReason} (task_id=${currentInst.task_id ?? 'none'})`,
+          });
 
     const actorLabel = formatActorLabel(currentInst);
     console.log(`[watchdog] Auto-failed instance #${currentInst.id} (${elapsedMin}m elapsed, task=${currentInst.task_id ?? 'none'}) — ${decisionReason}`);
-    recordWatchdogStaleNotification(db, currentInst, { actorLabel, elapsedMin, reason: decisionReason });
-    notifyTelegram(`⏰ Watchdog: ${actorLabel} auto-failed after ${elapsedMin}m (instance #${currentInst.id}${currentInst.task_id ? `, task #${currentInst.task_id}` : ''}) — ${decisionReason}`);
+    await recordWatchdogStaleNotification(db, currentInst, { actorLabel, elapsedMin, reason: decisionReason });
+    await notifyTelegram(`⏰ Watchdog: ${actorLabel} auto-failed after ${elapsedMin}m (instance #${currentInst.id}${currentInst.task_id ? `, task #${currentInst.task_id}` : ''}) — ${decisionReason}`);
   }
 }
 
 export function startWatchdog(): void {
   console.log(`[watchdog] Starting — will auto-fail instances based on per-job timeout_seconds (default ${DEFAULT_TIMEOUT_MINUTES}m)`);
 
-  setInterval(() => {
+  setInterval(async () => {
     const db = getDb();
-    runWatchdogPass(db, new Date());
+    await runWatchdogPass(db, new Date());
   }, POLL_INTERVAL_MS);
 
   // ── Task worktree pruning (task #365, tightened by task #457) ───────────
@@ -853,9 +820,9 @@ export function startWatchdog(): void {
   // Valid task worktrees are retained unless the backing task is done.
   // The orphan safety net remains for malformed task folders and missing tasks,
   // but any prune candidate must still have no live instance.
-  setInterval(() => {
+  setInterval(async () => {
     try {
-      runWorktreePrunePass(getDb());
+      await runWorktreePrunePass(getDb());
     } catch (err) {
       console.error('[watchdog] Worktree prune error:', err);
     }

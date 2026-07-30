@@ -51,6 +51,7 @@ jest.mock('../lib/agentHqBaseUrl', () => ({
 import { resolveRuntime } from '../runtimes';
 import type { AgentRuntime } from '../runtimes';
 import { dispatchInstance, resolveModelFromStoryPoints, runDispatcher } from './dispatcher';
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolveRuntime>;
 const mockedTaskNotifications = jest.requireMock('../lib/taskNotifications') as {
@@ -72,9 +73,10 @@ function mockRuntime(dispatch: jest.Mock): AgentRuntime {
 }
 
 describe('runDispatcher thinking-level routing', () => {
-  it('resolveModelFromStoryPoints returns configured thinking_level', () => {
-    const db = new Database(':memory:');
-    db.exec(`
+  it('resolveModelFromStoryPoints returns configured thinking_level', async () => {
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER,
@@ -90,12 +92,12 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
       VALUES (86, NULL, 5, 'anthropic', 'anthropic/claude-sonnet-4-6', 'medium', 'default route')
-    `).run();
+    `);
 
-    expect(resolveModelFromStoryPoints(db, 3, 'anthropic', { projectId: 86 })).toEqual({
+    expect(await resolveModelFromStoryPoints(db, 3, 'anthropic', { projectId: 86 })).toEqual({
       model: 'anthropic/claude-sonnet-4-6',
       max_turns: null,
       max_budget_usd: null,
@@ -104,12 +106,13 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'default route',
     });
 
-    db.close();
+    dbRaw.close();
   });
 
-  it('resolveModelFromStoryPoints ignores disabled rules', () => {
-    const db = new Database(':memory:');
-    db.exec(`
+  it('resolveModelFromStoryPoints ignores disabled rules', async () => {
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER,
@@ -126,24 +129,25 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, enabled, label)
       VALUES
         (86, NULL, 5, 'anthropic', 'anthropic/disabled', 'medium', 0, 'disabled route'),
         (86, NULL, 8, 'anthropic', 'anthropic/enabled', 'low', 1, 'enabled route')
-    `).run();
+    `);
 
-    expect(resolveModelFromStoryPoints(db, 3, 'anthropic', { projectId: 86 })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'anthropic', { projectId: 86 })).toEqual(expect.objectContaining({
       model: 'anthropic/enabled',
       label: 'enabled route',
     }));
 
-    db.close();
+    dbRaw.close();
   });
 
-  it('resolveModelFromStoryPoints prefers sprint scoped rules before project scoped rules', () => {
-    const db = new Database(':memory:');
-    db.exec(`
+  it('resolveModelFromStoryPoints prefers sprint scoped rules before project scoped rules', async () => {
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER,
@@ -159,14 +163,14 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
       VALUES
         (86, NULL, 5, 'openai-codex', 'openai/gpt-5.4', 'medium', 'project'),
         (86, 57, 5, 'openai-codex', 'openai/gpt-5.5', 'high', 'sprint')
-    `).run();
+    `);
 
-    expect(resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toEqual({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toEqual({
       model: 'openai/gpt-5.5',
       max_turns: null,
       max_budget_usd: null,
@@ -175,7 +179,7 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'sprint',
     });
 
-    expect(resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 58 })).toEqual({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 58 })).toEqual({
       model: 'openai/gpt-5.4',
       max_turns: null,
       max_budget_usd: null,
@@ -184,12 +188,13 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'project',
     });
 
-    db.close();
+    dbRaw.close();
   });
 
-  it('resolveModelFromStoryPoints applies sprint-type scoped rules between sprint and project scopes', () => {
-    const db = new Database(':memory:');
-    db.exec(`
+  it('resolveModelFromStoryPoints applies sprint-type scoped rules between sprint and project scopes', async () => {
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE sprints (
         id INTEGER PRIMARY KEY,
         project_id INTEGER,
@@ -214,49 +219,50 @@ describe('runDispatcher thinking-level routing', () => {
       INSERT INTO sprints (id, project_id, sprint_type) VALUES (57, 86, 'dev'), (58, 86, 'dev'), (59, 86, 'generic');
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, sprint_type, max_points, provider, model, thinking_level, label)
       VALUES
         (86, NULL, NULL, 5, 'openai-codex', 'openai/project', 'medium', 'project'),
         (NULL, NULL, 'dev', 5, 'openai-codex', 'openai/global-dev-default', 'low', 'global-dev-default'),
         (86, NULL, 'dev', 5, 'openai-codex', 'openai/dev-default', 'high', 'dev-default'),
         (86, 57, NULL, 5, 'openai-codex', 'openai/sprint', 'adaptive', 'sprint')
-    `).run();
+    `);
 
-    expect(resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toEqual(expect.objectContaining({
       model: 'openai/sprint',
       thinking_level: 'adaptive',
       label: 'sprint',
     }));
-    expect(resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 58 })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 58 })).toEqual(expect.objectContaining({
       model: 'openai/dev-default',
       thinking_level: 'high',
       label: 'dev-default',
     }));
-    expect(resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 59 })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 59 })).toEqual(expect.objectContaining({
       model: 'openai/project',
       thinking_level: 'medium',
       label: 'project',
     }));
 
-    db.prepare(`DELETE FROM story_point_model_routing WHERE label = 'dev-default'`).run();
-    expect(resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 58 })).toEqual(expect.objectContaining({
+    await db.run(`DELETE FROM story_point_model_routing WHERE label = 'dev-default'`);
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 58 })).toEqual(expect.objectContaining({
       model: 'openai/global-dev-default',
       thinking_level: 'low',
       label: 'global-dev-default',
     }));
-    expect(resolveModelFromStoryPoints(db, 3, 'openai-codex', { sprintType: 'dev' })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { sprintType: 'dev' })).toEqual(expect.objectContaining({
       model: 'openai/global-dev-default',
       thinking_level: 'low',
       label: 'global-dev-default',
     }));
 
-    db.close();
+    dbRaw.close();
   });
 
-  it('resolveModelFromStoryPoints ignores legacy global rows with no explicit scope', () => {
-    const db = new Database(':memory:');
-    db.exec(`
+  it('resolveModelFromStoryPoints ignores legacy global rows with no explicit scope', async () => {
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER,
@@ -272,19 +278,20 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
       VALUES (NULL, NULL, 5, 'openai-codex', 'openai/gpt-5.4', 'medium', 'legacy-global')
-    `).run();
+    `);
 
-    expect(resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toBeNull();
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toBeNull();
 
-    db.close();
+    dbRaw.close();
   });
 
-  it('resolveModelFromStoryPoints requires tenant-scoped routing rows to match the task tenant', () => {
-    const db = new Database(':memory:');
-    db.exec(`
+  it('resolveModelFromStoryPoints requires tenant-scoped routing rows to match the task tenant', async () => {
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE story_point_model_routing (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant_id INTEGER,
@@ -302,25 +309,26 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, sprint_type, max_points, provider, model, thinking_level, label)
       VALUES
         (1, 86, NULL, 'dev', 5, 'openai', 'anthropic/claude-sonnet-4-6', 'medium', 'tenant-1-wrong-model'),
         (4, 86, NULL, 'dev', 5, 'openai', 'openai/gpt-5.5', 'high', 'tenant-4-openai')
-    `).run();
+    `);
 
-    expect(resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 4, projectId: 86, sprintType: 'dev' })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 4, projectId: 86, sprintType: 'dev' })).toEqual(expect.objectContaining({
       model: 'openai/gpt-5.5',
       label: 'tenant-4-openai',
     }));
-    expect(resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 2, projectId: 86, sprintType: 'dev' })).toBeNull();
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 2, projectId: 86, sprintType: 'dev' })).toBeNull();
 
-    db.close();
+    dbRaw.close();
   });
 
   it('passes routed thinking_level into runtime dispatch and persists resolved output', async () => {
-    const db = new Database(':memory:');
-    db.exec(`
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         tenant_id INTEGER,
@@ -465,32 +473,32 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, sort_rules)
       VALUES (1, 4, 'Backend Engineer', 86, 'Do the task', 1, 900, 'openai/gpt-5.5', '[]', 'agent:backend:main', 'Cinder', 'openclaw', '{}', '/tmp', 'openai', '[]')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
       VALUES (382, 4, 'Add thinking routing', 'Implement support', 'ready', 'medium', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 4, '2026-04-28T20:00:00.000Z')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, max_points, provider, model, thinking_level, fast_mode, label)
       VALUES
         (1, 86, 10, 4, 'openai', 'anthropic/claude-sonnet-4-6', 'medium', 0, 'Tenant 1 Anthropic route'),
         (4, 86, 10, 4, 'openai', 'openai/gpt-5.5', 'high', 1, 'Tenant 4 OpenAI route')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprints (id, tenant_id, name, sprint_type, status)
       VALUES (10, 4, 'Bugs', 'generic', 'active')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
       VALUES (10, 'backend', 'ready', 1, 5)
-    `).run();
+    `);
 
     const callOrder: string[] = [];
     const dispatchMock = jest.fn(async () => {
@@ -511,7 +519,7 @@ describe('runDispatcher thinking-level routing', () => {
     });
     mockedResolveRuntime.mockReturnValue(runtime);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
     expect(result.dispatched).toBe(1);
 
     await new Promise((resolve) => setImmediate(resolve));
@@ -531,7 +539,7 @@ describe('runDispatcher thinking-level routing', () => {
     }));
     expect(callOrder).toEqual(['prepareAuthProfiles', 'dispatch']);
 
-    const instance = db.prepare(`SELECT tenant_id, effective_model, effective_thinking_level, effective_fast_mode FROM job_instances LIMIT 1`).get() as { tenant_id: number | null; effective_model: string | null; effective_thinking_level: string | null; effective_fast_mode: number | null };
+    const instance = await db.get(`SELECT tenant_id, effective_model, effective_thinking_level, effective_fast_mode FROM job_instances LIMIT 1`) as { tenant_id: number | null; effective_model: string | null; effective_thinking_level: string | null; effective_fast_mode: number | null };
     expect(instance).toEqual({
       tenant_id: 4,
       effective_model: 'openai/gpt-5.5',
@@ -539,12 +547,13 @@ describe('runDispatcher thinking-level routing', () => {
       effective_fast_mode: 1,
     });
 
-    db.close();
+    dbRaw.close();
   });
 
   it('makes task worktree authoritative for runtime cwd and repo-root metadata', async () => {
-    const db = new Database(':memory:');
-    db.exec(`
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
@@ -669,25 +678,25 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
       VALUES (1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'claude-code', '{"workingDirectory":"  /parent/workspace/../workspace-root  "}', '/parent/workspace', 'anthropic', '/repos/agent-hq', '[]')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO tasks (id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
       VALUES (375, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprints (id, name, sprint_type, status)
       VALUES (10, 'Bugs', 'generic', 'active')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
       VALUES (10, 'backend', 'ready', 1, 5)
-    `).run();
+    `);
 
     const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-375' });
     mockedResolveRuntime.mockReturnValue(mockRuntime(dispatchMock));
@@ -711,7 +720,7 @@ describe('runDispatcher thinking-level routing', () => {
       error: null,
     });
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
     expect(result.dispatched).toBe(1);
 
     await new Promise((resolve) => setImmediate(resolve));
@@ -759,27 +768,28 @@ describe('runDispatcher thinking-level routing', () => {
 
     logSpy.mockRestore();
 
-    const payloadSent = db.prepare(`SELECT payload_sent FROM job_instances LIMIT 1`).get() as { payload_sent: string | null };
+    const payloadSent = await db.get(`SELECT payload_sent FROM job_instances LIMIT 1`) as { payload_sent: string | null };
     expect(JSON.parse(payloadSent.payload_sent ?? '{}')).toEqual(expect.objectContaining({
       mode: 'runtime-dispatch',
       transport: 'ws.send',
     }));
 
-    const instance = db.prepare(`SELECT worktree_path FROM job_instances LIMIT 1`).get() as { worktree_path: string | null };
+    const instance = await db.get(`SELECT worktree_path FROM job_instances LIMIT 1`) as { worktree_path: string | null };
     expect(instance.worktree_path).toBe('/Users/test/workspaces/task-375');
 
-    db.close();
+    dbRaw.close();
   });
 
   it('writes run context into the active worktree with consistent repo-root metadata', async () => {
-    const db = new Database(':memory:');
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatcher-worktree-'));
     const workspaceRoot = path.join(tempRoot, 'workspace-root');
     const worktreeRoot = path.join(workspaceRoot, 'task-375');
     fs.mkdirSync(worktreeRoot, { recursive: true });
 
     try {
-      db.exec(`
+      await db.exec(`
         CREATE TABLE agents (
           id INTEGER PRIMARY KEY,
           job_title TEXT NOT NULL,
@@ -903,25 +913,25 @@ describe('runDispatcher thinking-level routing', () => {
         );
       `);
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
         VALUES (1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'claude-code', '{"workingDirectory":"/stale/root"}', ?, 'anthropic', '/repos/agent-hq', '[]')
-      `).run(workspaceRoot);
+      `, workspaceRoot);
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO tasks (id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
         VALUES (375, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
-      `).run();
+      `);
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprints (id, name, sprint_type, status)
         VALUES (10, 'Bugs', 'generic', 'active')
-      `).run();
+      `);
 
-      db.prepare(`
+      await db.run(`
         INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
         VALUES (10, 'backend', 'ready', 1, 5)
-      `).run();
+      `);
 
       const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-375' });
       mockedResolveRuntime.mockReturnValue(mockRuntime(dispatchMock));
@@ -934,7 +944,7 @@ describe('runDispatcher thinking-level routing', () => {
         error: null,
       });
 
-      const result = runDispatcher(db, 86);
+      const result = await runDispatcher(db, 86);
       expect(result.dispatched).toBeGreaterThanOrEqual(0);
       expect(result.errors).toEqual([]);
 
@@ -967,13 +977,14 @@ describe('runDispatcher thinking-level routing', () => {
       }));
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
-      db.close();
+      dbRaw.close();
     }
   });
 
   it('normalizes dispatch path inputs before making the worktree authoritative', async () => {
-    const db = new Database(':memory:');
-    db.exec(`
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
@@ -1098,25 +1109,25 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
       VALUES (1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'openclaw', '{"workingDirectory":"/parent/workspace"}', '/parent/workspace', 'anthropic', '/repos/agent-hq', '[]')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO tasks (id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
       VALUES (375, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprints (id, name, sprint_type, status)
       VALUES (10, 'Bugs', 'generic', 'active')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
       VALUES (10, 'backend', 'ready', 1, 5)
-    `).run();
+    `);
 
     const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-375' });
     mockedResolveRuntime.mockReturnValue(mockRuntime(dispatchMock));
@@ -1129,7 +1140,7 @@ describe('runDispatcher thinking-level routing', () => {
       error: null,
     });
 
-    runDispatcher(db, 86);
+    await runDispatcher(db, 86);
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -1147,14 +1158,15 @@ describe('runDispatcher thinking-level routing', () => {
       }),
     }));
 
-    db.close();
+    dbRaw.close();
   });
 
-  it('surfaces worktree startup failures on the task instead of leaving it silently ready', () => {
+  it('surfaces worktree startup failures on the task instead of leaving it silently ready', async () => {
     jest.clearAllMocks();
 
-    const db = new Database(':memory:');
-    db.exec(`
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
@@ -1229,18 +1241,18 @@ describe('runDispatcher thinking-level routing', () => {
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    db.prepare(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`).run();
+    await db.run(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
       VALUES (1, 'Ember', 86, 'Do the task', 1, 900, 'agent:ember:main', 'Ember', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'ember-frontend', '[]')
-    `).run();
-    db.prepare(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Bugs', 'generic', 'active')`).run();
-    db.prepare(`
+    `);
+    await db.run(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Bugs', 'generic', 'active')`);
+    await db.run(`
       INSERT INTO tasks (id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
       VALUES (442, 'Surface dispatcher failure', 'Task', 'ready', 'high', 86, 'frontend', 10, '2026-05-06T18:00:00.000Z', '2026-05-06T18:00:00.000Z')
-    `).run();
-    db.prepare(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'frontend', 'ready', 1, 10)`).run();
+    `);
+    await db.run(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'frontend', 'ready', 1, 10)`);
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
     createTaskWorktree.mockReturnValue({
@@ -1250,16 +1262,16 @@ describe('runDispatcher thinking-level routing', () => {
       error: "fatal: 'origin' does not appear to be a git repository\nfatal: ambiguous argument 'origin/main': unknown revision",
     });
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO external_event_mappings (project_id, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
       VALUES (86, 'agent_hq_dispatcher', 'dispatch_startup_failed', 'frontend', 'status', 'stalled', 1, 1, 100)
-    `).run();
+    `);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
     expect(result.dispatched).toBe(0);
     expect(result.skipped).toBe(1);
 
-    const task = db.prepare(`SELECT status, agent_id, routing_reason, failure_detail, previous_status, active_instance_id FROM tasks WHERE id = 442`).get() as Record<string, unknown>;
+    const task = await db.get(`SELECT status, agent_id, routing_reason, failure_detail, previous_status, active_instance_id FROM tasks WHERE id = 442`) as Record<string, unknown>;
     expect(task.status).toBe('stalled');
     expect(task.agent_id).toBe(1);
     expect(task.active_instance_id).toBeNull();
@@ -1270,7 +1282,7 @@ describe('runDispatcher thinking-level routing', () => {
     expect(String(task.routing_reason)).toContain('Rule: Ember (agent #1)');
     expect(task.previous_status).toBe('ready');
 
-    const note = db.prepare(`SELECT content FROM task_notes WHERE task_id = 442 ORDER BY id DESC LIMIT 1`).get() as { content: string };
+    const note = await db.get(`SELECT content FROM task_notes WHERE task_id = 442 ORDER BY id DESC LIMIT 1`) as { content: string };
     expect(note.content).toContain('Summary: Dispatch startup failed after routing matched Ember');
     expect(note.content).toContain('Failure or issue observed: Worktree creation failed for task #442');
     expect(note.content).toContain('Root cause assessment: repo configuration or checkout state');
@@ -1279,7 +1291,7 @@ describe('runDispatcher thinking-level routing', () => {
     expect(note.content).toContain('action=status→stalled');
     expect(note.content).toContain('Next owner: dev');
 
-    const eventHistory = db.prepare(`SELECT field, new_value FROM task_history WHERE task_id = 442 AND field LIKE 'workflow_event_%'`).all() as Array<{ field: string; new_value: string | null }>;
+    const eventHistory = await db.all(`SELECT field, new_value FROM task_history WHERE task_id = 442 AND field LIKE 'workflow_event_%'`) as Array<{ field: string; new_value: string | null }>;
     expect(eventHistory).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'workflow_event_source', new_value: 'agent_hq_dispatcher' }),
       expect.objectContaining({ field: 'workflow_event_name', new_value: 'dispatch_startup_failed' }),
@@ -1289,11 +1301,11 @@ describe('runDispatcher thinking-level routing', () => {
       expect.objectContaining({ field: 'workflow_event_action_target', new_value: 'stalled' }),
     ]));
 
-    const notification = db.prepare(`
+    const notification = await db.get(`
       SELECT type, title, body, source, outlet, metadata_json
       FROM notification_records
       WHERE type = 'task_dispatch_startup_failed'
-    `).get() as { type: string; title: string; body: string; source: string; outlet: string; metadata_json: string };
+    `) as { type: string; title: string; body: string; source: string; outlet: string; metadata_json: string };
     expect(notification.title).toBe('Task #442 dispatch startup failed');
     expect(notification.body).toContain('Task: #442 Surface dispatcher failure');
     expect(notification.body).toContain('Project: unknown');
@@ -1325,14 +1337,15 @@ describe('runDispatcher thinking-level routing', () => {
     }));
 
     expect(mockedResolveRuntime).not.toHaveBeenCalled();
-    db.close();
+    dbRaw.close();
   });
 
-  it('records a startup failure notification when workflow mapping ignores the event and status stays ready', () => {
+  it('records a startup failure notification when workflow mapping ignores the event and status stays ready', async () => {
     jest.clearAllMocks();
 
-    const db = new Database(':memory:');
-    db.exec(`
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
@@ -1407,22 +1420,22 @@ describe('runDispatcher thinking-level routing', () => {
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    db.prepare(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`).run();
+    await db.run(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
       VALUES (1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:cinder:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
-    `).run();
-    db.prepare(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Enhancements', 'dev', 'active')`).run();
-    db.prepare(`
+    `);
+    await db.run(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Enhancements', 'dev', 'active')`);
+    await db.run(`
       INSERT INTO tasks (id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
       VALUES (932, 'Notify operators when dispatch startup fails without a status change', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-07-06T18:00:00.000Z', '2026-07-06T18:00:00.000Z')
-    `).run();
-    db.prepare(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'backend', 'ready', 1, 10)`).run();
-    db.prepare(`
+    `);
+    await db.run(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'backend', 'ready', 1, 10)`);
+    await db.run(`
       INSERT INTO external_event_mappings (project_id, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
       VALUES (86, 'agent_hq_dispatcher', 'dispatch_startup_failed', 'backend', 'ignore', NULL, 1, 1, 100)
-    `).run();
+    `);
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
     createTaskWorktree.mockReturnValue({
@@ -1432,26 +1445,26 @@ describe('runDispatcher thinking-level routing', () => {
       error: "fatal: ambiguous argument 'origin/main': unknown revision",
     });
 
-    const first = runDispatcher(db, 86);
-    db.prepare(`UPDATE tasks SET dispatched_at = NULL WHERE id = 932`).run();
-    const second = runDispatcher(db, 86);
+    const first = await runDispatcher(db, 86);
+    await db.run(`UPDATE tasks SET dispatched_at = NULL WHERE id = 932`);
+    const second = await runDispatcher(db, 86);
     expect(first.dispatched).toBe(0);
     expect(first.skipped).toBe(1);
     expect(second.dispatched).toBe(0);
     expect(second.skipped).toBe(1);
 
-    const task = db.prepare(`SELECT status, failure_detail, previous_status FROM tasks WHERE id = 932`).get() as Record<string, unknown>;
+    const task = await db.get(`SELECT status, failure_detail, previous_status FROM tasks WHERE id = 932`) as Record<string, unknown>;
     expect(task.status).toBe('ready');
     expect(task.previous_status).toBe('ready');
     expect(String(task.failure_detail)).toContain('Action: ignore');
     expect(String(task.failure_detail)).toContain('Message: Workflow-level repository configuration is required for repo-backed workflow dispatch');
 
-    const notifications = db.prepare(`
+    const notifications = await db.all(`
       SELECT title, body, source, outlet, metadata_json
       FROM notification_records
       WHERE type = 'task_dispatch_startup_failed'
       ORDER BY id
-    `).all() as Array<{ title: string; body: string; source: string; outlet: string; metadata_json: string }>;
+    `) as Array<{ title: string; body: string; source: string; outlet: string; metadata_json: string }>;
     expect(notifications).toHaveLength(1);
     expect(notifications[0].title).toBe('Task #932 dispatch startup failed');
     expect(notifications[0].body).toContain('Task: #932 Notify operators when dispatch startup fails without a status change');
@@ -1475,14 +1488,15 @@ describe('runDispatcher thinking-level routing', () => {
     expect(mockedTaskNotifications.notifyTaskStatusChange).not.toHaveBeenCalled();
     expect(mockedResolveRuntime).not.toHaveBeenCalled();
 
-    db.close();
+    dbRaw.close();
   });
 
   it('preserves runtime dispatch retries but surfaces the failure on the task', async () => {
     jest.clearAllMocks();
 
-    const db = new Database(':memory:');
-    db.exec(`
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
@@ -1540,18 +1554,18 @@ describe('runDispatcher thinking-level routing', () => {
       CREATE TABLE task_history (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, changed_by TEXT, field TEXT, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
       CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, instance_id INTEGER, agent_id INTEGER, job_title TEXT, level TEXT, message TEXT);
     `);
-    db.prepare(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`).run();
+    await db.run(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
       VALUES (1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:agent-hq:cinder-platform-engineer:backend-engineer:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
-    `).run();
-    db.prepare(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Bugs', 'generic', 'active')`).run();
-    db.prepare(`
+    `);
+    await db.run(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Bugs', 'generic', 'active')`);
+    await db.run(`
       INSERT INTO tasks (id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
       VALUES (444, 'Surface dispatcher failure', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-05-06T18:00:00.000Z', '2026-05-06T18:00:00.000Z')
-    `).run();
-    db.prepare(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'backend', 'ready', 1, 10)`).run();
+    `);
+    await db.run(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'backend', 'ready', 1, 10)`);
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
     createTaskWorktree.mockReturnValue({
@@ -1564,11 +1578,11 @@ describe('runDispatcher thinking-level routing', () => {
     const dispatchMock = jest.fn().mockRejectedValue(new Error('Gateway connect timeout'));
     mockedResolveRuntime.mockReturnValue(mockRuntime(dispatchMock));
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
     expect(result.dispatched).toBe(1);
     await new Promise(resolve => setImmediate(resolve));
 
-    const task = db.prepare(`SELECT status, agent_id, routing_reason, retry_count, failure_detail, previous_status, active_instance_id FROM tasks WHERE id = 444`).get() as Record<string, unknown>;
+    const task = await db.get(`SELECT status, agent_id, routing_reason, retry_count, failure_detail, previous_status, active_instance_id FROM tasks WHERE id = 444`) as Record<string, unknown>;
     expect(task.status).toBe('ready');
     expect(task.agent_id).toBe(1);
     expect(task.active_instance_id).toBeNull();
@@ -1582,23 +1596,24 @@ describe('runDispatcher thinking-level routing', () => {
       agentSlug: 'cinder-backend',
     }));
 
-    const note = db.prepare(`SELECT content FROM task_notes WHERE task_id = 444 ORDER BY id DESC LIMIT 1`).get() as { content: string };
+    const note = await db.get(`SELECT content FROM task_notes WHERE task_id = 444 ORDER BY id DESC LIMIT 1`) as { content: string };
     expect(note.content).toContain('Summary: Dispatch startup failed after routing matched Cinder (attempt 1/3)');
     expect(note.content).toContain('Result: partial');
     expect(note.content).toContain('Evidence: workflow_event=dispatch_startup_failed');
     expect(note.content).toContain('legacy_outcome=infra_failed');
     expect(note.content).toContain('Next owner: PM/operator');
 
-    const instance = db.prepare(`SELECT status, error FROM job_instances WHERE task_id = 444 ORDER BY id DESC LIMIT 1`).get() as { status: string; error: string | null };
+    const instance = await db.get(`SELECT status, error FROM job_instances WHERE task_id = 444 ORDER BY id DESC LIMIT 1`) as { status: string; error: string | null };
     expect(instance.status).toBe('failed');
     expect(instance.error).toBe('Gateway connect timeout');
 
-    db.close();
+    dbRaw.close();
   });
 
   it('does not dispatch a stalled task that lacks a matching sprint routing rule, even if agent_id is set', async () => {
-    const db = new Database(':memory:');
-    db.exec(`
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
         job_title TEXT NOT NULL,
@@ -1714,40 +1729,40 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, sort_rules)
       VALUES (2, 'Beacon', 86, 'Do the task', 1, 900, 'openai/gpt-5.5', '[]', 'agent:beacon:main', 'Beacon', 'openclaw', '{}', '/tmp', 'openai-codex', '[]')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprints (id, name, sprint_type, status)
       VALUES (10, 'Bugs', 'generic', 'active')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO tasks (id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, updated_at)
       VALUES (417, 'Stalled task should not redispatch', 'Regression coverage', 'stalled', 'high', 2, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', '2026-04-28T20:00:00.000Z')
-    `).run();
+    `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
       VALUES (10, 'backend', 'ready', 2, 5)
-    `).run();
+    `);
 
     const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-stalled-417' });
     mockedResolveRuntime.mockReturnValue(mockRuntime(dispatchMock));
 
     const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
 
-    const result = runDispatcher(db, 86);
+    const result = await runDispatcher(db, 86);
     expect(result.dispatched).toBe(0);
     expect(result.skipped).toBeGreaterThan(0);
     expect(dispatchMock).not.toHaveBeenCalled();
 
-    const instances = db.prepare(`SELECT COUNT(*) as n FROM job_instances`).get() as { n: number };
+    const instances = await db.get(`SELECT COUNT(*) as n FROM job_instances`) as { n: number };
     expect(instances.n).toBe(0);
 
-    const taskRow = db.prepare(`SELECT status, active_instance_id, agent_id FROM tasks WHERE id = 417`).get() as {
+    const taskRow = await db.get(`SELECT status, active_instance_id, agent_id FROM tasks WHERE id = 417`) as {
       status: string;
       active_instance_id: number | null;
       agent_id: number | null;
@@ -1763,12 +1778,13 @@ describe('runDispatcher thinking-level routing', () => {
     );
 
     logSpy.mockRestore();
-    db.close();
+    dbRaw.close();
   });
 
   it('dispatchInstance passes routed thinking_level into runtime dispatch', async () => {
-    const db = new Database(':memory:');
-    db.exec(`
+    const dbRaw = new Database(':memory:');
+      const db = new SqliteAdapter(dbRaw);
+    await db.exec(`
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         agent_id INTEGER NOT NULL,
@@ -1818,17 +1834,17 @@ describe('runDispatcher thinking-level routing', () => {
       );
     `);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO job_instances (id, agent_id, task_id, status, created_at)
       VALUES (11, 1, 382, 'queued', '2026-04-28T20:00:00.000Z')
-    `).run();
-    db.prepare(`INSERT INTO agents (id, tenant_id) VALUES (1, NULL)`).run();
-    db.prepare(`INSERT INTO tasks (id, tenant_id) VALUES (382, NULL)`).run();
+    `);
+    await db.run(`INSERT INTO agents (id, tenant_id) VALUES (1, NULL)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id) VALUES (382, NULL)`);
 
-    db.prepare(`
+    await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
       VALUES (86, 10, 8, NULL, 'openai/gpt-5.5', 'adaptive', 'deeper route')
-    `).run();
+    `);
 
     const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-456' });
     mockedResolveRuntime.mockReturnValue(mockRuntime(dispatchMock));
@@ -1860,6 +1876,6 @@ describe('runDispatcher thinking-level routing', () => {
       thinking: 'adaptive',
     }));
 
-    db.close();
+    dbRaw.close();
   });
 });

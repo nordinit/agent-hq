@@ -1,4 +1,3 @@
-import type Database from 'better-sqlite3';
 import { getDb } from '../db/client';
 import {
   runDispatcher, type DispatchResult,
@@ -20,6 +19,7 @@ import { insertRuntimeLog } from '../lib/runtimeTenantScope';
 import { resolveSprintTaskRoutingAssignment } from '../domains/routing/policy/statuses';
 import { runRecurringTaskSchedulerTick, type RecurringTaskSchedulerSummary } from './recurringTaskScheduler';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
+import { type Db } from "../db/adapter/types";
 
 const POLL_INTERVAL_MS = 12_000; // ~12 seconds
 const DEFAULT_RECONCILER_TICK_TIMEOUT_MS = 2 * 60_000;
@@ -158,8 +158,8 @@ interface DispatchDeps {
 }
 
 export interface ReconcilerDeps extends DispatchDeps {
-  runEligibilityPass: (db: Database.Database, projectId?: number) => EligibilityResult;
-  runDispatcher: (db: Database.Database, projectId?: number) => DispatchResult;
+  runEligibilityPass: (db: Db, projectId?: number) => Promise<EligibilityResult>;
+  runDispatcher: (db: Db, projectId?: number) => Promise<DispatchResult>;
 }
 
 export interface ReconcilerTickSummary {
@@ -196,54 +196,54 @@ function createEmptySummary(projectIds: number[] = []): ReconcilerTickSummary {
   };
 }
 
-function log(db: Database.Database, message: string, _taskId?: number, agentId?: number): void {
-  insertRuntimeLog(db, {
-    taskId: _taskId ?? null,
-    agentId: agentId ?? null,
-    jobTitle: 'reconciler',
-    level: 'info',
-    message,
-  });
+async function log(db: Db, message: string, _taskId?: number, agentId?: number): Promise<void> {
+  await insertRuntimeLog(db, {
+        taskId: _taskId ?? null,
+        agentId: agentId ?? null,
+        jobTitle: 'reconciler',
+        level: 'info',
+        message,
+      });
   console.log(`[reconciler] ${message}`);
 }
 
-function logHistory(
-  db: Database.Database,
+async function logHistory(
+  db: Db,
   taskId: number,
   changedBy: string,
   field: string,
   oldValue: string | null,
   newValue: string | null,
-): void {
-  db.prepare(`
+): Promise<void> {
+  await db.run(`
     INSERT INTO task_history (task_id, changed_by, field, old_value, new_value)
     VALUES (?, ?, ?, ?, ?)
-  `).run(taskId, changedBy, field, oldValue, newValue);
+  `, taskId, changedBy, field, oldValue, newValue);
 }
 
-function resolveAgentName(db: Database.Database, agentId: number | null): string | null {
+async function resolveAgentName(db: Db, agentId: number | null): Promise<string | null> {
   if (agentId == null) return null;
-  const row = db.prepare(`SELECT name FROM agents WHERE id = ?`).get(agentId) as { name: string } | undefined;
+  const row = await db.get(`SELECT name FROM agents WHERE id = ?`, agentId) as { name: string } | undefined;
   return row?.name ?? String(agentId);
 }
 
-function isAgentBusy(db: Database.Database, agentId: number): boolean {
-  const running = db.prepare(`
+async function isAgentBusy(db: Db, agentId: number): Promise<boolean> {
+  const running = await db.get(`
     SELECT id FROM job_instances
     WHERE agent_id = ? AND status IN ('queued', 'dispatched', 'running')
     LIMIT 1
-  `).get(agentId);
+  `, agentId);
   return !!running;
 }
 
-function hasTaskLiveInstance(db: Database.Database, taskId: number): boolean {
-  const row = db.prepare(`
+async function hasTaskLiveInstance(db: Db, taskId: number): Promise<boolean> {
+  const row = await db.get(`
     SELECT ji.id
     FROM job_instances ji
     WHERE ji.task_id = ?
       AND ji.status IN ('queued', 'dispatched', 'running')
     LIMIT 1
-  `).get(taskId);
+  `, taskId);
   return Boolean(row);
 }
 
@@ -270,15 +270,15 @@ function buildQaTaskContext(task: TaskRow): string {
   ].join('\n');
 }
 
-function resolveRoutedTaskAgentId(db: Database.Database, task: TaskRow): number | null {
+async function resolveRoutedTaskAgentId(db: Db, task: TaskRow): Promise<number | null> {
   if (!task.task_type) return null;
   try {
-    return resolveSprintTaskRoutingAssignment(
-      db,
-      task.sprint_id ?? null,
-      task.task_type,
-      task.status,
-    ).agent_id ?? null;
+    return (await resolveSprintTaskRoutingAssignment(
+          db,
+          task.sprint_id ?? null,
+          task.task_type,
+          task.status,
+        )).agent_id ?? null;
   } catch {
     return null;
   }
@@ -290,7 +290,7 @@ function shouldReconcileTaskOwnership(task: TaskRow): boolean {
   return true;
 }
 
-function reassignTaskIfNeeded(db: Database.Database, task: TaskRow, nextAgentId: number | null): TaskRow {
+async function reassignTaskIfNeeded(db: Db, task: TaskRow, nextAgentId: number | null): Promise<TaskRow> {
   if (task.assigned_agent_id === nextAgentId && (task.status !== 'review' || task.review_owner_agent_id != null)) {
     return task;
   }
@@ -303,24 +303,24 @@ function reassignTaskIfNeeded(db: Database.Database, task: TaskRow, nextAgentId:
     return task;
   }
 
-  db.prepare(`
+  await db.run(`
     UPDATE tasks
     SET assigned_agent_id = ?,
         review_owner_agent_id = ?,
         updated_at = datetime('now')
     WHERE id = ?
-  `).run(nextAgentId, nextReviewOwnerAgentId, task.id);
-  syncTaskActiveAgentFromInstance(db, task.id);
+  `, nextAgentId, nextReviewOwnerAgentId, task.id);
+  await syncTaskActiveAgentFromInstance(db, task.id);
 
   if (task.assigned_agent_id !== nextAgentId) {
-    const oldName = task.assigned_agent_id ? (db.prepare('SELECT name FROM agents WHERE id = ?').get(task.assigned_agent_id) as { name: string } | undefined)?.name : null;
-    const newName = nextAgentId ? (db.prepare('SELECT name FROM agents WHERE id = ?').get(nextAgentId) as { name: string } | undefined)?.name : null;
-    logHistory(db, task.id, 'reconciler', 'assigned_agent_id', oldName ?? 'unassigned', newName ?? String(nextAgentId));
-    log(db,
-      `${task.status === 'review' ? 'Review' : 'Routing'} ownership: task #${task.id} "${task.title}" reassigned ${oldName ?? 'unassigned'} → ${newName ?? String(nextAgentId)}`,
-      task.id,
-      nextAgentId ?? undefined,
-    );
+    const oldName = task.assigned_agent_id ? (await db.get('SELECT name FROM agents WHERE id = ?', task.assigned_agent_id) as { name: string } | undefined)?.name : null;
+    const newName = nextAgentId ? (await db.get('SELECT name FROM agents WHERE id = ?', nextAgentId) as { name: string } | undefined)?.name : null;
+    await logHistory(db, task.id, 'reconciler', 'assigned_agent_id', oldName ?? 'unassigned', newName ?? String(nextAgentId));
+    await log(db,
+            `${task.status === 'review' ? 'Review' : 'Routing'} ownership: task #${task.id} "${task.title}" reassigned ${oldName ?? 'unassigned'} → ${newName ?? String(nextAgentId)}`,
+            task.id,
+            nextAgentId ?? undefined,
+          );
   }
 
   return {
@@ -330,8 +330,8 @@ function reassignTaskIfNeeded(db: Database.Database, task: TaskRow, nextAgentId:
   };
 }
 
-function getReconcilerProjectIds(db: Database.Database): number[] {
-  const rows = db.prepare(`
+async function getReconcilerProjectIds(db: Db): Promise<number[]> {
+  const rows = await db.all(`
     SELECT DISTINCT project_id
     FROM (
       SELECT id AS project_id FROM projects
@@ -341,19 +341,19 @@ function getReconcilerProjectIds(db: Database.Database): number[] {
       SELECT project_id FROM tasks WHERE project_id IS NOT NULL
       UNION ALL
       SELECT project_id FROM routing_config WHERE project_id IS NOT NULL
-    )
+    ) project_ids
     WHERE project_id IS NOT NULL
     ORDER BY project_id ASC
-  `).all() as Array<{ project_id: number }>;
+  `) as Array<{ project_id: number }>;
 
   return rows.map(row => row.project_id);
 }
 
 export async function reconcileReviewQaRouting(
   deps: DispatchDeps = { dispatchInstance },
-  db: Database.Database = getDb(),
+  db: Db = getDb(),
 ): Promise<void> {
-  const reviewTasks = db.prepare(`
+  const reviewTasks = await db.all(`
     SELECT t.*
     FROM tasks t
     WHERE t.status = 'review'
@@ -362,10 +362,10 @@ export async function reconcileReviewQaRouting(
         SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status != 'closed'
       ))
     ORDER BY t.updated_at ASC
-  `).all() as TaskRow[];
+  `) as TaskRow[];
 
-  const statusEligibility = getNonDispatchableTaskStatusPredicate(db, 't', 's');
-  const routedTasks = db.prepare(`
+  const statusEligibility = await getNonDispatchableTaskStatusPredicate(db, 't', 's');
+  const routedTasks = await db.all(`
     SELECT t.*
     FROM tasks t
     LEFT JOIN sprints s ON s.id = t.sprint_id
@@ -377,63 +377,63 @@ export async function reconcileReviewQaRouting(
         SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status != 'closed'
       ))
     ORDER BY t.updated_at ASC
-  `).all(...statusEligibility.params) as TaskRow[];
+  `, ...statusEligibility.params) as TaskRow[];
 
   for (const task of routedTasks) {
     if (!shouldReconcileTaskOwnership(task)) continue;
-    const routedAgentId = resolveRoutedTaskAgentId(db, task);
+    const routedAgentId = await resolveRoutedTaskAgentId(db, task);
     if (routedAgentId == null || routedAgentId === task.assigned_agent_id) continue;
-    reassignTaskIfNeeded(db, task, routedAgentId);
+    await reassignTaskIfNeeded(db, task, routedAgentId);
   }
 
   for (const originalTask of reviewTasks) {
-    const routedAgentId = resolveRoutedTaskAgentId(db, originalTask);
+    const routedAgentId = await resolveRoutedTaskAgentId(db, originalTask);
     if (routedAgentId == null) continue;
 
     // Skip entire task if it already has a live instance (no point trying any rule)
-    if (hasTaskLiveInstance(db, originalTask.id)) continue;
+    if (await hasTaskLiveInstance(db, originalTask.id)) continue;
 
     let agent: AgentRow | undefined;
     if (routedAgentId) {
-      agent = db.prepare(`SELECT * FROM agents WHERE id = ? AND enabled = 1`).get(routedAgentId) as AgentRow | undefined;
+      agent = await db.get(`SELECT * FROM agents WHERE id = ? AND enabled = 1`, routedAgentId) as AgentRow | undefined;
     }
     if (!agent) continue;
     const agentLabel = agent.name || agent.job_title || `Agent #${agent.id}`;
 
     // Agent busy? leave review ownership converged on next tick when capacity frees up
-    if (isAgentBusy(db, agent.id)) continue;
+    if (await isAgentBusy(db, agent.id)) continue;
 
     // Agent is available — now safe to write task reassignment to DB
-    const task = reassignTaskIfNeeded(db, originalTask, routedAgentId);
+    const task = await reassignTaskIfNeeded(db, originalTask, routedAgentId);
     if (!task.assigned_agent_id) continue;
 
     const sprint = task.sprint_id
-      ? db.prepare('SELECT * FROM sprints WHERE id = ?').get(task.sprint_id) as SprintRow | undefined
+      ? await db.get('SELECT * FROM sprints WHERE id = ?', task.sprint_id) as SprintRow | undefined
       : undefined;
 
     const jobInstructions = agent.job_instructions
       ? `${buildQaTaskContext(task)}\n\n---\n\n${agent.job_instructions}`
       : buildQaTaskContext(task);
 
-    const supportsDurableRunId = tableHasColumn(db, 'job_instances', 'durable_run_id');
+    const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
     const instanceResult = supportsDurableRunId
-      ? db.prepare(`
+      ? await db.run(`
           INSERT INTO job_instances (agent_id, status, durable_run_id)
           VALUES (?, 'queued', ?)
-        `).run(agent.id, createDurableRunId())
-      : db.prepare(`
+        `, agent.id, createDurableRunId())
+      : await db.run(`
           INSERT INTO job_instances (agent_id, status)
           VALUES (?, 'queued')
-        `).run(agent.id);
-    const instanceId = instanceResult.lastInsertRowid as number;
-    attachInstanceToTask(db, instanceId, task.id);
+        `, agent.id);
+    const instanceId = instanceResult.lastInsertId as number;
+    await attachInstanceToTask(db, instanceId, task.id);
 
     try {
-      const taskNotesSection = buildDispatchTaskNotesSection(getDispatchTaskNotesContext(db, {
-        taskId: task.id,
-        agentId: agent.id,
-        currentInstanceId: instanceId,
-      }));
+      const taskNotesSection = buildDispatchTaskNotesSection(await getDispatchTaskNotesContext(db, {
+                  taskId: task.id,
+                  agentId: agent.id,
+                  currentInstanceId: instanceId,
+                }));
 
       // Build message via shared helper + append lifecycle contract
       let message = buildDispatchMessage({
@@ -446,25 +446,25 @@ export async function reconcileReviewQaRouting(
       // Append task lifecycle contract
       const agentSlug = resolveRuntimeAgentSlug(agent)
         ?? agent.session_key.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-      const durableRunId = ensureJobInstanceDurableRunId(db, instanceId);
+      const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
       const runSessionKey = buildHookSessionKey(instanceId, durableRunId);
-      const contract = buildContractInstructions({
-        instanceId,
-        durableRunId,
-        taskId: task.id,
-        taskStatus: task.status,
-        taskType: task.task_type ?? null,
-        sprintId: task.sprint_id ?? null,
-        sprintType: sprint?.sprint_type ?? null,
-        agentSlug,
-        sessionKey: runSessionKey,
-        transportMode: resolveTransportMode({
-          runtimeType: agent.runtime_type,
-          runtimeConfig: agent.runtime_config,
-          hooksUrl: agent.hooks_url,
-        }),
-        db,
-      });
+      const contract = await buildContractInstructions({
+              instanceId,
+              durableRunId,
+              taskId: task.id,
+              taskStatus: task.status,
+              taskType: task.task_type ?? null,
+              sprintId: task.sprint_id ?? null,
+              sprintType: sprint?.sprint_type ?? null,
+              agentSlug,
+              sessionKey: runSessionKey,
+              transportMode: resolveTransportMode({
+                runtimeType: agent.runtime_type,
+                runtimeConfig: agent.runtime_config,
+                hooksUrl: agent.hooks_url,
+              }),
+              db,
+            });
       message += `\n\n${contract}`;
 
       const effectiveModel = agent.model ?? null;
@@ -493,11 +493,11 @@ export async function reconcileReviewQaRouting(
         `QA dispatch task #${task.id} project=${task.project_id ?? 'none'} agent=${agent.id} instance=${instanceId}`,
       );
 
-      log(db,
-        `QA auto-dispatch: task #${task.id} "${task.title}" kept in review and queued agent "${agentLabel}" (model=${effectiveModel ?? 'gateway-default'})`,
-        task.id,
-        agent.id,
-      );
+      await log(db,
+                `QA auto-dispatch: task #${task.id} "${task.title}" kept in review and queued agent "${agentLabel}" (model=${effectiveModel ?? 'gateway-default'})`,
+                task.id,
+                agent.id,
+              );
     } catch (err) {
       console.error(`[reconciler] QA dispatch failed for task #${task.id}:`, err);
       // Mark the newly created instance as failed — do NOT call
@@ -505,47 +505,44 @@ export async function reconcileReviewQaRouting(
       // still have a legitimately running instance from a prior dispatch.
       // Clearing active_instance_id on a transient dispatch error causes
       // running QA/DevOps instances to lose authoritative linkage.
-      db.prepare(`
+      await db.run(`
         UPDATE job_instances
         SET status = 'failed',
             error = ?,
             completed_at = datetime('now')
         WHERE id = ?
           AND status NOT IN ('done', 'failed', 'cancelled')
-      `).run(
-        err instanceof Error ? err.message : String(err),
-        instanceId
-      );
+      `, err instanceof Error ? err.message : String(err), instanceId);
       // Restore previous active_instance_id if this failed instance was set as active
-      const currentTask = db.prepare('SELECT active_instance_id FROM tasks WHERE id = ?').get(task.id) as { active_instance_id: number | null } | undefined;
+      const currentTask = await db.get('SELECT active_instance_id FROM tasks WHERE id = ?', task.id) as { active_instance_id: number | null } | undefined;
       if (currentTask?.active_instance_id === instanceId) {
-        db.prepare(`
+        await db.run(`
           UPDATE tasks SET active_instance_id = NULL, updated_at = datetime('now') WHERE id = ?
-        `).run(task.id);
+        `, task.id);
       }
     }
   }
 }
 
-function reconcileInProgressRecovery(db: Database.Database): void {
-  const inProgressTasks = db.prepare(`
+async function reconcileInProgressRecovery(db: Db): Promise<void> {
+  const inProgressTasks = await db.all(`
     SELECT t.* FROM tasks t
       WHERE t.status = 'in_progress'
       AND t.assigned_agent_id IS NOT NULL
       AND t.paused_at IS NULL
-  `).all() as TaskRow[];
+  `) as TaskRow[];
 
   const now = Date.now();
 
   for (const task of inProgressTasks) {
-    const agent = db.prepare(`SELECT * FROM agents WHERE id = ?`).get(task.assigned_agent_id!) as AgentRow | undefined;
+    const agent = await db.get(`SELECT * FROM agents WHERE id = ?`, task.assigned_agent_id!) as AgentRow | undefined;
     if (!agent) continue;
 
-    const liveInstance = db.prepare(`
+    const liveInstance = await db.get(`
       SELECT id FROM job_instances
       WHERE agent_id = ? AND status IN ('queued', 'dispatched', 'running')
       LIMIT 1
-    `).get(agent.id);
+    `, agent.id);
 
     if (liveInstance) continue;
 
@@ -558,12 +555,12 @@ function reconcileInProgressRecovery(db: Database.Database): void {
 
     if (elapsedMs >= timeoutMs) {
       const elapsedMin = Math.floor(elapsedMs / 60000);
-      log(
-        db,
-        `In-progress integrity anomaly: task #${task.id} "${task.title}" remains in_progress with no live instance for agent "${agent.name}" after ${elapsedMin}m; leaving visible status unchanged`,
-        task.id,
-        agent.id,
-      );
+      await log(
+                db,
+                `In-progress integrity anomaly: task #${task.id} "${task.title}" remains in_progress with no live instance for agent "${agent.name}" after ${elapsedMin}m; leaving visible status unchanged`,
+                task.id,
+                agent.id,
+              );
     }
   }
 }
@@ -589,8 +586,8 @@ function reconcileInProgressRecovery(db: Database.Database): void {
  * All detected orphans are logged immediately (even before the grace period
  * expires) so they are visible in observability tooling.
  */
-export function reconcileOrphanInProgressTasks(db: Database.Database): void {
-  const orphans = db.prepare(`
+export async function reconcileOrphanInProgressTasks(db: Db): Promise<void> {
+  const orphans = await db.all(`
     SELECT t.id, t.title, t.agent_id, t.active_instance_id, t.updated_at, t.paused_at,
            ji.status AS instance_status
     FROM tasks t
@@ -601,7 +598,7 @@ export function reconcileOrphanInProgressTasks(db: Database.Database): void {
         t.active_instance_id IS NULL
         OR ji.status IN ('done', 'failed', 'cancelled')
       )
-  `).all() as Array<{
+  `) as Array<{
     id: number;
     title: string;
     agent_id: number | null;
@@ -627,29 +624,29 @@ export function reconcileOrphanInProgressTasks(db: Database.Database): void {
       ? 'no active_instance_id'
       : `active_instance_id=${orphan.active_instance_id} (${orphan.instance_status})`;
 
-    const agentName = resolveAgentName(db, orphan.agent_id);
+    const agentName = await resolveAgentName(db, orphan.agent_id);
 
     // Always log orphan detection for observability (rate-limited to once per 10 min per task).
-    const recentOrphanLog = db.prepare(`
+    const recentOrphanLog = await db.get(`
       SELECT id FROM logs
       WHERE message LIKE ? AND created_at > datetime('now', '-10 minutes')
       LIMIT 1
-    `).get(`%Orphan in_progress: task #${orphan.id}%`) as { id: number } | undefined;
+    `, `%Orphan in_progress: task #${orphan.id}%`) as { id: number } | undefined;
 
     if (!recentOrphanLog) {
       const detectMsg = `Orphan in_progress: task #${orphan.id} "${orphan.title}" — ${instanceDesc}, elapsed=${elapsedMin}m, agent=${agentName ?? 'none'}`;
       console.warn(`[reconciler] ${detectMsg}`);
-      log(db, detectMsg, orphan.id, orphan.agent_id ?? undefined);
+      await log(db, detectMsg, orphan.id, orphan.agent_id ?? undefined);
     }
 
     if (elapsedMs < ORPHAN_STALL_GRACE_MS) continue;
 
-    log(
-      db,
-      `Orphan in_progress integrity anomaly: task #${orphan.id} "${orphan.title}" remains in_progress with ${instanceDesc} for ${elapsedMin}m (grace=${Math.floor(ORPHAN_STALL_GRACE_MS / 60000)}m), agent=${agentName ?? 'none'}; leaving visible status unchanged`,
-      orphan.id,
-      orphan.agent_id ?? undefined,
-    );
+    await log(
+            db,
+            `Orphan in_progress integrity anomaly: task #${orphan.id} "${orphan.title}" remains in_progress with ${instanceDesc} for ${elapsedMin}m (grace=${Math.floor(ORPHAN_STALL_GRACE_MS / 60000)}m), agent=${agentName ?? 'none'}; leaving visible status unchanged`,
+            orphan.id,
+            orphan.agent_id ?? undefined,
+          );
 
     console.log(
       `[reconciler] Orphan in_progress integrity anomaly: task #${orphan.id} "${orphan.title}" (${instanceDesc}, elapsed=${elapsedMin}m)`
@@ -657,13 +654,13 @@ export function reconcileOrphanInProgressTasks(db: Database.Database): void {
   }
 }
 
-function reconcileMissingLifecycleOutcomeAfterRuntimeEnd(db: Database.Database): void {
+async function reconcileMissingLifecycleOutcomeAfterRuntimeEnd(db: Db): Promise<void> {
   const now = Date.now();
-  const eligibleStatuses = getNeedsAttentionEligibleStatuses(db);
+  const eligibleStatuses = await getNeedsAttentionEligibleStatuses(db);
   if (eligibleStatuses.length === 0) return;
   const placeholders = eligibleStatuses.map(() => '?').join(', ');
 
-  const candidates = db.prepare(`
+  const candidates = await db.all(`
     SELECT
       t.id,
       t.title,
@@ -685,7 +682,7 @@ function reconcileMissingLifecycleOutcomeAfterRuntimeEnd(db: Database.Database):
       AND ji.runtime_ended_at IS NOT NULL
       AND ji.lifecycle_outcome_posted_at IS NULL
       AND COALESCE(ji.task_outcome, '') = ''
-  `).all(...eligibleStatuses) as Array<{
+  `, ...eligibleStatuses) as Array<{
     id: number;
     title: string;
     status: string;
@@ -702,7 +699,7 @@ function reconcileMissingLifecycleOutcomeAfterRuntimeEnd(db: Database.Database):
   }>;
 
   for (const task of candidates) {
-    if (!taskRequiresSemanticOutcome(db, task.id)) continue;
+    if (!await taskRequiresSemanticOutcome(db, task.id)) continue;
 
     const normalized = task.runtime_ended_at.includes('T')
       ? task.runtime_ended_at
@@ -716,25 +713,25 @@ function reconcileMissingLifecycleOutcomeAfterRuntimeEnd(db: Database.Database):
       continue;
     }
 
-    markTaskNeedsAttentionForMissingSemanticHandoff(db, {
-      taskId: task.id,
-      instanceId: task.active_instance_id,
-      changedBy: 'reconciler',
-      workflowPhase: null,
-      priorTaskStatus: task.status,
-      runtimeEnd: {
-        source: task.runtime_end_source,
-        success: task.instance_status === 'done' ? true : task.runtime_end_error ? false : null,
-        endedAt: withZ,
-        error: task.runtime_end_error,
-      },
-    });
+    await markTaskNeedsAttentionForMissingSemanticHandoff(db, {
+            taskId: task.id,
+            instanceId: task.active_instance_id,
+            changedBy: 'reconciler',
+            workflowPhase: null,
+            priorTaskStatus: task.status,
+            runtimeEnd: {
+              source: task.runtime_end_source,
+              success: task.instance_status === 'done' ? true : task.runtime_end_error ? false : null,
+              endedAt: withZ,
+              error: task.runtime_end_error,
+            },
+          });
 
-    log(db,
-      `Lifecycle recovery: task #${task.id} "${task.title}" — emitted missing-outcome workflow event after runtime ended on instance #${task.active_instance_id} without lifecycle outcome for ${elapsedMin}m (grace=${Math.floor(MISSING_LIFECYCLE_OUTCOME_GRACE_MS / 60000)}m)`,
-      task.id,
-      task.agent_id ?? undefined,
-    );
+    await log(db,
+            `Lifecycle recovery: task #${task.id} "${task.title}" — emitted missing-outcome workflow event after runtime ended on instance #${task.active_instance_id} without lifecycle outcome for ${elapsedMin}m (grace=${Math.floor(MISSING_LIFECYCLE_OUTCOME_GRACE_MS / 60000)}m)`,
+            task.id,
+            task.agent_id ?? undefined,
+          );
   }
 }
 
@@ -743,8 +740,8 @@ function reconcileMissingLifecycleOutcomeAfterRuntimeEnd(db: Database.Database):
  * status with no active_instance_id for longer than 5 minutes. This surfaces
  * QA dispatch failures that would otherwise silently block the pipeline.
  */
-function logStuckReviewTasks(db: Database.Database): void {
-  const stuckTasks = db.prepare(`
+async function logStuckReviewTasks(db: Db): Promise<void> {
+  const stuckTasks = await db.all(`
     SELECT t.id, t.title, t.agent_id, t.updated_at
     FROM tasks t
     WHERE t.status = 'review'
@@ -754,39 +751,39 @@ function logStuckReviewTasks(db: Database.Database): void {
       AND (t.sprint_id IS NULL OR EXISTS (
         SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status != 'closed'
       ))
-  `).all() as Array<{ id: number; title: string; agent_id: number | null; updated_at: string }>;
+  `) as Array<{ id: number; title: string; agent_id: number | null; updated_at: string }>;
 
   for (const task of stuckTasks) {
-    const agentName = resolveAgentName(db, task.agent_id);
+    const agentName = await resolveAgentName(db, task.agent_id);
     const msg = `⚠ Stuck review: task #${task.id} "${task.title}" has been in review with no active instance for >5 min (agent=${agentName ?? 'none'}, updated_at=${task.updated_at})`;
     console.warn(`[reconciler] ${msg}`);
     // Log to DB but only once per 30 minutes per task to avoid spam
-    const recentLog = db.prepare(`
+    const recentLog = await db.get(`
       SELECT id FROM logs
       WHERE message LIKE ? AND created_at > datetime('now', '-30 minutes')
       LIMIT 1
-    `).get(`%Stuck review: task #${task.id}%`) as { id: number } | undefined;
+    `, `%Stuck review: task #${task.id}%`) as { id: number } | undefined;
     if (!recentLog) {
-      log(db, msg, task.id, task.agent_id ?? undefined);
+      await log(db, msg, task.id, task.agent_id ?? undefined);
     }
   }
 }
 
 export async function runReconcilerTick(
   deps: ReconcilerDeps = DEFAULT_RECONCILER_DEPS,
-  db: Database.Database = getDb(),
+  db: Db = getDb(),
 ): Promise<ReconcilerTickSummary> {
-  reconcileMissingLifecycleOutcomeAfterRuntimeEnd(db);
-  cleanupImpossibleTaskLifecycleStates(db);
+  await reconcileMissingLifecycleOutcomeAfterRuntimeEnd(db);
+  await cleanupImpossibleTaskLifecycleStates(db);
 
-  const projectIds = getReconcilerProjectIds(db);
+  const projectIds = await getReconcilerProjectIds(db);
   const summary = createEmptySummary(projectIds);
-  summary.recurring = runRecurringTaskSchedulerTick(db);
+  summary.recurring = await runRecurringTaskSchedulerTick(db);
 
   for (const projectId of projectIds) {
     try {
-      const eligibility = deps.runEligibilityPass(db, projectId);
-      const dispatch = deps.runDispatcher(db, projectId);
+      const eligibility = await deps.runEligibilityPass(db, projectId);
+      const dispatch = await deps.runDispatcher(db, projectId);
 
       summary.promoted += eligibility.promoted;
       summary.blocked += eligibility.blocked;
@@ -813,9 +810,9 @@ export async function runReconcilerTick(
     RECONCILER_OPERATION_TIMEOUT_MS,
     `review/QA routing projects=${projectIds.join(',') || 'none'}`,
   );
-  reconcileOrphanInProgressTasks(db);
-  reconcileInProgressRecovery(db);
-  logStuckReviewTasks(db);
+  await reconcileOrphanInProgressTasks(db);
+  await reconcileInProgressRecovery(db);
+  await logStuckReviewTasks(db);
 
   // Backfill token usage from OpenClaw session data for recently completed instances.
   // Uses the async token-backfill path so reconciler ticks do not block the Node.js event loop.

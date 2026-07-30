@@ -16,27 +16,27 @@ const router = Router();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getSetting(key: string): string | null {
+async function getSetting(key: string): Promise<string | null> {
   const db = getDb();
-  const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;
+  const row = await db.get('SELECT value FROM app_settings WHERE key = ?', key) as { value: string } | undefined;
   return row?.value ?? null;
 }
 
-function setSetting(key: string, value: string): void {
+async function setSetting(key: string, value: string): Promise<void> {
   const db = getDb();
-  db.prepare(`
+  await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `).run(key, value);
+  `, key, value);
 }
 
 // ─── GET /api/v1/settings/telegram ───────────────────────────────────────────
 // Returns current Telegram config (token is masked for security)
-router.get('/telegram', (_req: Request, res: Response) => {
+router.get('/telegram', async (_req: Request, res: Response) => {
   try {
-    const botToken = getSetting('telegram_bot_token') ?? '';
-    const chatId = getSetting('telegram_chat_id') ?? '';
+    const botToken = (await getSetting('telegram_bot_token')) ?? '';
+    const chatId = (await getSetting('telegram_chat_id')) ?? '';
     const connected = !!(botToken && chatId);
 
     res.json({
@@ -55,7 +55,7 @@ router.get('/telegram', (_req: Request, res: Response) => {
 
 // ─── PUT /api/v1/settings/telegram ───────────────────────────────────────────
 // Save Telegram bot token + chat ID
-router.put('/telegram', (req: Request, res: Response) => {
+router.put('/telegram', async (req: Request, res: Response) => {
   try {
     const { botToken, chatId } = req.body;
 
@@ -69,8 +69,8 @@ router.put('/telegram', (req: Request, res: Response) => {
       return;
     }
 
-    setSetting('telegram_bot_token', botToken.trim());
-    setSetting('telegram_chat_id', chatId.trim());
+    await setSetting('telegram_bot_token', botToken.trim());
+    await setSetting('telegram_chat_id', chatId.trim());
 
     res.json({ ok: true, connected: true });
   } catch (err) {
@@ -80,10 +80,10 @@ router.put('/telegram', (req: Request, res: Response) => {
 
 // ─── DELETE /api/v1/settings/telegram ────────────────────────────────────────
 // Disconnect Telegram
-router.delete('/telegram', (_req: Request, res: Response) => {
+router.delete('/telegram', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
-    db.prepare("DELETE FROM app_settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id')").run();
+    await db.run("DELETE FROM app_settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id')");
     res.json({ ok: true, connected: false });
   } catch (err) {
     res.status(500).json({ error: String(err) });
@@ -98,8 +98,8 @@ router.post('/telegram/test', async (req: Request, res: Response) => {
     let botToken = (req.body.botToken as string)?.trim();
     let chatId = (req.body.chatId as string)?.trim();
 
-    if (!botToken) botToken = getSetting('telegram_bot_token') ?? '';
-    if (!chatId) chatId = getSetting('telegram_chat_id') ?? '';
+    if (!botToken) botToken = (await getSetting('telegram_bot_token')) ?? '';
+    if (!chatId) chatId = (await getSetting('telegram_chat_id')) ?? '';
 
     if (!botToken || !chatId) {
       res.status(400).json({ ok: false, error: 'No Telegram credentials configured' });
@@ -147,16 +147,16 @@ router.post('/telegram/test', async (req: Request, res: Response) => {
 
 // ─── GET /api/v1/settings/notifications ─────────────────────────────────────
 // Notification preferences, supported outlets, and persistent notification history.
-router.get('/notifications', (req: Request, res: Response) => {
+router.get('/notifications', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = notificationTenantIdFromRequest(db, req);
+    const tenantId = await notificationTenantIdFromRequest(db, req);
     const limit = Number(req.query.limit ?? 50);
     const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : null;
-    const botToken = getSetting('telegram_bot_token') ?? '';
-    const chatId = getSetting('telegram_chat_id') ?? '';
-    const preferences = readNotificationPreferences(db, tenantId);
-    const page = listNotificationRecordsPage(db, tenantId, { limit, cursor });
+    const botToken = (await getSetting('telegram_bot_token')) ?? '';
+    const chatId = (await getSetting('telegram_chat_id')) ?? '';
+    const preferences = await readNotificationPreferences(db, tenantId);
+    const page = await listNotificationRecordsPage(db, tenantId, { limit, cursor });
     res.json({
       ok: true,
       tenant_id: tenantId,
@@ -175,7 +175,7 @@ router.get('/notifications', (req: Request, res: Response) => {
         limit: page.limit,
         next_cursor: page.nextCursor,
       },
-      unread_count: unreadNotificationCount(db, tenantId),
+      unread_count: await unreadNotificationCount(db, tenantId),
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err) });
@@ -184,10 +184,10 @@ router.get('/notifications', (req: Request, res: Response) => {
 
 // ─── PUT /api/v1/settings/notifications/preferences ─────────────────────────
 // Persist current-user notification delivery and live UI preferences.
-router.put('/notifications/preferences', (req: Request, res: Response) => {
+router.put('/notifications/preferences', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = notificationTenantIdFromRequest(db, req);
+    const tenantId = await notificationTenantIdFromRequest(db, req);
     const body = req.body && typeof req.body === 'object' ? req.body as {
       enabled?: unknown;
       liveEnabled?: unknown;
@@ -198,7 +198,7 @@ router.put('/notifications/preferences', (req: Request, res: Response) => {
       ...(typeof body.liveEnabled === 'boolean' ? { liveEnabled: body.liveEnabled } : {}),
       ...(typeof body.outlets?.telegram === 'boolean' ? { outlets: { telegram: body.outlets.telegram } } : {}),
     };
-    const preferences = saveNotificationPreferences(patch, db, tenantId);
+    const preferences = await saveNotificationPreferences(patch, db, tenantId);
     res.json({ ok: true, tenant_id: tenantId, preferences });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err) });
@@ -207,9 +207,9 @@ router.put('/notifications/preferences', (req: Request, res: Response) => {
 
 // ─── POST /api/v1/settings/gateway/restart ───────────────────────────────────
 // Restart the local OpenClaw gateway service.
-router.get('/gateway/config', (_req: Request, res: Response) => {
+router.get('/gateway/config', async (_req: Request, res: Response) => {
   try {
-    const settings = readGatewaySettings();
+    const settings = await readGatewaySettings();
     res.json({
       ok: true,
       ws_url: settings.wsUrl,
@@ -225,7 +225,7 @@ router.get('/gateway/config', (_req: Request, res: Response) => {
   }
 });
 
-router.put('/gateway/config', (req: Request, res: Response) => {
+router.put('/gateway/config', async (req: Request, res: Response) => {
   try {
     const wsUrl = typeof req.body?.ws_url === 'string' ? req.body.ws_url.trim() : '';
     const runtimeHint = typeof req.body?.runtime_hint === 'string'
@@ -244,12 +244,12 @@ router.put('/gateway/config', (req: Request, res: Response) => {
       return res.status(400).json({ ok: false, error: 'runtime_hint is invalid' });
     }
 
-    const saved = saveGatewaySettings({
-      wsUrl,
-      runtimeHint: runtimeHint as GatewayRuntimeHint,
-      authToken,
-    });
-    const settings = readGatewaySettings();
+    const saved = await saveGatewaySettings({
+          wsUrl,
+          runtimeHint: runtimeHint as GatewayRuntimeHint,
+          authToken,
+        });
+    const settings = await readGatewaySettings();
 
     return res.json({
       ok: true,
@@ -267,7 +267,7 @@ router.put('/gateway/config', (req: Request, res: Response) => {
 
 router.get('/gateway/status', async (_req: Request, res: Response) => {
   try {
-    const settings = readGatewaySettings();
+    const settings = await readGatewaySettings();
     const probe = await probeGateway(settings.wsUrl);
     return res.json({
       ok: true,
@@ -293,7 +293,7 @@ router.get('/gateway/status', async (_req: Request, res: Response) => {
 
 router.post('/gateway/pair', async (_req: Request, res: Response) => {
   try {
-    const settings = readGatewaySettings();
+    const settings = await readGatewaySettings();
     const result = await pairGateway(settings.wsUrl, settings.runtimeHint);
     return res.json({
       ok: true,

@@ -1,78 +1,82 @@
-import type Database from 'better-sqlite3';
 import { tableHasColumn } from './durableRunIdentity';
+import { type Db } from "../db/adapter/types";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
-function tableExists(db: Database.Database, table: string): boolean {
-  return Boolean((db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`).get(table) as { name?: string } | undefined)?.name);
+async function tableExists(db: Db, table: string): Promise<boolean> {
+    return await sharedTableExists(db, table);
 }
 
-function hasTenantId(db: Database.Database, table: string): boolean {
-  return tableExists(db, table) && tableHasColumn(db, table, 'tenant_id');
+async function hasTenantId(db: Db, table: string): Promise<boolean> {
+    return await sharedColumnExists(db, table, 'tenant_id');
 }
 
-function pushTenantSubquery(
-  db: Database.Database,
+async function pushTenantSubquery(
+  db: Db,
   conditions: string[],
   params: unknown[],
   sql: string,
   refs: string[],
   tenantId: number,
-): void {
-  if (!refs.every((table) => hasTenantId(db, table))) return;
+): Promise<void> {
+  // `.every(async ...)` always returned true, so this guard never fired and the caller
+  // appended a tenant condition referencing columns that may not exist.
+  const tenantIdPresence = await Promise.all(refs.map((table) => hasTenantId(db, table)));
+  if (!tenantIdPresence.every(Boolean)) return;
   conditions.push(sql);
   params.push(tenantId);
 }
 
-export function resolveRuntimeTenantId(
-  db: Database.Database,
+export async function resolveRuntimeTenantId(
+  db: Db,
   input: { taskId?: number | null; agentId?: number | null; projectId?: number | null; instanceId?: number | null },
-): number | null {
-  if (input.taskId != null && hasTenantId(db, 'tasks')) {
-    const row = db.prepare(`SELECT tenant_id FROM tasks WHERE id = ? LIMIT 1`).get(input.taskId) as { tenant_id: number | null } | undefined;
+): Promise<number | null> {
+  if (input.taskId != null && await hasTenantId(db, 'tasks')) {
+    const row = await db.get(`SELECT tenant_id FROM tasks WHERE id = ? LIMIT 1`, input.taskId) as { tenant_id: number | null } | undefined;
     if (row?.tenant_id != null) return row.tenant_id;
   }
 
-  if (input.instanceId != null && tableExists(db, 'job_instances')) {
-    const taskTenantExpr = hasTenantId(db, 'tasks') ? 't.tenant_id' : 'NULL';
-    const agentTenantExpr = hasTenantId(db, 'agents') ? 'a.tenant_id' : 'NULL';
-    const row = db.prepare(`
+  if (input.instanceId != null && await tableExists(db, 'job_instances')) {
+    const taskTenantExpr = await hasTenantId(db, 'tasks') ? 't.tenant_id' : 'NULL';
+    const agentTenantExpr = await hasTenantId(db, 'agents') ? 'a.tenant_id' : 'NULL';
+    const row = await db.get(`
       SELECT COALESCE(${taskTenantExpr}, ${agentTenantExpr}) AS tenant_id
       FROM job_instances ji
       LEFT JOIN tasks t ON t.id = ji.task_id
       LEFT JOIN agents a ON a.id = ji.agent_id
       WHERE ji.id = ?
       LIMIT 1
-    `).get(input.instanceId) as { tenant_id: number | null } | undefined;
+    `, input.instanceId) as { tenant_id: number | null } | undefined;
     if (row?.tenant_id != null) return row.tenant_id;
   }
 
-  if (input.agentId != null && hasTenantId(db, 'agents')) {
-    const row = db.prepare(`SELECT tenant_id FROM agents WHERE id = ? LIMIT 1`).get(input.agentId) as { tenant_id: number | null } | undefined;
+  if (input.agentId != null && await hasTenantId(db, 'agents')) {
+    const row = await db.get(`SELECT tenant_id FROM agents WHERE id = ? LIMIT 1`, input.agentId) as { tenant_id: number | null } | undefined;
     if (row?.tenant_id != null) return row.tenant_id;
   }
 
-  if (input.projectId != null && hasTenantId(db, 'projects')) {
-    const row = db.prepare(`SELECT tenant_id FROM projects WHERE id = ? LIMIT 1`).get(input.projectId) as { tenant_id: number | null } | undefined;
+  if (input.projectId != null && await hasTenantId(db, 'projects')) {
+    const row = await db.get(`SELECT tenant_id FROM projects WHERE id = ? LIMIT 1`, input.projectId) as { tenant_id: number | null } | undefined;
     if (row?.tenant_id != null) return row.tenant_id;
   }
 
   return null;
 }
 
-export function tenantInsertColumns(
-  db: Database.Database,
+export async function tenantInsertColumns(
+  db: Db,
   table: string,
   tenantId: number | null | undefined,
-): { columnSql: string; valueSql: string; values: unknown[] } {
-  if (tenantId == null || !hasTenantId(db, table)) return { columnSql: '', valueSql: '', values: [] };
+): Promise<{ columnSql: string; valueSql: string; values: unknown[] }> {
+  if (tenantId == null || !await hasTenantId(db, table)) return { columnSql: '', valueSql: '', values: [] };
   return { columnSql: 'tenant_id, ', valueSql: '?, ', values: [tenantId] };
 }
 
-export function tenantUpsertUpdateSql(db: Database.Database, table: string): string {
-  return hasTenantId(db, table) ? 'tenant_id = COALESCE(excluded.tenant_id, tenant_id),' : '';
+export async function tenantUpsertUpdateSql(db: Db, table: string): Promise<string> {
+  return await hasTenantId(db, table) ? 'tenant_id = COALESCE(excluded.tenant_id, tenant_id),' : '';
 }
 
-export function insertRuntimeLog(
-  db: Database.Database,
+export async function insertRuntimeLog(
+  db: Db,
   input: {
     instanceId?: number | null;
     agentId?: number | null;
@@ -82,49 +86,71 @@ export function insertRuntimeLog(
     level?: 'info' | 'warn' | 'error' | 'debug';
     message: string;
   },
-): void {
-  const tenantId = resolveRuntimeTenantId(db, {
-    taskId: input.taskId,
-    instanceId: input.instanceId,
-    agentId: input.agentId,
-    projectId: input.projectId,
-  });
+): Promise<void> {
+  const tenantId = await resolveRuntimeTenantId(db, {
+      taskId: input.taskId,
+      instanceId: input.instanceId,
+      agentId: input.agentId,
+      projectId: input.projectId,
+    });
   const columns: string[] = [];
   const placeholders: string[] = [];
   const values: unknown[] = [];
-  const pushValue = (column: string, value: unknown): void => {
-    if (!tableHasColumn(db, 'logs', column)) return;
+  const pushValue = async (column: string, value: unknown): Promise<void> => {
+    if (!await tableHasColumn(db, 'logs', column)) return;
     columns.push(column);
     placeholders.push('?');
     values.push(value);
   };
-  pushValue('tenant_id', tenantId);
-  pushValue('instance_id', input.instanceId ?? null);
-  pushValue('agent_id', input.agentId ?? null);
-  pushValue('job_title', input.jobTitle == null ? '' : String(input.jobTitle));
-  pushValue('level', input.level ?? 'info');
-  pushValue('message', input.message);
-  db.prepare(`
+  // Each of these MUST be awaited: pushValue became async when tableHasColumn did, and an
+  // unawaited call leaves columns/placeholders empty, producing `INSERT INTO logs () VALUES ()`.
+  // They are awaited in sequence rather than via Promise.all so column order stays
+  // deterministic and matches the values array.
+  await pushValue('tenant_id', tenantId);
+  await pushValue('instance_id', input.instanceId ?? null);
+  await pushValue('agent_id', input.agentId ?? null);
+  await pushValue('job_title', input.jobTitle == null ? '' : String(input.jobTitle));
+  await pushValue('level', input.level ?? 'info');
+  await pushValue('message', input.message);
+  await db.run(`
     INSERT INTO logs (${columns.join(', ')})
     VALUES (${placeholders.join(', ')})
-  `).run(...values);
+  `, ...values);
 }
 
-export function sessionTenantScope(
-  db: Database.Database,
+export async function sessionTenantScope(
+  db: Db,
   alias: string,
   tenantId: number,
-): { sql: string; params: unknown[] } {
+): Promise<{ sql: string; params: unknown[] }> {
   const conditions: string[] = [];
   const params: unknown[] = [];
-  if (hasTenantId(db, 'sessions')) {
+  if (await hasTenantId(db, 'sessions')) {
     conditions.push(`${alias}.tenant_id = ?`);
     params.push(tenantId);
   }
-  pushTenantSubquery(db, conditions, params, `${alias}.task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, ['tasks'], tenantId);
-  pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
-  pushTenantSubquery(db, conditions, params, `${alias}.project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, ['projects'], tenantId);
-  if (tableExists(db, 'job_instances') && hasTenantId(db, 'tasks') && hasTenantId(db, 'agents')) {
+  // Every pushTenantSubquery call MUST be awaited. It appends to `conditions` AND to
+  // `params`, so an unawaited call defers both appends to a later microtask — and whether
+  // they land before `conditions.join(' OR ')` freezes the SQL string comes down to whether
+  // the builder happens to await something else first.
+  //
+  // That is what made the missing awaits so treacherous here. Three of the four builders in
+  // this file await a tableExists() query after their pushTenantSubquery calls, and a
+  // database round trip is more than enough for the pending appends to land, so they stayed
+  // correct BY ACCIDENT. instanceTenantScope, which returns immediately, did not: it emitted
+  // SQL with its task_id and agent_id branches dropped, and a `params` array that then grew
+  // past the placeholder count, because `params` is returned by reference and the appends
+  // arrived after the caller already held it.
+  //
+  // So the failure takes two shapes, neither visible to the compiler: tenant scope silently
+  // narrowed by a missing OR-branch, and a bind count that drifts out of step with the SQL
+  // (which PostgreSQL rejects outright). The accidental correctness is the worse half — any
+  // refactor that removed or reordered a later await would break tenant scoping in a builder
+  // that looks untouched.
+  await pushTenantSubquery(db, conditions, params, `${alias}.task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, ['tasks'], tenantId);
+  await pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
+  await pushTenantSubquery(db, conditions, params, `${alias}.project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, ['projects'], tenantId);
+  if (await tableExists(db, 'job_instances') && await hasTenantId(db, 'tasks') && await hasTenantId(db, 'agents')) {
     conditions.push(`${alias}.instance_id IN (
       SELECT ji.id
       FROM job_instances ji
@@ -137,19 +163,19 @@ export function sessionTenantScope(
   return conditions.length ? { sql: `(${conditions.join(' OR ')})`, params } : { sql: '1 = 1', params: [] };
 }
 
-export function chatMessageTenantScope(
-  db: Database.Database,
+export async function chatMessageTenantScope(
+  db: Db,
   alias: string,
   tenantId: number,
-): { sql: string; params: unknown[] } {
+): Promise<{ sql: string; params: unknown[] }> {
   const conditions: string[] = [];
   const params: unknown[] = [];
-  if (hasTenantId(db, 'chat_messages')) {
+  if (await hasTenantId(db, 'chat_messages')) {
     conditions.push(`${alias}.tenant_id = ?`);
     params.push(tenantId);
   }
-  pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
-  if (tableExists(db, 'job_instances') && hasTenantId(db, 'tasks') && hasTenantId(db, 'agents')) {
+  await pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
+  if (await tableExists(db, 'job_instances') && await hasTenantId(db, 'tasks') && await hasTenantId(db, 'agents')) {
     conditions.push(`${alias}.instance_id IN (
       SELECT ji.id
       FROM job_instances ji
@@ -162,31 +188,37 @@ export function chatMessageTenantScope(
   return conditions.length ? { sql: `(${conditions.join(' OR ')})`, params } : { sql: '1 = 1', params: [] };
 }
 
-export function instanceTenantScope(
-  db: Database.Database,
+export async function instanceTenantScope(
+  db: Db,
   alias: string,
   tenantId: number,
-): { sql: string; params: unknown[] } {
+): Promise<{ sql: string; params: unknown[] }> {
   const conditions: string[] = [];
   const params: unknown[] = [];
-  if (hasTenantId(db, 'job_instances')) {
+  if (await hasTenantId(db, 'job_instances')) {
     conditions.push(`${alias}.tenant_id = ?`);
     params.push(tenantId);
   }
-  pushTenantSubquery(db, conditions, params, `${alias}.task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, ['tasks'], tenantId);
-  pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
+  await pushTenantSubquery(db, conditions, params, `${alias}.task_id IN (SELECT id FROM tasks WHERE tenant_id = ?)`, ['tasks'], tenantId);
+  await pushTenantSubquery(db, conditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
   return conditions.length ? { sql: `(${conditions.join(' OR ')})`, params } : { sql: '1 = 1', params: [] };
 }
 
-export function logTenantScope(
-  db: Database.Database,
+export async function logTenantScope(
+  db: Db,
   alias: string,
   tenantId: number,
-): { sql: string; params: unknown[] } {
+): Promise<{ sql: string; params: unknown[] }> {
   const relationshipConditions: string[] = [];
   const params: unknown[] = [];
-  pushTenantSubquery(db, relationshipConditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
-  if (tableExists(db, 'job_instances') && hasTenantId(db, 'tasks') && hasTenantId(db, 'agents')) {
+  // The only one of the four whose failure mode WIDENS rather than narrows, which is why it
+  // is worth calling out separately. `relationshipConditions` starts empty here, so this call
+  // is the only thing that can populate it before the job_instances check. Unawaited, on a
+  // schema whose `logs` table has no tenant_id column, both branches below fall through to
+  // `1 = 1` — no tenant predicate at all, exposing every tenant's logs. The tableExists()
+  // await below currently masks it, but that is timing, not a guarantee.
+  await pushTenantSubquery(db, relationshipConditions, params, `${alias}.agent_id IN (SELECT id FROM agents WHERE tenant_id = ?)`, ['agents'], tenantId);
+  if (await tableExists(db, 'job_instances') && await hasTenantId(db, 'tasks') && await hasTenantId(db, 'agents')) {
     relationshipConditions.push(`${alias}.instance_id IN (
       SELECT ji.id
       FROM job_instances ji
@@ -196,7 +228,7 @@ export function logTenantScope(
     )`);
     params.push(tenantId, tenantId);
   }
-  if (!hasTenantId(db, 'logs')) {
+  if (!await hasTenantId(db, 'logs')) {
     return relationshipConditions.length ? { sql: `(${relationshipConditions.join(' OR ')})`, params } : { sql: '1 = 1', params: [] };
   }
 

@@ -11,25 +11,25 @@ import sprintsRouter from './sprints';
 let tempDir: string;
 const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   closeDb();
   jest.resetModules();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-relationships-'));
   process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-  initSchema();
+  await initSchema();
   const db = getDb();
-  db.prepare(`INSERT OR IGNORE INTO projects (id, name) VALUES (1, 'Agent HQ')`).run();
-  db.prepare(`
+  await db.run(`INSERT OR IGNORE INTO projects (id, name) VALUES (1, 'Agent HQ')`);
+  await db.run(`
     INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value)
     VALUES (10, 1, 'Enhancements', '', 'generic', 'active', 'time', '2w')
-  `).run();
-  db.prepare(`
+  `);
+  await db.run(`
     INSERT INTO tasks (id, title, description, status, priority, project_id, sprint_id, task_type)
     VALUES
       (1, 'Source task', '', 'ready', 'medium', 1, 10, 'backend'),
       (2, 'Target task', '', 'ready', 'medium', 1, 10, 'backend'),
       (3, 'Other task', '', 'done', 'medium', 1, 10, 'backend')
-  `).run();
+  `);
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -54,7 +54,7 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('task relationships API', () => {
-  beforeEach(() => resetDb());
+  beforeEach(async () => await resetDb());
 
   afterEach(() => {
     closeDb();
@@ -115,7 +115,7 @@ describe('task relationships API', () => {
         type: expect.objectContaining({ label: 'Causes' }),
       }));
 
-      const dependency = getDb().prepare(`SELECT blocker_id, blocked_id FROM task_dependencies WHERE blocker_id = 1 AND blocked_id = 2`).get();
+      const dependency = await getDb().get(`SELECT blocker_id, blocked_id FROM task_dependencies WHERE blocker_id = 1 AND blocked_id = 2`);
       expect(dependency).toEqual({ blocker_id: 1, blocked_id: 2 });
 
       const listResponse = await fetch(`${baseUrl}/api/v1/tasks/2/relationships`);
@@ -127,7 +127,7 @@ describe('task relationships API', () => {
       const deleteResponse = await fetch(`${baseUrl}/api/v1/tasks/1/relationships/${created.id}`, { method: 'DELETE' });
       expect(deleteResponse.status).toBe(200);
       await expect(deleteResponse.json()).resolves.toEqual({ ok: true, deleted_id: created.id });
-      const deletedDependency = getDb().prepare(`SELECT blocker_id, blocked_id FROM task_dependencies WHERE blocker_id = 1 AND blocked_id = 2`).get();
+      const deletedDependency = await getDb().get(`SELECT blocker_id, blocked_id FROM task_dependencies WHERE blocker_id = 1 AND blocked_id = 2`);
       expect(deletedDependency).toBeUndefined();
     } finally {
       await stopTestServer(server);
@@ -178,7 +178,7 @@ describe('task relationships API', () => {
       expect(task.blockers.map((blocker) => blocker.id)).toContain(2);
       expect(task.relationships).toEqual([expect.objectContaining({ relationship_type_key: 'blocked_by', source_task_id: 1, target_task_id: 2 })]);
 
-      const dependency = getDb().prepare(`SELECT blocker_id, blocked_id FROM task_dependencies WHERE blocker_id = 2 AND blocked_id = 1`).get();
+      const dependency = await getDb().get(`SELECT blocker_id, blocked_id FROM task_dependencies WHERE blocker_id = 2 AND blocked_id = 1`);
       expect(dependency).toEqual({ blocker_id: 2, blocked_id: 1 });
     } finally {
       await stopTestServer(server);
@@ -187,7 +187,7 @@ describe('task relationships API', () => {
 
   it('does not create hidden dispatch dependencies for legacy blockers when blocked_by is not configured', async () => {
     const db = getDb();
-    db.prepare(`DELETE FROM sprint_type_relationship_types WHERE key = 'blocked_by'`).run();
+    await db.run(`DELETE FROM sprint_type_relationship_types WHERE key = 'blocked_by'`);
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/tasks/1/blockers`, {
@@ -201,12 +201,12 @@ describe('task relationships API', () => {
       expect(task.legacy_blocker_warning).toContain('blocked_by is not configured');
       expect(task.blockers.map((blocker) => blocker.id)).not.toContain(2);
 
-      const dependency = getDb().prepare(`SELECT blocker_id, blocked_id FROM task_dependencies WHERE blocker_id = 2 AND blocked_id = 1`).get();
+      const dependency = await getDb().get(`SELECT blocker_id, blocked_id FROM task_dependencies WHERE blocker_id = 2 AND blocked_id = 1`);
       expect(dependency).toBeUndefined();
-      const relationship = getDb().prepare(`
+      const relationship = await getDb().get(`
         SELECT id FROM task_relationships
         WHERE source_task_id = 1 AND target_task_id = 2 AND relationship_type_key = 'blocked_by'
-      `).get();
+      `);
       expect(relationship).toBeUndefined();
     } finally {
       await stopTestServer(server);
@@ -215,16 +215,16 @@ describe('task relationships API', () => {
 
   it('keeps task relationship target tasks tenant-isolated', async () => {
     const db = getDb();
-    db.prepare(`INSERT OR IGNORE INTO tenants (id, slug, name) VALUES (2, 'other', 'Other Tenant')`).run();
-    db.prepare(`INSERT INTO projects (id, tenant_id, name) VALUES (2, 2, 'Other Project')`).run();
-    db.prepare(`
+    await db.run(`INSERT OR IGNORE INTO tenants (id, slug, name) VALUES (2, 'other', 'Other Tenant')`);
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (2, 2, 'Other Project')`);
+    await db.run(`
       INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
       VALUES (20, 2, 2, 'Other Enhancements', '', 'generic', 'active', 'time', '2w')
-    `).run();
-    db.prepare(`
+    `);
+    await db.run(`
       INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, sprint_id, task_type)
       VALUES (20, 2, 'Other tenant task', '', 'ready', 'medium', 2, 20, 'backend')
-    `).run();
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -235,33 +235,33 @@ describe('task relationships API', () => {
       });
       expect(response.status).toBe(404);
       await expect(response.json()).resolves.toEqual(expect.objectContaining({ error: 'Target task not found' }));
-      const relationship = getDb().prepare(`SELECT id FROM task_relationships WHERE source_task_id = 1 AND target_task_id = 20`).get();
+      const relationship = await getDb().get(`SELECT id FROM task_relationships WHERE source_task_id = 1 AND target_task_id = 20`);
       expect(relationship).toBeUndefined();
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('backfills legacy blockers and defects into idempotent relationship rows', () => {
+  it('backfills legacy blockers and defects into idempotent relationship rows', async () => {
     const db = getDb();
-    db.prepare(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (2, 1)`).run();
-    db.prepare(`UPDATE tasks SET origin_task_id = 3, defect_type = 'historic-custom-defect' WHERE id = 1`).run();
+    await db.run(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (2, 1)`);
+    await db.run(`UPDATE tasks SET origin_task_id = 3, defect_type = 'historic-custom-defect' WHERE id = 1`);
 
-    initSchema();
-    initSchema();
+    await initSchema();
+    await initSchema();
 
-    const blockers = db.prepare(`
+    const blockers = await db.all(`
       SELECT source_task_id, target_task_id, relationship_type_key, metadata_json, created_by
       FROM task_relationships
       WHERE source_task_id = 1 AND target_task_id = 2 AND relationship_type_key = 'blocked_by'
-    `).all();
+    `);
     expect(blockers).toEqual([{ source_task_id: 1, target_task_id: 2, relationship_type_key: 'blocked_by', metadata_json: '{}', created_by: 'legacy-task_dependencies' }]);
 
-    const defects = db.prepare(`
+    const defects = await db.all(`
       SELECT source_task_id, target_task_id, relationship_type_key, metadata_json, created_by
       FROM task_relationships
       WHERE source_task_id = 1 AND target_task_id = 3 AND relationship_type_key = 'defect_of'
-    `).all() as Array<{ metadata_json: string }>;
+    `) as Array<{ metadata_json: string }>;
     expect(defects).toHaveLength(1);
     expect(JSON.parse(defects[0].metadata_json)).toEqual({ legacy_defect_type: 'historic-custom-defect' });
   });

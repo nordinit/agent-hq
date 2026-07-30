@@ -2,9 +2,15 @@ import { jest } from '@jest/globals';
 
 const mockGet = jest.fn();
 
+// Adapter shape — db.get(sql, ...) — not better-sqlite3's prepare(sql).get(). mockGet stays
+// the source of truth for the row; only the calling convention changed.
 jest.mock('../../db/client', () => ({
   getDb: () => ({
-    prepare: () => ({ get: () => mockGet() }),
+    get: async () => mockGet(),
+    all: async () => [],
+    value: async () => mockGet(),
+    run: async () => ({ changes: 0, lastInsertId: null }),
+    exec: async () => undefined,
   }),
 }));
 
@@ -15,7 +21,7 @@ describe('Hermes transcript provider mapping', () => {
     mockGet.mockReset();
   });
 
-  it('uses the chat-message-backed remote transcript provider for Hermes agents', () => {
+  it('uses the chat-message-backed remote transcript provider for Hermes agents', async () => {
     mockGet.mockReturnValue({
       id: 41,
       name: 'Hermes Agent',
@@ -26,7 +32,7 @@ describe('Hermes transcript provider mapping', () => {
       openclaw_agent_id: null,
     });
 
-    const provider = resolveTranscriptProviderByAgent(41);
+    const provider = await resolveTranscriptProviderByAgent(41);
     expect(provider).toBeInstanceOf(RemoteTranscriptProvider);
     expect(provider.getTranscriptSource()).toBe('remote-hermes');
   });

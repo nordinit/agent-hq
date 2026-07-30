@@ -3,10 +3,13 @@ import os from 'os';
 import path from 'path';
 import Database from 'better-sqlite3';
 import { OpenClawSkillAdapter } from './skillMaterialization';
+import { type Db } from "../db/adapter/types";
+import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
-function createDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.exec(`
+async function createDb(): Promise<Db> {
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
+  await db.exec(`
     CREATE TABLE skills (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL DEFAULT 1,
@@ -35,8 +38,8 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     tempDirs = [];
   });
 
-  it('does not fall back to global/system filesystem skills without an explicit tenant DB row', () => {
-    const db = createDb();
+  it('does not fall back to global/system filesystem skills without an explicit tenant DB row', async () => {
+    const db = await createDb();
     const workspace = makeTempDir('skill-workspace');
     const globalSkills = makeTempDir('global-skills');
     tempDirs.push(workspace, globalSkills);
@@ -53,16 +56,16 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
       tenantId: 1,
     });
 
-    expect(result.count).toBe(0);
-    expect(result.details).toEqual([{ skill: 'shared-skill', action: 'skipped', reason: 'source not found' }]);
+    expect((await result).count).toBe(0);
+    expect((await result).details).toEqual([{ skill: 'shared-skill', action: 'skipped', reason: 'source not found' }]);
     expect(fs.existsSync(path.join(workspace, 'skills', 'shared-skill'))).toBe(false);
-    db.close();
+    await db.close();
   });
 
-  it('materializes the tenant-local DB skill when tenants reuse the same name', () => {
-    const db = createDb();
-    db.prepare(`INSERT INTO skills (tenant_id, name, description, content) VALUES (1, 'shared-skill', 'Tenant A', '# Tenant A skill')`).run();
-    db.prepare(`INSERT INTO skills (tenant_id, name, description, content) VALUES (2, 'shared-skill', 'Tenant B', '# Tenant B skill')`).run();
+  it('materializes the tenant-local DB skill when tenants reuse the same name', async () => {
+    const db = await createDb();
+    await db.run(`INSERT INTO skills (tenant_id, name, description, content) VALUES (1, 'shared-skill', 'Tenant A', '# Tenant A skill')`);
+    await db.run(`INSERT INTO skills (tenant_id, name, description, content) VALUES (2, 'shared-skill', 'Tenant B', '# Tenant B skill')`);
 
     const workspaceA = makeTempDir('tenant-a-workspace');
     const workspaceB = makeTempDir('tenant-b-workspace');
@@ -72,16 +75,16 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     const resultA = adapter.materialize({ workingDirectory: workspaceA, skillNames: ['shared-skill'], db, tenantId: 1 });
     const resultB = adapter.materialize({ workingDirectory: workspaceB, skillNames: ['shared-skill'], db, tenantId: 2 });
 
-    expect(resultA.count).toBe(1);
-    expect(resultB.count).toBe(1);
+    expect((await resultA).count).toBe(1);
+    expect((await resultB).count).toBe(1);
     expect(fs.readFileSync(path.join(workspaceA, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant A skill\n');
     expect(fs.readFileSync(path.join(workspaceB, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant B skill\n');
-    db.close();
+    await db.close();
   });
 
-  it('uses system skill directories only when the tenant has an explicit system skill row', () => {
-    const db = createDb();
-    db.prepare(`INSERT INTO skills (tenant_id, name, description, source) VALUES (2, 'system-skill', 'Tenant B explicit system skill', 'system')`).run();
+  it('uses system skill directories only when the tenant has an explicit system skill row', async () => {
+    const db = await createDb();
+    await db.run(`INSERT INTO skills (tenant_id, name, description, source) VALUES (2, 'system-skill', 'Tenant B explicit system skill', 'system')`);
 
     const workspaceA = makeTempDir('system-a-workspace');
     const workspaceB = makeTempDir('system-b-workspace');
@@ -95,10 +98,10 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     const resultA = adapter.materialize({ workingDirectory: workspaceA, skillNames: ['system-skill'], skillsBasePath: globalSkills, db, tenantId: 1 });
     const resultB = adapter.materialize({ workingDirectory: workspaceB, skillNames: ['system-skill'], skillsBasePath: globalSkills, db, tenantId: 2 });
 
-    expect(resultA.count).toBe(0);
+    expect((await resultA).count).toBe(0);
     expect(fs.existsSync(path.join(workspaceA, 'skills', 'system-skill'))).toBe(false);
-    expect(resultB.count).toBe(1);
+    expect((await resultB).count).toBe(1);
     expect(fs.readFileSync(path.join(workspaceB, 'skills', 'system-skill', 'SKILL.md'), 'utf-8')).toBe('# System skill\n');
-    db.close();
+    await db.close();
   });
 });

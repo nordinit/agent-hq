@@ -1,5 +1,7 @@
 import Database from 'better-sqlite3';
 import { applyRuntimeEndToJobInstance } from './runtimeEnd';
+import { type Db } from "../../db/adapter/types";
+import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 jest.mock('./observability', () => ({
   recordRunCheckIn: jest.fn(),
@@ -18,9 +20,10 @@ jest.mock('../../lib/taskLifecycle', () => ({
   scheduleEndedActiveInstanceLinkageCleanup: jest.fn(),
 }));
 
-function createDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.exec(`
+async function createDb(): Promise<Db> {
+  const dbRaw = new Database(':memory:');
+    const db = new SqliteAdapter(dbRaw);
+  await db.exec(`
     CREATE TABLE job_instances (
       id INTEGER PRIMARY KEY,
       status TEXT,
@@ -43,18 +46,18 @@ function createDb(): Database.Database {
 }
 
 describe('applyRuntimeEndToJobInstance token usage persistence', () => {
-  let db: Database.Database;
+  let db: Db;
 
-  afterEach(() => {
-    db.close();
+  afterEach(async () => {
+    await db.close();
   });
 
   it('persists token usage from runtime end metadata without overwriting existing non-null values with null', async () => {
-    db = createDb();
-    db.prepare(`
+    db = await createDb();
+    await db.run(`
       INSERT INTO job_instances (id, status, session_key, token_input)
       VALUES (915, 'running', 'run:915', 12)
-    `).run();
+    `);
 
     await applyRuntimeEndToJobInstance(db, {
       instanceId: 915,
@@ -64,7 +67,7 @@ describe('applyRuntimeEndToJobInstance token usage persistence', () => {
         source: 'hermes',
         sessionKey: 'run:915',
         success: true,
-        endedAt: '2026-06-03T14:00:00.000Z',
+        endedAt: '2026-06-03 14:00:00.000',
         reason: 'completed',
         metadata: {
           usage: {
@@ -75,11 +78,11 @@ describe('applyRuntimeEndToJobInstance token usage persistence', () => {
       },
     });
 
-    const row = db.prepare(`
+    const row = await db.get(`
       SELECT token_input, token_output, token_total, runtime_ended_at
       FROM job_instances
       WHERE id = 915
-    `).get() as {
+    `) as {
       token_input: number | null;
       token_output: number | null;
       token_total: number | null;
@@ -90,7 +93,7 @@ describe('applyRuntimeEndToJobInstance token usage persistence', () => {
       token_input: 12,
       token_output: 34,
       token_total: 46,
-      runtime_ended_at: '2026-06-03T14:00:00.000Z',
+      runtime_ended_at: '2026-06-03 14:00:00.000',
     });
   });
 });

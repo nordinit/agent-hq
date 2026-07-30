@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { nowTimestamp } from '../lib/timestamps';
 
 const router = Router({ mergeParams: true });
 
@@ -49,8 +50,8 @@ function sendRouteError(res: Response, err: unknown): Response {
   });
 }
 
-function findProjectForTenant(db: ReturnType<typeof getDb>, projectId: string | number, tenantId: number): { id: number } | undefined {
-  return db.prepare('SELECT id FROM projects WHERE id = ? AND tenant_id = ?').get(projectId, tenantId) as { id: number } | undefined;
+async function findProjectForTenant(db: ReturnType<typeof getDb>, projectId: string | number, tenantId: number): Promise<{ id: number } | undefined> {
+  return await db.get('SELECT id FROM projects WHERE id = ? AND tenant_id = ?', projectId, tenantId) as { id: number } | undefined;
 }
 
 type ProjectFileRow = {
@@ -79,56 +80,43 @@ const PROJECT_FILE_VERSION_SELECT = `
   size_bytes, created_by, created_at, change_source
 `;
 
-function getProjectFileForTenant(
+async function getProjectFileForTenant(
   db: ReturnType<typeof getDb>,
   projectId: string | number,
   fileId: string | number,
   tenantId: number,
-): ProjectFileRow | undefined {
-  return db.prepare(`
+): Promise<ProjectFileRow | undefined> {
+  return await db.get(`
     SELECT
       pf.id, pf.project_id, pf.filename, pf.original_name, pf.mime_type, pf.size_bytes, pf.file_path,
       pf.uploaded_by, pf.created_at, pf.updated_by, pf.updated_at, pf.current_version, pf.current_version_id
     FROM project_files pf
     JOIN projects p ON p.id = pf.project_id
     WHERE pf.id = ? AND pf.project_id = ? AND p.tenant_id = ?
-  `).get(fileId, projectId, tenantId) as ProjectFileRow | undefined;
+  `, fileId, projectId, tenantId) as ProjectFileRow | undefined;
 }
 
-function insertProjectFileVersion(
+async function insertProjectFileVersion(
   db: ReturnType<typeof getDb>,
   input: {
     tenantId: number;
     projectId: string | number;
-    fileId: number | bigint;
+    fileId: number | null;
     versionNumber: number;
     file: Express.Multer.File;
     actor: string;
     timestamp: string;
     changeSource: string;
   },
-): number | bigint {
-  const result = db.prepare(`
+): Promise<number | null> {
+  const result = await db.run(`
     INSERT INTO project_file_versions (
       tenant_id, project_id, file_id, version_number, filename, original_name, mime_type,
       size_bytes, file_path, created_by, created_at, change_source
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    input.tenantId,
-    input.projectId,
-    input.fileId,
-    input.versionNumber,
-    input.file.filename,
-    input.file.originalname,
-    input.file.mimetype,
-    input.file.size,
-    input.file.path,
-    input.actor,
-    input.timestamp,
-    input.changeSource,
-  );
-  return result.lastInsertRowid;
+  `, input.tenantId, input.projectId, input.fileId, input.versionNumber, input.file.filename, input.file.originalname, input.file.mimetype, input.file.size, input.file.path, input.actor, input.timestamp, input.changeSource);
+  return result.lastInsertId;
 }
 
 function cleanupUploadedFile(file: Express.Multer.File | undefined): void {
@@ -141,19 +129,19 @@ function cleanupUploadedFile(file: Express.Multer.File | undefined): void {
 }
 
 // GET /api/v1/projects/:id/files
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const project = findProjectForTenant(db, req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const project = await findProjectForTenant(db, req.params.id, tenantId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const files = db.prepare(`
+    const files = await db.all(`
       SELECT ${PROJECT_FILE_RESPONSE_SELECT}
       FROM project_files
       WHERE project_id = ?
       ORDER BY updated_at DESC, created_at DESC
-    `).all(req.params.id);
+    `, req.params.id);
 
     return res.json(files);
   } catch (err) {
@@ -162,11 +150,11 @@ router.get('/', (req: Request, res: Response) => {
 });
 
 // POST /api/v1/projects/:id/files
-router.post('/', upload.single('file'), (req: Request, res: Response) => {
+router.post('/', upload.single('file'), async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const project = findProjectForTenant(db, req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const project = await findProjectForTenant(db, req.params.id, tenantId);
     if (!project) {
       // Clean up uploaded file if project not found
       cleanupUploadedFile(req.file);
@@ -178,47 +166,36 @@ router.post('/', upload.single('file'), (req: Request, res: Response) => {
     }
 
     const uploadedBy = (req.body as { uploaded_by?: string }).uploaded_by ?? 'manual';
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
 
-    const result = db.transaction(() => {
-      const insertFile = db.prepare(`
+    const result = await db.withTransaction(async (db) => {
+      const insertFile = await db.run(`
         INSERT INTO project_files (
           project_id, filename, original_name, mime_type, size_bytes, file_path,
           uploaded_by, created_at, updated_by, updated_at, current_version
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-      `).run(
-        req.params.id,
-        req.file!.filename,
-        req.file!.originalname,
-        req.file!.mimetype,
-        req.file!.size,
-        req.file!.path,
-        uploadedBy,
-        now,
-        uploadedBy,
-        now,
-      );
+      `, req.params.id, req.file!.filename, req.file!.originalname, req.file!.mimetype, req.file!.size, req.file!.path, uploadedBy, now, uploadedBy, now);
 
-      const versionId = insertProjectFileVersion(db, {
-        tenantId,
-        projectId: req.params.id,
-        fileId: insertFile.lastInsertRowid,
-        versionNumber: 1,
-        file: req.file!,
-        actor: uploadedBy,
-        timestamp: now,
-        changeSource: 'api_upload',
-      });
+      const versionId = await insertProjectFileVersion(db, {
+              tenantId,
+              projectId: req.params.id,
+              fileId: insertFile.lastInsertId,
+              versionNumber: 1,
+              file: req.file!,
+              actor: uploadedBy,
+              timestamp: now,
+              changeSource: 'api_upload',
+            });
 
-      db.prepare('UPDATE project_files SET current_version_id = ? WHERE id = ?').run(versionId, insertFile.lastInsertRowid);
+      await db.run('UPDATE project_files SET current_version_id = ? WHERE id = ?', versionId, insertFile.lastInsertId);
       return insertFile;
-    })();
+    });
 
-    const record = db.prepare(`
+    const record = await db.get(`
       SELECT ${PROJECT_FILE_RESPONSE_SELECT}
       FROM project_files WHERE id = ?
-    `).get(result.lastInsertRowid);
+    `, result.lastInsertId);
 
     return res.status(201).json(record);
   } catch (err) {
@@ -227,13 +204,13 @@ router.post('/', upload.single('file'), (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/:id/files/:fileId
-router.get('/:fileId', (req: Request, res: Response) => {
+router.get('/:fileId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const project = findProjectForTenant(db, req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const project = await findProjectForTenant(db, req.params.id, tenantId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const file = getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId);
+    const file = await getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId);
 
     if (!file) return res.status(404).json({ error: 'File not found' });
     return res.json(file);
@@ -243,13 +220,13 @@ router.get('/:fileId', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/:id/files/:fileId/download
-router.get('/:fileId/download', (req: Request, res: Response) => {
+router.get('/:fileId/download', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const project = findProjectForTenant(db, req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const project = await findProjectForTenant(db, req.params.id, tenantId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const file = getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId) as {
+    const file = await getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId) as {
       id: number; filename: string; original_name: string;
       mime_type: string; file_path: string;
     } | undefined;
@@ -272,22 +249,22 @@ router.get('/:fileId/download', (req: Request, res: Response) => {
 });
 
 // GET /api/v1/projects/:id/files/:fileId/versions
-router.get('/:fileId/versions', (req: Request, res: Response) => {
+router.get('/:fileId/versions', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const project = findProjectForTenant(db, req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const project = await findProjectForTenant(db, req.params.id, tenantId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    const file = getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId);
+    const file = await getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId);
     if (!file) return res.status(404).json({ error: 'File not found' });
 
-    const versions = db.prepare(`
+    const versions = await db.all(`
       SELECT ${PROJECT_FILE_VERSION_SELECT}
       FROM project_file_versions
       WHERE tenant_id = ? AND project_id = ? AND file_id = ?
       ORDER BY version_number DESC
-    `).all(tenantId, req.params.id, req.params.fileId);
+    `, tenantId, req.params.id, req.params.fileId);
 
     return res.json(versions);
   } catch (err) {
@@ -296,11 +273,11 @@ router.get('/:fileId/versions', (req: Request, res: Response) => {
 });
 
 // PUT /api/v1/projects/:id/files/:fileId
-router.put('/:fileId', upload.single('file'), (req: Request, res: Response) => {
+router.put('/:fileId', upload.single('file'), async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const project = findProjectForTenant(db, req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const project = await findProjectForTenant(db, req.params.id, tenantId);
     if (!project) {
       cleanupUploadedFile(req.file);
       return res.status(404).json({ error: 'Project not found' });
@@ -310,7 +287,7 @@ router.put('/:fileId', upload.single('file'), (req: Request, res: Response) => {
       return res.status(400).json({ error: 'No file uploaded (field name must be "file")' });
     }
 
-    const file = getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId);
+    const file = await getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId);
     if (!file) {
       cleanupUploadedFile(req.file);
       return res.status(404).json({ error: 'File not found' });
@@ -319,45 +296,33 @@ router.put('/:fileId', upload.single('file'), (req: Request, res: Response) => {
     const updatedBy = (req.body as { uploaded_by?: string; updated_by?: string }).updated_by
       ?? (req.body as { uploaded_by?: string; updated_by?: string }).uploaded_by
       ?? 'manual';
-    const now = new Date().toISOString();
+    const now = nowTimestamp();
     const nextVersion = Number(file.current_version ?? 1) + 1;
 
-    db.transaction(() => {
-      const versionId = insertProjectFileVersion(db, {
-        tenantId,
-        projectId: req.params.id,
-        fileId: file.id,
-        versionNumber: nextVersion,
-        file: req.file!,
-        actor: updatedBy,
-        timestamp: now,
-        changeSource: 'api_replace',
-      });
+    await db.withTransaction(async (db) => {
+      const versionId = await insertProjectFileVersion(db, {
+              tenantId,
+              projectId: req.params.id,
+              fileId: file.id,
+              versionNumber: nextVersion,
+              file: req.file!,
+              actor: updatedBy,
+              timestamp: now,
+              changeSource: 'api_replace',
+            });
 
-      db.prepare(`
+      await db.run(`
         UPDATE project_files
         SET filename = ?, original_name = ?, mime_type = ?, size_bytes = ?, file_path = ?,
           updated_by = ?, updated_at = ?, current_version = ?, current_version_id = ?
         WHERE id = ? AND project_id = ?
-      `).run(
-        req.file!.filename,
-        req.file!.originalname,
-        req.file!.mimetype,
-        req.file!.size,
-        req.file!.path,
-        updatedBy,
-        now,
-        nextVersion,
-        versionId,
-        file.id,
-        req.params.id,
-      );
-    })();
+      `, req.file!.filename, req.file!.originalname, req.file!.mimetype, req.file!.size, req.file!.path, updatedBy, now, nextVersion, versionId, file.id, req.params.id);
+    });
 
-    const record = db.prepare(`
+    const record = await db.get(`
       SELECT ${PROJECT_FILE_RESPONSE_SELECT}
       FROM project_files WHERE id = ?
-    `).get(file.id);
+    `, file.id);
 
     return res.json(record);
   } catch (err) {
@@ -367,22 +332,22 @@ router.put('/:fileId', upload.single('file'), (req: Request, res: Response) => {
 });
 
 // DELETE /api/v1/projects/:id/files/:fileId
-router.delete('/:fileId', (req: Request, res: Response) => {
+router.delete('/:fileId', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const tenantId = resolveTenantIdFromRequest(db, req);
-    const project = findProjectForTenant(db, req.params.id, tenantId);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const project = await findProjectForTenant(db, req.params.id, tenantId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
-    const file = getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId);
+    const file = await getProjectFileForTenant(db, req.params.id, req.params.fileId, tenantId);
 
     if (!file) return res.status(404).json({ error: 'File not found' });
 
     // Delete from disk (best-effort)
     try {
-      const versions = db.prepare(`
+      const versions = await db.all(`
         SELECT file_path FROM project_file_versions
         WHERE tenant_id = ? AND project_id = ? AND file_id = ?
-      `).all(tenantId, req.params.id, req.params.fileId) as Array<{ file_path: string }>;
+      `, tenantId, req.params.id, req.params.fileId) as Array<{ file_path: string }>;
       const paths = new Set([file.file_path, ...versions.map((version) => version.file_path)]);
       for (const filePath of paths) {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -391,7 +356,7 @@ router.delete('/:fileId', (req: Request, res: Response) => {
       console.warn('[project-files] Failed to delete from disk:', fsErr);
     }
 
-    db.prepare('DELETE FROM project_files WHERE id = ?').run(file.id);
+    await db.run('DELETE FROM project_files WHERE id = ?', file.id);
     return res.json({ ok: true });
   } catch (err) {
     return sendRouteError(res, err);

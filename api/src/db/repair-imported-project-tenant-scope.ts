@@ -38,42 +38,45 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-function projectRows(db: ReturnType<typeof getDb>, projectId?: number): Array<{ id: number; tenant_id: number | null }> {
+async function projectRows(db: ReturnType<typeof getDb>, projectId?: number): Promise<Array<{ id: number; tenant_id: number | null }>> {
   if (projectId != null) {
-    return db.prepare('SELECT id, tenant_id FROM projects WHERE id = ?').all(projectId) as Array<{ id: number; tenant_id: number | null }>;
+    return await db.all('SELECT id, tenant_id FROM projects WHERE id = ?', projectId) as Array<{ id: number; tenant_id: number | null }>;
   }
-  return db.prepare('SELECT id, tenant_id FROM projects WHERE tenant_id IS NOT NULL ORDER BY id').all() as Array<{ id: number; tenant_id: number | null }>;
+  return await db.all('SELECT id, tenant_id FROM projects WHERE tenant_id IS NOT NULL ORDER BY id') as Array<{ id: number; tenant_id: number | null }>;
 }
 
-function run(): void {
+async function run(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const db = getDb();
-  const rows = projectRows(db, args.projectId);
+  const rows = await projectRows(db, args.projectId);
   if (!rows.length) throw new Error(args.projectId == null ? 'No tenant-owned projects found' : `Project ${args.projectId} not found`);
 
-  db.exec('SAVEPOINT repair_imported_project_tenant_scope');
+  await db.exec('SAVEPOINT repair_imported_project_tenant_scope');
   try {
-    const results = rows.map((row) => repairImportedProjectTenantScope(db, {
-      projectId: row.id,
-      tenantId: args.tenantId ?? row.tenant_id ?? undefined,
-    }));
+    const results = rows.map(async (row) => await repairImportedProjectTenantScope(db, {
+          projectId: row.id,
+          tenantId: args.tenantId ?? row.tenant_id ?? undefined,
+        }));
     if (args.dryRun) {
-      db.exec('ROLLBACK TO repair_imported_project_tenant_scope');
+      await db.exec('ROLLBACK TO repair_imported_project_tenant_scope');
     }
-    db.exec('RELEASE repair_imported_project_tenant_scope');
+    await db.exec('RELEASE repair_imported_project_tenant_scope');
     process.stdout.write(`${JSON.stringify({ ok: true, dry_run: args.dryRun, repaired: results }, null, 2)}\n`);
   } catch (error) {
-    db.exec('ROLLBACK TO repair_imported_project_tenant_scope');
-    db.exec('RELEASE repair_imported_project_tenant_scope');
+    await db.exec('ROLLBACK TO repair_imported_project_tenant_scope');
+    await db.exec('RELEASE repair_imported_project_tenant_scope');
     throw error;
   }
 }
 
-try {
-  run();
-} catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-} finally {
-  closeDb();
-}
+// run() is async, so the synchronous catch below could never fire and the finally closed the
+// database mid-repair — while run() holds an open SAVEPOINT it intends to roll back on failure.
+// Chaining is what makes that rollback reachable and the error path observable again.
+void run()
+  .catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    closeDb();
+  });
