@@ -1,42 +1,31 @@
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import {
   applyDefaultInstallPackage,
   DEFAULT_INSTALL_AGENT_SEEDS,
   DEFAULT_INSTALL_PACKAGE_VERSION,
 } from './defaultInstallPackage';
 
-const originalDbPath = process.env.AGENT_HQ_DB_PATH;
-let tempDir = '';
-
-async function resetDb(): Promise<void> {
-  closeDb();
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-default-install-'));
-  process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-  await initSchema();
-}
-
-function cleanup(): void {
-  closeDb();
-  if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-  else process.env.AGENT_HQ_DB_PATH = originalDbPath;
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-  tempDir = '';
+// setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on SQLite
+// and on PostgreSQL. The PostgreSQL fixture carries DDL only and is truncated between tests, so
+// every tenant this file needs is inserted explicitly rather than relying on initSchema seeding.
+async function insertTenant(name: string, slug: string): Promise<number> {
+  return Number((await getDb().run(
+    `INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 0)`,
+    name,
+    slug,
+  )).lastInsertId);
 }
 
 describe('applyDefaultInstallPackage', () => {
-  afterEach(cleanup);
+  beforeEach(async () => { await setupTestDb(); });
+  afterEach(async () => { await teardownTestDb(); });
 
   it('assigns default package agents to a tenant-local Agent HQ MCP server', async () => {
-    await resetDb();
     const db = getDb();
-    const tenantId = Number((await db.run(`
-      INSERT INTO tenants (name, slug, is_default)
-      VALUES ('Acme', 'acme', 0)
-    `)).lastInsertId);
+    const tenantId = await insertTenant('Acme', 'acme');
 
     const result = await applyDefaultInstallPackage(db, tenantId);
 
@@ -74,12 +63,8 @@ describe('applyDefaultInstallPackage', () => {
   });
 
   it('installs the canonical create-agent skill and assigns it to the developer agent', async () => {
-    await resetDb();
     const db = getDb();
-    const tenantId = Number((await db.run(`
-      INSERT INTO tenants (name, slug, is_default)
-      VALUES ('Acme', 'acme', 0)
-    `)).lastInsertId);
+    const tenantId = await insertTenant('Acme', 'acme');
     const canonicalContent = fs.readFileSync(
       path.resolve(__dirname, '../../../skills/create-agent/SKILL.md'),
       'utf8',
@@ -105,16 +90,9 @@ describe('applyDefaultInstallPackage', () => {
   });
 
   it('refreshes package-managed skills while preserving tenant-managed overrides', async () => {
-    await resetDb();
     const db = getDb();
-    const systemTenantId = Number((await db.run(`
-      INSERT INTO tenants (name, slug, is_default)
-      VALUES ('System', 'system', 0)
-    `)).lastInsertId);
-    const workspaceTenantId = Number((await db.run(`
-      INSERT INTO tenants (name, slug, is_default)
-      VALUES ('Workspace', 'workspace', 0)
-    `)).lastInsertId);
+    const systemTenantId = await insertTenant('System', 'system');
+    const workspaceTenantId = await insertTenant('Workspace', 'workspace');
     await db.run(`
       INSERT INTO skills (tenant_id, name, description, content, source)
       VALUES (?, 'create-agent', 'Old', '# Old', 'system')

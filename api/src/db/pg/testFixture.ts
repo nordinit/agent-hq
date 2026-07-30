@@ -92,9 +92,25 @@ let workerDb: string | null = null;
 let cachedTables: string[] | null = null;
 
 function workerDatabaseName(): string {
-  // JEST_WORKER_ID is 1-based and stable for the life of a worker.
+  // JEST_WORKER_ID is 1-based and stable for the life of a worker, but it is NOT unique across
+  // concurrent jest invocations — two runs on the same machine both have a worker 1, and each
+  // would DROP and re-CREATE the other's database mid-test. The process id disambiguates them
+  // while staying stable for the worker's lifetime, which is what the per-worker reuse relies on.
   const worker = process.env.JEST_WORKER_ID ?? '1';
-  return `agent_hq_test_w${worker}`;
+  return `agent_hq_test_w${worker}_p${process.pid}`;
+}
+
+/**
+ * The connection URL for this worker's database.
+ *
+ * Exported so a test harness can put it in DATABASE_URL. That matters because the code under
+ * test calls db/client.ts's own getDb() rather than receiving a handle, and getDb() selects the
+ * engine from DATABASE_URL — so setting it is what makes the application itself run on
+ * PostgreSQL, with no module mocking. Only valid after getTestDb() has run.
+ */
+export function workerDatabaseUrl(): string {
+  if (!workerDb) throw new Error('workerDatabaseUrl() called before getTestDb()');
+  return urlFor(workerDb);
 }
 
 /**

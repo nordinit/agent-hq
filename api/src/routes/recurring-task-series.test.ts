@@ -1,21 +1,11 @@
 import express from 'express';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import * as dispatchTrigger from '../services/dispatchTrigger';
 import recurringTaskSeriesRouter from './recurring-task-series';
 import tasksRouter from './tasks';
 import { getDefaultTenantId, setActiveTenantId } from '../lib/tenantContext';
-
-const ORIGINAL_DB_PATH = process.env.AGENT_HQ_DB_PATH;
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value == null) delete process.env[name];
-  else process.env[name] = value;
-}
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -51,7 +41,9 @@ async function seedFixture(): Promise<void> {
     INSERT INTO agents (id, tenant_id, name, role, session_key, workspace_path, status, preferred_provider)
     VALUES (6143, ?, 'Pinned Cinder', 'Backend Engineer', 'agent:pinned-cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
   `, tenantId);
-  await db.run(`INSERT OR IGNORE INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1)`, tenantId);
+  // ON CONFLICT DO NOTHING rather than SQLite's INSERT OR IGNORE, which PostgreSQL does not parse.
+  // Both engines accept the bare (target-less) form.
+  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, tenantId);
   await db.run(`DELETE FROM sprint_type_task_types WHERE tenant_id = ? AND sprint_type_key = 'recurring_api'`, tenantId);
   await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, tenantId);
 }
@@ -76,16 +68,15 @@ function validPayload(overrides: Record<string, unknown> = {}): Record<string, u
 }
 
 describe('recurring task series API', () => {
-  let tempDir: string;
   let server: Server;
   let baseUrl: string;
   let triggerDispatchSpy: jest.SpyInstance;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'recurring-task-series-route-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
-    closeDb();
-    await initSchema();
+    // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
+    // SQLite and on PostgreSQL. This test keeps no non-database temp state, so the old temp dir
+    // (which only ever held AGENT_HQ_DB_PATH) is gone entirely.
+    await setupTestDb();
     await seedFixture();
     triggerDispatchSpy = jest.spyOn(dispatchTrigger, 'triggerDispatch').mockImplementation(() => {});
     ({ server, baseUrl } = await startServer());
@@ -94,9 +85,7 @@ describe('recurring task series API', () => {
   afterEach(async () => {
     triggerDispatchSpy.mockRestore();
     await stopServer(server);
-    closeDb();
-    restoreEnv('AGENT_HQ_DB_PATH', ORIGINAL_DB_PATH);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await teardownTestDb();
   });
 
   async function createSeries(overrides: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
@@ -301,7 +290,10 @@ describe('recurring task series API', () => {
       url: `/tasks/${body.task.id}`,
     });
     expect(triggerDispatchSpy).toHaveBeenCalledWith(614);
-    expect(await getDb().get(`SELECT COUNT(*) AS count FROM job_instances`)).toEqual({ count: 0 });
+    // COUNT(*) is a bigint on PostgreSQL and arrives as a string; SQLite returns a number. The
+    // assertion is unchanged — run-now must create no agent run at all.
+    const jobInstanceCount = await getDb().get(`SELECT COUNT(*) AS count FROM job_instances`) as { count: number | string };
+    expect(Number(jobInstanceCount.count)).toBe(0);
 
     const historyRes = await fetch(`${baseUrl}/api/v1/recurring-task-series/${series.id}/history`);
     expect(historyRes.status).toBe(200);
@@ -331,7 +323,7 @@ describe('recurring task series API', () => {
       INSERT INTO agents (id, tenant_id, name, role, session_key, workspace_path, status, preferred_provider)
       VALUES (7143, ?, 'EcoPool Agent', 'Backend Engineer', 'agent:ecopool:test', '/tmp/ecopool', 'idle', 'openai-codex')
     `, ecoPoolTenantId);
-    await db.run(`INSERT OR IGNORE INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1)`, ecoPoolTenantId);
+    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, ecoPoolTenantId);
     await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, ecoPoolTenantId);
 
     const defaultSeries = await createSeries({ title_template: 'Default weekly maintenance' });

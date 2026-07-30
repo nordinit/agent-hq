@@ -1,29 +1,67 @@
 import express from 'express';
 import type { Server } from 'http';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
-import { getAtlasAgentRecord, ATLAS_SESSION_KEY, ATLAS_SYSTEM_ROLE } from '../lib/atlasAgent';
+import { getDb } from '../db/client';
+import type { Db } from '../db/adapter/types';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
+import {
+  getAtlasAgentRecord,
+  ATLAS_AGENT_NAME,
+  ATLAS_AGENT_SLUG,
+  ATLAS_SESSION_KEY,
+  ATLAS_SYSTEM_ROLE,
+  ATLAS_WORKSPACE_PATH,
+} from '../lib/atlasAgent';
+import { DEFAULT_TENANT_NAME, DEFAULT_TENANT_SLUG } from '../lib/tenantContext';
 import setupRouter from './setup';
 
-const originalDbPath = process.env.AGENT_HQ_DB_PATH;
-let tempDir = '';
+/**
+ * The default tenant, spelled out rather than inherited from a seeding side effect.
+ *
+ * On SQLite setupTestDb() runs initSchema(), which seeds one; the PostgreSQL fixture carries DDL
+ * only and truncates between tests, so there is none. Both engines need the row to exist before an
+ * agent can reference it (agents.tenant_id is a real foreign key on PostgreSQL), hence the
+ * find-or-insert.
+ */
+async function ensureDefaultTenantId(db: Db): Promise<number> {
+  const existing = await db.get(
+    `SELECT id FROM tenants WHERE slug = ? LIMIT 1`,
+    DEFAULT_TENANT_SLUG,
+  ) as { id: number } | undefined;
+  if (existing) return Number(existing.id);
 
-async function resetDb(): Promise<void> {
-  closeDb();
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-setup-skip-'));
-  process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-  await initSchema();
+  const inserted = await db.run(
+    `INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 1)`,
+    DEFAULT_TENANT_NAME,
+    DEFAULT_TENANT_SLUG,
+  );
+  if (inserted.lastInsertId == null) throw new Error('tenant fixture insert returned no id');
+  return inserted.lastInsertId;
 }
 
-function cleanup(): void {
-  closeDb();
-  if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-  else process.env.AGENT_HQ_DB_PATH = originalDbPath;
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-  tempDir = '';
+/**
+ * The Atlas record a fresh install has, stated explicitly.
+ *
+ * The first test's subject is that /onboarding/skip leaves an already-present Atlas alone
+ * (atlas_created === false, still exactly one row), so that row is a precondition of the test, not
+ * something it may assume initSchema() left behind. Idempotent because on SQLite initSchema() has
+ * already seeded it; on PostgreSQL it has not.
+ */
+async function seedAtlasAgent(db: Db): Promise<void> {
+  const tenantId = await ensureDefaultTenantId(db);
+  if (await getAtlasAgentRecord()) return;
+  await db.run(`
+    INSERT INTO agents (tenant_id, name, role, session_key, workspace_path, status, openclaw_agent_id, system_role)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `,
+    tenantId,
+    ATLAS_AGENT_NAME,
+    'Built-in assistant — task routing, coordination, and chat',
+    ATLAS_SESSION_KEY,
+    ATLAS_WORKSPACE_PATH,
+    'idle',
+    ATLAS_AGENT_SLUG,
+    ATLAS_SYSTEM_ROLE,
+  );
 }
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -43,13 +81,20 @@ async function stopServer(server: Server): Promise<void> {
 }
 
 describe('POST /api/v1/setup/onboarding/skip', () => {
-  beforeEach(resetDb);
-  afterEach(cleanup);
+  // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
+  // SQLite and on PostgreSQL.
+  beforeEach(async () => {
+    const db = await setupTestDb();
+    await seedAtlasAgent(db);
+  });
+  afterEach(async () => {
+    await teardownTestDb();
+  });
 
   it('marks onboarding complete without a connected provider, keeping the seeded Atlas agent', async () => {
     const { server, baseUrl } = await startServer();
     try {
-      // Fresh installs seed an Atlas DB record (unprovisioned at the runtime level)
+      // An install with an Atlas DB record already present (unprovisioned at the runtime level)
       expect(await getAtlasAgentRecord()).not.toBeNull();
 
       const res = await fetch(`${baseUrl}/api/v1/setup/onboarding/skip`, { method: 'POST' });
