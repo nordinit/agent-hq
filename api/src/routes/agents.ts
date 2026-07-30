@@ -53,7 +53,13 @@ import {
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
+import { requireNumericId } from '../lib/routeParams';
+
 const router = Router();
+// Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
+// returned for a no-match. Must be per-router: app.param() does not fire for a param
+// declared on a mounted sub-router.
+router.param('id', requireNumericId);
 const MAX_AGENT_MODEL_LENGTH = 200;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

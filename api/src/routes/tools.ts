@@ -4,7 +4,13 @@ import { materializeAssignedToolForOpenClaw } from '../capability-tools/material
 import { executeToolImplementation, fetchAgentTools } from '../runtimes/toolInjection';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 
+import { requireNumericId } from '../lib/routeParams';
+
 const router = Router();
+// Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
+// returned for a no-match. Must be per-router: app.param() does not fire for a param
+// declared on a mounted sub-router.
+router.param('id', requireNumericId);
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/tools — list tools (default: enabled only, opt into ?enabled=0|1)

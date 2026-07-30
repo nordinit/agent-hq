@@ -90,7 +90,13 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB max
 
+import { requireNumericId } from '../lib/routeParams';
+
 const router = Router();
+// Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
+// returned for a no-match. Must be per-router: app.param() does not fire for a param
+// declared on a mounted sub-router.
+router.param('id', requireNumericId);
 
 async function requireTaskVisibleForTenant(db: ReturnType<typeof getDb>, taskId: number | string, tenantId: number): Promise<boolean> {
   return Boolean(await db.get(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`, taskId, tenantId));

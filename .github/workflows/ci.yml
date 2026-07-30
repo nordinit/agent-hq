@@ -13,6 +13,27 @@ jobs:
   api:
     name: API — lint, test, build
     runs-on: ubuntu-latest
+
+    # 17 to match the version production runs, so CI cannot pass on behaviour a different major
+    # changes. Identifier folding, numeric widening in SUM()/AVG() and ON CONFLICT arbitration —
+    # the three things that have already bitten this migration — are all version-sensitive.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agent_hq_ci
+        ports:
+          - 5432:5432
+        # Without a health check the test step starts before the server accepts connections and
+        # fails with ECONNREFUSED rather than a real result.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +54,21 @@ jobs:
       - name: Test
         working-directory: api
         run: npm test
+
+      # The suite above runs entirely on SQLite, so a PostgreSQL-only defect passes it. That is
+      # not hypothetical: unquoted camelCase SQL aliases fold to lower case on PostgreSQL, which
+      # silently turned every id in an MCP authorization scope set into NaN and denied every agent
+      # lifecycle callbacks on its own run. The query succeeded, the row count was right, nothing
+      # threw — only the property names differed, and it reached production.
+      #
+      # These tests are gated behind AGENT_HQ_TEST_PG_URL and skip without it, which is why the
+      # full run reports one skipped suite. They need no schema preparation: verified locally
+      # against an empty database, 12 tests in 0.25s.
+      - name: Test (PostgreSQL dialect and adapter)
+        working-directory: api
+        run: npx jest src/db/adapter/adapter.postgres.test.ts
+        env:
+          AGENT_HQ_TEST_PG_URL: postgresql://postgres:postgres@localhost:5432/agent_hq_ci
 
       - name: Build
         working-directory: api

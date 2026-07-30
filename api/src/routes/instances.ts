@@ -7,7 +7,13 @@ import { resolveTranscriptProvider } from '../domains/runs/transcriptProvider';
 import { resolveInstanceSessionKey } from '../domains/runs/sessionKey';
 import { ensureCanonicalSessionForInstance } from '../lib/canonicalSessions';
 
+import { requireNumericId } from '../lib/routeParams';
+
 const router = Router();
+// Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
+// returned for a no-match. Must be per-router: app.param() does not fire for a param
+// declared on a mounted sub-router.
+router.param('id', requireNumericId);
 
 function readPositiveInteger(value: unknown, fallback: number, max: number): number {
   const parsed = Number(value ?? fallback);

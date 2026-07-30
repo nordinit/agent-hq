@@ -56,6 +56,29 @@ export function runDbContractTests(harness: ContractHarness): void {
       expect(await db.get(`SELECT name FROM parents WHERE id = ?`, 999)).toBeUndefined();
     });
 
+    it('returns a mixed-case column alias under the case it was written in', async () => {
+      // The regression that motivated this assertion, and the reason it belongs in the SHARED
+      // contract rather than in the PostgreSQL-only suite: PostgreSQL folds unquoted identifiers
+      // to lower case, so `AS instanceId` came back as `instanceid`, `row.instanceId` read
+      // undefined, and Number(undefined) was NaN. That silently turned every id in an MCP
+      // authorization scope set into NaN and denied every agent lifecycle callbacks on its own
+      // run. SQLite preserves the case, so the same code was correct there — which is exactly why
+      // a SQLite-only suite could not catch it, and why this must run on both engines.
+      //
+      // The alias is deliberately left unquoted here: translateToPostgres() is responsible for
+      // quoting it, so writing `AS "parentName"` would assert nothing.
+      await db.run(`INSERT INTO parents (name) VALUES (?)`, 'alpha');
+
+      const row = await db.get<{ parentName?: string }>(`SELECT name AS parentName FROM parents WHERE id = ?`, 1);
+      expect(row?.parentName).toBe('alpha');
+      expect(Object.keys(row ?? {})).toEqual(['parentName']);
+
+      // A value read through the alias must survive Number() the way an id has to.
+      const idRow = await db.get<{ parentId?: number }>(`SELECT id AS parentId FROM parents WHERE id = ?`, 1);
+      expect(Number(idRow?.parentId)).toBe(1);
+      expect(Number.isNaN(Number(idRow?.parentId))).toBe(false);
+    });
+
     it('reports lastInsertId as null for statements that are not inserts', async () => {
       await db.run(`INSERT INTO parents (name) VALUES (?)`, 'alpha');
       const updated = await db.run(`UPDATE parents SET name = ? WHERE id = ?`, 'renamed', 1);

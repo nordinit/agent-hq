@@ -19,7 +19,13 @@ import {
   validateProjectManifest,
 } from '../lib/projectPortability';
 
+import { requireNumericId } from '../lib/routeParams';
+
 const router = Router();
+// Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
+// returned for a no-match. Must be per-router: app.param() does not fire for a param
+// declared on a mounted sub-router.
+router.param('id', requireNumericId);
 const PROJECT_REPO_FIELDS = ['repo_path', 'repo_url', 'repo_access_mode'] as const;
 const PROJECT_REPO_FIELDS_ERROR = 'Project-level repository configuration is deprecated. Configure repository access on the workflow instead.';
 
