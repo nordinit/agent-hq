@@ -1,4 +1,4 @@
-import { RELEASE_TASK_STATUSES, TERMINAL_TASK_STATUSES } from '../../../lib/taskStatuses';
+import { RELEASE_TASK_STATUSES, DEFAULT_TERMINAL_TASK_STATUS_SEEDS } from '../../../lib/taskStatuses';
 import type { PolicyRequirementSeed, PolicyTransitionSeed, SprintSeedRow, StarterSprintType } from './types';
 import { type Db } from "../../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../../db/introspection";
@@ -99,13 +99,15 @@ export async function ensureRoutingMetadata(db: Db): Promise<void> {
 
   await db.withTransaction(async (db) => {
     for (const status of statuses) {
+      // `terminal` is deliberately absent from the DO UPDATE list: it is operator
+      // configuration, so the seeded value applies only when the row is first
+      // created. Re-adding it here would reset every customisation on restart.
       await db.run(`
         INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
           label = excluded.label,
           color = excluded.color,
-          terminal = excluded.terminal,
           is_system = excluded.is_system,
           allowed_transitions = excluded.allowed_transitions
       `, status.name, status.label, status.color, status.terminal, status.is_system, JSON.stringify(status.allowed_transitions));
@@ -211,7 +213,9 @@ export function buildCanonicalPolicyStatuses(sprintType: string | null | undefin
     name: status,
     label: labelFromKey(status),
     color: colorForStatus(status),
-    terminal: TERMINAL_TASK_STATUSES.includes(status as typeof TERMINAL_TASK_STATUSES[number]) ? 1 : 0,
+    // Seed value only: written when the status row is first created, after
+    // which task_statuses.terminal is the operator's to change.
+    terminal: DEFAULT_TERMINAL_TASK_STATUS_SEEDS.includes(status as typeof DEFAULT_TERMINAL_TASK_STATUS_SEEDS[number]) ? 1 : 0,
     is_system: 1,
     allowed_transitions: JSON.stringify([...(allowedByStatus.get(status) ?? new Set<string>())]),
     emoji: canonicalTaskStatusEmoji(status),

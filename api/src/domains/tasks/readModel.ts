@@ -1,6 +1,6 @@
 import { getDb } from '../../db/client';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
-import { TERMINAL_TASK_STATUSES } from '../../lib/taskStatuses';
+import { listConfiguredTerminalStatuses } from './terminality';
 import { parseCustomFields, resolveTaskFieldSchema } from './fields';
 import { getCanonicalTaskCustomFields, getCanonicalTaskRecord, stripTaskLifecycleEvidenceFields } from './evidence';
 import { getTaskRelationshipsForEnrichment } from './relationships';
@@ -395,8 +395,11 @@ export async function searchProjectTasks(
     params.push(...statuses);
   }
   if (parseBooleanFlag(input.active_only) || parseBooleanFlag(input.nonterminal_only)) {
-    conditions.push(`(t.status IS NULL OR t.status NOT IN (${TERMINAL_TASK_STATUSES.map(() => '?').join(',')}))`);
-    params.push(...TERMINAL_TASK_STATUSES);
+    const terminalStatuses = await listConfiguredTerminalStatuses(db, { sprintId, tenantId });
+    if (terminalStatuses.length > 0) {
+      conditions.push(`(t.status IS NULL OR t.status NOT IN (${terminalStatuses.map(() => '?').join(',')}))`);
+      params.push(...terminalStatuses);
+    }
   }
   if (taskType) {
     conditions.push('t.task_type = ?');

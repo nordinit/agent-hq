@@ -254,10 +254,13 @@ describe('reconciler workflow-defined status routing', () => {
     await db.close();
   });
 
-  it('keeps configured terminal and legacy fallback terminal statuses out of ownership reconciliation', async () => {
+  it('keeps configured terminal statuses out of ownership reconciliation', async () => {
     const db = await setupDb();
+    // Terminality is configuration only — there is no hardcoded fallback, so
+    // every terminal status this asserts on must be configured explicitly.
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('done', 'Done', 1)`);
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('cancelled', 'Cancelled', 1)`);
+    await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
     await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES

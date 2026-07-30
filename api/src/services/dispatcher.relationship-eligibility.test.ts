@@ -413,11 +413,14 @@ describe('dispatcher relationship-driven eligibility', () => {
     await db.close();
   });
 
-  it('keeps globally configured terminal statuses and legacy terminal fallback non-dispatchable', async () => {
+  it('keeps globally configured terminal statuses non-dispatchable', async () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
+    // Terminality is configuration only — there is no hardcoded fallback, so
+    // every terminal status this asserts on must be configured explicitly.
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('done', 'Done', 1)`);
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('cancelled', 'Cancelled', 1)`);
+    await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
     await db.run(`
       INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
       VALUES
@@ -490,6 +493,73 @@ describe('dispatcher relationship-driven eligibility', () => {
     expect(task.status).toBe('ready');
     expect(task.active_instance_id).toBeGreaterThan(0);
     await new Promise(resolve => setImmediate(resolve));
+    await db.close();
+  });
+
+  // A relationship type whose resolved_statuses_json omits terminal statuses used
+  // to strand the blocked task forever: it could not dispatch, so it could never
+  // post the outcome that would clear the blocker.
+  async function insertNarrowBlockerType(db: Db): Promise<void> {
+    await db.run(`
+      INSERT INTO sprint_type_relationship_types (sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility, direction_semantics, resolved_statuses_json)
+      VALUES ('dev', 'narrow_blocked_by', 'Blocked by', 'Blocks', 'dependency', 1, 'target_blocks_source', '["done"]')
+    `);
+    // Terminality comes from configuration, so state it explicitly rather than
+    // relying on the status name.
+    await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('cancelled', 'Cancelled', 1)`);
+    await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
+  }
+
+  it('releases a blocked task when its blocker is cancelled despite a narrow resolved_statuses_json', async () => {
+    const db = await setupDb();
+    const { runDispatcher } = await import('./dispatcher');
+    await insertNarrowBlockerType(db);
+    await insertTask(db, 530, 'ready');
+    await insertTask(db, 567, 'cancelled', 'frontend');
+    await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'narrow_blocked_by')`);
+
+    const result = await runDispatcher(db, 86);
+
+    expect(result.dispatched).toBe(1);
+    const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 530`) as { active_instance_id: number | null };
+    expect(task.active_instance_id).toBeGreaterThan(0);
+    await new Promise(resolve => setImmediate(resolve));
+    await db.close();
+  });
+
+  it('releases a blocked task when its blocker failed despite a narrow resolved_statuses_json', async () => {
+    const db = await setupDb();
+    const { runDispatcher } = await import('./dispatcher');
+    await insertNarrowBlockerType(db);
+    await insertTask(db, 530, 'ready');
+    await insertTask(db, 567, 'failed', 'frontend');
+    await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'narrow_blocked_by')`);
+
+    const result = await runDispatcher(db, 86);
+
+    expect(result.dispatched).toBe(1);
+    const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 530`) as { active_instance_id: number | null };
+    expect(task.active_instance_id).toBeGreaterThan(0);
+    await new Promise(resolve => setImmediate(resolve));
+    await db.close();
+  });
+
+  it('keeps blocking when the workflow marks the blocker status non-terminal', async () => {
+    const db = await setupDb();
+    const { runDispatcher } = await import('./dispatcher');
+    await insertNarrowBlockerType(db);
+    // This workflow treats `failed` as retryable, so the blocker can still
+    // progress and must keep blocking.
+    await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
+    await insertTask(db, 530, 'ready');
+    await insertTask(db, 567, 'failed', 'frontend');
+    await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'narrow_blocked_by')`);
+
+    const result = await runDispatcher(db, 86);
+
+    expect(result.dispatched).toBe(0);
+    const task = await db.get(`SELECT active_instance_id FROM tasks WHERE id = 530`) as { active_instance_id: number | null };
+    expect(task.active_instance_id).toBeNull();
     await db.close();
   });
 });

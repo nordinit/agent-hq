@@ -5,7 +5,8 @@ import {
   recordRecurringTaskRun,
 } from '../domains/recurring-tasks';
 import type { RecurringTaskRunRecord, RecurringTaskSeriesRecord } from '../domains/recurring-tasks';
-import { isTaskStatus, TERMINAL_TASK_STATUSES } from '../lib/taskStatuses';
+import { isTaskStatus } from '../lib/taskStatuses';
+import { listConfiguredTerminalStatuses } from '../domains/tasks/terminality';
 import { isValidTaskType } from '../lib/taskTypes';
 import { isTaskTypeAllowedForSprintType } from '../domains/sprint-definitions/config';
 import { listSprintTaskStatuses } from '../domains/routing/policy/statuses';
@@ -167,18 +168,16 @@ async function loadSprint(db: Db, sprintId: number): Promise<SprintRow | null> {
 }
 
 async function activeGeneratedTaskId(db: Db, series: RecurringTaskSeriesRecord): Promise<number | null> {
-  const statuses = await listSprintTaskStatuses(db, series.sprint_id);
-  const configuredTerminalStatuses = statuses.filter(status => status.terminal).map(status => status.name);
-  const terminalStatuses = configuredTerminalStatuses.length > 0
-    ? configuredTerminalStatuses
-    : [...TERMINAL_TASK_STATUSES];
-  const placeholders = terminalStatuses.map(() => '?').join(', ');
+  const terminalStatuses = await listConfiguredTerminalStatuses(db, { sprintId: series.sprint_id });
+  const exclusion = terminalStatuses.length > 0
+    ? `AND status NOT IN (${terminalStatuses.map(() => '?').join(', ')})`
+    : '';
   const row = await db.get(`
     SELECT id
     FROM tasks
     WHERE recurring_series_id = ?
       AND generated_from = ?
-      AND status NOT IN (${placeholders})
+      ${exclusion}
     ORDER BY created_at ASC, id ASC
     LIMIT 1
   `, series.id, RECURRING_GENERATED_FROM, ...terminalStatuses) as { id: number } | undefined;

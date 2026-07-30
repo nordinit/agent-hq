@@ -32,7 +32,7 @@ import { getAgentHqBaseUrl } from '../lib/agentHqBaseUrl';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn as durableTableHasColumn } from '../lib/durableRunIdentity';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from '../lib/runtimeTenantScope';
-import { TASK_STATUSES, TERMINAL_TASK_STATUSES } from '../lib/taskStatuses';
+import { TASK_STATUSES, DEFAULT_TERMINAL_TASK_STATUS_SEEDS } from '../lib/taskStatuses';
 import { AGENT_HQ_DISPATCHER_SOURCE, DISPATCH_STARTUP_FAILED_EVENT, resolveWorkflowEventMapping } from '../domains/routing/externalEventMappings';
 import type { AgentRuntime, DispatchParams } from '../runtimes/types';
 import type { CandidateTask } from './dispatch/types';
@@ -657,9 +657,14 @@ function parseStatusList(raw: unknown): string[] {
   }
 }
 
+/**
+ * Extra statuses a relationship type treats as resolved, beyond terminality.
+ * Terminal blockers are released by configured terminality in
+ * getRelationshipDispatchEligibility, so an empty list here simply means
+ * "nothing beyond terminal" rather than implying a hardcoded default.
+ */
 function relationshipResolvedStatuses(raw: unknown): string[] {
-  const configured = parseStatusList(raw);
-  return configured.length > 0 ? configured : [...TERMINAL_TASK_STATUSES];
+  return parseStatusList(raw);
 }
 
 async function isRelationshipModelAvailable(db: Db): Promise<boolean> {
@@ -672,8 +677,23 @@ async function isRelationshipModelAvailable(db: Db): Promise<boolean> {
 async function getRelationshipDispatchEligibility(db: Db, projectId?: number | null): Promise<RelationshipDispatchEligibility | null> {
   if (!await isRelationshipModelAvailable(db)) return null;
 
+  // A blocker that has reached a terminal status in its own workflow can never
+  // progress again, so it must stop blocking no matter how the relationship type
+  // configured resolved_statuses_json. Without this, a narrow list such as
+  // ["done"] leaves the blocked task permanently undispatchable once its blocker
+  // is cancelled or failed — with no dispatch, it can never post an outcome to
+  // escape. Terminality is workflow-configurable (a workflow may deliberately
+  // treat `failed` as retryable), so resolve it exactly the way dispatch
+  // eligibility does instead of assuming the global terminal set.
+  const sourceTerminality = await buildResolvedTaskTerminalityExpression(db, 'source', 'source_sprint');
+  const targetTerminality = await buildResolvedTaskTerminalityExpression(db, 'target', 'target_sprint');
+
   const projectFilter = projectId == null ? '' : 'AND (source.project_id = ? OR target.project_id = ?)';
-  const params = projectId == null ? [] : [projectId, projectId];
+  const params = [
+    ...sourceTerminality.params,
+    ...targetTerminality.params,
+    ...(projectId == null ? [] : [projectId, projectId]),
+  ];
   const rows = await db.all(`
     SELECT tr.id,
            tr.source_task_id,
@@ -689,11 +709,14 @@ async function getRelationshipDispatchEligibility(db: Db, projectId?: number | n
            rt.label,
            rt.inverse_label,
            rt.direction_semantics,
-           rt.resolved_statuses_json
+           rt.resolved_statuses_json,
+           (${sourceTerminality.sql}) AS source_is_terminal,
+           (${targetTerminality.sql}) AS target_is_terminal
     FROM task_relationships tr
     JOIN tasks source ON source.id = tr.source_task_id
     JOIN tasks target ON target.id = tr.target_task_id
     LEFT JOIN sprints source_sprint ON source_sprint.id = source.sprint_id
+    LEFT JOIN sprints target_sprint ON target_sprint.id = target.sprint_id
     JOIN sprint_type_relationship_types rt
       ON rt.key = tr.relationship_type_key
      AND rt.sprint_type_key IN (COALESCE(source_sprint.sprint_type, 'generic'), 'generic')
@@ -722,12 +745,15 @@ async function getRelationshipDispatchEligibility(db: Db, projectId?: number | n
     const blockerStatus = direction === 'target_blocks_source' ? String(row.target_status) : String(row.source_status);
     const blockerTitle = direction === 'target_blocks_source' ? String(row.target_title ?? '') : String(row.source_title ?? '');
     const resolvedStatuses = relationshipResolvedStatuses(row.resolved_statuses_json);
+    const blockerIsTerminal = direction === 'target_blocks_source'
+      ? Number(row.target_is_terminal) === 1
+      : Number(row.source_is_terminal) === 1;
 
     if (!resolvedStatuses.includes(blockedStatus)) {
       blockingCountByTaskId.set(blockerTaskId, (blockingCountByTaskId.get(blockerTaskId) ?? 0) + 1);
     }
 
-    if (resolvedStatuses.includes(blockerStatus)) continue;
+    if (resolvedStatuses.includes(blockerStatus) || blockerIsTerminal) continue;
     const reasons = blockedByTaskId.get(blockedTaskId) ?? [];
     reasons.push({
       relationshipTypeKey: String(row.relationship_type_key),
@@ -802,8 +828,13 @@ function buildDispatchRuntimeConfig(
   };
 }
 
+/**
+ * Static convenience list built from seed defaults. It is not the terminality
+ * authority — dispatch eligibility resolves that from configuration via
+ * buildResolvedTaskTerminalityExpression.
+ */
 export const DISPATCHABLE_ROUTED_STATUSES = TASK_STATUSES.filter(
-  (status): status is typeof TASK_STATUSES[number] => !(TERMINAL_TASK_STATUSES as readonly string[]).includes(status),
+  (status): status is typeof TASK_STATUSES[number] => !(DEFAULT_TERMINAL_TASK_STATUS_SEEDS as readonly string[]).includes(status),
 );
 
 async function buildResolvedTaskTerminalityExpression(
@@ -885,9 +916,11 @@ async function buildResolvedTaskTerminalityExpression(
     `);
   }
 
-  const fallbackPlaceholders = TERMINAL_TASK_STATUSES.map(() => '?').join(', ');
-  params.push(...TERMINAL_TASK_STATUSES);
-  sources.push(`CASE WHEN ${taskAlias}.status IN (${fallbackPlaceholders}) THEN 1 ELSE 0 END`);
+  // No hardcoded status list terminates this cascade. Terminality is operator
+  // configuration (see domains/tasks/terminality.ts); a status nobody has
+  // configured is non-terminal, so unknown work stays visible and dispatchable
+  // instead of silently vanishing.
+  sources.push('0');
 
   if (sources.length === 1) {
     return { sql: sources[0], params };
