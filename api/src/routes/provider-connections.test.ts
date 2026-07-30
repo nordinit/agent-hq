@@ -3,11 +3,10 @@ import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import router from './provider-connections';
 
-const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 let tempDir = '';
 
@@ -25,11 +24,12 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
 
 describe('runtime-owned provider connections', () => {
   beforeEach(async () => {
-    closeDb();
+    // setupTestDb() selects the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
+    // SQLite and on PostgreSQL. tempDir is still needed for OPENCLAW_STATE_DIR, which is
+    // filesystem state unrelated to the database.
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-provider-connections-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, 'openclaw');
-    await initSchema();
+    await setupTestDb();
     const authPath = path.join(process.env.OPENCLAW_STATE_DIR, 'agents', 'builder', 'agent', 'auth-profiles.json');
     fs.mkdirSync(path.dirname(authPath), { recursive: true });
     fs.writeFileSync(authPath, JSON.stringify({
@@ -37,10 +37,8 @@ describe('runtime-owned provider connections', () => {
     }));
   });
 
-  afterEach(() => {
-    closeDb();
-    if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-    else process.env.AGENT_HQ_DB_PATH = originalDbPath;
+  afterEach(async () => {
+    await teardownTestDb();
     if (originalOpenClawStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
     else process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
     fs.rmSync(tempDir, { recursive: true, force: true });

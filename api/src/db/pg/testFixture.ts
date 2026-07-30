@@ -98,6 +98,19 @@ function workerDatabaseName(): string {
 }
 
 /**
+ * The connection URL for this worker's database.
+ *
+ * Exported so a test harness can put it in DATABASE_URL. That matters because the code under
+ * test calls db/client.ts's own getDb() rather than receiving a handle, and getDb() selects the
+ * engine from DATABASE_URL — so setting it is what makes the application itself run on
+ * PostgreSQL, with no module mocking. Only valid after getTestDb() has run.
+ */
+export function workerDatabaseUrl(): string {
+  if (!workerDb) throw new Error('workerDatabaseUrl() called before getTestDb()');
+  return urlFor(workerDb);
+}
+
+/**
  * Returns this worker's database, creating it from the template on first use.
  */
 export async function getTestDb(): Promise<Db> {
