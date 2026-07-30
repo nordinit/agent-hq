@@ -814,6 +814,12 @@ export async function cleanupTaskExecutionLinkageForStatus(
       AND active_instance_id IS NOT NULL
   `, taskId);
 
+  if (result.changes > 0) {
+    // Recorded whether or not the orphaned instance row still exists: the link was removed
+    // either way, and that removal is what a later refused lifecycle write hinges on.
+    await writeTaskHistory(db, taskId, 'task_lifecycle', 'active_instance_id', orphanedInstanceId, null);
+  }
+
   if (result.changes > 0 && orphanedInstance) {
     const { session_key: sessionKey, status: instanceStatus } = orphanedInstance;
 
@@ -884,6 +890,11 @@ export async function cleanupImpossibleTaskLifecycleStates(db: Db): Promise<numb
       WHERE id = ?
         AND active_instance_id = ?
     `, row.id, row.active_instance_id);
+    if (result.changes > 0) {
+      // This sweep detaches links in bulk from a background pass, which makes it the easiest
+      // place for a link to vanish with nothing to attribute it to.
+      await writeTaskHistory(db, row.id, 'lifecycle_cleanup', 'active_instance_id', row.active_instance_id, null);
+    }
     cleared += result.changes;
   }
 

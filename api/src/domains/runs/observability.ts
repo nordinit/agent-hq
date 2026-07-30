@@ -1,6 +1,7 @@
 import { cleanupImpossibleTaskLifecycleStates } from '../../lib/taskLifecycle';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
+import { writeTaskHistory } from '../tasks/history';
 import { nowTimestamp } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
 import { columnExists as sharedColumnExists } from "../../db/introspection";
@@ -111,12 +112,35 @@ export async function attachInstanceToTask(db: Db, instanceId: number, taskId: n
   await db.run(`UPDATE job_instances SET task_id = ? WHERE id = ?`, taskId, instanceId);
 
   if (taskId) {
+    // The previous value is read first purely so the transition can be recorded. Five of the
+    // eight places that write tasks.active_instance_id used to do so silently, this one included
+    // — which is how a task could end up with a run attached, detached and reattached without a
+    // single task_history row to show it. That link is the thing MCP lifecycle authorization
+    // arbitrates on (see getScopedInstanceContexts), so when an agent is refused for not owning
+    // "the active dispatched instance" the history is the only way to reconstruct what the link
+    // actually was at that moment. Without it the refusal is undiagnosable after the fact.
+    const previous = await db.get(
+      `SELECT active_instance_id FROM tasks WHERE id = ?`,
+      taskId,
+    ) as { active_instance_id: number | null } | undefined;
+
     await db.run(`
       UPDATE tasks
       SET active_instance_id = ?, updated_at = datetime('now')
       WHERE id = ?
     `, instanceId, taskId);
     await syncTaskActiveAgentFromInstance(db, taskId);
+
+    if (previous?.active_instance_id !== instanceId) {
+      await writeTaskHistory(
+        db,
+        taskId,
+        'instance_attach',
+        'active_instance_id',
+        previous?.active_instance_id ?? null,
+        instanceId,
+      );
+    }
   }
 }
 

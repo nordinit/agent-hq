@@ -2018,6 +2018,20 @@ export async function dispatchTaskToJob(
     WHERE id = ?
   `, nextTaskStatus, ...assignedAgentValues, job.agent_id, instanceId, ...routingReasonValues, task.id);
   await syncTaskActiveAgentFromInstance(db, task.id);
+  // Dispatch is where the run/task link is CREATED, which makes it the single most important
+  // active_instance_id transition to record — and it was the one place that recorded nothing. The
+  // UPDATE above sets the column and only a status change was ever written to history, so a task
+  // could show a run attached with no history row explaining when or by what. That is why the
+  // production denial on task 1036 could not be reconstructed: the link was here all along, set
+  // silently at 03:36:18.
+  await writeTaskHistory(
+    db,
+    task.id,
+    'dispatcher',
+    'active_instance_id',
+    task.active_instance_id ?? null,
+    instanceId,
+  );
 
   if (nextTaskStatus !== task.status) {
     await writeTaskStatusChange(db, task.id, 'dispatcher', task.status, nextTaskStatus, {

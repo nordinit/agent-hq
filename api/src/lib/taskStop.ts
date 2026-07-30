@@ -1,4 +1,5 @@
 import { stopInstanceExecution, type StopInstanceExecutionResult } from '../domains/runs/stopInstanceExecution';
+import { writeTaskHistory } from '../domains/tasks/history';
 import { type Db } from "../db/adapter/types";
 
 export interface StopTaskActiveInstanceResult {
@@ -53,6 +54,9 @@ export async function stopTaskActiveInstance(
             updated_at = datetime('now')
         WHERE id = ? AND active_instance_id = ?
       `, taskId, existing.active_instance_id);
+      // A manual stop is one of the likeliest ways the link disappears, so it is one of the
+      // most important to record — otherwise the next refused lifecycle write looks unexplained.
+      await writeTaskHistory(db, taskId, 'task_stop', 'active_instance_id', existing.active_instance_id, null);
     }
   }
 

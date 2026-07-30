@@ -10,7 +10,7 @@ import { cleanupImpossibleTaskLifecycleStates, cleanupTaskExecutionLinkageForSta
 import { runEligibilityPass, type EligibilityResult } from '../services/eligibility';
 import { buildContractInstructions, resolveTransportMode } from '../services/contracts';
 import { backfillInstanceTokensAsync } from '../domains/runs/tokenBackfill';
-import { writeTaskStatusChange } from '../domains/tasks/history';
+import { writeTaskHistory, writeTaskStatusChange } from '../domains/tasks/history';
 import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOutcome } from '../domains/runs/lifecycleHandoff';
 import { getNeedsAttentionEligibleStatuses } from '../lib/reconcilerConfig';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
@@ -519,6 +519,10 @@ export async function reconcileReviewQaRouting(
         await db.run(`
           UPDATE tasks SET active_instance_id = NULL, updated_at = datetime('now') WHERE id = ?
         `, task.id);
+        // Recorded so the detach is visible. An agent refused for not owning "the active
+        // dispatched instance" is refused precisely because this link is gone, and without a
+        // history row there is nothing to show it was ever here or who removed it.
+        await writeTaskHistory(db, task.id, 'reconciler', 'active_instance_id', instanceId, null);
       }
     }
   }

@@ -517,6 +517,30 @@ function rewriteRoundCalls(sql: string): string {
 }
 
 /**
+ * `AS instanceId` -> `AS "instanceId"`.
+ *
+ * PostgreSQL folds unquoted identifiers to lower case, so a camelCase alias comes back as
+ * `instanceid` and any caller reading `row.instanceId` gets undefined. SQLite preserves the case,
+ * which is why this breaks only after the engine swap — and it breaks silently: the query
+ * succeeds, the row count is right, and only the property names differ. In production it turned
+ * every id in an authorization scope set into NaN and denied every agent lifecycle callbacks on
+ * its own run, with nothing thrown and nothing logged.
+ *
+ * The pattern requires an alias that STARTS lower case and contains an upper-case letter. That is
+ * what keeps it away from `CAST(x AS BIGINT)` and `CAST(x AS text)`: an all-caps type name has no
+ * lower-case start, an all-lower one has no upper-case letter, and multi-word types like
+ * `double precision` are not a single identifier. Already-quoted aliases cannot match either,
+ * because the quote character is not in the identifier class.
+ */
+function quoteMixedCaseAliases(sql: string): string {
+  return replaceInCodeWith(
+    sql,
+    /\bAS\s+([a-z_][a-z0-9_]*[A-Z][A-Za-z0-9_]*)/g,
+    (match) => `AS "${match[1]}"`,
+  );
+}
+
+/**
  * Shared walker for `fn(a, b)` rewrites: finds each call to `name` in a code position, splits its
  * arguments at the top-level comma, and hands both halves to `build`.
  *
@@ -646,6 +670,7 @@ export function applySafeRewrites(sql: string): string {
   text = unwrapSingleArgDatetime(text);
   text = rewriteJsonSetCalls(text);
   text = rewriteRoundCalls(text);
+  text = quoteMixedCaseAliases(text);
   text = rewriteInsertOrIgnore(text);
   for (const { pattern, replacement } of SAFE_REWRITES) {
     text = replaceInCode(text, pattern, replacement);
