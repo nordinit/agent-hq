@@ -44,7 +44,7 @@ import { normalizeSprintTaskRoutingRuleTaskTypes } from '../domains/routing/poli
 import { seedSprintTypeTaskStatuses } from '../domains/routing/policy/seed';
 import { ensureMcpApiKeyTable } from '../lib/mcpApiAuth';
 import { ensureTenantSchema, verifyTenantSchemaForStartup } from '../lib/tenantContext';
-import { beginIntentionalForeignKeyDisable, endIntentionalForeignKeyDisable } from './foreignKeyGuard';
+import { beginIntentionalForeignKeyDisable, endIntentionalForeignKeyDisable, withForeignKeysDisabled } from './foreignKeyGuard';
 import { tableHasColumn } from '../lib/durableRunIdentity';
 import { syncAllTaskActiveAgentsFromInstances } from '../domains/tasks/ownership';
 import { ensureNotificationTables } from '../lib/notifications';
@@ -665,6 +665,123 @@ function backfillWorkflowRepoConfigs(db: Database.Database): void {
 export type InitSchemaOptions = {
   tenantMode?: 'repair' | 'verify';
 };
+
+/**
+ * Repairs foreign keys left pointing at a `<table>_legacy_global` name that no longer
+ * exists, by re-targeting them at `<table>`.
+ *
+ * SQLite does not validate foreign-key TARGETS at DDL time — only at DML time, and only
+ * when enforcement is on. The tenant-ownership rebuilds renamed some global tables to
+ * `<name>_legacy_global` before replacing them, and two child tables kept the old name
+ * in their REFERENCES clause. That went unnoticed for as long as enforcement was
+ * leaking off. With enforcement restored, every INSERT and UPDATE on those children
+ * fails with `no such table: main.<name>_legacy_global`, while SELECTs still work.
+ *
+ * Detection is data-driven rather than hardcoded to the two known tables, so a future
+ * rebuild that leaks the same pattern is repaired automatically. A dangling reference
+ * is only rewritten when stripping the suffix names a table that actually exists.
+ */
+function repairDanglingLegacyGlobalReferences(db: Database.Database): void {
+  const tableNames = new Set(
+    (db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as { name: string }[])
+      .map((r) => r.name)
+  );
+
+  for (const table of tableNames) {
+    let fks: { table: string }[];
+    try {
+      fks = db.prepare(`PRAGMA foreign_key_list("${table}")`).all() as { table: string }[];
+    } catch {
+      continue;
+    }
+
+    const broken = [...new Set(fks.map((fk) => fk.table))].filter((target) => !tableNames.has(target));
+    if (broken.length === 0) continue;
+
+    const rewrites = broken
+      .map((missing) => ({ missing, replacement: missing.replace(/_legacy_global$/, '') }))
+      .filter((r) => r.replacement !== r.missing && tableNames.has(r.replacement));
+
+    if (rewrites.length !== broken.length) {
+      console.error(
+        `[schema] ${table} references missing table(s) ${broken.join(', ')} with no known ` +
+        `replacement. Writes to ${table} will fail while foreign keys are enforced.`
+      );
+      continue;
+    }
+
+    const originalDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`
+    ).get(table) as { sql?: string } | undefined)?.sql;
+    if (!originalDdl) continue;
+
+    // Refuse to drop rows: if any child points at a parent id that is absent from the
+    // replacement table, re-targeting would turn a dangling reference into real data
+    // loss. Report and leave the table alone for a human to reconcile.
+    let safe = true;
+    for (const { missing, replacement } of rewrites) {
+      for (const fk of (db.prepare(`PRAGMA foreign_key_list("${table}")`).all() as { table: string; from: string; to: string | null }[])) {
+        if (fk.table !== missing) continue;
+        const parentKey = fk.to ?? 'id';
+        const unmatched = (db.prepare(
+          `SELECT COUNT(*) AS c FROM "${table}" c
+           LEFT JOIN "${replacement}" p ON p."${parentKey}" = c."${fk.from}"
+           WHERE c."${fk.from}" IS NOT NULL AND p."${parentKey}" IS NULL`
+        ).get() as { c: number }).c;
+        if (unmatched > 0) {
+          console.error(
+            `[schema] Cannot re-target ${table}.${fk.from} from ${missing} to ${replacement}: ` +
+            `${unmatched} row(s) have no matching parent. Leaving the reference dangling.`
+          );
+          safe = false;
+        }
+      }
+    }
+    if (!safe) continue;
+
+    let rebuiltDdl = originalDdl;
+    for (const { missing, replacement } of rewrites) {
+      rebuiltDdl = rebuiltDdl.replace(
+        new RegExp(`"${missing}"|\\b${missing}\\b`, 'g'),
+        `"${replacement}"`
+      );
+    }
+    const tempName = `${table}_fkfix`;
+    const rebuiltAsTemp = rebuiltDdl.replace(
+      new RegExp(`CREATE TABLE\\s+"?${table}"?`, 'i'),
+      `CREATE TABLE "${tempName}"`
+    );
+    if (rebuiltAsTemp === rebuiltDdl) {
+      console.error(`[schema] Could not rename ${table} in its own DDL; skipping FK repair.`);
+      continue;
+    }
+
+    const columns = (db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string }[])
+      .map((c) => `"${c.name}"`)
+      .join(', ');
+    const indexDdl = (db.prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL`
+    ).all(table) as { sql: string }[]).map((r) => r.sql);
+
+    // The rebuild must run with enforcement off (dropping the original briefly breaks
+    // any reference to it) and inside a transaction so a failure leaves the table intact.
+    withForeignKeysDisabled(db, () => {
+      db.transaction(() => {
+        db.exec(`DROP TABLE IF EXISTS "${tempName}"`);
+        db.exec(rebuiltAsTemp);
+        db.exec(`INSERT INTO "${tempName}" (${columns}) SELECT ${columns} FROM "${table}"`);
+        db.exec(`DROP TABLE "${table}"`);
+        db.exec(`ALTER TABLE "${tempName}" RENAME TO "${table}"`);
+        for (const ddl of indexDdl) db.exec(ddl);
+      })();
+    });
+
+    console.log(
+      `[schema] Repaired dangling foreign key(s) on ${table}: ` +
+      rewrites.map((r) => `${r.missing} -> ${r.replacement}`).join(', ')
+    );
+  }
+}
 
 export async function initSchema(options: InitSchemaOptions = {}): Promise<void> {
   const db = getRawDb();
@@ -2304,6 +2421,8 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   } catch (_) { /* table may not exist at all */ }
 
   ensureRoutingLegacyConfigTable(db);
+
+  repairDanglingLegacyGlobalReferences(db);
 
   // Tenant-local workflow definitions use (tenant_id, key) ownership. Some legacy
   // workflow-policy tables still contain single-column REFERENCES sprint_types(key)
