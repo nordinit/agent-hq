@@ -48,6 +48,14 @@ module.exports = {
         NODE_ENV: env.NODE_ENV || 'production',
         PORT: apiPort,
         AGENT_HQ_DB_PATH: env.AGENT_HQ_DB_PATH || path.join(dataDir, 'agent-hq.db'),
+        // Selects the database engine. db/client.ts chooses PostgreSQL purely on this being
+        // present, so setting it in .env cuts over and commenting it out reverts — which is why
+        // AGENT_HQ_DB_PATH above is deliberately left set either way: it keeps the SQLite file
+        // one line away from being live again, with no config surgery under pressure.
+        //
+        // Nothing is inherited here: pm2 only forwards the keys named in this block, so a
+        // DATABASE_URL sitting in the environment or in .env has no effect until it is listed.
+        DATABASE_URL: env.DATABASE_URL,
         OPENCLAW_GATEWAY_URL: env.OPENCLAW_GATEWAY_URL,
         OPENCLAW_GATEWAY_TOKEN: env.OPENCLAW_GATEWAY_TOKEN,
         OPENCLAW_HOOKS_TOKEN: env.OPENCLAW_HOOKS_TOKEN,
