@@ -35,6 +35,37 @@ reached the DB. It confirms the layering — the *runtime* succeeded
 (`runtime_end_success = 1`) and the *workflow* layer independently flagged the
 missing outcome.
 
+#### Real-MCP round trip
+
+The scenarios above used a stand-in MCP server, so they proved the runtime but
+not the lifecycle write. Repeated with the **real** `api/dist/mcp/server.js`
+pointed at an isolated Agent HQ API on `:3599` backed by the throwaway SQLite
+database (production has 7 projects, the test API had 0 — different databases,
+verified before the run):
+
+- MCP preflight connected to the real server and enumerated **376 tools** (186 ms).
+- The agent called `mcp__agent-hq__agent-42__agent_hq_start_task_run`.
+- The REST handler wrote through to the database: `job_instances.started_at`,
+  and an `instance_artifacts` row carrying
+  `session_key = claude-code:c6cbc777-…` — the UUID Agent HQ minted *before*
+  spawn, propagated the whole way through CLI → MCP server → REST → DB.
+- `runtime_end_success = 1`; the agent's transcript contains the genuine API
+  response `{"ok":true,"data":{"ok":true,"id":7100,"durable_run_id":"drun_real_1",…}}`.
+
+So the full chain is proven: **Claude Code CLI → real Agent HQ MCP server → real
+REST API → real DB write.**
+
+A second dispatch of the same agent left `mcp_api_keys` at **one** row, which is
+the per-agent state dir carry-forward (deviation 2) working — without it that
+count would grow by one per dispatch, forever.
+
+Caveat worth keeping: invoking the server as `/usr/bin/env node …` rather than
+the node binary directly was necessary because `resolveAgentHqServerRuntimePaths`
+rewrites a `node` + `*/mcp/server.js` pair against `__dirname`, which resolves to
+`src/` when the API runs from source. Production runs from `dist/`, so this only
+bites development-from-source — the same pre-existing limitation noted under
+"Known gaps" for the tool shim.
+
 ### Deviations from the original plan, and why
 
 1. **MCP materialization happens inside the runtime, not in the dispatcher.**
