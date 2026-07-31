@@ -1,6 +1,6 @@
 # Claude Code Runtime v2 — Design Plan
 
-Status: **Phases 0–2 implemented** (branch `claude-code-runtime-v2`); Phase 3 open; Phase 4 deferred
+Status: **Phases 0–2 implemented, Phase 3 stage A implemented** (branch `claude-code-runtime-v2`); Phase 3 stage B and Phase 4 open
 
 ## Implementation status
 
@@ -9,10 +9,10 @@ Status: **Phases 0–2 implemented** (branch `claude-code-runtime-v2`); Phase 3 
 | 0 — verification spike (#534) | **done** | §6 Phase 0 below, all findings empirical against CLI 2.1.220 |
 | 1 — CLI runtime with lifecycle parity (#537) | **done** | `api/src/runtimes/claudeCode/` |
 | 2 — MCP materialization + readiness gate (#539) | **done** | `claudeCode/mcpConfig.ts`, `api/src/bin/agent-tool-mcp.ts` |
-| 3 — unified transcript ingestion (#538) | **not started** | see §6 Phase 3 |
+| 3 — unified transcript ingestion (#538) | **stage A done** — shared normalizer + live claude-code streaming; Hermes/OpenClaw not migrated | `api/src/runtimes/transcript/`, `claudeCode/transcript.ts` |
 | 4 — resume + prompt bundle | deferred by design | gated on sprint 111 #903 |
 
-`1360 tests pass, tsc --noEmit clean, npm run build clean.`
+`1395 tests pass, tsc --noEmit clean.`
 
 ### End-to-end verification
 
@@ -108,9 +108,16 @@ bites development-from-source — the same pre-existing limitation noted under
 
 ### Known gaps
 
-- **Live transcript streaming is Phase 3.** The runtime currently persists the
-  prompt, the final assistant text, and the `turn_end` row — Hermes parity. Events
-  are already parsed incrementally, so the normalizer has a seam to plug into.
+- **Phase 3 is half done.** claude-code now streams a full transcript live
+  (prompt, thinking, tool calls, tool results, answer, turn_end) through the
+  shared normalizer. Hermes and OpenClaw still use their own writers — migrating
+  them is stage B and carries the real regression risk, since Hermes' positional
+  ids plus a switch from `DO NOTHING` to `DO UPDATE` changes behaviour on
+  re-ingest.
+- **Existing transcripts are not retroactively repaired.**
+  `ensureCanonicalSessionForInstance` early-returns when `session_messages`
+  already has rows, so shipping the normalizer does not fix past sessions; that
+  needs an explicit backfill through the force path.
 - **The tool shim only materializes from a built `dist/`.** Its path is resolved
   from `__dirname`; running the API from source via `tsx` resolves to a `.js` that
   was never emitted, and the `existsSync` guard degrades to "no registry tools".

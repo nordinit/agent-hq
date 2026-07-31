@@ -54,6 +54,8 @@ import { normalizeClaudeCodeRuntimeConfig } from './config';
 import { buildClaudeArgs } from './args';
 import { classifyClaudeRun } from './errors';
 import { ClaudeStreamAccumulator, NdjsonDecoder } from './streamJson';
+import { decodeClaudeStreamEvent, promptTranscriptEvent } from './transcript';
+import { RuntimeTranscriptWriter } from '../transcript/writer';
 import {
   materializeClaudeCodeMcpConfig,
   readPreviousRunServers,
@@ -163,9 +165,26 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     const decoder = new NdjsonDecoder();
     let stderr = '';
 
+    // Live transcript. Rows are written as events arrive rather than at exit, so
+    // a long run is observable while it is still running instead of appearing
+    // silent until it finishes.
+    const transcript =
+      db && instanceId != null && agentId != null
+        ? new RuntimeTranscriptWriter({
+            db,
+            agentId,
+            instanceId,
+            idPrefix: 'claude-code',
+            sessionKey: `${CLAUDE_CODE_SESSION_KEY_PREFIX}${sessionId}`,
+            durableRunId: params.durableRunId ?? null,
+          })
+        : null;
+    transcript?.enqueue([promptTranscriptEvent(params.message)]);
+
     child.stdout.on('data', (chunk: string) => {
       for (const event of decoder.push(chunk)) {
         accumulator.observe(event);
+        transcript?.enqueue(decodeClaudeStreamEvent(event));
       }
     });
     child.stderr.on('data', (chunk: string) => {
@@ -206,6 +225,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       exited,
       accumulator,
       decoder,
+      transcript,
       getStderr: () => stderr,
       isMcpReady: () => true,
       mcp,
@@ -282,12 +302,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     exited: Promise<ProcessExitResult>;
     accumulator: ClaudeStreamAccumulator;
     decoder: NdjsonDecoder;
+    transcript: RuntimeTranscriptWriter | null;
     getStderr: () => string;
     isMcpReady: () => boolean;
     mcp: ClaudeMcpMaterialization;
     timeoutTimer: ReturnType<typeof setTimeout> | null;
   }): Promise<void> {
-    const { params, runId, db, state, exited, accumulator, decoder, mcp } = args;
+    const { params, runId, db, state, exited, accumulator, decoder, transcript, mcp } = args;
     const instanceId = params.instanceId ?? null;
     let runtimeEndEvent: RuntimeEndEvent | null = null;
 
@@ -298,7 +319,11 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       if (args.timeoutTimer) clearTimeout(args.timeoutTimer);
 
       // A process can exit without a trailing newline; drain the partial line.
-      for (const event of decoder.flush()) accumulator.observe(event);
+      for (const event of decoder.flush()) {
+        accumulator.observe(event);
+        transcript?.enqueue(decodeClaudeStreamEvent(event));
+      }
+      const transcriptResult = await transcript?.drain();
 
       const classification = classifyClaudeRun({
         accumulator,
@@ -312,7 +337,12 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         timeoutSeconds: params.timeoutSeconds,
       });
 
-      await this.persistAssistantMessage(db, instanceId, accumulator.finalText);
+      // Mirrors Hermes: only persist a single flattened answer when the richer
+      // streamed rows are absent, so a healthy run does not store its final text
+      // twice under two different ids.
+      if (!transcriptResult || transcriptResult.written === 0) {
+        await this.persistAssistantMessage(db, instanceId, accumulator.finalText);
+      }
       await this.persistTokenUsageFallback(db, instanceId, accumulator);
 
       const success = classification.family === 'none' && !state.aborted;
@@ -356,6 +386,8 @@ export class ClaudeCodeRuntime implements AgentRuntime {
             accumulator.confirmedMcpServer(name),
           ),
           malformed_stdout_lines: decoder.malformedLines.length,
+          transcript_rows_written: transcriptResult?.written ?? 0,
+          transcript_rows_failed: transcriptResult?.failed ?? 0,
         },
       };
     } catch (err) {
