@@ -10,6 +10,7 @@ import {
   GATEWAY_WS_URL,
 } from './gatewayClient';
 import { nowTimestamp, timestampFromEpochMs, toCanonicalTimestampOrNow } from '../../lib/timestamps';
+import { trimOpenClawHistoryRows } from '../../lib/openclawHistoryRows';
 
 const activeTerminalSignalCaptures = new Map<string, { stop: () => void }>();
 const activeRawSessionTerminalPolls = new Map<number, { stop: () => void }>();
@@ -152,6 +153,11 @@ export async function persistGatewayHistory(instanceId: number, agentId: number,
       await db.run(insertSql, rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(meta));
     }
   }
+
+  // This is a full refresh from index 0. Without trimming, a history that came
+  // back shorter than a previous fetch leaves the old tail behind and the
+  // transcript shows stale messages from the longer version.
+  await trimOpenClawHistoryRows(db, instanceId, rowIndex);
 }
 
 async function isInstanceStillActive(instanceId: number): Promise<boolean> {

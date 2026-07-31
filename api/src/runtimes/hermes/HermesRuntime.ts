@@ -84,7 +84,13 @@ function resolveDefaultHermesRoot(): string {
   return path.join(os.homedir(), ".hermes");
 }
 
-function resolveHermesProfileHome(config: NormalizedHermesRuntimeConfig): string {
+/**
+ * Profile home for a Hermes config — the directory containing `sessions/`.
+ *
+ * Exported so the transcript backfill can locate the same session files the
+ * runtime ingests from, rather than re-deriving the layout and drifting.
+ */
+export function resolveHermesProfileHome(config: NormalizedHermesRuntimeConfig): string {
   const explicitHome = config.hermesHome?.trim();
   if (explicitHome) {
     const resolved = path.resolve(explicitHome);
