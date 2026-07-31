@@ -1098,6 +1098,21 @@ function resolveHermesAgentHqServerPaths(
   );
 }
 
+/**
+ * Both path-repair passes in the order materializeHermesMcpConfig applies them.
+ *
+ * Every runtime that spawns a materialized server from a plain stdio config needs
+ * the same two fixes (host-portable Agent HQ entrypoint, then cwd-relative command
+ * and args resolved to absolute paths), and getting the ORDER wrong is silent: the
+ * Agent HQ rewrite must run first so the Hermes pass sees the final command/args.
+ * Exported so new runtimes compose it instead of re-deriving the pair.
+ */
+export function resolveMcpServerRuntimePaths(
+  servers: Record<string, Record<string, unknown>>,
+): Record<string, Record<string, unknown>> {
+  return resolveHermesServerPaths(resolveHermesAgentHqServerPaths(servers));
+}
+
 export async function materializeHermesMcpConfig(params: {
   db: Db;
   agentId: number;

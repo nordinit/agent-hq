@@ -33,8 +33,17 @@ export type {
 } from './skillMaterialization';
 export { OpenClawRuntime, abortChatRunBySessionKey } from './openclaw';
 export type { AbortChatRunResult, AbortChatRunStatus } from './openclaw';
-export { ClaudeCodeRuntime } from './ClaudeCodeRuntime';
-export type { ClaudeCodeRuntimeConfig } from './ClaudeCodeRuntime';
+export { ClaudeCodeRuntime } from './claudeCode';
+export type {
+  ClaudeCodeRuntimeConfig,
+  NormalizedClaudeCodeRuntimeConfig,
+  ClaudeEffortLevel,
+  ClaudePermissionMode,
+} from './claudeCode';
+export {
+  validateClaudeCodeRuntimeConfig,
+  normalizeClaudeCodeRuntimeConfig,
+} from './claudeCode';
 export { HermesRuntime, validateHermesRuntimeConfig } from './hermes';
 export type { HermesRuntimeConfig } from './hermes';
 export { WebhookRuntime } from './WebhookRuntime';
@@ -45,7 +54,7 @@ export type { CustomAgentRuntimeConfig } from './CustomAgentRuntime';
 
 import type { AgentRuntime } from './types';
 import { OpenClawRuntime } from './openclaw';
-import { ClaudeCodeRuntime } from './ClaudeCodeRuntime';
+import { ClaudeCodeRuntime } from './claudeCode';
 import { HermesRuntime } from './hermes';
 import { WebhookRuntime, type WebhookRuntimeConfig } from './WebhookRuntime';
 import { CustomAgentRuntime, type CustomAgentRuntimeConfig } from './CustomAgentRuntime';

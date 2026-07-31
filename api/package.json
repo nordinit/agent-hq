@@ -1,10 +1,11 @@
 {
   "name": "agent-hq-api",
   "version": "1.0.0",
-  "description": "Agent HQ API — agent management backend",
+  "description": "Agent HQ API \u2014 agent management backend",
   "main": "dist/index.js",
   "bin": {
-    "agent-hq-mcp": "dist/mcp/server.js"
+    "agent-hq-mcp": "dist/mcp/server.js",
+    "agent-hq-tool-mcp": "dist/bin/agent-tool-mcp.js"
   },
   "scripts": {
     "mcp": "tsx src/mcp/server.ts",
@@ -42,15 +43,11 @@
         "tsconfig": "tsconfig.json"
       }
     },
-    "moduleNameMapper": {
-      "^@anthropic-ai/claude-agent-sdk$": "<rootDir>/src/__mocks__/@anthropic-ai/claude-agent-sdk.ts"
-    },
     "modulePathIgnorePatterns": [
       "<rootDir>/dist/"
     ]
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.81",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/multer": "^2.1.0",
     "@types/ws": "^8.18.1",
