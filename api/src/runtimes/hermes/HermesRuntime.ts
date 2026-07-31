@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import { skippedRuntimeAuthProfileSync } from "../types";
 import { applyRuntimeEndToJobInstance } from "../../domains/runs/runtimeEnd";
+import { recordRunCheckIn } from "../../domains/runs/observability";
 import {
   materializeAgentMcpConfig,
   materializeHermesMcpConfig,
@@ -329,9 +330,29 @@ export class HermesRuntime implements AgentRuntime {
     try {
       await spawned;
     } catch (err) {
-      throw new Error(
-        `Hermes runtime failed to launch: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      const message = `Hermes runtime failed to launch: ${err instanceof Error ? err.message : String(err)}`;
+
+      // Persist a terminal record before rethrowing. This path runs before
+      // activeRuns.set and before monitorRun, so previously a launch failure
+      // produced NO RuntimeEndEvent at all — no turn_end chat message and no
+      // response.runtimeEnd. Those two rows are the only inputs to the
+      // watchdog's crash-recovery path, so a Hermes agent whose binary was
+      // missing left an instance the watchdog could not reason about.
+      if (params.instanceId != null && db) {
+        await this.handleRuntimeEnd(db, params.instanceId, {
+          type: "runEnded",
+          source: "hermes",
+          sessionKey: params.sessionKey,
+          runId,
+          success: false,
+          endedAt: nowTimestamp(),
+          reason: "error",
+          error: message,
+          metadata: { spawn_failed: true, hermes_bin: mergedConfig.hermesBin },
+        });
+      }
+
+      throw new Error(message);
     }
 
     if (params.instanceId != null) {
@@ -365,7 +386,38 @@ export class HermesRuntime implements AgentRuntime {
           }, params.timeoutSeconds * 1000)
         : null;
 
-    const heartbeatTimer = null;
+    // Runtime heartbeat.
+    //
+    // `heartbeatIntervalMs` was validated, normalized and defaulted to 60s, and
+    // then never used — this line was literally `null`, so docs/hermes-runtime.md
+    // documented a cadence that did not exist. The watchdog decides staleness
+    // from instance_artifacts.last_agent_heartbeat_at, which only the AGENT
+    // writes via check-ins, so a long run doing quiet work could be judged stale
+    // while its process was perfectly healthy. This reports liveness of the
+    // process itself, which is the one thing the runtime actually knows.
+    //
+    // suppressNote keeps it out of the task note stream; it is telemetry, not
+    // progress the operator needs to read.
+    const heartbeatTimer =
+      params.instanceId != null && db && mergedConfig.heartbeatIntervalMs > 0
+        ? setInterval(() => {
+            if (processState.exited) return;
+            void recordRunCheckIn(db, {
+              instanceId: params.instanceId as number,
+              durableRunId: params.durableRunId ?? null,
+              stage: "heartbeat",
+              sessionKey: params.sessionKey,
+              suppressNote: true,
+            }).catch((err: unknown) => {
+              // Never let telemetry take down a healthy run.
+              console.warn(
+                `[HermesRuntime] heartbeat failed for instance #${params.instanceId}:`,
+                err instanceof Error ? err.message : String(err),
+              );
+            });
+          }, mergedConfig.heartbeatIntervalMs)
+        : null;
+    heartbeatTimer?.unref?.();
 
     void this.monitorRun({
       params,

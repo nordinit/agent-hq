@@ -149,7 +149,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
             token_output = COALESCE(?, token_output),
             token_total = COALESCE(?, token_total)
         WHERE id = ?
-          AND status IN ('running', 'dispatched')
+          AND status IN ('queued', 'running', 'dispatched')
           AND runtime_ended_at IS NULL
       `,
         {
@@ -345,7 +345,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
             token_output = COALESCE(?, token_output),
             token_total = COALESCE(?, token_total)
         WHERE id = ?
-          AND status IN ('running', 'dispatched')
+          AND status IN ('queued', 'running', 'dispatched')
           AND runtime_ended_at IS NULL
       `)) as unknown as { run: jest.Mock };
     expect(runtimeStateUpdate.run).toHaveBeenCalledWith(

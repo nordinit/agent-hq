@@ -130,7 +130,11 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       );
     }
 
-    const agentId = db && instanceId != null ? await this.lookupAgentId(db, instanceId) : null;
+    const ownership =
+      db && instanceId != null
+        ? await this.lookupInstanceOwnership(db, instanceId)
+        : { agentId: null, tenantId: null };
+    const agentId = ownership.agentId;
     const mcp = await this.materializeMcp(db, agentId, instanceId, config);
     await this.preflightRequiredMcpServers(mcp, instanceId);
 
@@ -177,6 +181,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
             idPrefix: 'claude-code',
             sessionKey: `${CLAUDE_CODE_SESSION_KEY_PREFIX}${sessionId}`,
             durableRunId: params.durableRunId ?? null,
+            tenantId: ownership.tenantId,
           })
         : null;
     transcript?.enqueue([promptTranscriptEvent(params.message)]);
@@ -570,15 +575,36 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  private async lookupAgentId(db: Db, instanceId: number): Promise<number | null> {
+  /**
+   * Owning agent and tenant for an instance.
+   *
+   * tenant_id is read so transcript rows can be tenant-scoped. Most existing
+   * chat_messages writers omit it, which leaves their rows invisible to
+   * tenant-filtered queries; setting it is safe here only because this runtime's
+   * transcript rows are new, so nothing previously hidden suddenly appears.
+   */
+  private async lookupInstanceOwnership(
+    db: Db,
+    instanceId: number,
+  ): Promise<{ agentId: number | null; tenantId: number | null }> {
     try {
       const row = (await db.get(
-        'SELECT agent_id FROM job_instances WHERE id = ?',
+        'SELECT agent_id, tenant_id FROM job_instances WHERE id = ?',
         instanceId,
-      )) as { agent_id?: number } | undefined;
-      return row?.agent_id ?? null;
+      )) as { agent_id?: number; tenant_id?: number | null } | undefined;
+      return { agentId: row?.agent_id ?? null, tenantId: row?.tenant_id ?? null };
     } catch {
-      return null;
+      // Older SQLite test databases may lack tenant_id; the agent id alone is
+      // enough to run, so degrade rather than fail the dispatch.
+      try {
+        const row = (await db.get(
+          'SELECT agent_id FROM job_instances WHERE id = ?',
+          instanceId,
+        )) as { agent_id?: number } | undefined;
+        return { agentId: row?.agent_id ?? null, tenantId: null };
+      } catch {
+        return { agentId: null, tenantId: null };
+      }
     }
   }
 
