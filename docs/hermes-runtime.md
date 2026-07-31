@@ -83,7 +83,7 @@ Store Hermes settings on the agent as `runtime_config`.
 | `ignoreRules` | no | Adds `--ignore-rules`. |
 | `extraArgs` | no | Appended before the invocation command after validation. |
 | `env` | no | Merged into the child process env after Agent HQ metadata env vars. Values must be strings. |
-| `heartbeatIntervalMs` | no | Runtime heartbeat cadence while the Hermes process is alive. Defaults to 60000. |
+| `heartbeatIntervalMs` | no | Runtime heartbeat cadence while the Hermes process is alive; records a `heartbeat` run check-in so the watchdog can tell a quiet run from a dead one. Defaults to 60000. Set to `0` to disable. |
 | `killGraceMs` | no | Grace period before force-kill after timeout or abort. Defaults to 10000. |
 
 Agent create/update validation rejects:
@@ -130,7 +130,9 @@ Imported Hermes `messages[]` are converted into `chat_messages` rows:
 - `role=tool` output becomes `event_type=tool_result`, role `tool`.
 - Assistant `reasoning_content` becomes `event_type=thought` only when it is already plain text.
 
-Rows use deterministic IDs of the form `hermes-json-<instanceId>-<messageIndex>-<eventIndex>`, so repeated polls update the same rows and append newly written messages without duplicates. Imported rows include `session_key`, `durable_run_id` when available, `event_meta`, and timestamps from the message/session metadata with file mtime fallback.
+Rows use deterministic IDs of the form `hermes-json-<instanceId>-<messageIndex>-<eventIndex>`, so repeated polls update the same rows and append newly written messages without duplicates.
+
+The upsert is **grow-only**: a poll may replace a row's content only when the new body is at least as long as the stored one. Because the ID encodes a position rather than the message's identity, an unconditional update would let a reordered or inserted message rewrite a historically correct row. (Before this guard the clause was `ON CONFLICT DO NOTHING`, which had the opposite failure: the first partial snapshot of a streaming message claimed the ID and the finished text was discarded permanently.) Imported rows include `session_key`, `durable_run_id` when available, `event_meta`, and timestamps from the message/session metadata with file mtime fallback.
 
 The adapter also persists these Agent HQ-owned transcript records when a database handle is available:
 
@@ -142,7 +144,7 @@ For transcript resolution, Hermes agents use the chat-message-backed remote tran
 
 On failures:
 
-- Spawn failures call the lifecycle blocker path when lifecycle context is available and throw `Hermes runtime failed to launch`.
+- Spawn failures persist a terminal runtime-end record (so the watchdog's crash-recovery path has the `turn_end` row and `response.runtimeEnd` blob to read), call the lifecycle blocker path when lifecycle context is available, and throw `Hermes runtime failed to launch`.
 - Timeouts terminate the process with `SIGTERM`, then `SIGKILL` after `killGraceMs`.
 - Non-zero exits are classified as `infra_failed` when stderr/stdout looks like auth, provider, quota, permission, or model infrastructure failure; otherwise they are `runtime_failed`.
 - Abort sends `SIGTERM`, then `SIGKILL` after `killGraceMs`.

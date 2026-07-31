@@ -187,6 +187,12 @@ export async function handleOpenClawRuntimeEnd(
       normalizedEvent.success,
       requiresSemanticOutcome,
     );
+    // The status list includes 'queued' deliberately, matching the shared helper
+    // in domains/runs/runtimeEnd.ts. Omitting it meant an instance that
+    // terminated while still queued matched zero rows here, so the runtime
+    // persisted no terminal state at all and the run fell through to the
+    // watchdog. (Kept out of the SQL itself — this statement is string-matched
+    // by tests and shipped into logs.)
     const claim = await db.run(`
         UPDATE job_instances
         SET status = ?,
@@ -200,7 +206,7 @@ export async function handleOpenClawRuntimeEnd(
             token_output = COALESCE(?, token_output),
             token_total = COALESCE(?, token_total)
         WHERE id = ?
-          AND status IN ('running', 'dispatched')
+          AND status IN ('queued', 'running', 'dispatched')
           AND runtime_ended_at IS NULL
       `, nextStatus, nowIso, nowIso, nowIso, normalizedEvent.success ? 1 : 0, runtimeEndError, runtimeEndSource, tokenUsage.input, tokenUsage.output, tokenUsage.total, instanceId);
     if (!claim.changes) {

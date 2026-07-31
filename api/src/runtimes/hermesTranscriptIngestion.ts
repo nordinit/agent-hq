@@ -255,10 +255,35 @@ export async function importHermesSessionJson(params: HermesTranscriptIngestPara
   ].filter((value): value is string => Boolean(value));
   const optionalSql = optionalColumns.length ? `${optionalColumns.join(', ')}, ` : '';
   const optionalValuesSql = optionalColumns.length ? `${optionalColumns.map(() => '?').join(', ')}, ` : '';
+  // Grow-only upsert.
+  //
+  // This used to be ON CONFLICT DO NOTHING, which silently truncated every
+  // streamed message: HermesRuntime re-ingests on a 2s poll, row ids are
+  // POSITIONAL (`hermes-json-<instance>-<msgIdx>-<evtIdx>`), so the first
+  // partial snapshot of an assistant message claimed the id and the finished
+  // text was discarded forever.
+  //
+  // Plain DO UPDATE fixes that but introduces the opposite hazard: because the
+  // id encodes a position rather than the message's identity, a session file
+  // that ever reordered or inserted a message would rewrite historically correct
+  // rows with unrelated content. The `length(excluded) >= length(existing)`
+  // guard removes that — content at a given position can only ever grow, which
+  // is exactly the invariant an append-only conversation log has.
+  //
+  // Paperclip avoids the dilemma entirely by making run events append-only
+  // (`heartbeat_run_events`: surrogate bigserial PK + explicit `seq`, no upsert
+  // at all). chat_messages has a TEXT primary key and six writers relying on
+  // deterministic ids, so adopting that here is a schema change, not a patch —
+  // it is the right long-term shape and is noted as follow-up.
   const insertSql = `
     INSERT INTO chat_messages (id, agent_id, instance_id, ${optionalSql}role, content, timestamp, event_type, event_meta)
     VALUES (?, ?, ?, ${optionalValuesSql}?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO NOTHING
+    ON CONFLICT(id) DO UPDATE SET
+      content = excluded.content,
+      timestamp = excluded.timestamp,
+      event_type = excluded.event_type,
+      event_meta = excluded.event_meta
+    WHERE length(excluded.content) >= length(chat_messages.content)
   `;
 
   const fallbackTimestamp = timestampFromDate(fs.statSync(params.filePath).mtime) ?? nowTimestamp();

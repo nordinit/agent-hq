@@ -2,8 +2,6 @@ import { execFileSync, execSync } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
-import { z } from 'zod/v4';
 import { type Db } from "../db/adapter/types";
 
 const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
@@ -207,66 +205,15 @@ export function executeToolImplementation(
   }
 }
 
-// ── SDK MCP server creation ──────────────────────────────────────────────────
-
-/**
- * createAgentToolServer — build an in-process MCP server containing all
- * assigned tools for an agent, suitable for injection into the Claude Code SDK.
- *
- * Each tool's input_schema is passed in the description since the SDK requires
- * Zod schemas and our DB stores JSON Schema. A permissive Zod schema accepts
- * any input; the tool description includes the expected schema for the model.
- *
- * @param tools - Tool records from fetchAgentTools()
- * @param workingDirectory - Working directory for bash tool execution
- * @param hardcodedToolSlugs - Set of slugs that are already built-in; skip these
- * @returns MCP server config, or null if no tools to inject
- */
-export function createAgentToolServer(
-  tools: AgentToolRecord[],
-  workingDirectory?: string,
-  hardcodedToolSlugs?: Set<string>,
-) {
-  // Filter out tools that conflict with hardcoded tools
-  const filteredTools = tools.filter(t => {
-    if (hardcodedToolSlugs?.has(t.slug.toLowerCase())) {
-      console.log(`[toolInjection] Skipping registry tool "${t.slug}" — hardcoded tool takes precedence`);
-      return false;
-    }
-    return true;
-  });
-
-  if (filteredTools.length === 0) return null;
-
-  const sdkTools = filteredTools.map(t => {
-    let schemaDescription = '';
-    try {
-      const parsed = JSON.parse(t.input_schema || '{}');
-      if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
-        schemaDescription = `\n\nInput schema: ${JSON.stringify(parsed)}`;
-      }
-    } catch { /* ignore parse errors */ }
-
-    return tool(
-      t.slug,
-      `${t.description}${schemaDescription}`,
-      z.object({}).passthrough() as any,
-      async (args: Record<string, unknown>) => {
-        const result = executeToolImplementation(t, args, workingDirectory);
-        return result;
-      },
-    );
-  });
-
-  const server = createSdkMcpServer({
-    name: 'agent-hq-agent-tools',
-    version: '1.0.0',
-    tools: sdkTools,
-  });
-
-  console.log(
-    `[toolInjection] Created MCP server with ${sdkTools.length} tool(s): ${filteredTools.map(t => t.slug).join(', ')}`,
-  );
-
-  return server;
-}
+// ── Note on the removed SDK MCP server ───────────────────────────────────────
+//
+// `createAgentToolServer()` used to build an IN-PROCESS MCP server here so the
+// Claude Agent SDK could expose these registry tools to a claude-code run.
+// The claude-code runtime is now CLI-backed (runtimes/claudeCode/), so the tools
+// are served out-of-process by src/bin/agent-tool-mcp.ts instead — which also
+// runs them in the run's own cwd rather than inside the API process, and makes
+// them reachable from Codex/Hermes rather than claude-code only.
+//
+// Removing it dropped the last `@anthropic-ai/claude-agent-sdk` import in the
+// codebase. `fetchAgentTools` and `executeToolImplementation` below are still
+// live — routes/tools.ts serves them over REST.

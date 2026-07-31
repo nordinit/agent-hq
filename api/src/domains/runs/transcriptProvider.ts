@@ -27,6 +27,7 @@ import { extractGatewayStructuredEvents, extractTextFromGatewayMessage } from '.
 import { buildGatewayRunSessionKey, parseHookSessionKey, resolveRuntimeAgentSlug } from '../../lib/sessionKeys';
 import { backfillOpenClawJsonlTranscript, isRunChatTranscriptSparse } from './openclawJsonlBackfill';
 import { nowTimestamp, timestampFromEpochMs, toCanonicalTimestampOrNow } from '../../lib/timestamps';
+import { trimOpenClawHistoryRows } from '../../lib/openclawHistoryRows';
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -484,6 +485,9 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
         await db.run(insertSql, rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(evt.event_meta));
       }
     }
+
+    // Full refresh from index 0 — drop any tail left by a longer previous fetch.
+    await trimOpenClawHistoryRows(db, instanceId, rowIndex);
   }
 
   async resolveSessionKey(instanceId: number): Promise<SessionKeyResult> {

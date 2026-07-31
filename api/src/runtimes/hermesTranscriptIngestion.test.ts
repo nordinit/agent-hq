@@ -124,6 +124,68 @@ describe('Hermes transcript ingestion', () => {
     expect((await db.get('SELECT COUNT(*) AS n FROM chat_messages') as { n: number }).n).toBe(0);
   });
 
+  it('grows a streamed message across polls instead of freezing the first snapshot', async () => {
+    const db = await setupDb();
+    const hermesHome = makeTempDir('hermes-grow-');
+    const context = { instanceId: 5100, durableRunId: 'durable-5100', sessionKey: 'run:5100:durable-5100' };
+    const ingest = () =>
+      ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context });
+
+    const write = (assistantText: string) =>
+      writeSession(hermesHome, 'active.json', {
+        prompt: buildAgentHqRunContextBlock(context),
+        messages: [
+          { role: 'assistant', content: assistantText, timestamp: '2026-06-03T06:40:02.000Z' },
+        ],
+      });
+
+    // HermesRuntime re-ingests on a 2s poll, so a message still being streamed is
+    // seen partially first. Row ids are positional, so under the previous
+    // ON CONFLICT DO NOTHING the partial snapshot claimed the id and the finished
+    // text was discarded permanently.
+    write('Partial');
+    await ingest();
+    write('Partial answer, now complete.');
+    await ingest();
+
+    const row = (await db.get(
+      'SELECT content FROM chat_messages WHERE id = ?',
+      'hermes-json-5100-0-0',
+    )) as { content: string };
+    expect(row.content).toBe('Partial answer, now complete.');
+  });
+
+  it('never lets a shorter body replace an already-recorded longer one', async () => {
+    const db = await setupDb();
+    const hermesHome = makeTempDir('hermes-shrink-');
+    const context = { instanceId: 5101, durableRunId: 'durable-5101', sessionKey: 'run:5101:durable-5101' };
+    const ingest = () =>
+      ingestHermesTranscriptForRun({ db, agentId: 17, profile: 'cinder', hermesHome, ...context });
+
+    const write = (assistantText: string) =>
+      writeSession(hermesHome, 'active.json', {
+        prompt: buildAgentHqRunContextBlock(context),
+        messages: [
+          { role: 'assistant', content: assistantText, timestamp: '2026-06-03T06:40:02.000Z' },
+        ],
+      });
+
+    write('A long, fully streamed answer.');
+    await ingest();
+    // Because the id encodes a POSITION rather than the message's identity, a
+    // session file that ever reordered or inserted a message would otherwise
+    // rewrite a historically correct row with unrelated content. Content at a
+    // given position may only ever grow.
+    write('short');
+    await ingest();
+
+    const row = (await db.get(
+      'SELECT content FROM chat_messages WHERE id = ?',
+      'hermes-json-5101-0-0',
+    )) as { content: string };
+    expect(row.content).toBe('A long, fully streamed answer.');
+  });
+
   it('is incremental and idempotent across repeated polls', async () => {
     const db = await setupDb();
     const hermesHome = makeTempDir('hermes-incremental-');
