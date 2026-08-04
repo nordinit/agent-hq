@@ -27,6 +27,7 @@ import {
   getRoutingTransition,
   getRoutingRule,
   getWorkflowGraph,
+  traceHypothetical,
   listRoutingRulesForSprint,
   listRoutingStatuses,
   listRoutingTransitions,
@@ -382,6 +383,20 @@ router.get('/graph', async (req: Request, res: Response) => {
     return sendRoutingError(res, err);
   }
 });
+
+// POST /trace — "if a <task_type> task in <from_status> reports <outcome>, then what?"
+// Resolves against the same graph the canvas draws, so the two cannot disagree.
+// GET is accepted too so a trace is linkable.
+const traceHandler = async (req: Request, res: Response) => {
+  try {
+    const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body ?? {}));
+    return res.json(await traceHypothetical(getDb(), input));
+  } catch (err) {
+    return sendRoutingError(res, err);
+  }
+};
+router.post('/trace', traceHandler);
+router.get('/trace', traceHandler);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TASK ROUTING RULES — deterministic task_type + status → job assignment

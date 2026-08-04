@@ -1651,3 +1651,84 @@ export interface WorkflowGraph {
     warn_count: number;
   };
 }
+
+// ── Routing traces ────────────────────────────────────────────────────────────
+// Mirrors api/src/domains/routing/trace.ts. Both modes key their steps to the same
+// edge ids WorkflowGraph emits, so one canvas overlay renders either.
+
+export interface RoutingTraceGate {
+  requirement_id: number;
+  field_name: string;
+  requirement_type: string;
+  match_field: string | null;
+  severity: string;
+  message: string;
+  task_type: string | null;
+}
+
+export interface RoutingTraceCandidate {
+  edge_id: string;
+  to_status: string;
+  task_type: string | null;
+  priority: number;
+  wins: boolean;
+  reason: string | null;
+}
+
+export interface HypotheticalTrace {
+  scope: WorkflowGraph['scope'];
+  input: { task_type: string | null; from_status: string; outcome: string };
+  matched: boolean;
+  result: { edge_id: string; to_status: string; to_status_label: string; is_back_edge: boolean } | null;
+  candidates: RoutingTraceCandidate[];
+  gates: RoutingTraceGate[];
+  assignment: {
+    status: string;
+    agent_id: number | null;
+    agent_name: string | null;
+    rule_id: number | null;
+    candidates: Array<{ rule_id: number; agent_id: number | null; agent_name: string | null; task_type: string | null; priority: number; wins: boolean }>;
+  } | null;
+  notes: string[];
+}
+
+export type TraceStepMatch = 'transition' | 'event' | 'off_graph' | 'no_current_edge';
+
+export interface TraceStep {
+  seq: number;
+  event_id: number;
+  from_status: string | null;
+  to_status: string;
+  move_type: string;
+  moved_by: string;
+  agent_id: number | null;
+  instance_id: number | null;
+  outcome: string | null;
+  reason: string | null;
+  created_at: string;
+  edge_id: string | null;
+  match: TraceStepMatch;
+}
+
+export interface HistoricalTrace {
+  task: {
+    id: number;
+    title: string;
+    status: string;
+    task_type: string | null;
+    project_id: number | null;
+    sprint_id: number | null;
+    sprint_type: string | null;
+  };
+  scope: WorkflowGraph['scope'];
+  steps: TraceStep[];
+  visits: Record<string, number>;
+  drift: Array<{ seq: number; message: string }>;
+  stats: {
+    step_count: number;
+    matched: number;
+    off_graph: number;
+    drifted: number;
+    distinct_edges: number;
+  };
+}

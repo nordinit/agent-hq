@@ -1,5 +1,5 @@
 import { apiFetch, getApiBase } from './http';
-import type { CreateTaskPayload, RecurringTaskRun, RecurringTaskRunNowResponse, RecurringTaskSeries, RecurringTaskSeriesDetail, RecurringTaskSeriesInput, RecurringTaskSeriesListResponse, ResolvedTaskFieldSchemaResponse, Task, TaskAttachment, TaskHistory, TaskNote, TaskRelationship } from './types';
+import type { CreateTaskPayload, HistoricalTrace, RecurringTaskRun, RecurringTaskRunNowResponse, RecurringTaskSeries, RecurringTaskSeriesDetail, RecurringTaskSeriesInput, RecurringTaskSeriesListResponse, ResolvedTaskFieldSchemaResponse, Task, TaskAttachment, TaskHistory, TaskNote, TaskRelationship } from './types';
 
 export const tasksClient = {
 // Tasks
@@ -117,6 +117,9 @@ deleteTaskNote: (taskId: number, noteId: number) =>
 // Task History
 getTaskHistory: (taskId: number) =>
   apiFetch<TaskHistory[]>(`/api/v1/tasks/${taskId}/history`),
+// Status history replayed against the routing graph, for the canvas overlay.
+getTaskTrace: (taskId: number) =>
+  apiFetch<HistoricalTrace>(`/api/v1/tasks/${taskId}/trace`),
 // Task Attachments
 getTaskAttachments: (taskId: number) =>
   apiFetch<TaskAttachment[]>(`/api/v1/tasks/${taskId}/attachments`),

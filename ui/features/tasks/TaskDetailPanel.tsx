@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { api, Task, TaskHistory, TaskStatusMeta, ResolvedTaskFieldSchemaResponse, TaskRelationship, TaskRelationshipTaskRef, TaskRelationshipTypeConfig } from '@/lib/api';
 import { timeAgo, formatDateTime } from '@/lib/date';
-import { X, Pencil, AlertTriangle, ChevronDown, ExternalLink, StopCircle, Trash2, Activity, Cpu, PauseCircle, PlayCircle, Plus, Search } from 'lucide-react';
+import { X, Pencil, AlertTriangle, ChevronDown, ExternalLink, StopCircle, Trash2, Activity, Cpu, PauseCircle, PlayCircle, Plus, Search, GitBranch } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { getTaskStatusMaps } from '@/lib/taskStatuses';
@@ -965,6 +965,16 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                 <div className="flex items-center gap-1.5 mb-3">
                   <Activity className="w-3.5 h-3.5 text-slate-400" />
                   <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Agent Runs</p>
+                  {/* Replays this task's status history on the routing graph. Deep-links
+                      rather than embedding a canvas, so the modal stays light. */}
+                  <a
+                    href={`/routing?trace_task=${localTask.id}`}
+                    className="ml-auto inline-flex items-center gap-1 rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-400 transition-colors hover:border-amber-500/40 hover:text-amber-300"
+                    title="Replay this task's path on the routing graph"
+                  >
+                    <GitBranch className="w-3 h-3" />
+                    View path on graph
+                  </a>
                 </div>
                 <RelatedRunsSection taskId={localTask.id} outcomeMap={outcomeMap} nonFailureOutcomes={nonFailureOutcomes} />
               </div>

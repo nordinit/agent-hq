@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, type WorkflowGraph, type WorkflowGraphEdge, type WorkflowGraphNode } from '@/lib/api';
+import { api, type HistoricalTrace, type HypotheticalTrace, type WorkflowGraph, type WorkflowGraphEdge, type WorkflowGraphNode } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { SectionHeader, COLOR_BADGE_CLASSES } from '@/components/workflowConfig';
 import { getTaskTypeLabel } from '@/lib/taskTypes';
@@ -23,6 +23,9 @@ import {
   Bot,
   Ban,
   Zap,
+  History,
+  Play,
+  X,
 } from 'lucide-react';
 
 const LINT_LABELS: Record<string, string> = {
@@ -56,11 +59,16 @@ export default function WorkflowGraphSection({
   sprintId,
   sprintType,
   sprintName,
+  historicalTrace,
+  onClearHistoricalTrace,
 }: {
   projectId: number | null;
   sprintId: number | null;
   sprintType: string | null;
   sprintName: string | null;
+  /** A task's replayed path, when the page was opened via ?trace_task=. */
+  historicalTrace?: HistoricalTrace | null;
+  onClearHistoricalTrace?: () => void;
 }) {
   const [graph, setGraph] = useState<WorkflowGraph | null>(null);
   const [loading, setLoading] = useState(false);
@@ -68,6 +76,14 @@ export default function WorkflowGraphSection({
   const [taskTypeLens, setTaskTypeLens] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection>(null);
   const [showOnlyProblems, setShowOnlyProblems] = useState(false);
+  const [traceForm, setTraceForm] = useState<{ taskType: string; fromStatus: string; outcome: string }>(
+    { taskType: '', fromStatus: '', outcome: '' },
+  );
+  const [trace, setTrace] = useState<HypotheticalTrace | null>(null);
+  const [traceBusy, setTraceBusy] = useState(false);
+  const [traceError, setTraceError] = useState<string | null>(null);
+  /** Which step of a replayed task path is focused, if any. */
+  const [activeStep, setActiveStep] = useState<number | null>(null);
 
   const load = useCallback(() => {
     if (!sprintType) {
@@ -164,6 +180,49 @@ export default function WorkflowGraphSection({
   // the "show me" that replaces drawing one arc per source.
   const eventSourceHighlight = new Set(selectedEvent?.from ?? []);
 
+  // ── Trace overlay ──────────────────────────────────────────────────────────
+  // Historical and hypothetical traces both reduce to "these edge ids are on the
+  // path", so a single overlay renders either.
+  const focusedStep = historicalTrace && activeStep !== null
+    ? historicalTrace.steps[activeStep] ?? null
+    : null;
+  const tracedEdges: Map<string, number> = historicalTrace
+    ? (focusedStep
+      ? new Map(focusedStep.edge_id ? [[focusedStep.edge_id, 1]] : [])
+      : new Map(Object.entries(historicalTrace.visits)))
+    : new Map(trace?.result ? [[trace.result.edge_id, 1]] : []);
+  const traceActive = Boolean(historicalTrace) || Boolean(trace?.result);
+  const tracedNodes = new Set<string>();
+  if (historicalTrace) {
+    const steps = focusedStep ? [focusedStep] : historicalTrace.steps;
+    for (const step of steps) {
+      if (step.from_status) tracedNodes.add(step.from_status);
+      tracedNodes.add(step.to_status);
+    }
+  } else if (trace?.result) {
+    tracedNodes.add(trace.input.from_status);
+    tracedNodes.add(trace.result.to_status);
+  }
+
+  const runTrace = () => {
+    if (!traceForm.fromStatus || !traceForm.outcome) return;
+    setTraceBusy(true);
+    setTraceError(null);
+    api.traceRouting({
+      projectId,
+      workflowType: sprintType,
+      workflowId: sprintId,
+      taskType: traceForm.taskType || null,
+      fromStatus: traceForm.fromStatus,
+      outcome: traceForm.outcome,
+    })
+      .then(setTrace)
+      .catch(e => { setTrace(null); setTraceError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => setTraceBusy(false));
+  };
+
+  const outcomeOptions = [...new Set(graph.edges.map(edge => edge.outcome))].sort();
+
   return (
     <div className="space-y-4">
       <SectionHeader
@@ -239,6 +298,188 @@ export default function WorkflowGraphSection({
         )}
       </div>
 
+      {/* ── Historical replay banner + step timeline ─────────────────────── */}
+      {historicalTrace && (
+        <Card className="border-amber-500/30 bg-slate-900/80 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.2em] text-amber-300">
+                <History className="h-3.5 w-3.5" /> Replaying task #{historicalTrace.task.id}
+              </p>
+              <p className="mt-1 text-sm font-semibold text-white">{historicalTrace.task.title}</p>
+              <p className="text-xs text-slate-500">
+                {historicalTrace.stats.step_count} moves across {historicalTrace.stats.distinct_edges} distinct
+                transitions · {historicalTrace.stats.off_graph} manual
+                {historicalTrace.stats.drifted > 0 && (
+                  <span className="text-amber-400"> · {historicalTrace.stats.drifted} no longer configured</span>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {activeStep !== null && (
+                <button
+                  onClick={() => setActiveStep(null)}
+                  className="rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-300 hover:text-white"
+                >
+                  Show whole path
+                </button>
+              )}
+              <button
+                onClick={onClearHistoricalTrace}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+              >
+                <X className="h-3.5 w-3.5" /> Exit replay
+              </button>
+            </div>
+          </div>
+
+          {historicalTrace.stats.step_count > 0 && (
+            <div className="mt-3 max-h-44 overflow-y-auto rounded-lg border border-slate-800">
+              <ol className="divide-y divide-slate-800/70">
+                {historicalTrace.steps.map(step => (
+                  <li key={step.event_id}>
+                    <button
+                      onClick={() => setActiveStep(activeStep === step.seq ? null : step.seq)}
+                      className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] transition-colors ${
+                        activeStep === step.seq ? 'bg-amber-500/15 text-amber-200' : 'text-slate-400 hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <span className="w-8 shrink-0 tabular-nums text-slate-600">{step.seq + 1}</span>
+                      <span className="shrink-0 font-mono">
+                        {step.from_status ?? '—'} <span className="text-slate-600">→</span> {step.to_status}
+                      </span>
+                      <span className={`shrink-0 rounded px-1 ${
+                        step.match === 'off_graph'
+                          ? 'bg-slate-800 text-slate-400'
+                          : step.match === 'no_current_edge'
+                            ? 'bg-amber-950/60 text-amber-300'
+                            : 'bg-slate-800 text-slate-300'
+                      }`}>
+                        {step.match === 'off_graph' ? 'manual' : step.match === 'no_current_edge' ? 'not configured' : step.outcome ?? step.move_type}
+                      </span>
+                      <span className="truncate text-slate-600">{step.moved_by}</span>
+                      <span className="ml-auto shrink-0 text-slate-600">{step.created_at.slice(0, 16)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ── Hypothetical trace ───────────────────────────────────────────── */}
+      {!historicalTrace && (
+        <Card className="p-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-[150px] flex-1">
+              <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">If a task of type</p>
+              <select
+                value={traceForm.taskType}
+                onChange={e => setTraceForm(f => ({ ...f, taskType: e.target.value }))}
+                className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-2 text-sm text-slate-200 focus:border-amber-500 focus:outline-none"
+              >
+                <option value="">any type</option>
+                {taskTypes.map(type => <option key={type} value={type}>{getTaskTypeLabel(type)}</option>)}
+              </select>
+            </div>
+            <div className="min-w-[150px] flex-1">
+              <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">sitting in</p>
+              <select
+                value={traceForm.fromStatus}
+                onChange={e => setTraceForm(f => ({ ...f, fromStatus: e.target.value }))}
+                className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-2 text-sm text-slate-200 focus:border-amber-500 focus:outline-none"
+              >
+                <option value="">select status…</option>
+                {graph.nodes.map(node => <option key={node.id} value={node.id}>{node.label}</option>)}
+              </select>
+            </div>
+            <div className="min-w-[150px] flex-1">
+              <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">reports outcome</p>
+              <select
+                value={traceForm.outcome}
+                onChange={e => setTraceForm(f => ({ ...f, outcome: e.target.value }))}
+                className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-2 text-sm text-slate-200 focus:border-amber-500 focus:outline-none"
+              >
+                <option value="">select outcome…</option>
+                {outcomeOptions.map(outcome => <option key={outcome} value={outcome}>{outcome}</option>)}
+              </select>
+            </div>
+            <button
+              onClick={runTrace}
+              disabled={!traceForm.fromStatus || !traceForm.outcome || traceBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/25 disabled:opacity-40"
+            >
+              <Play className="h-3.5 w-3.5" /> Trace
+            </button>
+            {trace && (
+              <button
+                onClick={() => { setTrace(null); setTraceError(null); }}
+                className="rounded-lg border border-slate-700 px-2.5 py-2 text-xs text-slate-400 hover:text-slate-200"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+
+          {traceError && <p className="mt-3 text-xs text-red-300">{traceError}</p>}
+
+          {trace && (
+            <div className="mt-4 space-y-3 border-t border-slate-800 pt-3">
+              {trace.matched && trace.result ? (
+                <p className="text-sm text-slate-200">
+                  → moves to <span className="font-semibold text-amber-300">{trace.result.to_status_label}</span>
+                  {trace.result.is_back_edge && <span className="text-purple-400"> (rework loop)</span>}
+                  {trace.assignment?.agent_name
+                    ? <> and <span className="font-semibold text-slate-100">{trace.assignment.agent_name}</span> picks it up.</>
+                    : <> and <span className="text-amber-400">nobody is assigned to pick it up.</span></>}
+                </p>
+              ) : (
+                <p className="text-sm text-slate-400">→ nothing happens; the task stays where it is.</p>
+              )}
+
+              {trace.notes.map((note, index) => (
+                <p key={index} className="rounded-lg border border-amber-500/30 bg-amber-950/20 p-2 text-xs text-amber-200">{note}</p>
+              ))}
+
+              {trace.gates.length > 0 && (
+                <div>
+                  <p className="mb-1 flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">
+                    <Lock className="h-3 w-3 text-amber-400" /> {trace.gates.length} gate
+                    {trace.gates.length === 1 ? '' : 's'} would be checked first
+                  </p>
+                  <ul className="space-y-0.5">
+                    {trace.gates.map(gate => (
+                      <li key={gate.requirement_id} className="text-[11px] text-slate-400">
+                        <code className="text-slate-300">{gate.field_name}</code> · {gate.requirement_type}
+                        <span className={gate.severity === 'block' ? ' text-red-400' : ' text-amber-400'}> ({gate.severity})</span>
+                        {gate.message && <span className="text-slate-600"> — {gate.message}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {trace.candidates.length > 1 && (
+                <div>
+                  <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">
+                    {trace.candidates.length} transitions could apply
+                  </p>
+                  <ul className="space-y-0.5">
+                    {trace.candidates.map(candidate => (
+                      <li key={candidate.edge_id} className={`text-[11px] ${candidate.wins ? 'text-amber-300' : 'text-slate-500'}`}>
+                        → {candidate.to_status} (p{candidate.priority})
+                        {candidate.wins ? ' — wins' : ` — ${candidate.reason}`}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* Graph-level findings that are not anchored to a node or arc */}
       {graph.lint.filter(f => !f.node && f.edge === undefined).map((finding, index) => (
         <div
@@ -277,15 +518,19 @@ export default function WorkflowGraphSection({
                   const edges = arcEdges(arc);
                   const problem = arcHasProblem(arc);
                   const allShadowed = edges.length > 0 && edges.every(e => e.shadowed_by !== null);
-                  const dimmed = showOnlyProblems && !problem;
+                  const traceVisits = arc.edgeIds.reduce((sum, id) => sum + (tracedEdges.get(id) ?? 0), 0);
+                  const onTrace = traceVisits > 0;
+                  const dimmed = (showOnlyProblems && !problem) || (traceActive && !onTrace);
                   const isSelected = selection?.kind === 'arc' && selection.key === arc.key;
-                  const color = problem
-                    ? 'text-red-400'
-                    : arc.adjacent
-                      ? 'text-emerald-500'
-                      : arc.side === 'left'
-                        ? 'text-purple-400'
-                        : 'text-slate-500';
+                  const color = onTrace
+                    ? 'text-amber-300'
+                    : problem
+                      ? 'text-red-400'
+                      : arc.adjacent
+                        ? 'text-emerald-500'
+                        : arc.side === 'left'
+                          ? 'text-purple-400'
+                          : 'text-slate-500';
                   // Adjacent hops run down the middle of the node column; gutter arcs
                   // anchor to whichever edge of the box they bulge out from.
                   const anchor = arc.adjacent
@@ -301,7 +546,7 @@ export default function WorkflowGraphSection({
                         d={arcPath(arc, anchor)}
                         fill="none"
                         stroke="currentColor"
-                        strokeWidth={isSelected ? 2.5 : 1.5}
+                        strokeWidth={isSelected ? 2.5 : onTrace ? 2.5 : 1.5}
                         strokeDasharray={allShadowed ? '4 3' : undefined}
                         markerEnd="url(#wf-arrow)"
                       />
@@ -326,6 +571,7 @@ export default function WorkflowGraphSection({
                 const isSelected = selection?.kind === 'node' && selection.id === node.id;
                 const badgeClass = COLOR_BADGE_CLASSES[node.color] ?? COLOR_BADGE_CLASSES.slate;
                 const isEventSource = eventSourceHighlight.has(node.id);
+                const onTracePath = tracedNodes.has(node.id);
                 const isEventTarget = selection?.kind === 'event' && selection.target === node.id;
                 return (
                   <button
@@ -341,6 +587,8 @@ export default function WorkflowGraphSection({
                             : 'border-slate-700 bg-slate-900 hover:border-slate-500'
                     } ${dimmed ? 'opacity-25' : ''} ${
                       selection?.kind === 'event' && !isEventSource && !isEventTarget ? 'opacity-30' : ''
+                    } ${traceActive && !onTracePath ? 'opacity-25' : ''} ${
+                      traceActive && onTracePath ? 'ring-1 ring-amber-400/60' : ''
                     }`}
                     style={{
                       left: nodeX,
@@ -413,13 +661,16 @@ export default function WorkflowGraphSection({
               {layout.arcs.map(arc => {
                 const edges = arcEdges(arc);
                 if (edges.length === 0) return null;
-                const dimmed = showOnlyProblems && !arcHasProblem(arc);
+                const dimmed = (showOnlyProblems && !arcHasProblem(arc))
+                  || (traceActive && arc.edgeIds.every(id => !tracedEdges.has(id)));
                 const gated = edges.some(edge => edge.gates.length > 0);
                 // Stagger gutter labels by lane so arcs sharing a midpoint band do not
                 // stack their labels on top of each other.
                 const stagger = arc.adjacent ? 0 : (arc.lane % 3) * 13 - 13;
                 const midY = (arc.fromY + arc.toY) / 2 + stagger;
-                const label = edges.length === 1 ? edges[0].outcome : `${edges.length} outcomes`;
+                const visits = arc.edgeIds.reduce((sum, id) => sum + (tracedEdges.get(id) ?? 0), 0);
+                const baseLabel = edges.length === 1 ? edges[0].outcome : `${edges.length} outcomes`;
+                const label = visits > 1 ? `${baseLabel} ×${visits}` : baseLabel;
                 const position = arc.adjacent
                   ? { left: nodeX + NODE_WIDTH / 2, transform: 'translateX(-50%)' }
                   : arc.side === 'right'

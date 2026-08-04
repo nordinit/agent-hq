@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, type Project, type Sprint, type SprintType } from '@/lib/api';
+import { useSearchParams } from 'next/navigation';
+import { api, type HistoricalTrace, type Project, type Sprint, type SprintType } from '@/lib/api';
 import { formatSprintNumber } from '@/lib/sprintLabel';
 import { useSprintOutcomeCatalog } from '@/lib/useSprintOutcomeCatalog';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
@@ -21,6 +22,11 @@ type RoutingTab = 'graph' | 'rules' | 'transitions' | 'transition-reqs' | 'exter
 
 // ─── Main Page ───────────────────────────────────────────────
 export default function RoutingPage() {
+  const searchParams = useSearchParams();
+  // ?trace_task=<id> opens the graph replaying that task's path. The task modal
+  // deep-links here rather than embedding a second canvas of its own.
+  const traceTaskId = Number(searchParams?.get('trace_task') ?? '');
+  const [historicalTrace, setHistoricalTrace] = useState<HistoricalTrace | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [sprintTypes, setSprintTypes] = useState<SprintType[]>([]);
@@ -72,6 +78,27 @@ export default function RoutingPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Loading a replay also decides the scope: a task's path only makes sense against
+  // the graph for its own project and workflow, so those selectors follow the task.
+  useEffect(() => {
+    if (!Number.isFinite(traceTaskId) || traceTaskId <= 0) {
+      setHistoricalTrace(null);
+      return;
+    }
+    let cancelled = false;
+    api.getTaskTrace(traceTaskId)
+      .then(result => {
+        if (cancelled) return;
+        setHistoricalTrace(result);
+        setActiveTab('graph');
+        if (result.task.project_id) setSelectedProjectId(result.task.project_id);
+        if (result.task.sprint_type) setSelectedSprintType(result.task.sprint_type);
+        if (result.task.sprint_id) setSelectedSprintId(result.task.sprint_id);
+      })
+      .catch(e => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; };
+  }, [traceTaskId, setSelectedProjectId]);
+
   useEffect(() => {
     setSelectedSprintType(current => {
       if (current && availableSprintTypeKeys.includes(current)) return current;
@@ -80,12 +107,17 @@ export default function RoutingPage() {
   }, [availableSprintTypeKeys]);
 
   useEffect(() => {
+    // A replay pins the scope to the traced task's own workflow. Without this guard
+    // the reset below races the trace load: projectScopedSprints is still empty on
+    // mount, so the workflow the trace just selected gets cleared and the graph falls
+    // back to type defaults — which for most projects means no transitions at all.
+    if (historicalTrace?.task.sprint_id) return;
     setSelectedSprintId(current => {
       if (!selectedSprintType) return null;
       if (current && projectScopedSprints.some(sprint => sprint.id === current && sprint.sprint_type === selectedSprintType)) return current;
       return null;
     });
-  }, [projectScopedSprints, selectedSprintType]);
+  }, [projectScopedSprints, selectedSprintType, historicalTrace]);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -235,6 +267,11 @@ export default function RoutingPage() {
           sprintId={scopedSprintId}
           sprintName={scopedSprintName}
           sprintType={scopedSprintType}
+          historicalTrace={historicalTrace}
+          onClearHistoricalTrace={() => {
+            setHistoricalTrace(null);
+            window.history.replaceState(null, '', '/routing');
+          }}
         />
       )}
 

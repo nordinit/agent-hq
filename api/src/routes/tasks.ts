@@ -13,6 +13,7 @@ import {
   putReviewEvidence,
 } from '../domains/tasks/release';
 import { buildTaskContext, type TaskContextMode, type TaskContextOptions } from '../domains/tasks/context';
+import { traceTaskHistory } from '../domains/routing/trace';
 import { resolveTaskFieldSchema, TaskCustomFieldValidationError } from '../domains/tasks/fields';
 import {
   createTaskRelationship,
@@ -872,6 +873,23 @@ router.get('/:id/history', async (req: Request, res: Response) => {
     const tenantId = await resolveTenantIdFromRequest(db, req);
     if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
     res.json(await listTaskHistory(db, Number(req.params.id)));
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status ?? 500;
+    res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ── GET /api/v1/tasks/:id/trace ──────────────────────────────────────────────
+// The task's status history replayed against the routing graph, so the path it
+// actually took can be drawn on the same diagram that describes the rules.
+// Distinct from /history, which is a field-level diff log rather than status moves.
+
+router.get('/:id/trace', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    if (!await requireTaskVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Task not found' });
+    res.json(await traceTaskHistory(db, { task_id: req.params.id, tenant_id: tenantId }));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     res.status(status).json({ error: err instanceof Error ? err.message : String(err) });

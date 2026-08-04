@@ -1,6 +1,6 @@
 import { apiFetch } from './http';
 import { withWorkflowAliases } from './workflowAliases';
-import type { ReconcilerConfig, RoutingConfig, RoutingScopeInfo, RoutingTransition, TaskRoutingRule, TaskStatusMeta, TransitionRequirement, TransitionRequirementFieldsResponse, WorkflowEventMapping, WorkflowGraph } from './types';
+import type { HypotheticalTrace, ReconcilerConfig, RoutingConfig, RoutingScopeInfo, RoutingTransition, TaskRoutingRule, TaskStatusMeta, TransitionRequirement, TransitionRequirementFieldsResponse, WorkflowEventMapping, WorkflowGraph } from './types';
 
 export const routingClient = {
 // The workflow state machine, derived server-side so the canvas and Atlas share one
@@ -12,6 +12,18 @@ getRoutingGraph: (projectId?: number | null, workflowType?: string | null, workf
   if (workflowId) params.set('workflow_id', String(workflowId));
   if (taskType) params.set('task_type', taskType);
   return apiFetch<WorkflowGraph>(`/api/v1/routing/graph?${params.toString()}`);
+},
+
+// "If a <task_type> task in <from_status> reports <outcome>, then what?"
+traceRouting: (params: { projectId?: number | null; workflowType?: string | null; workflowId?: number | null; taskType?: string | null; fromStatus: string; outcome: string }) => {
+  const query = new URLSearchParams();
+  if (params.projectId) query.set('project_id', String(params.projectId));
+  if (params.workflowType) query.set('workflow_type', params.workflowType);
+  if (params.workflowId) query.set('workflow_id', String(params.workflowId));
+  if (params.taskType) query.set('task_type', params.taskType);
+  query.set('from_status', params.fromStatus);
+  query.set('outcome', params.outcome);
+  return apiFetch<HypotheticalTrace>(`/api/v1/routing/trace?${query.toString()}`);
 },
 
 // Routing Config / Routing Admin
