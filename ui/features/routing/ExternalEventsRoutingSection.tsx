@@ -43,7 +43,7 @@ const EVENT_MAPPING_COLUMN_HELP = {
   excludes: 'Task statuses where this mapping should not run.',
   action: 'What Agent HQ does when a matching event arrives.',
   evidence: 'Which review or failure details the event writes onto the task.',
-  priority: 'Which matching event mapping wins when more than one could apply. Lower numbers run first.',
+  priority: 'Which matching event mapping wins when more than one could apply. Higher numbers win; ties break toward the lower row ID.',
   enabled: 'Whether this event mapping is active.',
   actions: 'Edit or remove this event mapping.',
 };
