@@ -1742,3 +1742,28 @@ export interface HistoricalTrace {
     distinct_edges: number;
   };
 }
+
+// ── Routing preview ───────────────────────────────────────────────────────────
+// Mirrors api/src/domains/routing/preview.ts. Every canvas gesture is previewed before
+// it commits, so the operator sees the rows it writes and the lint it introduces.
+
+export type RoutingPreviewEntity = 'transition' | 'rule' | 'requirement';
+export type RoutingPreviewAction = 'create' | 'update' | 'delete';
+
+export interface RoutingPreviewOperation {
+  entity: RoutingPreviewEntity;
+  action: RoutingPreviewAction;
+  payload: Record<string, unknown>;
+}
+
+export interface RoutingPreview {
+  scope: WorkflowGraph['scope'];
+  operations: Array<{ entity: RoutingPreviewEntity; action: RoutingPreviewAction; affected: unknown }>;
+  introduced: WorkflowGraphLintFinding[];
+  resolved: WorkflowGraphLintFinding[];
+  before: WorkflowGraph['stats'];
+  after: WorkflowGraph['stats'];
+  /** Measured per-table row deltas — larger than the operation count when policy seeding fires. */
+  rows_written: Array<{ table: string; delta: number }>;
+  affects_workflows: { total: number; scope: 'workflow' | 'workflow_type' };
+}

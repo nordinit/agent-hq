@@ -1,6 +1,6 @@
 import { apiFetch } from './http';
 import { withWorkflowAliases } from './workflowAliases';
-import type { HypotheticalTrace, ReconcilerConfig, RoutingConfig, RoutingScopeInfo, RoutingTransition, TaskRoutingRule, TaskStatusMeta, TransitionRequirement, TransitionRequirementFieldsResponse, WorkflowEventMapping, WorkflowGraph } from './types';
+import type { HypotheticalTrace, RoutingPreview, RoutingPreviewOperation, ReconcilerConfig, RoutingConfig, RoutingScopeInfo, RoutingTransition, TaskRoutingRule, TaskStatusMeta, TransitionRequirement, TransitionRequirementFieldsResponse, WorkflowEventMapping, WorkflowGraph } from './types';
 
 export const routingClient = {
 // The workflow state machine, derived server-side so the canvas and Atlas share one
@@ -25,6 +25,24 @@ traceRouting: (params: { projectId?: number | null; workflowType?: string | null
   query.set('outcome', params.outcome);
   return apiFetch<HypotheticalTrace>(`/api/v1/routing/trace?${query.toString()}`);
 },
+
+// Apply a set of changes in a transaction that never commits, and report what they would
+// write plus the lint findings they introduce or clear. One gesture is one preview.
+previewRoutingChange: (params: {
+  projectId?: number | null;
+  workflowType?: string | null;
+  workflowId?: number | null;
+  operations: RoutingPreviewOperation[];
+}) =>
+  apiFetch<RoutingPreview>(`/api/v1/routing/preview`, {
+    method: 'POST',
+    body: JSON.stringify({
+      project_id: params.projectId ?? undefined,
+      workflow_type: params.workflowType ?? undefined,
+      workflow_id: params.workflowId ?? undefined,
+      operations: params.operations,
+    }),
+  }),
 
 // Routing Config / Routing Admin
 getRoutingConfig: (projectId?: number) => {
