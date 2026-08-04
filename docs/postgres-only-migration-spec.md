@@ -64,9 +64,10 @@ not about the engine production runs. `.github/workflows/ci.yml:58` already says
 
 ## Three defects to fix now, independent of this project
 
-These are live and do not depend on any decision below.
+These are live and do not depend on any decision below. **P0-1 and P0-3 were fixed on 2026-08-04**;
+P0-2 remains open and is Phase 1 work.
 
-**P0-1 — Production Postgres has no backup.** The only backup job is
+**P0-1 — Production Postgres has no backup. FIXED 2026-08-04.** The only backup job is
 `~/Library/LaunchAgents/com.atlas-hq.backup.plist` → `scripts/backup-db.sh`, which runs
 `sqlite3 "$DB_PATH" ".backup ..."` against `${AGENT_HQ_DB_PATH:-~/.agent-hq/agent-hq.db}` — the
 *frozen pre-cutover SQLite file*. It has produced six identical 2.87 GB copies of a database
@@ -76,17 +77,32 @@ everything written to Postgres since is unrecoverable. `docs/BACKUP_RESTORE.md` 
 incident — an API restart against an empty database, 700+ tasks lost, no backup — which is the same
 failure with the same cause.
 
+*Resolution:* `scripts/backup-pg.sh` takes a `pg_dump --format=custom` of `agent_hq_prod`, checks the
+archive's table of contents on every run, and under `--verify` restores into a scratch database and
+compares row counts against the source before dropping it. The launchd job now runs it with
+`--verify` at 02:00. First run: 1657 MB → 374 MB, 683 TOC entries, and a **performed** restore
+matching source counts on all seven checked tables (`tasks` 615, `projects` 8, `agents` 67, `sprints`
+44, `sprint_task_transitions` 902, `sprint_task_routing_rules` 495,
+`sprint_task_transition_requirements` 170). `backup-db.sh` now refuses to run without an explicit
+override.
+
 **P0-2 — `verifyMigrationsCurrent` is pointed at the wrong directory.** `startupVerifier.ts:181`
 passes `db/pg-baseline`, which contains only `01`–`03`. `db/pg-migrations/*.sql` is therefore never
 verified at boot, so a pending migration does not block startup — the exact guarantee the
 non-mutating startup contract exists to provide.
 
-**P0-3 — Dev `.env` files point at production.** Both `~/agent-hq-dev/.env` and
+**P0-3 — Dev `.env` files point at production. FIXED 2026-08-04.** Both `~/agent-hq-dev/.env` and
 `~/agent-hq-dev-2/.env` set `AGENT_HQ_DB_PATH=/Users/nordini/.agent-hq/agent-hq.db` and
 `PORT=3501`/`UI_PORT=3500` — production's file and ports. The running processes use different values,
 so they were started from older config; `ecosystem.dev.config.js` reads
 `env.AGENT_HQ_DB_PATH || <repo>/agent-hq-dev.db`, so a plain `pm2 restart` would attach a dev API to
-the production SQLite file. Both files also carry production's live `OPENCLAW_HOOKS_TOKEN`.
+the production SQLite file.
+
+*Resolution:* both files now carry the ports and database paths their processes actually use (3511/3510
+and 3521/3520, each with its own local `.db`), verified by restarting both APIs and confirming they
+came back on their own databases with the production SQLite file untouched. **Still open:** both `.env`
+files carry production's live `OPENCLAW_HOOKS_TOKEN`; rotating it needs to be coordinated with whatever
+consumes it.
 
 ## What "Postgres-only" means, and what it does not
 
@@ -210,11 +226,12 @@ with output recorded.
 
 ### Phase 0 — Stop the bleeding (P0 defects; no migration work)
 
-- `pg_dump`-based backup of `agent_hq_prod`, on a schedule, with a **restore actually performed**
-  into a scratch database and verified. Retire or repoint `scripts/backup-db.sh`.
+- ~~`pg_dump`-based backup of `agent_hq_prod`, on a schedule, with a **restore actually performed**
+  into a scratch database and verified. Retire or repoint `scripts/backup-db.sh`.~~ **Done 2026-08-04.**
 - Fix `startupVerifier.ts:181` to verify `db/pg-migrations`, and add a test that a pending migration
   blocks boot.
-- Fix the two dev `.env` files; rotate the shared `OPENCLAW_HOOKS_TOKEN`.
+- ~~Fix the two dev `.env` files~~ **done 2026-08-04**; rotate the shared `OPENCLAW_HOOKS_TOKEN`
+  (still outstanding).
 - Wire `findIncompatibilities()` into a lint over `api/src` and record the current violation count as
   a ratchet.
 
