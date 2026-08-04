@@ -1,8 +1,9 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   DndContext,
+  DragOverlay,
   MeasuringStrategy,
   PointerSensor,
   TraversalOrder,
@@ -53,14 +54,23 @@ export interface ConnectDragData {
   from: string;
 }
 
+export interface AssignDragData {
+  type: 'assign';
+  agentId: number;
+  agentName: string;
+}
+
 export interface StatusDropData {
   type: 'status';
   status: string;
 }
 
+export type CanvasDragData = ConnectDragData | AssignDragData;
+
 export function CanvasDndProvider({
   children,
   onConnect,
+  onAssign,
   onDragMove,
   onDragStart,
   onDragCancel,
@@ -68,22 +78,26 @@ export function CanvasDndProvider({
   children: ReactNode;
   /** Fired when a connection drag is released on a status node. */
   onConnect: (from: string, to: string) => void;
+  /** Fired when an agent chip is released on a status node. */
+  onAssign: (agentId: number, agentName: string, status: string) => void;
   onDragMove: (delta: { x: number; y: number } | null) => void;
   onDragStart: (from: string) => void;
   onDragCancel: () => void;
 }) {
+  const [dragging, setDragging] = useState<CanvasDragData | null>(null);
   // distance: 8 makes a click still a click. dnd-kit also swallows the click that follows a
   // real drag, so node selection needs no isDragging guard of its own.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const handleEnd = (event: DragEndEvent) => {
     onDragMove(null);
-    const active = event.active.data.current as ConnectDragData | undefined;
+    setDragging(null);
+    const active = event.active.data.current as CanvasDragData | undefined;
     const over = event.over?.data.current as StatusDropData | undefined;
     // Read the target from data, never by parsing the droppable id.
-    if (active?.type === 'connect' && over?.type === 'status') {
-      onConnect(active.from, over.status);
-      return;
+    if (over?.type === 'status') {
+      if (active?.type === 'connect') { onConnect(active.from, over.status); return; }
+      if (active?.type === 'assign') { onAssign(active.agentId, active.agentName, over.status); return; }
     }
     onDragCancel();
   };
@@ -98,14 +112,25 @@ export function CanvasDndProvider({
       measuring={MEASURING}
       autoScroll={AUTO_SCROLL}
       onDragStart={(event) => {
-        const data = event.active.data.current as ConnectDragData | undefined;
+        const data = event.active.data.current as CanvasDragData | undefined;
+        setDragging(data ?? null);
         if (data?.type === 'connect') onDragStart(data.from);
       }}
       onDragMove={(event: DragMoveEvent) => onDragMove(event.delta)}
       onDragEnd={handleEnd}
-      onDragCancel={() => { onDragMove(null); onDragCancel(); }}
+      onDragCancel={() => { onDragMove(null); setDragging(null); onDragCancel(); }}
     >
       {children}
+      {/* Overlay only for agent chips: a connection drag draws its own rubber band instead.
+          Mounted here at the context root rather than inside the canvas card, because that
+          card is an overflow container dnd-kit is simultaneously measuring. */}
+      <DragOverlay dropAnimation={null}>
+        {dragging?.type === 'assign' ? (
+          <span className="inline-flex items-center gap-1 rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-200 shadow-lg ring-1 ring-amber-400">
+            {dragging.agentName}
+          </span>
+        ) : null}
+      </DragOverlay>
     </DndContext>
   );
 }
@@ -159,4 +184,47 @@ export function StatusDropTarget({
     data: { type: 'status', status: statusId } satisfies StatusDropData,
   });
   return <>{children(isOver, setNodeRef)}</>;
+}
+
+/**
+ * A draggable agent chip.
+ *
+ * No avatar or colour exists on the Agent record, so this reuses the chip the canvas already
+ * shows on status nodes — slate when enabled, red when not — rather than inventing a second
+ * visual language for the same thing.
+ */
+export function AgentChip({
+  agentId,
+  agentName,
+  enabled,
+  subtitle,
+}: {
+  agentId: number;
+  agentName: string;
+  enabled: boolean;
+  subtitle?: string | null;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `assign-${agentId}`,
+    data: { type: 'assign', agentId, agentName } satisfies AssignDragData,
+  });
+
+  return (
+    <button
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      // touch-none for the same reason as the connect handle: without it the browser claims
+      // the gesture as a scroll and the drag never begins.
+      className={`flex w-full touch-none items-center gap-1.5 rounded-lg border px-2 py-1.5 text-left text-[11px] transition-colors ${
+        enabled
+          ? 'border-slate-700 bg-slate-800/70 text-slate-200 hover:border-amber-500/50'
+          : 'border-red-900/60 bg-red-950/40 text-red-300'
+      } ${isDragging ? 'opacity-40' : 'cursor-grab active:cursor-grabbing'}`}
+      title={enabled ? `Drag ${agentName} onto a status to assign it` : `${agentName} is disabled`}
+    >
+      <span className="truncate font-medium">{agentName}</span>
+      {subtitle && <span className="ml-auto truncate text-slate-500">{subtitle}</span>}
+    </button>
+  );
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, type HistoricalTrace, type HypotheticalTrace, type WorkflowGraph, type WorkflowGraphEdge, type WorkflowGraphNode } from '@/lib/api';
+import { api, type Agent, type HistoricalTrace, type HypotheticalTrace, type WorkflowGraph, type WorkflowGraphEdge, type WorkflowGraphNode } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { SectionHeader, COLOR_BADGE_CLASSES } from '@/components/workflowConfig';
 import { getTaskTypeLabel } from '@/lib/taskTypes';
@@ -16,7 +16,9 @@ import {
 import { scopePresentation, shouldMarkIndividually, summarizeScope } from '@/lib/workflowGraphScope';
 import type { GuardContext } from '@/lib/workflowGraphGuards';
 import TransitionComposer, { draftFromEdge, emptyDraft, type TransitionDraft } from './TransitionComposer';
-import { CanvasDndProvider, ConnectHandle, StatusDropTarget } from './CanvasDrag';
+import { AgentChip, CanvasDndProvider, ConnectHandle, StatusDropTarget } from './CanvasDrag';
+import AssignmentComposer from './AssignmentComposer';
+import { assignmentDraft, type GraphAssignment } from '@/lib/workflowGraphAssignment';
 import {
   AlertTriangle,
   CircleDot,
@@ -57,6 +59,7 @@ type Selection =
   | { kind: 'arc'; key: string }
   | { kind: 'event'; mappingId: number; target: string }
   | { kind: 'compose'; draft: TransitionDraft }
+  | { kind: 'assign'; agentId: number; agentName: string; status: string; rule?: GraphAssignment }
   | null;
 
 export default function WorkflowGraphSection({
@@ -98,6 +101,16 @@ export default function WorkflowGraphSection({
   /** In-flight connection drag: the source status and the pointer offset from its handle. */
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
   const [connectDelta, setConnectDelta] = useState<{ x: number; y: number } | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+
+  useEffect(() => {
+    if (!projectId) { setAgents([]); return; }
+    let cancelled = false;
+    api.getAgents(projectId)
+      .then(list => { if (!cancelled) setAgents(list); })
+      .catch(() => { if (!cancelled) setAgents([]); });
+    return () => { cancelled = true; };
+  }, [projectId]);
 
   const load = useCallback(() => {
     if (!sprintType) {
@@ -261,6 +274,11 @@ export default function WorkflowGraphSection({
         setConnectFrom(null);
         setConnectDelta(null);
         setSelection({ kind: 'compose', draft: emptyDraft(from, to) });
+      }}
+      onAssign={(agentId, agentName, status) => {
+        setConnectFrom(null);
+        setConnectDelta(null);
+        setSelection({ kind: 'assign', agentId, agentName, status });
       }}
     >
     <div className="space-y-4">
@@ -832,8 +850,43 @@ export default function WorkflowGraphSection({
         </Card>
 
         {/* ── Inspector ──────────────────────────────────────────── */}
+        {/* Sticky, because the canvas is often thousands of pixels tall: a static column
+            puts the agent palette below all of it, and a drag needs the chip and the target
+            node on screen together. self-start stops the column stretching to the row. */}
+        <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+        {/* Agent palette. Only meaningful once a project is chosen, since assignment rules
+            are project-scoped and the dispatcher never matches a project-less rule. */}
+        {projectId && agents.length > 0 && (
+          <Card className="h-fit p-5">
+            <p className="mb-1 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Agents</p>
+            <p className="mb-3 text-[11px] text-slate-500">
+              Drag one onto a status to make it pick up work there.
+            </p>
+            <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+              {agents.map(agent => (
+                <AgentChip
+                  key={agent.id}
+                  agentId={agent.id}
+                  agentName={agent.name}
+                  enabled={Boolean(agent.enabled)}
+                  subtitle={agent.role || null}
+                />
+              ))}
+            </div>
+          </Card>
+        )}
+
         <Card className="h-fit p-5">
-          {composing ? (
+          {selection?.kind === 'assign' ? (
+            <AssignmentComposer
+              draft={assignmentDraft(selection, graph)}
+              graph={graph}
+              taskTypes={taskTypes}
+              context={guardContext}
+              onCancel={() => setSelection(null)}
+              onCommitted={() => { setSelection(null); load(); }}
+            />
+          ) : composing ? (
             <TransitionComposer
               draft={composing}
               graph={graph}
@@ -888,6 +941,13 @@ export default function WorkflowGraphSection({
               findings={graph.lint.filter(f => f.node === selectedNode.id)}
               graph={graph}
               onAddTransition={(from, to) => setSelection({ kind: 'compose', draft: emptyDraft(from, to) })}
+              onEditAssignment={(assignment) => setSelection({
+                kind: 'assign',
+                agentId: assignment.agent_id ?? 0,
+                agentName: assignment.agent_name ?? 'agent',
+                status: selectedNode.id,
+                rule: assignment,
+              })}
             />
           ) : selectedArc ? (
             <ArcInspector
@@ -904,7 +964,7 @@ export default function WorkflowGraphSection({
                   Nothing to report. Select a status or transition to inspect it.
                 </p>
               ) : (
-                <ul className="space-y-2">
+                <ul className="max-h-[calc(100vh-16rem)] space-y-2 overflow-y-auto pr-1">
                   {graph.lint.map((finding, index) => (
                     <li
                       key={`${finding.code}-${index}`}
@@ -932,6 +992,8 @@ export default function WorkflowGraphSection({
             </div>
           )}
         </Card>
+
+        </div>
       </div>
       </div>
     </CanvasDndProvider>
@@ -943,11 +1005,13 @@ function NodeInspector({
   findings,
   graph,
   onAddTransition,
+  onEditAssignment,
 }: {
   node: WorkflowGraphNode;
   findings: WorkflowGraph['lint'];
   graph: WorkflowGraph;
   onAddTransition?: (from: string, to: string) => void;
+  onEditAssignment?: (assignment: GraphAssignment) => void;
 }) {
   return (
     <div className="space-y-4">
@@ -987,9 +1051,15 @@ function NodeInspector({
                 key={assignment.rule_id}
                 className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/60 px-2.5 py-1.5 text-xs"
               >
-                <span className={assignment.agent_enabled ? 'text-slate-300' : 'text-red-300 line-through'}>
+                <button
+                  onClick={() => onEditAssignment?.(assignment)}
+                  disabled={!onEditAssignment}
+                  className={`text-left ${assignment.agent_enabled ? 'text-slate-300' : 'text-red-300 line-through'} ${
+                    onEditAssignment ? 'hover:text-amber-300' : ''
+                  }`}
+                >
                   {assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`}
-                </span>
+                </button>
                 <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
                   {assignment.task_type ? getTaskTypeLabel(assignment.task_type) : 'all types'}
                   <span className="text-slate-600">·</span>
