@@ -9,6 +9,73 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     tenant_id: z.number().int().positive().optional().describe('Optional tenant selector for super-admin MCP keys with admin.cross_tenant only'),
   };
 
+  // ── Routing graph and traces ───────────────────────────────────────────────
+  // Routing config is a state machine: statuses are nodes, transitions are edges,
+  // gate requirements are edge conditions, and assignment rules say who owns a node.
+  // These four tools expose the derived machine rather than the raw rows, so an agent
+  // and the canvas reason over one representation and cannot reach different answers.
+
+  const graphScopeSchema = {
+    ...tenantSelectorSchema,
+    project_id: z.number().int().positive().optional().describe('Project ID. Most routing config is project-scoped, so omitting this usually yields an empty graph'),
+    sprint_id: z.number().int().positive().optional().describe('Workflow ID, to layer workflow-specific overrides over the type defaults'),
+    sprint_type: z.string().min(1).describe('Workflow type key. Required: a graph is always scoped to one workflow type'),
+    task_type: taskTypeSchema.nullable().optional().describe('Narrow to one task type. Catch-all rows that also apply are still included'),
+  };
+
+  registerTool(
+    ['agent_hq_get_routing_graph', 'atlas_get_routing_graph'],
+    'Get the routing configuration as a state machine: status nodes with their assigned agents and inbound workflow events, transition edges labelled by outcome with their gate requirements, and lint findings for structural problems. Use this instead of reassembling rules, transitions and requirements by hand. Requires workflow.analyze_routing_graph.',
+    graphScopeSchema,
+    (args) => wrap(() => api.getRoutingGraph(args))(),
+    { domain: 'routing_graph', rest_paths: ['/api/v1/routing/graph'] },
+  );
+
+  registerTool(
+    ['agent_hq_analyze_routing_graph', 'atlas_analyze_routing_graph'],
+    'Findings-only digest of the routing graph: unreachable and dead-end statuses, statuses with no agent assigned, transitions that can never fire because a higher-precedence one always wins, gates whose outcome no transition uses, and rules pointing at disabled agents. Returns the same analysis as agent_hq_get_routing_graph without the node and edge geometry, so it is far cheaper on context when you only need to know what is wrong. Requires workflow.analyze_routing_graph.',
+    graphScopeSchema,
+    (args) => wrap(async () => {
+      const graph = await api.getRoutingGraph(args) as {
+        scope?: unknown;
+        stats?: unknown;
+        lint?: Array<{ code: string; severity: string; message: string; node?: string; edge?: string }>;
+      };
+      const findings = graph.lint ?? [];
+      const byCode: Record<string, number> = {};
+      for (const finding of findings) byCode[finding.code] = (byCode[finding.code] ?? 0) + 1;
+      return {
+        scope: graph.scope,
+        stats: graph.stats,
+        finding_counts_by_code: byCode,
+        findings,
+      };
+    })(),
+    { domain: 'routing_graph', rest_paths: ['/api/v1/routing/graph'] },
+  );
+
+  registerTool(
+    ['agent_hq_trace_routing', 'atlas_trace_routing'],
+    'Answer "if a task of this type sitting in this status reports this outcome, what happens?" Returns the transition that wins, every transition that also matched and why it lost, the gate requirements that would be checked first, and which agent picks the task up at the destination status. Gates are listed, not evaluated — a real pass/fail needs evidence values from a real task. Requires workflow.analyze_routing_graph.',
+    {
+      ...graphScopeSchema,
+      from_status: z.string().min(1).describe('The status the task is sitting in'),
+      outcome: z.string().min(1).describe('The outcome an agent would report'),
+    },
+    (args) => wrap(() => api.traceRouting(args as typeof args & { from_status: string; outcome: string }))(),
+    { domain: 'routing_graph', rest_paths: ['/api/v1/routing/trace'] },
+  );
+
+  registerTool(
+    ['agent_hq_trace_task_path', 'atlas_trace_task_path'],
+    'Replay a task\'s status history against the routing graph. Each move is matched to the transition or workflow event that produced it, with per-edge visit counts so repeated rework loops are visible, manual moves flagged as off-graph, and moves that no current rule explains reported as configuration drift. Use this to explain why a task ended up where it did, or why it is cycling. Requires workflow.analyze_routing_graph.',
+    {
+      task_id: z.number().int().positive().describe('Task ID to replay'),
+    },
+    ({ task_id }) => wrap(() => api.traceTaskPath(task_id))(),
+    { domain: 'routing_graph', rest_paths: ['/api/v1/tasks/:id/trace'] },
+  );
+
   registerTool(
     ['agent_hq_list_routing_rules', 'agent_hq_list_assignment_rules', 'atlas_list_routing_rules', 'atlas_list_assignment_rules'],
     'List assignment rules that map task type and status to agents for workflow-type defaults or workflow overrides. Non-admin MCP keys require routing_rules.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only. sprint_* fields are the current machine-readable compatibility fields.',

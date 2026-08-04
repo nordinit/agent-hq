@@ -1417,6 +1417,22 @@ export class AgentHqApiClient {
     return this.request<unknown>('DELETE', `/api/v1/agents/${agentId}/mcp-permissions`);
   }
 
+  // ── Routing graph and traces ───────────────────────────────────────────────
+  // The derived state machine and its analyses, so an agent reasons over the same
+  // representation the canvas draws rather than re-deriving one from raw rows.
+
+  getRoutingGraph(params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; task_type?: string | null } = {}) {
+    return this.request<unknown>('GET', appendQuery('/api/v1/routing/graph', params));
+  }
+
+  traceRouting(params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; task_type?: string | null; from_status: string; outcome: string }) {
+    return this.request<unknown>('GET', appendQuery('/api/v1/routing/trace', params));
+  }
+
+  traceTaskPath(taskId: number) {
+    return this.request<unknown>('GET', `/api/v1/tasks/${taskId}/trace`);
+  }
+
   listRoutingRules(params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/rules', params));
   }

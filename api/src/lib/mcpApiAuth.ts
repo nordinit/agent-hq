@@ -404,6 +404,22 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'workflow.analyze_routing_graph',
+    group: 'Workflow',
+    label: 'Analyze routing graph',
+    description: 'Allows reading the routing configuration as a derived state machine — status nodes, transition edges, gate requirements, assigned agents and structural lint findings — plus hypothetical traces ("what happens on this outcome") and replays of a task\'s status history against that graph. Read-only analysis: it grants no ability to change rules, transitions, requirements or task state. Off by default for scoped runtime keys, because a graph spans a whole project and workflow type rather than the agent\'s own task.',
+    endpoints: [
+      'GET /api/v1/routing/graph',
+      'GET /api/v1/routing/trace',
+      'POST /api/v1/routing/trace',
+      'GET /api/v1/tasks/:id/trace',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'workflow_definitions.read_project_scope',
     group: 'Workflow',
     label: 'Read project workflow definitions',
@@ -2627,6 +2643,61 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     return deny({
       reason: `Normal Agent HQ MCP keys can only read workflow configuration scoped to the active task's sprint and project.`,
       requiredCapability: 'workflow.read_active_configuration',
+    });
+  }
+
+  // Routing graph and hypothetical traces. Read-only analysis of configuration, but a
+  // graph spans a whole project and workflow type rather than one task, so it is gated
+  // on its own capability and still confined to the key's scoped project/workflow.
+  if ((requestPath === '/routing/graph' || requestPath === '/routing/trace')
+    && (method === 'GET' || (method === 'POST' && requestPath === '/routing/trace'))) {
+    if (!await requireCapability(
+      'workflow.analyze_routing_graph',
+      `Routing graph analysis is disabled for ${identity.agentSlug}.`,
+    )) return;
+    const graphSprintId = parsePositiveInt(req.query.sprint_id ?? req.query.workflow_id);
+    const graphProjectId = parsePositiveInt(req.query.project_id);
+    if (graphProjectId != null && scopedProjectIds.has(graphProjectId)) return next();
+    if (graphSprintId != null && scopedSprintIds.has(graphSprintId)) return next();
+    return deny({
+      reason: `Normal Agent HQ MCP keys can only analyze routing graphs scoped to their assigned project or the active task's workflow.`,
+      requiredCapability: 'workflow.analyze_routing_graph',
+    });
+  }
+
+  // Replaying a task's path is a routing-graph analysis of that task, so it needs the
+  // analyze capability on top of the ordinary task-read scoping applied below.
+  const taskTraceMatch = requestPath.match(/^\/tasks\/(\d+)\/trace$/);
+  if (taskTraceMatch && method === 'GET') {
+    const taskId = Number(taskTraceMatch[1]);
+    if (!await requireCapability(
+      'workflow.analyze_routing_graph',
+      `Routing graph analysis is disabled for ${identity.agentSlug}.`,
+      { taskId },
+    )) return;
+    if (scopedTaskIds.has(taskId)) return next();
+    if (permissionState.enabledCapabilities.has('tasks.read_project_context')
+      || permissionState.enabledCapabilities.has('tasks.manage_project_tasks')) {
+      if (canonicalAgentProjectId == null) {
+        return deny({
+          reason: `${identity.agentSlug} does not have an assigned project for task path replay.`,
+          requiredCapability: 'workflow.analyze_routing_graph',
+          taskId,
+        });
+      }
+      if (!await taskBelongsToProject(db, identity, taskId, canonicalAgentProjectId)) {
+        return deny({
+          reason: `Task #${taskId} is outside the assigned project for ${identity.agentSlug}.`,
+          requiredCapability: 'workflow.analyze_routing_graph',
+          taskId,
+        });
+      }
+      return next();
+    }
+    return deny({
+      reason: `Normal Agent HQ MCP keys can only replay tasks they can already read.`,
+      requiredCapability: 'workflow.analyze_routing_graph',
+      taskId,
     });
   }
 
