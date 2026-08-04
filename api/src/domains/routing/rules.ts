@@ -319,6 +319,31 @@ export async function deleteRoutingRule(db: Db, input: Record<string, unknown> &
   const existing = await db.get(`SELECT * FROM sprint_task_routing_rules WHERE id = ?${tenant.sql}`, id, ...tenant.params) as RoutingRuleRecord | undefined;
   if (!existing) throw withStatus('Routing rule not found', 404);
 
+  // Scope guard. Previously this parsed sprintId, called requireSprint for its side
+  // effect, then DELETEd on `id` alone — so any rule in the tenant could be removed
+  // regardless of which project or workflow the caller was addressing, and deleting a
+  // workflow-type default while viewing one workflow silently removed it from every
+  // workflow of that type. Mirrors the guard deleteRoutingTransition already applies.
+  const requestedProjectId = Number.isFinite(Number(input.project_id)) ? Number(input.project_id) : null;
+  const requestedSprintType = typeof input.sprint_type === 'string' && input.sprint_type.trim().length > 0
+    ? input.sprint_type.trim()
+    : null;
+  const requestedSprintId = parseSprintId(input.sprint_id);
+  if (requestedProjectId != null && existing.project_id != null && Number(existing.project_id) !== requestedProjectId) {
+    throw withStatus('Routing rule not found', 404);
+  }
+  if (requestedSprintType != null && existing.sprint_type != null && String(existing.sprint_type) !== requestedSprintType) {
+    throw withStatus('Routing rule not found', 404);
+  }
+  // A caller addressing a specific workflow must not delete the shared default: the
+  // row's own sprint_id has to match what was asked for, NULL included.
+  if (input.sprint_id !== undefined) {
+    const existingSprintId = existing.sprint_id == null ? null : Number(existing.sprint_id);
+    if (existingSprintId !== requestedSprintId) {
+      throw withStatus('Routing rule not found', 404);
+    }
+  }
+
   const sprintId = parseSprintId(input.sprint_id ?? existing.sprint_id);
   if (sprintId) await requireSprint(db, sprintId, tenantId);
   await db.run(`DELETE FROM sprint_task_routing_rules WHERE id = ?${tenant.sql}`, id, ...tenant.params);

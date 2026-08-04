@@ -53,6 +53,14 @@ export function parseSprintId(raw: unknown): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+/**
+ * Truthy across both engines: PostgreSQL returns booleans for `enabled`, SQLite returns 0/1,
+ * and some query paths stringify. `Boolean(row.enabled)` would call '0' true.
+ */
+export function isRowEnabled(value: unknown): boolean {
+  return value === true || value === 1 || value === '1';
+}
+
 export function normalizeOptionalEnabled(input: unknown, fallback: number): number {
   if (input === undefined) return fallback;
   if (input === null || input === '') return fallback;
@@ -346,10 +354,15 @@ export function annotateRoutingRuleScope(
 ): RoutingRuleRow[] {
   const normalizedScopeKind = typeof options?.scopeKind === 'string' ? options.scopeKind.trim() : null;
   const defaultsOnly = normalizedScopeKind === 'defaults' || normalizedScopeKind === 'sprint_type_default';
+  // Only an ENABLED override supersedes the inherited default. Disabling an override means
+  // that row is skipped and resolution falls through to the workflow-type default, which is
+  // exactly what the resolvers do (`AND enabled = 1` inside the query that unions both
+  // scopes). Counting disabled overrides here made the graph render a live default as
+  // superseded — the canvas ghosting a rule the dispatcher was still executing.
   const overrideKeys = new Set<string>();
   if (selectedSprintId != null) {
     for (const row of rows) {
-      if ((row.rule_scope_kind ?? row.scope_kind) === 'sprint_override') {
+      if ((row.rule_scope_kind ?? row.scope_kind) === 'sprint_override' && isRowEnabled(row.enabled)) {
         overrideKeys.add(`${String(row.task_type ?? '')}::${String(row.status)}`);
       }
     }
@@ -526,9 +539,15 @@ export function annotateRequirementScope(
   rows: TransitionRequirementRecord[],
   selectedSprintId: number | null,
 ): TransitionRequirementRecord[] {
+  // Enabled overrides only, matching loadSprintTaskTransitionRequirements: it filters on
+  // `enabled = 1` before deduping, so a disabled override drops out and the inherited
+  // default still gates. Treating it as superseding here would ghost a live requirement.
   const overrideKeys = new Set(
     rows
-      .filter((row) => selectedSprintId != null && row.sprint_id != null && Number(row.sprint_id) === selectedSprintId)
+      .filter((row) => selectedSprintId != null
+        && row.sprint_id != null
+        && Number(row.sprint_id) === selectedSprintId
+        && isRowEnabled(row.enabled))
       .map(requirementOverrideKey),
   );
   return rows.map((row) => {
