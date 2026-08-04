@@ -61,7 +61,7 @@ export type GraphRuleInput = GraphScopeAnnotation & {
   enabled: boolean;
 };
 
-export type GraphRequirementInput = {
+export type GraphRequirementInput = GraphScopeAnnotation & {
   id: number;
   outcome: string;
   task_type: string | null;
@@ -129,6 +129,9 @@ export type GraphAssignment = {
   enabled: boolean;
   scope_kind: string;
   is_inherited: boolean;
+  is_override: boolean;
+  /** False when a workflow-scoped override supersedes this inherited row. */
+  effective_for_sprint: boolean;
 };
 
 /** An ambient event mapping that can drop a task into this status from many others. */
@@ -166,6 +169,10 @@ export type GraphGate = {
   message: string;
   task_type: string | null;
   enabled: boolean;
+  scope_kind: string;
+  is_inherited: boolean;
+  is_override: boolean;
+  effective_for_sprint: boolean;
 };
 
 /** A workflow event that can also fire this edge, alongside an agent reporting it. */
@@ -192,6 +199,9 @@ export type GraphEdge = {
   is_protected: boolean;
   scope_kind: string;
   is_inherited: boolean;
+  is_override: boolean;
+  /** False when a workflow-scoped override supersedes this inherited row. */
+  effective_for_sprint: boolean;
   /** Key for collapsing parallel edges between the same node pair in the UI. */
   parallel_group: string;
   /** True when to_status sits at or before from_status — a rework loop. */
@@ -313,7 +323,7 @@ export function buildWorkflowGraph(input: {
   const groups = new Map<string, GraphTransitionInput[]>();
   for (const transition of transitions) {
     if (!isLive(transition)) continue;
-    const key = `${transition.from_status} ${transition.outcome} ${transition.task_type ?? ''}`;
+    const key = `${transition.from_status}\u0000${transition.outcome}\u0000${transition.task_type ?? ''}`;
     groups.set(key, [...(groups.get(key) ?? []), transition]);
   }
   for (const group of groups.values()) {
@@ -354,6 +364,10 @@ export function buildWorkflowGraph(input: {
         message: requirement.message,
         task_type: requirement.task_type,
         enabled: requirement.enabled,
+        scope_kind: requirement.scope_kind ?? 'sprint_type_default',
+        is_inherited: Boolean(requirement.is_inherited),
+        is_override: Boolean(requirement.is_override),
+        effective_for_sprint: requirement.effective_for_sprint !== false,
       }));
 
     if (!statusByKey.has(transition.from_status)) {
@@ -379,6 +393,8 @@ export function buildWorkflowGraph(input: {
       is_protected: Boolean(transition.is_protected),
       scope_kind: transition.scope_kind ?? 'sprint_type_default',
       is_inherited: Boolean(transition.is_inherited),
+      is_override: Boolean(transition.is_override),
+      effective_for_sprint: transition.effective_for_sprint !== false,
       parallel_group: `${transition.from_status}->${transition.to_status}`,
       is_back_edge: stageOf(transition.to_status) <= stageOf(transition.from_status),
       shadowed_by: shadowedBy.get(`t${transition.id}`) ?? null,
@@ -415,7 +431,11 @@ export function buildWorkflowGraph(input: {
         enabled: entry.mapping.enabled,
         is_protected: false,
         scope_kind: 'workflow_event',
+        // A mapping belongs to the workflow itself, so there is nothing to inherit
+        // from or be superseded by: it always applies at the scope it was read at.
         is_inherited: false,
+        is_override: false,
+        effective_for_sprint: true,
         parallel_group: `${from}->${entry.target}`,
         is_back_edge: stageOf(entry.target) <= stageOf(from),
         shadowed_by: null,
@@ -500,6 +520,8 @@ export function buildWorkflowGraph(input: {
         enabled: rule.enabled,
         scope_kind: rule.scope_kind ?? 'sprint_type_default',
         is_inherited: Boolean(rule.is_inherited),
+        is_override: Boolean(rule.is_override),
+        effective_for_sprint: rule.effective_for_sprint !== false,
       };
     });
 
@@ -708,6 +730,10 @@ export async function getWorkflowGraph(
       severity: String(row.severity ?? 'block'),
       message: String(row.message ?? ''),
       enabled: asBool(row.enabled),
+      scope_kind: asNullableString(row.scope_kind),
+      is_inherited: asBool(row.is_inherited),
+      is_override: asBool(row.is_override),
+      effective_for_sprint: row.effective_for_sprint === undefined ? undefined : asBool(row.effective_for_sprint),
     })),
     agents: agentRows.map((row) => ({
       id: asNumber(row.id),

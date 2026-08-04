@@ -437,6 +437,123 @@ describe('buildWorkflowGraph', () => {
       expect(graph.edges.find((edge) => edge.transition_id === 2)?.shadowed_by).toBeNull();
       expect(graph.nodes.find((node) => node.id === 'review')?.lint).toContain('unreachable_status');
     });
+
+    // Without these the canvas cannot tell a live inherited row from one a workflow
+    // override supersedes: both look identical once is_inherited is all it gets.
+    it('carries the full scope annotation onto edges', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+          status('review', { stage_order: 2 }),
+        ],
+        transitions: [
+          transition(1, 'todo', 'review', 'completed', {
+            scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+          }),
+          transition(2, 'todo', 'done', 'completed', {
+            scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+          }),
+        ],
+        rules: [rule(1, 'todo', 1), rule(2, 'review', 1)],
+      });
+      expect(graph.edges.find((edge) => edge.transition_id === 1)).toMatchObject({
+        scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+      });
+      expect(graph.edges.find((edge) => edge.transition_id === 2)).toMatchObject({
+        scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+      });
+    });
+
+    it('defaults an unannotated edge to a live workflow-type default', () => {
+      // No workflow is selected, so nothing is superseded and every row participates.
+      expect(healthy().edges[0]).toMatchObject({
+        scope_kind: 'sprint_type_default', is_inherited: false, is_override: false, effective_for_sprint: true,
+      });
+    });
+
+    it('carries the full scope annotation onto assignments', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [
+          rule(1, 'todo', 1, {
+            scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+          }),
+          rule(2, 'todo', 1, {
+            scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+          }),
+        ],
+      });
+      const todo = graph.nodes.find((node) => node.id === 'todo');
+      expect(todo?.assignments.find((assignment) => assignment.rule_id === 1)).toMatchObject({
+        scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+      });
+      expect(todo?.assignments.find((assignment) => assignment.rule_id === 2)).toMatchObject({
+        scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+      });
+    });
+
+    it('carries the full scope annotation onto gates', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+        requirements: [
+          requirement(1, 'completed', {
+            scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+          }),
+          requirement(2, 'completed', {
+            field_name: 'notes',
+            scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+          }),
+        ],
+      });
+      const gates = graph.edges[0].gates;
+      expect(gates.find((gate) => gate.requirement_id === 1)).toMatchObject({
+        scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+      });
+      expect(gates.find((gate) => gate.requirement_id === 2)).toMatchObject({
+        scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+      });
+    });
+
+    it('defaults an unannotated gate to a live workflow-type default', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+        requirements: [requirement(1, 'completed')],
+      });
+      expect(graph.edges[0].gates[0]).toMatchObject({
+        scope_kind: 'sprint_type_default', is_inherited: false, is_override: false, effective_for_sprint: true,
+      });
+    });
+
+    it('marks an event-derived edge as always effective and never inherited', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('ready', { stage_order: 1 }),
+          status('in_progress', { stage_order: 2 }),
+        ],
+        transitions: [transition(1, 'todo', 'ready', 'triaged')],
+        rules: [rule(1, 'todo', 1), rule(2, 'ready', 1), rule(3, 'in_progress', 1)],
+        eventMappings: [eventMapping(27, { status_includes: ['ready'] })],
+      });
+      expect(graph.edges.find((edge) => edge.kind === 'event')).toMatchObject({
+        scope_kind: 'workflow_event', is_inherited: false, is_override: false, effective_for_sprint: true,
+      });
+    });
   });
 
   describe('workflow events', () => {

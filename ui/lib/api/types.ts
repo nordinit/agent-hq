@@ -1568,6 +1568,9 @@ export interface WorkflowGraphAssignment {
   enabled: boolean;
   scope_kind: string;
   is_inherited: boolean;
+  is_override: boolean;
+  /** False when a workflow-scoped override supersedes this inherited row. */
+  effective_for_sprint: boolean;
 }
 
 export interface WorkflowGraphInboundEvent {
@@ -1610,6 +1613,10 @@ export interface WorkflowGraphGate {
   message: string;
   task_type: string | null;
   enabled: boolean;
+  scope_kind: string;
+  is_inherited: boolean;
+  is_override: boolean;
+  effective_for_sprint: boolean;
 }
 
 export interface WorkflowGraphEdge {
@@ -1626,6 +1633,9 @@ export interface WorkflowGraphEdge {
   is_protected: boolean;
   scope_kind: string;
   is_inherited: boolean;
+  is_override: boolean;
+  /** False when a workflow-scoped override supersedes this inherited row. */
+  effective_for_sprint: boolean;
   parallel_group: string;
   is_back_edge: boolean;
   shadowed_by: string | null;
