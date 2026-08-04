@@ -22,6 +22,7 @@ import {
   RefreshCw,
   Bot,
   Ban,
+  Zap,
 } from 'lucide-react';
 
 const LINT_LABELS: Record<string, string> = {
@@ -35,6 +36,7 @@ const LINT_LABELS: Record<string, string> = {
   rule_targets_disabled_agent: 'Disabled agent',
   no_entry_point: 'No entry point',
   scope_not_configured: 'Scope not configured',
+  event_to_unknown_status: 'Event targets unknown status',
 };
 
 const SEVERITY_STYLES: Record<string, { chip: string; dot: string }> = {
@@ -46,6 +48,7 @@ const SEVERITY_STYLES: Record<string, { chip: string; dot: string }> = {
 type Selection =
   | { kind: 'node'; id: string }
   | { kind: 'arc'; key: string }
+  | { kind: 'event'; mappingId: number; target: string }
   | null;
 
 export default function WorkflowGraphSection({
@@ -88,7 +91,7 @@ export default function WorkflowGraphSection({
   );
 
   const edgesById = useMemo(
-    () => new Map((graph?.edges ?? []).map(edge => [edge.transition_id, edge])),
+    () => new Map((graph?.edges ?? []).map(edge => [edge.id, edge])),
     [graph],
   );
   const nodesById = useMemo(
@@ -101,6 +104,7 @@ export default function WorkflowGraphSection({
     for (const edge of graph?.edges ?? []) if (edge.task_type) set.add(edge.task_type);
     for (const node of graph?.nodes ?? []) {
       for (const assignment of node.assignments) if (assignment.task_type) set.add(assignment.task_type);
+      for (const event of node.inbound_events) if (event.task_type) set.add(event.task_type);
     }
     return [...set].sort();
   }, [graph]);
@@ -153,12 +157,18 @@ export default function WorkflowGraphSection({
   const selectedArc = selection?.kind === 'arc'
     ? layout.arcs.find(arc => arc.key === selection.key) ?? null
     : null;
+  const selectedEvent = selection?.kind === 'event'
+    ? nodesById.get(selection.target)?.inbound_events.find(e => e.mapping_id === selection.mappingId) ?? null
+    : null;
+  // Selecting an ambient event lights up the statuses it can actually fire from —
+  // the "show me" that replaces drawing one arc per source.
+  const eventSourceHighlight = new Set(selectedEvent?.from ?? []);
 
   return (
     <div className="space-y-4">
       <SectionHeader
         label="Workflow Graph"
-        help="The routing configuration as a state machine: statuses are nodes, transitions are arcs labelled by the outcome that triggers them, agent chips show who picks work up, and locks mark outcomes with gate requirements. Read-only — use the other tabs to edit."
+        help="The routing configuration as a state machine: statuses are nodes, transitions are arcs labelled by the outcome that triggers them, agent chips show who picks work up, and locks mark outcomes with gate requirements. Workflow events that move a task from almost anywhere appear as a lightning chip on the status they land in — click it to light up the statuses it can fire from. Read-only — use the other tabs to edit."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {taskTypes.length > 0 && (
@@ -315,17 +325,23 @@ export default function WorkflowGraphSection({
                 const dimmed = showOnlyProblems && !hasProblem;
                 const isSelected = selection?.kind === 'node' && selection.id === node.id;
                 const badgeClass = COLOR_BADGE_CLASSES[node.color] ?? COLOR_BADGE_CLASSES.slate;
+                const isEventSource = eventSourceHighlight.has(node.id);
+                const isEventTarget = selection?.kind === 'event' && selection.target === node.id;
                 return (
                   <button
                     key={node.id}
                     onClick={() => setSelection({ kind: 'node', id: node.id })}
                     className={`absolute flex flex-col justify-center rounded-xl border px-3 py-2 text-left transition-all ${
-                      isSelected
+                      isSelected || isEventTarget
                         ? 'border-amber-400 bg-slate-800 shadow-lg shadow-amber-950/30'
-                        : hasProblem
-                          ? 'border-red-500/50 bg-slate-900 hover:border-red-400'
-                          : 'border-slate-700 bg-slate-900 hover:border-slate-500'
-                    } ${dimmed ? 'opacity-25' : ''}`}
+                        : isEventSource
+                          ? 'border-cyan-400/70 bg-cyan-950/20 shadow-lg shadow-cyan-950/30'
+                          : hasProblem
+                            ? 'border-red-500/50 bg-slate-900 hover:border-red-400'
+                            : 'border-slate-700 bg-slate-900 hover:border-slate-500'
+                    } ${dimmed ? 'opacity-25' : ''} ${
+                      selection?.kind === 'event' && !isEventSource && !isEventTarget ? 'opacity-30' : ''
+                    }`}
                     style={{
                       left: nodeX,
                       top: layoutNode.y - NODE_HEIGHT / 2,
@@ -342,9 +358,33 @@ export default function WorkflowGraphSection({
                       {hasProblem && <AlertTriangle className="ml-auto h-3.5 w-3.5 shrink-0 text-red-400" />}
                     </div>
                     <div className="mt-1 flex items-center gap-1 overflow-hidden">
+                      {/* Ambient workflow events are not drawn as arcs, so the status
+                          they drop tasks into carries the marker instead. */}
+                      {node.inbound_events.map(event => (
+                        <span
+                          key={event.mapping_id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={e => {
+                            e.stopPropagation();
+                            setSelection({ kind: 'event', mappingId: event.mapping_id, target: node.id });
+                          }}
+                          onKeyDown={e => {
+                            if (e.key !== 'Enter' && e.key !== ' ') return;
+                            e.stopPropagation();
+                            setSelection({ kind: 'event', mappingId: event.mapping_id, target: node.id });
+                          }}
+                          className="inline-flex shrink-0 items-center gap-0.5 truncate rounded bg-cyan-950/70 px-1.5 py-0.5 text-[11px] text-cyan-300 hover:bg-cyan-900/70"
+                          title={`${event.event_name} — from ${event.from.length} status${event.from.length === 1 ? '' : 'es'}`}
+                        >
+                          <Zap className="h-3 w-3" />
+                          {event.event_name}
+                          <span className="text-cyan-500">×{event.from.length}</span>
+                        </span>
+                      ))}
                       {node.assignments.length === 0 ? (
                         <span className="text-[11px] text-slate-600">
-                          {node.terminal ? '—' : 'no agent'}
+                          {node.inbound_events.length > 0 ? '' : node.terminal ? '—' : 'no agent'}
                         </span>
                       ) : (
                         node.assignments.slice(0, 2).map(assignment => (
@@ -414,13 +454,54 @@ export default function WorkflowGraphSection({
             <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-4 bg-slate-500" /> forward skip</span>
             <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-4 bg-purple-400" /> rework loop</span>
             <span className="flex items-center gap-1"><Lock className="h-3 w-3 text-amber-400" /> gated outcome</span>
+            <span className="flex items-center gap-1"><Zap className="h-3 w-3 text-cyan-400" /> workflow event — click to show its sources</span>
             <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-4 border-t border-dashed border-slate-500" /> never fires</span>
           </div>
         </Card>
 
         {/* ── Inspector ──────────────────────────────────────────── */}
         <Card className="h-fit p-5">
-          {selectedNode ? (
+          {selectedEvent ? (
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Workflow event</p>
+                <p className="mt-1 flex items-center gap-1.5 text-base font-semibold text-white">
+                  <Zap className="h-4 w-4 text-cyan-400" />
+                  {selectedEvent.event_name}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {selectedEvent.source ?? 'any source'} · sets status to{' '}
+                  <code className="text-slate-300">{selection?.kind === 'event' ? selection.target : ''}</code>
+                </p>
+              </div>
+              <p className="rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-2.5 text-xs leading-relaxed text-cyan-200/90">
+                This event moves a task directly, without an agent reporting an outcome. It is
+                not drawn as an arc because it applies from {selectedEvent.from.length} statuses —
+                those are highlighted on the canvas.
+              </p>
+              <div>
+                <p className="mb-1.5 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
+                  Fires from ({selectedEvent.from.length})
+                </p>
+                <ul className="flex flex-wrap gap-1">
+                  {selectedEvent.from.map(from => (
+                    <li key={from}>
+                      <button
+                        onClick={() => setSelection({ kind: 'node', id: from })}
+                        className="rounded bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700"
+                      >
+                        {nodesById.get(from)?.label ?? from}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Mapping #{selectedEvent.mapping_id} · priority {selectedEvent.priority} ·{' '}
+                {selectedEvent.task_type ? getTaskTypeLabel(selectedEvent.task_type) : 'all task types'}
+              </p>
+            </div>
+          ) : selectedNode ? (
             <NodeInspector node={selectedNode} findings={graph.lint.filter(f => f.node === selectedNode.id)} />
           ) : selectedArc ? (
             <ArcInspector arc={selectedArc} edges={arcEdges(selectedArc)} graph={graph} />
@@ -440,7 +521,8 @@ export default function WorkflowGraphSection({
                       onClick={() => {
                         if (finding.node) setSelection({ kind: 'node', id: finding.node });
                         else if (finding.edge !== undefined) {
-                          const edge = edgesById.get(finding.edge);
+                          const edge = edgesById.get(finding.edge)
+                            ?? (graph.edges.find(e => e.mapping_id != null && `e${e.mapping_id}` === finding.edge));
                           if (edge) setSelection({ kind: 'arc', key: edge.parallel_group });
                         }
                       }}
@@ -586,10 +668,29 @@ function ArcInspector({
                 <span className="text-[11px] text-slate-500">#{edge.transition_id} · p{edge.priority}</span>
               </div>
               <p className="mt-1 text-[11px] text-slate-500">
+                {edge.kind === 'event' ? 'workflow event · ' : ''}
                 {edge.task_type ? getTaskTypeLabel(edge.task_type) : 'all task types'}
                 {edge.is_inherited && ' · inherited'}
                 {!edge.enabled && ' · disabled'}
               </p>
+              {edge.event_triggers.length > 0 && (
+                <div className="mt-2 border-t border-slate-800 pt-2">
+                  {/* An outcome-kind mapping reports this edge's outcome on the task's
+                      behalf, so the edge fires without an agent ever running. */}
+                  <p className="mb-1 flex items-center gap-1 text-[11px] text-cyan-300">
+                    <Zap className="h-3 w-3" /> also fired by {edge.event_triggers.length} event
+                    {edge.event_triggers.length === 1 ? '' : 's'}
+                  </p>
+                  <ul className="space-y-0.5">
+                    {edge.event_triggers.map(trigger => (
+                      <li key={trigger.mapping_id} className="text-[11px] text-slate-400">
+                        <code>{trigger.event_name}</code>
+                        {trigger.source && <span className="text-slate-600"> · {trigger.source}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {edge.shadowed_by !== null && (
                 <p className="mt-1.5 text-[11px] text-red-300">
                   Never fires — transition #{edge.shadowed_by} always wins.

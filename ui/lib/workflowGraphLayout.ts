@@ -20,7 +20,8 @@ export const NODE_WIDTH = 248;
 export type LayoutInputNode = { id: string };
 
 export type LayoutInputEdge = {
-  transition_id: number;
+  /** Stable edge id: `t<transition_id>` for transitions, `e<mapping_id>` for events. */
+  id: string;
   from: string;
   to: string;
   parallel_group: string;
@@ -51,8 +52,8 @@ export type LayoutArc = {
    * happy path off the right edge, so they are drawn as a short straight connector.
    */
   adjacent: boolean;
-  /** Transition ids collapsed into this arc, so the UI can badge the count. */
-  edgeIds: number[];
+  /** Edge ids collapsed into this arc, so the UI can badge the count. */
+  edgeIds: string[];
 };
 
 export type GraphLayout = {
@@ -109,7 +110,7 @@ export function computeGraphLayout(nodes: LayoutInputNode[], edges: LayoutInputE
       side: (toIndex > fromIndex ? 'right' : 'left') as 'left' | 'right',
       selfLoop: fromIndex === toIndex,
       adjacent: toIndex === fromIndex + 1,
-      edgeIds: group.map((edge) => edge.transition_id).sort((a, b) => a - b),
+      edgeIds: group.map((edge) => edge.id).sort(),
     };
   });
 

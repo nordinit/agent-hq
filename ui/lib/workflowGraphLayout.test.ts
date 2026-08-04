@@ -4,8 +4,8 @@ import { computeGraphLayout, NODE_HEIGHT, ROW_PITCH, type LayoutInputEdge } from
 
 const nodes = (...ids: string[]) => ids.map((id) => ({ id }));
 
-function edge(transition_id: number, from: string, to: string): LayoutInputEdge {
-  return { transition_id, from, to, parallel_group: `${from}->${to}` };
+function edge(id: number, from: string, to: string): LayoutInputEdge {
+  return { id: `t${id}`, from, to, parallel_group: `${from}->${to}` };
 }
 
 test('places nodes in a single column at a fixed pitch', () => {
@@ -39,12 +39,12 @@ test('forward transitions arc right and rework transitions arc left', () => {
 
 test('collapses parallel transitions between the same pair into one arc', () => {
   const layout = computeGraphLayout(nodes('todo', 'done'), [
-    { transition_id: 5, from: 'todo', to: 'done', parallel_group: 'todo->done' },
-    { transition_id: 2, from: 'todo', to: 'done', parallel_group: 'todo->done' },
-    { transition_id: 9, from: 'todo', to: 'done', parallel_group: 'todo->done' },
+    { id: 't5', from: 'todo', to: 'done', parallel_group: 'todo->done' },
+    { id: 't2', from: 'todo', to: 'done', parallel_group: 'todo->done' },
+    { id: 't9', from: 'todo', to: 'done', parallel_group: 'todo->done' },
   ]);
   assert.equal(layout.arcs.length, 1);
-  assert.deepEqual(layout.arcs[0].edgeIds, [2, 5, 9]);
+  assert.deepEqual(layout.arcs[0].edgeIds, ['t2', 't5', 't9']);
 });
 
 test('gives overlapping arcs on the same side different lanes', () => {

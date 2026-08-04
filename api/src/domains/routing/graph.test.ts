@@ -1,5 +1,7 @@
 import {
   buildWorkflowGraph,
+  effectiveEventSources,
+  type GraphEventMappingInput,
   type GraphRequirementInput,
   type GraphRuleInput,
   type GraphStatusInput,
@@ -45,12 +47,29 @@ function requirement(id: number, outcome: string, over: Partial<GraphRequirement
   };
 }
 
+function eventMapping(id: number, over: Partial<GraphEventMappingInput> = {}): GraphEventMappingInput {
+  return {
+    id,
+    event_name: 'agent_started',
+    source: 'agent_hq_runtime',
+    task_type: null,
+    status_includes: [],
+    status_excludes: [],
+    action_kind: 'status',
+    action_target: 'in_progress',
+    enabled: true,
+    priority: 100,
+    ...over,
+  };
+}
+
 function build(over: {
   statuses?: GraphStatusInput[];
   transitions?: GraphTransitionInput[];
   rules?: GraphRuleInput[];
   requirements?: GraphRequirementInput[];
   agents?: Array<{ id: number; name: string; enabled: boolean }>;
+  eventMappings?: GraphEventMappingInput[];
 } = {}) {
   return buildWorkflowGraph({
     scope: SCOPE,
@@ -59,6 +78,7 @@ function build(over: {
     rules: over.rules ?? [],
     requirements: over.requirements ?? [],
     agents: over.agents ?? [{ id: 1, name: 'Piper', enabled: true }],
+    eventMappings: over.eventMappings ?? [],
   });
 }
 
@@ -112,7 +132,7 @@ describe('buildWorkflowGraph', () => {
       });
       // Higher priority wins, so #1 can never fire.
       const shadowed = graph.edges.find((edge) => edge.transition_id === 1);
-      expect(shadowed?.shadowed_by).toBe(2);
+      expect(shadowed?.shadowed_by).toBe('t2');
       expect(graph.edges.find((edge) => edge.transition_id === 2)?.shadowed_by).toBeNull();
       expect(codes(graph)).toContain('shadowed_transition');
     });
@@ -131,7 +151,7 @@ describe('buildWorkflowGraph', () => {
         rules: [rule(1, 'todo', 1)],
       });
       // ORDER BY priority DESC, id ASC -> #3 wins, #7 is shadowed.
-      expect(graph.edges.find((edge) => edge.transition_id === 7)?.shadowed_by).toBe(3);
+      expect(graph.edges.find((edge) => edge.transition_id === 7)?.shadowed_by).toBe('t3');
       expect(graph.edges.find((edge) => edge.transition_id === 3)?.shadowed_by).toBeNull();
     });
 
@@ -416,6 +436,153 @@ describe('buildWorkflowGraph', () => {
       });
       expect(graph.edges.find((edge) => edge.transition_id === 2)?.shadowed_by).toBeNull();
       expect(graph.nodes.find((node) => node.id === 'review')?.lint).toContain('unreachable_status');
+    });
+  });
+
+  describe('workflow events', () => {
+    describe('effectiveEventSources', () => {
+      const all = ['todo', 'ready', 'in_progress', 'done'];
+
+      it('expands an empty includes list to every status', () => {
+        expect(effectiveEventSources({ status_includes: [], status_excludes: [] }, all)).toEqual(all);
+      });
+
+      it('honours an explicit includes list', () => {
+        expect(effectiveEventSources({ status_includes: ['ready'], status_excludes: [] }, all)).toEqual(['ready']);
+      });
+
+      it('lets excludes win over includes', () => {
+        expect(effectiveEventSources({ status_includes: ['ready', 'todo'], status_excludes: ['todo'] }, all))
+          .toEqual(['ready']);
+      });
+
+      it('drops statuses that are not in the catalog', () => {
+        // Real mappings exclude statuses that do not exist for every workflow type.
+        expect(effectiveEventSources({ status_includes: ['ready', 'ghost'], status_excludes: [] }, all))
+          .toEqual(['ready']);
+      });
+    });
+
+    // Regression for the reported bug: Default Project / dev showed Ready as a dead end
+    // and In Progress as unreachable, because mapping #27 (agent_started -> in_progress)
+    // moves the task and the graph only knew about transitions.
+    const withAgentStarted = () => build({
+      statuses: [
+        status('todo', { is_default_entry: true, stage_order: 0 }),
+        status('ready', { stage_order: 1 }),
+        status('in_progress', { stage_order: 2 }),
+        status('done', { terminal: true, stage_order: 3 }),
+      ],
+      transitions: [
+        transition(1, 'todo', 'ready', 'triaged'),
+        transition(2, 'in_progress', 'done', 'completed'),
+      ],
+      rules: [rule(1, 'todo', 1), rule(2, 'ready', 1), rule(3, 'in_progress', 1)],
+      eventMappings: [eventMapping(27, { status_excludes: ['in_progress', 'done'] })],
+    });
+
+    it('does not call a status a dead end when an event leaves it', () => {
+      const graph = withAgentStarted();
+      expect(graph.nodes.find(n => n.id === 'ready')?.lint).not.toContain('dead_end_status');
+    });
+
+    it('does not call a status unreachable when an event reaches it', () => {
+      const graph = withAgentStarted();
+      expect(graph.nodes.find(n => n.id === 'in_progress')?.lint).not.toContain('unreachable_status');
+    });
+
+    it('surfaces an ambient event as an inbound marker on its target', () => {
+      const graph = withAgentStarted();
+      const target = graph.nodes.find(n => n.id === 'in_progress');
+      expect(target?.inbound_events).toHaveLength(1);
+      expect(target?.inbound_events[0]).toMatchObject({ mapping_id: 27, event_name: 'agent_started' });
+      // todo and ready can fire it; in_progress and done are excluded.
+      expect(target?.inbound_events[0].from).toEqual(['todo', 'ready']);
+    });
+
+    it('does not draw ambient events as arcs', () => {
+      const graph = withAgentStarted();
+      expect(graph.edges.every(edge => edge.kind === 'transition')).toBe(true);
+      expect(graph.edges).toHaveLength(2);
+    });
+
+    it('draws a scoped event mapping as a real edge instead', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('ready', { stage_order: 1 }),
+          status('in_progress', { stage_order: 2 }),
+        ],
+        transitions: [transition(1, 'todo', 'ready', 'triaged')],
+        rules: [rule(1, 'todo', 1), rule(2, 'ready', 1), rule(3, 'in_progress', 1)],
+        eventMappings: [eventMapping(27, { status_includes: ['ready'] })],
+      });
+      const eventEdge = graph.edges.find(edge => edge.kind === 'event');
+      expect(eventEdge).toMatchObject({ from: 'ready', to: 'in_progress', outcome: 'agent_started', mapping_id: 27 });
+      // Drawn as an arc, so it must NOT also appear as a node marker.
+      expect(graph.nodes.find(n => n.id === 'in_progress')?.inbound_events).toEqual([]);
+    });
+
+    it('treats an outcome-kind mapping as a trigger on existing edges, not a new edge', () => {
+      const graph = build({
+        statuses: [
+          status('review', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'review', 'done', 'completed_for_review')],
+        rules: [rule(1, 'review', 1)],
+        eventMappings: [eventMapping(3, {
+          event_name: 'deployed_for_qa',
+          action_kind: 'outcome',
+          action_target: 'completed_for_review',
+        })],
+      });
+      expect(graph.edges).toHaveLength(1);
+      expect(graph.edges[0].event_triggers).toHaveLength(1);
+      expect(graph.edges[0].event_triggers[0]).toMatchObject({ mapping_id: 3, event_name: 'deployed_for_qa' });
+    });
+
+    it('ignores ignore-kind and disabled mappings entirely', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+        eventMappings: [
+          eventMapping(5, { action_kind: 'ignore', action_target: null }),
+          eventMapping(6, { enabled: false }),
+        ],
+      });
+      expect(graph.edges).toHaveLength(1);
+      expect(graph.nodes.every(n => n.inbound_events.length === 0)).toBe(true);
+    });
+
+    it('flags an event targeting a status outside the catalog', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+        eventMappings: [eventMapping(9, { status_includes: ['todo'], action_target: 'ghost' })],
+      });
+      expect(codes(graph)).toContain('event_to_unknown_status');
+    });
+
+    it('does not report an event-only scope as unconfigured', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('in_progress', { stage_order: 1 }),
+        ],
+        transitions: [],
+        rules: [rule(1, 'todo', 1), rule(2, 'in_progress', 1)],
+        eventMappings: [eventMapping(27, { status_excludes: ['in_progress'] })],
+      });
+      expect(codes(graph)).not.toContain('scope_not_configured');
     });
   });
 

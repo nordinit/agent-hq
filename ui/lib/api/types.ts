@@ -1555,7 +1555,7 @@ export interface WorkflowGraphLintFinding {
   severity: WorkflowGraphLintSeverity;
   message: string;
   node?: string;
-  edge?: number;
+  edge?: string;
 }
 
 export interface WorkflowGraphAssignment {
@@ -1570,6 +1570,23 @@ export interface WorkflowGraphAssignment {
   is_inherited: boolean;
 }
 
+export interface WorkflowGraphInboundEvent {
+  mapping_id: number;
+  event_name: string;
+  source: string | null;
+  task_type: string | null;
+  /** Statuses this event can fire from, after includes/excludes are applied. */
+  from: string[];
+  priority: number;
+}
+
+export interface WorkflowGraphEventTrigger {
+  mapping_id: number;
+  event_name: string;
+  source: string | null;
+  task_type: string | null;
+}
+
 export interface WorkflowGraphNode {
   id: string;
   label: string;
@@ -1579,6 +1596,7 @@ export interface WorkflowGraphNode {
   is_default_entry: boolean;
   layer: number;
   assignments: WorkflowGraphAssignment[];
+  inbound_events: WorkflowGraphInboundEvent[];
   inbound: number;
   outbound: number;
   lint: string[];
@@ -1596,7 +1614,9 @@ export interface WorkflowGraphGate {
 
 export interface WorkflowGraphEdge {
   id: string;
-  transition_id: number;
+  kind: 'transition' | 'event';
+  transition_id: number | null;
+  mapping_id: number | null;
   from: string;
   to: string;
   outcome: string;
@@ -1608,8 +1628,9 @@ export interface WorkflowGraphEdge {
   is_inherited: boolean;
   parallel_group: string;
   is_back_edge: boolean;
-  shadowed_by: number | null;
+  shadowed_by: string | null;
   gates: WorkflowGraphGate[];
+  event_triggers: WorkflowGraphEventTrigger[];
   lint: string[];
 }
 
