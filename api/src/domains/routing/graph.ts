@@ -22,6 +22,7 @@ import { listRoutingRulesForSprint } from './rules';
 import { listTransitionRequirements } from './requirements';
 import { listWorkflowEventMappings } from './externalEventMappings';
 import { requireProjectSprintTypeScope, withStatus } from './scope';
+import { tableExists } from './policy/metadata';
 
 // ── Inputs to the pure builder ────────────────────────────────────────────────
 
@@ -117,6 +118,14 @@ export type LintFinding = {
   node?: string;
   /** GraphEdge.id this finding is anchored to, when edge-scoped. */
   edge?: string;
+  /**
+   * Outcome this finding is anchored to, when outcome-scoped.
+   *
+   * Load-bearing for the preview diff, which keys findings by code plus anchor: several
+   * outcomes can raise the same code at once, and without this they collapse to one key and a
+   * change that fixes exactly one of them shows as fixing none.
+   */
+  outcome?: string;
 };
 
 export type GraphAssignment = {
@@ -163,6 +172,14 @@ export type GraphNode = {
 
 export type GraphGate = {
   requirement_id: number;
+  /**
+   * Which table the gate came from.
+   *
+   * 'global' rows live in `transition_requirements`, are shared by every project, and apply
+   * only because this workflow has no enabled gate of its own for the outcome — see the
+   * fallback note on buildWorkflowGraph. They are not editable from a workflow canvas.
+   */
+  source: 'workflow' | 'global';
   field_name: string;
   requirement_type: string;
   severity: string;
@@ -256,16 +273,37 @@ export function effectiveEventSources(
   return base.filter((status) => !excluded.has(status) && allStatuses.includes(status));
 }
 
+/** A row from the global `transition_requirements` table, which has no project or workflow. */
+export type GraphGlobalRequirementInput = {
+  id: number;
+  outcome: string;
+  task_type: string | null;
+  field_name: string;
+  requirement_type: string;
+  severity: string;
+  message: string;
+};
+
+/**
+ * Gate resolution mirrors `loadTransitionRequirements` in api/src/lib/taskRelease.ts, which
+ * REPLACES rather than accumulates: if the workflow-scoped set for an outcome is empty, the
+ * global table applies instead. That is the single most surprising thing about this model —
+ * disabling the last gate on an outcome does not remove it, it swaps in the global one, and
+ * every enabled global row in production is severity 'block'. Modelling it here is what lets
+ * the canvas show a lock that dispatch will actually enforce.
+ */
 export function buildWorkflowGraph(input: {
   scope: WorkflowGraph['scope'];
   statuses: GraphStatusInput[];
   transitions: GraphTransitionInput[];
   rules: GraphRuleInput[];
   requirements: GraphRequirementInput[];
+  globalRequirements?: GraphGlobalRequirementInput[];
   agents: GraphAgentInput[];
   eventMappings?: GraphEventMappingInput[];
 }): WorkflowGraph {
   const { scope, statuses, transitions, rules, requirements, agents } = input;
+  const globalRequirements = input.globalRequirements ?? [];
   const eventMappings = (input.eventMappings ?? []).filter((mapping) => mapping.enabled);
 
   const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
@@ -344,19 +382,47 @@ export function buildWorkflowGraph(input: {
 
   // ── Edges ───────────────────────────────────────────────────────────────────
   const gatesByOutcome = new Map<string, GraphRequirementInput[]>();
+  /** Outcomes whose gates come from the global table because the workflow defines none. */
+  const gatedByFallback = new Set<string>();
   for (const requirement of requirements) {
     if (!requirement.enabled) continue;
     gatesByOutcome.set(requirement.outcome, [...(gatesByOutcome.get(requirement.outcome) ?? []), requirement]);
   }
 
+  // Global rows, indexed the way the resolver reads them: a task-type match is tried before
+  // the task_type IS NULL catch-all, and the first non-empty set wins outright.
+  const globalByOutcome = new Map<string, GraphGlobalRequirementInput[]>();
+  for (const requirement of globalRequirements) {
+    globalByOutcome.set(requirement.outcome, [...(globalByOutcome.get(requirement.outcome) ?? []), requirement]);
+  }
+  const globalFallback = (outcome: string, taskType: string | null): GraphGlobalRequirementInput[] => {
+    const candidates = globalByOutcome.get(outcome) ?? [];
+    if (taskType != null) {
+      const typed = candidates.filter((requirement) => requirement.task_type === taskType);
+      if (typed.length > 0) return typed;
+    }
+    return candidates.filter((requirement) => requirement.task_type == null);
+  };
+
   const edges: GraphEdge[] = transitions.map((transition) => {
     // A gate on task_type=null applies to every task type; a task-type-scoped gate
     // only decorates transitions that can carry that task type.
-    const gates = (gatesByOutcome.get(transition.outcome) ?? [])
+    const workflowGates = (gatesByOutcome.get(transition.outcome) ?? [])
       .filter((requirement) => requirement.task_type == null
         || transition.task_type == null
-        || requirement.task_type === transition.task_type)
+        || requirement.task_type === transition.task_type);
+
+    // The fallback only engages when the workflow has NOTHING enabled for the outcome. One
+    // surviving workflow gate short-circuits the global table entirely, which is why disabling
+    // gates one at a time is safe right up until the last one.
+    const fallback = workflowGates.length === 0
+      ? globalFallback(transition.outcome, transition.task_type ?? scope.task_type ?? null)
+      : [];
+    if (fallback.length > 0) gatedByFallback.add(transition.outcome);
+
+    const gates = workflowGates
       .map((requirement): GraphGate => ({
+        source: 'workflow',
         requirement_id: requirement.id,
         field_name: requirement.field_name,
         requirement_type: requirement.requirement_type,
@@ -368,7 +434,23 @@ export function buildWorkflowGraph(input: {
         is_inherited: Boolean(requirement.is_inherited),
         is_override: Boolean(requirement.is_override),
         effective_for_sprint: requirement.effective_for_sprint !== false,
-      }));
+      }))
+      .concat(fallback.map((requirement): GraphGate => ({
+        source: 'global',
+        requirement_id: requirement.id,
+        field_name: requirement.field_name,
+        requirement_type: requirement.requirement_type,
+        severity: requirement.severity,
+        message: requirement.message,
+        task_type: requirement.task_type,
+        // A global row that is reached is enabled and in force by definition: the loader
+        // filters on enabled, and nothing at workflow level can supersede it here.
+        enabled: true,
+        scope_kind: 'global_default',
+        is_inherited: true,
+        is_override: false,
+        effective_for_sprint: true,
+      })));
 
     if (!statusByKey.has(transition.from_status)) {
       addEdgeFinding(`t${transition.id}`, 'transition_from_unknown_status', 'error',
@@ -586,7 +668,47 @@ export function buildWorkflowGraph(input: {
     lint.push({
       code: 'gate_without_transition',
       severity: 'warn',
+      outcome: requirement.outcome,
       message: `Gate requirements exist for outcome "${requirement.outcome}", but no active transition uses it, so they never run.`,
+    });
+  }
+
+  // The fallback is invisible in the tables — nothing in this workflow's rows mentions it —
+  // so it has to be said out loud. It has deadlocked real tasks: an operator disables a gate
+  // to unblock work, the workflow set empties, and the global block-severity rows take over.
+  for (const outcome of [...gatedByFallback].sort()) {
+    const fields = globalRequirements
+      .filter((requirement) => requirement.outcome === outcome)
+      .map((requirement) => requirement.field_name);
+    lint.push({
+      code: 'gate_from_global_fallback',
+      severity: 'warn',
+      outcome,
+      message: `Outcome "${outcome}" has no gate defined here, so the shared global requirements apply instead`
+        + `${fields.length > 0 ? ` (${[...new Set(fields)].join(', ')})` : ''}. `
+        + 'Adding any gate for this outcome here replaces that global set rather than adding to it.',
+    });
+  }
+
+  // Task-type gates REPLACE the all-types gates for that type rather than adding to them, so
+  // an outcome carrying both means the all-types rows silently do not apply to that task type.
+  const gateTypesByOutcome = new Map<string, Set<string | null>>();
+  for (const requirement of requirements) {
+    if (!requirement.enabled) continue;
+    const seen = gateTypesByOutcome.get(requirement.outcome) ?? new Set<string | null>();
+    seen.add(requirement.task_type);
+    gateTypesByOutcome.set(requirement.outcome, seen);
+  }
+  for (const [outcome, types] of [...gateTypesByOutcome].sort(([a], [b]) => a.localeCompare(b))) {
+    const named = [...types].filter((type): type is string => type != null);
+    if (named.length === 0 || !types.has(null)) continue;
+    lint.push({
+      code: 'gate_task_type_replaces_default',
+      severity: 'warn',
+      outcome,
+      message: `Outcome "${outcome}" has gates for both all task types and ${named.sort().join(', ')}. `
+        + `For ${named.length === 1 ? 'that task type' : 'those task types'} the all-types gates do not apply — `
+        + 'the more specific set replaces them rather than adding to them.',
     });
   }
 
@@ -671,6 +793,17 @@ export async function getWorkflowGraph(
     () => listTransitionRequirements(db, input),
     () => db.all(`SELECT id, name, enabled FROM agents`) as Promise<Array<Record<string, unknown>>>,
     () => listWorkflowEventMappings(db, { ...input, tenant_id: scope.tenantId }),
+    // The global fallback table. Guarded because it is absent from some hand-built test
+    // schemas, and an unguarded read there fails the whole graph rather than one gate.
+    async (): Promise<Array<Record<string, unknown>>> => {
+      if (!await tableExists(db, 'transition_requirements')) return [];
+      return await db.all(`
+        SELECT id, outcome, task_type, field_name, requirement_type, severity, message
+        FROM transition_requirements
+        WHERE enabled = 1
+        ORDER BY priority DESC, id ASC
+      `) as Array<Record<string, unknown>>;
+    },
   ] as const;
 
   let loaded: unknown[];
@@ -680,13 +813,14 @@ export async function getWorkflowGraph(
   } else {
     loaded = await Promise.all(loaders.map((load) => load()));
   }
-  const [statuses, transitionsResult, rulesResult, requirementsResult, agentRows, eventResult] = loaded as [
+  const [statuses, transitionsResult, rulesResult, requirementsResult, agentRows, eventResult, globalRequirementRows] = loaded as [
     Awaited<ReturnType<typeof listSprintTypeTaskStatuses>>,
     Awaited<ReturnType<typeof listRoutingTransitions>>,
     Awaited<ReturnType<typeof listRoutingRulesForSprint>>,
     Awaited<ReturnType<typeof listTransitionRequirements>>,
     Array<Record<string, unknown>>,
     Awaited<ReturnType<typeof listWorkflowEventMappings>>,
+    Array<Record<string, unknown>>,
   ];
 
   const rawTransitions = (transitionsResult.transitions ?? []) as Array<Record<string, unknown>>;
@@ -755,6 +889,15 @@ export async function getWorkflowGraph(
       is_inherited: asBool(row.is_inherited),
       is_override: asBool(row.is_override),
       effective_for_sprint: row.effective_for_sprint === undefined ? undefined : asBool(row.effective_for_sprint),
+    })),
+    globalRequirements: globalRequirementRows.map((row) => ({
+      id: asNumber(row.id),
+      outcome: String(row.outcome ?? ''),
+      task_type: asNullableString(row.task_type),
+      field_name: String(row.field_name ?? ''),
+      requirement_type: String(row.requirement_type ?? 'required'),
+      severity: String(row.severity ?? 'block'),
+      message: String(row.message ?? ''),
     })),
     agents: agentRows.map((row) => ({
       id: asNumber(row.id),

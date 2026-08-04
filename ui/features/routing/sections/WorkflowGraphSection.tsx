@@ -19,6 +19,14 @@ import TransitionComposer, { draftFromEdge, emptyDraft, type TransitionDraft } f
 import { AgentChip, CanvasDndProvider, ConnectHandle, StatusDropTarget } from './CanvasDrag';
 import AssignmentComposer from './AssignmentComposer';
 import { assignmentDraft, type GraphAssignment } from '@/lib/workflowGraphAssignment';
+import GateComposer from './GateComposer';
+import {
+  gateDraftFrom,
+  gateOverrideDraft,
+  newGateDraft,
+  type GateDraft,
+  type GraphGate,
+} from '@/lib/workflowGraphGates';
 import {
   AlertTriangle,
   CircleDot,
@@ -46,6 +54,8 @@ const LINT_LABELS: Record<string, string> = {
   no_entry_point: 'No entry point',
   scope_not_configured: 'Scope not configured',
   event_to_unknown_status: 'Event targets unknown status',
+  gate_from_global_fallback: 'Global gate applies',
+  gate_task_type_replaces_default: 'Task-type gates replace defaults',
 };
 
 const SEVERITY_STYLES: Record<string, { chip: string; dot: string }> = {
@@ -60,6 +70,7 @@ type Selection =
   | { kind: 'event'; mappingId: number; target: string }
   | { kind: 'compose'; draft: TransitionDraft }
   | { kind: 'assign'; agentId: number; agentName: string; status: string; rule?: GraphAssignment }
+  | { kind: 'gate'; draft: GateDraft }
   | null;
 
 export default function WorkflowGraphSection({
@@ -102,6 +113,27 @@ export default function WorkflowGraphSection({
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
   const [connectDelta, setConnectDelta] = useState<{ x: number; y: number } | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [catalogFields, setCatalogFields] = useState<string[]>([]);
+
+  // Field suggestions for the gate composer. The catalog endpoint returns the custom-field
+  // schema, which is empty for most scopes — and when it is empty the API skips validation
+  // entirely, so any name is legal. The fields already in use on this graph are therefore the
+  // more useful list in practice, and the global fallback names matter most of all: they are
+  // exactly what an operator taking control of an outcome needs to re-declare.
+  const gateFieldSuggestions = useMemo(() => {
+    const names = new Set<string>(catalogFields);
+    for (const edge of graph?.edges ?? []) for (const gate of edge.gates) names.add(gate.field_name);
+    return [...names].sort();
+  }, [graph, catalogFields]);
+
+  useEffect(() => {
+    if (!sprintType && !sprintId) { setCatalogFields([]); return; }
+    let cancelled = false;
+    api.getTransitionRequirementFields(sprintId ?? undefined, undefined, sprintType ?? undefined)
+      .then(res => { if (!cancelled) setCatalogFields(res.field_names ?? []); })
+      .catch(() => { if (!cancelled) setCatalogFields([]); });
+    return () => { cancelled = true; };
+  }, [sprintType, sprintId]);
 
   useEffect(() => {
     if (!projectId) { setAgents([]); return; }
@@ -284,7 +316,7 @@ export default function WorkflowGraphSection({
     <div className="space-y-4">
       <SectionHeader
         label="Workflow Graph"
-        help="The routing configuration as a state machine: statuses are nodes, transitions are arcs labelled by the outcome that triggers them, agent chips show who picks work up, and locks mark outcomes with gate requirements. Workflow events that move a task from almost anywhere appear as a lightning chip on the status they land in — click it to light up the statuses it can fire from. Read-only — use the other tabs to edit."
+        help="The routing configuration as a state machine: statuses are nodes, transitions are arcs labelled by the outcome that triggers them, agent chips show who picks work up, and locks mark outcomes with gate requirements. Workflow events that move a task from almost anywhere appear as a lightning chip on the status they land in — click it to light up the statuses it can fire from. A lock marks an outcome with gate requirements; click one to edit it, or Add gate on a transition. Gates shown as “global fallback” come from the shared requirements table and apply only because this workflow defines none of its own — declaring one here replaces that whole set."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {taskTypes.length > 0 && (
@@ -877,7 +909,17 @@ export default function WorkflowGraphSection({
         )}
 
         <Card className="h-fit p-5">
-          {selection?.kind === 'assign' ? (
+          {selection?.kind === 'gate' ? (
+            <GateComposer
+              draft={selection.draft}
+              graph={graph}
+              taskTypes={taskTypes}
+              fieldSuggestions={gateFieldSuggestions}
+              context={guardContext}
+              onCancel={() => setSelection(null)}
+              onCommitted={() => { setSelection(null); load(); }}
+            />
+          ) : selection?.kind === 'assign' ? (
             <AssignmentComposer
               draft={assignmentDraft(selection, graph)}
               graph={graph}
@@ -955,6 +997,9 @@ export default function WorkflowGraphSection({
               edges={arcEdges(selectedArc)}
               graph={graph}
               onEditEdge={(edge) => setSelection({ kind: 'compose', draft: draftFromEdge(edge) })}
+              onEditGate={(gate) => setSelection({ kind: 'gate', draft: gateDraftFrom(gate, graph) })}
+              onOverrideGate={(gate) => setSelection({ kind: 'gate', draft: gateOverrideDraft(gate, graph) })}
+              onAddGate={(outcome, taskType) => setSelection({ kind: 'gate', draft: newGateDraft(graph, outcome, taskType) })}
             />
           ) : (
             <div className="space-y-3">
@@ -1121,11 +1166,17 @@ function ArcInspector({
   edges,
   graph,
   onEditEdge,
+  onEditGate,
+  onAddGate,
+  onOverrideGate,
 }: {
   arc: LayoutArc;
   edges: WorkflowGraphEdge[];
   graph: WorkflowGraph;
   onEditEdge?: (edge: WorkflowGraphEdge) => void;
+  onEditGate?: (gate: GraphGate) => void;
+  onAddGate?: (outcome: string, taskType: string | null) => void;
+  onOverrideGate?: (gate: GraphGate) => void;
 }) {
   const fromLabel = graph.nodes.find(n => n.id === arc.from)?.label ?? arc.from;
   const toLabel = graph.nodes.find(n => n.id === arc.to)?.label ?? arc.to;
@@ -1204,23 +1255,56 @@ function ArcInspector({
                   Never fires — transition #{edge.shadowed_by} always wins.
                 </p>
               )}
-              {edge.gates.length > 0 && (
-                <div className="mt-2 border-t border-slate-800 pt-2">
-                  <p className="mb-1 flex items-center gap-1 text-[11px] text-amber-300">
-                    <Lock className="h-3 w-3" /> {edge.gates.length} gate{edge.gates.length === 1 ? '' : 's'}
+              <div className="mt-2 border-t border-slate-800 pt-2">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <p className="flex items-center gap-1 text-[11px] text-amber-300">
+                    <Lock className="h-3 w-3" />
+                    {edge.gates.length === 0
+                      ? 'no gates'
+                      : `${edge.gates.length} gate${edge.gates.length === 1 ? '' : 's'}`}
                   </p>
-                  <ul className="space-y-0.5">
-                    {edge.gates.map(gate => (
-                      <li key={gate.requirement_id} className="text-[11px] text-slate-400">
+                  {onAddGate && (
+                    <button
+                      onClick={() => onAddGate(edge.outcome, edge.task_type)}
+                      className="rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-300 hover:border-amber-500/50 hover:text-amber-300"
+                    >
+                      Add gate
+                    </button>
+                  )}
+                </div>
+                <ul className="space-y-0.5">
+                  {edge.gates.map(gate => (
+                    // Global and workflow ids come from different tables and do collide.
+                    <li key={`${gate.source}-${gate.requirement_id}`} className="flex items-start justify-between gap-2">
+                      <button
+                        onClick={() => onEditGate?.(gate)}
+                        disabled={!onEditGate}
+                        className={`text-left text-[11px] text-slate-400 ${onEditGate ? 'hover:text-amber-300' : ''}`}
+                      >
                         <code>{gate.field_name}</code> · {gate.requirement_type}
                         <span className={gate.severity === 'block' ? 'text-red-400' : 'text-amber-400'}>
                           {' '}({gate.severity})
                         </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                        {/* A global gate is not this workflow's row — say so, or the operator
+                            will reasonably assume editing it affects only them. */}
+                        {gate.source === 'global' && <span className="text-slate-600"> · global fallback</span>}
+                        {gate.source === 'workflow' && gate.is_override && (
+                          <span className="text-purple-300"> · this workflow</span>
+                        )}
+                      </button>
+                      {gate.source === 'workflow' && gate.is_inherited && !gate.is_override && onOverrideGate && (
+                        <button
+                          onClick={() => onOverrideGate(gate)}
+                          className="shrink-0 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-purple-500/50 hover:text-purple-300"
+                          title="Add a workflow-scoped gate with the same identity, leaving the shared default alone"
+                        >
+                          Override
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </li>
           ))}
         </ul>
