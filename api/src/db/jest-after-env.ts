@@ -1,3 +1,17 @@
+// A PostgreSQL run needs a longer hook budget than SQLite's.
+//
+// jest's default is 5s, which is generous for `:memory:` and not enough for the first file in
+// each worker: that one pays for the template build — 71 tables, 224 indexes, 130 foreign keys
+// from db/pg-baseline plus the migrations, behind an advisory lock every other worker is waiting
+// on — and then for CREATE DATABASE ... TEMPLATE. Subsequent files in the same worker only
+// truncate and are fast.
+//
+// Raised only when AGENT_HQ_TEST_PG_URL is set. On SQLite the 5s default stays, where a hook
+// that slow is a real signal rather than the cost of building a schema.
+if (process.env.AGENT_HQ_TEST_PG_URL) {
+  jest.setTimeout(60_000);
+}
+
 afterEach(() => {
   const taskLifecycle = require('../lib/taskLifecycle') as Partial<typeof import('../lib/taskLifecycle')>;
   taskLifecycle.clearPendingEndedActiveInstanceLinkageCleanupTimers?.();

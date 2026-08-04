@@ -108,6 +108,8 @@ export async function ensureTemplateDatabase(): Promise<void> {
 }
 
 let workerPool: Pool | null = null;
+/** In-flight worker-database creation, so concurrent callers await one clone. */
+let workerInit: Promise<Db> | null = null;
 let workerDb: string | null = null;
 let cachedTables: string[] | null = null;
 
@@ -138,7 +140,23 @@ export function workerDatabaseUrl(): string {
  */
 export async function getTestDb(): Promise<Db> {
   if (workerPool) return new PostgresAdapter(workerPool);
+  // Memoised on the in-flight PROMISE, not just the resolved pool. Two callers arriving before
+  // the first finishes both saw workerPool === null and both entered the clone path, and the
+  // second one's DROP DATABASE then hit the connection the first had just opened —
+  // "database ... is being accessed by other users", from a race inside one worker rather than
+  // between workers. ensureTemplateDatabase() already holds an advisory lock for the
+  // cross-process case; this is the in-process equivalent.
+  if (!workerInit) {
+    workerInit = createWorkerDatabase().catch((err) => {
+      // A failed init must not be cached, or every later file in this worker inherits it.
+      workerInit = null;
+      throw err;
+    });
+  }
+  return await workerInit;
+}
 
+async function createWorkerDatabase(): Promise<Db> {
   await ensureTemplateDatabase();
   workerDb = workerDatabaseName();
 
@@ -146,8 +164,28 @@ export async function getTestDb(): Promise<Db> {
   try {
     // CREATE DATABASE ... TEMPLATE fails if anything is connected to the template, and
     // rejects being run inside a transaction — hence a bare query on a fresh connection.
-    await admin.query(`DROP DATABASE IF EXISTS ${workerDb}`);
-    await admin.query(`CREATE DATABASE ${workerDb} TEMPLATE ${TEMPLATE_DB}`);
+    //
+    // Reuse an existing worker database rather than recreating it. The "one clone per worker"
+    // design assumed this module's state survives the worker's lifetime, and it does not: jest
+    // gives every TEST FILE a fresh module registry, so workerPool is null again at the start of
+    // each file and every file re-entered the clone path. DROP DATABASE then failed with "is
+    // being accessed by other users" whenever the previous file's db/client.ts pool still held a
+    // connection — which is why --runInBand made it WORSE, not better: one worker means more
+    // files sharing one database, so more chances to collide.
+    //
+    // Isolation does not depend on the clone. setupTestDb() truncates every table at the start of
+    // each test, so an existing database is as clean as a fresh one and costs a truncate instead
+    // of a file copy.
+    //
+    // Deliberately no pg_terminate_backend as a workaround: the holder is usually the pool serving
+    // the test running right now, so killing it turns a setup failure into "terminating connection
+    // due to administrator command" in the middle of an unrelated assertion.
+    const { rows } = await admin.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [workerDb]);
+    if (rows.length === 0) {
+      // CREATE DATABASE ... TEMPLATE fails if anything is connected to the template, and rejects
+      // being run inside a transaction — hence a bare query on a fresh connection.
+      await admin.query(`CREATE DATABASE ${workerDb} TEMPLATE ${TEMPLATE_DB}`);
+    }
   } finally {
     await admin.end();
   }
@@ -181,6 +219,10 @@ export async function closeTestDb(): Promise<void> {
     await workerPool.end();
     workerPool = null;
   }
+  // Cleared alongside the pool. Leaving it set would hand the next getTestDb() a resolved
+  // promise wrapping a pool that has already been ended, which fails on first query rather
+  // than re-cloning as intended.
+  workerInit = null;
   cachedTables = null;
 }
 

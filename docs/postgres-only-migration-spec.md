@@ -317,7 +317,7 @@ effect of being asked what was applied; the constant moved to a side-effect-free
 
 The four competing `schema_migrations` definitions still exist — Phase 3b collapses them.
 
-### Phase 2 — Postgres becomes the default test engine (D4)
+### Phase 2 — Postgres becomes the default test engine (D4) — **suite green, conversion outstanding**
 
 - Invert `jest-setup-env.ts`: Postgres by default, SQLite only where a file explicitly asks.
 - Convert the 104 SQLite-pinned files in tranches by directory. Replace the 52 hand-built schemas
@@ -328,6 +328,27 @@ The four competing `schema_migrations` definitions still exist — Phase 3b coll
 
 **Exit:** all 160 files green on Postgres; zero unguarded `initSchema(` in tests; CI's Postgres job
 runs the whole suite; `describeSqliteOnly` has no remaining users.
+
+*Progress 2026-08-04:* the full suite is green on PostgreSQL — **162 suites / 1575 tests**, stable
+across repeat runs and under `--runInBand`, and CI now runs the whole suite on Postgres 17 instead
+of one file. Three harness defects were in the way, all in `pg/testFixture.ts`:
+
+1. The 5s hook timeout was sized for SQLite `:memory:` and could not cover a template build.
+   Raised to 60s only when `AGENT_HQ_TEST_PG_URL` is set.
+2. `testFixture.test.ts` closed the shared worker pool in its own `afterAll`, so the next file in
+   that worker re-cloned while a connection was live and failed somewhere else entirely.
+3. The real one: "one database per worker" assumed module state survives the worker, and **jest
+   gives every test file a fresh module registry**, so `workerPool` was null again at the start of
+   each file and every file re-entered the clone path. `--runInBand` made it worse rather than
+   better, which is what gave it away. The fixture now reuses an existing worker database and
+   relies on the truncation it already does for isolation.
+
+**Still outstanding, and this is the bulk of the phase:** green is not the same as *running on*
+Postgres. Only the **17** files using `setupTestDb` genuinely exercise it — the hard invariant there
+throws if the dialect is not postgres. **31** files still call `initSchema()` and **52** construct
+`new Database(` directly; those build SQLite whatever the environment says, and pass. Converting
+them, and then flipping `jest-setup-env.ts` so Postgres is the default rather than an opt-in, is the
+remaining work.
 
 ### Phase 3 — SQL portability sweep (the plan's Phase 2, finally)
 

@@ -1,5 +1,5 @@
-import { afterAll, beforeEach, describe, expect, it } from '@jest/globals';
-import { closeTestDb, getTestDb, resetTestDb } from './testFixture';
+import { beforeEach, describe, expect, it } from '@jest/globals';
+import { getTestDb, resetTestDb } from './testFixture';
 import type { Db } from '../adapter/types';
 
 const PG = process.env.AGENT_HQ_TEST_PG_URL;
@@ -8,7 +8,13 @@ const d = PG ? describe : describe.skip;
 d('pg testFixture probe', () => {
   let db: Db;
   beforeEach(async () => { db = await getTestDb(); await resetTestDb(); });
-  afterAll(async () => { await closeTestDb(); });
+
+  // No afterAll(closeTestDb). The worker database and its pool are shared by every file this
+  // jest worker runs, not owned by this one: closing it here nulls the fixture's cached handle,
+  // so the NEXT file re-enters the clone path while db/client.ts still holds a connection, and
+  // its DROP DATABASE fails with "is being accessed by other users". The failure lands on an
+  // unrelated file, which is why it read as flakiness. The database is disposable and stale ones
+  // are reaped by global setup on the next run.
 
   it('gives a worker database with the real baseline schema, legacy vocabulary', async () => {
     const tables = await db.all<{ table_name: string }>(
