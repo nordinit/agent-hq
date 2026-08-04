@@ -64,8 +64,7 @@ not about the engine production runs. `.github/workflows/ci.yml:58` already says
 
 ## Three defects to fix now, independent of this project
 
-These are live and do not depend on any decision below. **P0-1 and P0-3 were fixed on 2026-08-04**;
-P0-2 remains open and is Phase 1 work.
+These are live and do not depend on any decision below. **All three were fixed on 2026-08-04.**
 
 **P0-1 — Production Postgres has no backup. FIXED 2026-08-04.** The only backup job is
 `~/Library/LaunchAgents/com.atlas-hq.backup.plist` → `scripts/backup-db.sh`, which runs
@@ -86,10 +85,17 @@ matching source counts on all seven checked tables (`tasks` 615, `projects` 8, `
 `sprint_task_transition_requirements` 170). `backup-db.sh` now refuses to run without an explicit
 override.
 
-**P0-2 — `verifyMigrationsCurrent` is pointed at the wrong directory.** `startupVerifier.ts:181`
+**P0-2 — `verifyMigrationsCurrent` is pointed at the wrong directory. FIXED 2026-08-04.** `startupVerifier.ts:181`
 passes `db/pg-baseline`, which contains only `01`–`03`. `db/pg-migrations/*.sql` is therefore never
 verified at boot, so a pending migration does not block startup — the exact guarantee the
 non-mutating startup contract exists to provide.
+
+*Root cause, and why it is not a one-line fix:* migrations `10` and `11` sit in the sequence
+deliberately unapplied (AD-2 defers the rename), so verifying the real directory would have refused
+to boot production. The check was aimed where it could not fail. Both files now live in
+`db/pg-migrations/staged/`, which `loadMigrations` does not read, and the verifier takes both
+directories. Proven against the production ledger: 6 applied / 0 pending / 0 drifted boots, and an
+unapplied migration raises `MigrationPendingError`.
 
 **P0-3 — Dev `.env` files point at production. FIXED 2026-08-04.** Both `~/agent-hq-dev/.env` and
 `~/agent-hq-dev-2/.env` set `AGENT_HQ_DB_PATH=/Users/nordini/.agent-hq/agent-hq.db` and
@@ -219,6 +225,49 @@ dev instance cannot be moved to Postgres by editing `.env`. Their data is real (
 1.65 GB with an actively written WAL). They move first, and run on Postgres through a stabilization
 window, so the removal commit is not the first time dev exercises the engine.
 
+### D7 — The baseline stops being a generated snapshot and becomes migration 00.
+
+`db/pg-baseline/` is generated from a SQLite file: `scripts/pg/generate-baseline-schema.mjs` takes
+a `.db` path and `require`s `better-sqlite3`, and the generated header says *"Do not edit by hand:
+regenerate from the snapshot instead."* Once SQLite is gone that instruction cannot be followed —
+the baseline becomes a frozen artifact whose provenance story is dead, and whose generator must be
+deleted along with everything else that opens a `.db`.
+
+**Decision:** fold `01-tables.sql`, `02-indexes.sql` and `03-foreign-keys.sql` into a single
+`db/pg-migrations/00-baseline.sql` and retire the separate baseline directory. Future regeneration
+is `pg_dump --schema-only` against production, not a SQLite snapshot.
+
+This also settles the four competing `schema_migrations` definitions (D3): the baseline stops being
+a special case that sits outside the migration sequence and creates its own ledger, so exactly one
+definition remains — the runner's.
+
+Do this after the SQL sweep and before removal, while `pg_dump` tooling is fresh from Phase 0 and
+before the generator is deleted, so the fold can be verified by regenerating and diffing.
+
+## What survives the removal
+
+The migration tooling splits three ways, and only one of the three is permanent.
+
+**Deleted with SQLite.** Twelve of the twenty-one files in `scripts/pg/` are SQLite-coupled —
+`provision.mjs`, `migrate-data.mjs`, `purge-orphans.mjs`, `report-orphans.mjs`,
+`verify-migration.mjs`, `generate-baseline-schema.mjs`, `analyze-call-sites.mjs` — plus
+`scripts/normalize-timestamps.mjs`. They exist to move data out of a `.db` file; with no `.db` file
+there is nothing to move.
+
+Sequencing nuance: several of the SQLite-coupled ones are codemods —
+`codemod-tests-to-adapter.mjs`, `codemod-to-adapter.mjs`, `fix-from-tsc.mjs`,
+`fix-test-handles.mjs` — which are needed **for** Phase 2 and deleted **after** it, not before.
+
+**Kept permanently.** `db/pg-migrations/` and `api/src/db/pg/migrationRunner.ts` have nothing to do
+with SQLite; they are ordinary schema evolution and become more central once Phase 1 gives
+`runMigrations` its first caller. `migrate.ts` and `migrateStatus.ts` are rewritten, not removed.
+
+**Shrinks but survives.** `dialect.ts` goes from 843 lines to roughly 130. `toPositionalParams`
+does its own string-literal scanning and does not depend on the rest of the file, so `?` → `$n`
+survives alone while the datetime translation, the `literalMask` machinery the other rewriters
+need, and `findIncompatibilities` all go. Keeping `?` placeholders as house style is the obvious
+call against rewriting more than three thousand call sites to `$n`.
+
 ## Phases
 
 A phase is done when its exit criteria have been demonstrated by a command that was actually run,
@@ -228,8 +277,8 @@ with output recorded.
 
 - ~~`pg_dump`-based backup of `agent_hq_prod`, on a schedule, with a **restore actually performed**
   into a scratch database and verified. Retire or repoint `scripts/backup-db.sh`.~~ **Done 2026-08-04.**
-- Fix `startupVerifier.ts:181` to verify `db/pg-migrations`, and add a test that a pending migration
-  blocks boot.
+- ~~Fix `startupVerifier.ts:181` to verify `db/pg-migrations`, and add a test that a pending
+  migration blocks boot.~~ **Done 2026-08-04.**
 - ~~Fix the two dev `.env` files~~ **done 2026-08-04**; rotate the shared `OPENCLAW_HOOKS_TOKEN`
   (still outstanding).
 - Wire `findIncompatibilities()` into a lint over `api/src` and record the current violation count as
@@ -274,6 +323,19 @@ raw `.prepare()` sites outside the adapter — concentrated in `lib/tenantContex
 
 **Exit:** the incompatibility lint from Phase 0 reads zero; no `.prepare()` outside
 `SqliteAdapter.ts` and `openclawOAuthProfiles.ts`; suite green on Postgres.
+
+### Phase 3b — Fold the baseline into migration 00 (D7)
+
+- Concatenate `db/pg-baseline/{01-tables,02-indexes,03-foreign-keys}.sql` into
+  `db/pg-migrations/00-baseline.sql`, preserving statement order.
+- Collapse to one `schema_migrations` definition, owned by the runner.
+- Point `verifyMigrationsCurrent` at `db/pg-migrations` (this is also the P0-2 fix) and confirm the
+  existing ledger rows still verify against the folded file's checksum, or re-record them once.
+- Replace `pg-baseline/rename-mapping.json` and `deferred-type-tightening.json` references, both of
+  which outlive the directory.
+
+**Exit:** `db:install` builds the schema from `db/pg-migrations` alone; the resulting inventory
+matches production's 71/224/130; `db/pg-baseline/` is gone and no code references it.
 
 ### Phase 4 — Environments and deployment (D1, D6)
 

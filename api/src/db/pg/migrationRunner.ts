@@ -55,7 +55,21 @@ const checksum = (sql: string): string =>
  * Ordering is numeric, not lexicographic: sorting "10-rename.sql" as a string places it
  * before "02-indexes.sql", which would apply a rename to tables that do not exist yet.
  */
-export function loadMigrations(dir: string): Migration[] {
+export function loadMigrations(dirs: string | string[]): Migration[] {
+  // Accepts several directories because the schema is currently split: db/pg-baseline holds
+  // 01-03 and db/pg-migrations holds the rest. They are sorted together by numeric prefix, so
+  // the split is invisible to ordering — and disappears entirely once the baseline folds into
+  // 00-baseline.sql. Subdirectories are not read: db/pg-migrations/staged holds migrations that
+  // are deliberately unapplied, and they must not count as pending.
+  // Sorted again across the combined set: each directory sorts its own files, but concatenating
+  // two sorted lists is not a sorted list, and relying on the caller to pass them in prefix order
+  // would make correctness depend on an argument nobody would think to check.
+  return (Array.isArray(dirs) ? dirs : [dirs])
+    .flatMap((dir) => loadMigrationsFromDir(dir))
+    .sort((a, b) => a.order - b.order);
+}
+
+function loadMigrationsFromDir(dir: string): Array<Migration & { order: number }> {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir)
     .filter((f) => f.endsWith('.sql'))
@@ -70,8 +84,7 @@ export function loadMigrations(dir: string): Migration[] {
       const sql = fs.readFileSync(path.join(dir, f), 'utf8');
       return { id: f, order: prefix, checksum: checksum(sql), sql };
     })
-    .sort((a, b) => a.order - b.order)
-    .map(({ id, checksum: c, sql }) => ({ id, checksum: c, sql }));
+    .sort((a, b) => a.order - b.order);
 }
 
 async function ensureLedger(db: Db): Promise<void> {
@@ -91,7 +104,7 @@ export interface MigrationStatus {
   drifted: Array<{ id: string; recorded: string; actual: string }>;
 }
 
-export async function migrationStatus(db: Db, dir: string): Promise<MigrationStatus> {
+export async function migrationStatus(db: Db, dir: string | string[]): Promise<MigrationStatus> {
   await ensureLedger(db);
   const onDisk = loadMigrations(dir);
   const recorded = await db.all<{ id: string; checksum: string }>(
@@ -121,7 +134,7 @@ export async function migrationStatus(db: Db, dir: string): Promise<MigrationSta
  * each means a failure stops the run with everything before it durably applied and
  * recorded.
  */
-export async function runMigrations(db: Db, dir: string): Promise<string[]> {
+export async function runMigrations(db: Db, dir: string | string[]): Promise<string[]> {
   const status = await migrationStatus(db, dir);
 
   if (status.drifted.length) {
@@ -162,7 +175,7 @@ export async function runMigrations(db: Db, dir: string): Promise<string[]> {
  * mutate the schema, and two of them can race. Applying migrations is an explicit,
  * single-actor operation.
  */
-export async function verifyMigrationsCurrent(db: Db, dir: string): Promise<void> {
+export async function verifyMigrationsCurrent(db: Db, dir: string | string[]): Promise<void> {
   const status = await migrationStatus(db, dir);
 
   if (status.drifted.length) {
