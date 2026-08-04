@@ -177,16 +177,13 @@ export async function verifyStartupSchemaCurrent(dbPath: string = getDbPath()): 
 export async function verifyStartupSchema(): Promise<void> {
   if (getEngine() === 'postgres') {
     const { verifyMigrationsCurrent } = await import('./pg/migrationRunner');
-    const path = await import('path');
+    const { POSTGRES_MIGRATION_DIRS } = await import('./pg/migrationDirs');
     // BOTH directories. Verifying only the baseline meant db/pg-migrations was never checked, so
     // a pending migration did not block startup — the one guarantee this function exists to give.
     // It was aimed there because migrations 10 and 11 sat unapplied in the sequence and would
     // have refused to boot production; they now live in db/pg-migrations/staged, which
     // loadMigrations does not read.
-    await verifyMigrationsCurrent(getDb(), [
-      path.resolve(__dirname, '../../../db/pg-baseline'),
-      path.resolve(__dirname, '../../../db/pg-migrations'),
-    ]);
+    await verifyMigrationsCurrent(getDb(), POSTGRES_MIGRATION_DIRS);
     return;
   }
   await verifyStartupSchemaCurrent();

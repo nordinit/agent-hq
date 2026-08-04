@@ -21,14 +21,19 @@ function writeDir(files: Record<string, string>): string {
   return dir;
 }
 
-/** A ledger stub: enough of Db for the runner's two reads, with no engine behind it. */
-function ledgerStub(applied: Array<{ id: string; checksum: string }>) {
+/**
+ * A ledger stub: enough of Db for the runner's reads, with no engine behind it.
+ *
+ * `exists` models whether schema_migrations is there yet, which the runner now asks before
+ * reading — on a fresh database the first migration is the one that creates it.
+ */
+function ledgerStub(applied: Array<{ id: string; checksum: string }>, exists = true) {
   return {
     dialect: 'postgres' as const,
     inTransaction: false,
     exec: async () => {},
     all: async () => applied,
-    get: async () => undefined,
+    get: async () => (exists ? { present: 1 } : undefined),
     run: async () => ({ changes: 0, lastInsertId: 0 }),
     value: async () => undefined,
     withTransaction: async <T,>(fn: (tx: unknown) => Promise<T>) => fn({}),
@@ -88,6 +93,18 @@ describe('verifyMigrationsCurrent', () => {
     await expect(verifyMigrationsCurrent(db as never, [baseline, migrations])).resolves.toBeUndefined();
   });
 
+  it('treats a missing ledger as nothing applied rather than creating one', async () => {
+    // Reading must not create. db/pg-baseline/01-tables.sql declares schema_migrations itself,
+    // without IF NOT EXISTS, so a status check that created the ledger first made that very
+    // migration fail with "relation already exists" — a fresh install could not get past its own
+    // first migration. The file is checksummed and applied in production, so the runner has to
+    // stop pre-empting it rather than the file gaining IF NOT EXISTS.
+    const dir = writeDir({ '01-tables.sql': 'SELECT 1;' });
+    const status = await migrationStatus(ledgerStub([], false) as never, dir);
+    expect(status.pending).toEqual(['01-tables.sql']);
+    expect(status.applied).toEqual([]);
+  });
+
   it('reports a migration missing from the ledger as pending, not as drift', async () => {
     // The two failures need different remedies — apply it, versus work out who edited it — so
     // collapsing them into one message would send the operator down the wrong path.
@@ -95,5 +112,24 @@ describe('verifyMigrationsCurrent', () => {
     const status = await migrationStatus(ledgerStub([]) as never, dir);
     expect(status.pending).toEqual(['12-a.sql', '13-b.sql']);
     expect(status.drifted).toEqual([]);
+  });
+});
+
+describe('the status command does not migrate', () => {
+  it('does not import the migrate entrypoint', () => {
+    // migrate.ts ends in a top-level `void main()`, so importing anything from it RUNS a
+    // migration. db:migrate:status briefly did exactly that by importing a path constant from
+    // there — a command whose whole purpose is to report without touching anything applied
+    // migrations as a side effect of being asked what was applied. The constant now lives in
+    // pg/migrationDirs.ts, which imports nothing but `path`.
+    const source = fs.readFileSync(path.join(__dirname, '../migrateStatus.ts'), 'utf8');
+    expect(source).not.toMatch(/from\s+'\.\/migrate'/);
+    expect(source).toMatch(/from\s+'\.\/pg\/migrationDirs'/);
+  });
+
+  it('keeps the shared directory constant free of side effects', () => {
+    const source = fs.readFileSync(path.join(__dirname, 'migrationDirs.ts'), 'utf8');
+    const imports = [...source.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
+    expect(imports).toEqual(['path']);
   });
 });

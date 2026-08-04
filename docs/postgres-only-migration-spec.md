@@ -287,7 +287,7 @@ with output recorded.
 **Exit:** a Postgres restore has been executed; a pending migration demonstrably fails startup; dev
 `.env` no longer names production; the incompatibility lint runs in CI.
 
-### Phase 1 — A working Postgres install path (D3)
+### Phase 1 — A working Postgres install path (D3) — **DONE 2026-08-04**
 
 - Give `runMigrations()` a caller: `db:install` / `db:migrate` create and migrate a Postgres database
   from `db/pg-baseline` + `db/pg-migrations`, replacing `psql -f` in `scripts/pg/provision.mjs`.
@@ -300,6 +300,22 @@ with output recorded.
 **Exit:** `npm run db:install` builds a complete, correct Postgres schema on an empty database from a
 clean clone; the inventory matches production's 71/224/130; `db:migrate:status` works; a stale schema
 still fails with `SCHEMA_MIGRATION_REQUIRED`.
+
+*Result:* `db:install` against an empty database applies all six migrations and produces a schema
+whose column list and index list are **byte-identical** to production (69 tables / 291 indexes / 130
+FKs / 862 columns, diffed). Re-running is a no-op, and `verifyStartupSchema` accepts the result, so
+a fresh clone can now create a database the API will serve from. `db:migrate:status` reports
+applied/pending/drifted on both engines.
+
+Two defects surfaced doing it. `runMigrations` created the ledger before applying anything, which
+made `db/pg-baseline/01-tables.sql` — which declares `schema_migrations` itself, without
+`IF NOT EXISTS` — fail on every fresh install; since that file is checksummed and applied in
+production it cannot gain the clause, so the runner stops pre-empting it and creates the ledger
+after the migration that may have declared it. And `migrateStatus` imported a path constant from
+`migrate.ts`, whose top-level `void main()` meant the status command applied migrations as a side
+effect of being asked what was applied; the constant moved to a side-effect-free module.
+
+The four competing `schema_migrations` definitions still exist — Phase 3b collapses them.
 
 ### Phase 2 — Postgres becomes the default test engine (D4)
 

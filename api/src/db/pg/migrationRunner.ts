@@ -87,6 +87,28 @@ function loadMigrationsFromDir(dir: string): Array<Migration & { order: number }
     .sort((a, b) => a.order - b.order);
 }
 
+/**
+ * Does the ledger exist yet?
+ *
+ * Asked rather than assumed, because on a fresh database the FIRST migration is the one that
+ * creates it: db/pg-baseline/01-tables.sql declares schema_migrations itself, without
+ * IF NOT EXISTS. Creating the ledger before applying that file made the file fail with
+ * "relation schema_migrations already exists", so a fresh install could not get past its own
+ * first migration. That file is checksummed and applied in production, so it cannot be edited
+ * to add IF NOT EXISTS — the runner has to stop pre-empting it instead.
+ *
+ * The two definitions still differ (this one has no app_commit, and dates its column
+ * timestamptz rather than text). Whichever exists is used as-is; they collapse to one at
+ * Phase 3b, when the baseline folds into 00-baseline.sql and stops declaring the ledger at all.
+ */
+async function ledgerExists(db: Db): Promise<boolean> {
+  const row = await db.get<{ present: unknown }>(
+    `SELECT 1 AS present FROM information_schema.tables
+     WHERE table_schema = current_schema() AND table_name = 'schema_migrations'`,
+  );
+  return row != null;
+}
+
 async function ensureLedger(db: Db): Promise<void> {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -105,11 +127,12 @@ export interface MigrationStatus {
 }
 
 export async function migrationStatus(db: Db, dir: string | string[]): Promise<MigrationStatus> {
-  await ensureLedger(db);
   const onDisk = loadMigrations(dir);
-  const recorded = await db.all<{ id: string; checksum: string }>(
-    `SELECT id, checksum FROM schema_migrations`
-  );
+  // Reading must not create. No ledger means nothing has been applied, which is exactly what an
+  // empty database should report — and creating one here would break the migration that declares it.
+  const recorded = await ledgerExists(db)
+    ? await db.all<{ id: string; checksum: string }>(`SELECT id, checksum FROM schema_migrations`)
+    : [];
   const byId = new Map(recorded.map((r) => [r.id, r.checksum]));
 
   const applied: string[] = [];
@@ -153,6 +176,10 @@ export async function runMigrations(db: Db, dir: string | string[]): Promise<str
     if (!status.pending.includes(m.id)) continue;
     await db.withTransaction(async (tx) => {
       await tx.exec(m.sql);
+      // After the migration, not before: the first one may be what creates the ledger. Inside
+      // the transaction, so a migration that applies but cannot be recorded rolls back rather
+      // than leaving the database ahead of its ledger.
+      await ensureLedger(tx);
       await tx.run(
         `INSERT INTO schema_migrations (id, checksum) VALUES (?, ?)
          ON CONFLICT (id) DO UPDATE SET checksum = EXCLUDED.checksum, applied_at = now()`,
