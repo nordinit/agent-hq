@@ -137,6 +137,9 @@ export default function RoutingPage() {
     { id: 'external-events', label: 'Workflow Events' },
     { id: 'agent-contract', label: 'Agent Contract' },
   ];
+  // resolved flattens the base outcomes plus one copy per task type, so the same key recurs
+  // once per type. Without the dedupe the composer lists every outcome about ten times.
+  const graphOutcomeKeys = [...new Set(outcomeCatalog.resolved.map(outcome => outcome.outcome_key))].sort();
   const filteredSprints = selectedProjectId && scopedSprintType
     ? sprints.filter(sprint => sprint.project_id === selectedProjectId && sprint.sprint_type === scopedSprintType)
     : [];
@@ -267,6 +270,8 @@ export default function RoutingPage() {
           sprintId={scopedSprintId}
           sprintName={scopedSprintName}
           sprintType={scopedSprintType}
+          outcomeCatalog={graphOutcomeKeys}
+          workflowCount={filteredSprints.length}
           historicalTrace={historicalTrace}
           onClearHistoricalTrace={() => {
             setHistoricalTrace(null);

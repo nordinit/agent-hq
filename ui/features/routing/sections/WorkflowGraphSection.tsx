@@ -14,6 +14,8 @@ import {
   type LayoutArc,
 } from '@/lib/workflowGraphLayout';
 import { scopePresentation, shouldMarkIndividually, summarizeScope } from '@/lib/workflowGraphScope';
+import type { GuardContext } from '@/lib/workflowGraphGuards';
+import TransitionComposer, { draftFromEdge, emptyDraft, type TransitionDraft } from './TransitionComposer';
 import {
   AlertTriangle,
   CircleDot,
@@ -53,6 +55,7 @@ type Selection =
   | { kind: 'node'; id: string }
   | { kind: 'arc'; key: string }
   | { kind: 'event'; mappingId: number; target: string }
+  | { kind: 'compose'; draft: TransitionDraft }
   | null;
 
 export default function WorkflowGraphSection({
@@ -62,11 +65,17 @@ export default function WorkflowGraphSection({
   sprintName,
   historicalTrace,
   onClearHistoricalTrace,
+  outcomeCatalog,
+  workflowCount,
 }: {
   projectId: number | null;
   sprintId: number | null;
   sprintType: string | null;
   sprintName: string | null;
+  /** Full outcome catalog for the type — graph.edges only shows outcomes already in use. */
+  outcomeCatalog?: string[];
+  /** Workflows of this type in the project, for stating what a shared edit reaches. */
+  workflowCount?: number;
   /** A task's replayed path, when the page was opened via ?trace_task=. */
   historicalTrace?: HistoricalTrace | null;
   onClearHistoricalTrace?: () => void;
@@ -184,6 +193,12 @@ export default function WorkflowGraphSection({
   // Inheritance only exists relative to a selected workflow. At workflow-type scope every
   // row IS the default, so badging them all "default" would be noise.
   const scopeAware = sprintId != null;
+  const guardContext: GuardContext = {
+    workflowId: sprintId,
+    projectId,
+    workflowCount: workflowCount ?? 0,
+  };
+  const composing = selection?.kind === 'compose' ? selection.draft : null;
   const scopeSummary = summarizeScope(
     [...graph.edges.filter(e => e.kind === 'transition'), ...graph.nodes.flatMap(n => n.assignments)],
     scopeAware,
@@ -230,7 +245,8 @@ export default function WorkflowGraphSection({
       .finally(() => setTraceBusy(false));
   };
 
-  const outcomeOptions = [...new Set(graph.edges.map(edge => edge.outcome))].sort();
+  const usedOutcomes = [...new Set(graph.edges.map(edge => edge.outcome))].sort();
+  const outcomeOptions = (outcomeCatalog && outcomeCatalog.length > 0) ? outcomeCatalog : usedOutcomes;
 
   return (
     <div className="space-y-4">
@@ -767,7 +783,16 @@ export default function WorkflowGraphSection({
 
         {/* ── Inspector ──────────────────────────────────────────── */}
         <Card className="h-fit p-5">
-          {selectedEvent ? (
+          {composing ? (
+            <TransitionComposer
+              draft={composing}
+              graph={graph}
+              outcomes={outcomeOptions}
+              context={guardContext}
+              onCancel={() => setSelection(null)}
+              onCommitted={() => { setSelection(null); load(); }}
+            />
+          ) : selectedEvent ? (
             <div className="space-y-4">
               <div>
                 <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Workflow event</p>
@@ -808,9 +833,19 @@ export default function WorkflowGraphSection({
               </p>
             </div>
           ) : selectedNode ? (
-            <NodeInspector node={selectedNode} findings={graph.lint.filter(f => f.node === selectedNode.id)} />
+            <NodeInspector
+              node={selectedNode}
+              findings={graph.lint.filter(f => f.node === selectedNode.id)}
+              graph={graph}
+              onAddTransition={(from, to) => setSelection({ kind: 'compose', draft: emptyDraft(from, to) })}
+            />
           ) : selectedArc ? (
-            <ArcInspector arc={selectedArc} edges={arcEdges(selectedArc)} graph={graph} />
+            <ArcInspector
+              arc={selectedArc}
+              edges={arcEdges(selectedArc)}
+              graph={graph}
+              onEditEdge={(edge) => setSelection({ kind: 'compose', draft: draftFromEdge(edge) })}
+            />
           ) : (
             <div className="space-y-3">
               <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Findings</p>
@@ -855,9 +890,13 @@ export default function WorkflowGraphSection({
 function NodeInspector({
   node,
   findings,
+  graph,
+  onAddTransition,
 }: {
   node: WorkflowGraphNode;
   findings: WorkflowGraph['lint'];
+  graph: WorkflowGraph;
+  onAddTransition?: (from: string, to: string) => void;
 }) {
   return (
     <div className="space-y-4">
@@ -917,6 +956,26 @@ function NodeInspector({
         )}
       </div>
 
+      {onAddTransition && (
+        <div>
+          <p className="mb-1.5 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
+            Add a transition from here
+          </p>
+          <select
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-2 text-sm text-slate-200 focus:border-amber-500 focus:outline-none"
+            value=""
+            onChange={e => { if (e.target.value) onAddTransition(node.id, e.target.value); }}
+          >
+            <option value="">select destination status…</option>
+            {graph.nodes.map(target => (
+              <option key={target.id} value={target.id}>
+                {target.label}{target.id === node.id ? ' (self-loop)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {findings.length > 0 && (
         <div>
           <p className="mb-1.5 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Findings</p>
@@ -940,10 +999,12 @@ function ArcInspector({
   arc,
   edges,
   graph,
+  onEditEdge,
 }: {
   arc: LayoutArc;
   edges: WorkflowGraphEdge[];
   graph: WorkflowGraph;
+  onEditEdge?: (edge: WorkflowGraphEdge) => void;
 }) {
   const fromLabel = graph.nodes.find(n => n.id === arc.from)?.label ?? arc.from;
   const toLabel = graph.nodes.find(n => n.id === arc.to)?.label ?? arc.to;
@@ -976,7 +1037,17 @@ function ArcInspector({
             >
               <div className="flex items-center justify-between gap-2">
                 <code className="text-slate-200">{edge.outcome}</code>
-                <span className="text-[11px] text-slate-500">#{edge.transition_id} · p{edge.priority}</span>
+                <span className="flex items-center gap-2 text-[11px] text-slate-500">
+                  #{edge.transition_id} · p{edge.priority}
+                  {edge.kind === 'transition' && onEditEdge && (
+                    <button
+                      onClick={() => onEditEdge(edge)}
+                      className="rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-300 hover:border-amber-500/50 hover:text-amber-300"
+                    >
+                      Edit
+                    </button>
+                  )}
+                </span>
               </div>
               <p className="mt-1 text-[11px] text-slate-500">
                 {edge.kind === 'event' ? 'workflow event · ' : ''}
