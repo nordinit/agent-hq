@@ -165,22 +165,24 @@ describe('routing config audit log', () => {
   });
 
   it('throws rather than swallowing a failed write', async () => {
-    // Deliberately NOT a bad foreign key. SQLite only enforces FKs when the pragma is on,
-    // and initSchema turns `foreign_keys = OFF` while rebuilding tables, so an FK-based
-    // assertion passes in isolation and fails whenever another suite has left it off.
-    // Dropping the table fails identically on both engines and tests the actual intent:
-    // this write must propagate, because it is the only record of the change.
-    const db = getDb();
-    await db.exec(`DROP TABLE routing_config_audit_log`);
-    try {
-      await expect(writeRoutingAudit(db, {
-        tenantId: TENANT_ID,
-        workflowType: 'dev',
-        entityTable: 'routing_transitions',
-        action: 'updated',
-      })).rejects.toThrow();
-    } finally {
-      await ensureRoutingConfigAuditLogTable(db);
-    }
+    // Injected failure rather than a real one. Two earlier versions of this test provoked
+    // the error through the database — a bad foreign key, then a dropped table — and both
+    // were order-dependent: SQLite only enforces foreign keys when the pragma is on and
+    // initSchema turns it off while rebuilding, and a :memory: handle reopened mid-test is
+    // a different database entirely. Each passed alone and failed under a full run.
+    //
+    // The behaviour under test has nothing to do with the schema: writeRoutingAudit must
+    // propagate whatever the write throws, because this row is the only record of the
+    // change. Asserting that directly is both truer and deterministic.
+    const failing = {
+      run: async () => { throw new Error('write failed'); },
+    } as unknown as Parameters<typeof writeRoutingAudit>[0];
+
+    await expect(writeRoutingAudit(failing, {
+      tenantId: TENANT_ID,
+      workflowType: 'dev',
+      entityTable: 'routing_transitions',
+      action: 'updated',
+    })).rejects.toThrow('write failed');
   });
 });

@@ -13,6 +13,7 @@ import {
   NODE_WIDTH,
   type LayoutArc,
 } from '@/lib/workflowGraphLayout';
+import { scopePresentation, shouldMarkIndividually, summarizeScope } from '@/lib/workflowGraphScope';
 import {
   AlertTriangle,
   CircleDot,
@@ -180,6 +181,14 @@ export default function WorkflowGraphSection({
   // the "show me" that replaces drawing one arc per source.
   const eventSourceHighlight = new Set(selectedEvent?.from ?? []);
 
+  // Inheritance only exists relative to a selected workflow. At workflow-type scope every
+  // row IS the default, so badging them all "default" would be noise.
+  const scopeAware = sprintId != null;
+  const scopeSummary = summarizeScope(
+    [...graph.edges.filter(e => e.kind === 'transition'), ...graph.nodes.flatMap(n => n.assignments)],
+    scopeAware,
+  );
+
   // ── Trace overlay ──────────────────────────────────────────────────────────
   // Historical and hypothetical traces both reduce to "these edge ids are on the
   // path", so a single overlay renders either.
@@ -281,6 +290,11 @@ export default function WorkflowGraphSection({
           {graph.stats.node_count} statuses · {graph.stats.edge_count} transitions
           {sprintName ? ` · ${sprintName}` : ' · workflow-type defaults'}
         </span>
+        {scopeSummary.label && (
+          <span className="rounded-md border border-purple-500/30 bg-purple-950/20 px-2 py-1 text-purple-200">
+            {scopeSummary.label}
+          </span>
+        )}
         {graph.stats.error_count > 0 && (
           <span className={`rounded-md border px-2 py-1 ${SEVERITY_STYLES.error.chip}`}>
             {graph.stats.error_count} error{graph.stats.error_count === 1 ? '' : 's'}
@@ -518,6 +532,11 @@ export default function WorkflowGraphSection({
                   const edges = arcEdges(arc);
                   const problem = arcHasProblem(arc);
                   const allShadowed = edges.length > 0 && edges.every(e => e.shadowed_by !== null);
+                  // Scope facts. These only mean anything with a workflow selected: without
+                  // one every row is a workflow-type default and effective_for_sprint is true.
+                  const superseded = scopeAware && edges.length > 0
+                    && edges.every(e => e.effective_for_sprint === false);
+                  const hasOverride = scopeAware && edges.some(e => e.is_override);
                   const traceVisits = arc.edgeIds.reduce((sum, id) => sum + (tracedEdges.get(id) ?? 0), 0);
                   const onTrace = traceVisits > 0;
                   const dimmed = (showOnlyProblems && !problem) || (traceActive && !onTrace);
@@ -539,7 +558,12 @@ export default function WorkflowGraphSection({
                   return (
                     <g
                       key={arc.key}
-                      className={`${color} cursor-pointer transition-opacity ${dimmed ? 'opacity-15' : isSelected ? 'opacity-100' : 'opacity-70 hover:opacity-100'}`}
+                      className={`${color} cursor-pointer transition-opacity ${
+                        dimmed ? 'opacity-15'
+                          : isSelected ? 'opacity-100'
+                            : superseded ? 'opacity-25 hover:opacity-60'
+                              : 'opacity-70 hover:opacity-100'
+                      }`}
                       onClick={() => setSelection({ kind: 'arc', key: arc.key })}
                     >
                       <path
@@ -547,7 +571,7 @@ export default function WorkflowGraphSection({
                         fill="none"
                         stroke="currentColor"
                         strokeWidth={isSelected ? 2.5 : onTrace ? 2.5 : 1.5}
-                        strokeDasharray={allShadowed ? '4 3' : undefined}
+                        strokeDasharray={allShadowed ? '4 3' : superseded ? '2 4' : undefined}
                         markerEnd="url(#wf-arrow)"
                       />
                       {/* Widen the hit target without thickening the visible stroke. */}
@@ -572,6 +596,7 @@ export default function WorkflowGraphSection({
                 const badgeClass = COLOR_BADGE_CLASSES[node.color] ?? COLOR_BADGE_CLASSES.slate;
                 const isEventSource = eventSourceHighlight.has(node.id);
                 const onTracePath = tracedNodes.has(node.id);
+                const markAssignmentScope = shouldMarkIndividually(node.assignments, scopeAware);
                 const isEventTarget = selection?.kind === 'event' && selection.target === node.id;
                 return (
                   <button
@@ -635,19 +660,31 @@ export default function WorkflowGraphSection({
                           {node.inbound_events.length > 0 ? '' : node.terminal ? '—' : 'no agent'}
                         </span>
                       ) : (
-                        node.assignments.slice(0, 2).map(assignment => (
-                          <span
-                            key={assignment.rule_id}
-                            className={`inline-flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[11px] ${
-                              assignment.agent_enabled
-                                ? 'bg-slate-800 text-slate-300'
-                                : 'bg-red-950/60 text-red-300'
-                            }`}
-                          >
-                            {assignment.agent_enabled ? <Bot className="h-3 w-3" /> : <Ban className="h-3 w-3" />}
-                            {assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`}
-                          </span>
-                        ))
+                        node.assignments.slice(0, 2).map(assignment => {
+                          const presentation = scopePresentation(assignment, scopeAware);
+                          const ruleSuperseded = presentation === 'superseded';
+                          // A ring on every chip when they all share a scope is noise; the
+                          // summary above says it once. Mark only a genuine mix.
+                          const markScope = markAssignmentScope && presentation === 'override';
+                          return (
+                            <span
+                              key={assignment.rule_id}
+                              title={ruleSuperseded
+                                ? 'Workflow-type default, superseded by an override on this workflow'
+                                : assignment.is_override ? 'Defined on this workflow' : undefined}
+                              className={`inline-flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[11px] ${
+                                assignment.agent_enabled
+                                  ? 'bg-slate-800 text-slate-300'
+                                  : 'bg-red-950/60 text-red-300'
+                              } ${ruleSuperseded ? 'opacity-40 line-through decoration-slate-500' : ''} ${
+                                markScope ? 'ring-1 ring-purple-400' : ''
+                              }`}
+                            >
+                              {assignment.agent_enabled ? <Bot className="h-3 w-3" /> : <Ban className="h-3 w-3" />}
+                              {assignment.agent_name ?? `agent ${assignment.agent_id ?? '?'}`}
+                            </span>
+                          );
+                        })
                       )}
                       {node.assignments.length > 2 && (
                         <span className="text-[11px] text-slate-500">+{node.assignments.length - 2}</span>
@@ -671,6 +708,10 @@ export default function WorkflowGraphSection({
                 const visits = arc.edgeIds.reduce((sum, id) => sum + (tracedEdges.get(id) ?? 0), 0);
                 const baseLabel = edges.length === 1 ? edges[0].outcome : `${edges.length} outcomes`;
                 const label = visits > 1 ? `${baseLabel} ×${visits}` : baseLabel;
+                const labelSuperseded = scopeAware && edges.length > 0
+                  && edges.every(e => e.effective_for_sprint === false);
+                const labelOverride = shouldMarkIndividually(edges, scopeAware)
+                  && edges.some(e => scopePresentation(e, scopeAware) === 'override');
                 const position = arc.adjacent
                   ? { left: nodeX + NODE_WIDTH / 2, transform: 'translateX(-50%)' }
                   : arc.side === 'right'
@@ -690,7 +731,13 @@ export default function WorkflowGraphSection({
                     style={{ ...position, top: midY - 9 }}
                   >
                     {gated && <Lock className="h-2.5 w-2.5 shrink-0 text-amber-400" />}
-                    <span className="truncate">{label}</span>
+                    {labelOverride && (
+                      <span
+                        className="h-1.5 w-1.5 shrink-0 rounded-full bg-purple-400"
+                        title="Defined on this workflow, overriding the workflow-type default"
+                      />
+                    )}
+                    <span className={`truncate ${labelSuperseded ? 'line-through decoration-slate-500' : ''}`}>{label}</span>
                   </button>
                 );
               })}
@@ -706,6 +753,14 @@ export default function WorkflowGraphSection({
             <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-4 bg-purple-400" /> rework loop</span>
             <span className="flex items-center gap-1"><Lock className="h-3 w-3 text-amber-400" /> gated outcome</span>
             <span className="flex items-center gap-1"><Zap className="h-3 w-3 text-cyan-400" /> workflow event — click to show its sources</span>
+            {scopeAware && (
+              <>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-purple-400" /> defined on this workflow
+                </span>
+                <span className="flex items-center gap-1 line-through decoration-slate-500">superseded default</span>
+              </>
+            )}
             <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-4 border-t border-dashed border-slate-500" /> never fires</span>
           </div>
         </Card>
@@ -849,7 +904,12 @@ function NodeInspector({
                   {assignment.task_type ? getTaskTypeLabel(assignment.task_type) : 'all types'}
                   <span className="text-slate-600">·</span>
                   p{assignment.priority}
-                  {assignment.is_inherited && <span className="text-slate-600">· inherited</span>}
+                  {assignment.is_override
+                    ? <span className="text-purple-300">· this workflow</span>
+                    : <span className="text-cyan-300">· workflow-type default</span>}
+                  {assignment.effective_for_sprint === false && (
+                    <span className="text-amber-400">· superseded</span>
+                  )}
                 </span>
               </li>
             ))}
@@ -921,7 +981,12 @@ function ArcInspector({
               <p className="mt-1 text-[11px] text-slate-500">
                 {edge.kind === 'event' ? 'workflow event · ' : ''}
                 {edge.task_type ? getTaskTypeLabel(edge.task_type) : 'all task types'}
-                {edge.is_inherited && ' · inherited'}
+                {edge.kind === 'transition' && (edge.is_override
+                  ? <span className="text-purple-300"> · this workflow</span>
+                  : <span className="text-cyan-300"> · workflow-type default</span>)}
+                {edge.effective_for_sprint === false && (
+                  <span className="text-amber-400"> · superseded by an override</span>
+                )}
                 {!edge.enabled && ' · disabled'}
               </p>
               {edge.event_triggers.length > 0 && (
