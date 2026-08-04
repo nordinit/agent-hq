@@ -70,3 +70,117 @@ export async function writeRoutingAudit(db: Db, entry: RoutingAuditEntry): Promi
     entry.affectedWorkflowCount ?? null,
   );
 }
+
+// ── Wiring mutations to the audit log ─────────────────────────────────────────
+
+/**
+ * Where the actor came from. Recorded separately from the actor string because Agent HQ has
+ * no user table: an MCP call carries an agent slug, but a browser request carries nothing at
+ * all. Flattening both to a single 'api' — as projectAudit's extractActor does — produces a
+ * column that says the same thing for every human action, which is worse than admitting the
+ * gap. `anonymous_ui` is a truthful answer; 'api' is not.
+ */
+export interface RoutingAuditActor {
+  actor: string;
+  actorKind: RoutingAuditActorKind;
+}
+
+/** Keys carried on a mutation payload so the domain layer can attribute the change. */
+const ACTOR_KEY = '_audit_actor';
+const ACTOR_KIND_KEY = '_audit_actor_kind';
+
+export function attachAuditActor<T extends Record<string, unknown>>(input: T, actor: RoutingAuditActor): T {
+  return { ...input, [ACTOR_KEY]: actor.actor, [ACTOR_KIND_KEY]: actor.actorKind };
+}
+
+export function readAuditActor(input: Record<string, unknown>): RoutingAuditActor {
+  const actor = typeof input[ACTOR_KEY] === 'string' && (input[ACTOR_KEY] as string).trim()
+    ? (input[ACTOR_KEY] as string).trim()
+    : 'unknown';
+  const kind = input[ACTOR_KIND_KEY];
+  const actorKind: RoutingAuditActorKind = kind === 'user' || kind === 'agent' || kind === 'system'
+    ? kind
+    : 'unknown';
+  return { actor, actorKind };
+}
+
+/** Columns every audited routing table carries, used to derive scope from the row itself. */
+interface ScopedRow {
+  id?: unknown;
+  project_id?: unknown;
+  sprint_type?: unknown;
+  sprint_id?: unknown;
+}
+
+function asNumberOrNull(value: unknown): number | null {
+  if (value == null) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function readRowById(db: Db, table: string, id: number): Promise<Record<string, unknown> | null> {
+  const row = await db.get(`SELECT * FROM ${table} WHERE id = ?`, id) as Record<string, unknown> | undefined;
+  return row ?? null;
+}
+
+/**
+ * Run a routing mutation and record it, atomically.
+ *
+ * The before-image has to be read here rather than inside the mutation: deleteRoutingTransition
+ * SELECTs only `stt.id`, so by the time it returns there is nothing left to snapshot.
+ *
+ * The whole thing runs in a transaction so the audit row and the change it describes commit or
+ * roll back together. Under a dry run this nests as a savepoint inside the caller's
+ * transaction, which is what stops a previewed change from leaving a permanent audit row
+ * claiming it happened.
+ */
+export async function auditedRoutingWrite<T>(
+  db: Db,
+  spec: {
+    table: string;
+    action: RoutingAuditAction;
+    input: Record<string, unknown>;
+    /** Row id for update/delete; omitted for create, where it is taken from the result. */
+    id?: unknown;
+  },
+  run: (tx: Db) => Promise<T>,
+): Promise<T> {
+  return await db.withTransaction(async (tx) => {
+    const knownId = asNumberOrNull(spec.id);
+    const before = knownId != null ? await readRowById(tx, spec.table, knownId) : null;
+
+    const result = await run(tx);
+
+    const resultId = asNumberOrNull((result as ScopedRow | null)?.id);
+    const rowId = spec.action === 'deleted' ? knownId : (resultId ?? knownId);
+    const after = spec.action === 'deleted' || rowId == null ? null : await readRowById(tx, spec.table, rowId);
+
+    // Prefer the surviving row for scope; on a delete only the before-image is left.
+    const scopeRow = (after ?? before ?? {}) as ScopedRow;
+    const workflowType = typeof scopeRow.sprint_type === 'string' && scopeRow.sprint_type
+      ? scopeRow.sprint_type
+      : String(spec.input.sprint_type ?? '');
+
+    const tenantId = asNumberOrNull(spec.input.tenant_id);
+    if (tenantId == null) {
+      throw new Error(`routing audit for ${spec.table} has no tenant_id; the route must resolve one before writing`);
+    }
+
+    const { actor, actorKind } = readAuditActor(spec.input);
+    await writeRoutingAudit(tx, {
+      tenantId,
+      projectId: asNumberOrNull(scopeRow.project_id) ?? asNumberOrNull(spec.input.project_id),
+      workflowType,
+      workflowId: asNumberOrNull(scopeRow.sprint_id) ?? asNumberOrNull(spec.input.sprint_id),
+      entityTable: spec.table,
+      entityId: rowId,
+      action: spec.action,
+      actor,
+      actorKind,
+      before,
+      after,
+    });
+
+    return result;
+  });
+}

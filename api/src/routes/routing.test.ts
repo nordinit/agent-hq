@@ -175,6 +175,25 @@ async function resetDb(): Promise<void> {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE TABLE routing_config_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER,
+      project_id INTEGER,
+      workflow_type TEXT NOT NULL,
+      workflow_id INTEGER,
+      entity_table TEXT NOT NULL,
+      entity_id INTEGER,
+      entity_key TEXT NOT NULL DEFAULT '',
+      action TEXT NOT NULL,
+      actor TEXT NOT NULL DEFAULT 'unknown',
+      actor_kind TEXT NOT NULL DEFAULT 'unknown',
+      before_json TEXT NOT NULL DEFAULT 'null',
+      after_json TEXT NOT NULL DEFAULT 'null',
+      changes TEXT NOT NULL DEFAULT '{}',
+      batch_id TEXT NOT NULL DEFAULT '',
+      affected_workflow_count INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE sprint_task_transition_requirement_tombstones (
       sprint_id INTEGER NOT NULL,
       task_type_key TEXT NOT NULL DEFAULT '',

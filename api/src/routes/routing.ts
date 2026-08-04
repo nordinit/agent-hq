@@ -17,6 +17,11 @@ import { getNeedsAttentionEligibleStatuses, setNeedsAttentionEligibleStatuses } 
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { columnExists as sharedColumnExists } from "../db/introspection";
 import {
+  attachAuditActor,
+  auditedRoutingWrite,
+  type RoutingAuditActor,
+} from '../domains/routing/audit';
+import {
   createRoutingRule,
   createRoutingStatus,
   createRoutingTransition,
@@ -156,10 +161,31 @@ function mergeWorkflowAliasInputs(query: unknown, body?: unknown): Record<string
   return { ...normalizeWorkflowAliases(query), ...normalizeWorkflowAliases(body) };
 }
 
+/**
+ * Who is making this change, as honestly as the system can say.
+ *
+ * There is no user table and no session: an MCP key carries an agent slug, and a browser
+ * request carries nothing. projectAudit's extractActor falls back to the literal 'api', which
+ * would make every human canvas edit indistinguishable from every other. Recording
+ * `anonymous_ui` instead is less satisfying and more true — and it is the signal that would
+ * justify adding real identity later.
+ */
+function requestAuditActor(req: Request): RoutingAuditActor {
+  const mcpActor = (req as Request & { mcpIdentity?: { auditActor?: string } }).mcpIdentity?.auditActor;
+  if (typeof mcpActor === 'string' && mcpActor.trim()) {
+    return { actor: mcpActor.trim(), actorKind: 'agent' };
+  }
+  const header = req.header('x-actor');
+  if (typeof header === 'string' && header.trim()) {
+    return { actor: header.trim(), actorKind: 'user' };
+  }
+  return { actor: 'anonymous_ui', actorKind: 'unknown' };
+}
+
 async function withRequestTenant<T extends Record<string, unknown>>(req: Request, input: T): Promise<T & { tenant_id: number }> {
   const db = getDb();
   const tenantId = await resolveTenantIdFromRequest(db, req);
-  return { ...input, tenant_id: tenantId };
+  return attachAuditActor({ ...input, tenant_id: tenantId }, requestAuditActor(req));
 }
 
 async function routeTableHasColumn(table: string, column: string): Promise<boolean> {
@@ -369,7 +395,7 @@ router.get('/transitions/:id', async (req: Request, res: Response) => {
 router.post('/transitions', async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body));
-    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'sprint_task_transitions', input, async (tx) => await createRoutingTransition(tx, input)));
+    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'sprint_task_transitions', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transitions', action: 'created', input }, (t) => createRoutingTransition(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -380,7 +406,7 @@ router.post('/transitions', async (req: Request, res: Response) => {
 router.put('/transitions/:id', async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'update', 'sprint_task_transitions', input, async (tx) => await updateRoutingTransition(tx, input)));
+    return res.json(await dryRunConfigWrite(getDb(), 'update', 'sprint_task_transitions', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transitions', action: 'updated', input, id: input.id }, (t) => updateRoutingTransition(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -391,7 +417,7 @@ router.put('/transitions/:id', async (req: Request, res: Response) => {
 router.delete('/transitions/:id', async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'sprint_task_transitions', input, async (tx) => await deleteRoutingTransition(tx, input)));
+    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'sprint_task_transitions', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transitions', action: 'deleted', input, id: input.id }, (t) => deleteRoutingTransition(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -484,7 +510,7 @@ router.get(['/rules/:id', '/assignment-rules/:id'], getAssignmentRuleHandler);
 const createAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body));
-    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'sprint_task_routing_rules', input, async (tx) => await createRoutingRule(tx, input)));
+    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'sprint_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_routing_rules', action: 'created', input }, (t) => createRoutingRule(t, input))));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -497,7 +523,7 @@ router.post(['/rules', '/assignment-rules'], createAssignmentRuleHandler);
 const updateAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'update', 'sprint_task_routing_rules', input, async (tx) => await updateRoutingRule(tx, input)));
+    return res.json(await dryRunConfigWrite(getDb(), 'update', 'sprint_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_routing_rules', action: 'updated', input, id: input.id }, (t) => updateRoutingRule(t, input))));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -510,7 +536,7 @@ router.put(['/rules/:id', '/assignment-rules/:id'], updateAssignmentRuleHandler)
 const deleteAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'sprint_task_routing_rules', input, async (tx) => await deleteRoutingRule(tx, input)));
+    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'sprint_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_routing_rules', action: 'deleted', input, id: input.id }, (t) => deleteRoutingRule(t, input))));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -677,7 +703,7 @@ router.get('/transition-requirements', async (req: Request, res: Response) => {
 router.post('/transition-requirements', async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body));
-    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'sprint_task_transition_requirements', input, async (tx) => await createTransitionRequirement(tx, input)));
+    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'sprint_task_transition_requirements', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transition_requirements', action: 'created', input }, (t) => createTransitionRequirement(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -688,7 +714,7 @@ router.post('/transition-requirements', async (req: Request, res: Response) => {
 router.put('/transition-requirements/:id', async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'update', 'sprint_task_transition_requirements', input, async (tx) => await updateTransitionRequirement(tx, input)));
+    return res.json(await dryRunConfigWrite(getDb(), 'update', 'sprint_task_transition_requirements', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transition_requirements', action: 'updated', input, id: input.id }, (t) => updateTransitionRequirement(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -699,7 +725,7 @@ router.put('/transition-requirements/:id', async (req: Request, res: Response) =
 router.delete('/transition-requirements/:id', async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'sprint_task_transition_requirements', input, async (tx) => await deleteTransitionRequirement(tx, input)));
+    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'sprint_task_transition_requirements', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transition_requirements', action: 'deleted', input, id: input.id }, (t) => deleteTransitionRequirement(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     const message = err instanceof Error ? err.message : String(err);

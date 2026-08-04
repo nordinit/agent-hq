@@ -25,6 +25,7 @@ import type { Db } from '../adapter/types';
  */
 
 const BASELINE_DIR = path.resolve(__dirname, '../../../../db/pg-baseline');
+const MIGRATIONS_DIR = path.resolve(__dirname, '../../../../db/pg-migrations');
 const TEMPLATE_DB = 'agent_hq_test_template';
 
 function adminUrl(): string {
@@ -46,12 +47,31 @@ function urlFor(database: string): string {
   return u.toString();
 }
 
+/**
+ * Migrations the template applies on top of the baseline, in order.
+ *
+ * This is a deliberate list rather than a glob of db/pg-migrations, because it has to mirror
+ * what production has ACTUALLY applied. 10 and 11 are staged but unapplied: 10 renames the
+ * sprint-* tables to workflow-* and 11 replaces them with read-only compatibility views, and
+ * the code still writes the pre-rename names — applying them here would make every routing
+ * write silently affect zero rows in tests while working in production, which is the same
+ * class of false-green this fixture exists to eliminate.
+ *
+ * Add an entry when a migration is applied to production, so a table introduced by migration
+ * exists in tests too. Without that, a feature depending on one passes on SQLite (where
+ * initSchema creates it) and 500s on PostgreSQL.
+ */
+const APPLIED_MIGRATIONS = [
+  '12-drop-dead-workflow-template-model.sql',
+  '13-drop-sprints-workflow-template-key.sql',
+  '14-routing-config-audit-log.sql',
+];
+
 function baselineFiles(): string[] {
-  // Only the structural files. The rename migration is applied too, so tests exercise the
-  // SAME vocabulary as production rather than the pre-rename names.
-  return ['01-tables.sql', '02-indexes.sql', '03-foreign-keys.sql', '10-rename-legacy-terminology.sql']
-    .map((f) => path.join(BASELINE_DIR, f))
-    .filter((f) => fs.existsSync(f));
+  const baseline = ['01-tables.sql', '02-indexes.sql', '03-foreign-keys.sql']
+    .map((f) => path.join(BASELINE_DIR, f));
+  const migrations = APPLIED_MIGRATIONS.map((f) => path.join(MIGRATIONS_DIR, f));
+  return [...baseline, ...migrations].filter((f) => fs.existsSync(f));
 }
 
 /**
