@@ -659,14 +659,35 @@ export async function getWorkflowGraph(
 
   // Reuse the same loaders the routing tables and resolvers use, so the canvas can
   // never drift from what the tables show or what dispatch actually does.
-  const [statuses, transitionsResult, rulesResult, requirementsResult, agentRows, eventResult] = await Promise.all([
-    listSprintTypeTaskStatuses(db, scope.sprintType, { tenantId: scope.tenantId }),
-    listRoutingTransitions(db, input),
-    listRoutingRulesForSprint(db, input),
-    listTransitionRequirements(db, input),
-    db.all(`SELECT id, name, enabled FROM agents`) as Promise<Array<Record<string, unknown>>>,
-    listWorkflowEventMappings(db, { ...input, tenant_id: scope.tenantId }),
-  ]);
+  // These six loaders are independent, so a pooled handle runs them concurrently. A
+  // transaction handle CANNOT: it is pinned to one connection, and node-postgres does not
+  // support overlapping queries on a single client — it warns today and will throw from
+  // pg@9. The preview endpoint builds the graph inside its non-committing transaction, so
+  // this path is reached in both modes.
+  const loaders = [
+    () => listSprintTypeTaskStatuses(db, scope.sprintType, { tenantId: scope.tenantId }),
+    () => listRoutingTransitions(db, input),
+    () => listRoutingRulesForSprint(db, input),
+    () => listTransitionRequirements(db, input),
+    () => db.all(`SELECT id, name, enabled FROM agents`) as Promise<Array<Record<string, unknown>>>,
+    () => listWorkflowEventMappings(db, { ...input, tenant_id: scope.tenantId }),
+  ] as const;
+
+  let loaded: unknown[];
+  if (db.inTransaction) {
+    loaded = [];
+    for (const load of loaders) loaded.push(await load());
+  } else {
+    loaded = await Promise.all(loaders.map((load) => load()));
+  }
+  const [statuses, transitionsResult, rulesResult, requirementsResult, agentRows, eventResult] = loaded as [
+    Awaited<ReturnType<typeof listSprintTypeTaskStatuses>>,
+    Awaited<ReturnType<typeof listRoutingTransitions>>,
+    Awaited<ReturnType<typeof listRoutingRulesForSprint>>,
+    Awaited<ReturnType<typeof listTransitionRequirements>>,
+    Array<Record<string, unknown>>,
+    Awaited<ReturnType<typeof listWorkflowEventMappings>>,
+  ];
 
   const rawTransitions = (transitionsResult.transitions ?? []) as Array<Record<string, unknown>>;
   const rawRules = (rulesResult.rules ?? []) as Array<Record<string, unknown>>;

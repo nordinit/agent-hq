@@ -29,6 +29,7 @@ import {
   getRoutingRule,
   getWorkflowGraph,
   traceHypothetical,
+  previewRoutingChange,
   listRoutingRulesForSprint,
   listRoutingStatuses,
   listRoutingTransitions,
@@ -426,6 +427,18 @@ const traceHandler = async (req: Request, res: Response) => {
 };
 router.post('/trace', traceHandler);
 router.get('/trace', traceHandler);
+
+// POST /preview — apply a set of config changes inside a transaction that never commits,
+// and report what they would write plus which lint findings they introduce or clear.
+// One canvas gesture is one preview, so a gesture that writes several rows is judged whole.
+router.post('/preview', async (req: Request, res: Response) => {
+  try {
+    const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body ?? {}));
+    return res.json(await previewRoutingChange(getDb(), input));
+  } catch (err) {
+    return sendRoutingError(res, err);
+  }
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TASK ROUTING RULES — deterministic task_type + status → job assignment
