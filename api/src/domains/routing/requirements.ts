@@ -89,6 +89,34 @@ export async function listTransitionRequirements(
   return { transition_requirements: await db.all(query, ...params) };
 }
 
+/**
+ * Refuse a requirement write that names no scope.
+ *
+ * With no sprint_id, project_id or sprint_type these functions fall through to the legacy
+ * global `transition_requirements` table — a table with no project and no tenant, consulted as
+ * the fallback for EVERY workflow in every project. Reaching it by omission is never what the
+ * caller meant:
+ *
+ *   * a create silently gates every project at once, escaping project scoping entirely;
+ *   * an update or delete addresses a GLOBAL row by an id the caller almost certainly took
+ *     from a scoped one, so it edits or destroys an unrelated row that happens to share it.
+ *
+ * The MCP layer already rejects unscoped requests for non-admin keys (lib/mcpApiAuth). This
+ * closes the same gap for admin keys, the REST API and the UI. The global rows are seeded
+ * (db/schema.ts) and are deliberately not managed through this endpoint.
+ */
+function requireRequirementScope(
+  input: { sprint_id?: unknown; project_id?: unknown; sprint_type?: unknown },
+  action: 'create' | 'update' | 'delete',
+): never {
+  throw withStatus(
+    `Refusing to ${action} a transition requirement with no scope. `
+    + 'Send project_id and sprint_type for a workflow-type default, or sprint_id for a workflow override. '
+    + 'Without either this would target the shared global requirements table, which applies to every project.',
+    400,
+  );
+}
+
 export async function createTransitionRequirement(db: Db, input: Record<string, unknown>) {
   const sprintId = parseSprintId(input.sprint_id);
   const hasDefaultScope = input.project_id != null || input.sprint_type != null;
@@ -141,12 +169,7 @@ export async function createTransitionRequirement(db: Db, input: Record<string, 
     return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ?${readTenant.sql}`, result.lastInsertId, ...readTenant.params);
   }
 
-  const result = await db.run(`
-    INSERT INTO transition_requirements (task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
-
-  return await db.get('SELECT * FROM transition_requirements WHERE id = ?', result.lastInsertId);
+  requireRequirementScope(input, 'create');
 }
 
 export async function updateTransitionRequirement(db: Db, input: Record<string, unknown> & { id: unknown; sprint_id?: unknown; project_id?: unknown; sprint_type?: unknown; tenant_id?: unknown }) {
@@ -183,31 +206,7 @@ export async function updateTransitionRequirement(db: Db, input: Record<string, 
     return await updateScopedTransitionRequirementRow(db, id, existing, input, { sprintId: scope.sprintId, sprintType: scope.sprintType, tenantId: scope.tenantId }, `WHERE id = ?${updateTenant.sql}`, [id, ...updateTenant.params]);
   }
 
-  const existing = await db.get('SELECT * FROM transition_requirements WHERE id = ?', id) as TransitionRequirementRecord | undefined;
-  if (!existing) throw withStatus('Transition requirement not found', 404);
-
-  const { task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority } = input;
-
-  if (task_type !== undefined && task_type !== null && !isValidTaskType(task_type)) {
-    throw withStatus(`Invalid task_type "${task_type}". Task type keys must use lowercase letters, numbers, underscores, or hyphens.`, 400);
-  }
-
-  await db.run(`
-    UPDATE transition_requirements SET
-      task_type = ?,
-      outcome = ?,
-      field_name = ?,
-      requirement_type = ?,
-      match_field = ?,
-      severity = ?,
-      message = ?,
-      enabled = ?,
-      priority = ?,
-      updated_at = datetime('now')
-    WHERE id = ?
-  `, task_type !== undefined ? (task_type ?? null) : existing.task_type, outcome ?? existing.outcome, field_name ?? existing.field_name, requirement_type ?? existing.requirement_type, match_field !== undefined ? (match_field ?? null) : existing.match_field, severity ?? existing.severity, message ?? existing.message, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, priority ?? existing.priority, id);
-
-  return await db.get('SELECT * FROM transition_requirements WHERE id = ?', id);
+  requireRequirementScope(input, 'update');
 }
 
 async function updateScopedTransitionRequirementRow(
@@ -306,9 +305,5 @@ export async function deleteTransitionRequirement(db: Db, input: { id: unknown; 
     await db.run(`DELETE FROM sprint_task_transition_requirements WHERE id = ?${deleteTenant.sql}`, id, ...deleteTenant.params);
     return { ok: true };
   }
-  const existing = await db.get('SELECT id FROM transition_requirements WHERE id = ?', id);
-  if (!existing) throw withStatus('Transition requirement not found', 404);
-
-  await db.run('DELETE FROM transition_requirements WHERE id = ?', id);
-  return { ok: true };
+  requireRequirementScope(input, 'delete');
 }
