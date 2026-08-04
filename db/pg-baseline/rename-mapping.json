@@ -42,18 +42,6 @@
       "to": "workflow_types"
     },
     {
-      "from": "sprint_workflow_statuses",
-      "to": "workflow_statuses"
-    },
-    {
-      "from": "sprint_workflow_templates",
-      "to": "workflow_templates"
-    },
-    {
-      "from": "sprint_workflow_transitions",
-      "to": "workflow_transitions"
-    },
-    {
       "from": "sprints",
       "to": "workflows"
     }
@@ -146,11 +134,6 @@
     },
     {
       "table": "sprint_type_task_types",
-      "from": "sprint_type_key",
-      "to": "workflow_type_key"
-    },
-    {
-      "table": "sprint_workflow_templates",
       "from": "sprint_type_key",
       "to": "workflow_type_key"
     },
@@ -295,18 +278,6 @@
       "to": "idx_workflow_types_tenant_key"
     },
     {
-      "from": "idx_sprint_workflow_statuses_template_order",
-      "to": "idx_workflow_statuses_template_order"
-    },
-    {
-      "from": "idx_sprint_workflow_templates_lookup",
-      "to": "idx_workflow_templates_lookup"
-    },
-    {
-      "from": "idx_sprint_workflow_transitions_template_from",
-      "to": "idx_workflow_transitions_template_from"
-    },
-    {
       "from": "idx_sprints_project",
       "to": "idx_workflows_project"
     },
@@ -365,18 +336,6 @@
     {
       "from": "sprint_types_pkey",
       "to": "workflow_types_pkey"
-    },
-    {
-      "from": "sprint_workflow_statuses_pkey",
-      "to": "workflow_statuses_pkey"
-    },
-    {
-      "from": "sprint_workflow_templates_pkey",
-      "to": "workflow_templates_pkey"
-    },
-    {
-      "from": "sprint_workflow_transitions_pkey",
-      "to": "workflow_transitions_pkey"
     },
     {
       "from": "sprints_pkey",

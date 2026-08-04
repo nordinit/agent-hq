@@ -1348,53 +1348,6 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     );
     CREATE INDEX IF NOT EXISTS idx_sprint_type_outcomes_lookup ON sprint_type_outcomes(sprint_type_key, task_type, enabled, stage_order);
 
-    CREATE TABLE IF NOT EXISTS sprint_workflow_templates (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_type_key  TEXT NOT NULL,
-      key              TEXT NOT NULL,
-      name             TEXT NOT NULL,
-      description      TEXT NOT NULL DEFAULT '',
-      is_default       INTEGER NOT NULL DEFAULT 1,
-      is_system        INTEGER NOT NULL DEFAULT 1,
-      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(sprint_type_key, key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_sprint_workflow_templates_lookup ON sprint_workflow_templates(sprint_type_key, is_default);
-
-    CREATE TABLE IF NOT EXISTS sprint_workflow_statuses (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      template_id      INTEGER NOT NULL REFERENCES sprint_workflow_templates(id) ON DELETE CASCADE,
-      status_key       TEXT NOT NULL,
-      label            TEXT NOT NULL,
-      color            TEXT NOT NULL DEFAULT 'slate',
-      stage_order      INTEGER NOT NULL DEFAULT 0,
-      terminal         INTEGER NOT NULL DEFAULT 0,
-      is_default_entry INTEGER NOT NULL DEFAULT 0,
-      metadata_json    TEXT NOT NULL DEFAULT '{}',
-      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(template_id, status_key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_sprint_workflow_statuses_template_order ON sprint_workflow_statuses(template_id, stage_order);
-
-    CREATE TABLE IF NOT EXISTS sprint_workflow_transitions (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      template_id      INTEGER NOT NULL REFERENCES sprint_workflow_templates(id) ON DELETE CASCADE,
-      from_status_key  TEXT NOT NULL,
-      to_status_key    TEXT NOT NULL,
-      transition_key   TEXT NOT NULL,
-      label            TEXT NOT NULL,
-      outcome          TEXT,
-      stage_order      INTEGER NOT NULL DEFAULT 0,
-      is_system        INTEGER NOT NULL DEFAULT 1,
-      metadata_json    TEXT NOT NULL DEFAULT '{}',
-      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(template_id, transition_key),
-      UNIQUE(template_id, from_status_key, to_status_key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_sprint_workflow_transitions_template_from ON sprint_workflow_transitions(template_id, from_status_key, stage_order);
   `);
 
   const ensureColumn = (table: string, column: string, ddl: string): void => {
@@ -1460,7 +1413,6 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       'task_field_schemas',
       'sprint_type_task_types',
       'sprint_type_outcomes',
-      'sprint_workflow_templates',
       'sprint_type_task_statuses',
       'sprint_task_transitions',
       'sprint_task_transition_requirements',
@@ -1572,10 +1524,6 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
   ensureColumn('sprint_type_outcomes', 'metadata_json', `metadata_json TEXT NOT NULL DEFAULT '{}'`);
   ensureColumn('sprint_type_outcomes', 'updated_at', `updated_at TEXT`);
   db.exec(`UPDATE sprint_type_outcomes SET description = COALESCE(description, ''), enabled = COALESCE(enabled, 1), behavior = COALESCE(NULLIF(behavior, ''), 'base'), stage_order = COALESCE(stage_order, 0), is_system = COALESCE(is_system, 1), metadata_json = COALESCE(metadata_json, '{}'), updated_at = COALESCE(updated_at, datetime('now'))`);
-  ensureColumn('sprint_workflow_templates', 'is_system', `is_system INTEGER NOT NULL DEFAULT 1`);
-  ensureColumn('sprint_workflow_templates', 'updated_at', `updated_at TEXT`);
-  db.exec(`UPDATE sprint_workflow_templates SET updated_at = COALESCE(updated_at, datetime('now'))`);
-
   const defaultTenantIdSql = `(SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1)`;
   const sprintTypesHasTenantId = await tableHasColumn(new SqliteAdapter(db), 'sprint_types', 'tenant_id');
   const workflowConfigTenantPredicate = async (tableName: string): Promise<string> => await tableHasColumn(new SqliteAdapter(db), tableName, 'tenant_id')

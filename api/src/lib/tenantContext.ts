@@ -311,7 +311,6 @@ const WORKFLOW_DEFINITION_CONFIG_TABLES = [
   'sprint_type_task_statuses',
   'sprint_type_outcomes',
   'sprint_type_relationship_types',
-  'sprint_workflow_templates',
 ] as const;
 
 const ensuredTenantSchemaDbs = new WeakSet<Db>();
@@ -1067,20 +1066,6 @@ function workflowConfigTableDefinition(table: string): string | null {
         updated_at                   TEXT NOT NULL DEFAULT (datetime('now')),
         UNIQUE(tenant_id, sprint_type_key, key)
       `;
-    case 'sprint_workflow_templates':
-      return `
-        id               INTEGER PRIMARY KEY AUTOINCREMENT,
-        tenant_id        INTEGER NOT NULL DEFAULT 1 REFERENCES tenants(id) ON DELETE CASCADE,
-        sprint_type_key  TEXT NOT NULL,
-        key              TEXT NOT NULL,
-        name             TEXT NOT NULL,
-        description      TEXT NOT NULL DEFAULT '',
-        is_default       INTEGER NOT NULL DEFAULT 1,
-        is_system        INTEGER NOT NULL DEFAULT 1,
-        created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE(tenant_id, sprint_type_key, key)
-      `;
     default:
       return null;
   }
@@ -1149,7 +1134,6 @@ async function ensureWorkflowDefinitionConfigTenantScope(db: Db, defaultTenantId
   if (await tableExists(db, 'sprint_type_task_statuses')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_task_statuses_lookup ON sprint_type_task_statuses(tenant_id, sprint_type_key, status_key)`);
   if (await tableExists(db, 'sprint_type_outcomes')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_outcomes_lookup ON sprint_type_outcomes(tenant_id, sprint_type_key, task_type, enabled, stage_order)`);
   if (await tableExists(db, 'sprint_type_relationship_types')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_type_relationship_types_lookup ON sprint_type_relationship_types(tenant_id, sprint_type_key, key)`);
-  if (await tableExists(db, 'sprint_workflow_templates')) await db.exec(`CREATE INDEX IF NOT EXISTS idx_sprint_workflow_templates_lookup ON sprint_workflow_templates(tenant_id, sprint_type_key, is_default)`);
 }
 
 async function copyWorkflowDefinitionConfig(db: Db, sourceKey: string, targetKey: string): Promise<void> {
@@ -1212,49 +1196,6 @@ async function copyWorkflowDefinitionConfig(db: Db, sourceKey: string, targetKey
       FROM sprint_type_task_statuses
       WHERE sprint_type_key = ?
     `, targetKey, sourceKey);
-  }
-  if (await tableExists(db, 'sprint_workflow_templates')) {
-    const templates = await db.all(`
-      SELECT id, key, name, description, is_default, is_system
-      FROM sprint_workflow_templates
-      WHERE sprint_type_key = ?
-      ORDER BY id ASC
-    `, sourceKey) as Array<{ id: number; key: string; name: string; description: string; is_default: number; is_system: number }>;
-    for (const template of templates) {
-      const result = await db.run(`
-        INSERT OR IGNORE INTO sprint_workflow_templates (sprint_type_key, key, name, description, is_default, is_system, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `, targetKey, template.key, template.name, template.description, template.is_default, template.is_system);
-      const targetTemplate = await db.get(`
-        SELECT id FROM sprint_workflow_templates WHERE sprint_type_key = ? AND key = ? LIMIT 1
-      `, targetKey, template.key) as { id: number } | undefined;
-      if (!targetTemplate) continue;
-      if (await tableExists(db, 'sprint_workflow_statuses')) {
-        await db.run(`
-          INSERT OR IGNORE INTO sprint_workflow_statuses (
-            template_id, status_key, label, color, stage_order, terminal,
-            is_default_entry, metadata_json, created_at, updated_at
-          )
-          SELECT ?, status_key, label, color, stage_order, terminal,
-            is_default_entry, metadata_json, datetime('now'), datetime('now')
-          FROM sprint_workflow_statuses
-          WHERE template_id = ?
-        `, targetTemplate.id, template.id);
-      }
-      if (await tableExists(db, 'sprint_workflow_transitions')) {
-        await db.run(`
-          INSERT OR IGNORE INTO sprint_workflow_transitions (
-            template_id, from_status_key, to_status_key, transition_key, label,
-            outcome, stage_order, is_system, metadata_json, created_at, updated_at
-          )
-          SELECT ?, from_status_key, to_status_key, transition_key, label,
-            outcome, stage_order, is_system, metadata_json, datetime('now'), datetime('now')
-          FROM sprint_workflow_transitions
-          WHERE template_id = ?
-        `, targetTemplate.id, template.id);
-      }
-      void result;
-    }
   }
 }
 

@@ -179,10 +179,6 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 | `agent_hq_create_sprint_type` | Create a workflow type using the legacy workflow type route |
 | `agent_hq_update_sprint_type` | Update a workflow type using the legacy workflow type route |
 | `agent_hq_delete_sprint_type` | Delete a workflow type using the legacy workflow type route |
-| `agent_hq_get_workflow_template` | Get a workflow template |
-| `agent_hq_create_workflow_template` | Create a workflow template |
-| `agent_hq_update_workflow_template` | Update a workflow template |
-| `agent_hq_delete_workflow_template` | Delete a workflow template |
 | `agent_hq_list_task_field_schemas` | List task field schemas for a workflow type |
 | `agent_hq_get_task_field_schema` | Get a task field schema |
 | `agent_hq_create_task_field_schema` | Create a task field schema |
@@ -870,11 +866,6 @@ Supported high-blast-radius writes accept `dry_run: true` for read-only preview.
 | `agent_hq_create_sprint_type` | POST | `/api/v1/sprints/types` |
 | `agent_hq_update_sprint_type` | PUT | `/api/v1/sprints/types/:key` |
 | `agent_hq_delete_sprint_type` | DELETE | `/api/v1/sprints/types/:key` |
-| `agent_hq_list_workflow_templates` | GET | `/api/v1/sprints/workflow-templates` or `/api/v1/sprints/types/:key/workflow-templates` |
-| `agent_hq_get_workflow_template` | GET | `/api/v1/sprints/types/:key/workflow-templates/:templateId` |
-| `agent_hq_create_workflow_template` | POST | `/api/v1/sprints/types/:key/workflow-templates` |
-| `agent_hq_update_workflow_template` | PUT | `/api/v1/sprints/types/:key/workflow-templates/:templateId` |
-| `agent_hq_delete_workflow_template` | DELETE | `/api/v1/sprints/types/:key/workflow-templates/:templateId` |
 | `agent_hq_list_task_field_schemas` | GET | `/api/v1/sprints/types/:key/field-schemas` |
 | `agent_hq_get_task_field_schema` | GET | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
 | `agent_hq_create_task_field_schema` | POST | `/api/v1/sprints/types/:key/field-schemas` |

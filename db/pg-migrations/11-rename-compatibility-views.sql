@@ -48,18 +48,6 @@ CREATE VIEW "sprint_types" WITH (security_barrier) AS SELECT * FROM "workflow_ty
 CREATE RULE "sprint_types_no_insert" AS ON INSERT TO "sprint_types" DO INSTEAD NOTHING;
 CREATE RULE "sprint_types_no_update" AS ON UPDATE TO "sprint_types" DO INSTEAD NOTHING;
 CREATE RULE "sprint_types_no_delete" AS ON DELETE TO "sprint_types" DO INSTEAD NOTHING;
-CREATE VIEW "sprint_workflow_statuses" WITH (security_barrier) AS SELECT * FROM "workflow_statuses";
-CREATE RULE "sprint_workflow_statuses_no_insert" AS ON INSERT TO "sprint_workflow_statuses" DO INSTEAD NOTHING;
-CREATE RULE "sprint_workflow_statuses_no_update" AS ON UPDATE TO "sprint_workflow_statuses" DO INSTEAD NOTHING;
-CREATE RULE "sprint_workflow_statuses_no_delete" AS ON DELETE TO "sprint_workflow_statuses" DO INSTEAD NOTHING;
-CREATE VIEW "sprint_workflow_templates" WITH (security_barrier) AS SELECT * FROM "workflow_templates";
-CREATE RULE "sprint_workflow_templates_no_insert" AS ON INSERT TO "sprint_workflow_templates" DO INSTEAD NOTHING;
-CREATE RULE "sprint_workflow_templates_no_update" AS ON UPDATE TO "sprint_workflow_templates" DO INSTEAD NOTHING;
-CREATE RULE "sprint_workflow_templates_no_delete" AS ON DELETE TO "sprint_workflow_templates" DO INSTEAD NOTHING;
-CREATE VIEW "sprint_workflow_transitions" WITH (security_barrier) AS SELECT * FROM "workflow_transitions";
-CREATE RULE "sprint_workflow_transitions_no_insert" AS ON INSERT TO "sprint_workflow_transitions" DO INSTEAD NOTHING;
-CREATE RULE "sprint_workflow_transitions_no_update" AS ON UPDATE TO "sprint_workflow_transitions" DO INSTEAD NOTHING;
-CREATE RULE "sprint_workflow_transitions_no_delete" AS ON DELETE TO "sprint_workflow_transitions" DO INSTEAD NOTHING;
 CREATE VIEW "sprints" WITH (security_barrier) AS SELECT * FROM "workflows";
 CREATE RULE "sprints_no_insert" AS ON INSERT TO "sprints" DO INSTEAD NOTHING;
 CREATE RULE "sprints_no_update" AS ON UPDATE TO "sprints" DO INSTEAD NOTHING;
