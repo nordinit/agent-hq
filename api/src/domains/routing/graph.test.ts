@@ -1,0 +1,441 @@
+import {
+  buildWorkflowGraph,
+  type GraphRequirementInput,
+  type GraphRuleInput,
+  type GraphStatusInput,
+  type GraphTransitionInput,
+} from './graph';
+
+// buildWorkflowGraph is pure, so every lint rule is testable without a database.
+// These tests are the contract that the canvas and Atlas both depend on.
+
+const SCOPE = { project_id: 1, workflow_type: 'dev', workflow_id: null, task_type: null };
+
+function status(name: string, over: Partial<GraphStatusInput> = {}): GraphStatusInput {
+  return {
+    name,
+    label: name,
+    color: 'slate',
+    terminal: false,
+    stage_order: 0,
+    is_default_entry: false,
+    ...over,
+  };
+}
+
+function transition(id: number, from: string, to: string, outcome: string, over: Partial<GraphTransitionInput> = {}): GraphTransitionInput {
+  return { id, from_status: from, to_status: to, outcome, task_type: null, priority: 0, enabled: true, ...over };
+}
+
+function rule(id: number, statusKey: string, agentId: number | null, over: Partial<GraphRuleInput> = {}): GraphRuleInput {
+  return { id, status: statusKey, task_type: null, agent_id: agentId, priority: 0, enabled: true, ...over };
+}
+
+function requirement(id: number, outcome: string, over: Partial<GraphRequirementInput> = {}): GraphRequirementInput {
+  return {
+    id,
+    outcome,
+    task_type: null,
+    field_name: 'pr_url',
+    requirement_type: 'required',
+    severity: 'block',
+    message: '',
+    enabled: true,
+    ...over,
+  };
+}
+
+function build(over: {
+  statuses?: GraphStatusInput[];
+  transitions?: GraphTransitionInput[];
+  rules?: GraphRuleInput[];
+  requirements?: GraphRequirementInput[];
+  agents?: Array<{ id: number; name: string; enabled: boolean }>;
+} = {}) {
+  return buildWorkflowGraph({
+    scope: SCOPE,
+    statuses: over.statuses ?? [],
+    transitions: over.transitions ?? [],
+    rules: over.rules ?? [],
+    requirements: over.requirements ?? [],
+    agents: over.agents ?? [{ id: 1, name: 'Piper', enabled: true }],
+  });
+}
+
+const codes = (graph: ReturnType<typeof build>): string[] => graph.lint.map((finding) => finding.code);
+
+/** A minimal healthy two-status workflow: todo -> done, with an owner on todo. */
+function healthy() {
+  return build({
+    statuses: [
+      status('todo', { is_default_entry: true, stage_order: 0 }),
+      status('done', { terminal: true, stage_order: 1 }),
+    ],
+    transitions: [transition(1, 'todo', 'done', 'completed')],
+    rules: [rule(1, 'todo', 1)],
+  });
+}
+
+describe('buildWorkflowGraph', () => {
+  it('produces no findings for a well-formed workflow', () => {
+    const graph = healthy();
+    expect(graph.lint).toEqual([]);
+    expect(graph.stats).toEqual({ node_count: 2, edge_count: 1, error_count: 0, warn_count: 0 });
+  });
+
+  it('orders nodes by stage_order and exposes it as the layout layer', () => {
+    const graph = build({
+      statuses: [
+        status('done', { terminal: true, stage_order: 5 }),
+        status('todo', { is_default_entry: true, stage_order: 0 }),
+      ],
+      transitions: [transition(1, 'todo', 'done', 'completed')],
+      rules: [rule(1, 'todo', 1)],
+    });
+    expect(graph.nodes.map((node) => node.id)).toEqual(['todo', 'done']);
+    expect(graph.nodes.map((node) => node.layer)).toEqual([0, 5]);
+  });
+
+  describe('shadowed_transition', () => {
+    it('flags the loser when two transitions share from + outcome + task_type', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+          status('review', { stage_order: 2 }),
+        ],
+        transitions: [
+          transition(1, 'todo', 'done', 'completed', { priority: 0 }),
+          transition(2, 'todo', 'review', 'completed', { priority: 10 }),
+        ],
+        rules: [rule(1, 'todo', 1), rule(2, 'review', 1)],
+      });
+      // Higher priority wins, so #1 can never fire.
+      const shadowed = graph.edges.find((edge) => edge.transition_id === 1);
+      expect(shadowed?.shadowed_by).toBe(2);
+      expect(graph.edges.find((edge) => edge.transition_id === 2)?.shadowed_by).toBeNull();
+      expect(codes(graph)).toContain('shadowed_transition');
+    });
+
+    it('breaks priority ties toward the lower id, matching the resolver', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('a', { terminal: true, stage_order: 1 }),
+          status('b', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [
+          transition(7, 'todo', 'a', 'completed', { priority: 5 }),
+          transition(3, 'todo', 'b', 'completed', { priority: 5 }),
+        ],
+        rules: [rule(1, 'todo', 1)],
+      });
+      // ORDER BY priority DESC, id ASC -> #3 wins, #7 is shadowed.
+      expect(graph.edges.find((edge) => edge.transition_id === 7)?.shadowed_by).toBe(3);
+      expect(graph.edges.find((edge) => edge.transition_id === 3)?.shadowed_by).toBeNull();
+    });
+
+    it('does not treat a task-type-scoped row as shadowing the catch-all row', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [
+          transition(1, 'todo', 'done', 'completed', { task_type: null }),
+          transition(2, 'todo', 'done', 'completed', { task_type: 'bug', priority: 10 }),
+        ],
+        rules: [rule(1, 'todo', 1)],
+      });
+      // The null row still serves every task type that is not 'bug'.
+      expect(graph.edges.every((edge) => edge.shadowed_by === null)).toBe(true);
+      expect(codes(graph)).not.toContain('shadowed_transition');
+    });
+
+    it('ignores disabled transitions when deciding the winner', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+          status('review', { stage_order: 2 }),
+        ],
+        transitions: [
+          transition(1, 'todo', 'done', 'completed', { priority: 0 }),
+          transition(2, 'todo', 'review', 'completed', { priority: 10, enabled: false }),
+        ],
+        rules: [rule(1, 'todo', 1), rule(2, 'review', 1)],
+      });
+      expect(graph.edges.find((edge) => edge.transition_id === 1)?.shadowed_by).toBeNull();
+    });
+  });
+
+  describe('reachability', () => {
+    it('flags a status nothing transitions into', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+          status('orphan', { terminal: true, stage_order: 2 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+      });
+      expect(codes(graph)).toContain('unreachable_status');
+      expect(graph.nodes.find((node) => node.id === 'orphan')?.lint).toContain('unreachable_status');
+      // The entry status is exempt.
+      expect(graph.nodes.find((node) => node.id === 'todo')?.lint).not.toContain('unreachable_status');
+    });
+
+    it('does not count a self-loop as a way to reach a status', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('stuck', { stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'stuck', 'stuck', 'retry')],
+        rules: [rule(1, 'todo', 1), rule(2, 'stuck', 1)],
+      });
+      expect(graph.nodes.find((node) => node.id === 'stuck')?.lint).toContain('unreachable_status');
+    });
+
+    it('flags a non-terminal status with no way out', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('limbo', { stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'limbo', 'completed')],
+        rules: [rule(1, 'todo', 1), rule(2, 'limbo', 1)],
+      });
+      expect(graph.nodes.find((node) => node.id === 'limbo')?.lint).toContain('dead_end_status');
+      // Terminal statuses are expected to have no way out.
+      expect(codes(healthy())).not.toContain('dead_end_status');
+    });
+
+    it('treats a shadowed transition as not providing reachability', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('a', { terminal: true, stage_order: 1 }),
+          status('b', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [
+          transition(1, 'todo', 'a', 'completed', { priority: 0 }),
+          transition(2, 'todo', 'b', 'completed', { priority: 10 }),
+        ],
+        rules: [rule(1, 'todo', 1)],
+      });
+      // #1 never fires, so 'a' is not actually reachable.
+      expect(graph.nodes.find((node) => node.id === 'a')?.lint).toContain('unreachable_status');
+      expect(graph.nodes.find((node) => node.id === 'b')?.lint).not.toContain('unreachable_status');
+    });
+  });
+
+  describe('assignment', () => {
+    it('flags a non-terminal status with no agent assigned', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [],
+      });
+      expect(graph.nodes.find((node) => node.id === 'todo')?.lint).toContain('unassigned_status');
+      // Terminal statuses are exempt: nobody is meant to pick work up from them.
+      expect(graph.nodes.find((node) => node.id === 'done')?.lint).not.toContain('unassigned_status');
+    });
+
+    it('flags a rule pointing at a disabled agent', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 9)],
+        agents: [{ id: 9, name: 'Casper', enabled: false }],
+      });
+      expect(codes(graph)).toContain('rule_targets_disabled_agent');
+      expect(graph.stats.error_count).toBeGreaterThan(0);
+    });
+
+    it('flags a rule pointing at an agent that no longer exists', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 404)],
+        agents: [],
+      });
+      expect(codes(graph)).toContain('rule_targets_disabled_agent');
+    });
+
+    it('attaches assignments to their node', () => {
+      const graph = healthy();
+      const todo = graph.nodes.find((node) => node.id === 'todo');
+      expect(todo?.assignments).toHaveLength(1);
+      expect(todo?.assignments[0]).toMatchObject({ agent_id: 1, agent_name: 'Piper', agent_enabled: true });
+    });
+  });
+
+  describe('gates', () => {
+    it('decorates the edge whose outcome the requirement gates', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+        requirements: [requirement(1, 'completed')],
+      });
+      expect(graph.edges[0].gates).toHaveLength(1);
+      expect(graph.edges[0].gates[0]).toMatchObject({ requirement_id: 1, field_name: 'pr_url' });
+    });
+
+    it('flags a requirement whose outcome no active transition uses', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+        requirements: [requirement(1, 'never_used')],
+      });
+      expect(codes(graph)).toContain('gate_without_transition');
+    });
+
+    it('reports an unused outcome once, not once per requirement', () => {
+      const graph = build({
+        statuses: [status('todo', { is_default_entry: true, terminal: true })],
+        rules: [rule(1, 'todo', 1)],
+        requirements: [requirement(1, 'ghost'), requirement(2, 'ghost'), requirement(3, 'ghost')],
+      });
+      expect(codes(graph).filter((code) => code === 'gate_without_transition')).toHaveLength(1);
+    });
+
+    it('does not attach a task-type-scoped gate to a different task type', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed', { task_type: 'chore' })],
+        rules: [rule(1, 'todo', 1)],
+        requirements: [requirement(1, 'completed', { task_type: 'bug' })],
+      });
+      expect(graph.edges[0].gates).toHaveLength(0);
+    });
+  });
+
+  describe('structural errors', () => {
+    it('flags a transition referencing a status outside the catalog', () => {
+      const graph = build({
+        statuses: [status('todo', { is_default_entry: true, terminal: true })],
+        transitions: [transition(1, 'todo', 'ghost', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+      });
+      expect(codes(graph)).toContain('transition_to_unknown_status');
+      expect(graph.edges[0].lint).toContain('transition_to_unknown_status');
+    });
+
+    it('flags a workflow with no entry status', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+      });
+      expect(codes(graph)).toContain('no_entry_point');
+    });
+
+    it('stays quiet on an empty status catalog rather than inventing findings', () => {
+      expect(build().lint).toEqual([]);
+    });
+  });
+
+  describe('unconfigured scope', () => {
+    // Many projects define zero workflow-type defaults and configure everything per
+    // workflow, so this scope is common. It must not read as "your workflow is broken".
+    const unconfigured = () => build({
+      statuses: [
+        status('todo', { is_default_entry: true, stage_order: 0 }),
+        status('review', { stage_order: 1 }),
+        status('done', { terminal: true, stage_order: 2 }),
+      ],
+      transitions: [],
+      rules: [],
+    });
+
+    it('reports the scope as unconfigured instead of one warning per status', () => {
+      expect(codes(unconfigured())).toEqual(['scope_not_configured']);
+    });
+
+    it('raises no warnings or errors for an unconfigured scope', () => {
+      const graph = unconfigured();
+      expect(graph.stats.warn_count).toBe(0);
+      expect(graph.stats.error_count).toBe(0);
+    });
+
+    it('does not suppress structural findings once the scope has any edge', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('review', { stage_order: 1 }),
+          status('done', { terminal: true, stage_order: 2 }),
+        ],
+        transitions: [transition(1, 'todo', 'done', 'completed')],
+        rules: [rule(1, 'todo', 1)],
+      });
+      expect(codes(graph)).toContain('unreachable_status');
+      expect(codes(graph)).not.toContain('scope_not_configured');
+    });
+  });
+
+  describe('scope layering', () => {
+    it('ignores an inherited row that a workflow-scoped override supersedes', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('done', { terminal: true, stage_order: 1 }),
+          status('review', { stage_order: 2 }),
+        ],
+        transitions: [
+          // The inherited default is superseded, so it must not shadow the override
+          // and must not make 'review' look reachable.
+          transition(1, 'todo', 'review', 'completed', { priority: 99, effective_for_sprint: false, is_inherited: true }),
+          transition(2, 'todo', 'done', 'completed', { priority: 0, effective_for_sprint: true, is_override: true }),
+        ],
+        rules: [rule(1, 'todo', 1), rule(2, 'review', 1)],
+      });
+      expect(graph.edges.find((edge) => edge.transition_id === 2)?.shadowed_by).toBeNull();
+      expect(graph.nodes.find((node) => node.id === 'review')?.lint).toContain('unreachable_status');
+    });
+  });
+
+  describe('back edges', () => {
+    it('marks a transition that moves a task backwards as a rework loop', () => {
+      const graph = build({
+        statuses: [
+          status('todo', { is_default_entry: true, stage_order: 0 }),
+          status('review', { stage_order: 1 }),
+          status('done', { terminal: true, stage_order: 2 }),
+        ],
+        transitions: [
+          transition(1, 'todo', 'review', 'completed'),
+          transition(2, 'review', 'done', 'approved'),
+          transition(3, 'review', 'todo', 'changes_requested'),
+        ],
+        rules: [rule(1, 'todo', 1), rule(2, 'review', 1)],
+      });
+      expect(graph.edges.find((edge) => edge.transition_id === 3)?.is_back_edge).toBe(true);
+      expect(graph.edges.find((edge) => edge.transition_id === 1)?.is_back_edge).toBe(false);
+    });
+  });
+});

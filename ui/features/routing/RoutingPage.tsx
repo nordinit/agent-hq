@@ -13,10 +13,11 @@ import AgentContractSection from '@/features/routing/sections/AgentContractSecti
 import RoutingRulesSection from '@/features/routing/sections/RoutingRulesSection';
 import TransitionRequirementsSection from '@/features/routing/sections/TransitionRequirementsSection';
 import TransitionsSection from '@/features/routing/sections/TransitionsSection';
+import WorkflowGraphSection from '@/features/routing/sections/WorkflowGraphSection';
 import { formatSprintTypeLabel } from '@/features/routing/workflowConfigShared';
 import { ChevronDown, GitBranch } from 'lucide-react';
 
-type RoutingTab = 'rules' | 'transitions' | 'transition-reqs' | 'external-events' | 'agent-contract';
+type RoutingTab = 'graph' | 'rules' | 'transitions' | 'transition-reqs' | 'external-events' | 'agent-contract';
 
 // ─── Main Page ───────────────────────────────────────────────
 export default function RoutingPage() {
@@ -28,8 +29,8 @@ export default function RoutingPage() {
   const [selectedSprintId, setSelectedSprintId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<RoutingTab>('rules');
-  const sprintScopedTabs: RoutingTab[] = ['rules', 'transitions', 'transition-reqs'];
+  const [activeTab, setActiveTab] = useState<RoutingTab>('graph');
+  const sprintScopedTabs: RoutingTab[] = ['graph', 'rules', 'transitions', 'transition-reqs'];
   const [selectedSprintType, setSelectedSprintType] = useState<string | null>(null);
   const selectedProject = projects.find(project => project.id === selectedProjectId) ?? null;
   const selectedSprint = sprints.find(sprint => sprint.id === selectedSprintId) ?? null;
@@ -97,6 +98,7 @@ export default function RoutingPage() {
   );
 
   const tabs: { id: RoutingTab; label: string; count?: number }[] = [
+    { id: 'graph', label: 'Graph' },
     { id: 'rules', label: 'Assignment Rules' },
     { id: 'transitions', label: 'Automatic Transitions' },
     { id: 'transition-reqs', label: 'Gate Requirements' },
@@ -227,6 +229,15 @@ export default function RoutingPage() {
       </div>
 
       {/* Tab Content */}
+      {activeTab === 'graph' && (
+        <WorkflowGraphSection
+          projectId={selectedProjectId}
+          sprintId={scopedSprintId}
+          sprintName={scopedSprintName}
+          sprintType={scopedSprintType}
+        />
+      )}
+
       {activeTab === 'rules' && (
         <RoutingRulesSection projectId={selectedProjectId} sprintId={scopedSprintId} sprintName={scopedSprintName} sprintType={scopedSprintType} />
       )}

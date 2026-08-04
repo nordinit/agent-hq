@@ -1,8 +1,19 @@
 import { apiFetch } from './http';
 import { withWorkflowAliases } from './workflowAliases';
-import type { ReconcilerConfig, RoutingConfig, RoutingScopeInfo, RoutingTransition, TaskRoutingRule, TaskStatusMeta, TransitionRequirement, TransitionRequirementFieldsResponse, WorkflowEventMapping } from './types';
+import type { ReconcilerConfig, RoutingConfig, RoutingScopeInfo, RoutingTransition, TaskRoutingRule, TaskStatusMeta, TransitionRequirement, TransitionRequirementFieldsResponse, WorkflowEventMapping, WorkflowGraph } from './types';
 
 export const routingClient = {
+// The workflow state machine, derived server-side so the canvas and Atlas share one
+// representation. workflowType is required — a graph is always scoped to one type.
+getRoutingGraph: (projectId?: number | null, workflowType?: string | null, workflowId?: number | null, taskType?: string | null) => {
+  const params = new URLSearchParams();
+  if (projectId) params.set('project_id', String(projectId));
+  if (workflowType) params.set('workflow_type', workflowType);
+  if (workflowId) params.set('workflow_id', String(workflowId));
+  if (taskType) params.set('task_type', taskType);
+  return apiFetch<WorkflowGraph>(`/api/v1/routing/graph?${params.toString()}`);
+},
+
 // Routing Config / Routing Admin
 getRoutingConfig: (projectId?: number) => {
   const qs = projectId ? `?project_id=${projectId}` : '';

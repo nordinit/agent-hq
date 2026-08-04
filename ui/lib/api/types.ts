@@ -1543,3 +1543,90 @@ export interface ProviderGateResponse {
   onboarding_provider_gate_passed: boolean;
   connected_count: number;
 }
+
+// ── Workflow routing graph ────────────────────────────────────────────────────
+// Mirrors api/src/domains/routing/graph.ts. The server derives the state machine
+// once so the canvas and Atlas cannot drift apart; keep these in sync with it.
+
+export type WorkflowGraphLintSeverity = 'error' | 'warn' | 'info';
+
+export interface WorkflowGraphLintFinding {
+  code: string;
+  severity: WorkflowGraphLintSeverity;
+  message: string;
+  node?: string;
+  edge?: number;
+}
+
+export interface WorkflowGraphAssignment {
+  rule_id: number;
+  task_type: string | null;
+  agent_id: number | null;
+  agent_name: string | null;
+  agent_enabled: boolean;
+  priority: number;
+  enabled: boolean;
+  scope_kind: string;
+  is_inherited: boolean;
+}
+
+export interface WorkflowGraphNode {
+  id: string;
+  label: string;
+  color: string;
+  terminal: boolean;
+  stage_order: number;
+  is_default_entry: boolean;
+  layer: number;
+  assignments: WorkflowGraphAssignment[];
+  inbound: number;
+  outbound: number;
+  lint: string[];
+}
+
+export interface WorkflowGraphGate {
+  requirement_id: number;
+  field_name: string;
+  requirement_type: string;
+  severity: string;
+  message: string;
+  task_type: string | null;
+  enabled: boolean;
+}
+
+export interface WorkflowGraphEdge {
+  id: string;
+  transition_id: number;
+  from: string;
+  to: string;
+  outcome: string;
+  task_type: string | null;
+  priority: number;
+  enabled: boolean;
+  is_protected: boolean;
+  scope_kind: string;
+  is_inherited: boolean;
+  parallel_group: string;
+  is_back_edge: boolean;
+  shadowed_by: number | null;
+  gates: WorkflowGraphGate[];
+  lint: string[];
+}
+
+export interface WorkflowGraph {
+  scope: {
+    project_id: number | null;
+    workflow_type: string | null;
+    workflow_id: number | null;
+    task_type: string | null;
+  };
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+  lint: WorkflowGraphLintFinding[];
+  stats: {
+    node_count: number;
+    edge_count: number;
+    error_count: number;
+    warn_count: number;
+  };
+}

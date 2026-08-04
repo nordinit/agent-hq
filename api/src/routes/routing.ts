@@ -26,6 +26,7 @@ import {
   deleteTransitionRequirement,
   getRoutingTransition,
   getRoutingRule,
+  getWorkflowGraph,
   listRoutingRulesForSprint,
   listRoutingStatuses,
   listRoutingTransitions,
@@ -363,6 +364,22 @@ router.delete('/transitions/:id', async (req: Request, res: Response) => {
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROUTING GRAPH — the workflow state machine as nodes + edges, derived server-side
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /graph?project_id=&workflow_type=&workflow_id=&task_type=
+// Single representation shared by the canvas UI and Atlas, so neither has to
+// re-derive the machine from the raw tables and reach a different answer.
+router.get('/graph', async (req: Request, res: Response) => {
+  try {
+    const input = await withRequestTenant(req, normalizeWorkflowAliases(req.query));
+    return res.json(await getWorkflowGraph(getDb(), input));
+  } catch (err) {
+    return sendRoutingError(res, err);
   }
 });
 
