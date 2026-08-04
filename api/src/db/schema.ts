@@ -49,6 +49,9 @@ import { tableHasColumn } from '../lib/durableRunIdentity';
 import { syncAllTaskActiveAgentsFromInstances } from '../domains/tasks/ownership';
 import { ensureNotificationTables } from '../lib/notifications';
 import { SqliteAdapter } from "./adapter/SqliteAdapter";
+import { type Db } from "./adapter/types";
+// Aliased: this module already has its own tableExists() over the raw better-sqlite3 handle.
+import { tableExists as dbTableExists } from "./introspection";
 
 const HOME = process.env.HOME ?? os.homedir();
 const OPENCLAW_DIR = process.env.WORKSPACE_PARENT ?? `${HOME}/.openclaw`;
@@ -3643,6 +3646,52 @@ function ensureProjectAuditLogTable(): void {
 }
 
 /**
+ * ensureRoutingConfigAuditLogTable — create routing_config_audit_log if it does not exist.
+ *
+ * Mirrors db/pg-migrations/14-routing-config-audit-log.sql. It is deliberately NOT folded
+ * into project_audit_log: that table pins entity_type to ('project','sprint','job_template'),
+ * requires a project_id, and has no tenant_id, while routing rows are tenant-scoped and are
+ * legitimately project-less. Its CREATE TABLE IF NOT EXISTS above can never widen an existing
+ * table anyway, so a second table is the only way either engine gets these columns.
+ *
+ * Takes a Db rather than the raw driver so the same DDL builds the table on PostgreSQL, where
+ * the test template carries db/pg-baseline only and therefore does not include migration 14.
+ */
+export async function ensureRoutingConfigAuditLogTable(db: Db): Promise<void> {
+  // The workflow table is still `sprints` on SQLite and on any PostgreSQL database that has
+  // not applied the rename in migration 10, and `workflows` on one that has. A missing FK
+  // target aborts the whole CREATE on PostgreSQL, so resolve it rather than name it.
+  const workflowTable = await dbTableExists(db, 'workflows') ? 'workflows' : 'sprints';
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS routing_config_audit_log (
+      id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id               INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      project_id              INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+      workflow_type           TEXT NOT NULL,
+      workflow_id             INTEGER REFERENCES ${workflowTable}(id) ON DELETE SET NULL,
+      entity_table            TEXT NOT NULL,
+      entity_id               INTEGER,
+      entity_key              TEXT NOT NULL DEFAULT '',
+      action                  TEXT NOT NULL,
+      actor                   TEXT NOT NULL DEFAULT 'unknown',
+      actor_kind              TEXT NOT NULL DEFAULT 'unknown',
+      before_json             TEXT NOT NULL DEFAULT 'null',
+      after_json              TEXT NOT NULL DEFAULT 'null',
+      changes                 TEXT NOT NULL DEFAULT '{}',
+      batch_id                TEXT NOT NULL DEFAULT '',
+      affected_workflow_count INTEGER,
+      created_at              TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_routing_config_audit_log_tenant ON routing_config_audit_log(tenant_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_routing_config_audit_log_project ON routing_config_audit_log(project_id);
+    CREATE INDEX IF NOT EXISTS idx_routing_config_audit_log_entity ON routing_config_audit_log(entity_table, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_routing_config_audit_log_batch ON routing_config_audit_log(batch_id);
+    CREATE INDEX IF NOT EXISTS idx_routing_config_audit_log_created ON routing_config_audit_log(created_at);
+  `);
+}
+
+/**
  * ensureDefectTrackingColumns — Task #535: add origin_task_id + defect_type
  * to tasks, spawned_defects to task_outcome_metrics, and backfill task #534.
  */
@@ -6303,6 +6352,8 @@ export async function ensurePipelineIntelligenceTelemetry(): Promise<void> {
     await backfillProjectFileVersionHistory(db);
   }
   await ensureNotificationTables(new SqliteAdapter(db));
+  // After ensureTenantSchema: the table's tenant_id references tenants(id).
+  await ensureRoutingConfigAuditLogTable(new SqliteAdapter(db));
 
   try {
     migrateAgentSessionKeysToCanonical(db);
