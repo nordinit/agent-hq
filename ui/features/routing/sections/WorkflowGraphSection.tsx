@@ -16,6 +16,7 @@ import {
 import { scopePresentation, shouldMarkIndividually, summarizeScope } from '@/lib/workflowGraphScope';
 import type { GuardContext } from '@/lib/workflowGraphGuards';
 import TransitionComposer, { draftFromEdge, emptyDraft, type TransitionDraft } from './TransitionComposer';
+import { CanvasDndProvider, ConnectHandle, StatusDropTarget } from './CanvasDrag';
 import {
   AlertTriangle,
   CircleDot,
@@ -94,6 +95,9 @@ export default function WorkflowGraphSection({
   const [traceError, setTraceError] = useState<string | null>(null);
   /** Which step of a replayed task path is focused, if any. */
   const [activeStep, setActiveStep] = useState<number | null>(null);
+  /** In-flight connection drag: the source status and the pointer offset from its handle. */
+  const [connectFrom, setConnectFrom] = useState<string | null>(null);
+  const [connectDelta, setConnectDelta] = useState<{ x: number; y: number } | null>(null);
 
   const load = useCallback(() => {
     if (!sprintType) {
@@ -249,6 +253,16 @@ export default function WorkflowGraphSection({
   const outcomeOptions = (outcomeCatalog && outcomeCatalog.length > 0) ? outcomeCatalog : usedOutcomes;
 
   return (
+    <CanvasDndProvider
+      onDragStart={(from) => { setConnectFrom(from); setSelection(null); }}
+      onDragMove={setConnectDelta}
+      onDragCancel={() => { setConnectFrom(null); setConnectDelta(null); }}
+      onConnect={(from, to) => {
+        setConnectFrom(null);
+        setConnectDelta(null);
+        setSelection({ kind: 'compose', draft: emptyDraft(from, to) });
+      }}
+    >
     <div className="space-y-4">
       <SectionHeader
         label="Workflow Graph"
@@ -600,6 +614,28 @@ export default function WorkflowGraphSection({
                     </g>
                   );
                 })}
+                {/* Rubber band for an in-flight connection drag. delta is dnd-kit's
+                    scroll-adjusted translate, so the line stays under the cursor even while
+                    auto-scroll is moving the canvas. The canvas is unscaled, so viewport
+                    pixels are canvas pixels and no conversion is needed. */}
+                {connectFrom && connectDelta && (() => {
+                  const source = layout.nodes.find(n => n.id === connectFrom);
+                  if (!source) return null;
+                  const x0 = nodeX + NODE_WIDTH;
+                  const y0 = source.y;
+                  return (
+                    <g className="text-amber-400 pointer-events-none">
+                      <path
+                        d={`M ${x0} ${y0} L ${x0 + connectDelta.x} ${y0 + connectDelta.y}`}
+                        stroke="currentColor"
+                        strokeWidth={2}
+                        strokeDasharray="5 4"
+                        fill="none"
+                      />
+                      <circle cx={x0 + connectDelta.x} cy={y0 + connectDelta.y} r={3} fill="currentColor" />
+                    </g>
+                  );
+                })()}
               </svg>
 
               {/* Nodes */}
@@ -615,8 +651,11 @@ export default function WorkflowGraphSection({
                 const markAssignmentScope = shouldMarkIndividually(node.assignments, scopeAware);
                 const isEventTarget = selection?.kind === 'event' && selection.target === node.id;
                 return (
+                  <StatusDropTarget key={node.id} statusId={node.id}>
+                    {(isOver, setDropRef) => (
+                      <>
                   <button
-                    key={node.id}
+                    ref={setDropRef}
                     onClick={() => setSelection({ kind: 'node', id: node.id })}
                     className={`absolute flex flex-col justify-center rounded-xl border px-3 py-2 text-left transition-all ${
                       isSelected || isEventTarget
@@ -630,7 +669,7 @@ export default function WorkflowGraphSection({
                       selection?.kind === 'event' && !isEventSource && !isEventTarget ? 'opacity-30' : ''
                     } ${traceActive && !onTracePath ? 'opacity-25' : ''} ${
                       traceActive && onTracePath ? 'ring-1 ring-amber-400/60' : ''
-                    }`}
+                    } ${isOver && connectFrom && connectFrom !== node.id ? 'ring-2 ring-amber-400' : ''}`}
                     style={{
                       left: nodeX,
                       top: layoutNode.y - NODE_HEIGHT / 2,
@@ -707,6 +746,17 @@ export default function WorkflowGraphSection({
                       )}
                     </div>
                   </button>
+                  {/* The connect handle sits outside the node button on purpose: a drag
+                      listener on the button itself would turn the event chips inside it into
+                      drag initiators, since PointerSensor activates on a bubbling pointerdown. */}
+                  <ConnectHandle
+                    statusId={node.id}
+                    x={nodeX + NODE_WIDTH}
+                    y={layoutNode.y}
+                  />
+                      </>
+                    )}
+                  </StatusDropTarget>
                 );
               })}
 
@@ -883,7 +933,8 @@ export default function WorkflowGraphSection({
           )}
         </Card>
       </div>
-    </div>
+      </div>
+    </CanvasDndProvider>
   );
 }
 
