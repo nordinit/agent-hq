@@ -244,6 +244,16 @@ async function tableHasColumn(db: Db, tableName: string, columnName: string): Pr
     return await sharedColumnExists(db, tableName, columnName);
 }
 
+/**
+ * Optional-table probes below ask this BEFORE querying, rather than letting the query fail and
+ * swallowing the error. These mutations run inside a transaction, and on PostgreSQL a single
+ * failed statement aborts the whole transaction (25P02) — every later statement then fails too,
+ * so a tolerated probe would take the entire operation down with it.
+ */
+async function tableExists(db: Db, tableName: string): Promise<boolean> {
+    return await sharedTableExists(db, tableName);
+}
+
 function parseJsonStringList(value: string | null | undefined): string[] {
   if (!value) return [];
   try {
@@ -408,22 +418,19 @@ function parseStatusListJson(raw: string | null | undefined): string[] {
 async function listKnownStatusKeys(db: Db): Promise<Set<string>> {
   const keys = new Set((await listSprintTaskStatuses(db)).map((status) => status.name));
 
-  try {
+  // both tables may be absent in isolated tests
+  if (await tableExists(db, 'sprint_task_statuses')) {
     const sprintRows = await db.all(`SELECT DISTINCT status_key FROM sprint_task_statuses`) as Array<{ status_key: string }>;
     for (const row of sprintRows) {
       if (typeof row.status_key === 'string' && row.status_key.trim()) keys.add(row.status_key);
     }
-  } catch {
-    // table may be absent in isolated tests
   }
 
-  try {
+  if (await tableExists(db, 'sprint_type_task_statuses')) {
     const sprintTypeRows = await db.all(`SELECT DISTINCT status_key FROM sprint_type_task_statuses`) as Array<{ status_key: string }>;
     for (const row of sprintTypeRows) {
       if (typeof row.status_key === 'string' && row.status_key.trim()) keys.add(row.status_key);
     }
-  } catch {
-    // table may be absent in isolated tests
   }
 
   return keys;
@@ -456,7 +463,8 @@ async function listKnownOutcomeKeys(db: Db): Promise<Set<string>> {
     }
   }
 
-  try {
+  // sprint_type_outcomes is not available in every test/runtime path.
+  if (await tableExists(db, 'sprint_type_outcomes')) {
     const rows = await db.all(`
       SELECT DISTINCT outcome_key, enabled, behavior
       FROM sprint_type_outcomes
@@ -464,8 +472,6 @@ async function listKnownOutcomeKeys(db: Db): Promise<Set<string>> {
     for (const row of rows) {
       if (row.enabled === 1 && row.behavior !== 'disable') keys.add(row.outcome_key);
     }
-  } catch {
-    // sprint_type_outcomes is not available in every test/runtime path.
   }
 
   return keys;
@@ -773,12 +779,10 @@ async function normalizePayload(db: Db, input: Record<string, unknown>, existing
 }
 
 async function getDefaultTenantIdIfAvailable(db: Db): Promise<number | null> {
-  try {
-    const tenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id: number } | undefined;
-    return tenant?.id ?? null;
-  } catch {
-    return null;
-  }
+  // tenants may not exist in legacy/minimal bootstrap paths
+  if (!await tableExists(db, 'tenants')) return null;
+  const tenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id: number } | undefined;
+  return tenant?.id ?? null;
 }
 
 export async function repairDuplicateWorkflowEventMappings(db: Db): Promise<{ deleted: number }> {
