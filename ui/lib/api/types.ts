@@ -1648,6 +1648,12 @@ export interface WorkflowGraphEdge {
   is_back_edge: boolean;
   shadowed_by: string | null;
   gates: WorkflowGraphGate[];
+  /**
+   * Task types with their own gate set for this outcome, when `gates` shows the all-types set.
+   * Gate resolution substitutes rather than adds, so for these types the listed gates do not
+   * apply at all — a different set does.
+   */
+  gate_task_type_overrides: string[];
   event_triggers: WorkflowGraphEventTrigger[];
   lint: string[];
 }

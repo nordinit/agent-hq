@@ -891,3 +891,129 @@ test('an unused-gate finding is anchored to its outcome too', () => {
   const finding = graph.lint.find(f => f.code === 'gate_without_transition');
   expect(finding?.outcome).toBe('never_used');
 });
+
+// ── Task-type gate resolution ─────────────────────────────────────────────────
+//
+// loadSprintTaskTransitionRequirements tries loadRows(taskType) first and, if it returns
+// anything, never loads the task_type IS NULL rows. A task-type gate therefore SUBSTITUTES the
+// whole set for that type rather than adding a requirement on top of the all-types ones.
+
+test('a task-type gate replaces the all-types set rather than adding to it', () => {
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'qa' })],
+    requirements: [
+      requirement(1, 'qa_pass', { task_type: null, field_name: 'pr_url' }),
+      requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' }),
+    ],
+  });
+  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['qa_commit']);
+});
+
+test('a task type with no gates of its own inherits the all-types set', () => {
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'backend' })],
+    requirements: [
+      requirement(1, 'qa_pass', { task_type: null, field_name: 'pr_url' }),
+      requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' }),
+    ],
+  });
+  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['pr_url']);
+});
+
+test('an all-types edge shows the all-types set, not the union', () => {
+  // No single task ever sees the union, so showing it would describe nothing real.
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: null })],
+    requirements: [
+      requirement(1, 'qa_pass', { task_type: null, field_name: 'pr_url' }),
+      requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' }),
+    ],
+  });
+  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['pr_url']);
+  expect(graph.edges[0].gate_task_type_overrides).toEqual(['qa']);
+});
+
+test('an edge that resolved to a specific task type reports no diverging types', () => {
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'qa' })],
+    requirements: [
+      requirement(1, 'qa_pass', { task_type: null }),
+      requirement(2, 'qa_pass', { task_type: 'qa' }),
+    ],
+  });
+  expect(graph.edges[0].gate_task_type_overrides).toEqual([]);
+});
+
+test('the task-type lens resolves gates for an otherwise all-types edge', () => {
+  const graph = buildWorkflowGraph({
+    scope: { project_id: 1, workflow_type: 'dev', workflow_id: null, task_type: 'qa' },
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: null })],
+    rules: [],
+    requirements: [
+      requirement(1, 'qa_pass', { task_type: null, field_name: 'pr_url' }),
+      requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' }),
+    ],
+    globalRequirements: [],
+    agents: [],
+    eventMappings: [],
+  });
+  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['qa_commit']);
+});
+
+test('a task type whose only gates are disabled falls back to the all-types set', () => {
+  // Disabled rows are filtered before the type check, so they cannot shadow the default set.
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'qa' })],
+    requirements: [
+      requirement(1, 'qa_pass', { task_type: null, field_name: 'pr_url' }),
+      requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit', enabled: false }),
+    ],
+  });
+  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['pr_url']);
+});
+
+test('a superseded default is still listed, but only the override actually gates', () => {
+  // effective_for_sprint=false means a workflow-scoped override with the same identity won the
+  // dedupe. The row stays visible — that is how an operator sees what the override replaced —
+  // but it is flagged, exactly as a superseded node assignment is.
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass')],
+    requirements: [
+      requirement(1, 'qa_pass', { field_name: 'pr_url', severity: 'block', effective_for_sprint: false }),
+      requirement(2, 'qa_pass', { field_name: 'pr_url', severity: 'warn', is_override: true }),
+    ],
+  });
+  expect(graph.edges[0].gates.map(g => g.severity)).toEqual(['block', 'warn']);
+  expect(graph.edges[0].gates.filter(g => g.effective_for_sprint).map(g => g.severity)).toEqual(['warn']);
+});
+
+test('a task-type set that is entirely superseded falls back to the all-types set', () => {
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'qa' })],
+    requirements: [
+      requirement(1, 'qa_pass', { task_type: null, field_name: 'pr_url' }),
+      requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit', effective_for_sprint: false }),
+    ],
+  });
+  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['pr_url']);
+});
+
+test('an outcome whose only gates are task-type scoped falls through to global for other types', () => {
+  // 'backend' matches no workflow gate, so the workflow set is empty and the global table wins.
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'backend' })],
+    requirements: [requirement(1, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' })],
+    globalRequirements: [globalRequirement(9, 'qa_pass', { field_name: 'review_commit' })],
+  });
+  expect(graph.edges[0].gates.map(g => [g.source, g.field_name]))
+    .toEqual([['global', 'review_commit']]);
+});

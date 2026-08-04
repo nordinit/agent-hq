@@ -1272,6 +1272,13 @@ function ArcInspector({
                     </button>
                   )}
                 </div>
+                {edge.gate_task_type_overrides?.length > 0 && (
+                  <p className="mb-1 text-[11px] text-purple-300">
+                    {edge.gate_task_type_overrides.map(t => getTaskTypeLabel(t)).join(', ')}
+                    {edge.gate_task_type_overrides.length === 1 ? ' has' : ' have'} a different gate set
+                    — these do not apply to {edge.gate_task_type_overrides.length === 1 ? 'it' : 'them'}.
+                  </p>
+                )}
                 <ul className="space-y-0.5">
                   {edge.gates.map(gate => (
                     // Global and workflow ids come from different tables and do collide.
@@ -1290,6 +1297,9 @@ function ArcInspector({
                         {gate.source === 'global' && <span className="text-slate-600"> · global fallback</span>}
                         {gate.source === 'workflow' && gate.is_override && (
                           <span className="text-purple-300"> · this workflow</span>
+                        )}
+                        {gate.effective_for_sprint === false && (
+                          <span className="text-slate-600"> · superseded</span>
                         )}
                       </button>
                       {gate.source === 'workflow' && gate.is_inherited && !gate.is_override && onOverrideGate && (

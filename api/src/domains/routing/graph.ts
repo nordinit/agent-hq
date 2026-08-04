@@ -226,6 +226,14 @@ export type GraphEdge = {
   /** Edge id that always beats this one for the same (from, outcome, task_type). */
   shadowed_by: string | null;
   gates: GraphGate[];
+  /**
+   * Task types with their own gate set for this outcome, when `gates` shows the all-types set.
+   *
+   * Gate resolution substitutes rather than adds, so for these task types the gates listed above
+   * do not apply at all — a different set does. Empty when the edge already resolved to a
+   * specific task type.
+   */
+  gate_task_type_overrides: string[];
   /** Outcome-kind event mappings that can fire this transition without an agent. */
   event_triggers: GraphEventTrigger[];
   lint: string[];
@@ -389,6 +397,42 @@ export function buildWorkflowGraph(input: {
     gatesByOutcome.set(requirement.outcome, [...(gatesByOutcome.get(requirement.outcome) ?? []), requirement]);
   }
 
+  /**
+   * A gate that actually runs. Superseded rows stay in the lists below — node assignments keep
+   * theirs too, and hiding them would take away the operator's view of what an override
+   * replaced — but they must not be mistaken for gates when deciding which set applies.
+   */
+  const gateRuns = (requirement: GraphRequirementInput): boolean => requirement.effective_for_sprint !== false;
+
+  /**
+   * Resolve a workflow's gates for one outcome and task type.
+   *
+   * The resolver REPLACES rather than accumulates: `loadRows(taskType)` is tried first and, if
+   * it returns anything, the task_type IS NULL rows never load. So a task-type gate does not add
+   * a requirement on top of the all-types ones — it substitutes the entire set for that type.
+   *
+   * A null taskType means "no particular type in view", which is the all-types set. It is not
+   * the union: no single task ever sees the union, so showing it would describe nothing real.
+   */
+  const resolveWorkflowGates = (outcome: string, taskType: string | null): GraphRequirementInput[] => {
+    const candidates = gatesByOutcome.get(outcome) ?? [];
+    if (taskType != null) {
+      // `some(gateRuns)`, not `length`: a set whose rows are all superseded gates nothing, so
+      // it must not shadow the all-types set the way a live one would.
+      const typed = candidates.filter((requirement) => requirement.task_type === taskType);
+      if (typed.some(gateRuns)) return typed;
+    }
+    return candidates.filter((requirement) => requirement.task_type == null);
+  };
+
+  /** Task types whose gate set for an outcome differs from the all-types set. */
+  const divergingTaskTypes = (outcome: string): string[] => [...new Set(
+    (gatesByOutcome.get(outcome) ?? [])
+      .filter(gateRuns)
+      .map((requirement) => requirement.task_type)
+      .filter((type): type is string => type != null),
+  )].sort();
+
   // Global rows, indexed the way the resolver reads them: a task-type match is tried before
   // the task_type IS NULL catch-all, and the first non-empty set wins outright.
   const globalByOutcome = new Map<string, GraphGlobalRequirementInput[]>();
@@ -405,18 +449,20 @@ export function buildWorkflowGraph(input: {
   };
 
   const edges: GraphEdge[] = transitions.map((transition) => {
-    // A gate on task_type=null applies to every task type; a task-type-scoped gate
-    // only decorates transitions that can carry that task type.
-    const workflowGates = (gatesByOutcome.get(transition.outcome) ?? [])
-      .filter((requirement) => requirement.task_type == null
-        || transition.task_type == null
-        || requirement.task_type === transition.task_type);
+    // Which task type this edge's gates resolve for: the transition's own type when it has
+    // one, otherwise the lens the graph was built under, otherwise none.
+    const gateTaskType = transition.task_type ?? scope.task_type ?? null;
+    const workflowGates = resolveWorkflowGates(transition.outcome, gateTaskType);
+
+    // Only meaningful when the resolved set IS the all-types one: it names the task types that
+    // would get a different set, which is otherwise invisible on the arc.
+    const otherTypes = gateTaskType == null ? divergingTaskTypes(transition.outcome) : [];
 
     // The fallback only engages when the workflow has NOTHING enabled for the outcome. One
     // surviving workflow gate short-circuits the global table entirely, which is why disabling
     // gates one at a time is safe right up until the last one.
-    const fallback = workflowGates.length === 0
-      ? globalFallback(transition.outcome, transition.task_type ?? scope.task_type ?? null)
+    const fallback = !workflowGates.some(gateRuns)
+      ? globalFallback(transition.outcome, gateTaskType)
       : [];
     if (fallback.length > 0) gatedByFallback.add(transition.outcome);
 
@@ -481,6 +527,7 @@ export function buildWorkflowGraph(input: {
       is_back_edge: stageOf(transition.to_status) <= stageOf(transition.from_status),
       shadowed_by: shadowedBy.get(`t${transition.id}`) ?? null,
       gates,
+      gate_task_type_overrides: otherTypes,
       // An outcome-kind event mapping fires this transition without an agent
       // reporting anything, so it belongs on the edge it actually triggers.
       event_triggers: (triggersByOutcome.get(transition.outcome) ?? [])
@@ -522,6 +569,7 @@ export function buildWorkflowGraph(input: {
         is_back_edge: stageOf(entry.target) <= stageOf(from),
         shadowed_by: null,
         gates: [],
+        gate_task_type_overrides: [],
         event_triggers: [],
         lint: [],
       });
