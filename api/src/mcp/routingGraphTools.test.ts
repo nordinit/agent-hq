@@ -91,3 +91,88 @@ describe('routing graph MCP tools', () => {
     expect(pathFor('agent_hq_trace_task_path')).toContain('/api/v1/tasks/:id/trace');
   });
 });
+
+// The canvas never writes a routing change without costing it first. Giving Atlas the write
+// endpoints without the preview would hand it the sharp half of the contract and keep the
+// safe half for people.
+
+describe('routing config edit MCP capability', () => {
+  const capability = AGENT_MCP_CAPABILITY_CATALOG
+    .find((entry) => entry.key === 'workflow.edit_routing_config');
+
+  it('is registered under the Workflow access group', () => {
+    expect(capability).toBeDefined();
+    expect(capability?.group).toBe('Workflow');
+  });
+
+  it('covers preview and audit', () => {
+    expect(capability?.endpoints).toEqual(expect.arrayContaining([
+      'POST /api/v1/routing/preview',
+      'GET /api/v1/routing/audit',
+    ]));
+  });
+
+  it('grants no writes of its own', () => {
+    // Preview applies mutations inside a transaction that never commits, and audit is a read.
+    // The actual write still needs routing_rules / routing_transitions /
+    // transition_requirements manage_project_scope, which is what makes this safe to enable
+    // wherever those already are.
+    const writes = (capability?.endpoints ?? []).filter((endpoint) =>
+      endpoint.startsWith('PUT ') || endpoint.startsWith('DELETE ')
+      || (endpoint.startsWith('POST ') && endpoint !== 'POST /api/v1/routing/preview'));
+    expect(writes).toEqual([]);
+  });
+
+  it('is off for scoped runtime keys and on for trusted admin keys', () => {
+    expect(capability?.defaultEnabled.scoped_runtime).toBe(false);
+    expect(capability?.defaultEnabled.trusted_admin).toBe(true);
+  });
+
+  it('does not overlap the analyze capability', () => {
+    // Two capabilities claiming one endpoint means the guard's answer depends on which block
+    // runs first, which is not something a permissions UI can explain.
+    const analyze = AGENT_MCP_CAPABILITY_CATALOG
+      .find((entry) => entry.key === 'workflow.analyze_routing_graph');
+    const analyzeEndpoints = new Set<string>(analyze?.endpoints ?? []);
+    const overlap = (capability?.endpoints ?? []).filter((endpoint) => analyzeEndpoints.has(endpoint));
+    expect(overlap).toEqual([]);
+  });
+});
+
+describe('routing config edit MCP tools', () => {
+  const loadCatalog = async () => {
+    const { getMcpCatalog } = await import('./catalog');
+    const { registerAgentHqMcpCatalog } = await import('./registerCatalog');
+    registerAgentHqMcpCatalog();
+    return getMcpCatalog();
+  };
+
+  it('publishes the preview and audit tools with atlas aliases', async () => {
+    const catalog = await loadCatalog();
+    const names = catalog.tools.map((tool) => tool.canonical_name);
+    expect(names).toEqual(expect.arrayContaining([
+      'agent_hq_preview_routing_change',
+      'agent_hq_get_routing_audit',
+    ]));
+    const preview = catalog.tools.find((tool) => tool.canonical_name === 'agent_hq_preview_routing_change');
+    expect(preview?.aliases ?? []).toEqual(expect.arrayContaining(['atlas_preview_routing_change']));
+  });
+
+  it('requires at least one operation on the preview', async () => {
+    // An empty operations array would report "no rows written, no lint introduced", which
+    // reads as a safe change rather than as no change at all.
+    const catalog = await loadCatalog();
+    const preview = catalog.tools.find((tool) => tool.canonical_name === 'agent_hq_preview_routing_change');
+    expect(preview).toBeDefined();
+    const operations = preview?.args.find((arg) => arg.name === 'operations');
+    expect(operations).toBeDefined();
+    expect(operations?.required).toBe(true);
+  });
+
+  it('maps each tool to the REST path it wraps', async () => {
+    const catalog = await loadCatalog();
+    const byName = new Map(catalog.tools.map((tool) => [tool.canonical_name, tool]));
+    expect(byName.get('agent_hq_preview_routing_change')?.rest_paths).toEqual(['/api/v1/routing/preview']);
+    expect(byName.get('agent_hq_get_routing_audit')?.rest_paths).toEqual(['/api/v1/routing/audit']);
+  });
+});

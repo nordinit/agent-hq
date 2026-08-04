@@ -1433,6 +1433,27 @@ export class AgentHqApiClient {
     return this.request<unknown>('GET', `/api/v1/tasks/${taskId}/trace`);
   }
 
+  previewRoutingChange(body: {
+    tenant_id?: number;
+    project_id?: number;
+    sprint_type?: string;
+    sprint_id?: number;
+    operations: Array<{ entity: string; action: string; payload: Record<string, unknown> }>;
+  }) {
+    return this.request<unknown>('POST', '/api/v1/routing/preview', body);
+  }
+
+  getRoutingAudit(params: {
+    tenant_id?: number;
+    project_id?: number;
+    sprint_id?: number;
+    sprint_type?: string;
+    entity_table?: string;
+    limit?: number;
+  } = {}) {
+    return this.request<unknown>('GET', appendQuery('/api/v1/routing/audit', params));
+  }
+
   listRoutingRules(params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/rules', params));
   }

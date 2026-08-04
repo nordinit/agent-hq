@@ -273,6 +273,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.post('/api/v1/routing/transition-requirements', (req, res) => res.status(201).json({ ok: true, body: req.body }));
     app.put('/api/v1/routing/transition-requirements/:id', (req, res) => res.json({ ok: true, requirement_id: Number(req.params.id), body: req.body }));
     app.delete('/api/v1/routing/transition-requirements/:id', (req, res) => res.json({ ok: true, requirement_id: Number(req.params.id), query: req.query }));
+    app.post('/api/v1/routing/preview', (req, res) => res.json({ ok: true, body: req.body }));
+    app.get('/api/v1/routing/audit', (req, res) => res.json({ ok: true, query: req.query }));
     app.get('/api/v1/sprints/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
     app.get('/api/v1/sprints/types/list', (req, res) => res.json({ ok: true, query: req.query }));
     app.get('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
@@ -1644,6 +1646,66 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       code: 'mcp_scope_denied',
       details: { required_capability: 'routing_rules.manage_project_scope' },
     });
+  });
+
+  it('gates routing preview and audit on workflow.edit_routing_config', async () => {
+    // Without the capability the write endpoints are still reachable, so an agent could change
+    // shared routing config having never seen its blast radius. That is the half of the canvas
+    // contract this capability exists to close.
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'transition_requirements.manage_project_scope',
+    ]);
+
+    const denied = await fetch(`${baseUrl}/api/v1/routing/preview`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 86, sprint_type: 'dev', operations: [] }),
+    });
+    expect(denied.status).toBe(403);
+    await expect(denied.json()).resolves.toMatchObject({
+      code: 'mcp_scope_denied',
+      details: { required_capability: 'workflow.edit_routing_config' },
+    });
+
+    const deniedAudit = await fetch(`${baseUrl}/api/v1/routing/audit?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(deniedAudit.status).toBe(403);
+
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'transition_requirements.manage_project_scope',
+      'workflow.edit_routing_config',
+    ]);
+
+    const allowedAudit = await fetch(`${baseUrl}/api/v1/routing/audit?project_id=86`, {
+      headers: authHeaders(normalKey),
+    });
+    expect(allowedAudit.status).toBe(200);
+  });
+
+  it('confines routing preview to the key\'s own project', async () => {
+    // Preview runs the real mutation, so an unscoped one would let a key measure — and by
+    // measuring, briefly apply — a change to a project it cannot otherwise touch.
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'discovery.read_catalog',
+      'workflow.edit_routing_config',
+    ]);
+
+    const otherProject = await fetch(`${baseUrl}/api/v1/routing/preview`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 87, sprint_type: 'dev', operations: [] }),
+    });
+    expect(otherProject.status).toBe(403);
+
+    const unscoped = await fetch(`${baseUrl}/api/v1/routing/preview`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ sprint_type: 'dev', operations: [] }),
+    });
+    expect(unscoped.status).toBe(403);
   });
 
   it('allows scoped transition requirement CRUD for project defaults and workflow overrides', async () => {

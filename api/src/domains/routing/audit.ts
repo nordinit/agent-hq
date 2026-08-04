@@ -184,3 +184,60 @@ export async function auditedRoutingWrite<T>(
     return result;
   });
 }
+
+/**
+ * Read the routing config audit trail for one scope.
+ *
+ * Ordered newest first, because the question this answers is almost always "what changed
+ * recently and who did it" rather than "what is the full history". The `changes` column is
+ * already a per-field diff, so a caller can answer that without pulling both JSON blobs.
+ */
+export async function listRoutingAudit(
+  db: Db,
+  input: {
+    project_id?: unknown;
+    sprint_id?: unknown;
+    sprint_type?: unknown;
+    entity_table?: unknown;
+    limit?: unknown;
+    tenant_id?: unknown;
+  },
+): Promise<{ entries: Array<Record<string, unknown>> }> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  const projectId = asNumberOrNull(input.project_id);
+  if (projectId != null) { where.push('project_id = ?'); params.push(projectId); }
+
+  const sprintId = asNumberOrNull(input.sprint_id);
+  if (sprintId != null) { where.push('workflow_id = ?'); params.push(sprintId); }
+
+  if (typeof input.sprint_type === 'string' && input.sprint_type.trim()) {
+    where.push('workflow_type = ?');
+    params.push(input.sprint_type.trim());
+  }
+  if (typeof input.entity_table === 'string' && input.entity_table.trim()) {
+    where.push('entity_table = ?');
+    params.push(input.entity_table.trim());
+  }
+
+  const tenantId = asNumberOrNull(input.tenant_id);
+  if (tenantId != null) { where.push('tenant_id = ?'); params.push(tenantId); }
+
+  // Bounded so a caller cannot ask for the whole table by omission; 500 is well above any
+  // reasonable review window and well below anything that would hurt.
+  const requested = asNumberOrNull(input.limit);
+  const limit = requested != null && requested > 0 ? Math.min(requested, 500) : 100;
+
+  const entries = await db.all(`
+    SELECT id, tenant_id, project_id, workflow_type, workflow_id, entity_table, entity_id,
+           entity_key, action, actor, actor_kind, changes, batch_id, affected_workflow_count,
+           created_at
+    FROM routing_config_audit_log
+    ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY id DESC
+    LIMIT ${limit}
+  `, ...params) as Array<Record<string, unknown>>;
+
+  return { entries };
+}

@@ -20,6 +20,7 @@ import {
   attachAuditActor,
   auditedRoutingWrite,
   type RoutingAuditActor,
+  listRoutingAudit,
 } from '../domains/routing/audit';
 import {
   createRoutingRule,
@@ -457,6 +458,17 @@ router.get('/trace', traceHandler);
 // POST /preview — apply a set of config changes inside a transaction that never commits,
 // and report what they would write plus which lint findings they introduce or clear.
 // One canvas gesture is one preview, so a gesture that writes several rows is judged whole.
+// Read the routing config audit trail. Paired with POST /preview under the same MCP
+// capability: one says what a change would do, the other what changes were already made.
+router.get('/audit', async (req: Request, res: Response) => {
+  try {
+    const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, {}));
+    return res.json(await listRoutingAudit(getDb(), input));
+  } catch (err) {
+    return sendRoutingError(res, err);
+  }
+});
+
 router.post('/preview', async (req: Request, res: Response) => {
   try {
     const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body ?? {}));

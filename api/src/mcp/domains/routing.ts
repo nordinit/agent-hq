@@ -76,6 +76,48 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     { domain: 'routing_graph', rest_paths: ['/api/v1/tasks/:id/trace'] },
   );
 
+  // ── Editing config the way the canvas does ─────────────────────────────────
+  // The canvas never writes a routing change without costing it first, because these rows
+  // are shared: one edit at workflow-type scope reaches every workflow of that type, and
+  // removing the last gate on an outcome silently hands it to the global requirements, which
+  // are all severity block. These two tools give an agent the same contract — what would this
+  // do, and what has already been done — rather than asking it to be careful.
+
+  const previewOperationSchema = z.object({
+    entity: z.enum(['transition', 'rule', 'requirement']).describe('Which kind of row the operation touches'),
+    action: z.enum(['create', 'update', 'delete']).describe('What the operation does to it'),
+    payload: z.record(z.string(), z.unknown()).describe('The same body the corresponding write endpoint takes, including its own project_id/sprint_type/sprint_id scope. Scope is NOT inherited from the envelope: a payload without it targets the shared global requirements table'),
+  });
+
+  registerTool(
+    ['agent_hq_preview_routing_change', 'atlas_preview_routing_change'],
+    'Cost a routing config change before making it. Applies the real mutations inside a transaction that never commits, then reports rows written per table, how many workflows the change reaches, and the lint findings it introduces or resolves. Use it before every create, update or delete of a transition, assignment rule or gate requirement. The lint delta is the reason it exists: gate resolution replaces rather than accumulates, so removing the last gate on an outcome hands that outcome to the shared global requirements — all of them severity block — and this is the only place that shows it before the change lands. Measured row counts also catch the seeding side effect, where the first write to an unseeded workflow materialises its whole starter policy. Requires workflow.edit_routing_config.',
+    {
+      ...tenantSelectorSchema,
+      project_id: z.number().int().positive().optional().describe('Project scope for the change'),
+      sprint_type: z.string().min(1).optional().describe('Workflow type key the change is scoped to'),
+      sprint_id: z.number().int().positive().optional().describe('Workflow ID, when the change is a workflow override rather than a type default'),
+      operations: z.array(previewOperationSchema).min(1).describe('Operations to apply together, in order. Pass every operation of an intended change at once: the lint delta is computed over the whole set, so previewing two gate deletions separately can report no problem while doing both introduces one'),
+    },
+    (args) => wrap(() => api.previewRoutingChange(args))(),
+    { domain: 'routing_graph', rest_paths: ['/api/v1/routing/preview'] },
+  );
+
+  registerTool(
+    ['agent_hq_get_routing_audit', 'atlas_get_routing_audit'],
+    'Read the routing config audit trail, newest first. Each entry records who changed which row, the action, a per-field diff, and how many workflows the change reached. Use it to answer "why does this workflow behave differently than it did last week" without diffing config by hand, and to check whether a change you are about to make undoes someone else\'s. Requires workflow.edit_routing_config.',
+    {
+      ...tenantSelectorSchema,
+      project_id: z.number().int().positive().optional().describe('Filter to one project'),
+      sprint_id: z.number().int().positive().optional().describe('Filter to one workflow'),
+      sprint_type: z.string().min(1).optional().describe('Filter to one workflow type'),
+      entity_table: z.string().min(1).optional().describe('Filter to one table, e.g. sprint_task_transition_requirements'),
+      limit: z.number().int().positive().optional().describe('Maximum entries to return. Defaults to 100, capped at 500'),
+    },
+    (args) => wrap(() => api.getRoutingAudit(args))(),
+    { domain: 'routing_graph', rest_paths: ['/api/v1/routing/audit'] },
+  );
+
   registerTool(
     ['agent_hq_list_routing_rules', 'agent_hq_list_assignment_rules', 'atlas_list_routing_rules', 'atlas_list_assignment_rules'],
     'List assignment rules that map task type and status to agents for workflow-type defaults or workflow overrides. Non-admin MCP keys require routing_rules.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only. sprint_* fields are the current machine-readable compatibility fields.',

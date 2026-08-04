@@ -420,6 +420,20 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'workflow.edit_routing_config',
+    group: 'Workflow',
+    label: 'Edit routing config with preview and audit',
+    description: 'Allows costing a routing change before making it and reading the routing config audit trail — the same contract the canvas gives a person. POST /routing/preview applies the real mutation inside a transaction that never commits and reports what it touched: rows written per table, how many workflows it reaches, and the lint findings it introduces or resolves. That last part is what makes it worth granting: removing the last gate on an outcome hands that outcome to the shared global requirements, which are all severity block, and the preview is the only place that shows it before the change lands. This capability grants no writes on its own — the write itself still needs routing_rules, routing_transitions or transition_requirements manage_project_scope — so it is safe to enable wherever those already are.',
+    endpoints: [
+      'POST /api/v1/routing/preview',
+      'GET /api/v1/routing/audit',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'workflow_definitions.read_project_scope',
     group: 'Workflow',
     label: 'Read project workflow definitions',
@@ -2662,6 +2676,28 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     return deny({
       reason: `Normal Agent HQ MCP keys can only analyze routing graphs scoped to their assigned project or the active task's workflow.`,
       requiredCapability: 'workflow.analyze_routing_graph',
+    });
+  }
+
+  // Previewing a routing change, and reading the audit trail of changes already made.
+  // Preview runs the real mutation in a transaction that never commits, so it reads like a
+  // write and is scoped like one: the key must own the project or workflow it names.
+  if ((requestPath === '/routing/preview' && method === 'POST')
+    || (requestPath === '/routing/audit' && method === 'GET')) {
+    if (!await requireCapability(
+      'workflow.edit_routing_config',
+      `Routing config preview and audit are disabled for ${identity.agentSlug}.`,
+    )) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const previewProjectId = parsePositiveInt(body.project_id ?? req.query.project_id);
+    const previewSprintId = parsePositiveInt(
+      body.sprint_id ?? body.workflow_id ?? req.query.sprint_id ?? req.query.workflow_id,
+    );
+    if (previewProjectId != null && scopedProjectIds.has(previewProjectId)) return next();
+    if (previewSprintId != null && scopedSprintIds.has(previewSprintId)) return next();
+    return deny({
+      reason: `Normal Agent HQ MCP keys can only preview or audit routing changes inside their assigned project or the active task's workflow.`,
+      requiredCapability: 'workflow.edit_routing_config',
     });
   }
 
