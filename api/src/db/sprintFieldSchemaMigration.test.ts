@@ -620,25 +620,25 @@ describe('sprint field schema migration', () => {
       VALUES (901, 'Custom Project', '', '', datetime('now'))
     `);
     await db.run(`
-      INSERT INTO sprints (id, project_id, name, goal, sprint_type, workflow_template_key, status, length_kind, length_value, created_at)
+      INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
       VALUES
-        (9011, 901, 'Bug Sprint', '', 'bugs', NULL, 'active', 'time', '2w', datetime('now')),
-        (9012, 901, 'Enhancement Sprint', '', 'enhancements', NULL, 'paused', 'time', '2w', datetime('now')),
-        (9013, 901, 'PM Sprint', '', 'pm', NULL, 'active', 'time', '2w', datetime('now'))
+        (9011, 901, 'Bug Sprint', '', 'bugs', 'active', 'time', '2w', datetime('now')),
+        (9012, 901, 'Enhancement Sprint', '', 'enhancements', 'paused', 'time', '2w', datetime('now')),
+        (9013, 901, 'PM Sprint', '', 'pm', 'active', 'time', '2w', datetime('now'))
     `);
 
     await initSchema();
 
     const sprints = await db.all(`
-      SELECT id, sprint_type, workflow_template_key
+      SELECT id, sprint_type
       FROM sprints
       WHERE id IN (9011, 9012, 9013)
       ORDER BY id ASC
-    `) as Array<{ id: number; sprint_type: string; workflow_template_key: string | null }>;
+    `) as Array<{ id: number; sprint_type: string }>;
     expect(sprints).toEqual([
-      { id: 9011, sprint_type: 'dev', workflow_template_key: null },
-      { id: 9012, sprint_type: 'dev', workflow_template_key: null },
-      { id: 9013, sprint_type: 'dev', workflow_template_key: null },
+      { id: 9011, sprint_type: 'dev' },
+      { id: 9012, sprint_type: 'dev' },
+      { id: 9013, sprint_type: 'dev' },
     ]);
 
     const deprecated = await db.all(`
@@ -657,24 +657,24 @@ describe('sprint field schema migration', () => {
       VALUES (900, 'Agent HQ', '', '', datetime('now'))
     `);
     await db.run(`
-      INSERT INTO sprints (id, project_id, name, goal, sprint_type, workflow_template_key, status, length_kind, length_value, created_at)
+      INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
       VALUES
-        (9001, 900, 'Active Bugs', '', 'generic', NULL, 'active', 'time', '2w', datetime('now')),
-        (9002, 900, 'Completed Work', '', 'generic', NULL, 'complete', 'time', '2w', datetime('now'))
+        (9001, 900, 'Active Bugs', '', 'generic', 'active', 'time', '2w', datetime('now')),
+        (9002, 900, 'Completed Work', '', 'generic', 'complete', 'time', '2w', datetime('now'))
     `);
 
     await initSchema();
 
     const rows = await db.all(`
-      SELECT id, sprint_type, workflow_template_key
+      SELECT id, sprint_type
       FROM sprints
       WHERE id IN (9001, 9002)
       ORDER BY id ASC
-    `) as Array<{ id: number; sprint_type: string; workflow_template_key: string | null }>;
+    `) as Array<{ id: number; sprint_type: string }>;
 
     expect(rows).toEqual([
-      { id: 9001, sprint_type: 'dev', workflow_template_key: null },
-      { id: 9002, sprint_type: 'generic', workflow_template_key: null },
+      { id: 9001, sprint_type: 'dev' },
+      { id: 9002, sprint_type: 'generic' },
     ]);
   });
 

@@ -164,7 +164,6 @@ function portableWorkflow(row: Row): ProjectManifest['workflows'][number] {
     name: String(row.name ?? ''),
     goal: String(row.goal ?? ''),
     sprint_type: String(row.sprint_type ?? 'generic'),
-    workflow_template_key: (row.workflow_template_key as string | null) ?? null,
     status: String(row.status ?? 'planning'),
     length_kind: String(row.length_kind ?? 'time'),
     length_value: String(row.length_value ?? ''),
@@ -228,7 +227,11 @@ export interface ProjectManifest {
     name: string;
     goal: string;
     sprint_type: string;
-    workflow_template_key: string | null;
+    /**
+     * Dropped with the workflow-template model. Still accepted so manifests exported
+     * before the removal keep importing; the value is ignored.
+     */
+    workflow_template_key?: string | null;
     status: string;
     length_kind: string;
     length_value: string;
@@ -469,7 +472,6 @@ export async function importProjectManifest(
               name: workflow.name,
               goal: workflow.goal ?? '',
               sprint_type: workflow.sprint_type ?? 'generic',
-              workflow_template_key: workflow.workflow_template_key ?? null,
               status: options.activateWorkflows ? (workflow.status || 'planning') : 'planning',
               length_kind: workflow.length_kind ?? 'time',
               length_value: workflow.length_value ?? '',

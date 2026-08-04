@@ -575,9 +575,9 @@ async function insertProject(db: Db, tenantId: number, plan: StarterSetupPlan): 
 
 async function insertWorkflow(db: Db, tenantId: number, projectId: number, workflow: StarterWorkflowPlan): Promise<number> {
   const result = await db.run(`
-    INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, workflow_template_key, status, length_kind, length_value)
-    VALUES (?, ?, ?, ?, ?, ?, 'active', 'time', 'ongoing')
-  `, tenantId, projectId, workflow.workflow.name, workflow.workflow.goal, workflow.workflow.sprint_type, workflow.template.key);
+    INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+    VALUES (?, ?, ?, ?, ?, 'active', 'time', 'ongoing')
+  `, tenantId, projectId, workflow.workflow.name, workflow.workflow.goal, workflow.workflow.sprint_type);
   const sprintId = Number(result.lastInsertId);
   await seedSprintTaskPolicy(db, sprintId);
   return sprintId;

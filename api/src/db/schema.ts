@@ -1210,7 +1210,6 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
       name         TEXT NOT NULL,
       goal         TEXT NOT NULL DEFAULT '',
       sprint_type  TEXT NOT NULL DEFAULT 'generic',
-      workflow_template_key TEXT,
       repo_path    TEXT,
       repo_url     TEXT,
       repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone')),
@@ -1232,8 +1231,17 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     const sprintsDdl = (db.prepare(
       `SELECT sql FROM sqlite_master WHERE type='table' AND name='sprints'`
     ).get() as { sql: string } | undefined)?.sql ?? '';
-    const sprintCols = (db.prepare(`PRAGMA table_info(sprints)`).all() as {name:string}[]).map(c => c.name);
-    const needsSprintsRebuild = Boolean(sprintsDdl) && (!sprintsDdl.includes("'closed'") || !sprintCols.includes('sprint_type') || !sprintCols.includes('workflow_template_key'));
+    const allSprintCols = (db.prepare(`PRAGMA table_info(sprints)`).all() as {name:string}[]).map(c => c.name);
+    // workflow_template_key pointed at the removed workflow-template model and was never
+    // read. Excluding it from the copy is what actually drops it: the rebuild below
+    // copies by column name, so a legacy database sheds the column on the next boot and
+    // then stops rebuilding because the trigger condition no longer holds.
+    const sprintCols = allSprintCols.filter(column => column !== 'workflow_template_key');
+    const needsSprintsRebuild = Boolean(sprintsDdl) && (
+      !sprintsDdl.includes("'closed'")
+      || !sprintCols.includes('sprint_type')
+      || allSprintCols.includes('workflow_template_key')
+    );
     if (needsSprintsRebuild) {
       db.pragma('foreign_keys = OFF');
       const migrate = db.transaction(() => {
@@ -1244,7 +1252,6 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
             name         TEXT NOT NULL,
             goal         TEXT NOT NULL DEFAULT '',
             sprint_type  TEXT NOT NULL DEFAULT 'generic',
-            workflow_template_key TEXT,
             repo_path    TEXT,
             repo_url     TEXT,
             repo_access_mode TEXT CHECK(repo_access_mode IN ('worktree','clone')),
@@ -1258,11 +1265,9 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
         `).run();
 
         const hasSprintType = sprintCols.includes('sprint_type');
-        const hasWorkflowTemplateKey = sprintCols.includes('workflow_template_key');
         const selectCols = sprintCols.join(', ');
         const extraInsertCols = [
           ...(hasSprintType ? [] : ['sprint_type']),
-          ...(hasWorkflowTemplateKey ? [] : ['workflow_template_key']),
           ...(sprintCols.includes('repo_path') ? [] : ['repo_path']),
           ...(sprintCols.includes('repo_url') ? [] : ['repo_url']),
           ...(sprintCols.includes('repo_access_mode') ? [] : ['repo_access_mode']),
@@ -1270,7 +1275,6 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
         const insertCols = extraInsertCols.length > 0 ? `${selectCols}, ${extraInsertCols.join(', ')}` : selectCols;
         const extraSelectExpr = [
           ...(hasSprintType ? [] : [`'generic' AS sprint_type`]),
-          ...(hasWorkflowTemplateKey ? [] : ['NULL AS workflow_template_key']),
           ...(sprintCols.includes('repo_path') ? [] : ['NULL AS repo_path']),
           ...(sprintCols.includes('repo_url') ? [] : ['NULL AS repo_url']),
           ...(sprintCols.includes('repo_access_mode') ? [] : ['NULL AS repo_access_mode']),

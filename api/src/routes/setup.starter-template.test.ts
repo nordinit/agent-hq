@@ -246,11 +246,13 @@ describe('starter template setup API', () => {
       const applied = await applyRes.json() as Record<string, any>;
       expect(Object.keys(applied.workflow_ids).sort()).toEqual(['development', 'lead-generation', 'ops']);
       const db = getDb();
-      const workflows = await db.all(`SELECT sprint_type, workflow_template_key FROM sprints WHERE project_id = ? ORDER BY workflow_template_key`, applied.project_id) as Array<{ sprint_type: string; workflow_template_key: string }>;
+      // Template identity is asserted through applied.workflow_ids above;
+      // sprints no longer stores a template key.
+      const workflows = await db.all(`SELECT sprint_type FROM sprints WHERE project_id = ? ORDER BY sprint_type`, applied.project_id) as Array<{ sprint_type: string }>;
       expect(workflows).toEqual([
-        { sprint_type: 'development'.replace('development', 'dev'), workflow_template_key: 'development' },
-        { sprint_type: 'lead_generation', workflow_template_key: 'lead-generation' },
-        { sprint_type: 'ops', workflow_template_key: 'ops' },
+        { sprint_type: 'dev' },
+        { sprint_type: 'lead_generation' },
+        { sprint_type: 'ops' },
       ]);
       const leadRoute = await db.get(`
         SELECT a.name
