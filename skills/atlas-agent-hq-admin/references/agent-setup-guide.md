@@ -4,6 +4,8 @@ Agents are durable roles, not temporary task assignees.
 
 Create or configure agents when the workflow has a recurring owner for a type of work.
 
+Model the workflow first. Derive agents from durable responsibility boundaries instead of creating one agent per task type or status.
+
 ## Common Agent Roles
 
 Software workflow:
@@ -52,6 +54,42 @@ For each agent, decide:
 - instructions
 - routing ownership
 
+## Agent Boundary Decision
+
+Create a separate agent when one or more of these differ materially:
+
+- authority or permissions
+- tools, runtime, or repository access
+- quality bar or separation-of-duties requirement
+- durable specialty or context
+- prohibited actions or escalation policy
+- model, cost, or latency profile
+
+Reuse an agent across multiple task types or statuses when its mission, authority, tools, and quality bar remain coherent.
+
+Do not create a separate agent merely because a status has a different name, a task has a different priority, or a one-off instruction differs.
+
+## Agent Contract
+
+Define every proposed agent with:
+
+```text
+Agent role:
+- Mission:
+- Owned task types/statuses:
+- Required input context:
+- Tools, runtime, repositories, and permissions:
+- Expected deliverables:
+- Allowed outcomes:
+- Required evidence:
+- Prohibited actions:
+- Escalation conditions:
+- Provider/model policy:
+- Concurrency/session expectations:
+```
+
+Keep role names conceptual while designing reusable workflows, then bind those roles to actual Agent HQ agents through assignment rules. Do not invent unsupported role-binding configuration.
+
 ## Instructions
 
 Agent instructions should define stable role behavior, not task-specific detail.
@@ -64,6 +102,8 @@ Good instructions include:
 - lifecycle callback expectations
 - evidence expectations
 - what not to do
+- allowed outcomes and when to report each one
+- escalation and stop conditions
 
 Task-specific details belong in the task description and dispatch contract.
 
@@ -111,5 +151,7 @@ Do not create a new agent when:
 - the work is a one-off task
 - the difference is only priority or story points
 - the user is still deciding the workflow shape
+- an existing agent can own the work without expanding its authority incoherently
+- the difference can be handled by task context, a relevant skill, or model routing
 
 Use routing, workflow type, or model routing changes first when those solve the problem.

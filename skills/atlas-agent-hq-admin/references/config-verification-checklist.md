@@ -11,7 +11,11 @@ Use this before telling the user Agent HQ is configured.
 
 ## Workflow Definition
 
+- Durable work-item and independent task boundaries match the user's ownership, parallelism, retry, and acceptance needs.
 - Allowed task types match the user's workflow.
+- Task types describe stable work variation rather than lifecycle phases or agent names.
+- Statuses describe current workflow truth rather than internal micro-steps or past events.
+- Outcomes such as `qa_pass` are not duplicated as unnecessary intermediate statuses.
 - Default field schema exists if common structured data is needed.
 - Task-type schema overrides exist only where needed.
 - Required fields are actually required for start, handoff, or verification.
@@ -19,7 +23,8 @@ Use this before telling the user Agent HQ is configured.
 
 ## Routing
 
-- Every routable `task_type + status` has an explicit assignment rule.
+- Every agent-actionable `task_type + status` has an explicit assignment rule.
+- Every intentionally unassigned nonterminal status has a verified human, event, timer, or manual-resume path.
 - Review/QA statuses route to the correct QA/review agent.
 - Release statuses route to the correct release/devops agent when needed.
 - PM task types route to PM/Atlas when intended.
@@ -52,11 +57,13 @@ Use this before telling the user Agent HQ is configured.
 ## Agents
 
 - Required roles have agents.
+- Each agent corresponds to a durable responsibility boundary rather than a status name.
 - Agents are enabled.
 - Agents have appropriate provider/model/runtime.
 - Agents that work on code have a repo/workspace strategy.
 - Agents have only relevant skills/tools.
 - Atlas has admin/helper guidance available when it is expected to configure Agent HQ.
+- Agent instructions define allowed outcomes, evidence, prohibited actions, and escalation conditions.
 
 ## Sample Task Verification
 
@@ -79,6 +86,8 @@ Expected:
 ```
 
 If the user wants the system live immediately, create a real `todo` sample task first. Move to `ready` only when the user wants an agent to pick it up.
+
+Also trace at least one materially relevant exception: rework, blocked/failure, or human/event wait.
 
 ## Report Template
 
