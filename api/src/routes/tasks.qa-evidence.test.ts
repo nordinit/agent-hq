@@ -1,9 +1,10 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import tasksRouter from './tasks';
 import { requireReleaseGate } from '../lib/taskRelease';
 import { validateInlineEvidenceForOutcome } from '../lib/evidenceValidation';
@@ -12,212 +13,27 @@ let tempDir: string;
 let dbPath: string;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-qa-evidence-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
-  process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  await db.exec(`
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL
-    );
-    CREATE TABLE sprints (
-      id INTEGER PRIMARY KEY,
-      project_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      sprint_type TEXT NOT NULL DEFAULT 'generic'
-    );
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      title TEXT NOT NULL,
-      status TEXT NOT NULL,
-      task_type TEXT,
-      sprint_id INTEGER,
-      project_id INTEGER,
-      agent_id INTEGER,
-      origin_task_id INTEGER,
-      review_commit TEXT,
-      qa_verified_commit TEXT,
-      qa_tested_url TEXT,
-      custom_fields_json TEXT NOT NULL DEFAULT '{}',
-      active_instance_id INTEGER,
-      updated_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      changed_by TEXT NOT NULL,
-      field TEXT NOT NULL,
-      old_value TEXT,
-      new_value TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_notes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      author TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_attachments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      filename TEXT NOT NULL,
-      original_name TEXT NOT NULL,
-      mime_type TEXT,
-      size INTEGER,
-      uploaded_by TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE instance_artifacts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      instance_id INTEGER,
-      task_id INTEGER,
-      kind TEXT,
-      label TEXT,
-      value TEXT,
-      current_stage TEXT,
-      last_agent_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      latest_commit_hash TEXT,
-      branch_name TEXT,
-      changed_files_json TEXT,
-      changed_files_count INTEGER,
-      summary TEXT,
-      blocker_reason TEXT,
-      outcome TEXT,
-      stale INTEGER,
-      stale_at TEXT,
-      updated_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_outcome_metrics (
-      task_id INTEGER PRIMARY KEY,
-      spawned_defects INTEGER DEFAULT 0,
-      last_outcome TEXT,
-      last_outcome_at TEXT,
-      updated_at TEXT
-    );
-    CREATE TABLE task_defects (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open',
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_dependencies (
-      blocker_id INTEGER NOT NULL,
-      blocked_id INTEGER NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      PRIMARY KEY (blocker_id, blocked_id)
-    );
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      agent_id INTEGER,
-      status TEXT,
-      session_key TEXT,
-      task_outcome TEXT,
-      lifecycle_outcome_posted_at TEXT,
-      response TEXT,
-      dispatched_at TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      runtime_ended_at TEXT,
-      runtime_completed_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT,
-      lifecycle_handoff_status TEXT,
-      semantic_outcome_missing INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      job_title TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE jobs (
-      id INTEGER PRIMARY KEY,
-      agent_id INTEGER
-    );
-    CREATE TABLE task_statuses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER,
-      status_key TEXT,
-      label TEXT,
-      color TEXT,
-      terminal INTEGER DEFAULT 0,
-      is_system INTEGER DEFAULT 0,
-      allowed_transitions_json TEXT DEFAULT '[]',
-      stage_order INTEGER DEFAULT 0,
-      is_default_entry INTEGER DEFAULT 0,
-      metadata_json TEXT DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE sprint_task_transitions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER,
-      task_type TEXT,
-      from_status TEXT NOT NULL,
-      outcome TEXT NOT NULL,
-      to_status TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      is_protected INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE sprint_task_transition_requirements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      task_type TEXT,
-      outcome TEXT NOT NULL,
-      field_name TEXT NOT NULL,
-      requirement_type TEXT NOT NULL DEFAULT 'required',
-      match_field TEXT,
-      severity TEXT NOT NULL DEFAULT 'block',
-      message TEXT NOT NULL DEFAULT '',
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE sprint_types (
-      key TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_field_schemas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_type_key TEXT NOT NULL,
-      task_type TEXT,
-      schema_json TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
 
-  await db.run(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`);
-  await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1)`);
-  await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Bugs', 'generic')`);
-  await db.run(`INSERT INTO agents (id, name, enabled) VALUES (7, 'Talon', 1)`);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
+  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1)`);
+  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (10, 1, 1, 'Bugs', 'generic')`);
+  await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, enabled) VALUES (7, 1, 'Talon', 'agent:talon:main', 1)`);
   await db.run(`
-    INSERT INTO tasks (id, title, status, task_type, sprint_id, project_id, agent_id, review_commit, custom_fields_json, active_instance_id)
-    VALUES (383, 'Task 383', 'review', 'backend', 10, 1, 7, '6d614b3b104ae36d1dd75210b9f9fb0342673329', ?, 1784)
+    INSERT INTO tasks (id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, custom_fields_json, active_instance_id)
+    VALUES (383, 1, 'Task 383', 'review', 'backend', 10, 1, 7, ?, NULL)
   `, JSON.stringify({ review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329' }));
-  await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, dispatched_at) VALUES (1784, 383, 7, 'running', datetime('now'))`);
-  await db.run(`INSERT INTO instance_artifacts (instance_id, task_id, current_stage, stale, updated_at) VALUES (1784, 383, 'progress', 0, datetime('now'))`);
-  await db.run(`INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at) VALUES (383, 0, datetime('now'))`);
+  await db.run(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status, dispatched_at) VALUES (1784, 1, 383, 7, 'running', CURRENT_TIMESTAMP)`);
+  await db.run(`INSERT INTO instance_artifacts (instance_id, task_id, current_stage, stale, updated_at) VALUES (1784, 383, 'progress', 0, CURRENT_TIMESTAMP)`);
+  await db.run(`INSERT INTO task_outcome_metrics (tenant_id, task_id, spawned_defects, updated_at) VALUES (1, 383, 0, CURRENT_TIMESTAMP)`);
+  await db.run(`UPDATE tasks SET active_instance_id = 1784 WHERE id = 383`);
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -245,9 +61,8 @@ describe('tasks qa-evidence aliases', () => {
     await resetDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -379,8 +194,8 @@ describe('tasks qa-evidence aliases', () => {
         task_agent_id: 7,
       });
 
-      const row = await db.get(`SELECT review_commit FROM tasks WHERE id = ?`, 383) as { review_commit: string | null };
-      expect(row.review_commit).toBe('6d614b3b104ae36d1dd75210b9f9fb0342673329');
+      const row = await db.get(`SELECT custom_fields_json FROM tasks WHERE id = ?`, 383) as { custom_fields_json: string };
+      expect(JSON.parse(row.custom_fields_json).review_commit).toBe('6d614b3b104ae36d1dd75210b9f9fb0342673329');
     } finally {
       await stopTestServer(server);
     }
@@ -431,67 +246,12 @@ describe('tasks qa-evidence aliases', () => {
 
   it('refreshes review evidence to the latest commit on re-submission for review', async () => {
     const db = getDb();
-    await db.exec(`
-      ALTER TABLE tasks ADD COLUMN review_branch TEXT;
-      ALTER TABLE tasks ADD COLUMN review_url TEXT;
-      ALTER TABLE tasks ADD COLUMN review_owner_agent_id INTEGER;
-      ALTER TABLE tasks ADD COLUMN previous_status TEXT;
-      ALTER TABLE tasks ADD COLUMN merged_commit TEXT;
-      ALTER TABLE tasks ADD COLUMN deployed_commit TEXT;
-      ALTER TABLE tasks ADD COLUMN deployed_at TEXT;
-      ALTER TABLE tasks ADD COLUMN live_verified_at TEXT;
-      ALTER TABLE tasks ADD COLUMN live_verified_by TEXT;
-      ALTER TABLE tasks ADD COLUMN deploy_target TEXT;
-      ALTER TABLE tasks ADD COLUMN evidence_json TEXT;
-      ALTER TABLE tasks ADD COLUMN failure_detail TEXT;
-      ALTER TABLE job_instances ADD COLUMN failure_stage TEXT;
-      CREATE TABLE logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_id INTEGER,
-        job_title TEXT,
-        level TEXT,
-        message TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE TABLE routing_config (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        from_status TEXT NOT NULL,
-        outcome TEXT NOT NULL,
-        to_status TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        project_id INTEGER
-      );
-      CREATE TABLE integrity_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        instance_id INTEGER,
-        anomaly_type TEXT,
-        detail TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE TABLE task_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        from_status TEXT,
-        to_status TEXT,
-        moved_by TEXT,
-        move_type TEXT,
-        instance_id INTEGER,
-        reason TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-    `);
-
     await db.run(`UPDATE tasks SET status = ?, custom_fields_json = ? WHERE id = ?`, 'in_progress', JSON.stringify({
               review_branch: 'feature/task-383-old',
               review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
               review_url: 'http://localhost:3510/review/task-383?attempt=1',
             }), 383);
-    await db.run(`INSERT INTO routing_config (from_status, outcome, to_status, enabled, project_id) VALUES (?, ?, ?, 1, ?)`, 'in_progress', 'completed_for_review', 'review', 1);
+    await db.run(`INSERT INTO routing_config (tenant_id, from_status, outcome, to_status, enabled, project_id) VALUES (1, ?, ?, ?, 1, ?)`, 'in_progress', 'completed_for_review', 'review', 1);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -679,8 +439,8 @@ describe('tasks qa-evidence aliases', () => {
   it('supports configured OR field expressions for release gates', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message)
-      VALUES (10, NULL, 'deployed_live', 'merged_commit|deployed_commit', 'required', NULL, 'block', 'deployed_live requires merged_commit or deployed_commit')
+      INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message)
+      VALUES (1, 10, 1, 'generic', NULL, 'deployed_live', 'merged_commit|deployed_commit', 'required', NULL, 'block', 'deployed_live requires merged_commit or deployed_commit')
     `);
 
     const result = await requireReleaseGate(db, {
@@ -699,11 +459,11 @@ describe('tasks qa-evidence aliases', () => {
   it('rejects premature or malformed live_verified release-gate validation when the workflow config requires it', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message)
+      INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message)
       VALUES
-        (10, NULL, 'live_verified', 'status', 'from_status', 'deployed', 'block', 'live_verified requires task status deployed'),
-        (10, NULL, 'live_verified', 'live_verified_by', 'required', NULL, 'block', 'live_verified requires live_verified_by'),
-        (10, NULL, 'live_verified', 'live_verified_at', 'required', NULL, 'block', 'live_verified requires live_verified_at')
+        (1, 10, 1, 'generic', NULL, 'live_verified', 'status', 'from_status', 'deployed', 'block', 'live_verified requires task status deployed'),
+        (1, 10, 1, 'generic', NULL, 'live_verified', 'live_verified_by', 'required', NULL, 'block', 'live_verified requires live_verified_by'),
+        (1, 10, 1, 'generic', NULL, 'live_verified', 'live_verified_at', 'required', NULL, 'block', 'live_verified requires live_verified_at')
     `);
 
     const result = await requireReleaseGate(db, {

@@ -10,6 +10,7 @@ import {
 } from './atlasAgent';
 import { resolveRuntimeAgentSlug } from './sessionKeys';
 import { ensureTenantSchema, resolveTenantIdFromRequest, verifyTenantSchemaForStartup } from './tenantContext';
+import { resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
 import { type Db } from "../db/adapter/types";
 import { columnExists as sharedColumnExists, tableExists as sharedTableExists } from "../db/introspection";
 
@@ -86,62 +87,6 @@ export function hashMcpApiKey(apiKey: string): string {
 
 export function createMcpApiKeyValue(): string {
   return `ahq_mcp_${crypto.randomBytes(32).toString('base64url')}`;
-}
-
-export async function ensureMcpApiKeyTable(db: Db): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS mcp_api_keys (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      agent_id     INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      name         TEXT NOT NULL DEFAULT '',
-      key_prefix   TEXT NOT NULL DEFAULT '',
-      key_hash     TEXT NOT NULL UNIQUE,
-      enabled      INTEGER NOT NULL DEFAULT 1,
-      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
-      last_used_at TEXT,
-      revoked_at   TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_mcp_api_keys_agent ON mcp_api_keys(agent_id);
-    CREATE INDEX IF NOT EXISTS idx_mcp_api_keys_enabled ON mcp_api_keys(enabled);
-  `);
-
-  if (!await hasColumn(db, 'mcp_api_keys', 'tenant_id')) {
-    // Do not add a REFERENCES constraint here: initSchema may call this helper before
-    // the tenants table exists in fresh/test databases. Tenant scope is enforced in
-    // MCP auth, and tenant rows are validated through tenantContext at request time.
-    await db.exec(`ALTER TABLE mcp_api_keys ADD COLUMN tenant_id INTEGER`);
-  }
-  if (!await hasColumn(db, 'mcp_api_keys', 'global_admin')) {
-    await db.exec(`ALTER TABLE mcp_api_keys ADD COLUMN global_admin INTEGER NOT NULL DEFAULT 0`);
-  }
-
-  const agentsTableReady = await hasTable(db, 'agents');
-  if (agentsTableReady && !await hasColumn(db, 'agents', 'global_mcp_admin')) {
-    await db.exec(`ALTER TABLE agents ADD COLUMN global_mcp_admin INTEGER NOT NULL DEFAULT 0`);
-  }
-
-  if (agentsTableReady && await hasColumn(db, 'agents', 'tenant_id')) {
-    await db.run(`
-      UPDATE mcp_api_keys
-      SET tenant_id = (
-        SELECT a.tenant_id
-        FROM agents a
-        WHERE a.id = mcp_api_keys.agent_id
-      )
-      WHERE tenant_id IS NULL
-        AND EXISTS (
-          SELECT 1
-          FROM agents a
-          WHERE a.id = mcp_api_keys.agent_id
-            AND a.tenant_id IS NOT NULL
-        )
-    `);
-  }
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_mcp_api_keys_tenant ON mcp_api_keys(tenant_id);
-    CREATE INDEX IF NOT EXISTS idx_mcp_api_keys_global_admin ON mcp_api_keys(global_admin);
-  `);
 }
 
 export type AgentMcpDefaultPolicy = 'scoped_runtime' | 'trusted_admin';
@@ -671,22 +616,6 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
   'mcp_capability_policies.read',
 ]);
 
-async function ensureAgentMcpCapabilityPolicyTable(db: Db): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS agent_mcp_capability_policies (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      agent_id       INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      capability_key TEXT NOT NULL,
-      enabled        INTEGER NOT NULL DEFAULT 0,
-      created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(agent_id, capability_key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_agent_mcp_capability_policies_agent
-      ON agent_mcp_capability_policies(agent_id);
-  `);
-}
-
 type AgentIdentityFields = {
   agentName: string;
   agentSlug: string;
@@ -766,7 +695,6 @@ async function loadAgentPermissionContext(db: Db, agentId: number): Promise<{
 }
 
 async function loadExplicitAgentMcpCapabilityRows(db: Db, agentId: number): Promise<Array<{ capability_key: string; enabled: number; updated_at: string | null }>> {
-  await ensureAgentMcpCapabilityPolicyTable(db);
   return await db.all(`
     SELECT capability_key, enabled, updated_at
     FROM agent_mcp_capability_policies
@@ -932,7 +860,6 @@ export async function replaceAgentMcpPermissionPolicy(
   enabledCapabilityKeys: readonly string[],
 ): Promise<AgentMcpPermissionPolicySnapshot> {
   const context = await loadAgentPermissionContext(db, agentId);
-  await ensureAgentMcpCapabilityPolicyTable(db);
   const normalized = new Set<AgentMcpCapabilityKey>();
 
   for (const rawKey of enabledCapabilityKeys) {
@@ -960,7 +887,6 @@ export async function replaceAgentMcpPermissionPolicy(
 
 export async function resetAgentMcpPermissionPolicy(db: Db, agentId: number): Promise<AgentMcpPermissionPolicySnapshot> {
   const context = await loadAgentPermissionContext(db, agentId);
-  await ensureAgentMcpCapabilityPolicyTable(db);
   await db.run(`DELETE FROM agent_mcp_capability_policies WHERE agent_id = ?`, agentId);
   return await buildAgentMcpPermissionPolicySnapshot(db, context);
 }
@@ -1013,7 +939,6 @@ export async function resolveMcpApiIdentityForKey(
   apiKey: string,
   options: { updateLastUsed?: boolean } = {},
 ): Promise<McpApiIdentity> {
-  await ensureMcpApiKeyTable(db);
   await ensureTenantSchema(db);
   const normalizedKey = apiKey.trim();
   if (!normalizedKey) {
@@ -1071,13 +996,12 @@ export async function resolveMcpApiIdentityForKey(
     throw new McpApiAuthError('MCP API key tenant binding does not match its owning agent', 403, 'mcp_api_key_tenant_mismatch');
   }
 
-  if (!rowTenantId && agentTenantId) {
-    await db.run(`UPDATE mcp_api_keys SET tenant_id = ?, updated_at = datetime('now') WHERE id = ?`, agentTenantId, row.key_id);
-    row.key_tenant_id = agentTenantId;
-  }
+  // Authentication is a read path, not a migration path. A legacy key without its own
+  // tenant_id may inherit the owning agent's tenant for this request, but it is never repaired
+  // as a side effect of being used. Explicit migration/provisioning owns persisted config.
 
   if (options.updateLastUsed !== false) {
-    await db.run(`UPDATE mcp_api_keys SET last_used_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`, row.key_id);
+    await db.run(`UPDATE mcp_api_keys SET last_used_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?`, row.key_id);
   }
 
   return await shapeIdentity(db, row);
@@ -1088,7 +1012,6 @@ export async function issueMcpApiKeyForAgent(
   agentId: number,
   name = 'Agent HQ MCP',
 ): Promise<{ apiKey: string; keyId: number; keyPrefix: string }> {
-  await ensureMcpApiKeyTable(db);
   await ensureTenantSchema(db);
   const agent = await db.get(`SELECT id, tenant_id FROM agents WHERE id = ?`, agentId) as { id: number; tenant_id: number | null } | undefined;
   if (!agent) throw new Error(`Cannot issue MCP API key: agent #${agentId} not found`);
@@ -1173,7 +1096,6 @@ export async function ensureConfiguredRuntimeMcpApiKey(
   env: NodeJS.ProcessEnv = process.env,
   options: { tenantMode?: 'repair' | 'verify' } = {},
 ): Promise<{ status: 'missing' | 'reused' | 'created'; agentId?: number; keyId?: number; keyPrefix?: string }> {
-  await ensureMcpApiKeyTable(db);
   if (options.tenantMode === 'verify') {
     await verifyTenantSchemaForStartup(db);
   } else {
@@ -1329,8 +1251,8 @@ async function getScopedTaskContexts(db: Db, identity: McpApiIdentity): Promise<
  * alias case, so the same code was correct there and nothing failed until the engine changed.
  *
  * Nothing threw and nothing logged: the query succeeded, the rows came back, and only the property
- * names differed. translateToPostgres() now quotes mixed-case aliases automatically, but these are
- * spelled out explicitly because this query decides an authorization outcome.
+ * names differed. They are spelled out explicitly because PostgreSQL has no execution-time
+ * dialect translator and this query decides an authorization outcome.
  *
  * NOTE: the status list is an allowlist of live statuses, but production job_instances only ever
  * hold done, failed, cancelled and dispatched — so two of the three values enumerated here never
@@ -1792,10 +1714,12 @@ async function insertMcpScopeDeniedNote(db: Db, params: {
   reason: string;
 }): Promise<void> {
   if (!params.taskId) return;
+  const tenantId = await resolveRuntimeTenantId(db, { taskId: params.taskId });
+  const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
   await db.run(`
-    INSERT INTO task_notes (task_id, author, content)
-    VALUES (?, ?, ?)
-  `, params.taskId, 'agent-hq-mcp-auth', `Scoped MCP write refused for ${params.identity.auditActor}: ${params.reason}`);
+    INSERT INTO task_notes (${tenant.columnSql}task_id, author, content)
+    VALUES (${tenant.valueSql}?, ?, ?)
+  `, ...tenant.values, params.taskId, 'agent-hq-mcp-auth', `Scoped MCP write refused for ${params.identity.auditActor}: ${params.reason}`);
 }
 
 async function sendMcpScopeDenied(res: Response, params: {

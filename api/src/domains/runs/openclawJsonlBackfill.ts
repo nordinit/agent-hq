@@ -17,6 +17,7 @@ import {
   timestampFromEpochMs,
   toCanonicalTimestamp,
 } from '../../lib/timestamps';
+import { requireRuntimeTenantId } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
@@ -402,22 +403,7 @@ function isOpenClawAgent(agent: BackfillAgentRow): boolean {
   return !runtimeType || runtimeType === 'openclaw';
 }
 
-async function ensureOpenClawTranscriptIngestSchema(db: Db): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS openclaw_transcript_ingest_state (
-      instance_id INTEGER PRIMARY KEY REFERENCES job_instances(id) ON DELETE CASCADE,
-      session_file TEXT NOT NULL,
-      last_line_index INTEGER NOT NULL DEFAULT 0,
-      last_event_at TEXT,
-      last_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-}
-
 async function readIngestState(db: Db, instanceId: number, sessionFile: string): Promise<IngestStateRow | null> {
-  await ensureOpenClawTranscriptIngestSchema(db);
   const row = await db.get(`
     SELECT instance_id, session_file, last_line_index, last_event_at,
            last_heartbeat_at, last_meaningful_output_at
@@ -437,7 +423,6 @@ async function writeIngestState(db: Db, params: {
   meaningfulOutputAt: string | null;
   now: string;
 }): Promise<void> {
-  await ensureOpenClawTranscriptIngestSchema(db);
   await db.run(`
     INSERT INTO openclaw_transcript_ingest_state (
       instance_id, session_file, last_line_index, last_event_at,
@@ -698,6 +683,14 @@ export async function backfillOpenClawJsonlTranscript(
   const lines = readJsonlLines(resolved.sessionFile, fromLineIndex, fallbackNow);
 
   const hasChatDurableRunId = await tableHasColumn(db, 'chat_messages', 'durable_run_id');
+  const hasChatTenantId = await tableHasColumn(db, 'chat_messages', 'tenant_id');
+  const tenantId = hasChatTenantId
+    ? await requireRuntimeTenantId(db, {
+        instanceId: instance.id,
+        taskId: instance.task_id,
+        agentId: instance.agent_id,
+      })
+    : null;
   const provisionalTrajectoryRowPrefix = `oc-traj-${instance.durable_run_id ?? instanceId}-%`;
   const deleteProvisionalTrajectoryRowsSql = `
     DELETE FROM chat_messages
@@ -706,9 +699,9 @@ export async function backfillOpenClawJsonlTranscript(
   `;
   const insertSql = `
     INSERT INTO chat_messages (
-      id, agent_id, instance_id, ${hasChatDurableRunId ? 'durable_run_id, ' : ''}session_key, role, content, timestamp, event_type, event_meta
+      id, ${hasChatTenantId ? 'tenant_id, ' : ''}agent_id, instance_id, ${hasChatDurableRunId ? 'durable_run_id, ' : ''}session_key, role, content, timestamp, event_type, event_meta
     )
-    VALUES (?, ?, ?, ${hasChatDurableRunId ? '?, ' : ''}?, ?, ?, ?, ?, ?)
+    VALUES (?, ${hasChatTenantId ? '?, ' : ''}?, ?, ${hasChatDurableRunId ? '?, ' : ''}?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       agent_id = excluded.agent_id,
       instance_id = excluded.instance_id,
@@ -767,9 +760,9 @@ export async function backfillOpenClawJsonlTranscript(
 
         const insertParams: unknown[] = [
           rowId,
-          instance.agent_id,
-          instance.id,
         ];
+        if (hasChatTenantId) insertParams.push(tenantId);
+        insertParams.push(instance.agent_id, instance.id);
         if (hasChatDurableRunId) insertParams.push(instance.durable_run_id ?? null);
         insertParams.push(
           resolved.sessionKey,

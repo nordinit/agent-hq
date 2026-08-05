@@ -25,16 +25,15 @@ Task types:
 Lifecycle:
 
 ```text
-todo -> ready -> in_progress -> review -> qa_pass -> ready_to_merge -> deployed -> done
+todo -> ready -> in_progress -> review -> ready_to_merge -> deployed -> done
 ```
 
 Common transitions:
 
 ```text
 in_progress + completed_for_review -> review
-review + qa_pass -> qa_pass
+review + qa_pass -> ready_to_merge
 review + qa_fail -> ready
-qa_pass + approved_for_merge -> ready_to_merge
 ready_to_merge + deployed_live -> deployed
 deployed + live_verified -> done
 ```
@@ -119,6 +118,22 @@ Routing:
 
 ## Sales / CRM
 
+Choose the modeling mode before applying this recipe.
+
+Case mode keeps one lead task moving through domain-specific statuses:
+
+```text
+intake -> qualification -> research -> outreach_draft -> human_approval -> sent -> follow_up -> done
+```
+
+Work-order mode creates independently owned tasks such as `lead_research`, `outreach_copy`, and `follow_up`, each with a broad lifecycle:
+
+```text
+todo -> ready -> in_progress -> review -> done
+```
+
+Hybrid mode keeps a lead case and relates independently executable research, drafting, or follow-up tasks to it. Prefer hybrid mode when those deliverables run in parallel or need separate acceptance.
+
 Roles:
 
 - researcher
@@ -126,13 +141,16 @@ Roles:
 - follow-up agent
 - manager/reviewer
 
-Task types:
+Example work-order task types:
 
-- `marketing`
-- `pm`
-- `adhoc`
+- `lead_research`
+- `outreach`
+- `follow_up`
+- `sales_review`
 
-Lifecycle:
+For case mode, prefer a stable workflow-specific type such as `lead` rather than changing the task type at every stage.
+
+Work-order lifecycle:
 
 ```text
 todo -> ready -> in_progress -> review -> done
@@ -149,9 +167,10 @@ Fields:
 
 Routing:
 
-- research tasks -> researcher
-- outreach tasks -> outreach agent
-- review tasks -> manager
+- `lead_research + ready` -> researcher
+- `outreach + ready` -> outreach agent
+- `follow_up + ready` -> follow-up agent
+- `all task types + review` -> manager
 
 ## Lightweight Personal Workflow
 

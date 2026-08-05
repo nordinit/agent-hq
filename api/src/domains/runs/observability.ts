@@ -3,6 +3,7 @@ import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { syncTaskActiveAgentFromInstance } from '../tasks/ownership';
 import { writeTaskHistory } from '../tasks/history';
 import { nowTimestamp } from '../../lib/timestamps';
+import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
 import { columnExists as sharedColumnExists } from "../../db/introspection";
 
@@ -56,6 +57,15 @@ const AGENT_DRIVEN_STAGES: ReadonlySet<CheckInStage> = new Set(['dispatch', 'sta
 async function resolveAgentName(db: Db, agentId: number): Promise<string | null> {
   const row = await db.get('SELECT name FROM agents WHERE id = ?', agentId) as { name: string } | undefined;
   return row?.name ?? null;
+}
+
+async function insertTaskNote(db: Db, taskId: number, author: string, content: string): Promise<void> {
+  const tenantId = await resolveRuntimeTenantId(db, { taskId });
+  const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
+  await db.run(`
+    INSERT INTO task_notes (${tenant.columnSql}task_id, author, content)
+    VALUES (${tenant.valueSql}?, ?, ?)
+  `, ...tenant.values, taskId, author, content);
 }
 
 function normalizeTimestamp(raw?: string | null): number | null {
@@ -126,7 +136,7 @@ export async function attachInstanceToTask(db: Db, instanceId: number, taskId: n
 
     await db.run(`
       UPDATE tasks
-      SET active_instance_id = ?, updated_at = datetime('now')
+      SET active_instance_id = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, instanceId, taskId);
     await syncTaskActiveAgentFromInstance(db, taskId);
@@ -339,10 +349,7 @@ export async function recordRunCheckIn(db: Db, input: RunCheckInInput): Promise<
       noteAuthor = 'Agent HQ';
     }
 
-    await db.run(`
-      INSERT INTO task_notes (task_id, author, content)
-      VALUES (?, ?, ?)
-    `, taskId, noteAuthor, note);
+    await insertTaskNote(db, taskId, noteAuthor, note);
 
     await db.run(`
       UPDATE instance_artifacts
@@ -426,10 +433,7 @@ export async function markInstanceStale(db: Db, instanceId: number, reason: stri
   `, instanceId, taskId, nowTs, nowTs);
 
   if (taskId) {
-    await db.run(`
-      INSERT INTO task_notes (task_id, author, content)
-      VALUES (?, 'Agent HQ', ?)
-    `, taskId, `Agent run appears stale\nReason: ${reason}`);
+    await insertTaskNote(db, taskId, 'Agent HQ', `Agent run appears stale\nReason: ${reason}`);
   }
 
   return { taskId, changed: true };

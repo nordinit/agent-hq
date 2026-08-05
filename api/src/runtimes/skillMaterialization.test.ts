@@ -1,35 +1,15 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import Database from 'better-sqlite3';
 import { OpenClawSkillAdapter } from './skillMaterialization';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 
 async function createDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE skills (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER NOT NULL DEFAULT 1,
-      name TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      content TEXT NOT NULL DEFAULT '',
-      source TEXT NOT NULL DEFAULT 'atlas' CHECK(source IN ('atlas','workspace','system')),
-      fs_path TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(tenant_id, name)
-    );
-    CREATE TABLE skill_files (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER NOT NULL,
-      skill_id INTEGER NOT NULL,
-      path TEXT NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      UNIQUE(tenant_id, skill_id, path)
-    );
+  const db = await setupTestDb();
+  await db.run(`
+    INSERT INTO tenants (id, name, slug, is_default)
+    VALUES (1, 'Tenant A', 'tenant-a', 1), (2, 'Tenant B', 'tenant-b', 0)
   `);
   return db;
 }
@@ -41,9 +21,10 @@ function makeTempDir(label: string): string {
 describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
   let tempDirs: string[] = [];
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
     tempDirs = [];
+    await teardownTestDb();
   });
 
   it('does not fall back to global/system filesystem skills without an explicit tenant DB row', async () => {
@@ -67,7 +48,6 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     expect((await result).count).toBe(0);
     expect((await result).details).toEqual([{ skill: 'shared-skill', action: 'skipped', reason: 'source not found' }]);
     expect(fs.existsSync(path.join(workspace, 'skills', 'shared-skill'))).toBe(false);
-    await db.close();
   });
 
   it('materializes the tenant-local DB skill when tenants reuse the same name', async () => {
@@ -87,7 +67,6 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     expect((await resultB).count).toBe(1);
     expect(fs.readFileSync(path.join(workspaceA, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant A skill\n');
     expect(fs.readFileSync(path.join(workspaceB, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant B skill\n');
-    await db.close();
   });
 
   it('materializes supplemental database-backed package files without a filesystem path', async () => {
@@ -116,7 +95,6 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
       .toBe('---\nname: packaged-skill\n---\n\n# Packaged skill\n');
     expect(fs.readFileSync(path.join(workspace, 'skills', 'packaged-skill', 'references', 'guide.md'), 'utf-8'))
       .toBe('# Guide\n');
-    await db.close();
   });
 
   it('uses system skill directories only when the tenant has an explicit system skill row', async () => {
@@ -139,6 +117,5 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     expect(fs.existsSync(path.join(workspaceA, 'skills', 'system-skill'))).toBe(false);
     expect((await resultB).count).toBe(1);
     expect(fs.readFileSync(path.join(workspaceB, 'skills', 'system-skill', 'SKILL.md'), 'utf-8')).toBe('# System skill\n');
-    await db.close();
   });
 });

@@ -1,33 +1,24 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import agentsRouter from './agents';
 
 let tempDir: string;
 let dbPath: string;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-mcp-permissions-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
-  process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  await db.exec(`
-    PRAGMA foreign_keys = ON;
-
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      system_role TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      deleted_at TEXT
-    );
-  `);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -57,14 +48,13 @@ describe('agent MCP permissions routes', () => {
 
     const db = getDb();
     await db.run(`
-      INSERT INTO agents (id, name, system_role, enabled)
-      VALUES (?, ?, NULL, 1), (?, ?, 'admin', 1)
-    `, 7, 'Cinder', 8, 'Atlas');
+      INSERT INTO agents (id, tenant_id, name, session_key, system_role, enabled)
+      VALUES (?, 1, ?, ?, NULL, 1), (?, 1, ?, ?, 'admin', 1)
+    `, 7, 'Cinder', 'agent:cinder:main', 8, 'Atlas', 'agent:atlas:main');
   });
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

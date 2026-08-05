@@ -474,7 +474,7 @@ router.put('/:id', async (req: Request, res: Response) => {
           fast_mode      = ?,
           enabled        = ?,
           label          = ?,
-          updated_at     = datetime('now')
+          updated_at     = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
       `, scope.project_id, scope.sprint_id, scope.sprint_id == null ? scope.sprint_type : null, payload.max_points     !== undefined ? payload.max_points     : existing.max_points, provider, payload.model          !== undefined ? payload.model          : existing.model, payload.fallback_model !== undefined ? payload.fallback_model : existing.fallback_model, payload.max_turns      !== undefined ? payload.max_turns      : existing.max_turns, payload.max_budget_usd !== undefined ? payload.max_budget_usd : existing.max_budget_usd, payload.thinking_level !== undefined ? payload.thinking_level : existing.thinking_level, payload.fast_mode      !== undefined ? (payload.fast_mode == null ? null : (payload.fast_mode ? 1 : 0)) : existing.fast_mode, payload.enabled        !== undefined ? (payload.enabled ? 1 : 0) : existing.enabled ?? 1, payload.label          !== undefined ? payload.label          : existing.label, req.params.id);
     } else {
@@ -490,7 +490,7 @@ router.put('/:id', async (req: Request, res: Response) => {
           fast_mode      = ?,
           enabled        = ?,
           label          = ?,
-          updated_at     = datetime('now')
+          updated_at     = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
       `, payload.max_points     !== undefined ? payload.max_points     : existing.max_points, provider, payload.model          !== undefined ? payload.model          : existing.model, payload.fallback_model !== undefined ? payload.fallback_model : existing.fallback_model, payload.max_turns      !== undefined ? payload.max_turns      : existing.max_turns, payload.max_budget_usd !== undefined ? payload.max_budget_usd : existing.max_budget_usd, payload.thinking_level !== undefined ? payload.thinking_level : existing.thinking_level, payload.fast_mode      !== undefined ? (payload.fast_mode == null ? null : (payload.fast_mode ? 1 : 0)) : existing.fast_mode, payload.enabled        !== undefined ? (payload.enabled ? 1 : 0) : existing.enabled ?? 1, payload.label          !== undefined ? payload.label          : existing.label, req.params.id);
     }

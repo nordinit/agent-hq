@@ -273,7 +273,6 @@ function createRuntimeDb(
   const runs: Array<{ sql: string; values: unknown[] }> = [];
   return {
     runs,
-    dialect: 'sqlite',
     inTransaction: false,
     get: jest.fn(async (sql: string) => sql.includes('SELECT agent_id')
       ? { agent_id: agentId, tenant_id: tenantId }
@@ -548,7 +547,6 @@ describe('CodexRuntime', () => {
       'agent_hq_start_task_run',
     ];
     const db = {
-      dialect: 'sqlite',
       inTransaction: false,
       get: jest.fn(async () => ({ agent_id: 42, tenant_id: 2 })),
       all: jest.fn(async () => []),
@@ -794,6 +792,27 @@ describe('CodexRuntime', () => {
     child.emit('close', 0, null);
   });
 
+  it('skips profile scavenging when durable active-run lookup fails', async () => {
+    const managedHome = path.join(root, 'codex', 'tenant-2', 'agent-42');
+    fs.mkdirSync(managedHome, { recursive: true });
+    const stalePath = path.join(
+      managedHome,
+      'agent-hq-runtime-99-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.config.toml',
+    );
+    fs.writeFileSync(stalePath, '# possibly active MCP credential\n', { mode: 0o600 });
+    const old = new Date(Date.now() - DEFAULT_CODEX_STALE_PROFILE_TTL_MS - 1_000);
+    fs.utimesSync(stalePath, old, old);
+    const db = createRuntimeDb();
+    db.all.mockRejectedValueOnce(new Error('transient runtime execution lookup failure'));
+
+    await new CodexRuntime().dispatch(params({ db }));
+
+    expect(db.all).toHaveBeenCalledWith(expect.stringContaining('FROM runtime_executions'));
+    expect(fs.existsSync(stalePath)).toBe(true);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    child.emit('close', 0, null);
+  });
+
   it('retries ephemeral profile cleanup after an unlink failure', async () => {
     mockMaterializeMcp.mockImplementationOnce(async ({
       codexHome,
@@ -879,6 +898,7 @@ describe('CodexRuntime', () => {
     expect(applyEnd).toHaveBeenCalledTimes(1);
     expect(persistHeartbeat).toHaveBeenCalledWith(db, {
       instanceId: 7,
+      tenantId: 2,
       sessionId: 'thread-123',
     });
     expect(appendCheckpoint).toHaveBeenCalledWith(db, expect.objectContaining({

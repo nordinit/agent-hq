@@ -14,6 +14,7 @@ import type { RuntimeAbortResult } from './types';
 
 interface ActiveLocalExecutionRow {
   id: number;
+  tenant_id: number;
   instance_id: number;
   runtime_type: string;
   state: string;
@@ -346,7 +347,7 @@ export async function reconcileRuntimeExecutions(
   summary.available = true;
 
   const rows = await db.all<ActiveLocalExecutionRow>(`
-    SELECT re.id, re.instance_id, re.runtime_type, re.state, re.opaque_handle,
+    SELECT re.id, re.tenant_id, re.instance_id, re.runtime_type, re.state, re.opaque_handle,
            ji.runtime_ended_at, ji.runtime_end_success, ji.runtime_end_error,
            ji.status AS job_status, ji.session_key, ji.run_id
     FROM runtime_executions re
@@ -356,7 +357,7 @@ export async function reconcileRuntimeExecutions(
     ORDER BY re.id
   `);
   const terminalRows = await db.all<TerminalLocalExecutionRow>(`
-    SELECT re.id, re.instance_id, re.runtime_type, re.state, re.opaque_handle,
+    SELECT re.id, re.tenant_id, re.instance_id, re.runtime_type, re.state, re.opaque_handle,
            re.terminal_reason, re.terminal_error, re.terminal_metadata, re.ended_at,
            ji.runtime_ended_at, ji.runtime_end_success, ji.runtime_end_error,
            ji.status AS job_status, ji.session_key, ji.run_id
@@ -569,6 +570,7 @@ export async function reconcileRuntimeExecutions(
         const state = projectedExecutionState(row);
         const result = await terminalRuntimeExecution(db, {
           instanceId: Number(row.instance_id),
+          tenantId: Number(row.tenant_id),
           state,
           reason: 'job_runtime_projection_terminal',
           error: row.runtime_end_error,
@@ -667,6 +669,7 @@ export async function reconcileRuntimeExecutions(
           });
           const result = await terminalRuntimeExecution(db, {
             instanceId: Number(row.instance_id),
+            tenantId: Number(row.tenant_id),
             state,
             reason: 'job_runtime_projection_terminal',
             error: currentProjection.runtime_end_error,
@@ -704,6 +707,7 @@ export async function reconcileRuntimeExecutions(
       }
       const result = await terminalRuntimeExecution(db, {
         instanceId: Number(row.instance_id),
+        tenantId: Number(row.tenant_id),
         state: 'lost',
         reason: 'local_process_missing_after_restart',
         error,

@@ -3,15 +3,11 @@ import { setupTestDb, teardownTestDb } from '../db/testDb';
 import type { Db } from '../db/adapter/types';
 import { ensureProjectBacklogSprint } from './starterSetup';
 
-// The tenant is created explicitly rather than read back from initSchema's seeding: the PostgreSQL
-// fixture carries DDL only and is truncated between tests, so there is no seeded default tenant to
-// find. A fixed id keeps the project/sprint/agent foreign keys below satisfiable on both engines.
+// A fixed explicit tenant keeps the project/sprint/agent foreign keys below deterministic.
 const TENANT_ID = 9000;
 
 async function seedTenant(db: Db): Promise<number> {
-  // is_default = 0 deliberately: SQLite and PostgreSQL both carry a unique partial index over
-  // is_default = 1, and on SQLite initSchema has already seeded the default tenant. Nothing in
-  // starter setup looks at is_default, so an ordinary tenant is the honest fixture.
+  // Nothing in starter setup needs the tenant to be the selected default.
   await db.run(`
     INSERT INTO tenants (id, name, slug, is_default)
     VALUES (?, 'Starter Setup Test', 'starter-setup-test', 0)
@@ -24,12 +20,12 @@ describe('starter workspace setup', () => {
   beforeEach(async () => { await setupTestDb(); });
   afterEach(async () => { await teardownTestDb(); });
 
-  it('seeds workflow statuses but never infers routing rules', async () => {
+  it('creates the backlog workflow without implicitly creating configuration', async () => {
     const db = getDb();
     const tenantId = await seedTenant(db);
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md, created_at)
-      VALUES (990, ?, 'Default Project', '', '', datetime('now'))
+      VALUES (990, ?, 'Default Project', '', '', CURRENT_TIMESTAMP)
     `, tenantId);
     await db.run(`
       INSERT INTO agents (tenant_id, project_id, name, role, job_title, session_key, workspace_path, status)
@@ -47,8 +43,8 @@ describe('starter workspace setup', () => {
       `SELECT COUNT(*) AS n FROM sprint_task_routing_rules WHERE sprint_id = ?`, sprintId,
     ) as { n: number | string }).n);
 
-    // Statuses come from the declared workflow definition; routing does not.
-    expect(statusCount).toBeGreaterThan(0);
+    // Configuration is install-owned. Creating a project backlog must not seed or repair it.
+    expect(statusCount).toBe(0);
     expect(ruleCount).toBe(0);
   });
 
@@ -57,7 +53,7 @@ describe('starter workspace setup', () => {
     const tenantId = await seedTenant(db);
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md, created_at)
-      VALUES (991, ?, 'Agency', '', '', datetime('now'))
+      VALUES (991, ?, 'Agency', '', '', CURRENT_TIMESTAMP)
     `, tenantId);
     // "Business Development" contains the substring "development". Role text must never be
     // used to infer who implements work — this agent is in sales and cannot write code.

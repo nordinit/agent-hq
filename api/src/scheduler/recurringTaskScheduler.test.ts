@@ -23,11 +23,11 @@ describe('recurring task scheduler', () => {
     const db = getDb();
     await db.run(`
       INSERT INTO projects (id, name, description, context_md, created_at)
-      VALUES (613, 'Recurring Scheduler', '', '', datetime('now'))
+      VALUES (613, 'Recurring Scheduler', '', '', CURRENT_TIMESTAMP)
     `);
     await db.run(`
       INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
-      VALUES (6131, 613, 'Fixed Sprint', '', 'dev', ?, 'time', '2w', datetime('now'))
+      VALUES (6131, 613, 'Fixed Sprint', '', 'dev', ?, 'time', '2w', CURRENT_TIMESTAMP)
     `, status);
     await db.run(`
       INSERT INTO agents (id, name, role, session_key)

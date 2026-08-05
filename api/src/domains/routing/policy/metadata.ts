@@ -1,7 +1,7 @@
 import { RELEASE_TASK_STATUSES, DEFAULT_TERMINAL_TASK_STATUS_SEEDS } from '../../../lib/taskStatuses';
 import type { PolicyRequirementSeed, PolicyTransitionSeed, SprintSeedRow, StarterSprintType } from './types';
 import { type Db } from "../../../db/adapter/types";
-import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../../db/introspection";
+import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../../db/introspection";
 
 const DEV_WORKFLOW_STATUSES = RELEASE_TASK_STATUSES.filter(status => status !== 'qa_pass');
 const GENERIC_WORKFLOW_STATUSES = ['todo', 'ready', 'in_progress', 'review', 'done'] as const;
@@ -44,42 +44,6 @@ export function canonicalTaskStatusEmoji(status: string): string | null {
 }
 
 export async function ensureRoutingMetadata(db: Db): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS task_statuses (
-      name                TEXT PRIMARY KEY,
-      label               TEXT NOT NULL,
-      color               TEXT NOT NULL DEFAULT 'slate',
-      terminal            INTEGER NOT NULL DEFAULT 0,
-      is_system           INTEGER NOT NULL DEFAULT 0,
-      allowed_transitions TEXT NOT NULL DEFAULT '[]'
-    );
-
-    CREATE TABLE IF NOT EXISTS routing_transitions (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id   INTEGER REFERENCES projects(id) ON DELETE CASCADE,
-      from_status  TEXT NOT NULL,
-      outcome      TEXT NOT NULL,
-      to_status    TEXT NOT NULL,
-      enabled      INTEGER NOT NULL DEFAULT 1,
-      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_routing_transitions_project ON routing_transitions(project_id);
-    CREATE INDEX IF NOT EXISTS idx_routing_transitions_from ON routing_transitions(from_status, outcome);
-
-    CREATE TABLE IF NOT EXISTS sprint_task_transition_requirement_tombstones (
-      sprint_id          INTEGER NOT NULL REFERENCES sprints(id) ON DELETE CASCADE,
-      task_type_key      TEXT NOT NULL DEFAULT '',
-      outcome            TEXT NOT NULL,
-      field_name         TEXT NOT NULL,
-      requirement_type   TEXT NOT NULL,
-      match_field_key    TEXT NOT NULL DEFAULT '',
-      deleted_at         TEXT NOT NULL DEFAULT (datetime('now')),
-      PRIMARY KEY (sprint_id, task_type_key, outcome, field_name, requirement_type, match_field_key)
-    );
-    CREATE INDEX IF NOT EXISTS idx_sprint_requirement_tombstones_sprint
-      ON sprint_task_transition_requirement_tombstones(sprint_id);
-  `);
-
   const statuses: Array<{ name: string; label: string; color: string; terminal: number; is_system: number; allowed_transitions: string[] }> = [
     { name: 'todo', label: 'To Do', color: 'slate', terminal: 0, is_system: 1, allowed_transitions: ['ready', 'cancelled'] },
     { name: 'ready', label: 'Ready', color: 'blue', terminal: 0, is_system: 1, allowed_transitions: ['in_progress', 'cancelled'] },
@@ -127,18 +91,6 @@ export async function ensureRoutingMetadata(db: Db): Promise<void> {
 
   await removeQaPassFromDevelopmentStatusMetadata(db);
   await normalizeQaPassDevelopmentTransitions(db);
-
-  try { await db.exec(`ALTER TABLE routing_transitions ADD COLUMN task_type TEXT`); } catch { /* exists */ }
-  try { await db.exec(`ALTER TABLE routing_transitions ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`); } catch { /* exists */ }
-  try {
-    await db.exec(`ALTER TABLE routing_transitions ADD COLUMN is_protected INTEGER NOT NULL DEFAULT 0`);
-  } catch { /* exists */ }
-  try {
-    await db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_routing_transitions_type
-        ON routing_transitions(task_type, from_status, outcome);
-    `);
-  } catch { /* exists */ }
 
   await db.run(`
     UPDATE routing_transitions
@@ -375,7 +327,7 @@ async function removeQaPassFromDevelopmentStatusMetadata(db: Db): Promise<void> 
           .map(status => status === 'qa_pass' ? 'ready_to_merge' : status);
         await db.run(`
           UPDATE sprint_type_task_statuses
-          SET allowed_transitions_json = ?, updated_at = datetime('now')
+          SET allowed_transitions_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
           WHERE id = ?
         `, JSON.stringify([...new Set(next)]), row.id);
       }
@@ -399,7 +351,7 @@ async function removeQaPassFromDevelopmentStatusMetadata(db: Db): Promise<void> 
           .filter(status => status !== 'qa_pass');
         await db.run(`
           UPDATE sprint_task_statuses
-          SET allowed_transitions_json = ?, updated_at = datetime('now')
+          SET allowed_transitions_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
           WHERE id = ?
         `, JSON.stringify([...new Set(next)]), row.id);
       }
@@ -449,7 +401,7 @@ async function normalizeQaPassDevelopmentTransitions(db: Db): Promise<void> {
           : `0`;
       await db.run(`
         UPDATE sprint_task_transitions
-        SET to_status = 'ready_to_merge', updated_at = datetime('now')
+        SET to_status = 'ready_to_merge', updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE from_status = 'review'
           AND outcome = 'qa_pass'
           AND to_status = 'qa_pass'
@@ -457,7 +409,7 @@ async function normalizeQaPassDevelopmentTransitions(db: Db): Promise<void> {
       `);
       await db.run(`
         UPDATE sprint_task_transitions
-        SET enabled = 0, updated_at = datetime('now')
+        SET enabled = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE from_status = 'qa_pass'
           AND (${scopeSql})
       `);
@@ -530,7 +482,7 @@ export async function markSprintTaskPolicySeeded(db: Db, sprintId: number): Prom
   if (!await tableHasColumn(db, 'sprints', 'task_policy_seeded_at')) return;
   await db.run(`
     UPDATE sprints
-    SET task_policy_seeded_at = COALESCE(task_policy_seeded_at, datetime('now'))
+    SET task_policy_seeded_at = COALESCE(task_policy_seeded_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     WHERE id = ?
   `, sprintId);
 }
@@ -553,7 +505,7 @@ export async function markSprintTypeStatusSeeded(db: Db, sprintType: string, ten
   const tenant = await sprintTypeTenantPredicate(db, 'sprint_types', tenantId);
   await db.run(`
     UPDATE sprint_types
-    SET status_seeded_at = COALESCE(status_seeded_at, datetime('now'))
+    SET status_seeded_at = COALESCE(status_seeded_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     WHERE key = ?
       ${tenant.sql}
   `, sprintType, ...tenant.params);

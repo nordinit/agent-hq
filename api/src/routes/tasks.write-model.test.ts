@@ -4,6 +4,7 @@ import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import * as dispatchTrigger from '../services/dispatchTrigger';
 import tasksRouter from './tasks';
+import { createTaskRecord, updateTaskRecord } from '../domains/tasks/writeModel';
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -25,15 +26,7 @@ async function stopServer(server: Server): Promise<void> {
 
 const DEFAULT_TENANT_ID = 1;
 
-/**
- * initSchema() does three jobs at once — create the schema, migrate it, and seed the starter
- * workflow catalogue — and this file leaned on all three. The PostgreSQL fixture carries DDL only
- * and truncates between tests, so the seeded rows the tasks router reads have to be inserted here.
- *
- * Each row is guarded by a SELECT rather than written with INSERT OR IGNORE, because on SQLite
- * initSchema has already seeded it and sprint_type_relationship_types has no unique index there —
- * OR IGNORE would quietly duplicate the row instead of skipping it.
- */
+/** Installs the minimal workflow catalogue read by this suite's task mutations. */
 async function ensureRow(
   existsSql: string,
   existsParams: unknown[],
@@ -50,6 +43,11 @@ async function seedWorkflowCatalog(): Promise<void> {
     `SELECT id FROM tenants WHERE id = ?`, [DEFAULT_TENANT_ID],
     `INSERT INTO tenants (id, name, slug, is_default) VALUES (?, 'Agent HQ', 'agent-hq', 1)`, [DEFAULT_TENANT_ID],
   );
+  await getDb().run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+  `, String(DEFAULT_TENANT_ID), String(DEFAULT_TENANT_ID));
 
   for (const [key, name] of [['generic', 'Generic'], ['dev', 'Dev']]) {
     await ensureRow(
@@ -104,22 +102,22 @@ async function seedFixture(): Promise<void> {
   const db = getDb();
   await seedWorkflowCatalog();
 
-  await db.run(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`);
-  await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Backend Domain Refactor', '', 'generic', 'active')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (86, 1, 'Agent HQ', '', '')`);
+  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (42, 1, 86, 'Backend Domain Refactor', '', 'generic', 'active')`);
   await db.run(`
-    INSERT INTO agents (id, name, role, session_key, workspace_path, status, preferred_provider)
-    VALUES (7, 'Cinder', 'Backend Engineer', 'agent:cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
+    INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
+    VALUES (7, 1, 86, 'Cinder', 'Backend Engineer', 'agent:cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
   `);
   await db.run(`
-    INSERT INTO tasks (id, title, description, status, priority, project_id, sprint_id, agent_id, task_type, custom_fields_json)
+    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, sprint_id, agent_id, task_type, custom_fields_json)
     VALUES
-      (101, 'Existing blocker', '', 'todo', 'medium', 86, 42, 7, 'backend', '{}'),
-      (102, 'Editable task', '', 'todo', 'medium', 86, 42, 7, 'backend', '{}'),
-      (103, 'Failed task', '', 'failed', 'medium', 86, 42, 7, 'backend', '{}'),
-      (104, 'Prior origin task', '', 'done', 'medium', 86, 42, 7, 'backend', '{}')
+      (101, 1, 'Existing blocker', '', 'todo', 'medium', 86, 42, 7, 'backend', '{}'),
+      (102, 1, 'Editable task', '', 'todo', 'medium', 86, 42, 7, 'backend', '{}'),
+      (103, 1, 'Failed task', '', 'failed', 'medium', 86, 42, 7, 'backend', '{}'),
+      (104, 1, 'Prior origin task', '', 'done', 'medium', 86, 42, 7, 'backend', '{}')
   `);
   await db.run(`UPDATE tasks SET origin_task_id = 104, defect_type = 'qa_miss' WHERE id = 102`);
-  await db.run(`INSERT INTO task_outcome_metrics (task_id, spawned_defects) VALUES (104, 1)`);
+  await db.run(`INSERT INTO task_outcome_metrics (tenant_id, task_id, spawned_defects) VALUES (1, 104, 1)`);
   await db.run(`UPDATE tasks SET previous_status = 'ready' WHERE id = 103`);
 }
 
@@ -312,7 +310,7 @@ describe('tasks route write-model handoff', () => {
       INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
     `);
-    await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (43, 86, 'Construction Workflow', '', 'construction', 'active')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -342,7 +340,7 @@ describe('tasks route write-model handoff', () => {
       INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
     `);
-    await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (43, 86, 'Construction Workflow', '', 'construction', 'active')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -370,7 +368,7 @@ describe('tasks route write-model handoff', () => {
       INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
     `);
-    await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (43, 86, 'Construction Workflow', '', 'construction', 'active')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',
@@ -543,6 +541,56 @@ describe('tasks route write-model handoff', () => {
       WHERE source_task_id = 102 AND target_task_id = 101 AND relationship_type_key = 'defect_of'
     `);
     expect(clearedRelationship).toBeUndefined();
+  });
+
+  it('owns created and resynchronized defect metrics with each non-default origin task tenant', async () => {
+    const db = getDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Workspace Two', 'workspace-two', 0)`);
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (287, 2, 'Workspace Two Project')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status) VALUES (242, 2, 287, 'Workspace Two Workflow', 'generic', 'active')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key) VALUES (27, 2, 287, 'Workspace Two Agent', 'agent:workspace-two')`);
+    await db.run(`
+      INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, title, status, task_type)
+      VALUES
+        (201, 2, 287, 242, 27, 27, 'First origin', 'done', 'backend'),
+        (202, 2, 287, 242, 27, 27, 'Second origin', 'done', 'backend')
+    `);
+
+    const created = await createTaskRecord(db, {
+      title: 'Workspace Two defect',
+      status: 'todo',
+      project_id: 287,
+      sprint_id: 242,
+      agent_id: 27,
+      task_type: 'backend',
+      origin_task_id: 201,
+      defect_type: 'regression',
+      tenant_id: 2,
+    }, 'tenant-test');
+
+    expect(await db.get(`SELECT tenant_id, spawned_defects FROM task_outcome_metrics WHERE task_id = 201`)).toEqual({
+      tenant_id: 2,
+      spawned_defects: 1,
+    });
+
+    await updateTaskRecord(db, Number(created.id), {
+      origin_task_id: 202,
+      defect_type: 'qa_miss',
+    }, {
+      changedBy: 'tenant-test',
+      authorityBy: 'tenant-test',
+      isManualOverride: false,
+    });
+
+    expect(await db.all(`
+      SELECT task_id, tenant_id, spawned_defects
+      FROM task_outcome_metrics
+      WHERE task_id IN (201, 202)
+      ORDER BY task_id
+    `)).toEqual([
+      { task_id: 201, tenant_id: 2, spawned_defects: 0 },
+      { task_id: 202, tenant_id: 2, spawned_defects: 1 },
+    ]);
   });
 
   it('rejects self-referential origin task relationships', async () => {

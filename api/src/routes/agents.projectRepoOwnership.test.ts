@@ -1,9 +1,10 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import agentsRouter from './agents';
 import projectsRouter from './projects';
 
@@ -11,101 +12,17 @@ let tempDir: string;
 let dbPath: string;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-project-repo-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
-  process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  await db.exec(`
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER DEFAULT 1,
-      name TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      context_md TEXT NOT NULL DEFAULT '',
-      repo_path TEXT,
-      repo_url TEXT,
-      repo_access_mode TEXT,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
 
-    CREATE TABLE app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
 
-    CREATE TABLE sprints (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER DEFAULT 1,
-      project_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      goal TEXT NOT NULL DEFAULT '',
-      sprint_type TEXT NOT NULL DEFAULT 'generic',
-      status TEXT NOT NULL DEFAULT 'active',
-      length_kind TEXT NOT NULL DEFAULT 'time',
-      length_value TEXT NOT NULL DEFAULT ''
-    );
-
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER DEFAULT 1,
-      name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT '',
-      session_key TEXT NOT NULL UNIQUE,
-      workspace_path TEXT NOT NULL DEFAULT '',
-      repo_path TEXT,
-      repo_url TEXT,
-      repo_access_mode TEXT,
-      status TEXT NOT NULL DEFAULT 'idle',
-      openclaw_agent_id TEXT,
-      model TEXT,
-      runtime_type TEXT NOT NULL DEFAULT 'webhook',
-      runtime_config TEXT,
-      hooks_url TEXT,
-      hooks_auth_header TEXT,
-      preferred_provider TEXT,
-      os_user TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      github_identity_id INTEGER,
-      job_title TEXT NOT NULL DEFAULT '',
-      schedule TEXT NOT NULL DEFAULT '',
-      job_instructions TEXT NOT NULL DEFAULT '',
-      skill_names TEXT NOT NULL DEFAULT '[]',
-      timeout_seconds INTEGER NOT NULL DEFAULT 900,
-      startup_grace_seconds INTEGER,
-      heartbeat_stale_seconds INTEGER,
-      stall_threshold_min INTEGER NOT NULL DEFAULT 30,
-      max_retries INTEGER NOT NULL DEFAULT 3,
-      sort_rules TEXT NOT NULL DEFAULT '[]',
-      project_id INTEGER,
-      sprint_id INTEGER,
-      system_role TEXT,
-      last_active TEXT,
-      job_instructions_updated_at TEXT,
-      instructions_version INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE provider_config (
-      slug TEXT PRIMARY KEY,
-      status TEXT NOT NULL
-    );
-
-    CREATE TABLE project_audit_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
-      entity_type TEXT NOT NULL,
-      entity_id INTEGER NOT NULL,
-      action TEXT NOT NULL,
-      actor TEXT NOT NULL,
-      changes TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  await db.run(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`, 'openai', 'connected');
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(`INSERT INTO provider_config (tenant_id, slug, status) VALUES (1, ?, ?)`, 'openai', 'connected');
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -164,8 +81,8 @@ describe('agent repo ownership enforcement', () => {
   it('rejects project-level repo fields on project update and preserves legacy values', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
+      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -198,17 +115,16 @@ describe('agent repo ownership enforcement', () => {
     }
   });
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('rejects repo fields on agent create instead of mutating the project', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
+      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -254,12 +170,12 @@ describe('agent repo ownership enforcement', () => {
   it('rejects repo fields on agent update and preserves the project repo config', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
+      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
     `);
     await db.run(`
-      INSERT INTO agents (id, name, role, session_key, runtime_type, project_id)
-      VALUES (94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 86)
+      INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, preferred_provider, project_id)
+      VALUES (94, 1, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 'openai', 86)
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -297,8 +213,8 @@ describe('agent repo ownership enforcement', () => {
   it('creates agents as project-scoped even when legacy sprint_id is submitted', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
+      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -334,12 +250,16 @@ describe('agent repo ownership enforcement', () => {
   it('ignores legacy sprint_id on agent update and hides it from responses', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
+      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
     `);
     await db.run(`
-      INSERT INTO agents (id, name, role, session_key, runtime_type, project_id, sprint_id)
-      VALUES (95, 'Legacy Sprint Agent', 'Backend Engineer', 'agent:legacy-sprint:main', 'webhook', 86, 12)
+      INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+      VALUES (12, 1, 86, 'Legacy Workflow', 'generic')
+    `);
+    await db.run(`
+      INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, preferred_provider, project_id, sprint_id)
+      VALUES (95, 1, 'Legacy Sprint Agent', 'Backend Engineer', 'agent:legacy-sprint:main', 'webhook', 'openai', 86, 12)
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -371,12 +291,12 @@ describe('agent repo ownership enforcement', () => {
   it('keeps project repo config read-only on agent reads while preserving legacy agent fallback metadata', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO projects (id, name, repo_path, repo_url, repo_access_mode)
-      VALUES (86, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
+      INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
+      VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
     `);
     await db.run(`
-      INSERT INTO agents (id, name, role, session_key, runtime_type, project_id, repo_url, repo_access_mode)
-      VALUES (94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 86, 'git@github.com:legacy/fallback.git', 'clone')
+      INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, preferred_provider, project_id, repo_url, repo_access_mode)
+      VALUES (94, 1, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 'openai', 86, 'git@github.com:legacy/fallback.git', 'clone')
     `);
 
     const { server, baseUrl } = await startTestServer();

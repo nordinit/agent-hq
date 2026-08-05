@@ -1,10 +1,7 @@
 import express from 'express';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import {
   authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
@@ -13,13 +10,6 @@ import {
 } from '../lib/mcpApiAuth';
 import { handleJsonRequestErrors } from '../lib/jsonRequestErrors';
 import tasksRouter from './tasks';
-
-const ORIGINAL_DB_PATH = process.env.AGENT_HQ_DB_PATH;
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value == null) delete process.env[name];
-  else process.env[name] = value;
-}
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -53,11 +43,21 @@ function authHeaders(apiKey: string): Record<string, string> {
 async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; otherProjectKey: string; otherTenantKey: string }> {
   const db = getDb();
 
-  await db.run(`INSERT OR IGNORE INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`, 1, 'Default Tenant', 'default', 1, 2, 'Other Tenant', 'other', 0);
+  await db.run(`
+    INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)
+    ON CONFLICT (id) DO NOTHING
+  `, 1, 'Default Tenant', 'default', 1, 2, 'Other Tenant', 'other', 0);
   await db.run(`
     INSERT INTO app_settings (key, value)
     VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `);
+  await db.run(`
+    INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
+    VALUES
+      ('in_progress', 'In Progress', 'yellow', 0, 1, '[]'),
+      ('review', 'Review', 'purple', 0, 1, '[]'),
+      ('done', 'Done', 'green', 1, 1, '[]')
   `);
 
   await db.run(`
@@ -87,7 +87,7 @@ async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; othe
       (?, ?, ?, '', ?, 'medium', ?, ?, ?, ?, ?, ?),
       (?, ?, ?, '', ?, 'medium', ?, ?, ?, ?, ?, ?),
       (?, ?, ?, '', ?, 'medium', ?, ?, ?, ?, ?, ?)
-  `, 9101, 1, 'Follow up Acme lead', 'in_progress', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 10:00:00', 9102, 1, 'Completed Acme lead', 'done', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 09:00:00', 9103, 1, 'Other project Acme lead', 'in_progress', 100, 502, 8, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 11:00:00', 9104, 2, 'Other tenant Acme lead', 'in_progress', 200, 601, 9, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc' }), '2026-07-20 12:00:00', 9105, 1, 'Different Agency lead', 'review', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-999', external_project_id: 'ext-999' }), '2026-07-20 13:00:00');
+  `, 9101, 1, 'Follow up Acme lead', 'in_progress', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', unique_string: 'exact-string', external_project_id: 'ext-abc', lead_score: 42, approved: true, optional_note: null, 'source.id': 'dot-123' }), '2026-07-20 10:00:00', 9102, 1, 'Completed Acme lead', 'done', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc', lead_score: 7, approved: false, optional_note: 'present', 'source.id': 'dot-other' }), '2026-07-20 09:00:00', 9103, 1, 'Other project Acme lead', 'in_progress', 100, 502, 8, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc', lead_score: 42, approved: true, optional_note: null, 'source.id': 'dot-123' }), '2026-07-20 11:00:00', 9104, 2, 'Other tenant Acme lead', 'in_progress', 200, 601, 9, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-123', external_project_id: 'ext-abc', lead_score: 42, approved: true, optional_note: null, 'source.id': 'dot-123' }), '2026-07-20 12:00:00', 9105, 1, 'Different Agency lead', 'review', 99, 501, 7, 'lead_generation', JSON.stringify({ crm_lead_id: 'crm-999', external_project_id: 'ext-999', lead_score: 7, approved: false, optional_note: 'present', 'source.id': 'dot-other' }), '2026-07-20 13:00:00');
 
   const agencyKey = (await issueMcpApiKeyForAgent(db, 7)).apiKey;
   const otherProjectKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
@@ -103,7 +103,6 @@ async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; othe
 }
 
 describe('POST /api/v1/tasks/project-search', () => {
-  let tempDir: string;
   let server: Server | undefined;
   let baseUrl: string;
   let agencyKey: string;
@@ -111,19 +110,14 @@ describe('POST /api/v1/tasks/project-search', () => {
   let otherTenantKey: string;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-project-search-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
-    closeDb();
-    await initSchema();
+    await setupTestDb();
     ({ agencyKey, otherProjectKey, otherTenantKey } = await seedProjectTaskSearchFixture());
     ({ server, baseUrl } = await startServer());
   });
 
   afterEach(async () => {
     await stopServer(server);
-    closeDb();
-    restoreEnv('AGENT_HQ_DB_PATH', ORIGINAL_DB_PATH);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await teardownTestDb();
   });
 
   it('finds an active same-project task by exact crm_lead_id with minimal summaries', async () => {
@@ -176,6 +170,30 @@ describe('POST /api/v1/tasks/project-search', () => {
     expect(body.limit).toBe(1);
     expect(body.hasMore).toBe(false);
     expect(body.tasks.map((task) => task.id)).toEqual([9101]);
+  });
+
+  it.each([
+    ['string', 'unique_string', 'exact-string'],
+    ['numeric', 'lead_score', 42],
+    ['boolean', 'approved', true],
+    ['null', 'optional_note', null],
+    ['literal dotted key', 'source.id', 'dot-123'],
+  ])('matches %s custom-field values exactly', async (_label, key, value) => {
+    const response = await fetch(`${baseUrl}/api/v1/tasks/project-search`, {
+      method: 'POST',
+      headers: authHeaders(agencyKey),
+      body: JSON.stringify({ custom_fields: { [key]: value } }),
+    });
+    const body = await response.json() as { tasks: Array<Record<string, unknown>>; total: number };
+
+    expect(response.status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.tasks).toEqual([
+      expect.objectContaining({
+        id: 9101,
+        matched_custom_fields: { [key]: value },
+      }),
+    ]);
   });
 
   it('does not reveal another project or tenant when matching filters exist elsewhere', async () => {

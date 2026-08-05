@@ -223,8 +223,8 @@ export async function handleOpenClawRuntimeEnd(
 
     const eventId = `oc-turn-end-${instanceId}`;
     await db.run(`
-        INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-        SELECT ?, agent_id, id, 'system', ?, ?, 'turn_end', ?
+        INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+        SELECT ?, tenant_id, agent_id, id, 'system', ?, ?, 'turn_end', ?
         FROM job_instances
         WHERE id = ?
         ON CONFLICT(id) DO UPDATE SET
@@ -290,7 +290,7 @@ export async function handleOpenClawRuntimeEnd(
 
     await db.run(`
         UPDATE job_instances
-        SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+        SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
         WHERE id = ?
       `, JSON.stringify(normalizedEvent), instanceId);
 

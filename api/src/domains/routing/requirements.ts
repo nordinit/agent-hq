@@ -1,6 +1,6 @@
 import { isValidTaskType } from '../../lib/taskTypes';
 import { getGateRequirementFieldDefinitions, resolveTaskFieldSchemaForSprint } from '../sprint-definitions/config';
-import { seedSprintTaskPolicy, rememberDeletedSprintTaskTransitionRequirement } from './policy/seed';
+import { rememberDeletedSprintTaskTransitionRequirement } from './policy/seed';
 import {
   annotateRequirementScope,
   normalizeSprintTypeKey,
@@ -123,24 +123,22 @@ export async function createTransitionRequirement(db: Db, input: Record<string, 
       if (!sprintId) throw withStatus('sprint_id is required', 400);
       const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
       await requireSprint(db, sprintId, tenantId);
-      await seedSprintTaskPolicy(db, sprintId);
       await requireTransitionRequirementFieldsForSprint(db, sprintId, task_type ?? null, field_name, match_field ?? null, requirement_type);
       const tenant = await tenantInsertFragment(db, 'sprint_task_transition_requirements', tenantId);
       const result = await db.run(`
         INSERT INTO sprint_task_transition_requirements (${tenant.columns}sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at)
-        VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `, ...tenant.params, sprintId, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
       const readTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', tenantId);
       return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${readTenant.sql}`, result.lastInsertId, sprintId, ...readTenant.params);
     }
 
     const scope = await requireTransitionRequirementScope(db, input);
-    if (scope.sprintId != null) await seedSprintTaskPolicy(db, scope.sprintId);
     await requireTransitionRequirementFieldsForScope(db, { sprintId: scope.sprintId, sprintType: scope.sprintType }, task_type ?? null, field_name, match_field ?? null, requirement_type);
     const tenant = await tenantInsertFragment(db, 'sprint_task_transition_requirements', scope.tenantId);
     const result = await db.run(`
       INSERT INTO sprint_task_transition_requirements (${tenant.columns}sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at)
-      VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     `, ...tenant.params, scope.sprintId, scope.projectId, scope.sprintType, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
     const readTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
     return await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ?${readTenant.sql}`, result.lastInsertId, ...readTenant.params);
@@ -158,7 +156,6 @@ export async function updateTransitionRequirement(db: Db, input: Record<string, 
       if (!sprintId) throw withStatus('sprint_id is required', 400);
       const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
       await requireSprint(db, sprintId, tenantId);
-      await seedSprintTaskPolicy(db, sprintId);
       const tenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', tenantId);
       const existing = await db.get(`SELECT * FROM sprint_task_transition_requirements WHERE id = ? AND sprint_id = ?${tenant.sql}`, id, sprintId, ...tenant.params) as TransitionRequirementRecord | undefined;
       if (!existing) throw withStatus('Transition requirement not found', 404);
@@ -166,14 +163,13 @@ export async function updateTransitionRequirement(db: Db, input: Record<string, 
     }
 
     const scope = await requireTransitionRequirementScope(db, input);
-    if (scope.sprintId != null) await seedSprintTaskPolicy(db, scope.sprintId);
     const tenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'req', scope.tenantId);
     const existing = await db.get(`
       SELECT req.*
       FROM sprint_task_transition_requirements req
       LEFT JOIN sprints s ON s.id = req.sprint_id
       WHERE req.id = ?
-        AND ((req.sprint_id IS NULL AND ? IS NULL) OR req.sprint_id = ?)
+        AND ((req.sprint_id IS NULL AND ?::text IS NULL) OR req.sprint_id = ?)
         AND COALESCE(req.project_id, s.project_id) = ?
         AND COALESCE(req.sprint_type, s.sprint_type) = ?
         ${tenant.sql}
@@ -221,7 +217,7 @@ async function updateScopedTransitionRequirementRow(
       message = ?,
       enabled = ?,
       priority = ?,
-      updated_at = datetime('now')
+      updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     ${whereClause}
   `, nextTaskType, outcome ?? existing.outcome, nextFieldName, nextRequirementType, nextMatchField, severity ?? existing.severity, message ?? existing.message, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, priority ?? existing.priority, ...whereParams);
   const readTenant = await tenantPredicateFor(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', scope.tenantId);
@@ -263,7 +259,7 @@ export async function deleteTransitionRequirement(db: Db, input: { id: unknown; 
       FROM sprint_task_transition_requirements req
       LEFT JOIN sprints s ON s.id = req.sprint_id
       WHERE req.id = ?
-        AND ((req.sprint_id IS NULL AND ? IS NULL) OR req.sprint_id = ?)
+        AND ((req.sprint_id IS NULL AND ?::text IS NULL) OR req.sprint_id = ?)
         AND COALESCE(req.project_id, s.project_id) = ?
         AND COALESCE(req.sprint_type, s.sprint_type) = ?
         ${tenant.sql}

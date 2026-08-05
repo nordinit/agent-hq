@@ -1,8 +1,7 @@
-import Database from 'better-sqlite3';
 import type { Request, Response } from 'express';
 
-import { SqliteAdapter } from '../db/adapter/SqliteAdapter';
 import type { Db } from '../db/adapter/types';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 
 let db: Db;
 
@@ -48,23 +47,14 @@ async function invokeStop(id: number): Promise<{ status: number; body: Record<st
 
 describe('PUT /api/v1/instances/:id/stop tenant boundary', () => {
   beforeEach(async () => {
-    db = new SqliteAdapter(new Database(':memory:'));
+    db = await setupTestDb();
     await db.exec(`
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER NOT NULL,
-        session_key TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT
-      );
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER NOT NULL,
-        agent_id INTEGER,
-        status TEXT NOT NULL
-      );
-      INSERT INTO agents (id, tenant_id, session_key, runtime_type, runtime_config)
-      VALUES (11, 1, 'agent:one', 'claude-code', '{}'), (22, 2, 'agent:two', 'claude-code', '{}');
+      INSERT INTO tenants (id, name, slug, is_default)
+      VALUES (1, 'Runtime One', 'runtime-one', 1), (2, 'Runtime Two', 'runtime-two', 0);
+      INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, runtime_config)
+      VALUES
+        (11, 1, 'Runtime One', 'test', 'agent:one', 'claude-code', '{}'),
+        (22, 2, 'Runtime Two', 'test', 'agent:two', 'claude-code', '{}');
       INSERT INTO job_instances (id, tenant_id, agent_id, status)
       VALUES (100, 1, 11, 'running'), (200, 2, 22, 'running');
     `);
@@ -90,7 +80,7 @@ describe('PUT /api/v1/instances/:id/stop tenant boundary', () => {
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('returns 404 for another tenant without invoking the stop domain', async () => {

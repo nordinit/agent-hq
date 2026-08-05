@@ -1,5 +1,5 @@
-import { getDb } from '../db/client';
-import { setupTestDb, teardownTestDb, usingPostgres } from '../db/testDb';
+import type { Db } from '../db/adapter/types';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import type { RuntimeBoundaryV1 } from './runtimeBoundary';
 import {
   appendRuntimeCheckpoint,
@@ -9,8 +9,6 @@ import {
   terminalRuntimeExecution,
   upsertRuntimeExecutionStart,
 } from './runtimeExecutionStore';
-
-const describePostgres = usingPostgres() ? describe : describe.skip;
 
 function boundary(): RuntimeBoundaryV1 {
   return {
@@ -67,10 +65,11 @@ function boundary(): RuntimeBoundaryV1 {
   };
 }
 
-describePostgres('runtime execution persistence', () => {
+describe('runtime execution persistence', () => {
+  let db: Db;
+
   beforeEach(async () => {
-    await setupTestDb();
-    const db = getDb();
+    db = await setupTestDb();
     clearRuntimeExecutionStoreAvailabilityCache(db);
     await db.run(`INSERT INTO tenants (id, name, slug) VALUES (1, 'Runtime Tests', 'runtime-tests')`);
     await db.run(`
@@ -88,7 +87,6 @@ describePostgres('runtime execution persistence', () => {
   });
 
   it('persists start, ordered checkpoints, heartbeat, interrupt and one terminal claim', async () => {
-    const db = getDb();
     const started = await upsertRuntimeExecutionStart(db, {
       boundary: boundary(),
       driver: 'claude-code',
@@ -97,6 +95,7 @@ describePostgres('runtime execution persistence', () => {
       launchSpec: {
         version: 1,
         command: 'claude',
+        executableFingerprint: 'sha256:test-claude-executable',
         args: ['--print', '-'],
         cwd: '/tmp/runtime-test/repo',
         envKeys: ['PATH'],
@@ -122,6 +121,18 @@ describePostgres('runtime execution persistence', () => {
       idempotent: false,
     });
 
+    await expect(heartbeatRuntimeExecution(db, {
+      instanceId: 4711,
+      tenantId: 2,
+      heartbeatAt: '2026-08-04 12:00:05',
+    })).resolves.toMatchObject({ status: 'not_found' });
+    await expect(terminalRuntimeExecution(db, {
+      instanceId: 4711,
+      tenantId: 2,
+      state: 'failed',
+      reason: 'cross-tenant update',
+    })).resolves.toMatchObject({ status: 'not_found' });
+
     const progress = await appendRuntimeCheckpoint(db, {
       executionId: started.executionId as number,
       kind: 'progress',
@@ -134,6 +145,7 @@ describePostgres('runtime execution persistence', () => {
 
     await heartbeatRuntimeExecution(db, {
       instanceId: 4711,
+      tenantId: 1,
       heartbeatAt: '2026-08-04 12:00:20',
       leaseOwner: 'api:test-host',
       leaseExpiresAt: '2026-08-04 12:01:20',
@@ -146,6 +158,7 @@ describePostgres('runtime execution persistence', () => {
     });
     const terminal = await terminalRuntimeExecution(db, {
       instanceId: 4711,
+      tenantId: 1,
       state: 'cancelled',
       reason: 'aborted',
       endedAt: '2026-08-04 12:00:31',
@@ -153,6 +166,7 @@ describePostgres('runtime execution persistence', () => {
     expect(terminal.status).toBe('persisted');
     await expect(terminalRuntimeExecution(db, {
       instanceId: 4711,
+      tenantId: 1,
       state: 'failed',
       reason: 'late duplicate',
     })).resolves.toMatchObject({ status: 'not_found' });
@@ -190,7 +204,6 @@ describePostgres('runtime execution persistence', () => {
   });
 
   it('serializes concurrent launch claims and preserves only the winning process handle', async () => {
-    const db = getDb();
     const common = {
       boundary: boundary(),
       driver: 'claude-code',
@@ -199,6 +212,7 @@ describePostgres('runtime execution persistence', () => {
       launchSpec: {
         version: 1 as const,
         command: 'claude',
+        executableFingerprint: 'sha256:test-claude-executable',
         args: ['--print', '-'],
         cwd: '/tmp/runtime-test/repo',
         envKeys: ['PATH'],

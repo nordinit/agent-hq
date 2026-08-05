@@ -168,8 +168,8 @@ router.post('/', async (req: Request, res: Response) => {
     if (existing) {
       await db.run(`
         UPDATE provider_connections
-        SET display_name = ?, status = 'connected', metadata = ?, last_validated_at = datetime('now'),
-            validation_error = NULL, updated_at = datetime('now')
+        SET display_name = ?, status = 'connected', metadata = ?, last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+            validation_error = NULL, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ? AND tenant_id = ?
       `, displayName || match.displayName, JSON.stringify(mergedMetadata), existing.id, tenantId);
       id = existing.id;
@@ -178,7 +178,7 @@ router.post('/', async (req: Request, res: Response) => {
         INSERT INTO provider_connections (
           tenant_id, provider_slug, auth_mode, runtime_type, external_ref, display_name,
           status, metadata, last_validated_at, validation_error
-        ) VALUES (?, ?, ?, ?, ?, ?, 'connected', ?, datetime('now'), NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'connected', ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), NULL)
       `, tenantId, provider, authMode, runtime, externalRef, displayName || match.displayName, JSON.stringify(mergedMetadata));
       id = Number(result.lastInsertId);
     }
@@ -232,7 +232,7 @@ router.post('/:id/validate', async (req: Request, res: Response) => {
     const validationError = match ? null : 'The runtime no longer reports this credential reference. Re-authenticate in the runtime.';
     await db.run(`
       UPDATE provider_connections
-      SET status = ?, last_validated_at = datetime('now'), validation_error = ?, updated_at = datetime('now')
+      SET status = ?, last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), validation_error = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ? AND tenant_id = ?
     `, status, validationError, row.id, tenantId);
     res.status(match ? 200 : 409).json({ ok: Boolean(match), status, error: validationError });

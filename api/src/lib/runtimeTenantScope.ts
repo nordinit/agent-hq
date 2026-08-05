@@ -30,36 +30,78 @@ export async function resolveRuntimeTenantId(
   db: Db,
   input: { taskId?: number | null; agentId?: number | null; projectId?: number | null; instanceId?: number | null },
 ): Promise<number | null> {
+  const candidates: Array<{ source: string; tenantId: number }> = [];
+  const addCandidate = (source: string, tenantId: number | null | undefined): void => {
+    if (tenantId != null) candidates.push({ source, tenantId });
+  };
+
   if (input.taskId != null && await hasTenantId(db, 'tasks')) {
     const row = await db.get(`SELECT tenant_id FROM tasks WHERE id = ? LIMIT 1`, input.taskId) as { tenant_id: number | null } | undefined;
-    if (row?.tenant_id != null) return row.tenant_id;
+    addCandidate(`task:${input.taskId}`, row?.tenant_id);
   }
 
   if (input.instanceId != null && await tableExists(db, 'job_instances')) {
+    const instanceTenantExpr = await hasTenantId(db, 'job_instances') ? 'ji.tenant_id' : 'NULL';
     const taskTenantExpr = await hasTenantId(db, 'tasks') ? 't.tenant_id' : 'NULL';
     const agentTenantExpr = await hasTenantId(db, 'agents') ? 'a.tenant_id' : 'NULL';
     const row = await db.get(`
-      SELECT COALESCE(${taskTenantExpr}, ${agentTenantExpr}) AS tenant_id
+      SELECT ${instanceTenantExpr} AS instance_tenant_id,
+             ${taskTenantExpr} AS task_tenant_id,
+             ${agentTenantExpr} AS agent_tenant_id
       FROM job_instances ji
       LEFT JOIN tasks t ON t.id = ji.task_id
       LEFT JOIN agents a ON a.id = ji.agent_id
       WHERE ji.id = ?
       LIMIT 1
-    `, input.instanceId) as { tenant_id: number | null } | undefined;
-    if (row?.tenant_id != null) return row.tenant_id;
+    `, input.instanceId) as {
+      instance_tenant_id: number | null;
+      task_tenant_id: number | null;
+      agent_tenant_id: number | null;
+    } | undefined;
+    addCandidate(`instance:${input.instanceId}`, row?.instance_tenant_id);
+    addCandidate(`instance-task:${input.instanceId}`, row?.task_tenant_id);
+    addCandidate(`instance-agent:${input.instanceId}`, row?.agent_tenant_id);
   }
 
   if (input.agentId != null && await hasTenantId(db, 'agents')) {
     const row = await db.get(`SELECT tenant_id FROM agents WHERE id = ? LIMIT 1`, input.agentId) as { tenant_id: number | null } | undefined;
-    if (row?.tenant_id != null) return row.tenant_id;
+    addCandidate(`agent:${input.agentId}`, row?.tenant_id);
   }
 
   if (input.projectId != null && await hasTenantId(db, 'projects')) {
     const row = await db.get(`SELECT tenant_id FROM projects WHERE id = ? LIMIT 1`, input.projectId) as { tenant_id: number | null } | undefined;
-    if (row?.tenant_id != null) return row.tenant_id;
+    addCandidate(`project:${input.projectId}`, row?.tenant_id);
   }
 
-  return null;
+  const tenantIds = [...new Set(candidates.map((candidate) => candidate.tenantId))];
+  if (tenantIds.length > 1) {
+    throw new Error(
+      `Conflicting runtime tenant ownership: ${candidates
+        .map((candidate) => `${candidate.source}=${candidate.tenantId}`)
+        .join(', ')}`,
+    );
+  }
+  return tenantIds[0] ?? null;
+}
+
+/**
+ * Resolve ownership for a runtime write without ever falling back to the active/default tenant.
+ * Every supplied parent is considered; conflicting parent ownership is an error rather than a
+ * precedence rule that could silently write data into the wrong tenant.
+ */
+export async function requireRuntimeTenantId(
+  db: Db,
+  input: { taskId?: number | null; agentId?: number | null; projectId?: number | null; instanceId?: number | null },
+): Promise<number> {
+  const tenantId = await resolveRuntimeTenantId(db, input);
+  if (tenantId == null) {
+    const refs = Object.entries(input)
+      .filter(([, value]) => value != null)
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join(', ');
+    throw new Error(`Runtime tenant ownership could not be resolved${refs ? ` (${refs})` : ''}`);
+  }
+  return tenantId;
 }
 
 export async function tenantInsertColumns(
@@ -69,6 +111,24 @@ export async function tenantInsertColumns(
 ): Promise<{ columnSql: string; valueSql: string; values: unknown[] }> {
   if (tenantId == null || !await hasTenantId(db, table)) return { columnSql: '', valueSql: '', values: [] };
   return { columnSql: 'tenant_id, ', valueSql: '?, ', values: [tenantId] };
+}
+
+/**
+ * Strict runtime ownership for migrated tables, while retaining narrow compatibility with unit
+ * fixtures that genuinely omit tenant_id. A real production table with tenant_id can never take
+ * the empty-column path: unresolved or conflicting parents throw before the INSERT is built.
+ */
+export async function runtimeTenantInsertColumns(
+  db: Db,
+  table: string,
+  input: { taskId?: number | null; agentId?: number | null; projectId?: number | null; instanceId?: number | null },
+): Promise<{ columnSql: string; valueSql: string; values: unknown[] }> {
+  if (!await hasTenantId(db, table)) return { columnSql: '', valueSql: '', values: [] };
+  return {
+    columnSql: 'tenant_id, ',
+    valueSql: '?, ',
+    values: [await requireRuntimeTenantId(db, input)],
+  };
 }
 
 /**
@@ -99,12 +159,34 @@ export async function insertRuntimeLog(
     message: string;
   },
 ): Promise<void> {
-  const tenantId = input.tenantId ?? await resolveRuntimeTenantId(db, {
-    taskId: input.taskId,
-    instanceId: input.instanceId,
-    agentId: input.agentId,
-    projectId: input.projectId,
-  });
+  const logHasTenantId = await hasTenantId(db, 'logs');
+  let tenantId: number | null = null;
+  if (logHasTenantId) {
+    const ownership = await resolveRuntimeTenantId(db, {
+      taskId: input.taskId,
+      instanceId: input.instanceId,
+      agentId: input.agentId,
+      projectId: input.projectId,
+    });
+    if (input.tenantId != null && ownership != null && input.tenantId !== ownership) {
+      throw new Error(
+        `Conflicting runtime tenant ownership: explicit=${input.tenantId}, resolved=${ownership}`,
+      );
+    }
+    tenantId = input.tenantId ?? ownership;
+    if (tenantId == null) {
+      const refs = Object.entries({
+        taskId: input.taskId,
+        instanceId: input.instanceId,
+        agentId: input.agentId,
+        projectId: input.projectId,
+      })
+        .filter(([, value]) => value != null)
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .join(', ');
+      throw new Error(`Runtime tenant ownership could not be resolved${refs ? ` (${refs})` : ''}`);
+    }
+  }
   const columns: string[] = [];
   const placeholders: string[] = [];
   const values: unknown[] = [];
@@ -118,7 +200,11 @@ export async function insertRuntimeLog(
   // unawaited call leaves columns/placeholders empty, producing `INSERT INTO logs () VALUES ()`.
   // They are awaited in sequence rather than via Promise.all so column order stays
   // deterministic and matches the values array.
-  await pushValue('tenant_id', tenantId);
+  if (logHasTenantId) {
+    columns.push('tenant_id');
+    placeholders.push('?');
+    values.push(tenantId);
+  }
   await pushValue('instance_id', input.instanceId ?? null);
   await pushValue('agent_id', input.agentId ?? null);
   await pushValue('job_title', input.jobTitle == null ? '' : String(input.jobTitle));

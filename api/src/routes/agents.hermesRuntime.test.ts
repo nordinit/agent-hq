@@ -1,9 +1,10 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import agentsRouter from './agents';
 
 let tempDir: string;
@@ -12,125 +13,19 @@ const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 const ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-hermes-runtime-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
-  process.env.AGENT_HQ_DB_PATH = dbPath;
   process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, 'openclaw.json');
   process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = '1';
 
   const db = getDb();
-  await db.exec(`
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      context_md TEXT NOT NULL DEFAULT '',
-      repo_path TEXT,
-      repo_url TEXT,
-      repo_access_mode TEXT
-    );
 
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT '',
-      session_key TEXT NOT NULL UNIQUE,
-      workspace_path TEXT NOT NULL DEFAULT '',
-      repo_path TEXT,
-      repo_url TEXT,
-      repo_access_mode TEXT,
-      status TEXT NOT NULL DEFAULT 'idle',
-      openclaw_agent_id TEXT,
-      model TEXT,
-      runtime_type TEXT NOT NULL DEFAULT 'webhook',
-      runtime_config TEXT,
-      hooks_url TEXT,
-      hooks_auth_header TEXT,
-      preferred_provider TEXT NOT NULL DEFAULT 'anthropic',
-      os_user TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      github_identity_id INTEGER,
-      job_title TEXT NOT NULL DEFAULT '',
-      schedule TEXT NOT NULL DEFAULT '',
-      job_instructions TEXT NOT NULL DEFAULT '',
-      skill_names TEXT NOT NULL DEFAULT '[]',
-      timeout_seconds INTEGER NOT NULL DEFAULT 900,
-      startup_grace_seconds INTEGER,
-      heartbeat_stale_seconds INTEGER,
-      stall_threshold_min INTEGER NOT NULL DEFAULT 30,
-      max_retries INTEGER NOT NULL DEFAULT 3,
-      sort_rules TEXT NOT NULL DEFAULT '[]',
-      project_id INTEGER,
-      system_role TEXT,
-      last_active TEXT,
-      deleted_at TEXT,
-      job_instructions_updated_at TEXT,
-      instructions_version INTEGER NOT NULL DEFAULT 0
-    );
 
-    CREATE TABLE provider_config (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL UNIQUE,
-      display_name TEXT,
-      status TEXT NOT NULL,
-      config TEXT NOT NULL DEFAULT '{}',
-      validation_error TEXT,
-      last_validated_at TEXT,
-      updated_at TEXT
-    );
-
-    CREATE TABLE tools (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      description TEXT NOT NULL DEFAULT '',
-      implementation_type TEXT NOT NULL DEFAULT 'bash',
-      implementation_body TEXT NOT NULL DEFAULT '',
-      input_schema TEXT NOT NULL DEFAULT '{}',
-      permissions TEXT NOT NULL DEFAULT 'read_only',
-      tags TEXT NOT NULL DEFAULT '[]',
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE agent_tool_assignments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      agent_id INTEGER NOT NULL,
-      tool_id INTEGER NOT NULL,
-      overrides TEXT NOT NULL DEFAULT '{}',
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE mcp_servers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL UNIQUE,
-      command TEXT NOT NULL,
-      args TEXT NOT NULL DEFAULT '[]',
-      env TEXT NOT NULL DEFAULT '{}',
-      cwd TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE agent_mcp_assignments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      agent_id INTEGER NOT NULL,
-      mcp_server_id INTEGER NOT NULL,
-      overrides TEXT NOT NULL DEFAULT '{}',
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE sprint_task_routing_rules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      task_type TEXT,
-      status TEXT NOT NULL,
-      agent_id INTEGER NOT NULL,
-      priority INTEGER NOT NULL DEFAULT 0
-    );
-  `);
-
-  await db.run(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`, 'openai', 'connected');
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(`INSERT INTO provider_config (tenant_id, slug, status) VALUES (1, ?, ?), (1, ?, ?)`, 'openai', 'connected', 'openai-codex', 'connected');
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -159,9 +54,8 @@ describe('agents Hermes runtime CRUD support', () => {
     await resetDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (ORIGINAL_OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
     else process.env.OPENCLAW_CONFIG_PATH = ORIGINAL_OPENCLAW_CONFIG_PATH;
     if (ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH === undefined) delete process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
@@ -173,7 +67,9 @@ describe('agents Hermes runtime CRUD support', () => {
     const db = getDb();
     const workspacePath = path.join(tempDir, 'workspace-hermes-full');
     const hermesHome = path.join(tempDir, 'hermes-home');
-    await db.run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (?, ?, ?, ?)`, 30, 'agent-hq', 'node', '["server.js"]');
+    await db.run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (?, 1, ?, ?, ?, ?)`, 30, 'Agent HQ', 'agent-hq', 'node', '["server.js"]');
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (40, 1, 'Hermes Project')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, status) VALUES (41, 1, 40, 'Hermes Workflow', 'planning')`);
 
     const runtimeConfig = {
       profile: 'agent-hq-hermes-full',
@@ -194,10 +90,16 @@ describe('agents Hermes runtime CRUD support', () => {
           workspace_path: workspacePath,
           runtime_type: 'hermes',
           runtime_config: runtimeConfig,
+          project_id: 40,
+          routing_rules: [{ sprint_id: 41, task_type: 'backend', status: 'ready', priority: 25 }],
           mcp_server_ids: [30],
         }),
       });
       const body = await response.json() as Record<string, any>;
+
+      if (response.status !== 201) {
+        throw new Error(`Expected 201, received ${response.status}: ${JSON.stringify(body)}`);
+      }
 
       expect(response.status).toBe(201);
       expect(body.ok).toBe(true);
@@ -220,6 +122,26 @@ describe('agents Hermes runtime CRUD support', () => {
       expect(JSON.parse(row.runtime_config ?? 'null')).toEqual(runtimeConfig);
       expect(row.openclaw_agent_id).toBeNull();
       expect(row.workspace_path).toBe(workspacePath);
+      const routingRule = await db.get(`
+        SELECT tenant_id, sprint_id, agent_id, task_type, status, priority
+        FROM sprint_task_routing_rules
+        WHERE sprint_id = 41
+      `) as {
+        tenant_id: number;
+        sprint_id: number;
+        agent_id: number;
+        task_type: string;
+        status: string;
+        priority: number;
+      };
+      expect(routingRule).toEqual({
+        tenant_id: 1,
+        sprint_id: 41,
+        agent_id: 1,
+        task_type: 'backend',
+        status: 'ready',
+        priority: 25,
+      });
 
       for (const doc of ['SOUL.md', 'AGENTS.md', 'IDENTITY.md', 'USER.md', 'TOOLS.md', 'MEMORY.md', 'LESSONS.md']) {
         expect(fs.existsSync(path.join(workspacePath, doc))).toBe(true);
@@ -248,9 +170,10 @@ describe('agents Hermes runtime CRUD support', () => {
     const hermesHome = path.join(tempDir, 'hermes-home-codex-auth');
     const expiresAt = Date.now() + 60 * 60 * 1000;
     await db.run(`
-      INSERT INTO provider_config (slug, display_name, status, config)
-      VALUES (?, ?, ?, ?)
-    `, 'openai-codex', 'OpenAI Codex (OAuth)', 'connected', JSON.stringify({
+      UPDATE provider_config
+      SET display_name = ?, status = ?, config = ?
+      WHERE tenant_id = 1 AND slug = 'openai-codex'
+    `, 'OpenAI Codex (OAuth)', 'connected', JSON.stringify({
             auth_type: 'oauth',
             provider: 'openai-codex',
             expires_at: expiresAt,
@@ -320,9 +243,10 @@ describe('agents Hermes runtime CRUD support', () => {
     const workspacePath = path.join(tempDir, 'workspace-hermes-missing-codex-auth');
     const hermesHome = path.join(tempDir, 'hermes-home-missing-codex-auth');
     await db.run(`
-      INSERT INTO provider_config (slug, display_name, status, config)
-      VALUES (?, ?, ?, ?)
-    `, 'openai-codex', 'OpenAI Codex (OAuth)', 'connected', '{}');
+      UPDATE provider_config
+      SET display_name = ?, status = ?, config = ?
+      WHERE tenant_id = 1 AND slug = 'openai-codex'
+    `, 'OpenAI Codex (OAuth)', 'connected', '{}');
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -345,6 +269,10 @@ describe('agents Hermes runtime CRUD support', () => {
         }),
       });
       const body = await response.json() as Record<string, any>;
+
+      if (!body.report?.auth) {
+        throw new Error(`Expected auth report, received ${response.status}: ${JSON.stringify(body)}`);
+      }
 
       expect(response.status).toBe(500);
       expect(body.ok).toBe(false);
@@ -526,8 +454,8 @@ describe('agents Hermes runtime CRUD support', () => {
     const db = getDb();
     await db.run(`
       INSERT INTO agents (
-        id, name, role, session_key, runtime_type, runtime_config, preferred_provider, project_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        id, tenant_id, name, role, session_key, runtime_type, runtime_config, preferred_provider, project_id
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)
     `, 94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', JSON.stringify({ dispatchUrl: 'http://localhost:3900/hook' }), 'openai', null);
 
     const hermesConfig = {
@@ -578,7 +506,7 @@ describe('agents Hermes runtime CRUD support', () => {
 
   it('rejects invalid Hermes runtime_config during create and update validation', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO agents (id, name, role, session_key, runtime_type, preferred_provider) VALUES (?, ?, ?, ?, ?, ?)`, 94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 'openai');
+    await db.run(`INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, preferred_provider) VALUES (?, 1, ?, ?, ?, ?, ?)`, 94, 'Cinder', 'Backend Engineer', 'agent:cinder:main', 'webhook', 'openai');
 
     const { server, baseUrl } = await startTestServer();
     try {

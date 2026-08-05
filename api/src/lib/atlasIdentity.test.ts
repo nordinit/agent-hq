@@ -15,13 +15,7 @@ import { ATLAS_SESSION_KEY, ATLAS_SYSTEM_ROLE, ensureCanonicalAtlasSessionKey } 
 beforeEach(async () => { await setupTestDb(); });
 afterEach(async () => { await teardownTestDb(); });
 
-/**
- * The default tenant, reused if the engine's bootstrap already made one.
- *
- * SQLite gets one from initSchema and `is_default` is unique, so inserting a second collides.
- * The PostgreSQL template is DDL-only and truncated between tests, so there is none. Handling
- * both is what lets this file run unchanged on either engine.
- */
+/** Creates the explicit tenant parent required by each identity case. */
 async function seedTenant(isDefault = 1): Promise<number> {
   const db = getDb();
   const slug = isDefault ? 'default' : 'other';
@@ -35,7 +29,7 @@ async function seedTenant(isDefault = 1): Promise<number> {
   return row.id;
 }
 
-/** Removes any Atlas the engine's own bootstrap seeded, so each case starts from a known row set. */
+/** Removes any Atlas seeded by the case so each assertion starts from a known row set. */
 async function clearAtlas(tenantId: number): Promise<void> {
   await getDb().run(`DELETE FROM agents WHERE system_role = ? AND tenant_id = ?`, ATLAS_SYSTEM_ROLE, tenantId);
 }

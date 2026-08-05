@@ -142,7 +142,7 @@ function createMockDb() {
   const runs: Array<{ sql: string; params: unknown[] }> = [];
   return {
     runs,
-    dialect: 'sqlite' as const,
+    dialect: 'postgres' as const,
     inTransaction: false,
     get: jest.fn(async (sql: string) =>
       sql.includes('agent_id') ? { agent_id: 42, tenant_id: 2 } : undefined,
@@ -888,7 +888,7 @@ describe('ClaudeCodeRuntime terminal handling', () => {
     const meta = JSON.parse(turnEnd[0].params[3] as string);
     expect(meta.source).toBe('claude-code');
 
-    expect(runsMatching(db, '$.runtimeEnd')).toHaveLength(1);
+    expect(runsMatching(db, "'{runtimeEnd}'")).toHaveLength(1);
   });
 
   it('rejects dispatch before model spend when a required MCP lifecycle tool is missing', async () => {

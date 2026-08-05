@@ -95,6 +95,7 @@ const MISSING_LIFECYCLE_OUTCOME_GRACE_MS: number = (() => {
 
 interface TaskRow {
   id: number;
+  tenant_id: number;
   title: string;
   description: string;
   status: string;
@@ -216,10 +217,7 @@ async function logHistory(
   oldValue: string | null,
   newValue: string | null,
 ): Promise<void> {
-  await db.run(`
-    INSERT INTO task_history (task_id, changed_by, field, old_value, new_value)
-    VALUES (?, ?, ?, ?, ?)
-  `, taskId, changedBy, field, oldValue, newValue);
+  await writeTaskHistory(db, taskId, changedBy, field, oldValue, newValue, false);
 }
 
 async function resolveAgentName(db: Db, agentId: number | null): Promise<string | null> {
@@ -308,7 +306,7 @@ async function reassignTaskIfNeeded(db: Db, task: TaskRow, nextAgentId: number |
     UPDATE tasks
     SET assigned_agent_id = ?,
         review_owner_agent_id = ?,
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, nextAgentId, nextReviewOwnerAgentId, task.id);
   await syncTaskActiveAgentFromInstance(db, task.id);
@@ -419,13 +417,13 @@ export async function reconcileReviewQaRouting(
     const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
     const instanceResult = supportsDurableRunId
       ? await db.run(`
-          INSERT INTO job_instances (agent_id, status, durable_run_id)
-          VALUES (?, 'queued', ?)
-        `, agent.id, createDurableRunId())
+          INSERT INTO job_instances (tenant_id, agent_id, status, durable_run_id)
+          VALUES (?, ?, 'queued', ?)
+        `, task.tenant_id, agent.id, createDurableRunId())
       : await db.run(`
-          INSERT INTO job_instances (agent_id, status)
-          VALUES (?, 'queued')
-        `, agent.id);
+          INSERT INTO job_instances (tenant_id, agent_id, status)
+          VALUES (?, ?, 'queued')
+        `, task.tenant_id, agent.id);
     const instanceId = instanceResult.lastInsertId as number;
     await attachInstanceToTask(db, instanceId, task.id);
 
@@ -510,7 +508,7 @@ export async function reconcileReviewQaRouting(
         UPDATE job_instances
         SET status = 'failed',
             error = ?,
-            completed_at = datetime('now')
+            completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
           AND status NOT IN ('done', 'failed', 'cancelled')
       `, err instanceof Error ? err.message : String(err), instanceId);
@@ -518,7 +516,7 @@ export async function reconcileReviewQaRouting(
       const currentTask = await db.get('SELECT active_instance_id FROM tasks WHERE id = ?', task.id) as { active_instance_id: number | null } | undefined;
       if (currentTask?.active_instance_id === instanceId) {
         await db.run(`
-          UPDATE tasks SET active_instance_id = NULL, updated_at = datetime('now') WHERE id = ?
+          UPDATE tasks SET active_instance_id = NULL, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
         `, task.id);
         // Recorded so the detach is visible. An agent refused for not owning "the active
         // dispatched instance" is refused precisely because this link is gone, and without a
@@ -634,7 +632,7 @@ export async function reconcileOrphanInProgressTasks(db: Db): Promise<void> {
     // Always log orphan detection for observability (rate-limited to once per 10 min per task).
     const recentOrphanLog = await db.get(`
       SELECT id FROM logs
-      WHERE message LIKE ? AND created_at > datetime('now', '-10 minutes')
+      WHERE message LIKE ? AND created_at > to_char((now() AT TIME ZONE 'utc' - interval '10 minute'), 'YYYY-MM-DD HH24:MI:SS')
       LIMIT 1
     `, `%Orphan in_progress: task #${orphan.id}%`) as { id: number } | undefined;
 
@@ -752,7 +750,7 @@ async function logStuckReviewTasks(db: Db): Promise<void> {
     WHERE t.status = 'review'
       AND t.paused_at IS NULL
       AND t.active_instance_id IS NULL
-      AND t.updated_at < datetime('now', '-5 minutes')
+      AND t.updated_at < to_char((now() AT TIME ZONE 'utc' - interval '5 minute'), 'YYYY-MM-DD HH24:MI:SS')
       AND (t.sprint_id IS NULL OR EXISTS (
         SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status != 'closed'
       ))
@@ -765,7 +763,7 @@ async function logStuckReviewTasks(db: Db): Promise<void> {
     // Log to DB but only once per 30 minutes per task to avoid spam
     const recentLog = await db.get(`
       SELECT id FROM logs
-      WHERE message LIKE ? AND created_at > datetime('now', '-30 minutes')
+      WHERE message LIKE ? AND created_at > to_char((now() AT TIME ZONE 'utc' - interval '30 minute'), 'YYYY-MM-DD HH24:MI:SS')
       LIMIT 1
     `, `%Stuck review: task #${task.id}%`) as { id: number } | undefined;
     if (!recentLog) {

@@ -52,7 +52,7 @@ clean. That is a historical result, not current release evidence.
   effective home. An isolated `claudeConfigDir` remains a deployment-policy
   responsibility because the code still permits the API user's shared `~/.claude`.
 - Local runs persist boundary, launch, native session, and terminal observations to the
-  PostgreSQL runtime-execution/checkpoint store when migration 18 is available. The
+  PostgreSQL runtime-execution/checkpoint store when migration 20 is available. The
   restart reconciler can identify a same-host live process or mark a missing/reused PID
   `lost` after two observations; it cannot reattach the event stream or recover the
   detached process's terminal result.

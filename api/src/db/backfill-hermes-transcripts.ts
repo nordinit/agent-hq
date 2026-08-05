@@ -48,11 +48,11 @@ interface Outcome {
 
 async function findCandidates(db: Db, onlyInstance: number | null): Promise<Candidate[]> {
   const rows = (await db.all(
-    `SELECT DISTINCT ji.id AS instanceId,
-            ji.agent_id  AS agentId,
-            ji.durable_run_id AS durableRunId,
-            ji.session_key    AS sessionKey,
-            a.runtime_config  AS runtimeConfig
+    `SELECT DISTINCT ji.id AS "instanceId",
+            ji.agent_id  AS "agentId",
+            ji.durable_run_id AS "durableRunId",
+            ji.session_key    AS "sessionKey",
+            a.runtime_config  AS "runtimeConfig"
      FROM chat_messages cm
      JOIN job_instances ji ON ji.id = cm.instance_id
      JOIN agents a ON a.id = ji.agent_id

@@ -22,13 +22,7 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 }
 
-/**
- * task_field_schemas.tenant_id and sprint_type_task_types.tenant_id are NOT NULL with a real
- * foreign key to tenants, so the literal `1` this fixture used to bind is only valid where
- * something has already created a tenant. initSchema() does; the PostgreSQL fixture carries DDL
- * only and truncates between tests, so it does not. Resolve the tenant instead of assuming it —
- * that works on both engines and does not depend on the default tenant landing on id 1.
- */
+/** Resolves or creates the explicit tenant parent required by the workflow-definition rows. */
 async function resolveTenantId(): Promise<number> {
   const db = getDb();
   const existing = await db.get(
@@ -72,10 +66,7 @@ async function seedFieldSchemaFixture(): Promise<{ sprintId: number }> {
     tenantId, Number(project.lastInsertId),
   );
 
-  // The DELETEs are what make this fixture authoritative rather than additive: on SQLite
-  // initSchema() has already seeded starter 'generic' and 'dev' schemas, and the resolver reads
-  // whichever row it finds without filtering by tenant, so leaving them would merge the starter
-  // fields into every assertion below. They are no-ops on the truncated PostgreSQL database.
+  // The DELETEs make this fixture authoritative rather than additive if setup added definitions.
   await db.run(`DELETE FROM sprint_type_task_types WHERE sprint_type_key = 'dev'`);
   await db.run(
     `INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type)

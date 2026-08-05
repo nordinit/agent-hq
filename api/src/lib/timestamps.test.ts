@@ -1,7 +1,3 @@
-import Database from 'better-sqlite3';
-import fs from 'fs';
-import path from 'path';
-import { spawnSync } from 'child_process';
 import {
   CANONICAL_TIMESTAMP_PATTERN,
   CANONICAL_TIMESTAMP_SQL,
@@ -15,7 +11,8 @@ import {
   toCanonicalTimestampOrNow,
   toIsoUtc,
 } from './timestamps';
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 
 describe('nowTimestamp emits exactly one format', () => {
   it('always matches the canonical pattern, across many samples', () => {
@@ -41,27 +38,17 @@ describe('nowTimestamp emits exactly one format', () => {
     }
   });
 
-  it('is byte-identical in shape to what SQLite datetime(\'now\') produces', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
+  it('is byte-identical in shape to PostgreSQL canonical now', async () => {
+    await setupTestDb();
     try {
-      const sqlNow = await db.get(`SELECT ${CANONICAL_TIMESTAMP_SQL} AS v`) as { v: string };
+      const sqlNow = await getDb().get(`SELECT ${CANONICAL_TIMESTAMP_SQL} AS v`) as { v: string };
       const jsNow = nowTimestamp();
-
       expect(sqlNow.v).toMatch(CANONICAL_TIMESTAMP_PATTERN);
-      expect(jsNow).toMatch(CANONICAL_TIMESTAMP_PATTERN);
-      expect(jsNow.length).toBe(sqlNow.v.length);
       expect(jsNow.replace(/\d/g, 'N')).toBe(sqlNow.v.replace(/\d/g, 'N'));
-
-      // Same instant to within a couple of seconds — proves nowTimestamp() is
-      // UTC and not local (this host is UTC-4, so a local-time bug shows as a
-      // ~4h delta).
-      const delta = Math.abs(
-        parseTimestamp(jsNow)!.getTime() - parseTimestamp(sqlNow.v)!.getTime(),
-      );
-      expect(delta).toBeLessThan(5000);
+      expect(Math.abs(parseTimestamp(jsNow)!.getTime() - parseTimestamp(sqlNow.v)!.getTime()))
+        .toBeLessThan(5000);
     } finally {
-      dbRaw.close();
+      await teardownTestDb();
     }
   });
 
@@ -71,34 +58,24 @@ describe('nowTimestamp emits exactly one format', () => {
     expect(Math.abs(asUtc - Date.now())).toBeLessThan(5000);
   });
 
-  it('agrees with the SQL DEFAULT written into an actual column', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
+  it('agrees with the PostgreSQL default written into a production table', async () => {
+    await setupTestDb();
     try {
-      await db.exec(`
-        CREATE TABLE t (
-          id INTEGER PRIMARY KEY,
-          from_default TEXT NOT NULL DEFAULT (${CANONICAL_TIMESTAMP_SQL}),
-          from_js TEXT NOT NULL
-        )
-      `);
-      for (let i = 0; i < 25; i += 1) {
-        await db.run('INSERT INTO t (from_js) VALUES (?)', nowTimestamp());
-      }
-      const rows = await db.all('SELECT from_default, from_js FROM t') as Array<{
-        from_default: string;
-        from_js: string;
-      }>;
-      const allShapes = new Set(
-        rows.flatMap((r) => [r.from_default, r.from_js]).map((v) => v.replace(/\d/g, 'N')),
+      const jsNow = nowTimestamp();
+      const inserted = await getDb().run(
+        `INSERT INTO tenants (name, slug, is_default) VALUES ('Timestamp Test', 'timestamp-test', 1)`,
       );
-      // The point of the whole exercise: a DEFAULT-written value and a
-      // JS-written value are indistinguishable.
-      expect(allShapes.size).toBe(1);
+      const row = await getDb().get<{ created_at: string }>(
+        `SELECT created_at FROM tenants WHERE id = ?`,
+        inserted.lastInsertId,
+      );
+      expect(row?.created_at).toMatch(CANONICAL_TIMESTAMP_PATTERN);
+      expect(row?.created_at.replace(/\d/g, 'N')).toBe(jsNow.replace(/\d/g, 'N'));
     } finally {
-      dbRaw.close();
+      await teardownTestDb();
     }
   });
+
 });
 
 describe('toCanonicalTimestamp', () => {
@@ -233,58 +210,5 @@ describe('the migration hazard this helper exists to prevent', () => {
     // rather than a hard-coded 4h so this passes in CI too.
     expect(buggyLocal - correct).toBe(hostOffsetMs);
     expect(toCanonicalTimestamp(stored)).toBe(stored);
-  });
-});
-
-describe('scripts/normalize-timestamps.mjs stays in sync with this module', () => {
-  // The migration script cannot import TypeScript, so it carries its own copy of
-  // the normalizer. If the two ever diverge, freshly-written rows and
-  // freshly-normalized rows stop matching. This test is the tripwire.
-  //
-  // The script is ESM and Jest runs CJS here, so it is exercised in a subprocess.
-  const CORPUS: unknown[] = [
-    '2026-06-03 20:05:53',
-    '2026-06-03 20:05:53.472',
-    '2026-06-03T20:05:53.000Z',
-    '2026-06-03T20:05:53Z',
-    '2026-06-03T20:05:53',
-    '2026-07-06T11:55:00-04:00',
-    '2026-07-06T11:55:00+02:00',
-    '2026-07-06T11:55:00-0400',
-    '2026-05-21T04:29Z',
-    '2026-03-09',
-    '2026-02-31T00:00:00Z',
-    'not-a-date',
-    '',
-    '   ',
-    null,
-  ];
-
-  it('produces identical output for every encoding seen in production', () => {
-    const scriptPath = path.resolve(__dirname, '../../../scripts/normalize-timestamps.mjs');
-    expect(fs.existsSync(scriptPath)).toBe(true);
-
-    const program = `
-      import { toCanonicalTimestamp } from ${JSON.stringify(scriptPath)};
-      const corpus = ${JSON.stringify(CORPUS)};
-      console.log(JSON.stringify({
-        keep: corpus.map((v) => toCanonicalTimestamp(v)),
-        drop: corpus.map((v) => toCanonicalTimestamp(v, { preserveFractional: false })),
-      }));
-    `;
-    const res = spawnSync(process.execPath, ['--input-type=module', '-e', program], {
-      encoding: 'utf8',
-    });
-    expect(res.status).toBe(0);
-
-    const fromScript = JSON.parse(res.stdout.trim()) as {
-      keep: Array<string | null>;
-      drop: Array<string | null>;
-    };
-
-    expect(fromScript.keep).toEqual(CORPUS.map((v) => toCanonicalTimestamp(v)));
-    expect(fromScript.drop).toEqual(
-      CORPUS.map((v) => toCanonicalTimestamp(v, { preserveFractional: false })),
-    );
   });
 });

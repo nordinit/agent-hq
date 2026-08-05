@@ -290,7 +290,7 @@ async function migrateAgentStartedWorkflowEventSource(db: Db): Promise<void> {
 
   await db.run(`
     UPDATE external_event_mappings
-    SET source = ?, updated_at = datetime('now')
+    SET source = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, AGENT_HQ_RUNTIME_SOURCE, wildcardRows[0].id);
 }
@@ -307,7 +307,7 @@ async function ensureAgentStartedBlockedGuard(db: Db): Promise<void> {
 
   const updateSql = `
     UPDATE external_event_mappings
-    SET status_excludes_json = ?, updated_at = datetime('now')
+    SET status_excludes_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `;
 
@@ -649,12 +649,12 @@ async function ensureNoConflicts(db: Db, candidate: {
     SELECT *
     FROM external_event_mappings
     WHERE event_name = ?
-      ${hasTenantId ? 'AND ((tenant_id IS NULL AND ? IS NULL) OR tenant_id = ?)' : ''}
-      AND ((project_id IS NULL AND ? IS NULL) OR project_id = ?)
-      ${hasWorkflowScope ? 'AND ((sprint_id IS NULL AND ? IS NULL) OR sprint_id = ?)' : ''}
-      ${hasWorkflowScope ? 'AND ((sprint_type IS NULL AND ? IS NULL) OR sprint_type = ?)' : ''}
-      AND ((source IS NULL AND ? IS NULL) OR source = ?)
-      AND ((task_type IS NULL AND ? IS NULL) OR task_type = ?)
+      ${hasTenantId ? 'AND ((tenant_id IS NULL AND ?::text IS NULL) OR tenant_id = ?)' : ''}
+      AND ((project_id IS NULL AND ?::text IS NULL) OR project_id = ?)
+      ${hasWorkflowScope ? 'AND ((sprint_id IS NULL AND ?::text IS NULL) OR sprint_id = ?)' : ''}
+      ${hasWorkflowScope ? 'AND ((sprint_type IS NULL AND ?::text IS NULL) OR sprint_type = ?)' : ''}
+      AND ((source IS NULL AND ?::text IS NULL) OR source = ?)
+      AND ((task_type IS NULL AND ?::text IS NULL) OR task_type = ?)
       AND priority = ?
       AND enabled = 1
       ${candidate.id ? 'AND id != ?' : ''}
@@ -849,52 +849,6 @@ export async function repairDuplicateWorkflowEventMappings(db: Db): Promise<{ de
   `);
   return { deleted: result.changes };
 }
-async function ensureWorkflowEventMappingUniqueIndex(db: Db): Promise<void> {
-  const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
-  await db.exec(`
-    DROP INDEX IF EXISTS idx_external_event_mappings_effective_unique_no_tenant;
-    DROP INDEX IF EXISTS idx_external_event_mappings_effective_unique_tenant;
-  `);
-  if (hasTenantId) {
-    await db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_external_event_mappings_effective_unique_tenant
-        ON external_event_mappings(
-          COALESCE(tenant_id, 0),
-          COALESCE(project_id, 0),
-          COALESCE(source, ''),
-          event_name,
-          COALESCE(task_type, ''),
-          status_includes_json,
-          status_excludes_json,
-          action_kind,
-          COALESCE(action_target, ''),
-          apply_review_evidence,
-          apply_failure_detail,
-          enabled,
-          priority
-        );
-    `);
-  } else {
-    await db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_external_event_mappings_effective_unique_no_tenant
-        ON external_event_mappings(
-          COALESCE(project_id, 0),
-          COALESCE(source, ''),
-          event_name,
-          COALESCE(task_type, ''),
-          status_includes_json,
-          status_excludes_json,
-          action_kind,
-          COALESCE(action_target, ''),
-          apply_review_evidence,
-          apply_failure_detail,
-          enabled,
-          priority
-        );
-    `);
-  }
-}
-
 async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typeof DEFAULT_WORKFLOW_EVENT_MAPPINGS[number][], tenantId: number | null): Promise<void> {
   const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
   const defaultTenantId = hasTenantId && tenantId == null ? await getDefaultTenantIdIfAvailable(db) : null;
@@ -907,7 +861,7 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
     : '1 = 1';
 
   const insertSql = `
-    INSERT OR IGNORE INTO external_event_mappings (
+    INSERT INTO external_event_mappings (
       ${hasTenantId ? 'tenant_id,' : ''}
       project_id,
       source,
@@ -923,8 +877,7 @@ async function insertDefaultWorkflowEventMappings(db: Db, mappings: readonly typ
       priority,
       created_at,
       updated_at
-    ) VALUES (${hasTenantId ? '?,' : ''} ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-  `;
+    ) VALUES (${hasTenantId ? '?,' : ''} ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`;
 
   const existsSql = `
     SELECT id
@@ -986,7 +939,6 @@ export async function seedDefaultWorkflowEventMappings(db: Db): Promise<void> {
     await migrateAgentStartedWorkflowEventSource(db);
     await ensureAgentStartedBlockedGuard(db);
     await repairDuplicateWorkflowEventMappings(db);
-    await ensureWorkflowEventMappingUniqueIndex(db);
     await insertDefaultWorkflowEventMappings(db, DEFAULT_WORKFLOW_EVENT_MAPPINGS, null);
   });
 }
@@ -994,9 +946,9 @@ export async function seedDefaultWorkflowEventMappings(db: Db): Promise<void> {
 export async function seedTenantDefaultWorkflowEventMappings(db: Db, tenantId: number): Promise<void> {
   await validateTenantExists(db, tenantId);
   await db.withTransaction(async (db) => {
-    await ensureAgentStartedBlockedGuard(db);
-    await repairDuplicateWorkflowEventMappings(db);
-    await ensureWorkflowEventMappingUniqueIndex(db);
+    // Tenant creation/reinstall may add this tenant's missing starter rows, but it must never
+    // normalize or deduplicate another tenant's operator-owned configuration. Historical global
+    // repairs belong in an explicit migration/repair command, not in a seed path.
     await insertDefaultWorkflowEventMappings(db, DEFAULT_TENANT_WORKFLOW_EVENT_MAPPINGS, tenantId);
   });
 }
@@ -1151,7 +1103,7 @@ export async function createWorkflowEventMapping(db: Db, input: Record<string, u
   const placeholders = columns.map(() => '?').join(', ');
   const result = await db.run(`
     INSERT INTO external_event_mappings (${columns.join(', ')}, created_at, updated_at)
-    VALUES (${placeholders}, datetime('now'), datetime('now'))
+    VALUES (${placeholders}, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
   `, ...columns.map((column) => insertValues[column]));
 
   const row = await db.get('SELECT * FROM external_event_mappings WHERE id = ?', result.lastInsertId) as MappingRecord;
@@ -1187,7 +1139,7 @@ export async function updateWorkflowEventMapping(db: Db, input: Record<string, u
         apply_failure_detail = ?,
         enabled = ?,
         priority = ?,
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, ...(hasTenantId ? [normalized.tenant_id] : []), normalized.project_id, ...(hasSprintId ? [normalized.sprint_id] : []), ...(hasSprintType ? [normalized.sprint_type] : []), normalized.source, normalized.event_name, normalized.task_type, JSON.stringify(normalized.status_includes), JSON.stringify(normalized.status_excludes), normalized.action_kind, normalized.action_target, normalized.apply_review_evidence ? 1 : 0, normalized.apply_failure_detail ? 1 : 0, normalized.enabled ? 1 : 0, normalized.priority, id);
 

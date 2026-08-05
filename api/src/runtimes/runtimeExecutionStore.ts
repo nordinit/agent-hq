@@ -44,6 +44,7 @@ export interface StartRuntimeExecutionInput {
 
 export interface HeartbeatRuntimeExecutionInput {
   instanceId: number;
+  tenantId: number;
   heartbeatAt?: string;
   leaseOwner?: string | null;
   leaseExpiresAt?: string | null;
@@ -60,6 +61,7 @@ export interface InterruptRuntimeExecutionInput {
 
 export interface TerminalRuntimeExecutionInput {
   instanceId: number;
+  tenantId: number;
   state: Extract<RuntimeExecutionState, 'succeeded' | 'failed' | 'cancelled' | 'lost'>;
   reason?: string | null;
   error?: string | null;
@@ -200,7 +202,7 @@ export async function upsertRuntimeExecutionStart(
       };
     }
 
-    const lock = tx.dialect === 'postgres' ? ' FOR UPDATE' : '';
+    const lock = ' FOR UPDATE';
     const existing = await tx.get<{
       id: number;
       boundary_version: number;
@@ -314,6 +316,7 @@ export async function heartbeatRuntimeExecution(
         session_id = COALESCE(?, session_id),
         updated_at = ?
     WHERE instance_id = ?
+      AND tenant_id = ?
       AND state IN ('preparing', 'starting', 'running', 'interrupting')
     RETURNING id
   `,
@@ -323,6 +326,7 @@ export async function heartbeatRuntimeExecution(
     input.sessionId ?? null,
     heartbeatAt,
     input.instanceId,
+    input.tenantId,
   );
   return row
     ? { status: 'persisted', executionId: Number(row.id) }
@@ -384,6 +388,7 @@ export async function terminalRuntimeExecution(
           lease_expires_at = NULL,
           updated_at = ?
       WHERE instance_id = ?
+        AND tenant_id = ?
         AND state NOT IN ('succeeded', 'failed', 'cancelled', 'lost')
       RETURNING id, boundary_fingerprint, session_id
     `,
@@ -395,6 +400,7 @@ export async function terminalRuntimeExecution(
       endedAt,
       endedAt,
       input.instanceId,
+      input.tenantId,
     );
     if (!row) return { status: 'not_found' as const, executionId: null };
 
@@ -422,7 +428,7 @@ async function appendRuntimeCheckpointInTransaction(
   tx: Db,
   input: AppendRuntimeCheckpointInput,
 ): Promise<AppendedRuntimeCheckpoint> {
-  const lock = tx.dialect === 'postgres' ? ' FOR UPDATE' : '';
+  const lock = ' FOR UPDATE';
   const execution = await tx.get<{
     id: number;
     tenant_id: number;

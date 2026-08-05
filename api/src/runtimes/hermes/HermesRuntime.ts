@@ -43,6 +43,7 @@ import {
   localProcessSupervisor,
 } from "../localProcessSupervisor";
 import { nowTimestamp } from '../../lib/timestamps';
+import { runtimeTenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
 
 const HERMES_TRANSCRIPT_POLL_INTERVAL_MS = 2_000;
@@ -796,11 +797,11 @@ export class HermesRuntime implements AgentRuntime {
     if (!db || instanceId == null) return;
     const agentId = await this.lookupAgentId(db, instanceId);
     if (agentId == null) return;
+    const tenant = await runtimeTenantInsertColumns(db, 'chat_messages', { instanceId, agentId });
 
     await db.run(`
-      INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-      VALUES (?, ?, ?, 'user', ?, ?)
-    `, `hermes-user-${instanceId}`, agentId, instanceId, prompt, nowTimestamp());
+      INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp)
+      VALUES (?, ${tenant.valueSql}?, ?, 'user', ?, ?) ON CONFLICT DO NOTHING`, `hermes-user-${instanceId}`, ...tenant.values, agentId, instanceId, prompt, nowTimestamp());
   }
 
   private async persistAssistantMessage(
@@ -811,12 +812,13 @@ export class HermesRuntime implements AgentRuntime {
     if (!db || instanceId == null || !content) return;
     const agentId = await this.lookupAgentId(db, instanceId);
     if (agentId == null) return;
+    const tenant = await runtimeTenantInsertColumns(db, 'chat_messages', { instanceId, agentId });
 
     await db.run(`
-      INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-      VALUES (?, ?, ?, 'assistant', ?, ?)
+      INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp)
+      VALUES (?, ${tenant.valueSql}?, ?, 'assistant', ?, ?)
       ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp
-    `, `hermes-asst-${instanceId}`, agentId, instanceId, content, nowTimestamp());
+    `, `hermes-asst-${instanceId}`, ...tenant.values, agentId, instanceId, content, nowTimestamp());
   }
 
   private async persistRuntimeEndEvent(
@@ -827,8 +829,8 @@ export class HermesRuntime implements AgentRuntime {
     if (!db) return;
 
     await db.run(`
-      INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-      SELECT ?, agent_id, id, 'system', ?, ?, 'turn_end', ?
+      INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+      SELECT ?, tenant_id, agent_id, id, 'system', ?, ?, 'turn_end', ?
       FROM job_instances
       WHERE id = ?
       ON CONFLICT(id) DO UPDATE SET
@@ -849,7 +851,7 @@ export class HermesRuntime implements AgentRuntime {
 
     await db.run(`
       UPDATE job_instances
-      SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+      SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
       WHERE id = ?
     `, JSON.stringify(event), instanceId);
   }

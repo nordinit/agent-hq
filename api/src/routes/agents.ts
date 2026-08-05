@@ -20,7 +20,6 @@ import {
   slugifySessionKeyPart,
 } from '../lib/sessionKeys';
 import { resolveWorkspaceProvider } from '../lib/workspaceProvider';
-import { seedSprintTaskPolicy } from '../domains/routing/policy/seed';
 import { getAgentRoutingConfig, updateAgentRoutingConfig } from '../domains/routing/config';
 import {
   defaultAgentModelForProvider,
@@ -192,7 +191,7 @@ async function archiveAgentForDeletion(db: ReturnType<typeof getDb>, agent: Reco
           schedule = '',
           openclaw_agent_id = NULL,
           session_key = ?,
-          deleted_at = COALESCE(deleted_at, datetime('now'))
+          deleted_at = COALESCE(deleted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       WHERE id = ?
     `, archivedSessionKey, agentId);
   });
@@ -1016,8 +1015,8 @@ router.post('/provision-full', async (req: Request, res: Response) => {
         }
 
         const sprintRoutingSql = `
-          INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, task_type, status, agent_id, priority)
+          VALUES (?, ?, ?, ?, ?, ?)
         `;
         const activeProjectSprintIds = body.project_id == null
           ? []
@@ -1035,8 +1034,7 @@ router.post('/provision-full', async (req: Request, res: Response) => {
             throw new Error('routing_rules entries must include sprint_id or the agent project must have at least one non-closed sprint');
           }
           for (const sprintId of targetSprintIds) {
-            await seedSprintTaskPolicy(db, sprintId);
-            const result = await db.run(sprintRoutingSql, sprintId, rule.task_type, rule.status, agentId, rule.priority ?? 0);
+            const result = await db.run(sprintRoutingSql, tenantId, sprintId, rule.task_type, rule.status, agentId, rule.priority ?? 0);
             createdRoutingRuleIds.push(Number(result.lastInsertId));
           }
         }
@@ -1368,7 +1366,7 @@ router.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: legacyJobInstructionsError, field: 'job_instructions' });
     }
     const requestedJobInstructions = getRequestedJobInstructions(rawBody) ?? '';
-    const { 
+    const {
       name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, provision_openclaw,
       runtime_type, runtime_config, project_id, preferred_provider, provider_connection_id, model, system_role,
       hooks_url, hooks_auth_header, os_user, enabled, github_identity_id,
@@ -1772,7 +1770,7 @@ router.put('/:id', async (req: Request, res: Response) => {
       'sort_rules = ?',
       'project_id = ?',
       'system_role = ?',
-      `last_active = datetime('now')`,
+      `last_active = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')`,
     ];
     const updateValues: unknown[] = [
       resolvedName,
@@ -1823,7 +1821,7 @@ router.put('/:id', async (req: Request, res: Response) => {
         const hasVersion = agentCols.some((c: { name: string }) => c.name === 'instructions_version');
         if (hasUpdatedAt || hasVersion) {
           const clauses: string[] = [];
-          if (hasUpdatedAt) clauses.push(`job_instructions_updated_at = datetime('now')`);
+          if (hasUpdatedAt) clauses.push(`job_instructions_updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')`);
           if (hasVersion) clauses.push(`instructions_version = instructions_version + 1`);
           await db.run(`UPDATE agents SET ${clauses.join(', ')} WHERE id = ?`, req.params.id);
         }

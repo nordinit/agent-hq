@@ -27,7 +27,7 @@ import {
 import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization';
 import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { getDb } from '../db/client';
-import { nowTimestamp } from '../lib/timestamps';
+import { nowTimestamp, timestampFromEpochMs } from '../lib/timestamps';
 import { getAgentHqBaseUrl } from '../lib/agentHqBaseUrl';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn as durableTableHasColumn } from '../lib/durableRunIdentity';
@@ -555,8 +555,8 @@ async function persistDispatchStartupFailure(
     ...(hasAssignedAgentColumn ? ['agent_id = NULL'] : []),
     'active_instance_id = NULL',
     ...(hasClaimedAtColumn ? ['claimed_at = NULL'] : []),
-    "dispatched_at = datetime('now')",
-    "updated_at = datetime('now')",
+    "dispatched_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')",
+    "updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')",
   ];
   const values: Array<string | number | null> = [nextStatus, params.matchedAgentId];
 
@@ -983,6 +983,9 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
   if (relationshipEligibility) {
     await annotateRelationshipDispatchBlocks(db, relationshipEligibility.blockedByTaskId);
   }
+  const dispatchFailureCutoff = timestampFromEpochMs(
+    Date.now() - DISPATCH_FAILURE_BACKOFF_SECONDS * 1000,
+  ) ?? nowTimestamp();
 
   const legacyBlockingCountSelect = relationshipEligibility
     ? '0 as blocking_count'
@@ -1015,14 +1018,14 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
       AND t.paused_at IS NULL
       AND (
         t.dispatched_at IS NULL
-        OR t.dispatched_at < datetime('now', '-${DISPATCH_FAILURE_BACKOFF_SECONDS} seconds')
+        OR t.dispatched_at < ?
       )
       AND (t.sprint_id IS NULL OR EXISTS (
         SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status = 'active'
       ))
       ${legacyBlockerEligibilityClause}
   `;
-  const params: unknown[] = [...statusEligibility.params];
+  const params: unknown[] = [...statusEligibility.params, dispatchFailureCutoff];
   if (projectId != null) {
     sql += ` AND t.project_id = ?`;
     params.push(projectId);
@@ -1853,7 +1856,7 @@ async function fireAgentRun(
 
     await db.run(`
       UPDATE job_instances
-      SET status = 'failed', error = ?, completed_at = datetime('now')
+      SET status = 'failed', error = ?, completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ? AND status IN ('dispatched', 'running')
     `, errorMsg, instanceId);
 
@@ -2091,11 +2094,11 @@ export async function dispatchTaskToJob(
   const instanceResult = supportsDurableRunId
     ? await db.run(`
         INSERT INTO job_instances (${instanceTenant.columnSql}agent_id, status, dispatched_at, payload_sent, task_id, worktree_path, durable_run_id)
-        VALUES (${instanceTenant.valueSql}?, 'dispatched', datetime('now'), ?, ?, ?, ?)
+        VALUES (${instanceTenant.valueSql}?, 'dispatched', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), ?, ?, ?, ?)
       `, ...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath, initialDurableRunId)
     : await db.run(`
         INSERT INTO job_instances (${instanceTenant.columnSql}agent_id, status, dispatched_at, payload_sent, task_id, worktree_path)
-        VALUES (${instanceTenant.valueSql}?, 'dispatched', datetime('now'), ?, ?, ?)
+        VALUES (${instanceTenant.valueSql}?, 'dispatched', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), ?, ?, ?)
       `, ...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath);
   const instanceId = instanceResult.lastInsertId as number;
   const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
@@ -2114,7 +2117,7 @@ export async function dispatchTaskToJob(
   const hasRoutingReasonColumn = await tableHasColumn(db, 'tasks', 'routing_reason');
 
   const firstDispatchClause = hasFirstDispatchedAt
-    ? "first_dispatched_at = COALESCE(first_dispatched_at, datetime('now')),"
+    ? "first_dispatched_at = COALESCE(first_dispatched_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),"
     : '';
   const dispatchCountClause = hasTotalDispatchCount
     ? 'total_dispatch_count = total_dispatch_count + 1,'
@@ -2132,7 +2135,7 @@ export async function dispatchTaskToJob(
     SET status = ?,
         ${assignedAgentClause}
         agent_id = ?,
-        dispatched_at = datetime('now'),
+        dispatched_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
         ${claimedAtClause}
         active_instance_id = ?,
         ${routingReasonClause}
@@ -2140,7 +2143,7 @@ export async function dispatchTaskToJob(
         ${clearPreviousStatusClause}
         ${firstDispatchClause}
         ${dispatchCountClause}
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, nextTaskStatus, ...assignedAgentValues, job.agent_id, instanceId, ...routingReasonValues, task.id);
   await syncTaskActiveAgentFromInstance(db, task.id);
@@ -2453,8 +2456,7 @@ export interface DispatchInstanceParams {
 export async function dispatchInstance(params: DispatchInstanceParams): Promise<void> {
   const db = getDb();
   // Canonical (offset-less UTC) so this write of job_instances.dispatched_at is
-  // indistinguishable from the `datetime('now')` DEFAULT and the inline
-  // `dispatched_at = datetime('now')` writes elsewhere in this file.
+  // indistinguishable from PostgreSQL defaults and inline canonical SQL writes.
   const now = nowTimestamp();
 
   let existingPayload: Record<string, unknown> = {};

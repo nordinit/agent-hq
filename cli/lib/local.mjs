@@ -26,7 +26,6 @@ import { fileURLToPath } from 'node:url';
 const DATA_DIR = join(homedir(), '.agent-hq');
 const SOURCE_DIR = join(DATA_DIR, 'source');
 const STATE_FILE = join(DATA_DIR, 'local.json');
-const DB_PATH = join(DATA_DIR, 'agent-hq.db');
 const REPO_URL = 'https://github.com/nordinit/agent-hq.git';
 const OPENCLAW_HOME = join(homedir(), '.openclaw');
 const OPENCLAW_CONFIG_FILE = join(OPENCLAW_HOME, 'openclaw.json');
@@ -107,6 +106,29 @@ function buildPathWith(extraDirs = []) {
   const currentPath = process.env.PATH ?? '';
   const parts = [...extraDirs.filter(Boolean), ...currentPath.split(delimiter).filter(Boolean)];
   return Array.from(new Set(parts)).join(delimiter);
+}
+
+function localDatabaseUrl() {
+  const value = process.env.AGENT_HQ_DATABASE_URL || process.env.DATABASE_URL;
+  if (!value || !value.trim()) {
+    die(
+      'Native mode requires PostgreSQL. Set DATABASE_URL (or AGENT_HQ_DATABASE_URL),\n' +
+      '  or omit --no-docker to use the bundled PostgreSQL 17 stack.'
+    );
+  }
+  return value.trim();
+}
+
+function apiProcessEnv(databaseUrl, extra = {}) {
+  const env = {
+    ...process.env,
+    ...extra,
+    DATABASE_URL: databaseUrl,
+  };
+  // Never let a stale SQLite setting become an implicit fallback in a child.
+  delete env.AGENT_HQ_DB_PATH;
+  delete env.DATABASE_PATH;
+  return env;
 }
 
 function shouldUseShell(executable) {
@@ -555,6 +577,8 @@ export function localStart(flags) {
     localStop();
   }
 
+  const databaseUrl = localDatabaseUrl();
+
   // 1. Fetch / update source
   const sourceDir = ensureSource();
   ensureAgentHqOpenClawPluginConfig(sourceDir);
@@ -571,15 +595,13 @@ export function localStart(flags) {
   // non-mutating — it verifies the schema ledger and refuses to serve a
   // missing or stale database, so migrations must run before launch.
   info('Preparing database…');
-  run('npm run db:migrate', {
+  run('npm run db:install', {
     cwd: join(sourceDir, 'api'),
-    env: {
-      ...process.env,
+    env: apiProcessEnv(databaseUrl, {
       NODE_ENV: 'production',
-      AGENT_HQ_DB_PATH: DB_PATH,
       AGENT_HQ_DATA_DIR: DATA_DIR,
       PATH: runtimePath,
-    },
+    }),
   });
 
   // 5. Start API
@@ -589,14 +611,12 @@ export function localStart(flags) {
     [join(sourceDir, 'api', 'dist', 'index.js')],
     {
       cwd: join(sourceDir, 'api'),
-      env: {
-        ...process.env,
+      env: apiProcessEnv(databaseUrl, {
         NODE_ENV: 'production',
         PORT: apiPort,
-        AGENT_HQ_DB_PATH: DB_PATH,
         AGENT_HQ_DATA_DIR: DATA_DIR,
         PATH: runtimePath,
-      },
+      }),
     },
   );
 
@@ -648,14 +668,14 @@ export function localStart(flags) {
     uiPid,
     apiPort,
     uiPort,
-    dbPath: DB_PATH,
+    database: 'PostgreSQL',
     startedAt: new Date().toISOString(),
   });
 
   success('Agent HQ is starting (local mode)!');
   console.log(`  UI:  http://localhost:${uiPort}`);
   console.log(`  API: http://localhost:${apiPort}`);
-  console.log(`  DB:  ${DB_PATH}`);
+  console.log('  DB:  PostgreSQL');
   console.log(`  Gateway: start and configure OpenClaw separately from Agent HQ.`);
   console.log(
     `\n  Run \x1b[1magent-hq open\x1b[0m to open the UI in your browser.`,
@@ -694,7 +714,7 @@ export function localStatus() {
   console.log(
     `  UI  (PID ${state.uiPid}): ${uiAlive ? '\x1b[32mrunning\x1b[0m' : '\x1b[31mstopped\x1b[0m'}  → http://localhost:${state.uiPort}`,
   );
-  console.log(`  DB:  ${state.dbPath}`);
+  console.log(`  DB:  ${state.database || state.dbPath || 'PostgreSQL'}`);
 
   if (!apiAlive && !uiAlive) {
     warn('Both processes have stopped. Run `agent-hq start` to restart.');

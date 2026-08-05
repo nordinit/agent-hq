@@ -88,15 +88,14 @@ Prompts and defaults:
 | Data directory | `~/.agent-hq` | `~/.agent-hq` | prompt, default `~/.agent-hq` |
 | UI port | `3500` | `3500` | prompt |
 | API port | `3501` | `3501` | prompt |
-| Start mode | local | local | local, Docker optional |
+| Start mode | Docker | Docker | Docker, native PostgreSQL optional |
 
 Behavior:
 
-- Detect existing `~/.agent-hq/agent-hq.db`, `~/.agent-hq/local.json`, and port
-  conflicts.
+- Detect existing Docker state, `~/.agent-hq/local.json`, and port conflicts.
 - Reuse existing state only after showing what will be reused.
-- Prefer local mode for first install. Docker is an explicit self-hosting
-  choice outside the starter prompts.
+- Prefer Docker for first install because it supplies PostgreSQL 17. Native mode
+  is explicit and requires a configured database URL.
 - Generate an instance id or use the API-created id once the local API is
   available.
 
@@ -337,7 +336,7 @@ The CLI may write these files:
 
 | File | Purpose |
 |---|---|
-| `~/.agent-hq/agent-hq.db` | Local SQLite system of record. |
+| `agent-hq-postgres-data` | Docker volume containing the bundled PostgreSQL data. |
 | `~/.agent-hq/local.json` | Runtime process state, ports, mode, source path. |
 | `~/.agent-hq/init-plan.json` | Last generated setup plan before apply. Safe to inspect. |
 | `~/.agent-hq/init-result.json` | Last applied setup summary and verification result. Safe to inspect. |

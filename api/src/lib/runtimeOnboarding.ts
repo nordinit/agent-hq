@@ -59,8 +59,8 @@ async function getSetting(db: Db, key: string): Promise<string | null> {
 async function setSetting(db: Db, key: string, value: string): Promise<void> {
   await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+    VALUES (?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
   `, key, value);
 }
 

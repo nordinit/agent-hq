@@ -17,22 +17,23 @@ import { setupTestDb, teardownTestDb } from "../../db/testDb";
  * nothing in these tests reads them.
  */
 async function seedRun(db: Db): Promise<void> {
-  const project = await db.run(`INSERT INTO projects (name) VALUES ('Backfill Project')`);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (11, 'Backfill Tenant', 'backfill', 1)`);
+  const project = await db.run(`INSERT INTO projects (tenant_id, name) VALUES (11, 'Backfill Project')`);
   const sprint = await db.run(
-    `INSERT INTO sprints (project_id, name) VALUES (?, 'Backfill Sprint')`,
+    `INSERT INTO sprints (tenant_id, project_id, name) VALUES (11, ?, 'Backfill Sprint')`,
     project.lastInsertId,
   );
   await db.run(
-    `INSERT INTO tasks (id, title, sprint_id) VALUES (491, 'Backfilled run', ?)`,
+    `INSERT INTO tasks (id, tenant_id, title, sprint_id) VALUES (491, 11, 'Backfilled run', ?)`,
     sprint.lastInsertId,
   );
   await db.run(`
-    INSERT INTO agents (id, name, runtime_type, session_key, openclaw_agent_id)
-    VALUES (94, 'Cinder', 'openclaw', 'agent:cinder-backend:main', 'cinder-backend')
+    INSERT INTO agents (id, tenant_id, name, runtime_type, session_key, openclaw_agent_id)
+    VALUES (94, 11, 'Cinder', 'openclaw', 'agent:cinder-backend:main', 'cinder-backend')
   `);
   await db.run(`
-    INSERT INTO job_instances (id, agent_id, task_id, session_key, durable_run_id)
-    VALUES (77, 94, 491, 'run:77:current-run', 'current-run')
+    INSERT INTO job_instances (id, tenant_id, agent_id, task_id, session_key, durable_run_id)
+    VALUES (77, 11, 94, 491, 'run:77:current-run', 'current-run')
   `);
 }
 
@@ -120,11 +121,11 @@ describe('OpenClaw JSONL transcript backfill', () => {
 
     expect(result.persistedEvents).toBe(1);
     const rows = await db.all(`
-      SELECT durable_run_id, content
+      SELECT tenant_id, durable_run_id, content
       FROM chat_messages
       WHERE instance_id = 77
-    `) as Array<{ durable_run_id: string | null; content: string }>;
-    expect(rows).toEqual([{ durable_run_id: 'current-run', content: 'current run history' }]);
+    `) as Array<{ tenant_id: number; durable_run_id: string | null; content: string }>;
+    expect(rows).toEqual([{ tenant_id: 11, durable_run_id: 'current-run', content: 'current run history' }]);
   });
 
   it('does not fall back to legacy numeric run sessions before the durable run is indexed', async () => {

@@ -66,6 +66,7 @@ import { openClawGatewayWsOptions } from './openclawGatewayWs';
 import { resolveOpenClawGatewayProtocolVersion } from './openclawGatewayProtocol';
 import type { RuntimeEndEvent } from '../runtimes/types';
 import { resolveChatTerminalEvent } from '../runtimes/openclaw/terminalEvents';
+import { requireRuntimeTenantId } from './runtimeTenantScope';
 import { nowTimestamp, timestampFromEpochMs } from './timestamps';
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -269,21 +270,33 @@ async function chatMessageIdentityColumns(
   values: unknown[];
 }> {
   const columns: string[] = [];
+  const updateColumns: string[] = [];
   const values: unknown[] = [];
 
+  if (await tableHasColumn(db, 'chat_messages', 'tenant_id')) {
+    columns.push('tenant_id');
+    values.push(await requireRuntimeTenantId(db, {
+      instanceId: ctx.instanceId,
+      agentId: ctx.agentId,
+    }));
+  }
   if (await tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
     columns.push('durable_run_id');
+    updateColumns.push('durable_run_id');
     values.push(ctx.durableRunId);
   }
   if (await tableHasColumn(db, 'chat_messages', 'session_key')) {
     columns.push('session_key');
+    updateColumns.push('session_key');
     values.push(ctx.sessionKey);
   }
 
   return {
     insertColumnSql: columns.length ? `${columns.join(', ')}, ` : '',
     valueSql: columns.length ? `${columns.map(() => '?').join(', ')}, ` : '',
-    updateSql: columns.map((column) => `${column} = excluded.${column},`).join('\n        '),
+    // Ownership is immutable for a deterministic message id. Resolve and insert it, but never
+    // let an upsert move an existing transcript row between tenants.
+    updateSql: updateColumns.map((column) => `${column} = excluded.${column},`).join('\n        '),
     values,
   };
 }

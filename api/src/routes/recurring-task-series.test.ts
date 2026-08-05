@@ -27,7 +27,14 @@ async function stopServer(server: Server): Promise<void> {
 
 async function seedFixture(): Promise<void> {
   const db = getDb();
-  const tenantId = await getDefaultTenantId(db);
+  const tenantId = Number((await db.run(`
+    INSERT INTO tenants (name, slug, is_default)
+    VALUES ('Agent HQ', 'agent-hq', 1)
+  `)).lastInsertId);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)
+  `, String(tenantId), String(tenantId));
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (614, ?, 'Recurring API', '', '')`, tenantId);
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (615, ?, 'Other Project', '', '')`, tenantId);
   await db.run(`
@@ -38,11 +45,9 @@ async function seedFixture(): Promise<void> {
       (6151, ?, 615, 'Other Workflow', '', 'recurring_api', 'active', 'time', '2w')
   `, tenantId, tenantId, tenantId);
   await db.run(`
-    INSERT INTO agents (id, tenant_id, name, role, session_key, workspace_path, status, preferred_provider)
-    VALUES (6143, ?, 'Pinned Cinder', 'Backend Engineer', 'agent:pinned-cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
+    INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
+    VALUES (6143, ?, 614, 'Pinned Cinder', 'Backend Engineer', 'agent:pinned-cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
   `, tenantId);
-  // ON CONFLICT DO NOTHING rather than SQLite's INSERT OR IGNORE, which PostgreSQL does not parse.
-  // Both engines accept the bare (target-less) form.
   await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, tenantId);
   await db.run(`DELETE FROM sprint_type_task_types WHERE tenant_id = ? AND sprint_type_key = 'recurring_api'`, tenantId);
   await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, tenantId);
@@ -73,9 +78,6 @@ describe('recurring task series API', () => {
   let triggerDispatchSpy: jest.SpyInstance;
 
   beforeEach(async () => {
-    // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
-    // SQLite and on PostgreSQL. This test keeps no non-database temp state, so the old temp dir
-    // (which only ever held AGENT_HQ_DB_PATH) is gone entirely.
     await setupTestDb();
     await seedFixture();
     triggerDispatchSpy = jest.spyOn(dispatchTrigger, 'triggerDispatch').mockImplementation(() => {});
@@ -290,8 +292,6 @@ describe('recurring task series API', () => {
       url: `/tasks/${body.task.id}`,
     });
     expect(triggerDispatchSpy).toHaveBeenCalledWith(614);
-    // COUNT(*) is a bigint on PostgreSQL and arrives as a string; SQLite returns a number. The
-    // assertion is unchanged — run-now must create no agent run at all.
     const jobInstanceCount = await getDb().get(`SELECT COUNT(*) AS count FROM job_instances`) as { count: number | string };
     expect(Number(jobInstanceCount.count)).toBe(0);
 
@@ -320,8 +320,8 @@ describe('recurring task series API', () => {
       VALUES (7141, ?, 714, 'EcoPool Workflow', '', 'recurring_api', 'active', 'time', '2w')
     `, ecoPoolTenantId);
     await db.run(`
-      INSERT INTO agents (id, tenant_id, name, role, session_key, workspace_path, status, preferred_provider)
-      VALUES (7143, ?, 'EcoPool Agent', 'Backend Engineer', 'agent:ecopool:test', '/tmp/ecopool', 'idle', 'openai-codex')
+      INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
+      VALUES (7143, ?, 714, 'EcoPool Agent', 'Backend Engineer', 'agent:ecopool:test', '/tmp/ecopool', 'idle', 'openai-codex')
     `, ecoPoolTenantId);
     await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, ecoPoolTenantId);
     await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, ecoPoolTenantId);

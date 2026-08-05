@@ -35,8 +35,9 @@ Symptoms:
   string-interpolated into SQL
 - `The database connection is not open` — the promise resolved after teardown closed it
 
-Detector: `scripts/pg/fix-floating-promises.mjs` asks the checker whether a discarded
-expression statement has a `Promise` type. It found 105.
+The migration-time `fix-floating-promises.mjs` detector asked the checker whether a discarded
+expression statement had a `Promise` type. It found 105. That one-off conversion tool was retired
+with the PostgreSQL-only release after the affected code was reviewed.
 
 **Do not fix these in bulk.** Running the fixer across all 105 took failing suites from 41
 to 87 and stopped 539 tests from running at all. Many source-level discarded promises are
@@ -100,7 +101,8 @@ Nine sites, every one a real behavioural bug:
 | `sprint-definitions` | The system `pm` type always visible |
 
 `map`/`forEach`/`flatMap` are fine — an async callback there is normal, usually with
-`Promise.all`. Detector: `scripts/pg/find-promise-conditions.mjs`.
+`Promise.all`. The migration-time `find-promise-conditions.mjs` detector was retired after the
+conversion audit completed.
 
 ### 5. A pragma window that stopped being atomic
 
@@ -182,7 +184,10 @@ production between a shutdown signal and in-flight request work.
    not running — reached through a failing test. Adjusting the test would have buried them.
 6. A test that passes because it stopped checking anything is worse than a failing test.
 
-## Tooling produced
+## Temporary tooling produced
+
+These one-off conversion scripts were removed with the PostgreSQL-only release. Their names and
+purposes remain here as historical context for the defects and review process.
 
 | Script | Purpose |
 |---|---|

@@ -1,10 +1,9 @@
-import Database from 'better-sqlite3';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
+import { type Db } from '../db/adapter/types';
 
 jest.mock('../runtimes', () => ({
   resolveRuntime: jest.fn(() => ({
@@ -66,177 +65,32 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: seedPath, stdio: 'ignore' });
     execFileSync('git', ['push', 'origin', 'main'], { cwd: seedPath, stdio: 'ignore' });
 
-    db = new SqliteAdapter(new Database(':memory:'));
-    await db.exec(`
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER NOT NULL DEFAULT 1,
-        name TEXT,
-        job_title TEXT,
-        project_id INTEGER,
-        job_instructions TEXT,
-        enabled INTEGER,
-        timeout_seconds INTEGER,
-        model TEXT,
-        skill_names TEXT,
-        session_key TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT,
-        hooks_url TEXT,
-        hooks_auth_header TEXT,
-        workspace_path TEXT,
-        preferred_provider TEXT,
-        repo_path TEXT,
-        repo_url TEXT,
-        repo_access_mode TEXT,
-        os_user TEXT,
-        openclaw_agent_id TEXT
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT,
-        description TEXT,
-        status TEXT,
-        priority TEXT,
-        agent_id INTEGER,
-        active_instance_id INTEGER,
-        project_id INTEGER,
-        task_type TEXT,
-        sprint_id INTEGER,
-        created_at TEXT,
-        updated_at TEXT,
-        dispatched_at TEXT,
-        claimed_at TEXT,
-        paused_at TEXT,
-        routing_reason TEXT,
-        first_dispatched_at TEXT,
-        total_dispatch_count INTEGER DEFAULT 0
-      );
-      CREATE TABLE task_dependencies (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        blocked_id INTEGER
-      );
-      CREATE TABLE sprint_task_routing_rules (
-        id INTEGER PRIMARY KEY,
-        sprint_id INTEGER,
-        agent_id INTEGER,
-        status TEXT,
-        task_type TEXT,
-        priority INTEGER
-      );
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER NOT NULL DEFAULT 1,
-        agent_id INTEGER,
-        task_id INTEGER,
-        status TEXT,
-        payload_sent TEXT,
-        worktree_path TEXT,
-        session_key TEXT,
-        dispatched_at TEXT,
-        created_at TEXT,
-        run_id TEXT,
-        response TEXT,
-        error TEXT,
-        completed_at TEXT,
-        effective_model TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE TABLE task_history (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        changed_by TEXT,
-        field TEXT,
-        old_value TEXT,
-        new_value TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE TABLE logs (
-        id INTEGER PRIMARY KEY,
-        instance_id INTEGER,
-        agent_id INTEGER,
-        job_title TEXT,
-        level TEXT,
-        message TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE TABLE dispatch_log (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        agent_id INTEGER,
-        routing_reason TEXT,
-        candidate_count INTEGER,
-        candidates_skipped TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE TABLE projects (
-        id INTEGER PRIMARY KEY,
-        name TEXT,
-        context TEXT
-      );
-      CREATE TABLE sprint_types (
-        key TEXT PRIMARY KEY,
-        repo_required INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        sprint_type TEXT
-      );
-      CREATE TABLE story_point_model_routing (
-        id INTEGER PRIMARY KEY,
-        max_points INTEGER,
-        model TEXT,
-        max_turns INTEGER,
-        max_budget_usd REAL,
-        label TEXT,
-        enabled INTEGER DEFAULT 1,
-        preferred_provider TEXT
-      );
-      CREATE TABLE skills (
-        tenant_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        updated_at TEXT
-      );
-      CREATE TABLE mcp_servers (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER NOT NULL,
-        slug TEXT NOT NULL,
-        updated_at TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1
-      );
-      CREATE TABLE agent_mcp_assignments (
-        id INTEGER PRIMARY KEY,
-        agent_id INTEGER NOT NULL,
-        mcp_server_id INTEGER NOT NULL,
-        overrides TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1
-      );
-    `);
+    db = await setupTestDb();
 
-    await db.run(`INSERT INTO projects (id, name, context) VALUES (1, 'Agent HQ', 'Context')`);
-    await db.run(`INSERT INTO sprint_types (key, repo_required) VALUES ('generic', 0), ('dev', 1)`);
-    await db.run(`INSERT INTO sprints (id, sprint_type) VALUES (9, 'generic')`);
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default', 'default', 1)`);
+    await db.run(`INSERT INTO projects (id, tenant_id, name, context_md) VALUES (1, 1, 'Agent HQ', 'Context')`);
+    await db.run(`
+      INSERT INTO sprint_types (tenant_id, key, name, repo_required)
+      VALUES (1, 'generic', 'Generic', 0), (1, 'dev', 'Development', 1)
+    `);
+    await db.run(`
+      INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+      VALUES (9, 1, 1, 'Repository modes', 'generic')
+    `);
     await db.run(`
       INSERT INTO agents (
-        id, name, job_title, project_id, job_instructions, enabled, timeout_seconds, model,
+        id, tenant_id, name, job_title, project_id, job_instructions, enabled, timeout_seconds, model,
         skill_names, session_key, runtime_type, runtime_config, hooks_url, hooks_auth_header,
         workspace_path, preferred_provider, repo_path, repo_url, repo_access_mode, os_user, openclaw_agent_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, 1, 'Cinder', 'Backend Engineer', 1, 'Do the work', 1, 900, null, null, 'agent:cinder-backend:main', 'openclaw', null, null, null, workspaceRoot, null, null, remotePath, 'clone', null, 'cinder-backend');
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, 1, 1, 'Cinder', 'Backend Engineer', 1, 'Do the work', 1, 900, null, '[]', 'agent:cinder-backend:main', 'openclaw', null, null, null, workspaceRoot, 'anthropic', null, remotePath, 'clone', null, 'cinder-backend');
     await db.run(`
-      INSERT INTO tasks (id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
-      VALUES (373, 'Agent repo source modes', 'Test task', 'ready', 'high', 1, 'implementation', 9, datetime('now'), datetime('now'))
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
+      VALUES (373, 1, 'Agent repo source modes', 'Test task', 'ready', 'high', 1, 'implementation', 9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (id, sprint_id, agent_id, status, task_type, priority)
-      VALUES (1, 9, 1, 'ready', 'implementation', 100)
+      INSERT INTO sprint_task_routing_rules (id, tenant_id, project_id, sprint_id, agent_id, status, task_type, priority)
+      VALUES (1, 1, 1, 9, 1, 'ready', 'implementation', 100)
     `);
 
     runtimeDispatch = jest.fn(async () => ({ runId: 'run-test' }));
@@ -254,7 +108,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
     fs.rmSync(tempRoot, { recursive: true, force: true });
     jest.clearAllMocks();
   });
@@ -429,8 +283,8 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
   it('dispatchInstance uses persisted repo workspace as runtime working directory', async () => {
     const repoWorkspacePath = path.join(workspaceRoot, 'task-373');
     await db.run(`
-      INSERT INTO job_instances (id, agent_id, task_id, status, payload_sent, created_at)
-      VALUES (?, ?, ?, ?, ?, datetime('now'))
+      INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, payload_sent, created_at)
+      VALUES (?, 1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `, 900, 1, 373, 'queued', JSON.stringify({
               repoAccessMode: 'clone',
               repoSource: `clone:${remotePath}`,

@@ -1,4 +1,4 @@
-import { createNotificationRecord, ensureNotificationTables } from './notifications';
+import { createNotificationRecord } from './notifications';
 import { type Db } from "../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 import { nowTimestamp, timestampFromEpochMs } from './timestamps';
@@ -137,13 +137,8 @@ async function alreadyRecordedRecentFailure(
   taskId: number,
   failureCategory: string,
 ): Promise<boolean> {
-  await ensureNotificationTables(db);
-  // The window is computed here and bound as one value. Two things in the original were
-  // SQLite-only: datetime('now', ?) cannot be translated, because an interval literal has to
-  // be known at translation time rather than arriving as a parameter; and datetime(created_at)
-  // wrapped a column that is ALREADY canonical-format text, so on SQLite it was a no-op and on
-  // PostgreSQL there is no such function. Comparing the text directly is what SQLite was
-  // effectively doing, and it sorts correctly because the format is fixed-width.
+  // Compute the window once in the caller and bind the canonical value. Direct text comparison
+  // is chronological because the stored UTC representation is fixed-width.
   const cutoff = timestampFromEpochMs(Date.now() - DEDUP_WINDOW_MINUTES * 60 * 1000) ?? nowTimestamp();
   const rows = await db.all(`
     SELECT metadata_json

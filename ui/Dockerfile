@@ -14,7 +14,8 @@ WORKDIR /build
 COPY --from=deps /build/node_modules ./node_modules
 COPY ui/ ./
 
-ENV NEXT_PUBLIC_API_URL=http://agent-hq-api:3501
+ARG NEXT_PUBLIC_API_URL=http://localhost:3501
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
@@ -23,12 +24,15 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 
+RUN addgroup -S agenthq && adduser -S agenthq -G agenthq
+
 ENV NODE_ENV=production
 ENV PORT=3500
 ENV NEXT_TELEMETRY_DISABLED=1
 
-COPY --from=builder /build/.next/standalone ./
-COPY --from=builder /build/.next/static ./.next/static
+COPY --from=builder --chown=agenthq:agenthq /build/.next/standalone ./
+COPY --from=builder --chown=agenthq:agenthq /build/.next/static ./.next/static
 
 EXPOSE 3500
+USER agenthq
 CMD ["node", "server.js"]

@@ -1,6 +1,5 @@
 import { getDb } from './client';
-import { initSchema } from './schema';
-import { describeSqliteOnly, setupTestDb, teardownTestDb, usingPostgres } from './testDb';
+import { setupTestDb, teardownTestDb } from './testDb';
 import { getDefaultTenantId } from '../lib/tenantContext';
 import { createTaskRecord } from '../domains/tasks/writeModel';
 import {
@@ -14,9 +13,7 @@ import {
  * and the driver normalises it. The phrase is still engine-EXACT rather than a loose /unique/i, so
  * a foreign-key or CHECK failure cannot satisfy the assertion by accident.
  */
-const UNIQUE_VIOLATION = usingPostgres()
-  ? 'duplicate key value violates unique constraint'
-  : 'UNIQUE constraint failed';
+const UNIQUE_VIOLATION = 'duplicate key value violates unique constraint';
 
 const LOOKUP_INDEXES = [
   'idx_recurring_task_series_due',
@@ -25,31 +22,28 @@ const LOOKUP_INDEXES = [
   'idx_tasks_generated_occurrence_unique',
 ];
 
-/** sqlite_master has no PostgreSQL equivalent; pg_indexes is the catalog that answers the same question. */
+/** Read the PostgreSQL catalog rather than inferring index existence from behavior. */
 async function lookupIndexNames(): Promise<string[]> {
   const db = getDb();
   const placeholders = LOOKUP_INDEXES.map(() => '?').join(', ');
-  const rows = usingPostgres()
-    ? await db.all(`
+  const rows = await db.all(`
         SELECT indexname AS name
         FROM pg_indexes
         WHERE schemaname = 'public'
           AND indexname IN (${placeholders})
         ORDER BY indexname ASC
-      `, ...LOOKUP_INDEXES)
-    : await db.all(`
-        SELECT name
-        FROM sqlite_master
-        WHERE type = 'index'
-          AND name IN (${placeholders})
-        ORDER BY name ASC
       `, ...LOOKUP_INDEXES);
   return (rows as Array<{ name: string }>).map(row => row.name);
 }
 
 describe('recurring task scheduling schema', () => {
   beforeEach(async () => {
-    await setupTestDb();
+    const db = await setupTestDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Recurring Tasks', 'recurring-tasks', 1)`);
+    await db.run(`
+      INSERT INTO app_settings (key, value)
+      VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
+    `);
   });
 
   afterEach(async () => {
@@ -167,16 +161,7 @@ describe('recurring task scheduling schema', () => {
           idempotency_key: `${series.id}:${scheduledFor}`,
         });
 
-    // Asserted on the rejection VALUE. A bare .rejects.toThrow() is order-dependent here:
-
-    // better-sqlite3 is a native addon, and a SqliteError raised from the second test file
-
-    // loaded in a jest worker fails `instanceof Error` (the addon keeps the constructor from
-
-    // the first module-registry load), so toThrow cannot classify it and reports "did not
-
-    // throw" despite a correct rejection.
-
+    // Match the concrete PostgreSQL unique-constraint error rather than accepting any rejection.
     await expect((async () => await recordRecurringTaskRun(db, {
                 series_id: series.id,
                 scheduled_for: scheduledFor,
@@ -197,16 +182,7 @@ describe('recurring task scheduling schema', () => {
             generated_from: 'recurring_task_series',
           }, 'scheduler');
 
-    // Asserted on the rejection VALUE. A bare .rejects.toThrow() is order-dependent here:
-
-    // better-sqlite3 is a native addon, and a SqliteError raised from the second test file
-
-    // loaded in a jest worker fails `instanceof Error` (the addon keeps the constructor from
-
-    // the first module-registry load), so toThrow cannot classify it and reports "did not
-
-    // throw" despite a correct rejection.
-
+    // The second occurrence must fail for the intended unique index, not another constraint.
     await expect((async () => await createTaskRecord(db, {
                 title: 'Daily QA sweep duplicate',
                 status: 'in_progress',
@@ -228,71 +204,5 @@ describe('recurring task scheduling schema', () => {
       'idx_tasks_generated_lookup',
       'idx_tasks_generated_occurrence_unique',
     ]);
-  });
-});
-
-/**
- * SQLite-only on purpose, and not a conversion gap.
- *
- * What this covers is initSchema()'s in-place ALTER TABLE migration of a pre-existing tasks table,
- * which exists solely to carry legacy SQLite installs forward. PostgreSQL gets those columns from
- * db/pg-baseline, so there is no PostgreSQL behaviour here to exercise — running it there would
- * assert against the baseline rather than against the migration.
- */
-describeSqliteOnly('recurring task schema legacy migration', () => {
-  beforeEach(async () => {
-    await setupTestDb();
-  });
-
-  afterEach(async () => {
-    await teardownTestDb();
-  });
-
-  it('migrates an existing tasks table before creating generated-task indexes', async () => {
-    // Replace the fully-migrated tasks table with the legacy shape, rather than bootstrapping a
-    // second database by hand: setupTestDb() owns AGENT_HQ_DB_PATH now. initSchema() creates tasks
-    // with IF NOT EXISTS, so the legacy table below is what it has to migrate. Dropping it also
-    // drops its indexes, so idx_tasks_generated_lookup really is re-created rather than left over.
-    await getDb().exec(`
-      DROP TABLE tasks;
-      CREATE TABLE tasks (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        title        TEXT NOT NULL,
-        description  TEXT NOT NULL DEFAULT '',
-        status       TEXT NOT NULL DEFAULT 'todo',
-        priority     TEXT NOT NULL DEFAULT 'medium',
-        project_id   INTEGER,
-        agent_id     INTEGER,
-        created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
-        dispatched_at TEXT,
-        active_instance_id INTEGER,
-        task_type    TEXT,
-        story_points INTEGER,
-        custom_fields_json TEXT NOT NULL DEFAULT '{}'
-      );
-    `);
-
-    // The premise, pinned: setupTestDb() hands over a fully-migrated tasks table, so if the drop
-    // above ever stopped working this test would assert the migration's outcome against a table
-    // that never needed migrating, and pass for no reason.
-    const before = await getDb().all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>;
-    expect(before.map(col => col.name)).not.toContain('recurring_series_id');
-
-    await initSchema();
-
-    const db = getDb();
-    const columns = await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>;
-    expect(columns.map(col => col.name)).toEqual(expect.arrayContaining([
-      'recurring_series_id',
-      'scheduled_for',
-      'schedule_run_id',
-      'generated_from',
-    ]));
-    expect(await db.get(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'index' AND name = 'idx_tasks_generated_lookup'
-    `)).toEqual({ name: 'idx_tasks_generated_lookup' });
   });
 });

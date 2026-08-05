@@ -33,7 +33,7 @@ Options:
   --port-api <port>   Host port for the API  (default: 3501, env: AGENT_HQ_API_PORT)
   --port-ui  <port>   Host port for the UI   (default: 3500, env: AGENT_HQ_UI_PORT)
   --docker            Run with Docker Compose
-  --no-docker         Alias for local mode (kept for compatibility)
+  --no-docker         Run native Node processes (requires DATABASE_URL)
   --api-url <url>     Agent HQ API base URL for API-backed onboarding/status
   --skip-provider     Skip provider setup in API-backed onboarding
   --skip-template     Skip starter project/workflow/agent setup in API-backed onboarding
@@ -49,8 +49,8 @@ Init options:
   --skip-providers       Leave provider setup out of the plan
   --skip-runtime         Leave runtime setup out of the plan
 
-Agent HQ defaults to local mode.
-Use --docker only when you explicitly want the Docker Compose stack.
+Agent HQ defaults to Docker Compose, including PostgreSQL 17.
+Native mode is explicit and requires DATABASE_URL or AGENT_HQ_DATABASE_URL.
 
 Examples:
   agent-hq init --dry-run
@@ -216,8 +216,8 @@ function openBrowser(url) {
 }
 
 /**
- * Determine whether to use local mode.
- * Local is the default. Docker is only used when --docker is passed.
+ * Docker is the zero-config default because it includes PostgreSQL. Native mode
+ * remains available explicitly and requires an existing PostgreSQL URL.
  */
 function shouldUseLocalMode(flags) {
   if (flags.docker) {
@@ -225,13 +225,17 @@ function shouldUseLocalMode(flags) {
       die(
         'Docker mode was requested, but Docker is not available.\n' +
         '  Install Docker Desktop: https://docs.docker.com/get-docker/\n' +
-        '  Or run without --docker to use local mode.'
+        '  Or use --no-docker with an explicit DATABASE_URL.'
       );
     }
     return false;
   }
   if (flags.noDocker) return true;
-  return true;
+  if (isDockerAvailable()) return false;
+  die(
+    'Docker is unavailable. Native mode is never selected implicitly.\n' +
+    '  Install Docker Desktop for the bundled PostgreSQL stack, or retry with --no-docker and an explicit DATABASE_URL.'
+  );
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -265,12 +269,9 @@ function cmdStart(flags) {
 
 function cmdStop(flags) {
   const localState = readLocalState();
-  if (!flags.docker && localState && localState.mode === 'local') {
-    localStop();
-    return;
-  }
-
-  if (!flags.docker) {
+  // Match start/restart's mode contract: an existing native state wins unless Docker was
+  // requested explicitly; otherwise plain commands address the default Docker deployment.
+  if (flags.noDocker || (!flags.docker && localState?.mode === 'local')) {
     localStop();
     return;
   }
@@ -312,16 +313,13 @@ function cmdRestart(flags) {
 
 async function cmdStatus(flags) {
   const localState = readLocalState();
-  if (!flags.docker && localState && localState.mode === 'local') {
+  if (flags.noDocker || (!flags.docker && localState?.mode === 'local')) {
     localStatus();
-    await printRuntimeStatus(`http://localhost:${localState.apiPort}`).catch(error => {
-      warn(`Runtime status unavailable: ${error.message}`);
-    });
-    return;
-  }
-
-  if (!flags.docker) {
-    localStatus();
+    if (localState?.mode === 'local') {
+      await printRuntimeStatus(`http://localhost:${localState.apiPort}`).catch(error => {
+        warn(`Runtime status unavailable: ${error.message}`);
+      });
+    }
     return;
   }
 

@@ -1,7 +1,8 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import Database from 'better-sqlite3';
+import { type Db } from '../db/adapter/types';
 
 jest.mock('../runtimes', () => ({
   resolveRuntime: jest.fn(),
@@ -27,7 +28,15 @@ jest.mock('../runtimes/skillMaterialization', () => ({
 }));
 
 jest.mock('../runtimes/mcpMaterialization', () => ({
-  syncAssignedMcpForAgent: jest.fn(() => ({ ok: true, count: 0, warnings: [] })),
+  syncAssignedMcpForAgent: jest.fn(() => ({
+    ok: true,
+    count: 0,
+    path: '',
+    bundlePath: '',
+    openClawConfigPath: '',
+    serverNames: [],
+    warnings: [],
+  })),
 }));
 
 jest.mock('../lib/githubIdentity', () => ({
@@ -51,7 +60,6 @@ jest.mock('../lib/agentHqBaseUrl', () => ({
 import { resolveRuntime } from '../runtimes';
 import type { AgentRuntime } from '../runtimes';
 import { dispatchInstance, resolveModelFromStoryPoints, runDispatcher } from './dispatcher';
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolveRuntime>;
 const mockedTaskNotifications = jest.requireMock('../lib/taskNotifications') as {
@@ -72,26 +80,54 @@ function mockRuntime(dispatch: jest.Mock): AgentRuntime {
   };
 }
 
+async function seedProjectParents(
+  db: Db,
+  options: {
+    projectTenantId?: number;
+    sprints?: Array<{ id: number; sprintType: string; tenantId?: number; name?: string }>;
+  } = {},
+): Promise<void> {
+  const projectTenantId = options.projectTenantId ?? 1;
+  await db.run(`
+    INSERT INTO tenants (id, name, slug, is_default)
+    VALUES
+      (1, 'Default Tenant', 'default', 1),
+      (2, 'Tenant Two', 'tenant-two', 0),
+      (4, 'Tenant Four', 'tenant-four', 0)
+  `);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, ?, 'Agent HQ')`, projectTenantId);
+  for (const sprint of options.sprints ?? []) {
+    await db.run(`
+      INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
+      VALUES (?, ?, 86, ?, ?, 'active')
+    `, sprint.id, sprint.tenantId ?? projectTenantId, sprint.name ?? `Workflow ${sprint.id}`, sprint.sprintType);
+  }
+}
+
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  description: string,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function waitForInstanceDispatchPersistence(db: Db, instanceId: number): Promise<void> {
+  await waitFor(async () => {
+    const row = await db.get(`SELECT response FROM job_instances WHERE id = ?`, instanceId) as { response: string | null } | undefined;
+    return Boolean(row?.response);
+  }, `job instance #${instanceId} runtime response persistence`);
+}
+
 describe('runDispatcher thinking-level routing', () => {
   it('resolveModelFromStoryPoints returns configured thinking_level', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE story_point_model_routing (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        max_points INTEGER NOT NULL,
-        provider TEXT,
-        model TEXT NOT NULL,
-        fallback_model TEXT,
-        max_turns INTEGER,
-        max_budget_usd REAL,
-        thinking_level TEXT,
-        label TEXT
-      );
-    `);
-
+    const db = await setupTestDb();
+    await seedProjectParents(db);
     await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
       VALUES (86, NULL, 5, 'anthropic', 'anthropic/claude-sonnet-4-6', 'medium', 'default route')
@@ -106,29 +142,12 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'default route',
     });
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('resolveModelFromStoryPoints ignores disabled rules', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE story_point_model_routing (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        max_points INTEGER NOT NULL,
-        provider TEXT,
-        model TEXT NOT NULL,
-        fallback_model TEXT,
-        max_turns INTEGER,
-        max_budget_usd REAL,
-        thinking_level TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        label TEXT
-      );
-    `);
-
+    const db = await setupTestDb();
+    await seedProjectParents(db);
     await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, enabled, label)
       VALUES
@@ -141,28 +160,12 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'enabled route',
     }));
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('resolveModelFromStoryPoints prefers sprint scoped rules before project scoped rules', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE story_point_model_routing (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        max_points INTEGER NOT NULL,
-        provider TEXT,
-        model TEXT NOT NULL,
-        fallback_model TEXT,
-        max_turns INTEGER,
-        max_budget_usd REAL,
-        thinking_level TEXT,
-        label TEXT
-      );
-    `);
-
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 57, sprintType: 'generic' }] });
     await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
       VALUES
@@ -188,37 +191,18 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'project',
     });
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('resolveModelFromStoryPoints applies sprint-type scoped rules between sprint and project scopes', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        project_id INTEGER,
-        sprint_type TEXT
-      );
-
-      CREATE TABLE story_point_model_routing (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        sprint_type TEXT,
-        max_points INTEGER NOT NULL,
-        provider TEXT,
-        model TEXT NOT NULL,
-        fallback_model TEXT,
-        max_turns INTEGER,
-        max_budget_usd REAL,
-        thinking_level TEXT,
-        label TEXT
-      );
-
-      INSERT INTO sprints (id, project_id, sprint_type) VALUES (57, 86, 'dev'), (58, 86, 'dev'), (59, 86, 'generic');
-    `);
-
+    const db = await setupTestDb();
+    await seedProjectParents(db, {
+      sprints: [
+        { id: 57, sprintType: 'dev' },
+        { id: 58, sprintType: 'dev' },
+        { id: 59, sprintType: 'generic' },
+      ],
+    });
     await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, sprint_type, max_points, provider, model, thinking_level, label)
       VALUES
@@ -256,28 +240,12 @@ describe('runDispatcher thinking-level routing', () => {
       label: 'global-dev-default',
     }));
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('resolveModelFromStoryPoints ignores legacy global rows with no explicit scope', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE story_point_model_routing (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        max_points INTEGER NOT NULL,
-        provider TEXT,
-        model TEXT NOT NULL,
-        fallback_model TEXT,
-        max_turns INTEGER,
-        max_budget_usd REAL,
-        thinking_level TEXT,
-        label TEXT
-      );
-    `);
-
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 57, sprintType: 'generic' }] });
     await db.run(`
       INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
       VALUES (NULL, NULL, 5, 'openai-codex', 'openai/gpt-5.4', 'medium', 'legacy-global')
@@ -285,30 +253,12 @@ describe('runDispatcher thinking-level routing', () => {
 
     expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toBeNull();
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('resolveModelFromStoryPoints requires tenant-scoped routing rows to match the task tenant', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE story_point_model_routing (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tenant_id INTEGER,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        sprint_type TEXT,
-        max_points INTEGER NOT NULL,
-        provider TEXT,
-        model TEXT NOT NULL,
-        fallback_model TEXT,
-        max_turns INTEGER,
-        max_budget_usd REAL,
-        thinking_level TEXT,
-        label TEXT
-      );
-    `);
-
+    const db = await setupTestDb();
+    await seedProjectParents(db, { projectTenantId: 4 });
     await db.run(`
       INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, sprint_type, max_points, provider, model, thinking_level, label)
       VALUES
@@ -322,157 +272,15 @@ describe('runDispatcher thinking-level routing', () => {
     }));
     expect(await resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 2, projectId: 86, sprintType: 'dev' })).toBeNull();
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('passes routed thinking_level into runtime dispatch and persists resolved output', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        job_title TEXT NOT NULL,
-        project_id INTEGER,
-        job_instructions TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        timeout_seconds INTEGER NOT NULL,
-        model TEXT,
-        skill_names TEXT,
-        session_key TEXT NOT NULL,
-        name TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT,
-        hooks_url TEXT,
-        hooks_auth_header TEXT,
-        workspace_path TEXT,
-        preferred_provider TEXT,
-        repo_path TEXT,
-        repo_url TEXT,
-        repo_access_mode TEXT,
-        os_user TEXT,
-        openclaw_agent_id TEXT,
-        sort_rules TEXT NOT NULL DEFAULT '[]'
-      );
-
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        agent_id INTEGER,
-        project_id INTEGER,
-        task_type TEXT,
-        sprint_id INTEGER,
-        created_at TEXT NOT NULL,
-        story_points INTEGER,
-        active_instance_id INTEGER,
-        paused_at TEXT,
-        dispatched_at TEXT,
-        claimed_at TEXT,
-        routing_reason TEXT,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        max_retries INTEGER NOT NULL DEFAULT 3,
-        updated_at TEXT
-      );
-
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        name TEXT,
-        sprint_type TEXT,
-        status TEXT
-      );
-
-      CREATE TABLE sprint_task_routing_rules (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sprint_id INTEGER NOT NULL,
-        task_type TEXT,
-        status TEXT NOT NULL,
-        agent_id INTEGER NOT NULL,
-        priority INTEGER NOT NULL DEFAULT 0
-      );
-
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tenant_id INTEGER,
-        agent_id INTEGER NOT NULL,
-        task_id INTEGER,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        dispatched_at TEXT,
-        payload_sent TEXT,
-        worktree_path TEXT,
-        session_key TEXT,
-        response TEXT,
-        error TEXT,
-        completed_at TEXT,
-        effective_model TEXT,
-        effective_thinking_level TEXT,
-        effective_fast_mode INTEGER
-      );
-
-      CREATE TABLE story_point_model_routing (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tenant_id INTEGER,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        max_points INTEGER NOT NULL,
-        provider TEXT,
-        model TEXT NOT NULL,
-        fallback_model TEXT,
-        max_turns INTEGER,
-        max_budget_usd REAL,
-        thinking_level TEXT,
-        fast_mode INTEGER,
-        label TEXT
-      );
-
-      CREATE TABLE dispatch_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        agent_id INTEGER,
-        routing_reason TEXT,
-        candidate_count INTEGER,
-        candidates_skipped TEXT
-      );
-
-      CREATE TABLE task_dependencies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        blocker_id INTEGER,
-        blocked_id INTEGER
-      );
-
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE task_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        changed_by TEXT,
-        field TEXT,
-        old_value TEXT,
-        new_value TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        instance_id INTEGER,
-        agent_id INTEGER,
-        job_title TEXT,
-        level TEXT,
-        message TEXT
-      );
-    `);
-
+    const db = await setupTestDb();
+    await seedProjectParents(db, {
+      projectTenantId: 4,
+      sprints: [{ id: 10, sprintType: 'generic', tenantId: 4 }],
+    });
     await db.run(`
       INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, sort_rules)
       VALUES (1, 4, 'Backend Engineer', 86, 'Do the task', 1, 900, 'openai/gpt-5.5', '[]', 'agent:backend:main', 'Cinder', 'openclaw', '{}', '/tmp', 'openai', '[]')
@@ -491,13 +299,8 @@ describe('runDispatcher thinking-level routing', () => {
     `);
 
     await db.run(`
-      INSERT INTO sprints (id, tenant_id, name, sprint_type, status)
-      VALUES (10, 4, 'Bugs', 'generic', 'active')
-    `);
-
-    await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
-      VALUES (10, 'backend', 'ready', 1, 5)
+      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (4, 10, 86, 'generic', 'backend', 'ready', 1, 5)
     `);
 
     const callOrder: string[] = [];
@@ -522,7 +325,7 @@ describe('runDispatcher thinking-level routing', () => {
     const result = await runDispatcher(db, 86);
     expect(result.dispatched).toBe(1);
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForInstanceDispatchPersistence(db, 1);
 
     expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
       model: 'openai/gpt-5.5',
@@ -547,173 +350,25 @@ describe('runDispatcher thinking-level routing', () => {
       effective_fast_mode: 1,
     });
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('makes task worktree authoritative for runtime cwd and repo-root metadata', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER NOT NULL DEFAULT 1,
-        job_title TEXT NOT NULL,
-        project_id INTEGER,
-        job_instructions TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        timeout_seconds INTEGER NOT NULL,
-        model TEXT,
-        skill_names TEXT,
-        session_key TEXT NOT NULL,
-        name TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT,
-        hooks_url TEXT,
-        hooks_auth_header TEXT,
-        workspace_path TEXT,
-        preferred_provider TEXT,
-        repo_path TEXT,
-        repo_url TEXT,
-        repo_access_mode TEXT,
-        os_user TEXT,
-        openclaw_agent_id TEXT,
-        sort_rules TEXT NOT NULL DEFAULT '[]'
-      );
-
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        agent_id INTEGER,
-        project_id INTEGER,
-        task_type TEXT,
-        sprint_id INTEGER,
-        created_at TEXT NOT NULL,
-        story_points INTEGER,
-        active_instance_id INTEGER,
-        paused_at TEXT,
-        dispatched_at TEXT,
-        claimed_at TEXT,
-        routing_reason TEXT,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        max_retries INTEGER NOT NULL DEFAULT 3,
-        updated_at TEXT
-      );
-
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        name TEXT,
-        sprint_type TEXT,
-        status TEXT
-      );
-
-      CREATE TABLE sprint_task_routing_rules (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sprint_id INTEGER NOT NULL,
-        task_type TEXT,
-        status TEXT NOT NULL,
-        agent_id INTEGER NOT NULL,
-        priority INTEGER NOT NULL DEFAULT 0
-      );
-
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tenant_id INTEGER NOT NULL DEFAULT 1,
-        agent_id INTEGER NOT NULL,
-        task_id INTEGER,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        dispatched_at TEXT,
-        payload_sent TEXT,
-        worktree_path TEXT,
-        session_key TEXT,
-        response TEXT,
-        error TEXT,
-        completed_at TEXT,
-        effective_model TEXT,
-        effective_thinking_level TEXT
-      );
-
-      CREATE TABLE dispatch_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        agent_id INTEGER,
-        routing_reason TEXT,
-        candidate_count INTEGER,
-        candidates_skipped TEXT
-      );
-
-      CREATE TABLE task_dependencies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        blocker_id INTEGER,
-        blocked_id INTEGER
-      );
-
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE task_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        changed_by TEXT,
-        field TEXT,
-        old_value TEXT,
-        new_value TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        instance_id INTEGER,
-        agent_id INTEGER,
-        job_title TEXT,
-        level TEXT,
-        message TEXT
-      );
-
-      CREATE TABLE skills (tenant_id INTEGER NOT NULL, name TEXT NOT NULL, updated_at TEXT);
-      CREATE TABLE mcp_servers (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER NOT NULL,
-        slug TEXT NOT NULL,
-        updated_at TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1
-      );
-      CREATE TABLE agent_mcp_assignments (
-        id INTEGER PRIMARY KEY,
-        agent_id INTEGER NOT NULL,
-        mcp_server_id INTEGER NOT NULL,
-        overrides TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1
-      );
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
+    await db.run(`
+      INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
+      VALUES (1, 1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'claude-code', '{"workingDirectory":"  /parent/workspace/../workspace-root  "}', '/parent/workspace', 'anthropic', '/repos/agent-hq', '[]')
     `);
 
     await db.run(`
-      INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
-      VALUES (1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'claude-code', '{"workingDirectory":"  /parent/workspace/../workspace-root  "}', '/parent/workspace', 'anthropic', '/repos/agent-hq', '[]')
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
+      VALUES (375, 1, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
     `);
 
     await db.run(`
-      INSERT INTO tasks (id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
-      VALUES (375, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
-    `);
-
-    await db.run(`
-      INSERT INTO sprints (id, name, sprint_type, status)
-      VALUES (10, 'Bugs', 'generic', 'active')
-    `);
-
-    await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
-      VALUES (10, 'backend', 'ready', 1, 5)
+      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 5)
     `);
 
     const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-375' });
@@ -741,7 +396,7 @@ describe('runDispatcher thinking-level routing', () => {
     const result = await runDispatcher(db, 86);
     expect(result.dispatched).toBe(1);
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForInstanceDispatchPersistence(db, 1);
 
     const runtimeParams = dispatchMock.mock.calls[0]?.[0];
     expect(runtimeParams).toMatchObject({
@@ -795,178 +450,31 @@ describe('runDispatcher thinking-level routing', () => {
     const instance = await db.get(`SELECT worktree_path FROM job_instances LIMIT 1`) as { worktree_path: string | null };
     expect(instance.worktree_path).toBe('/Users/test/workspaces/task-375');
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('writes run context into the active worktree with consistent repo-root metadata', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatcher-worktree-'));
     const workspaceRoot = path.join(tempRoot, 'workspace-root');
     const worktreeRoot = path.join(workspaceRoot, 'task-375');
     fs.mkdirSync(worktreeRoot, { recursive: true });
 
     try {
-      await db.exec(`
-        CREATE TABLE agents (
-          id INTEGER PRIMARY KEY,
-          tenant_id INTEGER NOT NULL DEFAULT 1,
-          job_title TEXT NOT NULL,
-          project_id INTEGER,
-          job_instructions TEXT NOT NULL,
-          enabled INTEGER NOT NULL,
-          timeout_seconds INTEGER NOT NULL,
-          model TEXT,
-          skill_names TEXT,
-          session_key TEXT NOT NULL,
-          name TEXT,
-          runtime_type TEXT,
-          runtime_config TEXT,
-          hooks_url TEXT,
-          hooks_auth_header TEXT,
-          workspace_path TEXT,
-          preferred_provider TEXT,
-          repo_path TEXT,
-          repo_url TEXT,
-          repo_access_mode TEXT,
-          os_user TEXT,
-          openclaw_agent_id TEXT,
-          sort_rules TEXT NOT NULL DEFAULT '[]'
-        );
-
-        CREATE TABLE tasks (
-          id INTEGER PRIMARY KEY,
-          title TEXT NOT NULL,
-          description TEXT NOT NULL,
-          status TEXT NOT NULL,
-          priority TEXT NOT NULL,
-          agent_id INTEGER,
-          project_id INTEGER,
-          task_type TEXT,
-          sprint_id INTEGER,
-          created_at TEXT NOT NULL,
-          story_points INTEGER,
-          active_instance_id INTEGER,
-          paused_at TEXT,
-          dispatched_at TEXT,
-          claimed_at TEXT,
-          routing_reason TEXT,
-          retry_count INTEGER NOT NULL DEFAULT 0,
-          max_retries INTEGER NOT NULL DEFAULT 3,
-          updated_at TEXT
-        );
-
-        CREATE TABLE sprints (
-          id INTEGER PRIMARY KEY,
-          name TEXT,
-          sprint_type TEXT,
-          status TEXT
-        );
-
-        CREATE TABLE sprint_task_routing_rules (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          sprint_id INTEGER NOT NULL,
-          task_type TEXT,
-          status TEXT NOT NULL,
-          agent_id INTEGER NOT NULL,
-          priority INTEGER NOT NULL DEFAULT 0
-        );
-
-        CREATE TABLE job_instances (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          tenant_id INTEGER NOT NULL DEFAULT 1,
-          agent_id INTEGER NOT NULL,
-          task_id INTEGER,
-          status TEXT NOT NULL,
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          dispatched_at TEXT,
-          payload_sent TEXT,
-          worktree_path TEXT,
-          session_key TEXT,
-          response TEXT,
-          error TEXT,
-          completed_at TEXT,
-          effective_model TEXT,
-          effective_thinking_level TEXT
-        );
-
-        CREATE TABLE dispatch_log (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          task_id INTEGER,
-          agent_id INTEGER,
-          routing_reason TEXT,
-          candidate_count INTEGER,
-          candidates_skipped TEXT
-        );
-
-        CREATE TABLE task_dependencies (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          blocker_id INTEGER,
-          blocked_id INTEGER
-        );
-
-        CREATE TABLE task_notes (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          task_id INTEGER,
-          author TEXT,
-          content TEXT,
-          created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE task_history (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          task_id INTEGER,
-          changed_by TEXT,
-          field TEXT,
-          old_value TEXT,
-          new_value TEXT,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE logs (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          instance_id INTEGER,
-          agent_id INTEGER,
-          job_title TEXT,
-          level TEXT,
-          message TEXT
-        );
-
-        CREATE TABLE skills (tenant_id INTEGER NOT NULL, name TEXT NOT NULL, updated_at TEXT);
-        CREATE TABLE mcp_servers (
-          id INTEGER PRIMARY KEY,
-          tenant_id INTEGER NOT NULL,
-          slug TEXT NOT NULL,
-          updated_at TEXT,
-          enabled INTEGER NOT NULL DEFAULT 1
-        );
-        CREATE TABLE agent_mcp_assignments (
-          id INTEGER PRIMARY KEY,
-          agent_id INTEGER NOT NULL,
-          mcp_server_id INTEGER NOT NULL,
-          overrides TEXT,
-          enabled INTEGER NOT NULL DEFAULT 1
-        );
-      `);
-
       await db.run(`
-        INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
-        VALUES (1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'claude-code', '{"workingDirectory":"/stale/root"}', ?, 'anthropic', '/repos/agent-hq', '[]')
+        INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
+        VALUES (1, 1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'claude-code', '{"workingDirectory":"/stale/root"}', ?, 'anthropic', '/repos/agent-hq', '[]')
       `, workspaceRoot);
 
       await db.run(`
-        INSERT INTO tasks (id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
-        VALUES (375, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
+        INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
+        VALUES (375, 1, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
       `);
 
       await db.run(`
-        INSERT INTO sprints (id, name, sprint_type, status)
-        VALUES (10, 'Bugs', 'generic', 'active')
-      `);
-
-      await db.run(`
-        INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
-        VALUES (10, 'backend', 'ready', 1, 5)
+        INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+        VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 5)
       `);
 
       const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-375' });
@@ -984,7 +492,7 @@ describe('runDispatcher thinking-level routing', () => {
       expect(result.dispatched).toBeGreaterThanOrEqual(0);
       expect(result.errors).toEqual([]);
 
-      await new Promise((resolve) => setImmediate(resolve));
+      await waitForInstanceDispatchPersistence(db, 1);
 
       const runContextPath = path.join(worktreeRoot, '.agent-hq-run-context.json');
       const runContext = JSON.parse(fs.readFileSync(runContextPath, 'utf-8')) as {
@@ -1013,156 +521,26 @@ describe('runDispatcher thinking-level routing', () => {
       }));
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
-      dbRaw.close();
+      await teardownTestDb();
     }
   });
 
   it('normalizes dispatch path inputs before making the worktree authoritative', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        job_title TEXT NOT NULL,
-        project_id INTEGER,
-        job_instructions TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        timeout_seconds INTEGER NOT NULL,
-        model TEXT,
-        skill_names TEXT,
-        session_key TEXT NOT NULL,
-        name TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT,
-        hooks_url TEXT,
-        hooks_auth_header TEXT,
-        workspace_path TEXT,
-        preferred_provider TEXT,
-        repo_path TEXT,
-        repo_url TEXT,
-        repo_access_mode TEXT,
-        os_user TEXT,
-        openclaw_agent_id TEXT,
-        sort_rules TEXT NOT NULL DEFAULT '[]'
-      );
-
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        agent_id INTEGER,
-        project_id INTEGER,
-        task_type TEXT,
-        sprint_id INTEGER,
-        created_at TEXT NOT NULL,
-        story_points INTEGER,
-        active_instance_id INTEGER,
-        paused_at TEXT,
-        dispatched_at TEXT,
-        claimed_at TEXT,
-        routing_reason TEXT,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        max_retries INTEGER NOT NULL DEFAULT 3,
-        updated_at TEXT
-      );
-
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        name TEXT,
-        sprint_type TEXT,
-        status TEXT
-      );
-
-      CREATE TABLE sprint_task_routing_rules (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sprint_id INTEGER NOT NULL,
-        task_type TEXT,
-        status TEXT NOT NULL,
-        agent_id INTEGER NOT NULL,
-        priority INTEGER NOT NULL DEFAULT 0
-      );
-
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_id INTEGER NOT NULL,
-        task_id INTEGER,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        dispatched_at TEXT,
-        payload_sent TEXT,
-        worktree_path TEXT,
-        session_key TEXT,
-        response TEXT,
-        error TEXT,
-        completed_at TEXT,
-        effective_model TEXT,
-        effective_thinking_level TEXT
-      );
-
-      CREATE TABLE dispatch_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        agent_id INTEGER,
-        routing_reason TEXT,
-        candidate_count INTEGER,
-        candidates_skipped TEXT
-      );
-
-      CREATE TABLE task_dependencies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        blocker_id INTEGER,
-        blocked_id INTEGER
-      );
-
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE task_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        changed_by TEXT,
-        field TEXT,
-        old_value TEXT,
-        new_value TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        instance_id INTEGER,
-        agent_id INTEGER,
-        job_title TEXT,
-        level TEXT,
-        message TEXT
-      );
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
+    await db.run(`
+      INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
+      VALUES (1, 1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'openclaw', '{"workingDirectory":"/parent/workspace"}', '/parent/workspace', 'anthropic', '/repos/agent-hq', '[]')
     `);
 
     await db.run(`
-      INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
-      VALUES (1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'openclaw', '{"workingDirectory":"/parent/workspace"}', '/parent/workspace', 'anthropic', '/repos/agent-hq', '[]')
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
+      VALUES (375, 1, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
     `);
 
     await db.run(`
-      INSERT INTO tasks (id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
-      VALUES (375, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
-    `);
-
-    await db.run(`
-      INSERT INTO sprints (id, name, sprint_type, status)
-      VALUES (10, 'Bugs', 'generic', 'active')
-    `);
-
-    await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
-      VALUES (10, 'backend', 'ready', 1, 5)
+      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 5)
     `);
 
     const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-375' });
@@ -1177,7 +555,7 @@ describe('runDispatcher thinking-level routing', () => {
     });
 
     await runDispatcher(db, 86);
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitForInstanceDispatchPersistence(db, 1);
 
     expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({
       workspaceRoot: '/parent/workspace',
@@ -1194,101 +572,24 @@ describe('runDispatcher thinking-level routing', () => {
       }),
     }));
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('surfaces worktree startup failures on the task instead of leaving it silently ready', async () => {
     jest.clearAllMocks();
 
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        job_title TEXT NOT NULL,
-        project_id INTEGER,
-        job_instructions TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        timeout_seconds INTEGER NOT NULL,
-        model TEXT,
-        skill_names TEXT,
-        session_key TEXT NOT NULL,
-        name TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT,
-        hooks_url TEXT,
-        hooks_auth_header TEXT,
-        workspace_path TEXT,
-        preferred_provider TEXT,
-        repo_path TEXT,
-        repo_url TEXT,
-        repo_access_mode TEXT,
-        os_user TEXT,
-        openclaw_agent_id TEXT,
-        sort_rules TEXT NOT NULL DEFAULT '[]'
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        agent_id INTEGER,
-        project_id INTEGER,
-        task_type TEXT,
-        sprint_id INTEGER,
-        created_at TEXT NOT NULL,
-        story_points INTEGER,
-        active_instance_id INTEGER,
-        paused_at TEXT,
-        dispatched_at TEXT,
-        claimed_at TEXT,
-        routing_reason TEXT,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        max_retries INTEGER NOT NULL DEFAULT 3,
-        failure_detail TEXT,
-        previous_status TEXT,
-        updated_at TEXT
-      );
-      CREATE TABLE sprints (id INTEGER PRIMARY KEY, name TEXT, sprint_type TEXT, status TEXT);
-      CREATE TABLE sprint_task_routing_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, sprint_id INTEGER NOT NULL, task_type TEXT, status TEXT NOT NULL, agent_id INTEGER NOT NULL, priority INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE job_instances (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id INTEGER, task_id INTEGER, status TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, payload_sent TEXT, worktree_path TEXT, session_key TEXT, dispatched_at TEXT, response TEXT, error TEXT, completed_at TEXT, effective_model TEXT, effective_thinking_level TEXT);
-      CREATE TABLE dispatch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, agent_id INTEGER, routing_reason TEXT, candidate_count INTEGER, candidates_skipped TEXT);
-      CREATE TABLE task_dependencies (id INTEGER PRIMARY KEY AUTOINCREMENT, blocker_id INTEGER, blocked_id INTEGER);
-      CREATE TABLE task_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, author TEXT, content TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE task_history (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, changed_by TEXT, field TEXT, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, instance_id INTEGER, agent_id INTEGER, job_title TEXT, level TEXT, message TEXT);
-      CREATE TABLE external_event_mappings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER,
-        source TEXT,
-        event_name TEXT NOT NULL,
-        task_type TEXT,
-        status_includes_json TEXT NOT NULL DEFAULT '[]',
-        status_excludes_json TEXT NOT NULL DEFAULT '[]',
-        action_kind TEXT NOT NULL DEFAULT 'ignore',
-        action_target TEXT,
-        apply_review_evidence INTEGER NOT NULL DEFAULT 0,
-        apply_failure_detail INTEGER NOT NULL DEFAULT 0,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        priority INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    await db.run(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`);
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic', name: 'Bugs' }] });
 
     await db.run(`
-      INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
-      VALUES (1, 'Ember', 86, 'Do the task', 1, 900, 'agent:ember:main', 'Ember', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'ember-frontend', '[]')
+      INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
+      VALUES (1, 1, 'Ember', 86, 'Do the task', 1, 900, 'agent:ember:main', 'Ember', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'ember-frontend', '[]')
     `);
-    await db.run(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Bugs', 'generic', 'active')`);
     await db.run(`
-      INSERT INTO tasks (id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
-      VALUES (442, 'Surface dispatcher failure', 'Task', 'ready', 'high', 86, 'frontend', 10, '2026-05-06T18:00:00.000Z', '2026-05-06T18:00:00.000Z')
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
+      VALUES (442, 1, 'Surface dispatcher failure', 'Task', 'ready', 'high', 86, 'frontend', 10, '2026-05-06T18:00:00.000Z', '2026-05-06T18:00:00.000Z')
     `);
-    await db.run(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'frontend', 'ready', 1, 10)`);
+    await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'generic', 'frontend', 'ready', 1, 10)`);
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
     createTaskWorktree.mockReturnValue({
@@ -1299,17 +600,18 @@ describe('runDispatcher thinking-level routing', () => {
     });
 
     await db.run(`
-      INSERT INTO external_event_mappings (project_id, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
-      VALUES (86, 'agent_hq_dispatcher', 'dispatch_startup_failed', 'frontend', 'status', 'stalled', 1, 1, 100)
+      INSERT INTO external_event_mappings (tenant_id, project_id, sprint_id, sprint_type, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
+      VALUES (1, 86, 10, 'generic', 'agent_hq_dispatcher', 'dispatch_startup_failed', 'frontend', 'status', 'stalled', 1, 1, 100)
     `);
 
     const result = await runDispatcher(db, 86);
     expect(result.dispatched).toBe(0);
     expect(result.skipped).toBe(1);
 
-    const task = await db.get(`SELECT status, agent_id, routing_reason, failure_detail, previous_status, active_instance_id FROM tasks WHERE id = 442`) as Record<string, unknown>;
+    const task = await db.get(`SELECT status, agent_id, assigned_agent_id, routing_reason, failure_detail, previous_status, active_instance_id FROM tasks WHERE id = 442`) as Record<string, unknown>;
     expect(task.status).toBe('stalled');
-    expect(task.agent_id).toBe(1);
+    expect(task.agent_id).toBeNull();
+    expect(task.assigned_agent_id).toBe(1);
     expect(task.active_instance_id).toBeNull();
     expect(String(task.failure_detail)).toContain('Dispatcher startup failure workflow event');
     expect(String(task.failure_detail)).toContain('Matched agent: Ember (#1)');
@@ -1344,7 +646,7 @@ describe('runDispatcher thinking-level routing', () => {
     `) as { type: string; title: string; body: string; source: string; outlet: string; metadata_json: string };
     expect(notification.title).toBe('Task #442 dispatch startup failed');
     expect(notification.body).toContain('Task: #442 Surface dispatcher failure');
-    expect(notification.body).toContain('Project: unknown');
+    expect(notification.body).toContain('Project: Agent HQ');
     expect(notification.body).toContain('Workflow: Bugs');
     expect(notification.body).toContain('Matched agent: Ember (#1)');
     expect(notification.body).toContain('Routing reason: Priority: high | Created: 2026-05-06T18:00:00.000Z | Rule: Ember (agent #1)');
@@ -1373,104 +675,31 @@ describe('runDispatcher thinking-level routing', () => {
     }));
 
     expect(mockedResolveRuntime).not.toHaveBeenCalled();
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('records a startup failure notification when workflow mapping ignores the event and status stays ready', async () => {
     jest.clearAllMocks();
 
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        job_title TEXT NOT NULL,
-        project_id INTEGER,
-        job_instructions TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        timeout_seconds INTEGER NOT NULL,
-        model TEXT,
-        skill_names TEXT,
-        session_key TEXT NOT NULL,
-        name TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT,
-        hooks_url TEXT,
-        hooks_auth_header TEXT,
-        workspace_path TEXT,
-        preferred_provider TEXT,
-        repo_path TEXT,
-        repo_url TEXT,
-        repo_access_mode TEXT,
-        os_user TEXT,
-        openclaw_agent_id TEXT,
-        sort_rules TEXT NOT NULL DEFAULT '[]'
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        agent_id INTEGER,
-        project_id INTEGER,
-        task_type TEXT,
-        sprint_id INTEGER,
-        created_at TEXT NOT NULL,
-        story_points INTEGER,
-        active_instance_id INTEGER,
-        paused_at TEXT,
-        dispatched_at TEXT,
-        claimed_at TEXT,
-        routing_reason TEXT,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        max_retries INTEGER NOT NULL DEFAULT 3,
-        failure_detail TEXT,
-        previous_status TEXT,
-        updated_at TEXT
-      );
-      CREATE TABLE sprints (id INTEGER PRIMARY KEY, name TEXT, sprint_type TEXT, status TEXT);
-      CREATE TABLE sprint_task_routing_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, sprint_id INTEGER NOT NULL, task_type TEXT, status TEXT NOT NULL, agent_id INTEGER NOT NULL, priority INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE job_instances (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id INTEGER, task_id INTEGER, status TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, payload_sent TEXT, worktree_path TEXT, session_key TEXT, dispatched_at TEXT, response TEXT, error TEXT, completed_at TEXT, effective_model TEXT, effective_thinking_level TEXT);
-      CREATE TABLE dispatch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, agent_id INTEGER, routing_reason TEXT, candidate_count INTEGER, candidates_skipped TEXT);
-      CREATE TABLE task_dependencies (id INTEGER PRIMARY KEY AUTOINCREMENT, blocker_id INTEGER, blocked_id INTEGER);
-      CREATE TABLE task_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, author TEXT, content TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE task_history (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, changed_by TEXT, field TEXT, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, instance_id INTEGER, agent_id INTEGER, job_title TEXT, level TEXT, message TEXT);
-      CREATE TABLE external_event_mappings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER,
-        source TEXT,
-        event_name TEXT NOT NULL,
-        task_type TEXT,
-        status_includes_json TEXT NOT NULL DEFAULT '[]',
-        status_excludes_json TEXT NOT NULL DEFAULT '[]',
-        action_kind TEXT NOT NULL DEFAULT 'ignore',
-        action_target TEXT,
-        apply_review_evidence INTEGER NOT NULL DEFAULT 0,
-        apply_failure_detail INTEGER NOT NULL DEFAULT 0,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        priority INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'dev', name: 'Enhancements' }] });
+    await db.run(`
+      INSERT INTO sprint_types (tenant_id, key, name, repo_required)
+      VALUES (1, 'dev', 'Development', 1)
     `);
-    await db.run(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`);
 
     await db.run(`
-      INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
-      VALUES (1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:cinder:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
+      INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
+      VALUES (1, 1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:cinder:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
     `);
-    await db.run(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Enhancements', 'dev', 'active')`);
     await db.run(`
-      INSERT INTO tasks (id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
-      VALUES (932, 'Notify operators when dispatch startup fails without a status change', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-07-06T18:00:00.000Z', '2026-07-06T18:00:00.000Z')
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
+      VALUES (932, 1, 'Notify operators when dispatch startup fails without a status change', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-07-06T18:00:00.000Z', '2026-07-06T18:00:00.000Z')
     `);
-    await db.run(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'backend', 'ready', 1, 10)`);
+    await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'dev', 'backend', 'ready', 1, 10)`);
     await db.run(`
-      INSERT INTO external_event_mappings (project_id, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
-      VALUES (86, 'agent_hq_dispatcher', 'dispatch_startup_failed', 'backend', 'ignore', NULL, 1, 1, 100)
+      INSERT INTO external_event_mappings (tenant_id, project_id, sprint_id, sprint_type, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
+      VALUES (1, 86, 10, 'dev', 'agent_hq_dispatcher', 'dispatch_startup_failed', 'backend', 'ignore', NULL, 1, 1, 100)
     `);
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
@@ -1524,84 +753,24 @@ describe('runDispatcher thinking-level routing', () => {
     expect(mockedTaskNotifications.notifyTaskStatusChange).not.toHaveBeenCalled();
     expect(mockedResolveRuntime).not.toHaveBeenCalled();
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('preserves runtime dispatch retries but surfaces the failure on the task', async () => {
     jest.clearAllMocks();
 
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        job_title TEXT NOT NULL,
-        project_id INTEGER,
-        job_instructions TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        timeout_seconds INTEGER NOT NULL,
-        model TEXT,
-        skill_names TEXT,
-        session_key TEXT NOT NULL,
-        name TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT,
-        hooks_url TEXT,
-        hooks_auth_header TEXT,
-        workspace_path TEXT,
-        preferred_provider TEXT,
-        repo_path TEXT,
-        repo_url TEXT,
-        repo_access_mode TEXT,
-        os_user TEXT,
-        openclaw_agent_id TEXT,
-        sort_rules TEXT NOT NULL DEFAULT '[]'
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        agent_id INTEGER,
-        project_id INTEGER,
-        task_type TEXT,
-        sprint_id INTEGER,
-        created_at TEXT NOT NULL,
-        story_points INTEGER,
-        active_instance_id INTEGER,
-        paused_at TEXT,
-        dispatched_at TEXT,
-        claimed_at TEXT,
-        routing_reason TEXT,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        max_retries INTEGER NOT NULL DEFAULT 3,
-        failure_detail TEXT,
-        previous_status TEXT,
-        updated_at TEXT
-      );
-      CREATE TABLE sprints (id INTEGER PRIMARY KEY, name TEXT, sprint_type TEXT, status TEXT);
-      CREATE TABLE sprint_task_routing_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, sprint_id INTEGER NOT NULL, task_type TEXT, status TEXT NOT NULL, agent_id INTEGER NOT NULL, priority INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE job_instances (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id INTEGER, task_id INTEGER, status TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, payload_sent TEXT, worktree_path TEXT, session_key TEXT, dispatched_at TEXT, response TEXT, error TEXT, completed_at TEXT, effective_model TEXT, effective_thinking_level TEXT);
-      CREATE TABLE dispatch_log (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, agent_id INTEGER, routing_reason TEXT, candidate_count INTEGER, candidates_skipped TEXT);
-      CREATE TABLE task_dependencies (id INTEGER PRIMARY KEY AUTOINCREMENT, blocker_id INTEGER, blocked_id INTEGER);
-      CREATE TABLE task_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, author TEXT, content TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE task_history (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, changed_by TEXT, field TEXT, old_value TEXT, new_value TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
-      CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, instance_id INTEGER, agent_id INTEGER, job_title TEXT, level TEXT, message TEXT);
-    `);
-    await db.run(`INSERT INTO tenants (id, name) VALUES (1, 'Default Tenant')`);
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic', name: 'Bugs' }] });
 
     await db.run(`
-      INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
-      VALUES (1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:agent-hq:cinder-platform-engineer:backend-engineer:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
+      INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
+      VALUES (1, 1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:agent-hq:cinder-platform-engineer:backend-engineer:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
     `);
-    await db.run(`INSERT INTO sprints (id, name, sprint_type, status) VALUES (10, 'Bugs', 'generic', 'active')`);
     await db.run(`
-      INSERT INTO tasks (id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
-      VALUES (444, 'Surface dispatcher failure', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-05-06T18:00:00.000Z', '2026-05-06T18:00:00.000Z')
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
+      VALUES (444, 1, 'Surface dispatcher failure', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-05-06T18:00:00.000Z', '2026-05-06T18:00:00.000Z')
     `);
-    await db.run(`INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority) VALUES (10, 'backend', 'ready', 1, 10)`);
+    await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 10)`);
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
     createTaskWorktree.mockReturnValue({
@@ -1616,11 +785,42 @@ describe('runDispatcher thinking-level routing', () => {
 
     const result = await runDispatcher(db, 86);
     expect(result.dispatched).toBe(1);
-    await new Promise(resolve => setImmediate(resolve));
+    await waitFor(async () => {
+      const row = await db.get(`
+        SELECT
+          retry_count,
+          active_instance_id,
+          (SELECT COUNT(*) FROM task_notes WHERE task_id = 444) AS note_count,
+          (SELECT COUNT(*) FROM notification_records WHERE type = 'task_dispatch_startup_failed') AS notification_count,
+          (SELECT status FROM job_instances WHERE task_id = 444 ORDER BY id DESC LIMIT 1) AS instance_status,
+          (SELECT error FROM job_instances WHERE task_id = 444 ORDER BY id DESC LIMIT 1) AS instance_error
+        FROM tasks
+        WHERE id = 444
+      `) as {
+        retry_count: number;
+        active_instance_id: number | null;
+        note_count: number;
+        notification_count: number;
+        instance_status: string | null;
+        instance_error: string | null;
+      };
+      return row.retry_count === 1
+        && row.active_instance_id === null
+        && Number(row.note_count) === 1
+        && Number(row.notification_count) === 1
+        && row.instance_status === 'failed'
+        && row.instance_error === 'Gateway connect timeout';
+    }, 'all durable task #444 dispatch failure effects');
 
-    const task = await db.get(`SELECT status, agent_id, routing_reason, retry_count, failure_detail, previous_status, active_instance_id FROM tasks WHERE id = 444`) as Record<string, unknown>;
+    // The notification is the final awaited persistence step in the detached
+    // fireAgentRun failure path. Yield once more so that promise can return
+    // before teardown truncates the shared PostgreSQL fixture tables.
+    await new Promise<void>(resolve => setImmediate(resolve));
+
+    const task = await db.get(`SELECT status, agent_id, assigned_agent_id, routing_reason, retry_count, failure_detail, previous_status, active_instance_id FROM tasks WHERE id = 444`) as Record<string, unknown>;
     expect(task.status).toBe('ready');
-    expect(task.agent_id).toBe(1);
+    expect(task.agent_id).toBeNull();
+    expect(task.assigned_agent_id).toBe(1);
     expect(task.active_instance_id).toBeNull();
     expect(task.retry_count).toBe(1);
     expect(String(task.failure_detail)).toContain('Dispatcher startup failure workflow event');
@@ -1643,146 +843,25 @@ describe('runDispatcher thinking-level routing', () => {
     expect(instance.status).toBe('failed');
     expect(instance.error).toBe('Gateway connect timeout');
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('does not dispatch a stalled task that lacks a matching sprint routing rule, even if agent_id is set', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        job_title TEXT NOT NULL,
-        project_id INTEGER,
-        job_instructions TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        timeout_seconds INTEGER NOT NULL,
-        model TEXT,
-        skill_names TEXT,
-        session_key TEXT NOT NULL,
-        name TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT,
-        hooks_url TEXT,
-        hooks_auth_header TEXT,
-        workspace_path TEXT,
-        preferred_provider TEXT,
-        repo_path TEXT,
-        repo_url TEXT,
-        repo_access_mode TEXT,
-        os_user TEXT,
-        openclaw_agent_id TEXT,
-        sort_rules TEXT NOT NULL DEFAULT '[]'
-      );
-
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT NOT NULL,
-        priority TEXT NOT NULL,
-        agent_id INTEGER,
-        project_id INTEGER,
-        task_type TEXT,
-        sprint_id INTEGER,
-        created_at TEXT NOT NULL,
-        story_points INTEGER,
-        active_instance_id INTEGER,
-        paused_at TEXT,
-        dispatched_at TEXT,
-        claimed_at TEXT,
-        routing_reason TEXT,
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        max_retries INTEGER NOT NULL DEFAULT 3,
-        updated_at TEXT
-      );
-
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        name TEXT,
-        sprint_type TEXT,
-        status TEXT
-      );
-
-      CREATE TABLE sprint_task_routing_rules (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sprint_id INTEGER NOT NULL,
-        task_type TEXT,
-        status TEXT NOT NULL,
-        agent_id INTEGER NOT NULL,
-        priority INTEGER NOT NULL DEFAULT 0
-      );
-
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_id INTEGER NOT NULL,
-        task_id INTEGER,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        dispatched_at TEXT,
-        payload_sent TEXT,
-        worktree_path TEXT,
-        session_key TEXT,
-        response TEXT,
-        error TEXT,
-        completed_at TEXT,
-        effective_model TEXT,
-        effective_thinking_level TEXT
-      );
-
-      CREATE TABLE dispatch_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        agent_id INTEGER,
-        routing_reason TEXT,
-        candidate_count INTEGER,
-        candidates_skipped TEXT,
-        dispatched_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE task_dependencies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        blocker_id INTEGER,
-        blocked_id INTEGER
-      );
-
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE task_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER,
-        changed_by TEXT,
-        field TEXT,
-        old_value TEXT,
-        new_value TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
+    await db.run(`
+      INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, sort_rules)
+      VALUES (2, 1, 'Beacon', 86, 'Do the task', 1, 900, 'openai/gpt-5.5', '[]', 'agent:beacon:main', 'Beacon', 'openclaw', '{}', '/tmp', 'openai-codex', '[]')
     `);
 
     await db.run(`
-      INSERT INTO agents (id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, sort_rules)
-      VALUES (2, 'Beacon', 86, 'Do the task', 1, 900, 'openai/gpt-5.5', '[]', 'agent:beacon:main', 'Beacon', 'openclaw', '{}', '/tmp', 'openai-codex', '[]')
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, updated_at)
+      VALUES (417, 1, 'Stalled task should not redispatch', 'Regression coverage', 'stalled', 'high', 2, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', '2026-04-28T20:00:00.000Z')
     `);
 
     await db.run(`
-      INSERT INTO sprints (id, name, sprint_type, status)
-      VALUES (10, 'Bugs', 'generic', 'active')
-    `);
-
-    await db.run(`
-      INSERT INTO tasks (id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, updated_at)
-      VALUES (417, 'Stalled task should not redispatch', 'Regression coverage', 'stalled', 'high', 2, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', '2026-04-28T20:00:00.000Z')
-    `);
-
-    await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
-      VALUES (10, 'backend', 'ready', 2, 5)
+      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (1, 10, 86, 'generic', 'backend', 'ready', 2, 5)
     `);
 
     const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-stalled-417' });
@@ -1814,72 +893,28 @@ describe('runDispatcher thinking-level routing', () => {
     );
 
     logSpy.mockRestore();
-    dbRaw.close();
+    await teardownTestDb();
   });
 
   it('dispatchInstance passes routed thinking_level into runtime dispatch', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_id INTEGER NOT NULL,
-        task_id INTEGER,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        dispatched_at TEXT,
-        payload_sent TEXT,
-        session_key TEXT,
-        response TEXT,
-        error TEXT,
-        completed_at TEXT,
-        run_id TEXT
-      );
-
-      CREATE TABLE logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        instance_id INTEGER,
-        agent_id INTEGER,
-        job_title TEXT,
-        level TEXT,
-        message TEXT
-      );
-
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER
-      );
-
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER
-      );
-
-      CREATE TABLE story_point_model_routing (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        max_points INTEGER NOT NULL,
-        provider TEXT,
-        model TEXT NOT NULL,
-        fallback_model TEXT,
-        max_turns INTEGER,
-        max_budget_usd REAL,
-        thinking_level TEXT,
-        label TEXT
-      );
+    const db = await setupTestDb();
+    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
+    await db.run(`
+      INSERT INTO agents (id, tenant_id, name, session_key, project_id, job_title, job_instructions)
+      VALUES (1, 1, 'Cinder', 'agent:cinder:main', 86, 'Backend Engineer', 'Do the task')
+    `);
+    await db.run(`
+      INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id, task_type, story_points)
+      VALUES (382, 1, 'Add thinking routing', 86, 10, 'backend', 6)
+    `);
+    await db.run(`
+      INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, created_at)
+      VALUES (11, 1, 1, 382, 'queued', '2026-04-28T20:00:00.000Z')
     `);
 
     await db.run(`
-      INSERT INTO job_instances (id, agent_id, task_id, status, created_at)
-      VALUES (11, 1, 382, 'queued', '2026-04-28T20:00:00.000Z')
-    `);
-    await db.run(`INSERT INTO agents (id, tenant_id) VALUES (1, NULL)`);
-    await db.run(`INSERT INTO tasks (id, tenant_id) VALUES (382, NULL)`);
-
-    await db.run(`
-      INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
-      VALUES (86, 10, 8, NULL, 'openai/gpt-5.5', 'adaptive', 'deeper route')
+      INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, max_points, provider, model, thinking_level, label)
+      VALUES (1, 86, 10, 8, NULL, 'openai/gpt-5.5', 'adaptive', 'deeper route')
     `);
 
     const dispatchMock = jest.fn().mockResolvedValue({ runId: 'run-456' });
@@ -1912,6 +947,6 @@ describe('runDispatcher thinking-level routing', () => {
       thinking: 'adaptive',
     }));
 
-    dbRaw.close();
+    await teardownTestDb();
   });
 });

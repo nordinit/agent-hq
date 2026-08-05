@@ -157,16 +157,16 @@ async function selectTaskEvidenceColumns(db: Db): Promise<string> {
     'previous_status',
   ];
   return [
-    ...lifecycleColumns.map((column) => `NULL AS ${column}`),
+    ...lifecycleColumns.map((column) => `NULL AS "${column}"`),
     ...await Promise.all(
-      compatibilityColumns.map(async (column) => (await tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`)),
+      compatibilityColumns.map(async (column) => (await tableHasColumn(db, 'tasks', column) ? column : `NULL AS "${column}"`)),
     ),
   ]
     .join(',\n      ');
 }
 
 async function selectTaskColumnOrNull(db: Db, column: string): Promise<string> {
-  return await tableHasColumn(db, 'tasks', column) ? column : `NULL AS ${column}`;
+  return await tableHasColumn(db, 'tasks', column) ? column : `NULL AS "${column}"`;
 }
 
 export async function resolveRefusedTaskOutcome(
@@ -599,7 +599,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
           review_owner_agent_id = ?,
           failure_detail = ?,
           previous_status = ?,
-          updated_at = datetime('now')
+          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.failureDetail ?? input.summary ?? null, preserveFailureMetadata ? priorStatus : null, input.taskId);
   } else {
@@ -610,7 +610,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
           review_owner_agent_id = ?,
           failure_detail = NULL,
           previous_status = NULL,
-          updated_at = datetime('now')
+          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.taskId);
   }
@@ -626,7 +626,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     await db.run(`
       UPDATE job_instances
       SET task_outcome = ?,
-          lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, datetime('now')),
+          lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
           lifecycle_handoff_status = CASE
             WHEN runtime_ended_at IS NOT NULL THEN 'reconciled'
             ELSE 'posted'
@@ -641,7 +641,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     await db.run(`
       UPDATE job_instances
       SET task_outcome = ?,
-          lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, datetime('now')),
+          lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
           lifecycle_handoff_status = CASE
             WHEN runtime_ended_at IS NOT NULL THEN 'reconciled'
             ELSE 'posted'
@@ -652,8 +652,34 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     `, effectiveOutcome, reloadedExisting.active_instance_id);
   }
 
+  // Close the authoritative run before status-driven linkage cleanup. Cleanup may mark a
+  // still-running, sessionless instance as failed when the destination status no longer permits
+  // active execution. Closing afterward would therefore see an already-terminal failed instance
+  // and skip the accepted outcome's successful completion bookkeeping. Keep the accepted outcome
+  // authoritative by closing its run before cleanup mutates any remaining execution linkage.
+  let instanceClosed = false;
+  const authoritativeInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
+  if (!input.dryRun && authoritativeInstanceId != null && isTerminalOutcome(effectiveOutcome)) {
+    const instanceStatus = effectiveOutcome === 'failed' || effectiveOutcome === 'infra_failed' || isRuntimeFailureOutcome(effectiveOutcome) ? 'failed' : 'done';
+    try {
+      const closeResult = await closeInstance({
+        db,
+        instanceId: authoritativeInstanceId,
+        status: instanceStatus,
+        summary: input.summary ?? null,
+        outcome: effectiveOutcome,
+        skipIfAlreadyDone: true,
+        recordCompletionNote: false,
+      });
+      instanceClosed = closeResult.closed;
+    } catch (closeErr) {
+      // Non-fatal: log and continue. Task status was already updated.
+      console.warn(`[taskOutcome] Auto-close failed for instance ${authoritativeInstanceId} (non-fatal):`, closeErr instanceof Error ? closeErr.message : closeErr);
+    }
+  }
+
   await cleanupTaskExecutionLinkageForStatus(db, input.taskId, nextStatus, {
-        authoritativeInstanceId: input.instanceId ?? reloadedExisting.active_instance_id,
+        authoritativeInstanceId,
         changedBy: 'task_outcome',
       });
   await writeTaskLifecycleOutcomeHistory(db, input.taskId, changedBy, {
@@ -744,33 +770,6 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
             toStatus: nextStatus,
             source: changedBy,
           });
-  }
-
-  // ── Auto-close instance on terminal outcomes ──────────────────────────────
-  // When an outcome is accepted, automatically mark the instance done/failed
-  // and terminate the agent session. This makes POST /tasks/:id/outcome the
-  // single exit step.
-  // The separate PUT /instances/:id/complete remains for backward compat but is
-  // no longer required.
-  let instanceClosed = false;
-  const authoritativeInstanceId = input.instanceId ?? finalTaskState.active_instance_id;
-  if (!input.dryRun && authoritativeInstanceId != null && isTerminalOutcome(effectiveOutcome)) {
-    const instanceStatus = effectiveOutcome === 'failed' || effectiveOutcome === 'infra_failed' || isRuntimeFailureOutcome(effectiveOutcome) ? 'failed' : 'done';
-    try {
-      const closeResult = await closeInstance({
-        db,
-        instanceId: authoritativeInstanceId,
-        status: instanceStatus,
-        summary: input.summary ?? null,
-        outcome: effectiveOutcome,
-        skipIfAlreadyDone: true,
-        recordCompletionNote: false,
-      });
-      instanceClosed = closeResult.closed;
-    } catch (closeErr) {
-      // Non-fatal: log and continue. Task status was already updated.
-      console.warn(`[taskOutcome] Auto-close failed for instance ${authoritativeInstanceId} (non-fatal):`, closeErr instanceof Error ? closeErr.message : closeErr);
-    }
   }
 
   return {

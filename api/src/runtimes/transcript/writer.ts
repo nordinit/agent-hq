@@ -13,9 +13,9 @@
  *    Writing real JSON there for a runtime that also writes chat_messages makes
  *    that dedupe stop matching and every sync re-appends the whole transcript.
  *
- *  - It does NOT populate `tenant_id` by default. Only one of the existing
- *    writers does, so always setting it would make previously-invisible rows
- *    appear in tenant-scoped views. Opt in per call site once that is intended.
+ *  - It derives `tenant_id` from the owning instance/agent when the schema has
+ *    that column. Runtime transcript rows are tenant-owned operational data;
+ *    they must never fall back to the active/default tenant.
  *
  *  - It does NOT own discovery, resume offsets, or session_messages ordinals.
  */
@@ -23,6 +23,7 @@
 import { type Db } from '../../db/adapter/types';
 import { normalizeChatMessageRole } from '../../lib/chatMessageRoles';
 import { nowTimestamp, toCanonicalTimestampOrNow } from '../../lib/timestamps';
+import { requireRuntimeTenantId } from '../../lib/runtimeTenantScope';
 import { tableHasColumn } from '../../domains/routing/scope';
 import type { RuntimeTranscriptEvent } from './events';
 
@@ -34,10 +35,7 @@ export interface TranscriptWriterOptions {
   idPrefix: string;
   sessionKey?: string | null;
   durableRunId?: string | null;
-  /**
-   * Opt-in only — see the header note. Most existing writers omit tenant_id, so
-   * setting it changes which rows tenant-scoped queries return.
-   */
+  /** Explicit ownership when the caller already loaded it; otherwise derived strictly. */
   tenantId?: number | null;
 }
 
@@ -60,6 +58,7 @@ export class RuntimeTranscriptWriter {
   private queue: Promise<void> = Promise.resolve();
   private optionalColumns: { durableRunId: boolean; sessionKey: boolean; tenantId: boolean } | null =
     null;
+  private resolvedTenantId: number | null = null;
   private writtenCount = 0;
   private failedCount = 0;
 
@@ -102,9 +101,8 @@ export class RuntimeTranscriptWriter {
   /**
    * Probe which optional columns exist.
    *
-   * Every existing writer does this rather than hard-coding the PostgreSQL
-   * column list, and so must this one: SQLite dev/test databases are migrated in
-   * place by try/catch ALTERs and genuinely lack some of these columns.
+   * Keep optional-column probing for narrow compatibility fixtures and imported historical
+   * rows. The production PostgreSQL schema itself is owned by numbered migrations.
    */
   private async resolveOptionalColumns(): Promise<{
     durableRunId: boolean;
@@ -113,12 +111,17 @@ export class RuntimeTranscriptWriter {
   }> {
     if (this.optionalColumns) return this.optionalColumns;
     const { db } = this.options;
+    const hasTenantColumn = await tableHasColumn(db, 'chat_messages', 'tenant_id');
+    if (hasTenantColumn) {
+      this.resolvedTenantId = this.options.tenantId ?? await requireRuntimeTenantId(db, {
+        instanceId: this.options.instanceId,
+        agentId: this.options.agentId,
+      });
+    }
     this.optionalColumns = {
       durableRunId: await tableHasColumn(db, 'chat_messages', 'durable_run_id'),
       sessionKey: await tableHasColumn(db, 'chat_messages', 'session_key'),
-      tenantId:
-        this.options.tenantId != null &&
-        (await tableHasColumn(db, 'chat_messages', 'tenant_id')),
+      tenantId: hasTenantColumn,
     };
     return this.optionalColumns;
   }
@@ -141,7 +144,7 @@ export class RuntimeTranscriptWriter {
       }
       if (columns.tenantId) {
         optionalNames.push('tenant_id');
-        optionalValues.push(this.options.tenantId ?? null);
+        optionalValues.push(this.resolvedTenantId);
       }
       const optionalSql = optionalNames.length > 0 ? `${optionalNames.join(', ')}, ` : '';
       const optionalPlaceholders = optionalNames.map(() => '?').join(', ');

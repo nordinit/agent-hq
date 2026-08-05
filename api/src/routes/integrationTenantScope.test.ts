@@ -1,13 +1,13 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import {
   authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
-  ensureMcpApiKeyTable,
   issueMcpApiKeyForAgent,
   replaceAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
@@ -23,91 +23,23 @@ let tenantOneAdminKey = '';
 let tenantTwoAdminKey = '';
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'integration-tenant-scope-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
-  process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  await db.exec(`
-    CREATE TABLE tenants (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      is_default INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER,
-      name TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      system_role TEXT,
-      github_identity_id INTEGER,
-      deleted_at TEXT
-    );
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER,
-      project_id INTEGER,
-      sprint_id INTEGER,
-      active_instance_id INTEGER
-    );
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      agent_id INTEGER,
-      status TEXT
-    );
-    CREATE TABLE provider_config (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      slug TEXT NOT NULL,
-      display_name TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'pending',
-      config TEXT NOT NULL DEFAULT '{}',
-      last_validated_at TEXT,
-      validation_error TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(tenant_id, slug)
-    );
-    CREATE TABLE github_identities (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      github_username TEXT NOT NULL,
-      token TEXT NOT NULL DEFAULT '',
-      git_author_name TEXT NOT NULL DEFAULT '',
-      git_author_email TEXT NOT NULL DEFAULT '',
-      lane TEXT NOT NULL DEFAULT 'shared',
-      notes TEXT NOT NULL DEFAULT '',
-      enabled INTEGER NOT NULL DEFAULT 1,
-      last_validated_at TEXT,
-      validation_status TEXT,
-      validation_error TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(tenant_id, github_username)
-    );
-  `);
+
 
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`, 1, 'Default Company', 'default', 1, 2, 'Tenant Two', 'tenant-two', 0);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
-  await db.run(`INSERT INTO agents (id, tenant_id, name, enabled, system_role) VALUES (?, ?, ?, 1, 'admin'), (?, ?, ?, 1, 'admin')`, 101, 1, 'Tenant One Admin', 202, 2, 'Tenant Two Admin');
+  await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, enabled, system_role) VALUES (?, ?, ?, ?, 1, 'admin'), (?, ?, ?, ?, 1, 'admin')`, 101, 1, 'Tenant One Admin', 'agent:tenant-one-admin:main', 202, 2, 'Tenant Two Admin', 'agent:tenant-two-admin:main');
   await db.run(`INSERT INTO provider_config (tenant_id, slug, display_name, status, config) VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`, 1, 'openai', 'Tenant One OpenAI', 'connected', '{"api_key":"tenant-one-secret"}', 2, 'openai', 'Tenant Two OpenAI', 'connected', '{"api_key":"tenant-two-secret"}');
   await db.run(`
     INSERT INTO github_identities (tenant_id, github_username, token, git_author_name, git_author_email, lane)
     VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)
   `, 1, 'shared-bot', 'ghp_tenant_one_secret', 'Tenant One Bot', 'one@example.test', 'shared', 2, 'shared-bot', 'ghp_tenant_two_secret', 'Tenant Two Bot', 'two@example.test', 'shared');
 
-  await ensureMcpApiKeyTable(db);
   tenantOneAdminKey = (await issueMcpApiKeyForAgent(db, 101)).apiKey;
   tenantTwoAdminKey = (await issueMcpApiKeyForAgent(db, 202)).apiKey;
   await replaceAgentMcpPermissionPolicy(db, 101, ['admin.full_access']);
@@ -159,8 +91,7 @@ describe('tenant scoping for integration credentials/config routes', () => {
 
   afterEach(async () => {
     await stopTestServer();
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+    await teardownTestDb();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

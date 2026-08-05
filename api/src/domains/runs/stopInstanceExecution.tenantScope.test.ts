@@ -1,7 +1,5 @@
-import Database from 'better-sqlite3';
-
-import { SqliteAdapter } from '../../db/adapter/SqliteAdapter';
 import type { Db } from '../../db/adapter/types';
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { resolveRuntime } from '../../runtimes';
 import { stopDurableLocalProcess } from '../../runtimes/durableLocalProcessControl';
 import { stopInstanceExecution } from './stopInstanceExecution';
@@ -22,97 +20,48 @@ const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolv
 const mockedStopDurableLocalProcess = stopDurableLocalProcess as jest.MockedFunction<typeof stopDurableLocalProcess>;
 
 async function createDb(): Promise<Db> {
-  const db = new SqliteAdapter(new Database(':memory:'));
+  const db = await setupTestDb();
   await db.exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER NOT NULL,
-      session_key TEXT,
-      runtime_type TEXT,
-      runtime_config TEXT
-    );
-
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER NOT NULL,
-      status TEXT NOT NULL,
-      active_instance_id INTEGER,
-      agent_id INTEGER,
-      updated_at TEXT
-    );
-
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER NOT NULL,
-      agent_id INTEGER,
-      task_id INTEGER,
-      status TEXT NOT NULL,
-      session_key TEXT,
-      run_id TEXT,
-      payload_sent TEXT,
-      abort_attempted_at TEXT,
-      abort_status TEXT,
-      abort_error TEXT,
-      completed_at TEXT,
-      runtime_ended_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT
-    );
-
-    CREATE TABLE logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      instance_id INTEGER,
-      agent_id INTEGER,
-      job_title TEXT,
-      level TEXT,
-      message TEXT
-    );
-
-    CREATE TABLE runtime_executions (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER NOT NULL,
-      instance_id INTEGER NOT NULL,
-      backend TEXT NOT NULL,
-      state TEXT NOT NULL,
-      opaque_handle TEXT,
-      boundary_fingerprint TEXT NOT NULL,
-      session_id TEXT,
-      terminal_reason TEXT,
-      updated_at TEXT
-    );
-
-    CREATE TABLE runtime_checkpoints (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER NOT NULL,
-      execution_id INTEGER NOT NULL,
-      version INTEGER NOT NULL,
-      sequence INTEGER NOT NULL,
-      kind TEXT NOT NULL,
-      state TEXT NOT NULL,
-      session_id TEXT,
-      boundary_fingerprint TEXT NOT NULL,
-      transcript_cursor TEXT,
-      checkpoint_data TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      UNIQUE (execution_id, sequence)
-    );
-
-    INSERT INTO agents (id, tenant_id, session_key, runtime_type, runtime_config)
+    INSERT INTO tenants (id, name, slug, is_default)
     VALUES
-      (11, 1, 'agent:one', 'claude-code', '{}'),
-      (22, 2, 'agent:two', 'claude-code', '{}');
+      (1, 'Runtime One', 'runtime-one', 1),
+      (2, 'Runtime Two', 'runtime-two', 0);
 
-    INSERT INTO tasks (id, tenant_id, status, active_instance_id, agent_id)
-    VALUES (20, 2, 'in_progress', 100, 22);
+    INSERT INTO projects (id, tenant_id, name)
+    VALUES (2, 2, 'Foreign task project');
+
+    INSERT INTO sprints (id, tenant_id, project_id, name)
+    VALUES (2, 2, 2, 'Foreign task workflow');
+
+    INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, runtime_config)
+    VALUES
+      (11, 1, 'Runtime One', 'test', 'agent:one', 'claude-code', '{}'),
+      (22, 2, 'Runtime Two', 'test', 'agent:two', 'claude-code', '{}');
+
+    INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id)
+    VALUES (20, 2, 2, 2, 'Foreign tenant task', 'in_progress', 22);
 
     INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, session_key, run_id)
     VALUES
       (100, 1, 11, 20, 'running', 'run:one', 'claude-code:100'),
       (200, 2, 22, NULL, 'running', 'run:two', 'claude-code:200');
+
+    UPDATE tasks SET active_instance_id = 100 WHERE id = 20;
   `);
   return db;
+}
+
+async function insertRuntimeExecution(
+  db: Db,
+  input: { id: number; tenantId: number; instanceId: number; owner: string; fingerprint: string },
+): Promise<void> {
+  await db.run(`
+    INSERT INTO runtime_executions (
+      id, tenant_id, instance_id, boundary_json, boundary_fingerprint,
+      runtime_type, driver, backend, execution_target_id, opaque_handle, state
+    ) VALUES (?, ?, ?, '{}'::jsonb, ?, 'claude-code', 'claude-code',
+      'local-process', 'local:test', ?::jsonb, 'running')
+  `, input.id, input.tenantId, input.instanceId, input.fingerprint, JSON.stringify({ owner: input.owner }));
 }
 
 describe('stopInstanceExecution tenant boundary', () => {
@@ -138,15 +87,17 @@ describe('stopInstanceExecution tenant boundary', () => {
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('rejects a foreign-tenant instance before resolving or signalling its runtime', async () => {
-    await db.run(`
-      INSERT INTO runtime_executions (
-        id, tenant_id, instance_id, backend, state, opaque_handle, boundary_fingerprint
-      ) VALUES (2, 2, 200, 'local-process', 'running', '{"owner":"two"}', 'fp-two')
-    `);
+    await insertRuntimeExecution(db, {
+      id: 2,
+      tenantId: 2,
+      instanceId: 200,
+      owner: 'two',
+      fingerprint: 'fp-two',
+    });
 
     await expect(stopInstanceExecution(db, 200, 1, 'stop')).rejects.toThrow('Instance not found');
 
@@ -159,14 +110,21 @@ describe('stopInstanceExecution tenant boundary', () => {
     await expect(db.get(`SELECT state FROM runtime_executions WHERE id = 2`)).resolves.toEqual({ state: 'running' });
   });
 
-  it('interrupts and recovers only the owned durable execution, never an equal-id foreign row or task', async () => {
-    await db.exec(`
-      INSERT INTO runtime_executions (
-        id, tenant_id, instance_id, backend, state, opaque_handle, boundary_fingerprint
-      ) VALUES
-        (1, 1, 100, 'local-process', 'running', '{"owner":"one"}', 'fp-one'),
-        (2, 2, 100, 'local-process', 'running', '{"owner":"two"}', 'fp-two');
-    `);
+  it('interrupts and recovers only the owned durable execution, never a foreign row or task', async () => {
+    await insertRuntimeExecution(db, {
+      id: 1,
+      tenantId: 1,
+      instanceId: 100,
+      owner: 'one',
+      fingerprint: 'fp-one',
+    });
+    await insertRuntimeExecution(db, {
+      id: 2,
+      tenantId: 2,
+      instanceId: 200,
+      owner: 'two',
+      fingerprint: 'fp-two',
+    });
 
     const result = await stopInstanceExecution(db, 100, 1, 'stop');
 
@@ -177,7 +135,7 @@ describe('stopInstanceExecution tenant boundary', () => {
       taskId: null,
     });
     expect(mockedStopDurableLocalProcess).toHaveBeenCalledTimes(1);
-    expect(mockedStopDurableLocalProcess).toHaveBeenCalledWith('{"owner":"one"}', 10_000);
+    expect(mockedStopDurableLocalProcess).toHaveBeenCalledWith({ owner: 'one' }, 10_000);
 
     await expect(db.all(`
       SELECT tenant_id, state

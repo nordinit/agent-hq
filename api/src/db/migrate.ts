@@ -1,126 +1,99 @@
-import { closeDb, getDb, getDbPath, getEngine } from './client';
+import '../config/loadRootEnv';
+import { closeDb, getDb } from './client';
 import { ensureConfiguredRuntimeMcpApiKey } from '../lib/mcpApiAuth';
 import { ensureCanonicalAtlasSessionKey } from '../lib/atlasAgent';
-import { initSchema } from './schema';
+import { repairTenantOwnershipForMigration } from '../lib/tenantContext';
 import { bootstrapRoutingAndWorkflowDefaults } from './bootstrapDefaults';
 import { migrationStatus, runMigrations } from './pg/migrationRunner';
 import { POSTGRES_MIGRATION_DIRS } from './pg/migrationDirs';
-import { STARTUP_SCHEMA_LEDGER_CHECKSUM, STARTUP_SCHEMA_LEDGER_ID } from './startupVerifier';
+import type { Db } from './adapter/types';
 
 /**
- * `npm run db:install` / `db:migrate` — the only supported way to create or upgrade a schema.
+ * Explicit PostgreSQL schema command.
  *
- * Engine-aware, because the two do genuinely different things. SQLite has no migration system:
- * `initSchema()` is a 6,000-line idempotent repair engine that introspects the live file and
- * patches whatever it finds, and its ledger is one row whose "checksum" is the literal string
- * 'initSchema'. PostgreSQL has an ordered set of numbered SQL files, each checksummed, applied
- * once, and verified at boot.
- *
- * Until this existed the Postgres branch did not: `initSchema()` acquires the raw better-sqlite3
- * handle regardless of DATABASE_URL, so running db:install against a Postgres URL silently
- * initialised a SQLite file and then failed on the first query against the untouched target.
- * Postgres schemas were built by `scripts/pg/provision.mjs` shelling out to `psql -f`, and
- * `runMigrations()` — which applies each migration in its own transaction and records the ledger
- * correctly — had no caller anywhere in the repo.
- *
- * Both paths keep the non-mutating startup contract intact: this command migrates, and nothing
- * else does. See docs/database-migration-runbook.md.
+ * `db:migrate` applies numbered schema migrations only. It never reconciles
+ * operator-owned routing, transitions, requirements, or other configuration.
+ * `db:install` passes --install and may create starter data only when the
+ * database has no tenant at all. Once a tenant exists, later invocations leave
+ * configuration untouched.
  */
 
-async function migratePostgres(): Promise<void> {
-  const db = getDb();
+async function hasAnyTenant(db: Db): Promise<boolean> {
+  const row = await db.get<{ present: unknown }>(`SELECT 1 AS present FROM tenants LIMIT 1`);
+  return row != null;
+}
 
+export async function installInitialConfiguration(db: Db): Promise<{
+  installed: boolean;
+  runtimeMcpKey?: string;
+  atlasIdentity?: unknown;
+}> {
+  return await db.withTransaction(async (tx) => {
+    // Serialize installers so two first boots cannot each create a default tenant.
+    await tx.exec('LOCK TABLE tenants IN SHARE ROW EXCLUSIVE MODE');
+    if (await hasAnyTenant(tx)) return { installed: false };
+
+    // This is the one explicit installation boundary. Create the tenant first so every
+    // subsequently seeded configuration row is tenant-owned; inserting global defaults before
+    // the tenant existed left NULL tenant_id rows that the read-only startup verifier rejected.
+    await repairTenantOwnershipForMigration(tx);
+    await bootstrapRoutingAndWorkflowDefaults(tx);
+    const runtimeMcpKey = await ensureConfiguredRuntimeMcpApiKey(tx);
+    const atlasIdentity = await ensureCanonicalAtlasSessionKey(tx);
+    return {
+      installed: true,
+      runtimeMcpKey: runtimeMcpKey.status,
+      atlasIdentity,
+    };
+  });
+}
+
+async function main(): Promise<void> {
+  const db = getDb();
+  const installRequested = process.argv.includes('--install');
   const before = await migrationStatus(db, POSTGRES_MIGRATION_DIRS);
-  if (before.drifted.length > 0) {
-    // Applying more migrations on top of an edited one buries the problem. An applied migration
-    // whose text changed means the database and the repo disagree about what was run, and no
-    // amount of forward migration resolves that.
+
+  if (before.drifted.length > 0 || before.unexpected.length > 0) {
     throw new Error(
-      `Schema drift: ${before.drifted.map((entry) => entry.id).join(', ')} changed after being applied. `
-      + 'Restore the file to what was applied, or record a new migration for the difference.',
+      `Schema drift: changed=${before.drifted.map((entry) => entry.id).join(',') || 'none'}; `
+      + `unexpected=${before.unexpected.map((entry) => entry.id).join(',') || 'none'}. `
+      + 'Use the release that owns every applied migration; an applied migration is immutable.',
     );
   }
 
   const applied = await runMigrations(db, POSTGRES_MIGRATION_DIRS);
-
-  // Seeding is deliberately after the schema and deliberately part of install, not of boot.
-  await bootstrapRoutingAndWorkflowDefaults(db);
-  const runtimeMcpKey = await ensureConfiguredRuntimeMcpApiKey(db);
-  // The canonical Atlas identity. On SQLite this is a side effect of initSchema's seedInitialData,
-  // which runs on the raw better-sqlite3 handle and has no PostgreSQL counterpart — so an install
-  // created on PostgreSQL had an Atlas whose session_key was never normalised, and seed-dev.ts,
-  // which guards its insert on that key, would then add a second one.
-  const atlasIdentity = await ensureCanonicalAtlasSessionKey(db);
+  const initialConfiguration = installRequested
+    ? await installInitialConfiguration(db)
+    : { installed: false };
 
   const after = await migrationStatus(db, POSTGRES_MIGRATION_DIRS);
-  if (after.pending.length > 0) {
-    throw new Error(`Migrations still pending after apply: ${after.pending.join(', ')}`);
+  if (after.pending.length > 0 || after.drifted.length > 0 || after.unexpected.length > 0) {
+    throw new Error(
+      `Migration did not converge: pending=${after.pending.join(',') || 'none'}; `
+      + `drifted=${after.drifted.map((entry) => entry.id).join(',') || 'none'}; `
+      + `unexpected=${after.unexpected.map((entry) => entry.id).join(',') || 'none'}`,
+    );
   }
 
   console.log(JSON.stringify({
     ok: true,
     engine: 'postgres',
+    command: installRequested ? 'install' : 'migrate',
     applied,
     already_applied: before.applied.length,
-    runtime_mcp_api_key: runtimeMcpKey.status,
-    atlas_identity: atlasIdentity,
+    initial_configuration: initialConfiguration.installed ? 'installed' : 'unchanged',
+    runtime_mcp_api_key: initialConfiguration.runtimeMcpKey,
+    atlas_identity: initialConfiguration.atlasIdentity,
   }));
 }
 
-async function migrateSqlite(): Promise<void> {
-  await initSchema();
-  const db = getDb();
-  await bootstrapRoutingAndWorkflowDefaults(db);
-  const runtimeMcpKey = await ensureConfiguredRuntimeMcpApiKey(db);
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      id         TEXT PRIMARY KEY,
-      checksum   TEXT NOT NULL,
-      applied_at TEXT NOT NULL DEFAULT (datetime('now')),
-      applied_by TEXT NOT NULL DEFAULT 'agent-hq-api',
-      app_commit TEXT NOT NULL DEFAULT ''
-    )
-  `);
-  await db.run(`
-    INSERT INTO schema_migrations (id, checksum, applied_by, app_commit)
-    VALUES (?, ?, 'agent-hq-api', ?)
-    ON CONFLICT(id) DO UPDATE SET
-      checksum = excluded.checksum,
-      applied_at = datetime('now'),
-      applied_by = excluded.applied_by,
-      app_commit = excluded.app_commit
-  `, STARTUP_SCHEMA_LEDGER_ID, STARTUP_SCHEMA_LEDGER_CHECKSUM, process.env.AGENT_HQ_APP_COMMIT ?? process.env.GIT_COMMIT ?? '');
-
-  const integrity = await db.value(`PRAGMA integrity_check`);
-  if (integrity !== 'ok') {
-    throw new Error(`Database integrity check failed: ${String(integrity)}`);
-  }
-
-  console.log(JSON.stringify({
-    ok: true,
-    engine: 'sqlite',
-    db_path: getDbPath(),
-    integrity,
-    runtime_mcp_api_key: runtimeMcpKey.status,
-  }));
+if (require.main === module) {
+  void main()
+    .catch((error) => {
+      console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      await closeDb();
+    });
 }
-
-async function main(): Promise<void> {
-  if (getEngine() === 'postgres') return await migratePostgres();
-  return await migrateSqlite();
-}
-
-// main() is async, so `try { main() } finally { closeDb() }` was actively harmful: the finally
-// ran on the very next tick and closed the database while the migration was still in flight,
-// and a synchronous catch can never see an async rejection, so a failed migration printed its
-// success JSON and exited 0. Chaining restores the intended order — migrate, then report the
-// failure, then tear down — which is the best shape available under `module: commonjs`, where
-// top-level await does not exist.
-void main()
-  .catch((error) => {
-    console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
-    process.exitCode = 1;
-  })
-  .finally(() => {
-    closeDb();
-  });

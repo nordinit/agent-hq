@@ -51,23 +51,9 @@ jobs:
         working-directory: api
         run: npm run lint
 
-      - name: Test
+      - name: Test (PostgreSQL 17)
         working-directory: api
         run: npm test
-
-      # The suite above runs on SQLite, so a PostgreSQL-only defect passes it. That is not
-      # hypothetical: unquoted camelCase SQL aliases fold to lower case on PostgreSQL, which
-      # silently turned every id in an MCP authorization scope set into NaN and denied every agent
-      # lifecycle callbacks on its own run. The query succeeded, the row count was right, nothing
-      # threw — only the property names differed, and it reached production.
-      #
-      # This job used to run ONE file — 12 tests, a quarter of a second. It now runs the entire
-      # suite against PostgreSQL 17, so that class of defect fails CI rather than reaching
-      # production. Both engines are run until the SQLite removal completes; see
-      # docs/postgres-only-migration-spec.md.
-      - name: Test (PostgreSQL — full suite)
-        working-directory: api
-        run: npx jest
         env:
           AGENT_HQ_TEST_PG_URL: postgresql://postgres:postgres@localhost:5432/agent_hq_ci
 

@@ -1,12 +1,13 @@
+import '../config/loadRootEnv';
 /**
  * seed-dev.ts — Seed the Dev database with representative data.
  *
  * Usage:
- *   AGENT_HQ_DB_PATH=/path/to/agent-hq-dev.db \
+ *   DATABASE_URL=postgresql://localhost/agent_hq_dev \
  *   npx tsx src/db/seed-dev.ts
  *
  * This script is safe to re-run — it checks for existing rows before inserting.
- * It does NOT touch the production DB (agent-hq.db).
+ * It operates only on the PostgreSQL database named by DATABASE_URL.
  *
  * The whole script runs inside `main()` rather than at module top level: this file is
  * compiled as CommonJS, where top-level `await` is unavailable, and every database call
@@ -14,11 +15,9 @@
  */
 
 import os from 'os';
-import { initSchema, provisionDefaultMcpRegistry, provisionDefaultToolRegistry } from './schema';
-import { getDb } from './client';
+import { closeDb, getDb } from './client';
 import type { Db } from './adapter/types';
 import { getDefaultTenantId } from '../lib/tenantContext';
-import { bootstrapRoutingAndWorkflowDefaults } from './bootstrapDefaults';
 
 const HOME = process.env.HOME ?? os.homedir();
 const OPENCLAW_DIR = process.env.WORKSPACE_PARENT ?? `${HOME}/.openclaw`;
@@ -30,8 +29,7 @@ async function seedIfEmpty(
   insertFn: () => Promise<void>,
 ): Promise<void> {
   const row = await db.get<{ cnt: number }>(checkSql);
-  // COUNT(*) comes back as a string from the PostgreSQL driver (bigint) and as a number
-  // from SQLite, so coerce before comparing.
+  // Coerce defensively because aggregate result parsers may represent bigint as text.
   if (!row || Number(row.cnt) === 0) {
     await insertFn();
     console.log(`[seed-dev] Seeded table: ${table}`);
@@ -77,13 +75,7 @@ const INSERT_AGENT_SQL = `
 `;
 
 async function main(): Promise<void> {
-  console.log(`[seed-dev] DB path: ${process.env.AGENT_HQ_DB_PATH ?? '(default)'}`);
-
-  // Initialize schema first (idempotent)
-  await initSchema();
-
   const db = getDb();
-  await bootstrapRoutingAndWorkflowDefaults(db);
   const defaultTenantId = await getDefaultTenantId(db);
 
   // ── Projects ────────────────────────────────────────────────────────────────
@@ -126,9 +118,6 @@ async function main(): Promise<void> {
   }
   console.log(`[seed-dev] Agents: ${agentsAdded} added (existing skipped).`);
 
-  provisionDefaultToolRegistry();
-  await provisionDefaultMcpRegistry();
-
   // ── Sprints ─────────────────────────────────────────────────────────────────
   await seedIfEmpty(
     db,
@@ -159,7 +148,7 @@ async function main(): Promise<void> {
   // the agents table via job_instructions, schedule, routing rules, etc.
 
   // ── Routing: task statuses ──────────────────────────────────────────────────
-  // (Routing rules are inserted by initSchema/migrations if they exist, so we skip here)
+  // Routing configuration is installation/operator data; this dev fixture does not reconcile it.
 
   // ── Sample Tasks ────────────────────────────────────────────────────────────
   await seedIfEmpty(
@@ -182,30 +171,14 @@ async function main(): Promise<void> {
     }
   );
 
-  // ── Routing config (minimal) ────────────────────────────────────────────────
-  // Only seed if routing_configs table exists and is empty
-  try {
-    const routingCount = await db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM routing_configs`);
-    if (routingCount && Number(routingCount.cnt) === 0) {
-      const agencyProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId);
-      if (agencyProject) {
-        await db.run(`
-          INSERT INTO routing_configs (tenant_id, project_id, from_status, outcome, to_status, enabled) VALUES
-            (?, ?, 'in_progress', 'completed_for_review', 'review', 1),
-            (?, ?, 'review', 'qa_pass', 'ready_to_merge', 1),
-            (?, ?, 'review', 'qa_fail', 'in_progress', 1)
-        `, defaultTenantId, agencyProject.id, defaultTenantId, agencyProject.id, defaultTenantId, agencyProject.id);
-        console.log('[seed-dev] Seeded table: routing_configs');
-      }
-    }
-  } catch {
-    // routing_configs table may not exist in older schemas — skip
-  }
-
   console.log('[seed-dev] Done.');
 }
 
-main().catch((err) => {
-  console.error('[seed-dev] Failed:', err);
-  process.exitCode = 1;
-});
+void main()
+  .catch((err) => {
+    console.error('[seed-dev] Failed:', err);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await closeDb();
+  });

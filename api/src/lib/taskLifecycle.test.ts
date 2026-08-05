@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import {
@@ -13,7 +13,6 @@ import {
 import { removeTaskWorktree } from '../services/worktreeManager';
 import { removeTaskClone } from '../services/repoWorkspaceManager';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../services/worktreeManager', () => ({
   removeTaskWorktree: jest.fn(({ worktreePath }: { worktreePath: string }) => ({ removed: true, worktreePath })),
@@ -57,100 +56,13 @@ function mockAbortSpawn(): void {
 }
 
 async function createDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT,
-      job_title TEXT,
-      repo_path TEXT,
-      repo_access_mode TEXT
-    );
+  const db = await setupTestDb();
 
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      title TEXT,
-      status TEXT NOT NULL,
-      task_type TEXT,
-      sprint_id INTEGER,
-      project_id INTEGER,
-      agent_id INTEGER,
-      active_instance_id INTEGER,
-      updated_at TEXT
-    );
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Test Project')`);
+  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (1, 1, 1, 'Test Sprint')`);
 
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      agent_id INTEGER,
-      task_id INTEGER,
-      status TEXT NOT NULL,
-      session_key TEXT,
-      worktree_path TEXT,
-      payload_sent TEXT,
-      abort_attempted_at TEXT,
-      abort_status TEXT,
-      abort_error TEXT,
-      error TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      runtime_ended_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT,
-      runtime_completed_at TEXT,
-      lifecycle_handoff_status TEXT,
-      semantic_outcome_missing INTEGER NOT NULL DEFAULT 0,
-      lifecycle_outcome_posted_at TEXT,
-      task_outcome TEXT,
-      token_input INTEGER,
-      token_output INTEGER,
-      token_total INTEGER
-    );
-
-    CREATE TABLE sprints (
-      id INTEGER PRIMARY KEY,
-      sprint_type TEXT
-    );
-
-    CREATE TABLE instance_artifacts (
-      instance_id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      current_stage TEXT,
-      summary TEXT,
-      latest_commit_hash TEXT,
-      branch_name TEXT,
-      changed_files_json TEXT,
-      changed_files_count INTEGER,
-      blocker_reason TEXT,
-      outcome TEXT,
-      last_agent_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      stale INTEGER,
-      stale_at TEXT,
-      session_key TEXT,
-      updated_at TEXT,
-      last_note_at TEXT
-    );
-
-    CREATE TABLE task_notes (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      author TEXT,
-      content TEXT
-    );
-
-    CREATE TABLE task_history (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      changed_by TEXT,
-      field TEXT,
-      old_value TEXT,
-      new_value TEXT
-    );
-  `);
   return db;
 }
 
@@ -169,27 +81,43 @@ async function seedLinkedTask(db: Db, params: {
     worktreePath = '/tmp/workspaces/task-1',
   } = params;
 
-  await db.run(`INSERT INTO agents (id, name, job_title, repo_path, repo_access_mode) VALUES (1, 'Agent', ?, '/repo', 'worktree')`, nextAgentTitle);
-  await db.run(`INSERT INTO tasks (id, status, agent_id, active_instance_id) VALUES (1, ?, 1, ?)`, taskStatus, activeInstanceId);
+  await db.run(
+    `INSERT INTO agents (id, tenant_id, name, session_key, job_title, repo_path, repo_access_mode)
+     VALUES (1, 1, 'Agent', 'agent:test-1:main', ?, '/repo', 'worktree')`,
+    nextAgentTitle,
+  );
+  await db.run(
+    `INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id)
+     VALUES (1, 1, 1, 1, 'Lifecycle task', ?, 1, NULL)`,
+    taskStatus,
+  );
   await db.run(`
-    INSERT INTO job_instances (id, agent_id, task_id, status, session_key, worktree_path)
-    VALUES (10, 1, 1, ?, NULL, ?)
+    INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, session_key, worktree_path)
+    VALUES (10, 1, 1, 1, ?, NULL, ?)
   `, instanceStatus, worktreePath);
+  if (activeInstanceId !== null) {
+    await db.run(`UPDATE tasks SET active_instance_id = ? WHERE id = 1`, activeInstanceId);
+  }
 }
 
 describe('task lifecycle worktree cleanup', () => {
   let db: Db;
 
   beforeEach(async () => {
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date('2026-05-01T12:00:00.000Z'));
     mockedRemoveTaskWorktree.mockClear();
     mockedRemoveTaskWorktree.mockImplementation(({ worktreePath }) => ({ removed: true, worktreePath }));
     mockedRemoveTaskClone.mockClear();
     mockedRemoveTaskClone.mockImplementation(({ workspacePath }) => ({ removed: true, workspacePath }));
     mockedSpawn.mockReset();
     mockAbortSpawn();
+
+    // node-postgres resolves socket work through microtasks. Jest's modern fake timers include
+    // nextTick/queueMicrotask by default, which freezes completed query promises and can leave
+    // the template advisory lock held indefinitely. Only lifecycle clocks/timers are under test;
+    // keep the driver's microtask queue real for every PostgreSQL query in this suite.
     db = await createDb();
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
+    jest.setSystemTime(new Date('2026-05-01T12:00:00.000Z'));
   });
 
   afterEach(async () => {
@@ -197,7 +125,7 @@ describe('task lifecycle worktree cleanup', () => {
     clearPendingEndedActiveInstanceLinkageCleanupTimers();
     jest.clearAllTimers();
     jest.useRealTimers();
-    await db.close();
+    await teardownTestDb();
   });
 
   it.each(['failed', 'cancelled', 'ready', 'qa_pass'])('keeps the worktree when a task moves to %s', async (status) => {
@@ -242,17 +170,17 @@ describe('task lifecycle worktree cleanup', () => {
   });
 
   it('removes all known repo task workspaces when the task becomes done', async () => {
-    await db.run(`INSERT INTO agents (id, name, job_title, repo_path, repo_access_mode) VALUES (1, 'Agent', 'Builder', '/repo', 'worktree')`);
-    await db.run(`INSERT INTO agents (id, name, job_title, repo_path, repo_access_mode) VALUES (2, 'Agent 2', 'Builder', NULL, 'clone')`);
-    await db.run(`INSERT INTO tasks (id, status, agent_id, active_instance_id) VALUES (1, 'deployed', 1, NULL)`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, repo_path, repo_access_mode) VALUES (1, 1, 'Agent', 'agent:test-1:main', 'Builder', '/repo', 'worktree')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, repo_path, repo_access_mode) VALUES (2, 1, 'Agent 2', 'agent:test-2:main', 'Builder', NULL, 'clone')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id) VALUES (1, 1, 1, 1, 'Lifecycle task', 'deployed', 1, NULL)`);
     await db.run(`
-      INSERT INTO job_instances (id, agent_id, task_id, status, worktree_path)
+      INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, worktree_path)
       VALUES
-        (10, 1, 1, 'done', '/tmp/workspaces/task-1'),
-        (11, 1, 1, 'failed', '/tmp/workspaces/task-1'),
-        (12, 1, 1, 'done', '/tmp/workspaces/task-1-retry'),
-        (13, 2, 1, 'done', '/tmp/workspaces/no-repo'),
-        (14, 1, NULL, 'failed', '/tmp/workspaces/agent-hq-task-1')
+        (10, 1, 1, 1, 'done', '/tmp/workspaces/task-1'),
+        (11, 1, 1, 1, 'failed', '/tmp/workspaces/task-1'),
+        (12, 1, 1, 1, 'done', '/tmp/workspaces/task-1-retry'),
+        (13, 1, 2, 1, 'done', '/tmp/workspaces/no-repo'),
+        (14, 1, 1, NULL, 'failed', '/tmp/workspaces/agent-hq-task-1')
     `);
 
     await cleanupTaskExecutionLinkageForStatus(db, 1, 'done');
@@ -265,9 +193,9 @@ describe('task lifecycle worktree cleanup', () => {
   });
 
   it('removes clone-backed task workspaces with removeTaskClone', async () => {
-    await db.run(`INSERT INTO agents (id, name, job_title, repo_path, repo_access_mode) VALUES (3, 'Clone Agent', 'Builder', NULL, 'clone')`);
-    await db.run(`INSERT INTO tasks (id, status, agent_id, active_instance_id) VALUES (77, 'done', 3, NULL)`);
-    await db.run(`INSERT INTO job_instances (id, agent_id, task_id, status, worktree_path) VALUES (77, 3, 77, 'done', '/tmp/task-77')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, repo_path, repo_access_mode) VALUES (3, 1, 'Clone Agent', 'agent:test-3:main', 'Builder', NULL, 'clone')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id) VALUES (77, 1, 1, 1, 'Clone cleanup', 'done', 3, NULL)`);
+    await db.run(`INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, worktree_path) VALUES (77, 1, 3, 77, 'done', '/tmp/task-77')`);
 
     await cleanupTaskExecutionLinkageForStatus(db, 77, 'done');
 
@@ -275,11 +203,11 @@ describe('task lifecycle worktree cleanup', () => {
   });
 
   it('cleans worktree-backed runs from payload repo metadata when agent repo fields are empty', async () => {
-    await db.run(`INSERT INTO agents (id, name, job_title, repo_path, repo_access_mode) VALUES (4, 'Project Repo Agent', 'Builder', NULL, NULL)`);
-    await db.run(`INSERT INTO tasks (id, status, agent_id, active_instance_id) VALUES (88, 'done', 4, NULL)`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, repo_path, repo_access_mode) VALUES (4, 1, 'Project Repo Agent', 'agent:test-4:main', 'Builder', NULL, NULL)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id) VALUES (88, 1, 1, 1, 'Payload cleanup', 'done', 4, NULL)`);
     await db.run(`
-      INSERT INTO job_instances (id, agent_id, task_id, status, worktree_path, payload_sent)
-      VALUES (88, 4, 88, 'done', '/tmp/task-88', ?)
+      INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, worktree_path, payload_sent)
+      VALUES (88, 1, 4, 88, 'done', '/tmp/task-88', ?)
     `, JSON.stringify({
             repoAccessMode: 'worktree',
             repoSource: 'worktree:/projects/agent-hq',
@@ -333,7 +261,7 @@ describe('task lifecycle worktree cleanup', () => {
       SET runtime_ended_at = ?
       WHERE id = 10
     `, nowIso);
-    await db.run(`INSERT INTO job_instances (id, agent_id, task_id, status) VALUES (11, 1, 1, 'running')`);
+    await db.run(`INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status) VALUES (11, 1, 1, 1, 'running')`);
 
     await scheduleEndedActiveInstanceLinkageCleanup(db, 1, 10, { changedBy: 'task_lifecycle' });
     await db.run(`UPDATE tasks SET active_instance_id = 11 WHERE id = 1`);

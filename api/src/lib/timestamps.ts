@@ -9,17 +9,17 @@
  *
  * Optionally with fractional seconds ('YYYY-MM-DD HH:MM:SS.mmm') for rows that
  * historically carried millisecond precision. `nowTimestamp()` never emits
- * fractional seconds so that a JS-written value is byte-identical to what
- * SQLite's `datetime('now')` DEFAULT produces.
+ * fractional seconds so that a JS-written value is byte-identical to the
+ * canonical UTC text emitted by PostgreSQL defaults and inline writes.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS FORMAT AND NOT ISO-8601 'Z'
  * ---------------------------------------------------------------------------
  *
- * Until now the codebase produced timestamps two ways:
+ * Before the PostgreSQL-only migration the codebase produced timestamps two ways:
  *
- *   1. SQL: `datetime('now')` — 104 DEFAULT clauses in the schema plus ~797
- *      inline uses. Emits '2026-06-03 20:05:53' (UTC, offset-less).
+ *   1. SQL: SQLite `datetime('now')`. Emitted
+ *      '2026-06-03 20:05:53' (UTC, offset-less).
  *   2. JS:  `new Date().toISOString()` — ~134 call sites. Emits
  *      '2026-06-03T20:05:53.000Z' (UTC, offset-bearing).
  *
@@ -31,14 +31,10 @@
  *
  * Offset-less UTC is the canonical form because:
  *
- *   - It is what every SQL DEFAULT already emits. Changing 104 DEFAULT clauses
- *     in SQLite requires a full table rebuild per table (SQLite cannot ALTER a
- *     column default), on a 2.8 GB production database. Changing ~134 JS call
- *     sites is a code edit with no schema change and no downtime.
- *   - Because DEFAULTs cannot practically be changed, choosing ISO-Z as
- *     canonical would leave every DEFAULT still emitting the offset-less form:
- *     the drift would regenerate the moment normalization finished. Offset-less
- *     is the only choice that is actually *enforceable* on this schema.
+ *   - It is the representation retained by the PostgreSQL baseline, making the
+ *     engine migration value-preserving instead of coupling it to type changes.
+ *   - PostgreSQL writes use to_char(now() AT TIME ZONE 'utc', ...), so defaults,
+ *     inline SQL, and JavaScript continue to emit the same byte representation.
  *   - The UI already codifies this contract: `ui/lib/date.ts#parseDbDate`
  *     appends 'Z' to any offset-less value before parsing, i.e. the frontend
  *     already treats offset-less DB timestamps as UTC.
@@ -63,20 +59,19 @@
  *   import { nowTimestamp, toCanonicalTimestamp } from '../lib/timestamps';
  *
  *   // writing "now" from JS
- *   db.prepare('UPDATE job_instances SET completed_at = ? WHERE id = ?')
- *     .run(nowTimestamp(), id);
+ *   await db.run('UPDATE job_instances SET completed_at = ? WHERE id = ?',
+ *     nowTimestamp(), id);
  *
  *   // writing a caller-supplied / runtime-supplied instant
- *   db.prepare('UPDATE sprints SET ended_at = ? WHERE id = ?')
- *     .run(toCanonicalTimestamp(req.body.ended_at), id);
+ *   await db.run('UPDATE sprints SET ended_at = ? WHERE id = ?',
+ *     toCanonicalTimestamp(req.body.ended_at), id);
  *
- *   // inside SQL, `datetime('now')` remains correct and equivalent — prefer
- *   // CANONICAL_TIMESTAMP_SQL when building SQL strings so the intent is
- *   // greppable.
+ *   // Prefer CANONICAL_TIMESTAMP_SQL when building SQL strings so the exact
+ *   // UTC text contract stays greppable.
  */
 
-/** SQL expression that produces a canonical timestamp inside SQLite. */
-export const CANONICAL_TIMESTAMP_SQL = "datetime('now')";
+/** PostgreSQL expression that produces a canonical UTC text timestamp. */
+export const CANONICAL_TIMESTAMP_SQL = "to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')";
 
 /** Exactly what {@link nowTimestamp} emits: no fractional seconds, no offset. */
 export const CANONICAL_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
@@ -104,8 +99,8 @@ function formatUtc(date: Date, fractional?: string): string {
 export interface NormalizeOptions {
   /**
    * Keep sub-second precision that the source value carried (default true).
-   * Set false to truncate to whole seconds — the exact shape `datetime('now')`
-   * and {@link nowTimestamp} produce.
+   * Set false to truncate to whole seconds — the exact shape PostgreSQL's
+   * canonical timestamp expression and {@link nowTimestamp} produce.
    */
   preserveFractional?: boolean;
 }

@@ -18,7 +18,7 @@ Workflow endpoints are the preferred board/operating-cycle surface in the publis
 Agent HQ supports logical tenants through tenant-owned rows in the shared database. Existing installations are backfilled into a default tenant, and new tenants are created through the canonical tenant API:
 
 - `GET /api/v1/tenants` — list tenants and the active tenant id.
-- `POST /api/v1/tenants` — create a tenant. Payload: `{ "name": "...", "slug": "...", "set_active": true }`. The slug is retry-safe: repeating the same slug returns and reseeds the existing tenant instead of duplicating starter data.
+- `POST /api/v1/tenants` — create a tenant. Payload: `{ "name": "...", "slug": "...", "set_active": true }`. The slug is retry-safe: repeating the same slug returns the existing tenant without duplicating or reconciling its operator-owned starter configuration.
 - `GET /api/v1/tenants/active` — resolve the active tenant.
 - `PUT /api/v1/tenants/active` — select an active tenant with `{ "tenant_id": 123 }`.
 - `POST /api/v1/tenants/:id/select` — select an active tenant by id.

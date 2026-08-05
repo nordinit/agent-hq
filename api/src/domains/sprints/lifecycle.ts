@@ -61,7 +61,7 @@ export async function completeSprint(sprintId: number): Promise<void> {
   if (!sprint || sprint.status === 'complete') return;
 
   await db.run(`
-    UPDATE sprints SET status = 'complete', ended_at = datetime('now') WHERE id = ?
+    UPDATE sprints SET status = 'complete', ended_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
   `, sprintId);
 
   const paused = await db.run(`
@@ -96,11 +96,11 @@ export async function completeSprint(sprintId: number): Promise<void> {
     const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
     const instanceResult = supportsDurableRunId
       ? await db.run(`
-          INSERT INTO job_instances (agent_id, status, durable_run_id) VALUES (?, 'queued', ?)
-        `, job.id, createDurableRunId())
+          INSERT INTO job_instances (tenant_id, agent_id, status, durable_run_id) VALUES (?, ?, 'queued', ?)
+        `, job.tenant_id, job.id, createDurableRunId())
       : await db.run(`
-          INSERT INTO job_instances (agent_id, status) VALUES (?, 'queued')
-        `, job.id);
+          INSERT INTO job_instances (tenant_id, agent_id, status) VALUES (?, ?, 'queued')
+        `, job.tenant_id, job.id);
     const instanceId = instanceResult.lastInsertId as number;
 
     let message = buildDispatchMessage({

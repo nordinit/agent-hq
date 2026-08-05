@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { writeProjectAudit, diffFields, extractActor } from '../lib/projectAudit';
 import { ensureProjectBacklogSprint } from '../lib/starterSetup';
-import { ensureDefaultProjectId, setDefaultProjectId } from '../lib/defaultProject';
+import { getDefaultProjectId, setDefaultProjectId } from '../lib/defaultProject';
 import {
   requireTenantOwnedRow,
   resolveTenantIdFromRequest,
@@ -110,7 +110,6 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, _req);
-    await ensureDefaultProjectId(db);
     const projects = await db.all(`
       ${projectSelectSqlForTenant()}
       ORDER BY p.created_at DESC
@@ -148,7 +147,6 @@ router.post('/', async (req: Request, res: Response) => {
 
     const newId = Number(result.lastInsertId);
     await ensureProjectBacklogSprint(db, newId);
-    await ensureDefaultProjectId(db);
     const actor = extractActor(req);
     await writeProjectAudit(db, newId, 'project', newId, 'created', actor, {
             name,
@@ -168,7 +166,7 @@ router.get('/default', async (_req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, _req);
-    const defaultProjectId = await ensureDefaultProjectId(db);
+    const defaultProjectId = await getDefaultProjectId(db);
     if (!defaultProjectId) return res.json({ project: null, default_project_id: null });
 
     const project = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'),defaultProjectId, tenantId);
@@ -271,7 +269,6 @@ router.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    await ensureDefaultProjectId(db);
     const project = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'),req.params.id, tenantId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     return res.json(project);
@@ -331,7 +328,6 @@ router.put('/:id', async (req: Request, res: Response) => {
       await writeProjectAudit(db, existing.id, 'project', existing.id, 'updated', actor, changes);
     }
 
-    await ensureDefaultProjectId(db);
     const updated = await db.get(projectSelectSqlForTenant('WHERE p.id = ?'),req.params.id, tenantId);
     return res.json(updated);
   } catch (err) {
@@ -425,7 +421,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
           });
 
     await runTenantScopedDelete(db, { table: 'projects', id: req.params.id, tenantId });
-    await ensureDefaultProjectId(db);
     return res.json({ ok: true, deleted: true, project_id: Number(req.params.id), forced: force });
   } catch (err) {
     return sendRouteError(res, err);
@@ -460,7 +455,7 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
 
     const durationRow = await db.get(`
       SELECT AVG(
-        (strftime('%s', updated_at) - strftime('%s', created_at)) * 1000
+        (EXTRACT(EPOCH FROM (updated_at)::timestamp) - EXTRACT(EPOCH FROM (created_at)::timestamp)) * 1000
       ) as avg_ms
       FROM tasks
       WHERE project_id = ? AND tenant_id = ? AND status = 'done'

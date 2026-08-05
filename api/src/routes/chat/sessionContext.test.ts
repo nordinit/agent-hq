@@ -1,50 +1,22 @@
-import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
 
 let db: Db;
 
-jest.mock('../../db/client', () => ({
-  getDb: () => db,
-}));
-
 import { resolveSessionContext } from './sessionContext';
 import { type Db } from "../../db/adapter/types";
-import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
-
-async function setupDb(): Promise<void> {
-  await db.exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT,
-      session_key TEXT,
-      openclaw_agent_id TEXT
-    );
-
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      title TEXT
-    );
-
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      agent_id INTEGER,
-      session_key TEXT,
-      status TEXT,
-      run_stage TEXT,
-      durable_run_id TEXT
-    );
-  `);
-}
 
 describe('resolveSessionContext', () => {
   beforeEach(async () => {
-    db = new SqliteAdapter(new Database(':memory:'));
-    await setupDb();
+    db = await setupTestDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Test')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (1, 1, 1, 'Test')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title) VALUES (867, 1, 1, 1, 'Test task')`);
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('resolves a direct chat key as instance-less when a chat-stage job_instance already exists', async () => {

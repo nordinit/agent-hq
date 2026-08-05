@@ -241,11 +241,13 @@ export class CodexRuntime implements AgentRuntime {
         userConfigOverrides,
       });
       const protectedInstanceIds = await this.lookupActiveCodexInstanceIds(db);
-      const scavenged = scavengeStaleCodexRuntimeProfiles(codexHome, { protectedInstanceIds });
-      if (scavenged.failures.length > 0) {
-        throw new Error(
-          `Codex stale runtime profile cleanup failed: ${scavenged.failures.map((failure) => failure.name).join(', ')}`,
-        );
+      if (protectedInstanceIds !== null) {
+        const scavenged = scavengeStaleCodexRuntimeProfiles(codexHome, { protectedInstanceIds });
+        if (scavenged.failures.length > 0) {
+          throw new Error(
+            `Codex stale runtime profile cleanup failed: ${scavenged.failures.map((failure) => failure.name).join(', ')}`,
+          );
+        }
       }
       runtimeProfile = adHocAllocation?.profile ?? allocateCodexRuntimeProfile({
         agentSlug: params.agentSlug,
@@ -412,6 +414,7 @@ export class CodexRuntime implements AgentRuntime {
               }
               const heartbeat = await heartbeatRuntimeExecution(db, {
                 instanceId,
+                tenantId: params.runtimeBoundary.identity.tenantId,
                 sessionId: threadId,
               });
               if (heartbeat.status !== 'persisted' || heartbeat.executionId == null) {
@@ -556,6 +559,7 @@ export class CodexRuntime implements AgentRuntime {
       params,
       runId,
       db,
+      tenantId: ownership.tenantId,
       state,
       exited,
       accumulator,
@@ -634,6 +638,7 @@ export class CodexRuntime implements AgentRuntime {
     params: DispatchParams;
     runId: string;
     db: Db | null;
+    tenantId: number | null;
     state: ActiveCodexRun;
     exited: Promise<ProcessExitResult>;
     accumulator: CodexStreamAccumulator;
@@ -746,9 +751,9 @@ export class CodexRuntime implements AgentRuntime {
       state.exited = true;
       localProcessSupervisor.unregister(runId, state.child);
       if (args.timeoutTimer) clearTimeout(args.timeoutTimer);
-      if (instanceId != null && event) {
+      if (instanceId != null && args.tenantId != null && event) {
         try {
-          await this.handleRuntimeEnd(db, instanceId, event, accumulator);
+          await this.handleRuntimeEnd(db, instanceId, args.tenantId, event, accumulator);
         } catch (error) {
           // Terminal delivery is deliberately best-effort at this boundary. A
           // durable terminal execution is repaired into job_instances by the
@@ -773,6 +778,7 @@ export class CodexRuntime implements AgentRuntime {
   private async handleRuntimeEnd(
     db: Db | null,
     instanceId: number,
+    tenantId: number,
     event: RuntimeEndEvent,
     accumulator: CodexStreamAccumulator,
   ): Promise<void> {
@@ -780,6 +786,7 @@ export class CodexRuntime implements AgentRuntime {
     try {
       await terminalRuntimeExecution(db, {
         instanceId,
+        tenantId,
         state: event.reason === 'aborted' ? 'cancelled' : event.success ? 'succeeded' : 'failed',
         reason: event.reason ?? (event.success ? 'completed' : 'error'),
         error: event.error ?? null,
@@ -842,8 +849,8 @@ export class CodexRuntime implements AgentRuntime {
     };
     try {
       await db.run(
-        `INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-         SELECT ?, agent_id, id, 'system', ?, ?, 'turn_end', ? FROM job_instances WHERE id = ?
+        `INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+         SELECT ?, tenant_id, agent_id, id, 'system', ?, ?, 'turn_end', ? FROM job_instances WHERE id = ?
          ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp,
            event_type = excluded.event_type, event_meta = excluded.event_meta`,
         `${CODEX_RUNTIME_END_MESSAGE_PREFIX}${instanceId}`,
@@ -854,7 +861,7 @@ export class CodexRuntime implements AgentRuntime {
       );
       await db.run(
         `UPDATE job_instances
-         SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+         SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
          WHERE id = ?`,
         JSON.stringify(event),
         instanceId,
@@ -904,8 +911,8 @@ export class CodexRuntime implements AgentRuntime {
     if (!db || instanceId == null || !content.trim()) return;
     try {
       await db.run(
-        `INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type)
-         SELECT ?, agent_id, id, 'assistant', ?, ?, 'text' FROM job_instances WHERE id = ?
+        `INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, role, content, timestamp, event_type)
+         SELECT ?, tenant_id, agent_id, id, 'assistant', ?, ?, 'text' FROM job_instances WHERE id = ?
          ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp`,
         `codex-asst-${instanceId}`,
         content,
@@ -917,8 +924,8 @@ export class CodexRuntime implements AgentRuntime {
     }
   }
 
-  private async lookupActiveCodexInstanceIds(db: Db | null): Promise<ReadonlySet<number>> {
-    if (!db) return new Set<number>();
+  private async lookupActiveCodexInstanceIds(db: Db | null): Promise<ReadonlySet<number> | null> {
+    if (!db) return null;
     try {
       const rows = await db.all<{ instance_id: number }>(
         `SELECT instance_id FROM runtime_executions
@@ -931,9 +938,10 @@ export class CodexRuntime implements AgentRuntime {
           .filter((value) => Number.isSafeInteger(value) && value > 0),
       );
     } catch {
-      // Migration/bootstrap paths may not have the durable table yet. The
-      // 15-minute race-grace TTL remains the conservative boundary in that case.
-      return new Set<number>();
+      // Without durable visibility, skip age-based scavenging entirely. A
+      // transient read failure must not delete a profile that a long active run
+      // still owns after an API restart.
+      return null;
     }
   }
 

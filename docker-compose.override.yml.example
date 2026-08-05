@@ -1,52 +1,28 @@
 ###############################################################################
-# docker-compose.override.yml.example — Local customization template
-#
-# Copy this file to docker-compose.override.yml and edit it.
-# Docker Compose automatically merges this file into docker-compose.yml —
-# no extra flags or environment changes required.
-#
-#   cp docker-compose.override.yml.example docker-compose.override.yml
-#   $EDITOR docker-compose.override.yml
-#   docker compose up -d
-#
-# This file is listed in .gitignore so your local secrets stay local.
-#
-# ── Common use-cases ──────────────────────────────────────────────────────────
-#
-#   1. Change host ports (if 3500/3501 are already in use on your machine)
-#   2. Mount an existing SQLite database file from the host
-#   3. Override environment variables (e.g. a remote API URL for the UI)
-#   4. Enable OpenClaw agent dispatch
-#
+# Optional local overrides. Copy to docker-compose.override.yml; that file is
+# ignored because it may contain credentials.
 ###############################################################################
 
-# name: agent-hq   # keep in sync with docker-compose.yml
-
 services:
-
   agent-hq-api:
-    # ── Change the host-side API port ──────────────────────────────────────
     # ports:
     #   - "4501:3501"
-
-    # ── Mount an existing database from the host instead of the named volume ─
-    # volumes:
-    #   - /path/to/your/existing/agent-hq.db:/data/agent-hq.db
-
     environment:
-      # ── Custom secrets / feature flags ────────────────────────────────────
-      # MY_SECRET_KEY: "changeme"
-      pass: "true"   # placeholder — remove this line when you add real vars
+      # Add OpenClaw/provider integration settings here when needed.
+      # OPENCLAW_GATEWAY_URL: "https://host.docker.internal:18789"
+      NODE_ENV: production
 
   agent-hq-ui:
-    # ── Change the host-side UI port ──────────────────────────────────────
     # ports:
     #   - "4500:3500"
-
-    # ── Point the UI at a non-default API location ─────────────────────────
-    # The NEXT_PUBLIC_API_URL is baked into the Next.js bundle at build time.
-    # If you change it here you must rebuild the image:
-    #   docker compose build agent-hq-ui && docker compose up -d agent-hq-ui
     build:
       args:
         NEXT_PUBLIC_API_URL: "http://localhost:3501"
+
+  # PostgreSQL is intentionally not published to the host by default. Uncomment
+  # only when a host-side tool needs a direct connection.
+  agent-hq-postgres:
+    # ports:
+    #   - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: "replace-with-a-local-secret"

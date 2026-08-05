@@ -784,7 +784,7 @@ export async function runWatchdogPass(db: Db, now = new Date()): Promise<void> {
         UPDATE tasks
         SET active_instance_id = NULL,
             ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
-            updated_at = datetime('now')
+            updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ? AND active_instance_id = ?
       `, currentInst.task_id, currentInst.id);
       if (cleared.changes > 0) {

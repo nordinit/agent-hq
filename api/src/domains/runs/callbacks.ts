@@ -60,7 +60,7 @@ async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: 
 
     const result = await db.run(`
       UPDATE tasks
-      SET active_instance_id = ?, updated_at = datetime('now')
+      SET active_instance_id = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
         AND active_instance_id IS NULL
     `, instanceId, task.id);
@@ -118,7 +118,7 @@ async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: 
 
   await db.run(`
     UPDATE tasks
-    SET status = ?, updated_at = datetime('now')
+    SET status = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, mapping.action_target, task.id);
 
@@ -337,8 +337,8 @@ export async function completeRunInstance(
   await db.run(`
     UPDATE job_instances
     SET status = ?,
-        completed_at = datetime('now'),
-        runtime_ended_at = COALESCE(runtime_ended_at, datetime('now')),
+        completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+        runtime_ended_at = COALESCE(runtime_ended_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
         runtime_end_success = COALESCE(runtime_end_success, ?),
         runtime_end_error = COALESCE(runtime_end_error, ?),
         runtime_end_source = COALESCE(runtime_end_source, 'instance_complete'),

@@ -133,7 +133,7 @@ Local process execution also remains an operating-system-user trust boundary, no
 
 ## Durable executions and checkpoints
 
-PostgreSQL migration `18-runtime-executions-and-checkpoints.sql` separates runtime transport state from task/workflow outcome:
+PostgreSQL migration `20-runtime-executions-and-checkpoints.sql` separates runtime transport state from task/workflow outcome:
 
 - `runtime_executions` holds one current execution per tenant/instance: boundary and fingerprint, driver/backend/target, sanitized launch, opaque handle, native session, capability snapshot, lease/heartbeat, state, and terminal data.
 - `runtime_checkpoints` is append-only and monotonically sequenced per execution. It records prepared/launched/session/progress/interrupt/terminal/reconciled observations and optional transcript cursor data.

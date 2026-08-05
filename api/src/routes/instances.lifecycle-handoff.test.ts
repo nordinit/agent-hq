@@ -1,6 +1,7 @@
 import express from 'express';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import instancesRouter from './instances';
 
 jest.mock('../services/browserPool', () => ({
@@ -8,225 +9,56 @@ jest.mock('../services/browserPool', () => ({
   destroyAgentContext: jest.fn(() => Promise.resolve()),
 }));
 
-async function resetDb(): Promise<void> {
-  closeDb();
-  const db = getDb();
-  await db.exec(`
-    CREATE TABLE app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL
-    );
-
-    CREATE TABLE sprints (
-      id INTEGER PRIMARY KEY,
-      project_id INTEGER,
-      name TEXT,
-      sprint_type TEXT
-    );
-
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      title TEXT NOT NULL,
-      status TEXT NOT NULL,
-      previous_status TEXT,
-      task_type TEXT,
-      sprint_id INTEGER,
-      project_id INTEGER,
-      agent_id INTEGER,
-      active_instance_id INTEGER,
-      review_branch TEXT,
-      review_commit TEXT,
-      review_url TEXT,
-      qa_verified_commit TEXT,
-      qa_tested_url TEXT,
-      merged_commit TEXT,
-      deployed_commit TEXT,
-      deploy_target TEXT,
-      deployed_at TEXT,
-      updated_at TEXT
-    );
-
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      session_key TEXT,
-      openclaw_agent_id TEXT,
-      runtime_type TEXT
-    );
-
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      agent_id INTEGER,
-      task_id INTEGER,
-      status TEXT,
-      session_key TEXT,
-      task_outcome TEXT,
-      runtime_completed_at TEXT,
-      lifecycle_handoff_status TEXT,
-      semantic_outcome_missing INTEGER NOT NULL DEFAULT 0,
-      lifecycle_outcome_posted_at TEXT,
-      error TEXT,
-      response TEXT,
-      dispatched_at TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      runtime_ended_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT,
-      token_input INTEGER,
-      token_output INTEGER,
-      token_total INTEGER,
-      run_id TEXT,
-      durable_run_id TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE instance_artifacts (
-      instance_id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      current_stage TEXT,
-      summary TEXT,
-      latest_commit_hash TEXT,
-      branch_name TEXT,
-      changed_files_json TEXT,
-      changed_files_count INTEGER,
-      blocker_reason TEXT,
-      outcome TEXT,
-      last_agent_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      stale INTEGER,
-      stale_at TEXT,
-      session_key TEXT,
-      updated_at TEXT,
-      last_note_at TEXT
-    );
-
-    CREATE TABLE task_notes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      author TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE task_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      changed_by TEXT NOT NULL,
-      field TEXT NOT NULL,
-      old_value TEXT,
-      new_value TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE task_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER,
-      project_id INTEGER,
-      agent_id INTEGER,
-      from_status TEXT,
-      to_status TEXT,
-      moved_by TEXT,
-      move_type TEXT,
-      instance_id INTEGER,
-      reason TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE integrity_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER,
-      project_id INTEGER,
-      agent_id INTEGER,
-      instance_id INTEGER,
-      anomaly_type TEXT NOT NULL,
-      detail TEXT,
-      resolved INTEGER NOT NULL DEFAULT 0,
-      resolved_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      instance_id INTEGER,
-      agent_id INTEGER,
-      job_title TEXT,
-      level TEXT,
-      message TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE sessions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      external_key TEXT NOT NULL UNIQUE,
-      runtime TEXT NOT NULL,
-      agent_id INTEGER,
-      task_id INTEGER,
-      instance_id INTEGER,
-      project_id INTEGER,
-      status TEXT NOT NULL,
-      title TEXT NOT NULL DEFAULT '',
-      started_at TEXT,
-      ended_at TEXT,
-      message_count INTEGER NOT NULL DEFAULT 0,
-      token_input INTEGER,
-      token_output INTEGER,
-      metadata TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE session_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id INTEGER NOT NULL,
-      ordinal INTEGER NOT NULL,
-      role TEXT,
-      event_type TEXT,
-      content TEXT,
-      event_meta TEXT,
-      raw_payload TEXT,
-      timestamp TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(session_id, ordinal)
-    );
+async function seedFixture(): Promise<void> {
+  const db = await setupTestDb();
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Agent HQ', 'agent-hq', 1)`);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
   `);
-
-  await db.run(`INSERT INTO projects (id, name) VALUES (86, 'Agent HQ')`);
-  await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (96, 'Talon (QA)', 'agency-qa', 'openclaw')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Agent HQ')`);
+  await db.run(`
+    INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
+    VALUES (1, 'dev', 'Development', '', 1)
+  `);
+  await db.run(`
+    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
+    VALUES (42, 1, 86, 'Development', '', 'dev', 'active')
+  `);
+  await db.run(`
+    INSERT INTO agents (
+      id, tenant_id, project_id, sprint_id, name, role, session_key, runtime_type
+    ) VALUES (
+      96, 1, 86, 42, 'Talon (QA)', 'QA Engineer', 'agency-qa', 'openclaw'
+    )
+  `);
   await db.run(`
     INSERT INTO tasks (
-      id, title, status, task_type, project_id, agent_id, active_instance_id,
-      review_branch, review_commit, review_url, updated_at
-    )
-    VALUES (
+      id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id,
+      custom_fields_json, updated_at
+    ) VALUES (
       403,
+      1,
       'Prevent outcome-less run completions from closing cleanly or redispatching blindly',
       'review',
       'backend',
+      42,
       86,
       96,
-      2045,
-      'cinder-backend/task-403-prevent-outcome-less-run-completions-fro',
-      '2997dcc8cec51f6fe0dfec2ab882668b83d482df',
-      'http://localhost:3510/tasks/403',
-      datetime('now')
+      ?,
+      CURRENT_TIMESTAMP
     )
-  `);
+  `, JSON.stringify({
+    review_branch: 'cinder-backend/task-403-prevent-outcome-less-run-completions-fro',
+    review_commit: '2997dcc8cec51f6fe0dfec2ab882668b83d482df',
+    review_url: 'http://localhost:3510/tasks/403',
+  }));
   await db.run(`
     INSERT INTO job_instances (
-      id, agent_id, task_id, status, session_key, dispatched_at, started_at
-    )
-    VALUES (2045, 96, 403, 'running', 'run:2045', datetime('now'), datetime('now'))
+      id, tenant_id, agent_id, task_id, status, session_key, dispatched_at, started_at
+    ) VALUES (2045, 1, 96, 403, 'running', 'run:2045', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
   `);
+  await db.run(`UPDATE tasks SET active_instance_id = 2045 WHERE id = 403`);
 }
 
 function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -250,8 +82,8 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('instance completion lifecycle handoff recovery', () => {
-  beforeEach(resetDb);
-  afterEach(closeDb);
+  beforeEach(seedFixture);
+  afterEach(teardownTestDb);
 
   it('persists the structured operator note when a lifecycle-managed run completes without an outcome', async () => {
     const { server, baseUrl } = await startTestServer();

@@ -229,8 +229,8 @@ export async function resolveTaskFieldSchemaForSprint(
         SELECT schema_json
         FROM task_field_schemas
         WHERE sprint_type_key = ?
-          AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
-        ORDER BY COALESCE(updated_at, created_at, datetime('now')) DESC, id DESC
+          AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
+        ORDER BY COALESCE(updated_at, created_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) DESC, id DESC
         LIMIT 1
       `, sprintType, candidateTaskType, candidateTaskType) as { schema_json: string } | undefined;
       return row ? parseFieldSchemaJson(row.schema_json) : { fields: [] };

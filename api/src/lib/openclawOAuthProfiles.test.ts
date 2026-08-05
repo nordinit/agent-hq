@@ -7,7 +7,6 @@ import {
   type OpenClawOAuthCredential,
   upsertOAuthProfileStore,
 } from './openclawOAuthProfiles';
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 function jwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
@@ -28,26 +27,25 @@ describe('OpenClaw OAuth profile synchronization', () => {
 
   it('writes Agent HQ Codex OAuth credentials into the current OpenClaw SQLite profile', async () => {
     const storePath = path.join(tempDir, 'openclaw-agent.sqlite');
-    const dbRaw = new Database(storePath);
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
+    const db = new Database(storePath);
+    db.exec(`
       CREATE TABLE auth_profile_store (
         store_key TEXT NOT NULL PRIMARY KEY,
         store_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
     `);
-    await db.run(`
+    db.prepare(`
       INSERT INTO auth_profile_store (store_key, store_json, updated_at)
       VALUES ('primary', ?, 1)
-    `, JSON.stringify({
+    `).run(JSON.stringify({
             version: 1,
             profiles: {
               'anthropic:default': { type: 'token', provider: 'anthropic', token: 'keep-me' },
               'openai:default': { type: 'api_key', provider: 'openai', key: 'stale', displayName: 'Existing profile' },
             },
           }));
-    dbRaw.close();
+    db.close();
 
     const credential: OpenClawOAuthCredential = {
       type: 'oauth',
@@ -68,14 +66,13 @@ describe('OpenClaw OAuth profile synchronization', () => {
     expect(await upsertOAuthProfileStore(storePath, 'openai-codex', credential)).toBe(true);
     expect(await upsertOAuthProfileStore(storePath, 'openai-codex', credential)).toBe(false);
 
-    const verifyDbRaw = new Database(storePath, { readonly: true });
-      const verifyDb = new SqliteAdapter(verifyDbRaw);
-    const row = await verifyDb.get(`
+    const verifyDb = new Database(storePath, { readonly: true });
+    const row = verifyDb.prepare(`
       SELECT store_json
       FROM auth_profile_store
       WHERE store_key = 'primary'
-    `) as { store_json: string };
-    verifyDbRaw.close();
+    `).get() as { store_json: string };
+    verifyDb.close();
     const document = JSON.parse(row.store_json);
 
     expect(document.profiles['anthropic:default']).toEqual(expect.objectContaining({ token: 'keep-me' }));

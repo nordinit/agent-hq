@@ -309,8 +309,9 @@ export function buildRuntimeBoundaryV1(params: BuildRuntimeBoundaryV1Input): Run
   const config = runtimeConfigRecord(params.runtimeConfig);
   const targetInput = params.executionTarget ?? defaultRuntimeExecutionTarget(params.runtimeType);
   const executionTarget: RuntimeExecutionTargetV1 = {
-    ...targetInput,
     id: stripUrlCredentials(targetInput.id),
+    kind: targetInput.kind,
+    trustLevel: targetInput.trustLevel,
     capabilities: sortedStrings(targetInput.capabilities),
   };
   const workspaceRoot = nonEmptyString(params.workspaceRoot);

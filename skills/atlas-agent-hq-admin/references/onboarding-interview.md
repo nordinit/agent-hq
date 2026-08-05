@@ -6,7 +6,13 @@ Ask only questions that change configuration. If a detail is obvious from the us
 
 ## Minimum Questions
 
-1. What kind of work will Agent HQ manage?
+1. What durable thing is moving through the process?
+   Examples: software change, lead, incident, article, request, campaign, or case.
+
+2. Which parts are independently assignable or completable?
+   Ask what can run in parallel, be retried separately, have its own blocker, or require separate acceptance. Use the answer to choose case, work-order, or hybrid modeling.
+
+3. What kind of work will Agent HQ manage?
    - software delivery
    - content/editorial
    - sales/CRM
@@ -15,7 +21,7 @@ Ask only questions that change configuration. If a detail is obvious from the us
    - personal task management
    - mixed/custom
 
-2. What roles touch the work?
+4. What roles touch the work, and where are the real responsibility boundaries?
    - PM/planner
    - frontend/backend/fullstack
    - QA/reviewer
@@ -23,23 +29,10 @@ Ask only questions that change configuration. If a detail is obvious from the us
    - ops/sales/content/editor
    - user/human approval
 
-3. What are the main task categories?
-   Use canonical task types when possible:
-   - `frontend`
-   - `backend`
-   - `fullstack`
-   - `qa`
-   - `design`
-   - `marketing`
-   - `pm`
-   - `pm_analysis`
-   - `pm_operational`
-   - `ops`
-   - `data`
-   - `adhoc`
-   - `other`
+5. Which stable task differences change schema, tools, routing capability, evidence, or definition of done?
+   Derive task types from these differences. Resolve allowed values from the workflow definition; do not assume the legacy/default task-type seed list is globally authoritative.
 
-4. How should a task move from start to finish?
+6. How should the durable item or each independent task move from start to finish?
    Ask for the real handoffs, for example:
    - plan -> ready
    - ready -> in progress
@@ -50,7 +43,10 @@ Ask only questions that change configuration. If a detail is obvious from the us
    - live verify
    - done
 
-5. What evidence is required before handoff?
+7. Which steps wait for an agent, human, external event, timer, or manual resume?
+   This determines assignment coverage and which states intentionally have no agent route.
+
+8. What evidence is required before handoff?
    Examples:
    - branch and commit
    - tested URL
@@ -60,7 +56,7 @@ Ask only questions that change configuration. If a detail is obvious from the us
    - live verification timestamp
    - external ticket/customer link
 
-6. What should be optimized for model routing?
+9. What should be optimized for model routing?
    - cheapest acceptable model for small tasks
    - stronger model for high-risk tasks
    - provider preference
@@ -79,6 +75,9 @@ Ask these only when needed:
 - Are there existing providers already configured?
 - Are there existing agents to reuse?
 - Should the workflow be reusable as a workflow type?
+- Is QA a stage for the same task or an independent QA deliverable?
+- Does `blocked` preserve the current phase or enter a separately owned recovery lane?
+- Which roles require different permissions, tools, or independent review?
 
 ## Discovery Output
 
@@ -87,6 +86,9 @@ Before changing configuration, summarize:
 ```text
 Workflow summary:
 - Work type:
+- Durable work item:
+- Modeling mode: case | work order | hybrid
+- Independent task boundaries:
 - Project:
 - Workflow / workflow type:
 - Roles:
@@ -104,6 +106,7 @@ Use this structure when asking for approval:
 
 ```text
 Proposed Agent HQ setup:
+- Work-item model:
 - Project/workflow:
 - Workflow type:
 - Task field schema:

@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './config/loadRootEnv';
 
 // Must be set after dotenv loads but before any fetch/TLS calls.
 // dotenv/config is synchronous, so process.env is populated by now.
@@ -523,9 +523,9 @@ app.get('/api/v1/stats', async (req, res) => {
     const activeJobs = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status IN ('queued','dispatched','running')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
     const runningJobs = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'running'${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
     const pendingJobs = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status IN ('queued','dispatched')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
-    const recentRuns = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.created_at >= datetime('now', '-24 hours')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
-    const failedRecent = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'failed' AND ji.created_at >= datetime('now', '-24 hours')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
-    const doneRecent = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'done' AND ji.created_at >= datetime('now', '-24 hours')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
+    const recentRuns = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.created_at >= to_char((now() AT TIME ZONE 'utc' - interval '24 hour'), 'YYYY-MM-DD HH24:MI:SS')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
+    const failedRecent = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'failed' AND ji.created_at >= to_char((now() AT TIME ZONE 'utc' - interval '24 hour'), 'YYYY-MM-DD HH24:MI:SS')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
+    const doneRecent = (await db.get(`SELECT COUNT(*) as n FROM job_instances ji ${scopedJobJoin} WHERE ji.status = 'done' AND ji.created_at >= to_char((now() AT TIME ZONE 'utc' - interval '24 hour'), 'YYYY-MM-DD HH24:MI:SS')${scopedJobWhere}`, ...scopedJobParams) as { n: number }).n;
     const enabledTemplates = (await db.get(`SELECT COUNT(*) as n FROM agents WHERE enabled = 1 ${enabledAgentProjectWhere}`, ...agentProjectParams) as { n: number }).n;
     const tokensLast24h = await getDashboardTokenUsageLast24h(db, projectId, tenantId);
 
@@ -534,7 +534,7 @@ app.get('/api/v1/stats', async (req, res) => {
       FROM job_instances ji
       LEFT JOIN agents a ON a.id = ji.agent_id
       LEFT JOIN tasks t ON t.id = ji.task_id
-      WHERE ji.status = 'failed' AND ji.created_at >= datetime('now', '-24 hours')
+      WHERE ji.status = 'failed' AND ji.created_at >= to_char((now() AT TIME ZONE 'utc' - interval '24 hour'), 'YYYY-MM-DD HH24:MI:SS')
       ${scopedJobWhere}
       ORDER BY ji.created_at DESC
       LIMIT 5
@@ -558,44 +558,48 @@ app.get('/api/v1/stats', async (req, res) => {
   }
 });
 
-// Verify DB schema and start. Startup must not run schema/data migrations.
-// Engine-aware and non-mutating: verifies the schema matches the repository and refuses
-// to start if it does not. It never migrates — see verifyStartupSchema().
-void verifyStartupSchema().catch((err) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+async function startServer(): Promise<void> {
+  // Startup is a hard, read-only gate. Nothing may listen or start a background writer until the
+  // migration ledger has been verified, otherwise a stale process gets a window to mutate data
+  // before the asynchronous verification failure terminates it.
+  await verifyStartupSchema();
 
-const automationDisabled = process.env.AGENT_HQ_DISABLE_AUTOMATION === '1';
-if (automationDisabled) {
-  console.warn('[boot] Background automation disabled by AGENT_HQ_DISABLE_AUTOMATION=1');
-} else {
-  startScheduler();
-  startSprintScheduler();
-  startWatchdog();
-  startReconciler();
+  const automationDisabled = process.env.AGENT_HQ_DISABLE_AUTOMATION === '1';
+  if (automationDisabled) {
+    console.warn('[boot] Background automation disabled by AGENT_HQ_DISABLE_AUTOMATION=1');
+  } else {
+    startScheduler();
+    startSprintScheduler();
+    startWatchdog();
+    startReconciler();
+  }
+
+  // Sprint heartbeat: check every 5 min for time/run-limit exceeded sprints
+  setInterval(async () => {
+    try { await checkSprintCompletion(); } catch (err) { console.error('[sprints] Heartbeat error:', err); }
+  }, 5 * 60 * 1000);
+
+  const server = http.createServer(app);
+
+  console.log('[boot] http server created', { port: Number(PORT), host: HOST });
+
+  // WebSocket proxy for chat (bridges browser → Gateway wss://)
+  console.log('[boot] creating chat websocket server', { path: '/api/v1/chat/ws' });
+  const wss = new WebSocketServer({ server, path: '/api/v1/chat/ws' });
+  console.log('[boot] calling setupChatProxy');
+  setupChatProxy(wss);
+  console.log('[boot] setupChatProxy returned');
+
+  console.log('[boot] about to server.listen', { port: Number(PORT), host: HOST });
+  server.listen(Number(PORT), HOST, () => {
+    const displayHost = HOST === '0.0.0.0' ? '127.0.0.1' : HOST;
+    console.log(`Agent HQ API running on http://${displayHost}:${PORT}`);
+  });
 }
 
-// Sprint heartbeat: check every 5 min for time/run-limit exceeded sprints
-setInterval(async () => {
-  try { await checkSprintCompletion(); } catch (err) { console.error('[sprints] Heartbeat error:', err); }
-}, 5 * 60 * 1000);
-
-const server = http.createServer(app);
-
-console.log('[boot] http server created', { port: Number(PORT), host: HOST });
-
-// WebSocket proxy for chat (bridges browser → Gateway wss://)
-console.log('[boot] creating chat websocket server', { path: '/api/v1/chat/ws' });
-const wss = new WebSocketServer({ server, path: '/api/v1/chat/ws' });
-console.log('[boot] calling setupChatProxy');
-setupChatProxy(wss);
-console.log('[boot] setupChatProxy returned');
-
-console.log('[boot] about to server.listen', { port: Number(PORT), host: HOST });
-server.listen(Number(PORT), HOST, () => {
-  const displayHost = HOST === '0.0.0.0' ? '127.0.0.1' : HOST;
-  console.log(`Agent HQ API running on http://${displayHost}:${PORT}`);
+void startServer().catch((err) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
 });
 
 // Graceful shutdown: close browser pool

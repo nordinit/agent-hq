@@ -1,5 +1,6 @@
-import Database from 'better-sqlite3';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
+import { request as httpRequest } from 'http';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
@@ -31,134 +32,101 @@ jest.mock('../domains/runs/transcriptProvider', () => ({
 
 import sessionsRouter from './sessions';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 async function postJson(app: express.Express, route: string): Promise<{ status: number; body: any }> {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
   try {
     await new Promise<void>((resolve) => server.once('listening', () => resolve()));
     const { port } = server.address() as AddressInfo;
-    const res = await fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST' });
-    return {
-      status: res.status,
-      body: await res.json(),
-    };
+    return await new Promise<{ status: number; body: any }>((resolve, reject) => {
+      // Do not use the process-global fetch/Undici connection pool here. A pooled keep-alive
+      // socket can outlive the response and make server.close() wait behind unrelated full-suite
+      // activity. This request owns one socket and explicitly closes it with the response.
+      const request = httpRequest({
+        host: '127.0.0.1',
+        port,
+        path: route,
+        method: 'POST',
+        agent: false,
+        headers: { connection: 'close' },
+      }, (response) => {
+        response.setEncoding('utf8');
+        let rawBody = '';
+        response.on('data', (chunk: string) => { rawBody += chunk; });
+        response.on('error', reject);
+        response.on('end', () => {
+          try {
+            resolve({
+              status: response.statusCode ?? 0,
+              body: JSON.parse(rawBody),
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      });
+      request.setTimeout(30_000, () => {
+        request.destroy(new Error(`POST ${route} timed out waiting for the test server`));
+      });
+      request.on('error', reject);
+      request.end();
+    });
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+      // close() stops new connections; this closes any socket that raced with shutdown. The
+      // response body has already been consumed before this finally block begins.
+      server.closeAllConnections();
+    });
   }
 }
 
 async function setupDb(): Promise<void> {
-  await db.exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT,
-      session_key TEXT,
-      runtime_type TEXT
-    );
-
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL
-    );
-
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      title TEXT,
-      project_id INTEGER
-    );
-
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      agent_id INTEGER,
-      session_key TEXT,
-      status TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      dispatched_at TEXT,
-      created_at TEXT,
-      run_id TEXT,
-      token_input INTEGER,
-      token_output INTEGER
-    );
-
-    CREATE TABLE sessions (
-      id INTEGER PRIMARY KEY,
-      external_key TEXT UNIQUE,
-      runtime TEXT NOT NULL,
-      agent_id INTEGER,
-      task_id INTEGER,
-      instance_id INTEGER,
-      project_id INTEGER,
-      status TEXT NOT NULL DEFAULT 'active',
-      title TEXT NOT NULL DEFAULT '',
-      started_at TEXT,
-      ended_at TEXT,
-      message_count INTEGER NOT NULL DEFAULT 0,
-      token_input INTEGER,
-      token_output INTEGER,
-      metadata TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE session_messages (
-      id INTEGER PRIMARY KEY,
-      session_id INTEGER NOT NULL,
-      ordinal INTEGER NOT NULL,
-      role TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      content TEXT NOT NULL,
-      event_meta TEXT NOT NULL DEFAULT '{}',
-      raw_payload TEXT,
-      timestamp TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(session_id, ordinal)
-    );
-
-    CREATE TABLE chat_messages (
-      id INTEGER PRIMARY KEY,
-      agent_id INTEGER NOT NULL,
-      instance_id INTEGER,
-      session_key TEXT NOT NULL DEFAULT '',
-      role TEXT NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      timestamp TEXT NOT NULL,
-      event_type TEXT NOT NULL DEFAULT 'text',
-      event_meta TEXT NOT NULL DEFAULT '{}'
-    );
+  await db.run(`
+    INSERT INTO tenants (id, name, slug, is_default)
+    VALUES (1, 'Default', 'default', 1)
+  `);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
+  `);
+  await db.run(`
+    INSERT INTO projects (id, tenant_id, name)
+    VALUES (9, 1, 'Backend Bugs')
+  `);
+  await db.run(`
+    INSERT INTO sprints (id, tenant_id, project_id, name)
+    VALUES (9, 1, 9, 'Backend Bugs')
   `);
 }
 
 describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
   beforeEach(async () => {
-    db = new SqliteAdapter(new Database(':memory:'));
+    db = await setupTestDb();
     mockTranscriptMessages = [];
     await setupDb();
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('creates a canonical active session and backfills prompt-only chat_messages for a dispatched OpenClaw run', async () => {
-    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`);
-    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
-    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (97, 1, 'Cinder', 'agent:cinder:main', 'openclaw')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (
-        id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
+        id, tenant_id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
       ) VALUES (
-        4581, 679, 97, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
+        4581, 1, 679, 97, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
         'dispatched', NULL, NULL, '2026-05-01T11:59:00Z', '2026-05-01T11:58:00Z', NULL
       )
     `);
     await db.run(`
-      INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
+      INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
       VALUES
-        (1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
-        (2, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
+        ('1', 1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
+        ('2', 1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
     `);
 
     const app = express();
@@ -211,22 +179,21 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
       },
     ];
 
-    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`);
-    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
-    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (97, 1, 'Cinder', 'agent:cinder:main', 'openclaw')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (
-        id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
+        id, tenant_id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
       ) VALUES (
-        4581, 679, 97, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
+        4581, 1, 679, 97, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
         'dispatched', NULL, NULL, '2026-05-01T11:59:00Z', '2026-05-01T11:58:00Z', NULL
       )
     `);
     await db.run(`
-      INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
+      INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
       VALUES
-        (1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
-        (2, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
+        ('1', 1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
+        ('2', 1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
     `);
 
     const app = express();
@@ -251,22 +218,21 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
   });
 
   it('imports a dispatched prompt-only run from chat_messages when job_instances has no session_key yet', async () => {
-    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`);
-    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
-    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (97, 1, 'Cinder', 'agent:cinder:main', 'openclaw')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (
-        id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
+        id, tenant_id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
       ) VALUES (
-        4581, 679, 97, NULL,
+        4581, 1, 679, 97, NULL,
         'dispatched', NULL, NULL, '2026-05-01T11:59:00Z', '2026-05-01T11:58:00Z', NULL
       )
     `);
     await db.run(`
-      INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
+      INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
       VALUES
-        (1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
-        (2, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
+        ('1', 1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
+        ('2', 1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
     `);
 
     const app = express();
@@ -309,22 +275,21 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
       event_meta: { source: 'provider' },
     }];
 
-    await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (97, 'Cinder', 'agent:cinder:main', 'openclaw')`);
-    await db.run(`INSERT INTO projects (id, name) VALUES (9, 'Backend Bugs')`);
-    await db.run(`INSERT INTO tasks (id, title, project_id) VALUES (679, 'Prompt-only run', 9)`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (97, 1, 'Cinder', 'agent:cinder:main', 'openclaw')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (
-        id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
+        id, tenant_id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
       ) VALUES (
-        4581, 679, 97, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
+        4581, 1, 679, 97, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062',
         'dispatched', NULL, NULL, '2026-05-01T11:59:00Z', '2026-05-01T11:58:00Z', NULL
       )
     `);
     await db.run(`
-      INSERT INTO chat_messages (id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
+      INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, session_key, role, content, timestamp, event_type)
       VALUES
-        (1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
-        (2, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
+        ('1', 1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Initial task prompt', '2026-05-01T12:00:00Z', 'text'),
+        ('2', 1, 97, 4581, 'run:4581:244f30ff-cf5d-4c86-96f9-273787cf8062', 'user', 'Dispatch contract', '2026-05-01T12:00:01Z', 'text')
     `);
 
     const app = express();

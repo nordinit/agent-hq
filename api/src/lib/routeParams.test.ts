@@ -1,4 +1,5 @@
 import express from 'express';
+import type { Server } from 'http';
 import { AddressInfo } from 'net';
 import { describe, expect, it } from '@jest/globals';
 import { parseIdParam, requireNumericId } from './routeParams';
@@ -11,15 +12,28 @@ import { parseIdParam, requireNumericId } from './routeParams';
  * PostgreSQL rejects the cast — `invalid input syntax for type bigint: "types"` — so the same
  * request became a 500 carrying database text.
  */
+async function closeServer(server: Server): Promise<void> {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+    // A failed request can leave Undici's keep-alive socket open. Closing the listener alone
+    // then waits for that socket and turns a simple assertion failure into a Jest timeout.
+    server.closeAllConnections();
+  });
+}
+
 async function get(app: express.Express, path: string): Promise<{ status: number; body: any }> {
-  const server = app.listen(0);
+  const server = app.listen(0, '127.0.0.1');
   try {
-    await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
     const { port } = server.address() as AddressInfo;
     const res = await fetch(`http://127.0.0.1:${port}${path}`);
     return { status: res.status, body: await res.json().catch(() => null) };
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    await closeServer(server);
   }
 }
 
@@ -68,7 +82,7 @@ describe('requireNumericId', () => {
     expect(res.body).toEqual({ reachedHandler: true, id: '123' });
   });
 
-  it('stops a non-numeric id before the handler, with SQLite\'s 404', async () => {
+  it('stops a non-numeric id before the handler with a clean 404', async () => {
     const res = await get(buildApp(), '/api/v1/workflows/types-x');
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'invalid_id' });

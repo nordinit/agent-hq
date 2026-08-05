@@ -116,12 +116,10 @@ agent-hq stop
 agent-hq open
 ```
 
-Agent HQ defaults to local mode.
-
-Use Docker explicitly if you want the Docker Compose stack:
+Docker is the default launcher mode because it includes PostgreSQL 17:
 
 ```bash
-agent-hq start --docker
+agent-hq start
 ```
 
 The planned first-install guided setup flow is defined in
@@ -138,7 +136,7 @@ For a persistent self-hosted Docker setup:
 ```bash
 git clone https://github.com/nordinit/agent-hq.git
 cd agent-hq
-docker compose up -d
+docker compose up --build -d
 ```
 
 This starts:
@@ -148,14 +146,17 @@ This starts:
 | `agent-hq-ui` | Next.js UI | `3500` |
 | `agent-hq-api` | Express/TypeScript API | `3501` |
 
-Data persists in the `agent-hq-data` Docker volume.
+PostgreSQL data persists in the `agent-hq-postgres-data` Docker volume; workspaces, editable
+contract templates, and uploaded files persist in `agent-hq-workspaces`, `agent-hq-contracts`,
+and `agent-hq-uploads`. A one-shot
+`agent-hq-migrate` service installs or upgrades the schema before the API starts.
 
 For custom ports or configuration:
 
 ```bash
 cp .env.example .env
 # Edit .env as needed
-docker compose --env-file .env up -d
+docker compose --env-file .env up --build -d
 ```
 
 See [`docs/SELF_HOSTING.md`](docs/SELF_HOSTING.md) for advanced self-hosting configuration.
@@ -370,7 +371,7 @@ flowchart LR
     Human["Operator / PM"]
     UI["Agent HQ UI<br/>Tasks · Agents · Routing · Telemetry"]
     API["Agent HQ API<br/>REST · lifecycle · MCP · transcripts"]
-    DB[("SQLite<br/>agent-hq.db")]
+    DB[("PostgreSQL 17<br/>Agent HQ system of record")]
     Reconciler["Reconciler<br/>eligible work"]
     Dispatcher["Dispatcher<br/>resolve route + launch run"]
     Watchdog["Watchdog<br/>stale run recovery"]

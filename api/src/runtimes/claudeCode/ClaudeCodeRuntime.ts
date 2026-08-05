@@ -416,6 +416,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       config,
       runId,
       db,
+      tenantId,
       state,
       exited,
       accumulator,
@@ -535,6 +536,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     config: NormalizedClaudeCodeRuntimeConfig;
     runId: string;
     db: Db | null;
+    tenantId: number | null;
     state: ActiveClaudeCodeRun;
     exited: Promise<ProcessExitResult>;
     accumulator: ClaudeStreamAccumulator;
@@ -668,9 +670,9 @@ export class ClaudeCodeRuntime implements AgentRuntime {
         };
       }
     } finally {
-      if (instanceId != null && runtimeEndEvent) {
+      if (instanceId != null && args.tenantId != null && runtimeEndEvent) {
         try {
-          await this.handleRuntimeEnd(db, instanceId, runtimeEndEvent, accumulator);
+          await this.handleRuntimeEnd(db, instanceId, args.tenantId, runtimeEndEvent, accumulator);
         } catch (error) {
           // Durable terminal state is repaired into job_instances by the runtime
           // reconciler. No persistence failure may reject this detached monitor
@@ -696,6 +698,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   private async handleRuntimeEnd(
     db: Db | null,
     instanceId: number,
+    tenantId: number,
     event: RuntimeEndEvent,
     accumulator: ClaudeStreamAccumulator,
   ): Promise<void> {
@@ -704,6 +707,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     try {
       await terminalRuntimeExecution(db, {
         instanceId,
+        tenantId,
         state: event.reason === 'aborted' ? 'cancelled' : event.success ? 'succeeded' : 'failed',
         reason: event.reason ?? (event.success ? 'completed' : 'error'),
         error: event.error ?? null,
@@ -781,8 +785,8 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     try {
       await db.run(
         `
-        INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-        SELECT ?, agent_id, id, 'system', ?, ?, 'turn_end', ?
+        INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+        SELECT ?, tenant_id, agent_id, id, 'system', ?, ?, 'turn_end', ?
         FROM job_instances
         WHERE id = ?
         ON CONFLICT(id) DO UPDATE SET
@@ -803,7 +807,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       await db.run(
         `
         UPDATE job_instances
-        SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+        SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
         WHERE id = ?
       `,
         JSON.stringify(event),
@@ -859,8 +863,8 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     try {
       await db.run(
         `
-        INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type)
-        SELECT ?, agent_id, id, 'assistant', ?, ?, 'text'
+        INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, role, content, timestamp, event_type)
+        SELECT ?, tenant_id, agent_id, id, 'assistant', ?, ?, 'text'
         FROM job_instances
         WHERE id = ?
         ON CONFLICT(id) DO UPDATE SET

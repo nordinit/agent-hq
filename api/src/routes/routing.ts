@@ -121,8 +121,7 @@ class DryRunRollback<T> extends Error {
  *
  * `run` therefore takes the transaction handle explicitly. Every routing domain mutation
  * already accepts a `Db` as its first argument and none of them reach for getDb(), so the
- * handle reaches every statement. Their internal withTransaction calls (seedSprintTaskPolicy)
- * nest as savepoints on the same connection.
+ * handle reaches every statement.
  *
  * The non-dry-run path deliberately stays OUTSIDE a transaction: wrapping real writes would
  * change production semantics and pin a pooled connection for every write.
@@ -310,7 +309,7 @@ router.put('/config/:job_id', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'No fields to update' });
     }
 
-    sets.push("last_active = datetime('now')");
+    sets.push("last_active = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')");
     vals.push(agentId);
     if (agentTenantWhere) vals.push(tenantId);
     await db.run(`UPDATE agents SET ${sets.join(', ')} WHERE id = ? ${agentTenantWhere}`, ...vals);

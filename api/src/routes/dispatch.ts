@@ -170,7 +170,7 @@ router.get('/status', async (_req: Request, res: Response) => {
     const dispatchedToday = (await db.get(`
       SELECT COUNT(*) as n
       FROM dispatch_log
-      WHERE dispatched_at >= datetime('now', 'start of day')
+      WHERE dispatched_at >= to_char(date_trunc('day', now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
     `) as { n: number }).n;
 
     // Stalled today (tasks that transitioned to stalled today)
@@ -178,7 +178,7 @@ router.get('/status', async (_req: Request, res: Response) => {
       SELECT COUNT(*) as n
       FROM tasks
       WHERE status = 'stalled'
-        AND updated_at >= datetime('now', 'start of day')
+        AND updated_at >= to_char(date_trunc('day', now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
     `) as { n: number }).n;
 
     // Starved jobs: enabled agents that currently own an explicit sprint routing rule

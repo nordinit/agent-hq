@@ -1,67 +1,27 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import agentsRouter from './agents';
 
 let tempDir: string;
 let dbPath: string;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-remote-gateway-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
-  process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  await db.exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT '',
-      session_key TEXT NOT NULL UNIQUE,
-      workspace_path TEXT NOT NULL DEFAULT '',
-      repo_path TEXT,
-      repo_url TEXT,
-      repo_access_mode TEXT,
-      status TEXT NOT NULL DEFAULT 'idle',
-      openclaw_agent_id TEXT,
-      model TEXT,
-      runtime_type TEXT NOT NULL DEFAULT 'webhook',
-      runtime_config TEXT,
-      hooks_url TEXT,
-      hooks_auth_header TEXT,
-      preferred_provider TEXT,
-      os_user TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      github_identity_id INTEGER,
-      job_title TEXT NOT NULL DEFAULT '',
-      schedule TEXT NOT NULL DEFAULT '',
-      job_instructions TEXT NOT NULL DEFAULT '',
-      skill_names TEXT NOT NULL DEFAULT '[]',
-      timeout_seconds INTEGER NOT NULL DEFAULT 900,
-      startup_grace_seconds INTEGER,
-      heartbeat_stale_seconds INTEGER,
-      stall_threshold_min INTEGER NOT NULL DEFAULT 30,
-      max_retries INTEGER NOT NULL DEFAULT 3,
-      sort_rules TEXT NOT NULL DEFAULT '[]',
-      project_id INTEGER,
-      system_role TEXT,
-      last_active TEXT,
-      job_instructions_updated_at TEXT,
-      instructions_version INTEGER NOT NULL DEFAULT 0
-    );
 
-    CREATE TABLE provider_config (
-      slug TEXT PRIMARY KEY,
-      status TEXT NOT NULL
-    );
-  `);
 
-  await db.run(`INSERT INTO provider_config (slug, status) VALUES (?, ?)`, 'openai', 'connected');
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(`INSERT INTO provider_config (tenant_id, slug, status) VALUES (1, ?, ?)`, 'openai', 'connected');
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -90,9 +50,8 @@ describe('agents Remote Gateway compatibility fields', () => {
     await resetDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -130,8 +89,8 @@ describe('agents Remote Gateway compatibility fields', () => {
   it('updates existing Remote Gateway values without breaking stored agent records', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO agents (id, name, role, session_key, runtime_type, hooks_url, hooks_auth_header, preferred_provider)
-      VALUES (1, 'Existing Gateway Agent', 'Backend Engineer', 'agent:existing-gateway:main', 'webhook', 'http://localhost:3711', 'Bearer old-token', 'openai')
+      INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, hooks_url, hooks_auth_header, preferred_provider)
+      VALUES (1, 1, 'Existing Gateway Agent', 'Backend Engineer', 'agent:existing-gateway:main', 'webhook', 'http://localhost:3711', 'Bearer old-token', 'openai')
     `);
 
     const { server, baseUrl } = await startTestServer();

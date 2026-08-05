@@ -91,7 +91,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_preview_routing_change', 'atlas_preview_routing_change'],
-    'Cost a routing config change before making it. Applies the real mutations inside a transaction that never commits, then reports rows written per table, how many workflows the change reaches, and the lint findings it introduces or resolves. Use it before every create, update or delete of a transition, assignment rule or gate requirement. The lint delta is the reason it exists: gate resolution replaces rather than accumulates, so a task-type gate substitutes the whole all-types set for that type instead of adding to it, and this is the only place that shows it before the change lands. Measured row counts also catch the seeding side effect, where the first write to an unseeded workflow materialises its whole starter policy. Requires workflow.edit_routing_config.',
+    'Cost a routing config change before making it. Applies the real mutations inside a transaction that never commits, then reports rows written per table, how many workflows the change reaches, and the lint findings it introduces or resolves. Use it before every create, update or delete of a transition, assignment rule or gate requirement. The lint delta is the reason it exists: gate resolution replaces rather than accumulates, so a task-type gate substitutes the whole all-types set for that type instead of adding to it, and this is the only place that shows it before the change lands. Requires workflow.edit_routing_config.',
     {
       ...tenantSelectorSchema,
       project_id: z.number().int().positive().optional().describe('Project scope for the change'),
@@ -133,7 +133,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     (args) => wrap(() => api.listRoutingRules(args))(),
     { domain: 'assignment_rules', rest_paths: ['/api/v1/routing/assignment-rules', '/api/v1/assignment-rules', '/api/v1/routing/rules', '/api/v1/routing-rules'] },
   );
-  
+
   registerTool(
     ['agent_hq_get_routing_rule', 'agent_hq_get_assignment_rule', 'atlas_get_routing_rule', 'atlas_get_assignment_rule'],
     'Get a single assignment rule by ID within its scoped project/workflow-type context. Non-admin MCP keys require routing_rules.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only.',
@@ -150,7 +150,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     ({ rule_id, ...params }) => wrap(() => api.getRoutingRule(rule_id, params))(),
     { domain: 'assignment_rules', rest_paths: ['/api/v1/routing/assignment-rules/:id', '/api/v1/assignment-rules/:id', '/api/v1/routing/rules/:id', '/api/v1/routing-rules/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_create_routing_rule', 'agent_hq_create_assignment_rule', 'atlas_create_routing_rule', 'atlas_create_assignment_rule'],
     'Create an assignment rule that maps task type and status to an agent. Non-admin MCP keys require routing_rules.manage_project_scope and can only create rules in their assigned project. Optional tenant_id is super-admin MCP only.',
@@ -171,7 +171,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     (args) => wrap(() => api.createRoutingRule(args))(),
     { domain: 'assignment_rules', rest_paths: ['/api/v1/routing/assignment-rules', '/api/v1/assignment-rules', '/api/v1/routing/rules', '/api/v1/routing-rules'] },
   );
-  
+
   registerTool(
     ['agent_hq_update_routing_rule', 'agent_hq_update_assignment_rule', 'atlas_update_routing_rule', 'atlas_update_assignment_rule'],
     'Update an assignment rule that maps task type and status to an agent. Non-admin MCP keys require routing_rules.manage_project_scope and can only update rules that remain in their assigned project. Optional tenant_id is super-admin MCP only.',
@@ -193,7 +193,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     ({ rule_id, ...patch }) => wrap(() => api.updateRoutingRule(rule_id, patch))(),
     { domain: 'assignment_rules', rest_paths: ['/api/v1/routing/assignment-rules/:id', '/api/v1/assignment-rules/:id', '/api/v1/routing/rules/:id', '/api/v1/routing-rules/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_delete_routing_rule', 'agent_hq_delete_assignment_rule', 'atlas_delete_routing_rule', 'atlas_delete_assignment_rule'],
     'Delete a workflow-type default or sprint-specific assignment rule. Non-admin MCP keys require routing_rules.manage_project_scope and can only delete rules in their assigned project. Optional tenant_id is super-admin MCP only.',
@@ -211,7 +211,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     ({ rule_id, ...params }) => wrap(() => api.deleteRoutingRule(rule_id, params))(),
     { domain: 'assignment_rules', rest_paths: ['/api/v1/routing/assignment-rules/:id', '/api/v1/assignment-rules/:id', '/api/v1/routing/rules/:id', '/api/v1/routing-rules/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_list_routing_transitions', 'atlas_list_routing_transitions'],
     'List automatic workflow transitions for workflow-type defaults or workflow-specific overrides. Non-admin MCP keys require routing_transitions.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only.',
@@ -224,7 +224,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     (args) => wrap(() => api.listRoutingTransitions(args))(),
     { domain: 'routing_transitions', rest_paths: ['/api/v1/routing/transitions'] },
   );
-  
+
   registerTool(
     ['agent_hq_get_routing_transition', 'atlas_get_routing_transition'],
     'Get an automatic workflow transition by ID within its scoped project/workflow-type context. Non-admin MCP keys require routing_transitions.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only.',
@@ -238,7 +238,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     ({ transition_id, ...params }) => wrap(() => api.getRoutingTransition(transition_id, params))(),
     { domain: 'routing_transitions', rest_paths: ['/api/v1/routing/transitions/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_create_routing_transition', 'atlas_create_routing_transition'],
     'Create an automatic workflow transition for a workflow-type default or workflow-specific override. Non-admin MCP keys require routing_transitions.manage_project_scope and can only create transitions in their assigned project. Optional tenant_id is super-admin MCP only.',
@@ -259,7 +259,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     (args) => wrap(() => api.createRoutingTransition(args))(),
     { domain: 'routing_transitions', rest_paths: ['/api/v1/routing/transitions'] },
   );
-  
+
   registerTool(
     ['agent_hq_update_routing_transition', 'atlas_update_routing_transition'],
     'Update an automatic workflow transition. Non-admin MCP keys require routing_transitions.manage_project_scope and can only update transitions that remain in their assigned project. Optional tenant_id is super-admin MCP only.',
@@ -281,7 +281,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     ({ transition_id, ...patch }) => wrap(() => api.updateRoutingTransition(transition_id, patch))(),
     { domain: 'routing_transitions', rest_paths: ['/api/v1/routing/transitions/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_delete_routing_transition', 'atlas_delete_routing_transition'],
     'Delete a workflow-type default or workflow-specific automatic transition. Non-admin MCP keys require routing_transitions.manage_project_scope and can only delete transitions in their assigned project. Optional tenant_id is super-admin MCP only.',
@@ -296,7 +296,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     ({ transition_id, ...params }) => wrap(() => api.deleteRoutingTransition(transition_id, params))(),
     { domain: 'routing_transitions', rest_paths: ['/api/v1/routing/transitions/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_list_model_routing_rules', 'atlas_list_model_routing_rules'],
     'List story-point model-routing rules, optionally scoped to a project, sprint, or workflow type.',
@@ -308,7 +308,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     (args) => wrap(() => api.listModelRoutingRules(args))(),
     { domain: 'model_routing', rest_paths: ['/api/v1/model-routing', '/api/v1/story-point-routing'] },
   );
-  
+
   registerTool(
     ['agent_hq_get_model_routing_rule', 'atlas_get_model_routing_rule'],
     'Get a story-point model-routing rule by ID.',
@@ -316,7 +316,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     ({ rule_id }) => wrap(() => api.getModelRoutingRule(rule_id))(),
     { domain: 'model_routing', rest_paths: ['/api/v1/model-routing/:id', '/api/v1/story-point-routing/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_create_model_routing_rule', 'atlas_create_model_routing_rule'],
     'Create a story-point model-routing rule.',
@@ -337,7 +337,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     (args) => wrap(() => api.createModelRoutingRule(args))(),
     { domain: 'model_routing', rest_paths: ['/api/v1/model-routing', '/api/v1/story-point-routing'] },
   );
-  
+
   registerTool(
     ['agent_hq_update_model_routing_rule', 'atlas_update_model_routing_rule'],
     'Update a story-point model-routing rule.',
@@ -359,7 +359,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
     ({ rule_id, ...patch }) => wrap(() => api.updateModelRoutingRule(rule_id, patch))(),
     { domain: 'model_routing', rest_paths: ['/api/v1/model-routing/:id', '/api/v1/story-point-routing/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_delete_model_routing_rule', 'atlas_delete_model_routing_rule'],
     'Delete a story-point model-routing rule.',

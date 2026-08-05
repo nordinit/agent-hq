@@ -3,6 +3,7 @@ import { getDb } from '../db/client';
 import type { Db } from '../db/adapter/types';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { normalizeSkillPackagePath, parseSkillPackageFiles, type SkillPackageFile } from '../lib/skillPackage';
+import { isPostgresUniqueViolation } from '../lib/postgresErrors';
 
 const router = Router();
 
@@ -69,8 +70,7 @@ function normalizeName(value: unknown): string {
 }
 
 function constraintIsTenantNameConflict(err: unknown): boolean {
-  const text = String((err as any)?.message ?? err);
-  return (err as any)?.code === 'SQLITE_CONSTRAINT_UNIQUE' || text.includes('UNIQUE constraint failed');
+  return isPostgresUniqueViolation(err);
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ router.put('/:name', async (req: Request, res: Response) => {
     const sourceValue = source === 'system' || source === 'workspace' || source === 'atlas' ? source : existing.source;
     await db.run(`
       UPDATE skills
-      SET description = ?, content = ?, source = ?, updated_at = datetime('now')
+      SET description = ?, content = ?, source = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE tenant_id = ? AND name = ?
     `, description ?? existing.description, content ?? existing.content, sourceValue, tenantId, name);
     const updated = await db.get(`SELECT * FROM skills WHERE tenant_id = ? AND name = ?`, tenantId, name);

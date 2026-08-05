@@ -7,12 +7,8 @@ describe('taskRelease configurable outcome routing', () => {
   let tenantId: number;
 
   beforeEach(async () => {
-    // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
-    // SQLite and on PostgreSQL.
     db = await setupTestDb();
-    // On SQLite initSchema() seeds a default tenant plus stock sprint types/transitions; on
-    // PostgreSQL the template is DDL-only and truncated between tests. Clear the workflow tables
-    // either way so both engines start from the same explicitly-built fixture.
+    // Clear workflow tables so the explicitly built policy below is authoritative.
     await db.exec(`
       DELETE FROM sprint_task_transitions;
       DELETE FROM sprint_type_task_types;
@@ -23,22 +19,18 @@ describe('taskRelease configurable outcome routing', () => {
       DELETE FROM projects;
     `);
 
-    // Own the tenant row rather than leaning on a seeded default. getDefaultTenantId() would
-    // work on SQLite only by accident: on PostgreSQL the tenant is absent after truncation, so
-    // it takes the "created the default tenant" branch and provisions a default workspace
-    // project with id 1 — which then collides with the project this fixture inserts. Nothing
-    // under test here resolves a tenant globally (the routing helpers all derive tenant_id from
-    // the sprint row), so an explicit tenant is both sufficient and unambiguous.
+    // Nothing under test resolves a tenant globally; the routing helpers derive it from the
+    // sprint row, so an explicit non-default tenant keeps the fixture sufficient and unambiguous.
     tenantId = Number((await db.run(
       `INSERT INTO tenants (name, slug, is_default, created_at, updated_at)
-       VALUES ('Task Release Test', 'task-release-test', 0, datetime('now'), datetime('now'))`,
+       VALUES ('Task Release Test', 'task-release-test', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
     )).lastInsertId);
-    await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md, created_at) VALUES (1, ?, 'Agent HQ', '', '', datetime('now'))`, tenantId);
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'enhancements', 'Enhancements', '', 0, datetime('now'), datetime('now'))`, tenantId);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at) VALUES (10, ?, 1, 'Configurable outcomes', '', 'enhancements', 'active', 'time', '2w', datetime('now'))`, tenantId);
-    await db.run(`INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES (?, 10, NULL, 'in_progress', 'ship_it', 'review', 1, 10, 0, datetime('now'), datetime('now')), (?, 10, NULL, 'in_progress', 'blocked_custom', 'blocked_custom', 1, 5, 0, datetime('now'), datetime('now'))`, tenantId, tenantId);
-    await db.run(`INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, 'enhancements', NULL, 'ship_it', 'Ship It', 'Move to review', 1, 'base', NULL, 0, 0, '{}', datetime('now'), datetime('now')), (?, 'enhancements', NULL, 'blocked_custom', 'Blocked Custom', 'Custom blocked state', 1, 'base', NULL, 1, 0, '{}', datetime('now'), datetime('now'))`, tenantId, tenantId);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, sprint_id, task_type, created_at, updated_at) VALUES (42, ?, 'Configurable outcome task', 'in_progress', 10, 'backend', datetime('now'), datetime('now'))`, tenantId);
+    await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md, created_at) VALUES (1, ?, 'Agent HQ', '', '', CURRENT_TIMESTAMP)`, tenantId);
+    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'enhancements', 'Enhancements', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at) VALUES (10, ?, 1, 'Configurable outcomes', '', 'enhancements', 'active', 'time', '2w', CURRENT_TIMESTAMP)`, tenantId);
+    await db.run(`INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES (?, 10, NULL, 'in_progress', 'ship_it', 'review', 1, 10, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), (?, 10, NULL, 'in_progress', 'blocked_custom', 'blocked_custom', 1, 5, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId, tenantId);
+    await db.run(`INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, 'enhancements', NULL, 'ship_it', 'Ship It', 'Move to review', 1, 'base', NULL, 0, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), (?, 'enhancements', NULL, 'blocked_custom', 'Blocked Custom', 'Custom blocked state', 1, 'base', NULL, 1, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId, tenantId);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, sprint_id, task_type, created_at, updated_at) VALUES (42, ?, 'Configurable outcome task', 'in_progress', 10, 'backend', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
   });
 
   afterEach(async () => {
@@ -89,7 +81,7 @@ describe('taskRelease configurable outcome routing', () => {
   it('does not mark configuration-style done tasks legacy/unverified when deploy evidence is not part of the workflow', async () => {
     await db.run(`
       INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-      VALUES (?, 10, NULL, 'in_progress', 'completed', 'done', 1, 20, 0, datetime('now'), datetime('now'))
+      VALUES (?, 10, NULL, 'in_progress', 'completed', 'done', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, tenantId);
 
     const result = await evaluateTaskIntegrity({
@@ -110,8 +102,8 @@ describe('taskRelease configurable outcome routing', () => {
     await db.run(`
       INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
       VALUES
-        (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 10, 0, datetime('now'), datetime('now')),
-        (?, 10, 'configuration', 'in_progress', 'completed', 'done', 1, 20, 0, datetime('now'), datetime('now'))
+        (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 10, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+        (?, 10, 'configuration', 'in_progress', 'completed', 'done', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, tenantId, tenantId);
 
     const result = await evaluateTaskIntegrity({
@@ -130,7 +122,7 @@ describe('taskRelease configurable outcome routing', () => {
   it('keeps missing deploy/live warnings for done tasks in deploy-verification workflows', async () => {
     await db.run(`
       INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-      VALUES (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 20, 0, datetime('now'), datetime('now'))
+      VALUES (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, tenantId);
 
     const result = await evaluateTaskIntegrity({

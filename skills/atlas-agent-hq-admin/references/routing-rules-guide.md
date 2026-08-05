@@ -24,9 +24,8 @@ Examples:
 backend + ready -> backend agent
 frontend + ready -> frontend agent
 fullstack + ready -> fullstack agent
-backend + review -> QA agent
-frontend + review -> QA agent
-ready_to_merge + qa_pass -> release/devops agent
+all task types + review -> QA agent
+all task types + ready_to_merge -> release/devops agent
 ```
 
 If a status should not auto-dispatch, do not create an assignment rule for it.
@@ -39,9 +38,8 @@ Examples:
 
 ```text
 in_progress + completed_for_review -> review
-review + qa_pass -> qa_pass
+review + qa_pass -> ready_to_merge
 review + qa_fail -> ready
-qa_pass + approved_for_merge -> ready_to_merge
 ready_to_merge + deployed_live -> deployed
 deployed + live_verified -> done
 ```
@@ -68,7 +66,8 @@ Use gate requirements for truth and auditability. Do not use them for optional n
 For each sprint:
 
 - List allowed task types.
-- List statuses that should dispatch.
+- Classify statuses as agent-actionable or intentionally waiting for a human, event, timer, or manual resume.
+- List agent-actionable statuses that should dispatch.
 - For each `task_type + status`, choose exactly one primary agent unless intentional fan-out is supported.
 - Confirm each chosen agent is enabled and assigned to the right project/workflow.
 - Confirm there are no duplicate high-priority rules that would make ownership ambiguous.
@@ -87,6 +86,7 @@ Watch for:
 - `ready_to_merge` without release/devops routing.
 - PM task types without PM routing.
 - `qa_fail` transitions that move work to a status with no implementation routing.
+- Intentional waiting statuses with no configured or documented trigger.
 - New task types added to a workflow type but not added to assignment rules.
 
 ## Proposal Template

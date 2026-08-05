@@ -1,3 +1,4 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
@@ -24,7 +25,7 @@ jest.mock('../lib/taskLifecycle', () => {
   };
 });
 
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import externalTaskEventsRouter, { DEV_ENV_LEASE_MANAGER_SOURCE } from './external-task-events';
 import {
   authenticateMcpApiKeyIfPresent,
@@ -39,312 +40,51 @@ let tempDir: string;
 let dbPath: string;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'external-task-events-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
-  process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  await db.exec(`
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER DEFAULT 1,
-      name TEXT NOT NULL
-    );
-    CREATE TABLE sprints (
-      id INTEGER PRIMARY KEY,
-      project_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      sprint_type TEXT NOT NULL DEFAULT 'generic'
-    );
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER DEFAULT 1,
-      title TEXT NOT NULL,
-      status TEXT NOT NULL,
-      task_type TEXT,
-      sprint_id INTEGER,
-      project_id INTEGER,
-      agent_id INTEGER,
-      active_instance_id INTEGER,
-      review_owner_agent_id INTEGER,
-      review_branch TEXT,
-      review_commit TEXT,
-      review_url TEXT,
-      qa_verified_commit TEXT,
-      qa_tested_url TEXT,
-      merged_commit TEXT,
-      deployed_commit TEXT,
-      deploy_target TEXT,
-      deployed_at TEXT,
-      live_verified_by TEXT,
-      live_verified_at TEXT,
-      evidence_json TEXT,
-      custom_fields_json TEXT,
-      previous_status TEXT,
-      failure_detail TEXT,
-      updated_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      changed_by TEXT NOT NULL,
-      field TEXT NOT NULL,
-      old_value TEXT,
-      new_value TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_notes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      author TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      project_id INTEGER,
-      agent_id INTEGER,
-      from_status TEXT,
-      to_status TEXT,
-      moved_by TEXT,
-      move_type TEXT,
-      instance_id INTEGER,
-      reason TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE integrity_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      project_id INTEGER,
-      agent_id INTEGER,
-      instance_id INTEGER,
-      anomaly_type TEXT NOT NULL,
-      detail TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_attachments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      filename TEXT NOT NULL,
-      original_name TEXT NOT NULL,
-      mime_type TEXT,
-      size INTEGER,
-      uploaded_by TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_outcome_metrics (
-      task_id INTEGER PRIMARY KEY,
-      spawned_defects INTEGER DEFAULT 0,
-      last_outcome TEXT,
-      last_outcome_at TEXT,
-      updated_at TEXT
-    );
-    CREATE TABLE task_defects (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open',
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_dependencies (
-      blocker_id INTEGER NOT NULL,
-      blocked_id INTEGER NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      PRIMARY KEY (blocker_id, blocked_id)
-    );
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      agent_id INTEGER,
-      status TEXT,
-      session_key TEXT,
-      task_outcome TEXT,
-      lifecycle_outcome_posted_at TEXT,
-      response TEXT,
-      dispatched_at TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      runtime_ended_at TEXT,
-      runtime_completed_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT,
-      lifecycle_handoff_status TEXT,
-      semantic_outcome_missing INTEGER NOT NULL DEFAULT 0,
-      failure_stage TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER DEFAULT 1,
-      project_id INTEGER,
-      name TEXT NOT NULL,
-      slug TEXT,
-      openclaw_agent_id TEXT,
-      session_key TEXT,
-      system_role TEXT,
-      job_title TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      deleted_at TEXT
-    );
-    CREATE TABLE logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      instance_id INTEGER,
-      agent_id INTEGER,
-      job_title TEXT,
-      level TEXT NOT NULL DEFAULT 'info',
-      message TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_statuses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER,
-      status_key TEXT,
-      label TEXT,
-      color TEXT,
-      terminal INTEGER DEFAULT 0,
-      is_system INTEGER DEFAULT 0,
-      allowed_transitions_json TEXT DEFAULT '[]',
-      stage_order INTEGER DEFAULT 0,
-      is_default_entry INTEGER DEFAULT 0,
-      metadata_json TEXT DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE sprint_task_transitions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER,
-      task_type TEXT,
-      from_status TEXT NOT NULL,
-      outcome TEXT NOT NULL,
-      to_status TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      is_protected INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE sprint_task_transition_requirements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      task_type TEXT,
-      outcome TEXT NOT NULL,
-      field_name TEXT NOT NULL,
-      requirement_type TEXT NOT NULL DEFAULT 'required',
-      match_field TEXT,
-      severity TEXT NOT NULL DEFAULT 'block',
-      message TEXT NOT NULL DEFAULT '',
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE sprint_types (
-      key TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_field_schemas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_type_key TEXT NOT NULL,
-      task_type TEXT,
-      schema_json TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE routing_config (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER,
-      from_status TEXT NOT NULL,
-      outcome TEXT NOT NULL,
-      to_status TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE external_task_event_receipts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      fingerprint TEXT NOT NULL UNIQUE,
-      source TEXT NOT NULL,
-      event TEXT NOT NULL,
-      task_id INTEGER NOT NULL,
-      environment_id TEXT NOT NULL,
-      queue_id TEXT NOT NULL,
-      lease_id TEXT NOT NULL,
-      branch TEXT,
-      commit_sha TEXT,
-      review_url TEXT,
-      message TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      received_by TEXT NOT NULL DEFAULT 'system',
-      processing_state TEXT NOT NULL DEFAULT 'received',
-      processing_error TEXT,
-      mapping_id INTEGER,
-      mapping_action_kind TEXT,
-      mapping_action_target TEXT,
-      request_metadata_json TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      processed_at TEXT
-    );
-    CREATE TABLE external_event_mappings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER,
-      source TEXT,
-      event_name TEXT NOT NULL,
-      task_type TEXT,
-      status_includes_json TEXT NOT NULL DEFAULT '[]',
-      status_excludes_json TEXT NOT NULL DEFAULT '[]',
-      action_kind TEXT NOT NULL DEFAULT 'ignore',
-      action_target TEXT,
-      apply_review_evidence INTEGER NOT NULL DEFAULT 0,
-      apply_failure_detail INTEGER NOT NULL DEFAULT 0,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
 
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
-  await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('generic', 'Generic', 1)`);
-  await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Enhancements', 'generic')`);
-  await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, slug, openclaw_agent_id, job_title, enabled) VALUES (7, 1, 1, 'Lease Manager', ?, ?, 'Service', 1)`, DEV_ENV_LEASE_MANAGER_SOURCE, DEV_ENV_LEASE_MANAGER_SOURCE);
-  await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, slug, job_title, enabled) VALUES (42, 1, 1, 'Cinder', 'cinder-backend', 'Backend Engineer', 1)`);
-  await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, slug, job_title, enabled) VALUES (43, 1, 1, 'Scoped No Access', 'scoped-no-access', 'Backend Engineer', 1)`);
+  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1)`);
+  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (10, 1, 1, 'Enhancements', 'generic')`);
+  await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, openclaw_agent_id, job_title, enabled) VALUES (7, 1, 1, 'Lease Manager', 'agent:lease-manager:main', ?, ?, 'Service', 1)`, DEV_ENV_LEASE_MANAGER_SOURCE, DEV_ENV_LEASE_MANAGER_SOURCE);
+  await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, job_title, enabled) VALUES (42, 1, 1, 'Cinder', 'agent:cinder:main', 'cinder-backend', 'Backend Engineer', 1)`);
+  await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, job_title, enabled) VALUES (43, 1, 1, 'Scoped No Access', 'agent:scoped-no-access:main', 'scoped-no-access', 'Backend Engineer', 1)`);
   await db.run(`
     INSERT INTO tasks (
       id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
-    ) VALUES (449, 1, 'External task event callback', 'in_progress', 'backend', 10, 1, 42, 1784, 42, datetime('now'))
+    ) VALUES (449, 1, 'External task event callback', 'in_progress', 'backend', 10, 1, 42, NULL, 42, CURRENT_TIMESTAMP)
   `);
   await db.run(`
     INSERT INTO job_instances (
-      id, task_id, agent_id, status, session_key, dispatched_at
-    ) VALUES (1784, 449, 42, 'running', 'run:1784', datetime('now'))
+      id, tenant_id, task_id, agent_id, status, session_key, dispatched_at
+    ) VALUES (1784, 1, 449, 42, 'running', 'run:1784', CURRENT_TIMESTAMP)
   `);
-  await db.run(`INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at) VALUES (449, 0, datetime('now'))`);
+  await db.run(`INSERT INTO task_outcome_metrics (tenant_id, task_id, spawned_defects, updated_at) VALUES (1, 449, 0, CURRENT_TIMESTAMP)`);
+  await db.run(`UPDATE tasks SET active_instance_id = 1784 WHERE id = 449`);
   await seedDefaultExternalEventMappings(db);
   await db.run(`
-    INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status)
+    INSERT INTO sprint_task_transitions (tenant_id, sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status)
     VALUES
-      (10, 'backend', 'in_progress', 'completed_for_review', 'review'),
-      (10, 'backend', 'in_progress', 'dev_deploy_queued', 'dev_deploy_queued'),
-      (10, 'backend', 'dev_deploy_queued', 'dev_deploy_queued', 'dev_deploy_queued'),
-      (10, 'backend', 'dev_deploy_queued', 'completed_for_review', 'review'),
-      (10, 'backend', 'dev_deploy_queued', 'blocked', 'stalled'),
-      (10, 'backend', 'dev_deploying', 'completed_for_review', 'review'),
-      (10, 'backend', 'dev_deploying', 'blocked', 'stalled'),
-      (10, 'backend', 'in_progress', 'blocked', 'stalled')
+      (1, 10, 1, 'generic', 'backend', 'in_progress', 'completed_for_review', 'review'),
+      (1, 10, 1, 'generic', 'backend', 'in_progress', 'dev_deploy_queued', 'dev_deploy_queued'),
+      (1, 10, 1, 'generic', 'backend', 'dev_deploy_queued', 'dev_deploy_queued', 'dev_deploy_queued'),
+      (1, 10, 1, 'generic', 'backend', 'dev_deploy_queued', 'completed_for_review', 'review'),
+      (1, 10, 1, 'generic', 'backend', 'dev_deploy_queued', 'blocked', 'stalled'),
+      (1, 10, 1, 'generic', 'backend', 'dev_deploying', 'completed_for_review', 'review'),
+      (1, 10, 1, 'generic', 'backend', 'dev_deploying', 'blocked', 'stalled'),
+      (1, 10, 1, 'generic', 'backend', 'in_progress', 'blocked', 'stalled')
   `);
   await db.run(`
-    INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, message)
+    INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, message)
     VALUES
-      (10, 'backend', 'completed_for_review', 'review_branch', 'review_branch required'),
-      (10, 'backend', 'completed_for_review', 'review_commit', 'review_commit required')
+      (1, 10, 1, 'generic', 'backend', 'completed_for_review', 'review_branch', 'review_branch required'),
+      (1, 10, 1, 'generic', 'backend', 'completed_for_review', 'review_commit', 'review_commit required')
   `);
 }
 
@@ -389,9 +129,8 @@ describe('external task events route', () => {
     await resetDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -400,10 +139,10 @@ describe('external task events route', () => {
     await db.run(`DELETE FROM external_event_mappings`);
     await db.run(`
       INSERT INTO external_event_mappings (
-        project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
+        tenant_id, project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
         action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, null, null, 'deployed_for_qa', 'backend', JSON.stringify(['in_progress']), JSON.stringify([]), 'outcome', 'completed_for_review', 1, 0, 1, 900);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, 1, null, null, 'deployed_for_qa', 'backend', JSON.stringify(['in_progress']), JSON.stringify([]), 'outcome', 'completed_for_review', 1, 0, 1, 900);
 
     const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
@@ -520,10 +259,11 @@ describe('external task events route', () => {
   it('denies scoped external task-event management without capability and across project boundaries', async () => {
     const db = getDb();
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (2, 1, 'Other Project')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, 1, 2, 'Other Project Sprint', 'generic')`);
     await db.run(`
       INSERT INTO tasks (
         id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
-      ) VALUES (450, 1, 'Other project event', 'in_progress', 'backend', NULL, 2, 42, NULL, 42, datetime('now'))
+      ) VALUES (450, 1, 'Other project event', 'in_progress', 'backend', 20, 2, 42, NULL, 42, CURRENT_TIMESTAMP)
     `);
     const payload = {
       source: DEV_ENV_LEASE_MANAGER_SOURCE,
@@ -592,10 +332,10 @@ describe('external task events route', () => {
     await db.run(`DELETE FROM external_event_mappings`);
     await db.run(`
       INSERT INTO external_event_mappings (
-        project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
+        tenant_id, project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
         action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, null, DEV_ENV_LEASE_MANAGER_SOURCE, 'deploy_failed', 'backend', JSON.stringify(['in_progress']), JSON.stringify([]), 'outcome', 'blocked', 0, 1, 1, 900);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, 1, null, DEV_ENV_LEASE_MANAGER_SOURCE, 'deploy_failed', 'backend', JSON.stringify(['in_progress']), JSON.stringify([]), 'outcome', 'blocked', 0, 1, 1, 900);
 
     const apiKey = await issueLeaseManagerApiKey();
     const { server, baseUrl } = await startTestServer();
@@ -914,8 +654,8 @@ describe('external task events route', () => {
     const db = getDb();
     (cleanupTaskExecutionLinkageForStatus as jest.Mock).mockClear();
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements (sprint_id, task_type, outcome, field_name, message)
-      VALUES (10, 'backend', 'completed_for_review', 'configuration_resource', 'configuration_resource required')
+      INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, message)
+      VALUES (1, 10, 1, 'generic', 'backend', 'completed_for_review', 'configuration_resource', 'configuration_resource required')
     `);
     await db.run(`UPDATE tasks SET status = 'dev_deploying' WHERE id = 449`);
 
@@ -1014,8 +754,11 @@ describe('external task events route', () => {
         configuration_resource: 'dev-environment-lease-manager:lease-config-retry/configuration',
       });
       expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledTimes(1);
+      const cleanupCall = (cleanupTaskExecutionLinkageForStatus as jest.Mock).mock.calls[0];
+      expect(cleanupCall[0]).not.toBe(db);
+      expect(cleanupCall[0].inTransaction).toBe(true);
       expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledWith(
-        db,
+        expect.objectContaining({ inTransaction: true }),
         449,
         'review',
         expect.objectContaining({
@@ -1041,18 +784,17 @@ describe('external task events route', () => {
       });
       expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledTimes(1);
 
-      const receipt = await db.get(`
-        SELECT COUNT(*) AS count, processing_state, processing_error, mapping_action_target
+      const receipts = await db.all(`
+        SELECT processing_state, processing_error, mapping_action_target
         FROM external_task_event_receipts
         WHERE queue_id = 'queue-config-retry'
-      `) as {
-        count: number;
+      `) as Array<{
         processing_state: string;
         processing_error: string | null;
         mapping_action_target: string;
-      };
-      expect(receipt).toMatchObject({
-        count: 1,
+      }>;
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0]).toMatchObject({
         processing_state: 'processed',
         processing_error: null,
         mapping_action_target: 'completed_for_review',
@@ -1123,10 +865,10 @@ describe('external task events route', () => {
     await db.run(`DELETE FROM external_event_mappings`);
     await db.run(`
       INSERT INTO external_event_mappings (
-        project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
+        tenant_id, project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
         action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, null, DEV_ENV_LEASE_MANAGER_SOURCE, 'deploy_failed', 'backend', JSON.stringify(['dev_deploying']), JSON.stringify([]), 'outcome', 'not_a_configured_outcome', 0, 1, 1, 900);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, 1, null, DEV_ENV_LEASE_MANAGER_SOURCE, 'deploy_failed', 'backend', JSON.stringify(['dev_deploying']), JSON.stringify([]), 'outcome', 'not_a_configured_outcome', 0, 1, 1, 900);
     await db.run(`UPDATE tasks SET status = 'dev_deploying' WHERE id = 449`);
 
     const apiKey = await issueLeaseManagerApiKey();
@@ -1318,34 +1060,34 @@ describe('external task events route', () => {
       const body = await response.json() as { code?: string };
       expect(body.code).toBe('external_task_event_validation_failed');
 
-      const task = await getDb().get(`SELECT status, review_branch, review_commit FROM tasks WHERE id = 449`) as {
+      const task = await getDb().get(`SELECT status, custom_fields_json FROM tasks WHERE id = 449`) as {
         status: string;
-        review_branch: string | null;
-        review_commit: string | null;
+        custom_fields_json: string | null;
       };
-      expect(task).toMatchObject({ status: 'in_progress', review_branch: null, review_commit: null });
+      const customFields = JSON.parse(task.custom_fields_json ?? '{}') as Record<string, unknown>;
+      expect(task.status).toBe('in_progress');
+      expect(customFields.review_branch ?? null).toBeNull();
+      expect(customFields.review_commit ?? null).toBeNull();
 
       const notes = await getDb().get(`SELECT COUNT(*) as count FROM task_notes WHERE task_id = 449`) as { count: number };
       const history = await getDb().get(`SELECT COUNT(*) as count FROM task_history WHERE task_id = 449`) as { count: number };
-      const receipts = await getDb().get(`
-        SELECT COUNT(*) as count,
-               processing_state,
+      const receipts = await getDb().all(`
+        SELECT processing_state,
                processing_error,
                mapping_action_target
         FROM external_task_event_receipts
         WHERE task_id = 449
-      `) as {
-        count: number;
+      `) as Array<{
         processing_state: string;
         processing_error: string;
         mapping_action_target: string;
-      };
+      }>;
       expect(notes.count).toBe(0);
       expect(history.count).toBe(0);
-      expect(receipts.count).toBe(1);
-      expect(receipts.processing_state).toBe('rejected');
-      expect(receipts.processing_error).toContain('review_commit');
-      expect(receipts.mapping_action_target).toBe('completed_for_review');
+      expect(receipts).toHaveLength(1);
+      expect(receipts[0].processing_state).toBe('rejected');
+      expect(receipts[0].processing_error).toContain('review_commit');
+      expect(receipts[0].mapping_action_target).toBe('completed_for_review');
     } finally {
       await stopTestServer(server);
     }

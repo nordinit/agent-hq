@@ -105,8 +105,9 @@ async function seedRunFixtures(): Promise<void> {
   // job_instances.agent_id -> agents.id as genuine foreign keys. The minimal schema this test
   // used to hand-build had neither, so agent 94 never had to exist for the capture's writes to
   // land. It does now.
-  await db.run(`INSERT INTO agents (id, name, session_key) VALUES (94, 'Cinder Backend', 'agent:cinder-backend')`);
-  await db.run(`INSERT INTO job_instances (id, agent_id, durable_run_id) VALUES (4698, 94, 'durable-4698')`);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (7, 'Capture Tenant', 'capture', 1)`);
+  await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (94, 7, 'Cinder Backend', 'agent:cinder-backend')`);
+  await db.run(`INSERT INTO job_instances (id, tenant_id, agent_id, durable_run_id) VALUES (4698, 7, 94, 'durable-4698')`);
 }
 
 /**
@@ -183,13 +184,14 @@ describe('gatewayTranscriptCapture', () => {
     ]));
 
     const rows = await getDb().all(`
-      SELECT role, event_type, content, session_key, durable_run_id
+      SELECT tenant_id, role, event_type, content, session_key, durable_run_id
       FROM chat_messages
       WHERE instance_id = 4698
       ORDER BY timestamp ASC, id ASC
     `);
     expect(rows).toEqual([
       {
+        tenant_id: 7,
         role: 'assistant',
         event_type: 'text',
         content: 'Working through the task',
@@ -197,6 +199,7 @@ describe('gatewayTranscriptCapture', () => {
         durable_run_id: 'durable-4698',
       },
       {
+        tenant_id: 7,
         role: 'assistant',
         event_type: 'tool_call',
         content: 'exec_command',
@@ -204,6 +207,7 @@ describe('gatewayTranscriptCapture', () => {
         durable_run_id: 'durable-4698',
       },
       {
+        tenant_id: 7,
         role: 'tool',
         event_type: 'tool_result',
         content: 'command output',

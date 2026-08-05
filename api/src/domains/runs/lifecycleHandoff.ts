@@ -9,6 +9,7 @@ import {
 } from '../routing/externalEventMappings';
 import { emitIntegrityEvent, writeTaskHistory, writeTaskRuntimeEndHistory, writeTaskStatusChange } from '../tasks/history';
 import { toCanonicalTimestampOrNow } from '../../lib/timestamps';
+import { tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
@@ -147,7 +148,7 @@ export async function markTaskNeedsAttentionForMissingSemanticHandoff(
   if (mapping?.action_kind === 'status' && mapping.action_target && mapping.action_target !== priorStatus) {
     await db.run(`
       UPDATE tasks
-      SET status = ?, updated_at = datetime('now')
+      SET status = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, mapping.action_target, params.taskId);
     await writeTaskStatusChange(db, params.taskId, params.changedBy, priorStatus, mapping.action_target, {
@@ -197,7 +198,14 @@ export async function markTaskNeedsAttentionForMissingSemanticHandoff(
   if (params.runtimeEnd?.endedAt) noteLines.push(`Runtime ended at: ${params.runtimeEnd.endedAt}`);
   if (params.runtimeEnd?.error) noteLines.push(`Runtime end error: ${params.runtimeEnd.error}`);
 
-  await db.run(`INSERT INTO task_notes (task_id, author, content) VALUES (?, ?, ?)`, params.taskId, params.changedBy, noteLines.join('\n'));
+  const noteTenant = await tenantInsertColumns(db, 'task_notes', task.tenant_id);
+  await db.run(
+    `INSERT INTO task_notes (${noteTenant.columnSql}task_id, author, content) VALUES (${noteTenant.valueSql}?, ?, ?)`,
+    ...noteTenant.values,
+    params.taskId,
+    params.changedBy,
+    noteLines.join('\n'),
+  );
 
   await emitIntegrityEvent(db, {
         taskId: params.taskId,

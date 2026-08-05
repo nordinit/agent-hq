@@ -10,6 +10,7 @@ import { buildAgentHqRunContextBlock } from '../runtimes/hermesTranscriptIngesti
 
 const INSTANCE_ID = 4806;
 const AGENT_ID = 17;
+const TENANT_ID = 23;
 const CONTEXT = {
   instanceId: INSTANCE_ID,
   durableRunId: 'durable-4806',
@@ -25,14 +26,21 @@ const FULL_TEXT = 'The complete assistant answer, streamed to the very end.';
 async function seedRun(runtimeConfig: string): Promise<Db> {
   const db = getDb();
   await db.run(
-    `INSERT INTO agents (id, name, session_key, runtime_type, runtime_config)
-     VALUES (?, 'Cinder', 'hermes-backfill-agent', 'hermes', ?)`,
+    `INSERT INTO tenants (id, name, slug, is_default)
+     VALUES (?, 'Hermes Backfill', 'hermes-backfill', 1)`,
+    TENANT_ID,
+  );
+  await db.run(
+    `INSERT INTO agents (id, tenant_id, name, session_key, runtime_type, runtime_config)
+     VALUES (?, ?, 'Cinder', 'hermes-backfill-agent', 'hermes', ?)`,
     AGENT_ID,
+    TENANT_ID,
     runtimeConfig,
   );
   await db.run(
-    'INSERT INTO job_instances (id, agent_id, durable_run_id, session_key) VALUES (?, ?, ?, ?)',
+    'INSERT INTO job_instances (id, tenant_id, agent_id, durable_run_id, session_key) VALUES (?, ?, ?, ?, ?)',
     INSTANCE_ID,
+    TENANT_ID,
     AGENT_ID,
     CONTEXT.durableRunId,
     CONTEXT.sessionKey,
@@ -59,9 +67,10 @@ function makeProfileHome(): string {
 /** The truncated row the old DO NOTHING ingest would have left behind. */
 async function seedTruncatedRow(db: Db): Promise<void> {
   await db.run(
-    `INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-     VALUES (?, ?, ?, 'assistant', ?, '2026-06-03 06:40:02')`,
+    `INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, role, content, timestamp)
+     VALUES (?, ?, ?, ?, 'assistant', ?, '2026-06-03 06:40:02')`,
     `hermes-json-${INSTANCE_ID}-0-0`,
+    TENANT_ID,
     AGENT_ID,
     INSTANCE_ID,
     'The complete',
@@ -84,6 +93,14 @@ async function contentOf(db: Db): Promise<string> {
     `hermes-json-${INSTANCE_ID}-0-0`,
   )) as { content: string };
   return row.content;
+}
+
+async function tenantOf(db: Db): Promise<number> {
+  const row = (await db.get(
+    'SELECT tenant_id FROM chat_messages WHERE id = ?',
+    `hermes-json-${INSTANCE_ID}-0-0`,
+  )) as { tenant_id: number };
+  return row.tenant_id;
 }
 
 describe('Hermes transcript backfill', () => {
@@ -116,6 +133,7 @@ describe('Hermes transcript backfill', () => {
     expect(outcome.status).toBe('repaired');
     expect(outcome.rowsGrown).toBe(1);
     expect(await contentOf(db)).toBe(FULL_TEXT);
+    expect(await tenantOf(db)).toBe(TENANT_ID);
   });
 
   it('changes nothing in dry-run mode', async () => {

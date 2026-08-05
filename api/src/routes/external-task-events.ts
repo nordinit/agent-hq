@@ -13,6 +13,8 @@ import {
   type WorkflowEventMapping,
 } from '../domains/routing/externalEventMappings';
 import { type Db } from "../db/adapter/types";
+import { isPostgresUniqueViolation } from '../lib/postgresErrors';
+import { tenantInsertColumns } from '../lib/runtimeTenantScope';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export { DEV_ENV_LEASE_MANAGER_SOURCE };
@@ -225,8 +227,9 @@ function buildFingerprint(event: NormalizedExternalTaskEvent): string {
 }
 
 function isUniqueConstraintError(error: unknown, table: string, column: string): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes('UNIQUE constraint failed') && message.includes(`${table}.${column}`);
+  return table === 'external_task_event_receipts'
+    && column === 'fingerprint'
+    && isPostgresUniqueViolation(error, ['uq_external_task_event_receipts_fingerprint']);
 }
 
 async function insertReceipt(
@@ -318,7 +321,7 @@ async function markReceiptProcessed(
   mapping: WorkflowEventMapping | null,
   error: unknown = null,
 ): Promise<void> {
-  const assignments = ['processed_at = datetime(\'now\')'];
+  const assignments = ['processed_at = to_char(now() AT TIME ZONE \'utc\', \'YYYY-MM-DD HH24:MI:SS\')'];
   const values: unknown[] = [];
   const maybeAssign = async (column: string, value: unknown): Promise<void> => {
     if (!await tableHasColumn(db, 'external_task_event_receipts', column)) return;
@@ -339,16 +342,15 @@ async function markReceiptProcessed(
   `, ...values, receiptId);
 }
 
-async function addTaskNote(taskId: number, author: string, content: string): Promise<void> {
-  const db = getDb();
+async function addTaskNote(db: Db, taskId: number, tenantId: number | null, author: string, content: string): Promise<void> {
+  const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
   await db.run(`
-    INSERT INTO task_notes (task_id, author, content)
-    VALUES (?, ?, ?)
-  `, taskId, author, content);
+    INSERT INTO task_notes (${tenant.columnSql}task_id, author, content)
+    VALUES (${tenant.valueSql}?, ?, ?)
+  `, ...tenant.values, taskId, author, content);
 }
 
-async function updateTaskEvidence(taskId: number, changedBy: string, updates: Record<string, unknown>): Promise<void> {
-  const db = getDb();
+async function updateTaskEvidence(db: Db, taskId: number, changedBy: string, updates: Record<string, unknown>): Promise<void> {
   const existing = await db.get(`SELECT * FROM tasks WHERE id = ?`, taskId) as Record<string, unknown> | undefined;
   if (!existing) throw new Error('Task not found');
   const taskColumns = new Set(await sharedTableColumns(db, 'tasks'));
@@ -394,7 +396,7 @@ async function updateTaskEvidence(taskId: number, changedBy: string, updates: Re
   if (!assignments) return;
   await db.run(`
     UPDATE tasks
-    SET ${assignments}, updated_at = datetime('now')
+    SET ${assignments}, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, ...values, taskId);
 }
@@ -521,8 +523,7 @@ async function scopedReceiptWhere(db: Db, identity: McpApiIdentity, assignedProj
   return { clauses, params };
 }
 
-async function writeWorkflowEventHistory(taskId: number, changedBy: string, event: NormalizedExternalTaskEvent, mapping: WorkflowEventMapping | null): Promise<void> {
-  const db = getDb();
+async function writeWorkflowEventHistory(db: Db, taskId: number, changedBy: string, event: NormalizedExternalTaskEvent, mapping: WorkflowEventMapping | null): Promise<void> {
   const historyEntries: Array<[string, string | number | null]> = [
     ['external_event_source', event.source],
     ['external_event_name', event.event],
@@ -572,6 +573,7 @@ function buildEventNote(event: NormalizedExternalTaskEvent, mapping: WorkflowEve
 }
 
 async function applyExternalTaskStatus(
+  db: Db,
   task: TaskRow,
   nextStatus: string,
   changedBy: string,
@@ -579,13 +581,12 @@ async function applyExternalTaskStatus(
 ): Promise<boolean> {
   if (task.status === nextStatus) return false;
 
-  const db = getDb();
   await db.run(`
     UPDATE tasks
     SET status = ?,
         failure_detail = NULL,
         previous_status = NULL,
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, nextStatus, task.id);
 
@@ -825,34 +826,34 @@ router.post('/task-events', async (req: Request, res: Response) => {
         validateReviewEvidenceForMapping(normalized);
       }
 
-      let actionApplied = false;
-      let nextStatus = task.status;
-      let outcome: string | null = null;
+      const applied = await db.withTransaction(async (tx) => {
+        let actionApplied = false;
+        let nextStatus = task.status;
+        let outcome: string | null = null;
 
-      await db.exec('BEGIN');
-      try {
-        await writeWorkflowEventHistory(normalized.taskId, changedBy, normalized, mapping);
-        await addTaskNote(normalized.taskId, changedBy, buildEventNote(normalized, mapping));
+        await writeWorkflowEventHistory(tx, normalized.taskId, changedBy, normalized, mapping);
+        await addTaskNote(tx, normalized.taskId, task.tenant_id, changedBy, buildEventNote(normalized, mapping));
 
         if (mapping?.apply_review_evidence) {
-          await updateTaskEvidence(normalized.taskId, changedBy, {
-                        review_branch: normalized.branch,
-                        review_commit: normalized.commitSha,
-                        review_url: normalized.reviewUrl,
-                      });
+          await updateTaskEvidence(tx, normalized.taskId, changedBy, {
+            review_branch: normalized.branch,
+            review_commit: normalized.commitSha,
+            review_url: normalized.reviewUrl,
+          });
         }
 
         if (mapping?.action_kind === 'status' && mapping.action_target) {
           actionApplied = await applyExternalTaskStatus(
-                      task,
-                      mapping.action_target,
-                      changedBy,
-                      `Workflow event ${normalized.event} via ${normalized.source}. ${normalized.message}`,
-                    );
+            tx,
+            task,
+            mapping.action_target,
+            changedBy,
+            `Workflow event ${normalized.event} via ${normalized.source}. ${normalized.message}`,
+          );
           nextStatus = actionApplied ? mapping.action_target : task.status;
         } else if (mapping?.action_kind === 'outcome' && mapping.action_target) {
           outcome = mapping.action_target;
-          const result = await applyTaskOutcome(db, {
+          const result = await applyTaskOutcome(tx, {
             taskId: normalized.taskId,
             outcome,
             changedBy,
@@ -868,20 +869,13 @@ router.post('/task-events', async (req: Request, res: Response) => {
         }
 
         if (mapping?.apply_failure_detail && mapping.action_kind !== 'outcome') {
-          await updateTaskEvidence(normalized.taskId, changedBy, {
-                        failure_detail: buildFailureDetail(normalized),
-                      });
+          await updateTaskEvidence(tx, normalized.taskId, changedBy, {
+            failure_detail: buildFailureDetail(normalized),
+          });
         }
 
-        await db.exec('COMMIT');
-      } catch (error) {
-        try {
-          await db.exec('ROLLBACK');
-        } catch {
-          // Preserve the original error below.
-        }
-        throw error;
-      }
+        return { actionApplied, nextStatus, outcome };
+      });
 
       await markReceiptProcessed(db, receiptId, 'processed', mapping);
       return res.json({
@@ -901,9 +895,9 @@ router.post('/task-events', async (req: Request, res: Response) => {
         mapping_source_label: mapping?.source_label ?? null,
         action_kind: mapping?.action_kind ?? null,
         action_target: mapping?.action_target ?? null,
-        outcome,
-        outcome_applied: actionApplied,
-        next_status: nextStatus,
+        outcome: applied.outcome,
+        outcome_applied: applied.actionApplied,
+        next_status: applied.nextStatus,
       });
     } catch (error) {
       await markReceiptProcessed(db, receiptId, 'rejected', mapping, error);

@@ -38,7 +38,7 @@ const dryRun = args.includes('--dry-run');
 const noAliases = args.includes('--no-aliases');
 const only = args.find((a) => a.startsWith('--only='))?.slice('--only='.length);
 
-const mappingPath = path.resolve('db/pg-baseline/rename-mapping.json');
+const mappingPath = path.resolve('db/pg-metadata/rename-mapping.json');
 if (!fs.existsSync(mappingPath)) {
   console.error(`Missing ${mappingPath}. Run generate-rename-mapping.mjs first.`);
   process.exit(1);
@@ -191,7 +191,7 @@ console.log(`  references to DROPPED columns: ${report.droppedColumnReferences.l
 for (const s of report.droppedColumnReferences) console.log(`      ${s}`);
 
 fs.writeFileSync(
-  path.resolve('db/pg-baseline/rename-code-report.json'),
+  path.resolve('db/pg-metadata/rename-code-report.json'),
   JSON.stringify({
     sqlStringsRewritten: report.sqlStringsRewritten,
     identifierOccurrences: report.identifierOccurrences,

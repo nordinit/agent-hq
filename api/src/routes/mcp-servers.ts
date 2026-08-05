@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { syncAssignedMcpForAgent, syncAssignedMcpForServer } from '../runtimes/mcpMaterialization';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { isPostgresUniqueViolation } from '../lib/postgresErrors';
 
 import { requireNumericId } from '../lib/routeParams';
 
@@ -144,7 +145,7 @@ router.post('/', async (req: Request, res: Response) => {
     const created = await db.get('SELECT * FROM mcp_servers WHERE id = ?', result.lastInsertId);
     return res.status(201).json(created);
   } catch (err: any) {
-    if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
+    if (isPostgresUniqueViolation(err)) {
       return res.status(409).json({ error: 'An MCP server with this slug already exists' });
     }
     return res.status(500).json({ error: String(err) });
@@ -181,7 +182,7 @@ router.put('/:id', async (req: Request, res: Response) => {
           env = ?,
           cwd = ?,
           enabled = ?,
-          updated_at = datetime('now')
+          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ? AND tenant_id = ?
     `, typeof name === 'string' ? name.trim() : existing.name, typeof slug === 'string' ? slug.trim() : existing.slug, typeof description === 'string' ? description.trim() : existing.description, transport === 'stdio' ? 'stdio' : existing.transport, typeof command === 'string' ? command.trim() : existing.command, args !== undefined ? normalizeJsonText(args, '[]') : existing.args, env !== undefined ? normalizeJsonText(env, '{}') : existing.env, cwd !== undefined ? (typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null) : existing.cwd, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
 
@@ -189,7 +190,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     scheduleServerMcpSync(Number(req.params.id));
     return res.json(updated);
   } catch (err: any) {
-    if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
+    if (isPostgresUniqueViolation(err)) {
       return res.status(409).json({ error: 'An MCP server with this slug already exists' });
     }
     return res.status(500).json({ error: String(err) });
@@ -202,7 +203,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const existing = await db.get('SELECT id FROM mcp_servers WHERE id = ? AND tenant_id = ?', req.params.id, tenantId);
     if (!existing) return res.status(404).json({ error: 'MCP server not found' });
-    await db.run(`UPDATE mcp_servers SET enabled = 0, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
+    await db.run(`UPDATE mcp_servers SET enabled = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     scheduleServerMcpSync(Number(req.params.id));
     return res.json({ ok: true, id: Number(req.params.id) });
   } catch (err) {
@@ -271,7 +272,7 @@ agentMcpServersRouter.post('/', async (req: Request, res: Response) => {
     scheduleAgentMcpSync(Number(agentId));
     return res.status(201).json(created);
   } catch (err: any) {
-    if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
+    if (isPostgresUniqueViolation(err)) {
       return res.status(409).json({ error: 'This MCP server is already assigned to the agent' });
     }
     return res.status(500).json({ error: String(err) });

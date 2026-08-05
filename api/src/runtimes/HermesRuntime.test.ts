@@ -97,10 +97,9 @@ function createMockDb(options: {
     ...(options.taskRow ?? {}),
   };
 
-  // Presents the async Db ADAPTER interface — db.get(sql, ...) — rather than
-  // better-sqlite3's prepare(sql).get(). The canned-result logic below is unchanged; only
-  // the calling convention moved. __statements is still populated, keyed by SQL, so
-  // findPreparedRun() keeps working.
+  // Presents the async PostgreSQL Db interface. The canned-result logic below is
+  // unchanged; __statements is still populated, keyed by SQL, so findPreparedRun()
+  // keeps working.
   //
   // Statements are deduped by exact SQL rather than pushed per call, which is what lets an
   // assertion see every invocation on ONE jest.Mock instead of only the first.
@@ -133,7 +132,7 @@ function createMockDb(options: {
 
   const db: Record<string, unknown> = {
     __statements: statements,
-    dialect: 'sqlite',
+    dialect: 'postgres',
     inTransaction: false,
     get: jest.fn(async (sql: string, ...params: unknown[]) => statementFor(sql).get(...params)),
     all: jest.fn(async (sql: string, ...params: unknown[]) => statementFor(sql).all(...params)),
@@ -524,7 +523,7 @@ describe('HermesRuntime', () => {
       expect.any(String),
     );
 
-    const responseUpdate = findPreparedRun(db, '$.runtimeEnd');
+    const responseUpdate = findPreparedRun(db, "'{runtimeEnd}'");
     const [runtimeEndJson] = responseUpdate.mock.calls[0] as [string, number];
     expect(JSON.parse(runtimeEndJson)).toEqual(expect.objectContaining({
       success: false,

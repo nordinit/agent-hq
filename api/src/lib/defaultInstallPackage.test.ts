@@ -8,9 +8,8 @@ import {
   DEFAULT_INSTALL_PACKAGE_VERSION,
 } from './defaultInstallPackage';
 
-// setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on SQLite
-// and on PostgreSQL. The PostgreSQL fixture carries DDL only and is truncated between tests, so
-// every tenant this file needs is inserted explicitly rather than relying on initSchema seeding.
+// The PostgreSQL fixture is schema-only and truncated between tests, so every tenant this file
+// needs is inserted explicitly before the install package is applied.
 async function insertTenant(name: string, slug: string): Promise<number> {
   return Number((await getDb().run(
     `INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 0)`,

@@ -274,7 +274,7 @@ export async function stopInstanceExecution(
   if (abortResult?.attempted) {
     await db.run(`
       UPDATE job_instances
-      SET abort_attempted_at = datetime('now'),
+      SET abort_attempted_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
           abort_status = ?,
           abort_error = ?
       WHERE id = ? AND tenant_id = ?
@@ -328,8 +328,8 @@ export async function stopInstanceExecution(
   await db.run(`
     UPDATE job_instances
     SET status = 'failed',
-        completed_at = datetime('now'),
-        runtime_ended_at = COALESCE(runtime_ended_at, datetime('now')),
+        completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+        runtime_ended_at = COALESCE(runtime_ended_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
         runtime_end_success = COALESCE(runtime_end_success, 0),
         runtime_end_error = COALESCE(runtime_end_error, ?),
         runtime_end_source = COALESCE(runtime_end_source, 'manual_stop')

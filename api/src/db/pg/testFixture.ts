@@ -1,8 +1,9 @@
-import fs from 'fs';
-import path from 'path';
+import crypto from 'crypto';
 import { Pool } from 'pg';
 import { PostgresAdapter } from '../adapter/PostgresAdapter';
 import type { Db } from '../adapter/types';
+import { POSTGRES_MIGRATION_DIRS } from './migrationDirs';
+import { loadMigrations, runMigrations, verifyMigrationsCurrent } from './migrationRunner';
 
 /**
  * PostgreSQL fixtures for the test suite, replacing initSchema()-built SQLite databases.
@@ -24,10 +25,6 @@ import type { Db } from '../adapter/types';
  * class of gap this migration exists to close.
  */
 
-const BASELINE_DIR = path.resolve(__dirname, '../../../../db/pg-baseline');
-const MIGRATIONS_DIR = path.resolve(__dirname, '../../../../db/pg-migrations');
-const TEMPLATE_DB = 'agent_hq_test_template';
-
 function adminUrl(): string {
   const url = process.env.AGENT_HQ_TEST_PG_URL;
   if (!url) {
@@ -47,33 +44,18 @@ function urlFor(database: string): string {
   return u.toString();
 }
 
-/**
- * Migrations the template applies on top of the baseline, in order.
- *
- * This is a deliberate list rather than a glob of db/pg-migrations, because it has to mirror
- * what production has ACTUALLY applied. 10 and 11 are staged but unapplied: 10 renames the
- * sprint-* tables to workflow-* and 11 replaces them with read-only compatibility views, and
- * the code still writes the pre-rename names — applying them here would make every routing
- * write silently affect zero rows in tests while working in production, which is the same
- * class of false-green this fixture exists to eliminate.
- *
- * Add an entry when a migration is applied to production, so a table introduced by migration
- * exists in tests too. Without that, a feature depending on one passes on SQLite (where
- * initSchema creates it) and 500s on PostgreSQL.
- */
-const APPLIED_MIGRATIONS = [
-  '12-drop-dead-workflow-template-model.sql',
-  '13-drop-sprints-workflow-template-key.sql',
-  '14-routing-config-audit-log.sql',
-  '15-drop-global-transition-requirements.sql',
-  '18-runtime-executions-and-checkpoints.sql',
-];
+/** A schema-content fingerprint prevents a stale template from surviving a migration change. */
+export function migrationFingerprint(): string {
+  const migrations = loadMigrations(POSTGRES_MIGRATION_DIRS);
+  if (!migrations.length) throw new Error('Cannot build PostgreSQL test template: no migrations found');
+  return crypto.createHash('sha256')
+    .update(migrations.map(({ id, checksum }) => `${id}:${checksum}`).join('\n'))
+    .digest('hex')
+    .slice(0, 12);
+}
 
-function baselineFiles(): string[] {
-  const baseline = ['01-tables.sql', '02-indexes.sql', '03-foreign-keys.sql']
-    .map((f) => path.join(BASELINE_DIR, f));
-  const migrations = APPLIED_MIGRATIONS.map((f) => path.join(MIGRATIONS_DIR, f));
-  return [...baseline, ...migrations].filter((f) => fs.existsSync(f));
+export function templateDatabaseName(): string {
+  return `agent_hq_test_template_${migrationFingerprint()}`;
 }
 
 /**
@@ -81,6 +63,7 @@ function baselineFiles(): string[] {
  * competing workers, and the second one finds the template already present.
  */
 export async function ensureTemplateDatabase(): Promise<void> {
+  const templateDb = templateDatabaseName();
   const admin = new Pool({ connectionString: urlFor('postgres') });
   try {
     // A plain "does it exist? then create it" race between parallel workers produces
@@ -88,14 +71,27 @@ export async function ensureTemplateDatabase(): Promise<void> {
     const client = await admin.connect();
     try {
       await client.query('SELECT pg_advisory_lock($1)', [847362891]);
-      const { rows } = await client.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [TEMPLATE_DB]);
-      if (!rows.length) {
-        await client.query(`CREATE DATABASE ${TEMPLATE_DB}`);
-        const build = new Pool({ connectionString: urlFor(TEMPLATE_DB) });
+      const { rows } = await client.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [templateDb]);
+      let needsBuild = rows.length === 0;
+      if (!needsBuild) {
+        // A process can die between CREATE DATABASE and the final migration. The fingerprint
+        // prevents old schemas from being reused; if the current template is incomplete, rebuild
+        // it under the same lock instead of leaving every future run permanently broken.
+        const existing = new Pool({ connectionString: urlFor(templateDb) });
         try {
-          for (const file of baselineFiles()) {
-            await build.query(fs.readFileSync(file, 'utf8'));
-          }
+          await verifyMigrationsCurrent(new PostgresAdapter(existing), POSTGRES_MIGRATION_DIRS);
+        } catch {
+          needsBuild = true;
+        } finally {
+          await existing.end();
+        }
+        if (needsBuild) await client.query(`DROP DATABASE "${templateDb}"`);
+      }
+      if (needsBuild) {
+        await client.query(`CREATE DATABASE "${templateDb}"`);
+        const build = new Pool({ connectionString: urlFor(templateDb) });
+        try {
+          await runMigrations(new PostgresAdapter(build), POSTGRES_MIGRATION_DIRS);
         } finally {
           await build.end();
         }
@@ -121,7 +117,7 @@ function workerDatabaseName(): string {
   // would DROP and re-CREATE the other's database mid-test. The process id disambiguates them
   // while staying stable for the worker's lifetime, which is what the per-worker reuse relies on.
   const worker = process.env.JEST_WORKER_ID ?? '1';
-  return `agent_hq_test_w${worker}_p${process.pid}`;
+  return `agent_hq_test_w${worker}_p${process.pid}_${migrationFingerprint()}`;
 }
 
 /**
@@ -161,6 +157,7 @@ export async function getTestDb(): Promise<Db> {
 async function createWorkerDatabase(): Promise<Db> {
   await ensureTemplateDatabase();
   workerDb = workerDatabaseName();
+  const templateDb = templateDatabaseName();
 
   const admin = new Pool({ connectionString: urlFor('postgres') });
   try {
@@ -186,7 +183,7 @@ async function createWorkerDatabase(): Promise<Db> {
     if (rows.length === 0) {
       // CREATE DATABASE ... TEMPLATE fails if anything is connected to the template, and rejects
       // being run inside a transaction — hence a bare query on a fresh connection.
-      await admin.query(`CREATE DATABASE ${workerDb} TEMPLATE ${TEMPLATE_DB}`);
+      await admin.query(`CREATE DATABASE "${workerDb}" TEMPLATE "${templateDb}"`);
     }
   } finally {
     await admin.end();

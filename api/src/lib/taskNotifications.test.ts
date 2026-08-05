@@ -1,150 +1,21 @@
-import Database from 'better-sqlite3';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { notifyTelegram } from '../integrations/telegram';
 import { saveNotificationPreferences } from './notifications';
 import { notifyTaskStatusChange } from './taskNotifications';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../integrations/telegram', () => ({
   notifyTelegram: jest.fn(),
 }));
 
 async function createDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL
-    );
+  const db = await setupTestDb();
 
-    CREATE TABLE sprints (
-      id INTEGER PRIMARY KEY,
-      project_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      sprint_type TEXT NOT NULL DEFAULT 'generic'
-    );
-
-    CREATE TABLE sprint_types (
-      key TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE task_statuses (
-      name TEXT PRIMARY KEY,
-      label TEXT NOT NULL,
-      color TEXT NOT NULL DEFAULT 'slate',
-      terminal INTEGER NOT NULL DEFAULT 0,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      allowed_transitions TEXT NOT NULL DEFAULT '[]'
-    );
-
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER,
-      title TEXT NOT NULL,
-      project_id INTEGER,
-      sprint_id INTEGER
-    );
-
-    CREATE TABLE sprint_task_statuses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      status_key TEXT NOT NULL,
-      label TEXT NOT NULL,
-      color TEXT NOT NULL DEFAULT 'slate',
-      terminal INTEGER NOT NULL DEFAULT 0,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      allowed_transitions_json TEXT NOT NULL DEFAULT '[]',
-      stage_order INTEGER NOT NULL DEFAULT 0,
-      is_default_entry INTEGER NOT NULL DEFAULT 0,
-      metadata_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE sprint_type_task_statuses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_type_key TEXT NOT NULL,
-      status_key TEXT NOT NULL,
-      label TEXT NOT NULL,
-      color TEXT NOT NULL DEFAULT 'slate',
-      terminal INTEGER NOT NULL DEFAULT 0,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      allowed_transitions_json TEXT NOT NULL DEFAULT '[]',
-      stage_order INTEGER NOT NULL DEFAULT 0,
-      is_default_entry INTEGER NOT NULL DEFAULT 0,
-      metadata_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE sprint_task_transitions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      task_type TEXT,
-      from_status TEXT NOT NULL,
-      outcome TEXT NOT NULL,
-      to_status TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      is_protected INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE sprint_task_transition_requirements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      task_type TEXT,
-      outcome TEXT NOT NULL,
-      field_name TEXT NOT NULL,
-      requirement_type TEXT NOT NULL,
-      match_field TEXT,
-      severity TEXT NOT NULL,
-      message TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE sprint_task_routing_rules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      task_type TEXT NOT NULL,
-      status TEXT NOT NULL,
-      agent_id INTEGER,
-      priority INTEGER NOT NULL DEFAULT 0,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE tenants (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      is_default INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
 
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1), (5, 'Tenant 5', 'tenant-5', 0)`);
-  await db.run(`INSERT INTO projects (id, name) VALUES (1, 'Agent HQ')`);
-  await db.run(`INSERT INTO sprint_types (key, name, is_system) VALUES ('enhancements', 'Enhancements', 0)`);
-  await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Enhancements Sprint', 'enhancements')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
+  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (1, 'enhancements', 'Enhancements', 0)`);
+  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (10, 1, 1, 'Enhancements Sprint', 'enhancements')`);
 
   return db;
 }
@@ -191,7 +62,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🧱 <b>Task #484 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🏗️ <i>in_progress</i>  →  🧱 <b>blocked</b>'));
     } finally {
-      await db.close();
+      await teardownTestDb();
     }
   });
 
@@ -212,7 +83,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🧪 <b>Task #485 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🔍 <i>review</i>  →  🧪 <b>review_ready</b>'));
     } finally {
-      await db.close();
+      await teardownTestDb();
     }
   });
 
@@ -233,7 +104,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🔍 <b>Task #486 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🔵 <i>ready</i>  →  🔍 <b>review</b>'));
     } finally {
-      await db.close();
+      await teardownTestDb();
     }
   });
 
@@ -254,7 +125,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🧱 <b>Task #487 — Status Changed</b>'));
       expect(notifyTelegramMock).toHaveBeenCalledWith(expect.stringContaining('🕒 <i>dev_deploy_queued</i>  →  🧱 <b>blocked</b>'));
     } finally {
-      await db.close();
+      await teardownTestDb();
     }
   });
 
@@ -286,7 +157,7 @@ describe('notifyTaskStatusChange', () => {
       expect(row.outlet).toBe('telegram');
       expect(notifyTelegramMock).toHaveBeenCalled();
     } finally {
-      await db.close();
+      await teardownTestDb();
     }
   });
 
@@ -309,7 +180,7 @@ describe('notifyTaskStatusChange', () => {
       expect(count).toBe(1);
       expect(notifyTelegramMock).not.toHaveBeenCalled();
     } finally {
-      await db.close();
+      await teardownTestDb();
     }
   });
 
@@ -333,7 +204,7 @@ describe('notifyTaskStatusChange', () => {
       expect(notifyTelegramMock).not.toHaveBeenCalled();
       expect(await db.get(`SELECT value FROM app_settings WHERE key = 'notifications.preferences'`)).toBeUndefined();
     } finally {
-      await db.close();
+      await teardownTestDb();
     }
   });
 });

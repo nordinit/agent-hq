@@ -236,7 +236,7 @@ async function advanceSeries(db: Db, series: RecurringTaskSeriesRecord, schedule
     SET last_run_at = ?,
         next_run_at = ?,
         enabled = CASE WHEN ? THEN 0 ELSE enabled END,
-        updated_at = datetime('now'),
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
         updated_by = 'recurring-task-scheduler'
     WHERE id = ?
   `, scheduledFor, nextRunAt, options.disable ? 1 : 0, series.id);

@@ -25,16 +25,16 @@ export async function logHistory(
   field: string,
   oldValue: unknown,
   newValue: unknown,
+  db: Db = getDb(),
 ): Promise<void> {
-  await writeTaskHistory(getDb(), taskId, changedBy, field, oldValue, newValue, false);
+  await writeTaskHistory(db, taskId, changedBy, field, oldValue, newValue, false);
 }
 
 export async function taskTableHasColumn(db: Db, column: string): Promise<boolean> {
   return await sharedColumnExists(db, 'tasks', column);
 }
 
-export async function addTaskNote(taskId: number, author: string, content: string): Promise<void> {
-  const db = getDb();
+export async function addTaskNote(taskId: number, author: string, content: string, db: Db = getDb()): Promise<void> {
   const tenantId = await resolveRuntimeTenantId(db, { taskId });
   const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
   await db.run(`
@@ -47,9 +47,9 @@ export async function updateTaskEvidence(
   taskId: number,
   changedBy: string,
   updates: Record<string, unknown>,
-  options?: { explicitClears?: Set<string> },
+  options?: { explicitClears?: Set<string>; db?: Db },
 ): Promise<void> {
-  const db = getDb();
+  const db = options?.db ?? getDb();
   const existing = await db.get('SELECT * FROM tasks WHERE id = ?', taskId) as Record<string, unknown> | undefined;
   if (!existing) throw new Error('Task not found');
   const taskColumns = new Set(await sharedTableColumns(db, 'tasks'));
@@ -79,7 +79,7 @@ export async function updateTaskEvidence(
       : existing[key];
     const newValue = updates[key];
     if (String(oldValue ?? '') !== String(newValue ?? '')) {
-      await logHistory(taskId, changedBy, key, oldValue, newValue);
+      await logHistory(taskId, changedBy, key, oldValue, newValue, db);
     }
   }
 
@@ -101,7 +101,7 @@ export async function updateTaskEvidence(
   if (assignments.length === 0) return;
   await db.run(`
     UPDATE tasks
-    SET ${assignments.join(', ')}, updated_at = datetime('now')
+    SET ${assignments.join(', ')}, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, ...values, taskId);
 }

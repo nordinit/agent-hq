@@ -266,4 +266,29 @@ describe('buildRuntimeBoundaryV1', () => {
       repoAccessMode: 'remote',
     });
   });
+
+  it('projects only the secret-free execution target contract', () => {
+    const boundary = buildRuntimeBoundaryV1(input({
+      runtimeType: 'claude-code-managed',
+      executionTarget: {
+        id: 'managed:https://target-user:target-password@example.test/agents?access_token=target-token',
+        kind: 'managed',
+        trustLevel: 'untrusted',
+        capabilities: ['network'],
+        providerApiKey: 'target-api-key',
+        providerMetadata: { authorization: 'Bearer target-secret' },
+      } as BuildRuntimeBoundaryV1Input['executionTarget'] & Record<string, unknown>,
+    }));
+
+    expect(boundary.executionTarget).toEqual({
+      id: 'managed:https://example.test/agents?access_token=%5Bredacted%5D',
+      kind: 'managed',
+      trustLevel: 'untrusted',
+      capabilities: ['network'],
+    });
+    expect(JSON.stringify(boundary)).not.toContain('target-password');
+    expect(JSON.stringify(boundary)).not.toContain('target-token');
+    expect(JSON.stringify(boundary)).not.toContain('target-api-key');
+    expect(JSON.stringify(boundary)).not.toContain('target-secret');
+  });
 });

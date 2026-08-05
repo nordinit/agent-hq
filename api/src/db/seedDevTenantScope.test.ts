@@ -19,12 +19,17 @@ async function listProjects(): Promise<ProjectRow[]> {
 }
 
 beforeEach(async () => {
-  // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
-  // SQLite and on PostgreSQL. tempDir survives because WORKSPACE_PARENT is filesystem state that
-  // seed-dev.ts writes agent workspace paths from — nothing to do with the database.
+  // tempDir is filesystem state that seed-dev.ts writes agent workspace paths from.
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'seed-dev-tenant-scope-'));
   process.env.WORKSPACE_PARENT = path.join(tempDir, 'workspaces');
-  await setupTestDb();
+  const db = await setupTestDb();
+  const tenantId = Number((await db.run(
+    `INSERT INTO tenants (name, slug, is_default) VALUES ('Default', 'default', 1)`,
+  )).lastInsertId);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)
+  `, String(tenantId), String(tenantId));
 });
 
 afterEach(async () => {
@@ -42,32 +47,17 @@ it('seeds dev fixtures into the default tenant without leaking into another tena
     VALUES (?, 'Tenant 2 Existing', 'preexisting tenant 2 row', '')
   `, otherTenant.id);
 
-  // Snapshot the pre-seed projects instead of hardcoding them. Creating the default tenant against
-  // the complete PostgreSQL schema provisions its starter workspace (a 'Default Project' row),
-  // whereas on SQLite the default tenant is created part-way through initSchema, before
-  // canProvisionTenantDefaultWorkspace()'s tables exist, so it gets none. That difference belongs
-  // to tenant bootstrap, not to seed-dev, and asserting the DELTA pins seed-dev's behaviour on both
-  // engines — more tightly than the old fixed list did, because it now covers every projects row
-  // rather than three names.
+  // Snapshot the pre-seed projects so the assertion covers only seed-dev's delta and preserves
+  // every project explicitly installed by either tenant fixture.
   const projectsBeforeSeed = await listProjects();
 
   const apiRoot = path.resolve(__dirname, '../..');
   const tsxBin = path.join(apiRoot, 'node_modules', '.bin', 'tsx');
   const result = spawnSync(tsxBin, ['src/db/seed-dev.ts'], {
     cwd: apiRoot,
-    // The child resolves its own connection from the environment, so it must inherit whichever
-    // selector setupTestDb() set: AGENT_HQ_DB_PATH (a temp file) on SQLite, DATABASE_URL (the
-    // per-worker clone) on PostgreSQL. Both are already on process.env, so inheriting is enough.
-    //
-    // The AGENT_HQ_DB_PATH fallback is a guard, not a normal path: seed-dev.ts calls initSchema()
-    // unconditionally and initSchema() builds its DDL on the raw better-sqlite3 connection with no
-    // dialect check, so under DATABASE_URL the child still opens a SQLite database alongside the
-    // PostgreSQL one it seeds. jest-setup-env.ts pins AGENT_HQ_DB_PATH to ':memory:', which keeps
-    // that throwaway off disk here; the fallback makes sure it can never land on a real file if
-    // that ever stops being true.
+    // The child resolves its own PostgreSQL connection from the worker URL set by setupTestDb().
     env: {
       ...process.env,
-      AGENT_HQ_DB_PATH: process.env.AGENT_HQ_DB_PATH ?? path.join(tempDir, 'throwaway-sqlite.db'),
       WORKSPACE_PARENT: path.join(tempDir, 'workspaces'),
     },
     encoding: 'utf-8',
@@ -79,7 +69,7 @@ it('seeds dev fixtures into the default tenant without leaking into another tena
   const db = getDb();
   for (const table of ['projects', 'agents', 'sprints', 'tasks']) {
     const nullCount = await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id IS NULL`) as { n: number | string };
-    // COUNT(*) is a bigint on PostgreSQL and arrives as a string; SQLite returns a number.
+    // Coerce defensively at the assertion boundary in case a driver parser is overridden.
     expect(Number(nullCount.n)).toBe(0);
   }
 

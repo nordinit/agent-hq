@@ -16,6 +16,7 @@ const SPRINT_ID = 700;
 const AGENT_ID = 94;
 const TASK_ID = 552;
 const INSTANCE_ID = 3461;
+const TENANT_ID = 42;
 /** A second live instance, used by the stale-callback case as the task's real owner. */
 const OTHER_INSTANCE_ID = 9999;
 
@@ -24,25 +25,33 @@ const OTHER_INSTANCE_ID = 9999;
  * NOT NULL and both it and project_id are foreign keys, so a task cannot exist on its own.
  */
 async function seedScope(db: Db): Promise<void> {
+  await db.run(`
+    INSERT INTO tenants (id, name, slug, is_default)
+    VALUES (?, 'Callback Test Tenant', 'callback-test', 1)
+  `, TENANT_ID);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)
+  `, TENANT_ID, TENANT_ID);
   await db.run(
-    `INSERT INTO projects (id, name) VALUES (?, 'Agent HQ')`,
-    PROJECT_ID,
+    `INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, 'Agent HQ')`,
+    PROJECT_ID, TENANT_ID,
   );
   await db.run(`
-    INSERT INTO sprints (id, project_id, name, sprint_type, status)
-    VALUES (?, ?, 'Routing', 'dev', 'active')
-  `, SPRINT_ID, PROJECT_ID);
+    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
+    VALUES (?, ?, ?, 'Routing', 'dev', 'active')
+  `, SPRINT_ID, TENANT_ID, PROJECT_ID);
   await db.run(`
-    INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type)
-    VALUES (?, 'Cinder (Backend)', 'cinder-backend', 'cinder-backend', 'openclaw')
-  `, AGENT_ID);
+    INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type)
+    VALUES (?, ?, 'Cinder (Backend)', 'cinder-backend', 'cinder-backend', 'openclaw')
+  `, AGENT_ID, TENANT_ID);
   await db.run(`
     INSERT INTO external_event_mappings (
-      project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
+      tenant_id, project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
       action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
     )
-    VALUES (NULL, NULL, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 1, 100)
-  `);
+    VALUES (?, NULL, NULL, 'agent_started', NULL, '[]', '["in_progress","blocked","review","qa_pass","ready_to_merge","deployed","done","cancelled","failed"]', 'status', 'in_progress', 0, 0, 1, 100)
+  `, TENANT_ID);
 }
 
 /**
@@ -52,20 +61,20 @@ async function seedScope(db: Db): Promise<void> {
  */
 async function seedReadyTaskRun(db: Db, activeInstanceId: number | null = null): Promise<void> {
   await db.run(`
-    INSERT INTO tasks (id, title, status, task_type, sprint_id, project_id, agent_id, updated_at)
-    VALUES (?, 'Allow task routing rules that apply to all task types', 'ready', 'backend', ?, ?, ?, datetime('now'))
-  `, TASK_ID, SPRINT_ID, PROJECT_ID, AGENT_ID);
+    INSERT INTO tasks (id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, updated_at)
+    VALUES (?, ?, 'Allow task routing rules that apply to all task types', 'ready', 'backend', ?, ?, ?, CURRENT_TIMESTAMP)
+  `, TASK_ID, TENANT_ID, SPRINT_ID, PROJECT_ID, AGENT_ID);
   await db.run(`
-    INSERT INTO job_instances (id, agent_id, task_id, status, dispatched_at)
-    VALUES (?, ?, ?, 'running', datetime('now'))
-  `, INSTANCE_ID, AGENT_ID, TASK_ID);
+    INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, dispatched_at)
+    VALUES (?, ?, ?, ?, 'running', CURRENT_TIMESTAMP)
+  `, INSTANCE_ID, TENANT_ID, AGENT_ID, TASK_ID);
   if (activeInstanceId === OTHER_INSTANCE_ID) {
     // active_instance_id is a foreign key now, so "owned by another instance" has to be a real
     // competing run rather than a dangling id.
     await db.run(`
-      INSERT INTO job_instances (id, agent_id, task_id, status, dispatched_at)
-      VALUES (?, ?, ?, 'running', datetime('now'))
-    `, OTHER_INSTANCE_ID, AGENT_ID, TASK_ID);
+      INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, dispatched_at)
+      VALUES (?, ?, ?, ?, 'running', CURRENT_TIMESTAMP)
+    `, OTHER_INSTANCE_ID, TENANT_ID, AGENT_ID, TASK_ID);
   }
   if (activeInstanceId !== null) {
     await db.run(`UPDATE tasks SET active_instance_id = ? WHERE id = ?`, activeInstanceId, TASK_ID);
@@ -142,11 +151,11 @@ describe('completeRunInstance runtime failure workflow event', () => {
     await db.run(`UPDATE job_instances SET session_key = 'run:3461' WHERE id = ?`, INSTANCE_ID);
     await db.run(`
       INSERT INTO external_event_mappings (
-        project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
+        tenant_id, project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
         action_kind, action_target, apply_review_evidence, apply_failure_detail, enabled, priority
       )
-      VALUES (NULL, 'agent_hq_runtime', 'runtime_failed', NULL, '[]', '[]', ?, ?, 0, 1, 1, 200)
-    `, actionKind, actionTarget);
+      VALUES (?, NULL, 'agent_hq_runtime', 'runtime_failed', NULL, '[]', '[]', ?, ?, 0, 1, 1, 200)
+    `, TENANT_ID, actionKind, actionTarget);
   }
 
   it('applies the configured visible status for a runtime_failed workflow event', async () => {

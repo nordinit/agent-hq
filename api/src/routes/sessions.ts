@@ -4,6 +4,7 @@ import {
   ensureCanonicalSessionByExternalKey,
   ensureCanonicalSessionForInstance,
   ingestSessionByExternalKey,
+  SessionIngestTenantError,
   syncSessionMessagesFromChatMessages,
 } from '../lib/canonicalSessions';
 import { resolveSessionAdapterForKey } from '../lib/sessionAdapters';
@@ -101,13 +102,14 @@ router.get('/by-key/:externalKey', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    const session = await ensureCanonicalSessionByExternalKey(req.params.externalKey);
+    const session = await ensureCanonicalSessionByExternalKey(req.params.externalKey, tenantId);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     const scope = await sessionTenantScope(db, 's', tenantId);
     const visible = await db.get(`SELECT id FROM sessions s WHERE s.id = ? AND ${scope.sql}`, session.id, ...scope.params);
     if (!visible) return res.status(404).json({ error: 'Session not found' });
     return res.json(session);
   } catch (err) {
+    if (err instanceof SessionIngestTenantError) return res.status(404).json({ error: err.message });
     return res.status(500).json({ error: String(err) });
   }
 });
@@ -231,7 +233,7 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
 
             const insertSql = `
               INSERT INTO session_messages (session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
               ON CONFLICT(session_id, ordinal) DO UPDATE SET
                 content = excluded.content,
                 event_type = excluded.event_type,
@@ -261,7 +263,7 @@ router.get('/:id/messages', async (req: Request, res: Response) => {
             await db.run(`
               UPDATE sessions
               SET message_count = (SELECT COUNT(*) FROM session_messages WHERE session_id = ?),
-                  updated_at = datetime('now')
+                  updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
               WHERE id = ?
             `, session.id, session.id);
           }
@@ -378,6 +380,7 @@ router.post('/ingest', async (req: Request, res: Response) => {
 
     const session = await ingestSessionByExternalKey(
       body.external_key,
+      tenantId,
       {
         instanceId: body.instance_id,
         agentId: body.agent_id,
@@ -396,6 +399,7 @@ router.post('/ingest', async (req: Request, res: Response) => {
 
     return res.json(session);
   } catch (err) {
+    if (err instanceof SessionIngestTenantError) return res.status(404).json({ error: err.message });
     return res.status(500).json({ error: String(err) });
   }
 });
@@ -405,6 +409,8 @@ router.post('/ingest', async (req: Request, res: Response) => {
 // Body: { limit?: number }  (default 50 most recent)
 router.post('/ingest/cron-runs', async (req: Request, res: Response) => {
   try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const fs = await import('fs');
     const path = await import('path');
     const os = await import('os');
@@ -431,7 +437,7 @@ router.post('/ingest/cron-runs', async (req: Request, res: Response) => {
       const jobId = file.replace('.jsonl', '');
       const externalKey = `cron:${jobId}`;
       try {
-        const session = await ingestSessionByExternalKey(externalKey, {}, 'cron');
+        const session = await ingestSessionByExternalKey(externalKey, tenantId, {}, 'cron');
         if (session) {
           results.ingested++;
         } else {

@@ -1,11 +1,10 @@
-import Database from 'better-sqlite3';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import type { McpApiIdentity } from './mcpApiAuth';
 import { postTaskOutcome } from '../domains/tasks/release';
 import { cleanupTaskExecutionLinkageForStatus } from './taskLifecycle';
 import { applyTaskOutcome } from './taskOutcome';
 import { WorkflowAllowedValuesError } from './taskStatusValidation';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../domains/tasks/readModel', () => {
   const actual = jest.requireActual('../domains/tasks/readModel');
@@ -32,241 +31,22 @@ jest.mock('./taskLifecycle', () => {
 });
 
 async function createDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER,
-      name TEXT NOT NULL
-    );
-    CREATE TABLE sprints (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER,
-      project_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      sprint_type TEXT NOT NULL DEFAULT 'generic'
-    );
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER,
-      name TEXT NOT NULL,
-      job_title TEXT
-    );
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER,
-      title TEXT NOT NULL,
-      status TEXT NOT NULL,
-      project_id INTEGER,
-      sprint_id INTEGER,
-      task_type TEXT,
-      agent_id INTEGER,
-      active_instance_id INTEGER,
-      review_owner_agent_id INTEGER,
-      review_branch TEXT,
-      review_commit TEXT,
-      review_url TEXT,
-      qa_verified_commit TEXT,
-      qa_tested_url TEXT,
-      merged_commit TEXT,
-      deployed_commit TEXT,
-      deployed_at TEXT,
-      live_verified_at TEXT,
-      live_verified_by TEXT,
-      deploy_target TEXT,
-      evidence_json TEXT,
-      custom_fields_json TEXT,
-      previous_status TEXT,
-      failure_detail TEXT,
-      origin_task_id INTEGER,
-      updated_at TEXT
-    );
-    CREATE TABLE routing_config (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER,
-      from_status TEXT NOT NULL,
-      outcome TEXT NOT NULL,
-      to_status TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE sprint_task_transitions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER,
-      project_id INTEGER,
-      sprint_type TEXT,
-      task_type TEXT,
-      from_status TEXT NOT NULL,
-      outcome TEXT NOT NULL,
-      to_status TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      is_protected INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE sprint_task_statuses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      status_key TEXT NOT NULL,
-      label TEXT NOT NULL,
-      color TEXT NOT NULL DEFAULT 'slate',
-      terminal INTEGER NOT NULL DEFAULT 0,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      allowed_transitions_json TEXT NOT NULL DEFAULT '[]',
-      stage_order INTEGER NOT NULL DEFAULT 0,
-      is_default_entry INTEGER NOT NULL DEFAULT 0,
-      metadata_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(sprint_id, status_key)
-    );
-    CREATE TABLE sprint_task_transition_requirements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      task_type TEXT,
-      outcome TEXT NOT NULL,
-      field_name TEXT NOT NULL,
-      requirement_type TEXT NOT NULL DEFAULT 'required',
-      match_field TEXT,
-      severity TEXT NOT NULL DEFAULT 'block',
-      message TEXT NOT NULL DEFAULT '',
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE sprint_type_outcomes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_type_key TEXT NOT NULL,
-      task_type TEXT,
-      outcome_key TEXT NOT NULL,
-      label TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      enabled INTEGER NOT NULL DEFAULT 1,
-      behavior TEXT NOT NULL DEFAULT 'base',
-      badge_variant TEXT,
-      stage_order INTEGER NOT NULL DEFAULT 0,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      metadata_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE sprint_task_routing_rules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER NOT NULL,
-      task_type TEXT NOT NULL,
-      status TEXT NOT NULL,
-      agent_id INTEGER,
-      priority INTEGER NOT NULL DEFAULT 0,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      task_id INTEGER NOT NULL,
-      changed_by TEXT NOT NULL,
-      field TEXT NOT NULL,
-      old_value TEXT,
-      new_value TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_notes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      task_id INTEGER NOT NULL,
-      author TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      instance_id INTEGER,
-      agent_id INTEGER,
-      job_title TEXT,
-      level TEXT,
-      message TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE task_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      task_id INTEGER,
-      project_id INTEGER,
-      agent_id INTEGER,
-      from_status TEXT,
-      to_status TEXT,
-      moved_by TEXT,
-      move_type TEXT,
-      instance_id INTEGER,
-      reason TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE integrity_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      task_id INTEGER,
-      project_id INTEGER,
-      agent_id INTEGER,
-      instance_id INTEGER,
-      anomaly_type TEXT,
-      detail TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE instance_artifacts (
-      instance_id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      current_stage TEXT,
-      last_agent_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      latest_commit_hash TEXT,
-      branch_name TEXT,
-      changed_files_json TEXT,
-      changed_files_count INTEGER,
-      summary TEXT,
-      blocker_reason TEXT,
-      outcome TEXT,
-      stale INTEGER,
-      stale_at TEXT,
-      updated_at TEXT
-    );
-    CREATE TABLE task_outcome_metrics (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      task_id INTEGER,
-      spawned_defects INTEGER DEFAULT 0
-    );
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER,
-      task_id INTEGER,
-      agent_id INTEGER NOT NULL,
-      status TEXT,
-      session_key TEXT,
-      task_outcome TEXT,
-      lifecycle_outcome_posted_at TEXT,
-      response TEXT,
-      created_at TEXT,
-      dispatched_at TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      runtime_ended_at TEXT,
-      runtime_completed_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT,
-      lifecycle_handoff_status TEXT,
-      semantic_outcome_missing INTEGER NOT NULL DEFAULT 0,
-      failure_stage TEXT
-    );
-  `);
+  const db = await setupTestDb();
 
+  await db.run(`
+    INSERT INTO tenants (id, name, slug, is_default)
+    VALUES (1, 'Test Tenant', 'test-tenant', 1), (4, 'Tenant Four', 'tenant-four', 0)
+  `);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
+  `);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
   await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (10, 1, 1, 'Bugs', 'generic')`);
-  await db.run(`INSERT INTO agents (id, tenant_id, name, job_title) VALUES (7, 1, 'Cinder', 'Backend Engineer')`);
+  await db.run(`
+    INSERT INTO agents (id, tenant_id, name, job_title, session_key)
+    VALUES (7, 1, 'Cinder', 'Backend Engineer', 'agent:cinder:main')
+  `);
   await db.run(`
     INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id, task_type, agent_id)
     VALUES (417, 1, 'Scoped transitions', 'blocked', 1, 10, 'backend', 7)
@@ -294,7 +74,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
 
   afterEach(async () => {
     jest.clearAllMocks();
-    await db.close();
+    await teardownTestDb();
   });
 
   it('ignores null-scoped routing_config fallback rows', async () => {
@@ -321,17 +101,6 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
 
   it('ignores legacy lifecycle_rules rows when no explicit sprint transition exists', async () => {
     db = await createDb();
-    await db.exec(`
-      CREATE TABLE lifecycle_rules (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_type TEXT,
-        from_status TEXT NOT NULL,
-        outcome TEXT NOT NULL,
-        to_status TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        priority INTEGER NOT NULL DEFAULT 0
-      );
-    `);
     await db.run(`
       INSERT INTO lifecycle_rules (task_type, from_status, outcome, to_status, enabled, priority)
       VALUES ('backend', 'blocked', 'custom_global_handoff', 'ready', 1, 100)
@@ -376,8 +145,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'dev_deploy_queued', 'dev_deploy_queued', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'dev_deploy_queued', 'dev_deploy_queued', 1)
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -408,8 +177,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
         (10, 'field_reported', 'Field Reported', 'blue', 0, 0, 2, 0)
     `);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'todo', 'ready_for_intake', 'intake', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'todo', 'ready_for_intake', 'intake', 1)
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -439,8 +208,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
         (10, 'ready', 'Ready', 'blue', 0, 1, 1, 0)
     `);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'todo', 'bad_custom_route', 'field_reported', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'todo', 'bad_custom_route', 'field_reported', 1)
     `);
 
     await expect(applyTaskOutcome(db, {
@@ -484,8 +253,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
         (10, 'field_reported', 'Field Reported', 'blue', 0, 0, 1, 0)
     `);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'todo', 'ready_for_field_report', 'field_reported', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'todo', 'ready_for_field_report', 'field_reported', 1)
     `);
 
     await applyTaskOutcome(db, {
@@ -514,8 +283,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   it('uses sprint-type default transitions for matching sprint workflow outcomes', async () => {
     db = await createDb();
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled)
-      VALUES (NULL, 1, 'generic', 'backend', 'blocked', 'default_unblocked', 'ready', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, NULL, 1, 'generic', 'backend', 'blocked', 'default_unblocked', 'ready', 1)
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -538,10 +307,10 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   it('prefers sprint override transitions over matching sprint-type defaults', async () => {
     db = await createDb();
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority)
       VALUES
-        (NULL, 1, 'generic', 'backend', 'blocked', 'default_unblocked', 'ready', 1, 100),
-        (10, 1, 'generic', 'backend', 'blocked', 'default_unblocked', 'needs_attention', 1, 0)
+        (1, NULL, 1, 'generic', 'backend', 'blocked', 'default_unblocked', 'ready', 1, 100),
+        (1, 10, 1, 'generic', 'backend', 'blocked', 'default_unblocked', 'needs_attention', 1, 0)
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -563,14 +332,14 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
 
   it('auto-closes the authoritative instance when deployed_live is posted', async () => {
     db = await createDb();
-    await db.run(`UPDATE tasks SET status = 'ready_to_merge', active_instance_id = 94, agent_id = 7 WHERE id = 417`);
     await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, status, session_key)
       VALUES (94, 417, 7, 'running', NULL)
     `);
+    await db.run(`UPDATE tasks SET status = 'ready_to_merge', active_instance_id = 94, agent_id = 7 WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'ready_to_merge', 'deployed_live', 'deployed', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'ready_to_merge', 'deployed_live', 'deployed', 1)
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -621,12 +390,12 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'failed', 'failed', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'failed', 'failed', 1)
     `);
     await db.run(`
-      INSERT INTO sprint_type_outcomes (sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
-      VALUES ('generic', NULL, 'custom_failure', 'Custom Failure', 'A configured failure outcome', 1, 'base', 'failed', 1, 0, '{"failure_like":true}')
+      INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
+      VALUES (1, 'generic', NULL, 'custom_failure', 'Custom Failure', 'A configured failure outcome', 1, 'base', 'failed', 1, 0, '{"failure_like":true}')
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -651,12 +420,12 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'blocked', 'stalled', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'blocked', 'stalled', 1)
     `);
     await db.run(`
-      INSERT INTO sprint_type_outcomes (sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
-      VALUES ('generic', NULL, 'custom_blocker', 'Custom Blocker', 'A configured blocker outcome', 1, 'base', 'stalled', 1, 0, '{"blocked_like":true}')
+      INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
+      VALUES (1, 'generic', NULL, 'custom_blocker', 'Custom Blocker', 'A configured blocker outcome', 1, 'base', 'stalled', 1, 0, '{"blocked_like":true}')
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -681,12 +450,12 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'in_progress' WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'failed', 'failed', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'failed', 'failed', 1)
     `);
     await db.run(`
-      INSERT INTO sprint_type_outcomes (sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
-      VALUES ('generic', NULL, 'custom_failed', 'Custom Failed', 'Name alone should not imply failure semantics', 1, 'base', 'failed', 1, 0, '{}')
+      INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json)
+      VALUES (1, 'generic', NULL, 'custom_failed', 'Custom Failed', 'Name alone should not imply failure semantics', 1, 'base', 'failed', 1, 0, '{}')
     `);
 
     await expect(applyTaskOutcome(db, {
@@ -705,8 +474,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = NULL, agent_id = 7 WHERE id = 417`);
     await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (91, NULL, 7, 'failed')`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -752,8 +521,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = NULL, agent_id = 7 WHERE id = 417`);
     await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (92, 417, 7, 'running')`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -778,14 +547,14 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
   it('clears active ownership immediately when a terminal outcome is accepted for the authoritative active run', async () => {
     db = await createDb();
     (cleanupTaskExecutionLinkageForStatus as jest.Mock).mockClear();
-    await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 93, agent_id = 7 WHERE id = 417`);
     await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, status, session_key)
       VALUES (93, 417, 7, 'running', NULL)
     `);
+    await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 93, agent_id = 7 WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -826,14 +595,14 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     await db.run(`UPDATE projects SET tenant_id = 4 WHERE id = 1`);
     await db.run(`UPDATE sprints SET tenant_id = 4 WHERE id = 10`);
     await db.run(`UPDATE agents SET tenant_id = 4 WHERE id = 7`);
-    await db.run(`UPDATE tasks SET tenant_id = 4, status = 'in_progress', active_instance_id = 96, agent_id = 7 WHERE id = 417`);
     await db.run(`
       INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status, session_key)
       VALUES (96, 4, 417, 7, 'running', NULL)
     `);
+    await db.run(`UPDATE tasks SET tenant_id = 4, status = 'in_progress', active_instance_id = 96, agent_id = 7 WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (4, 10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
     `);
 
     const result = await applyTaskOutcome(db, {
@@ -872,16 +641,16 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
 
   it('binds MCP outcome writes to the authenticated agent active instance instead of caller-supplied instance_id', async () => {
     db = await createDb();
-    await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 93, agent_id = 7 WHERE id = 417`);
     await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, status)
       VALUES
         (93, 417, 7, 'running'),
         (999, 417, 7, 'running')
     `);
+    await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 93, agent_id = 7 WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
     `);
 
     const result = await postTaskOutcome(db, 417, {
@@ -921,12 +690,15 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
 
   it('rejects MCP outcome writes when the key does not own the task active instance', async () => {
     db = await createDb();
-    await db.run(`INSERT INTO agents (id, name, job_title) VALUES (8, 'Atlas', 'Operator')`);
-    await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 94, agent_id = 8 WHERE id = 417`);
-    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (94, 417, 8, 'running')`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
+      INSERT INTO agents (id, tenant_id, name, job_title, session_key)
+      VALUES (8, 1, 'Atlas', 'Operator', 'agent:atlas:main')
+    `);
+    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (94, 417, 8, 'running')`);
+    await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 94, agent_id = 8 WHERE id = 417`);
+    await db.run(`
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
     `);
 
     await expect(postTaskOutcome(db, 417, {
@@ -952,8 +724,8 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     db = await createDb();
     await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = NULL, agent_id = 7 WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'completed_for_review', 'review', 1)
     `);
 
     await expect(postTaskOutcome(db, 417, {
@@ -973,11 +745,11 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
 
   it('maps MCP payload fields into existing outcome handling', async () => {
     db = await createDb();
-    await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 95, agent_id = 7 WHERE id = 417`);
     await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (95, 417, 7, 'running')`);
+    await db.run(`UPDATE tasks SET status = 'in_progress', active_instance_id = 95, agent_id = 7 WHERE id = 417`);
     await db.run(`
-      INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled)
-      VALUES (10, 'backend', 'in_progress', 'failed', 'failed', 1)
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+      VALUES (1, 10, 'backend', 'in_progress', 'failed', 'failed', 1)
     `);
 
     await postTaskOutcome(db, 417, {

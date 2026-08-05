@@ -577,23 +577,19 @@ describe('registry-tool boundary enforcement', () => {
     expect(result.serverNames).toEqual([]);
   });
 
-  it.each(['sqlite', 'postgres'] as const)(
-    'fails closed before MCP fetch when %s registry tools exist outside the boundary',
-    async (dialect) => {
-      const db = dbWithToolCount(2) as Db & { dialect: typeof dialect };
-      db.dialect = dialect;
-      await expect(materializeClaudeCodeMcpConfig({
-        db,
-        tenantId: TENANT_ID,
-        agentId: AGENT_ID,
-        instanceId: 7,
-        runKey: `registry-${dialect}`,
-        protectedInstanceIds: new Set(),
-      })).rejects.toThrow(/absent from RuntimeBoundaryV1/);
-      expect(fetchAssignedMcpServersMock).not.toHaveBeenCalled();
-      expect(fs.readdirSync(agentStateDir())).toEqual([]);
-    },
-  );
+  it('fails closed before MCP fetch when registry tools exist outside the boundary', async () => {
+    const db = dbWithToolCount(2);
+    await expect(materializeClaudeCodeMcpConfig({
+      db,
+      tenantId: TENANT_ID,
+      agentId: AGENT_ID,
+      instanceId: 7,
+      runKey: 'registry-postgres',
+      protectedInstanceIds: new Set(),
+    })).rejects.toThrow(/absent from RuntimeBoundaryV1/);
+    expect(fetchAssignedMcpServersMock).not.toHaveBeenCalled();
+    expect(fs.readdirSync(agentStateDir())).toEqual([]);
+  });
 
   it('treats registry-assignment inspection errors as fatal', async () => {
     const db = createMockDb() as unknown as Record<string, jest.Mock>;

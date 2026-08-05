@@ -50,9 +50,13 @@ import { resolveRequestActor } from '../domains/tasks/requestActor';
 import { getMcpIdentityFromRequest } from '../lib/mcpApiAuth';
 import { WorkflowAllowedValuesError, workflowAllowedValuesErrorBody } from '../lib/taskStatusValidation';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { resolveUploadsRoot } from '../config';
 
-const UPLOADS_BASE = path.resolve(__dirname, '../../uploads/tasks');
 const ACTIVE_TASK_INSTANCE_STATUSES = new Set(['queued', 'dispatched', 'running']);
+
+function getTaskUploadsBase(): string {
+  return process.env.AGENT_HQ_TASK_UPLOADS_DIR ?? path.join(resolveUploadsRoot(), 'tasks');
+}
 
 function sendWorkflowAllowedValuesError(res: Response, err: unknown): boolean {
   if (!(err instanceof WorkflowAllowedValuesError)) return false;
@@ -78,7 +82,7 @@ function parseTaskRouteId(raw: string): number | null {
 
 const storage = multer.diskStorage({
   destination: (req, _file, cb) => {
-    const taskDir = path.join(UPLOADS_BASE, String(req.params.id));
+    const taskDir = path.join(getTaskUploadsBase(), String(req.params.id));
     fs.mkdirSync(taskDir, { recursive: true });
     cb(null, taskDir);
   },
@@ -547,7 +551,7 @@ router.put('/:id', async (req: Request, res: Response) => {
     if (message.includes('requires ') || message.startsWith('done requires task status deployed') || message.includes('story_points') || message.includes('custom field') || message.includes('custom_fields')) {
       return res.status(400).json({ error: message });
     }
-    // Safety net: convert raw SQLite CHECK constraint errors into clean 400 responses
+    // Safety net: convert raw database CHECK-constraint errors into clean 400 responses.
     if (message.includes('CHECK constraint failed')) {
       return res.status(400).json({ error: `Invalid field value: ${message.replace(/^.*CHECK constraint failed:\s*/i, '')}` });
     }
@@ -659,7 +663,7 @@ router.post('/:id/unpause', async (req: Request, res: Response) => {
 // ── POST /api/v1/tasks/:id/outcome ───────────────────────────────────────────
 // Supports atomic evidence writes through payload.review_branch,
 // payload.review_commit, etc. Evidence is validated and written in the same
-// SQLite transaction as the status transition, ensuring the task record
+// database transaction as the status transition, ensuring the task record
 // always reflects the actual artifact when completion succeeds.
 
 router.post('/:id/outcome', async (req: Request, res: Response) => {

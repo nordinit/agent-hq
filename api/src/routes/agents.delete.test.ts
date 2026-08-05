@@ -1,9 +1,10 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import agentsRouter from './agents';
 
 let tempDir: string;
@@ -11,84 +12,18 @@ let dbPath: string;
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-delete-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
-  process.env.AGENT_HQ_DB_PATH = dbPath;
   process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, 'openclaw.json');
 
   const db = getDb();
-  await db.exec(`
-    PRAGMA foreign_keys = ON;
-
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL
-    );
-
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT '',
-      session_key TEXT NOT NULL UNIQUE,
-      workspace_path TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'idle',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      openclaw_agent_id TEXT,
-      runtime_type TEXT NOT NULL DEFAULT 'openclaw',
-      runtime_config TEXT,
-      project_id INTEGER,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      schedule TEXT NOT NULL DEFAULT '',
-      skill_names TEXT NOT NULL DEFAULT '[]',
-      sort_rules TEXT NOT NULL DEFAULT '[]',
-      repo_path TEXT,
-      repo_url TEXT,
-      repo_access_mode TEXT,
-      deleted_at TEXT
-    );
-
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      title TEXT NOT NULL,
-      agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL,
-      review_owner_agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL
-    );
-
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
-      agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      status TEXT NOT NULL DEFAULT 'done'
-    );
-
-    CREATE TABLE dispatch_log (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      agent_id INTEGER REFERENCES agents(id)
-    );
-
-    CREATE TABLE sprint_task_routing_rules (
-      id INTEGER PRIMARY KEY,
-      sprint_id INTEGER,
-      task_type TEXT,
-      status TEXT,
-      agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL
-    );
-
-    CREATE TABLE agent_tool_assignments (
-      id INTEGER PRIMARY KEY,
-      agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      tool_id INTEGER NOT NULL
-    );
-
-    CREATE TABLE agent_mcp_assignments (
-      id INTEGER PRIMARY KEY,
-      agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      mcp_server_id INTEGER NOT NULL
-    );
-  `);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
+  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (1, 1, 1, 'Default Workflow', 'generic')`);
+  await db.run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node')`);
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -117,9 +52,8 @@ describe('agents delete', () => {
     await resetDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (ORIGINAL_OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
     else process.env.OPENCLAW_CONFIG_PATH = ORIGINAL_OPENCLAW_CONFIG_PATH;
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
@@ -128,13 +62,13 @@ describe('agents delete', () => {
   it('archives referenced agents instead of throwing a raw foreign-key error', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO agents (id, name, session_key, status, enabled)
-      VALUES (98, 'Repo Mode Smoke Agent', 'agent:repo-mode-smoke:main', 'idle', 0)
+      INSERT INTO agents (id, tenant_id, name, session_key, status, enabled)
+      VALUES (98, 1, 'Repo Mode Smoke Agent', 'agent:repo-mode-smoke:main', 'idle', 0)
     `);
-    await db.run(`INSERT INTO tasks (id, title, agent_id) VALUES (394, 'Live clone mode smoke', 98)`);
-    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (1849, 394, 98, 'done')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, agent_id) VALUES (394, 1, 1, 1, 'Live clone mode smoke', 98)`);
+    await db.run(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status) VALUES (1849, 1, 394, 98, 'done')`);
     await db.run(`INSERT INTO dispatch_log (id, task_id, agent_id) VALUES (1, 394, 98)`);
-    await db.run(`INSERT INTO sprint_task_routing_rules (id, sprint_id, task_type, status, agent_id) VALUES (1, 1, 'backend', 'ready', 98)`);
+    await db.run(`INSERT INTO sprint_task_routing_rules (id, tenant_id, project_id, sprint_id, task_type, status, agent_id) VALUES (1, 1, 1, 1, 'backend', 'ready', 98)`);
     await db.run(`INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id) VALUES (1, 98, 30)`);
     fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({
       mcp: {
@@ -217,8 +151,8 @@ describe('agents delete', () => {
   it('hard-deletes agents with no historical references', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO agents (id, name, session_key, status, enabled)
-      VALUES (99, 'Disposable Agent', 'agent:disposable:main', 'idle', 1)
+      INSERT INTO agents (id, tenant_id, name, session_key, status, enabled)
+      VALUES (99, 1, 'Disposable Agent', 'agent:disposable:main', 'idle', 1)
     `);
     await db.run(`INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id) VALUES (1, 99, 30)`);
     fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({

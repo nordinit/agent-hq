@@ -229,7 +229,7 @@ async function finalizeTaskTransitionRuntimeEndIfNeeded(
   await db.run(`
     UPDATE job_instances
     SET status = 'done',
-        completed_at = COALESCE(completed_at, runtime_ended_at, datetime('now'))
+        completed_at = COALESCE(completed_at, runtime_ended_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     WHERE id = ?
       AND status IN ('queued', 'dispatched', 'running')
       AND runtime_ended_at IS NOT NULL
@@ -267,7 +267,7 @@ export async function clearEndedActiveInstanceLinkageIfEligible(
     UPDATE tasks
     SET active_instance_id = NULL,
         ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
       AND active_instance_id = ?
   `, taskId, instanceId);
@@ -544,7 +544,7 @@ function hardKillSessionSync(fullSessionKey: string): { ok: boolean; error?: str
  * If the abort times out or fails, the instance is marked failed so it is not
  * left indefinitely in dispatched/running state.
  *
- * @param db          - SQLite database connection
+ * @param db          - PostgreSQL database adapter
  * @param instanceId  - The orphaned job_instance.id to abort
  * @param sessionKey  - The openclaw session key for the running instance (short form)
  * @param reason      - Human-readable reason for the abort (logged)
@@ -724,10 +724,10 @@ async function markInstanceCancelled(db: Db, instanceId: number, abortStatus: st
     await db.run(`
       UPDATE job_instances
       SET status = 'cancelled',
-          abort_attempted_at = COALESCE(abort_attempted_at, datetime('now')),
+          abort_attempted_at = COALESCE(abort_attempted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
           abort_status = ?,
           abort_error = NULL,
-          completed_at = datetime('now')
+          completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
         AND status NOT IN ('done', 'failed', 'cancelled')
     `, abortStatus, instanceId);
@@ -741,11 +741,11 @@ async function markInstanceFailed(db: Db, instanceId: number, reason: string): P
     await db.run(`
       UPDATE job_instances
       SET status = 'failed',
-          abort_attempted_at = COALESCE(abort_attempted_at, datetime('now')),
+          abort_attempted_at = COALESCE(abort_attempted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
           abort_status = 'failed',
           abort_error = ?,
           error = ?,
-          completed_at = datetime('now')
+          completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
         AND status NOT IN ('done', 'failed', 'cancelled')
     `, reason, reason, instanceId);
@@ -809,7 +809,7 @@ export async function cleanupTaskExecutionLinkageForStatus(
     UPDATE tasks
     SET active_instance_id = NULL,
         ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
       AND active_instance_id IS NOT NULL
   `, taskId);
@@ -886,7 +886,7 @@ export async function cleanupImpossibleTaskLifecycleStates(db: Db): Promise<numb
       UPDATE tasks
       SET active_instance_id = NULL,
           ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
-          updated_at = datetime('now')
+          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
         AND active_instance_id = ?
     `, row.id, row.active_instance_id);

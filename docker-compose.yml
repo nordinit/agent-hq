@@ -1,54 +1,90 @@
 ###############################################################################
-# docker-compose.yml — Agent HQ full-stack one-command local install
+# Agent HQ local/self-hosted stack. PostgreSQL 17 is the system of record.
 #
-# Spins up:
-#   agent-hq-api   Agent HQ API      → http://localhost:3501
-#   agent-hq-ui    Agent HQ UI       → http://localhost:3500
+#   docker compose up --build -d
+#   docker compose down                 # data is retained
+#   docker compose down -v              # removes DB, workspaces, contracts, and uploads
 #
-# Named volume:
-#   agent-hq-data  SQLite database persistence (/data inside the API container)
-#
-# ── Quick start ───────────────────────────────────────────────────────────────
-#   docker compose up          # build images and start everything (foreground)
-#   docker compose up -d       # same, detached
-#   docker compose down        # stop and remove containers (data volume kept)
-#   docker compose down -v     # ⚠️  also removes the data volume (wipes DB)
-#
-# ── Local overrides ───────────────────────────────────────────────────────────
-#   Copy docker-compose.override.yml.example to docker-compose.override.yml
-#   and edit it. Docker Compose merges it automatically — no extra flags needed.
-#
-# ── Environment variables ─────────────────────────────────────────────────────
-#   AGENT_HQ_API_PORT            Host port for the API     (default: 3501)
-#   AGENT_HQ_UI_PORT             Host port for the UI      (default: 3500)
-#   NEXT_PUBLIC_API_URL          API URL baked into the UI build
-#                                (default: http://localhost:3501)
+# Set DATABASE_URL to use an external PostgreSQL server. The bundled server is
+# still started (but remains private to this Compose network) so the same file
+# stays a reliable one-command install.
 ###############################################################################
 
 name: agent-hq
 
-# ── Named volume for SQLite persistence ───────────────────────────────────────
 volumes:
-  agent-hq-data:
+  agent-hq-postgres-data:
+    driver: local
+  agent-hq-workspaces:
+    driver: local
+  agent-hq-contracts:
+    driver: local
+  agent-hq-uploads:
     driver: local
 
-# ── Services ──────────────────────────────────────────────────────────────────
-services:
+x-database-url: &database-url
+  DATABASE_URL: ${DATABASE_URL:-postgresql://${AGENT_HQ_POSTGRES_USER:-agenthq}:${AGENT_HQ_POSTGRES_PASSWORD:-agent-hq-local}@agent-hq-postgres:5432/${AGENT_HQ_POSTGRES_DB:-agent_hq}}
 
-  # ── API ─────────────────────────────────────────────────────────────────────
+services:
+  agent-hq-postgres:
+    image: postgres:17-alpine
+    container_name: agent-hq-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${AGENT_HQ_POSTGRES_DB:-agent_hq}
+      POSTGRES_USER: ${AGENT_HQ_POSTGRES_USER:-agenthq}
+      POSTGRES_PASSWORD: ${AGENT_HQ_POSTGRES_PASSWORD:-agent-hq-local}
+    volumes:
+      - agent-hq-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  agent-hq-migrate:
+    image: nordinit/agent-hq-api:latest
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: "no"
+    environment:
+      <<: *database-url
+      NODE_ENV: production
+      WORKSPACE_PARENT: /app/workspaces
+      AGENT_CONTRACT_ROOT: /app/agent-contracts
+    volumes:
+      - agent-hq-workspaces:/app/workspaces
+      - agent-hq-contracts:/app/agent-contracts
+    command: ["node", "dist/db/migrate.js", "--install"]
+    depends_on:
+      agent-hq-postgres:
+        condition: service_healthy
+
   agent-hq-api:
     image: nordinit/agent-hq-api:latest
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     container_name: agent-hq-api
     restart: unless-stopped
     ports:
       - "${AGENT_HQ_API_PORT:-3501}:3501"
-    volumes:
-      - agent-hq-data:/data
     environment:
+      <<: *database-url
       NODE_ENV: production
       PORT: "3501"
-      AGENT_HQ_DB_PATH: /data/agent-hq.db
-      AGENT_HQ_DATA_DIR: /data
+      WORKSPACE_PARENT: /app/workspaces
+      AGENT_CONTRACT_ROOT: /app/agent-contracts
+      AGENT_HQ_UPLOADS_DIR: /app/uploads
+    volumes:
+      - agent-hq-workspaces:/app/workspaces
+      - agent-hq-contracts:/app/agent-contracts
+      - agent-hq-uploads:/app/uploads
+    depends_on:
+      agent-hq-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3501/health"]
       interval: 30s
@@ -56,9 +92,13 @@ services:
       retries: 5
       start_period: 15s
 
-  # ── UI ──────────────────────────────────────────────────────────────────────
   agent-hq-ui:
     image: nordinit/agent-hq-ui:latest
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3501}
     container_name: agent-hq-ui
     restart: unless-stopped
     ports:
@@ -66,6 +106,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3500"
+      AGENT_HQ_INTERNAL_BASE_URL: http://agent-hq-api:3501
     depends_on:
       agent-hq-api:
         condition: service_healthy

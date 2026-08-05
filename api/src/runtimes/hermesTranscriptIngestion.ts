@@ -4,6 +4,7 @@ import path from 'path';
 import { tableHasColumn } from '../lib/durableRunIdentity';
 import { normalizeChatMessageRole } from '../lib/chatMessageRoles';
 import { nowTimestamp, timestampFromDate, timestampFromEpochMs, toCanonicalTimestamp } from '../lib/timestamps';
+import { requireRuntimeTenantId } from '../lib/runtimeTenantScope';
 import { type Db } from "../db/adapter/types";
 
 export interface HermesTranscriptRunContext {
@@ -249,7 +250,15 @@ export async function importHermesSessionJson(params: HermesTranscriptIngestPara
 
   const hasDurableRunId = await tableHasColumn(params.db, 'chat_messages', 'durable_run_id');
   const hasSessionKey = await tableHasColumn(params.db, 'chat_messages', 'session_key');
+  const hasTenantId = await tableHasColumn(params.db, 'chat_messages', 'tenant_id');
+  const tenantId = hasTenantId
+    ? await requireRuntimeTenantId(params.db, {
+        instanceId: params.instanceId,
+        agentId: params.agentId,
+      })
+    : null;
   const optionalColumns = [
+    hasTenantId ? 'tenant_id' : null,
     hasDurableRunId ? 'durable_run_id' : null,
     hasSessionKey ? 'session_key' : null,
   ].filter((value): value is string => Boolean(value));
@@ -295,6 +304,7 @@ export async function importHermesSessionJson(params: HermesTranscriptIngestPara
       for (const [eventIndex, event] of events.entries()) {
         const rowId = `hermes-json-${params.instanceId}-${messageIndex}-${eventIndex}`;
         const optionalValues: unknown[] = [];
+        if (hasTenantId) optionalValues.push(tenantId);
         if (hasDurableRunId) optionalValues.push(params.durableRunId ?? null);
         if (hasSessionKey) optionalValues.push(params.sessionKey ?? '');
         const result = await db.run(

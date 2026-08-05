@@ -1,5 +1,6 @@
 import { stopInstanceExecution, type StopInstanceExecutionResult } from '../domains/runs/stopInstanceExecution';
 import { writeTaskHistory } from '../domains/tasks/history';
+import { tenantInsertColumns } from './runtimeTenantScope';
 import { type Db } from "../db/adapter/types";
 
 export interface StopTaskActiveInstanceResult {
@@ -52,7 +53,7 @@ export async function stopTaskActiveInstance(
         UPDATE tasks
         SET active_instance_id = NULL,
             agent_id = NULL,
-            updated_at = datetime('now')
+            updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ? AND tenant_id = ? AND active_instance_id = ?
       `, taskId, tenantId, existing.active_instance_id);
       // A manual stop is one of the likeliest ways the link disappears, so it is one of the
@@ -66,10 +67,11 @@ export async function stopTaskActiveInstance(
     const note = stopReason
       ? `Active instance manually stopped by ${changedBy}: ${stopReason}`
       : `Active instance manually stopped by ${changedBy}.`;
+    const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
     await db.run(`
-      INSERT INTO task_notes (task_id, author, content)
-      VALUES (?, ?, ?)
-    `, taskId, changedBy, note);
+      INSERT INTO task_notes (${tenant.columnSql}task_id, author, content)
+      VALUES (${tenant.valueSql}?, ?, ?)
+    `, ...tenant.values, taskId, changedBy, note);
   }
 
   return {

@@ -118,8 +118,7 @@ describe('RuntimeTranscriptWriter', () => {
     writer.enqueue([TEXT]);
     await writer.drain();
 
-    // SQLite test databases are migrated by try/catch ALTERs and really do lack
-    // columns; hard-coding the Postgres column list breaks every such test.
+    // Keep the writer defensive when a caller exposes a reduced adapter schema.
     expect(db.runs[0].sql).not.toContain('durable_run_id');
     expect(db.runs[0].sql).toContain('session_key');
   });
@@ -131,7 +130,7 @@ describe('RuntimeTranscriptWriter', () => {
     await writer.drain();
 
     expect(db.runs).toHaveLength(3);
-    expect(mockTableHasColumn).toHaveBeenCalledTimes(2); // durable_run_id, session_key
+    expect(mockTableHasColumn).toHaveBeenCalledTimes(3); // tenant_id, durable_run_id, session_key
   });
 
   it('writes tenant_id only when explicitly opted in', async () => {
@@ -176,7 +175,7 @@ describe('RuntimeTranscriptWriter', () => {
     writer.enqueue([TEXT]);
     await writer.drain();
 
-    // event_meta is `text NOT NULL DEFAULT '{}'` in both engines, so a null
+    // event_meta is `text NOT NULL DEFAULT '{}'` in PostgreSQL, so a null
     // violates the constraint instead of falling back to the default. A live run
     // lost 4 of 6 transcript rows to exactly this before it was fixed; the mock
     // db accepts anything, so only the constraint value itself can be asserted.

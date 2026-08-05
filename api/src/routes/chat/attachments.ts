@@ -3,14 +3,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 import multer from 'multer';
 import { getDb } from '../../db/client';
+import { resolveUploadsRoot } from '../../config';
 
-const CHAT_UPLOADS_BASE = process.env.AGENT_HQ_CHAT_UPLOADS_DIR
-  ?? path.join(path.resolve(__dirname, '../../../..'), 'uploads', 'chat');
+function getChatUploadsBase(): string {
+  return process.env.AGENT_HQ_CHAT_UPLOADS_DIR ?? path.join(resolveUploadsRoot(), 'chat');
+}
 
 const chatAttachmentStorage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    fs.mkdirSync(CHAT_UPLOADS_BASE, { recursive: true });
-    cb(null, CHAT_UPLOADS_BASE);
+    const uploadsBase = getChatUploadsBase();
+    fs.mkdirSync(uploadsBase, { recursive: true });
+    cb(null, uploadsBase);
   },
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname);

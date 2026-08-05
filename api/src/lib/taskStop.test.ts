@@ -1,8 +1,7 @@
-import Database from 'better-sqlite3';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { stopTaskActiveInstance } from './taskStop';
 import { stopInstanceExecution } from './stopInstanceExecution';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../domains/runs/stopInstanceExecution', () => ({
   stopInstanceExecution: jest.fn(),
@@ -11,45 +10,55 @@ jest.mock('../domains/runs/stopInstanceExecution', () => ({
 const mockedStopInstanceExecution = stopInstanceExecution as jest.MockedFunction<typeof stopInstanceExecution>;
 
 async function createDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER NOT NULL,
-      status TEXT NOT NULL,
-      active_instance_id INTEGER,
-      paused_at TEXT,
-      pause_reason TEXT,
-      manual_intervention_count INTEGER NOT NULL DEFAULT 0,
-      updated_at TEXT
-    );
+  const db = await setupTestDb();
 
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER NOT NULL,
-      status TEXT NOT NULL
-    );
-
-    CREATE TABLE task_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      changed_by TEXT NOT NULL,
-      field TEXT NOT NULL,
-      old_value TEXT,
-      new_value TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE task_notes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      author TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
+  await db.run(`
+    INSERT INTO tenants (id, name, slug, is_default)
+    VALUES (1, 'Default', 'default', 1), (2, 'Task Stop Workspace', 'task-stop', 0)
   `);
+  await db.run(`
+    INSERT INTO projects (id, tenant_id, name)
+    VALUES (1, 2, 'Task stop')
+  `);
+  await db.run(`
+    INSERT INTO sprints (id, tenant_id, project_id, name)
+    VALUES (1, 2, 1, 'Task stop')
+  `);
+  await db.run(`
+    INSERT INTO agents (id, tenant_id, name, role, session_key)
+    VALUES (7, 2, 'Cinder', 'Implementation', 'agent:cinder')
+  `);
+
   return db;
+}
+
+async function seedTask(db: Db, input: {
+  status: string;
+  pausedAt?: string | null;
+  pauseReason?: string | null;
+  manualInterventionCount?: number;
+  activeInstance?: boolean;
+}): Promise<void> {
+  await db.run(`
+    INSERT INTO tasks (
+      id, tenant_id, project_id, sprint_id, title, status,
+      active_instance_id, paused_at, pause_reason, manual_intervention_count
+    )
+    VALUES (486, 2, 1, 1, 'Stop an active task', ?, NULL, ?, ?, ?)
+  `,
+    input.status,
+    input.pausedAt ?? null,
+    input.pauseReason ?? null,
+    input.manualInterventionCount ?? 0,
+  );
+
+  if (input.activeInstance) {
+    await db.run(`
+      INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status)
+      VALUES (91, 2, 7, 486, 'running')
+    `);
+    await db.run(`UPDATE tasks SET active_instance_id = 91 WHERE id = 486`);
+  }
 }
 
 describe('stopTaskActiveInstance', () => {
@@ -61,15 +70,11 @@ describe('stopTaskActiveInstance', () => {
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('aborts the active authoritative instance without pausing the task', async () => {
-    await db.run(`
-      INSERT INTO tasks (id, tenant_id, status, active_instance_id, paused_at, pause_reason)
-      VALUES (486, 1, 'in_progress', 91, NULL, NULL)
-    `);
-    await db.run(`INSERT INTO job_instances (id, tenant_id, status) VALUES (91, 1, 'running')`);
+    await seedTask(db, { status: 'in_progress', activeInstance: true });
     mockedStopInstanceExecution.mockResolvedValue({
       id: 91,
       behavior: 'stop',
@@ -89,9 +94,9 @@ describe('stopTaskActiveInstance', () => {
       clearedTaskLinkage: true,
     });
 
-    const result = await stopTaskActiveInstance(db, 486, 1, 'cinder-backend', 'Operator clicked Stop');
+    const result = await stopTaskActiveInstance(db, 486, 2, 'cinder-backend', 'Operator clicked Stop');
 
-    expect(mockedStopInstanceExecution).toHaveBeenCalledWith(db, 91, 1, 'stop');
+    expect(mockedStopInstanceExecution).toHaveBeenCalledWith(db, 91, 2, 'stop');
     expect(result).toMatchObject({
       had_active_run: true,
       task_was_paused: false,
@@ -120,24 +125,27 @@ describe('stopTaskActiveInstance', () => {
     expect(history).toEqual([]);
 
     const note = await db.get(`
-      SELECT author, content
+      SELECT tenant_id, author, content
       FROM task_notes
       WHERE task_id = ?
       ORDER BY id DESC
       LIMIT 1
-    `, 486) as { author: string; content: string };
+    `, 486) as { tenant_id: number; author: string; content: string };
     expect(note).toEqual({
+      tenant_id: 2,
       author: 'cinder-backend',
       content: 'Active instance manually stopped by cinder-backend: Operator clicked Stop',
     });
   });
 
   it('preserves existing task pause state when the task was already paused', async () => {
-    await db.run(`
-      INSERT INTO tasks (id, tenant_id, status, active_instance_id, paused_at, pause_reason, manual_intervention_count)
-      VALUES (486, 1, 'in_progress', 91, datetime('now'), 'Waiting on review', 2)
-    `);
-    await db.run(`INSERT INTO job_instances (id, tenant_id, status) VALUES (91, 1, 'running')`);
+    await seedTask(db, {
+      status: 'in_progress',
+      pausedAt: new Date().toISOString(),
+      pauseReason: 'Waiting on review',
+      manualInterventionCount: 2,
+      activeInstance: true,
+    });
     mockedStopInstanceExecution.mockResolvedValue({
       id: 91,
       behavior: 'stop',
@@ -157,7 +165,7 @@ describe('stopTaskActiveInstance', () => {
       clearedTaskLinkage: true,
     });
 
-    const result = await stopTaskActiveInstance(db, 486, 1, 'cinder-backend', null);
+    const result = await stopTaskActiveInstance(db, 486, 2, 'cinder-backend', null);
 
     expect(result).toMatchObject({
       had_active_run: true,
@@ -186,12 +194,9 @@ describe('stopTaskActiveInstance', () => {
   });
 
   it('is a no-op and does not pause when no active instance is linked', async () => {
-    await db.run(`
-      INSERT INTO tasks (id, tenant_id, status, active_instance_id, paused_at, pause_reason, manual_intervention_count)
-      VALUES (486, 1, 'ready', NULL, NULL, NULL, 0)
-    `);
+    await seedTask(db, { status: 'ready' });
 
-    const result = await stopTaskActiveInstance(db, 486, 1, 'cinder-backend', 'No active run');
+    const result = await stopTaskActiveInstance(db, 486, 2, 'cinder-backend', 'No active run');
 
     expect(mockedStopInstanceExecution).not.toHaveBeenCalled();
     expect(result).toMatchObject({

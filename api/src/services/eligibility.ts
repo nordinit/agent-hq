@@ -110,7 +110,7 @@ export async function resetFromQAFail(db: Db, taskId: number): Promise<'ready' |
 
   if (newRetryCount >= maxRetries) {
     await db.run(`
-      UPDATE tasks SET status = 'failed', retry_count = ?, updated_at = datetime('now') WHERE id = ?
+      UPDATE tasks SET status = 'failed', retry_count = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
     `, newRetryCount, taskId);
     await writeTaskStatusChange(db, taskId, 'eligibility', task.status, 'failed');
     return 'failed';
@@ -120,7 +120,7 @@ export async function resetFromQAFail(db: Db, taskId: number): Promise<'ready' |
     const assignmentColumn = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id';
     await db.run(`
       UPDATE tasks
-      SET status = 'ready', retry_count = ?, ${assignmentColumn} = ?, updated_at = datetime('now')
+      SET status = 'ready', retry_count = ?, ${assignmentColumn} = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, newRetryCount, targetAgentId, taskId);
     await writeTaskStatusChange(db, taskId, 'eligibility', task.status, 'ready');

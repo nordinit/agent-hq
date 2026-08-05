@@ -354,13 +354,13 @@ function parseExactCustomFieldMatches(value: unknown): Record<string, unknown> {
   return matches;
 }
 
-function customFieldMatchesSqlPath(key: string): string {
-  return `$."${key.replace(/"/g, '\\"')}"`;
+function customFieldMatchesSqlKey(key: string): string {
+  return key;
 }
 
 function normalizeCustomFieldSqlValue(value: unknown): unknown {
-  if (typeof value === 'boolean') return value ? 1 : 0;
-  return value;
+  if (value === null || value === undefined) return value;
+  return String(value);
 }
 
 export async function searchProjectTasks(
@@ -410,11 +410,11 @@ export async function searchProjectTasks(
     // The SQL here is built per request, so branch on nullness instead.
     const sqlValue = normalizeCustomFieldSqlValue(value);
     if (sqlValue === null || sqlValue === undefined) {
-      conditions.push('json_extract(t.custom_fields_json, ?) IS NULL');
-      params.push(customFieldMatchesSqlPath(key));
+      conditions.push('jsonb_extract_path_text(t.custom_fields_json::jsonb, ?) IS NULL');
+      params.push(customFieldMatchesSqlKey(key));
     } else {
-      conditions.push('json_extract(t.custom_fields_json, ?) = ?');
-      params.push(customFieldMatchesSqlPath(key), sqlValue);
+      conditions.push('jsonb_extract_path_text(t.custom_fields_json::jsonb, ?) = ?');
+      params.push(customFieldMatchesSqlKey(key), sqlValue);
     }
   }
 

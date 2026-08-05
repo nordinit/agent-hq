@@ -54,8 +54,8 @@ export function parseSprintId(raw: unknown): number | null {
 }
 
 /**
- * Truthy across both engines: PostgreSQL returns booleans for `enabled`, SQLite returns 0/1,
- * and some query paths stringify. `Boolean(row.enabled)` would call '0' true.
+ * PostgreSQL normally returns booleans for `enabled`; compatibility/import paths may still
+ * surface 0/1 strings. `Boolean(row.enabled)` would incorrectly treat '0' as true.
  */
 export function isRowEnabled(value: unknown): boolean {
   return value === true || value === 1 || value === '1';
@@ -226,8 +226,8 @@ export async function detectDuplicateRoutingRule(
       FROM sprint_task_routing_rules
       WHERE ${projectPredicate}
         AND sprint_type = ?
-        AND ((sprint_id IS NULL AND ? IS NULL) OR sprint_id = ?)
-        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+        AND ((sprint_id IS NULL AND ?::text IS NULL) OR sprint_id = ?)
+        AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
         AND status = ?
         AND agent_id = ?
         AND priority = ?
@@ -247,7 +247,7 @@ export async function detectDuplicateRoutingRule(
     SELECT id
     FROM sprint_task_routing_rules
     WHERE sprint_id = ?
-      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
       AND status = ?
       AND agent_id = ?
       AND priority = ?
