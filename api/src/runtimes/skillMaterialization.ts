@@ -42,6 +42,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { normalizeSkillPackagePath, type SkillPackageFile } from '../lib/skillPackage';
 import { type Db } from "../db/adapter/types";
 
 function resolveDefaultHermesRoot(): string {
@@ -181,10 +182,11 @@ export class NoopSkillAdapter implements SkillMaterializationAdapter {
  *   4. Skips skills whose source dir cannot be found in skillsBasePath or the DB.
  *
  * Workspace skill resolution order:
- *   1. Tenant-scoped DB skill row with `fs_path` pointing to a valid directory.
- *   2. Tenant-scoped DB skill row with `content`, rendered into a generated
- *      SKILL.md source directory under the agent workspace.
- *   3. Tenant-scoped DB skill row with source='system', resolved from
+ *   1. Tenant-scoped DB skill package (`content` plus `skill_files`), rendered into a
+ *      generated source directory under the agent workspace.
+ *   2. Legacy tenant-scoped DB skill row with `fs_path` pointing to a valid directory.
+ *   3. Tenant-scoped DB row with `content` only, rendered as a generated SKILL.md.
+ *   4. Tenant-scoped DB skill row with source='system', resolved from
  *      `skillsBasePath/<name>/` as an explicit/auditable system-skill reference.
  *
  * The adapter intentionally does not fall back to the Agent HQ repo-level
@@ -275,6 +277,29 @@ export abstract class FilesystemSkillAdapter implements SkillMaterializationAdap
         | undefined;
       if (!row) return null;
 
+      let packagedFiles: SkillPackageFile[] = [];
+      try {
+        packagedFiles = await db.all<SkillPackageFile>(`
+          SELECT path, content
+          FROM skill_files
+          WHERE tenant_id = ?
+            AND skill_id = (SELECT id FROM skills WHERE tenant_id = ? AND name = ? LIMIT 1)
+          ORDER BY path ASC
+        `, tenantId, tenantId, name);
+      } catch {
+        // A pre-migration database can still materialize its legacy fs_path/content row.
+      }
+
+      if (packagedFiles.length > 0 && row.content && row.content.trim()) {
+        return this.writeDbSkillSourceDir(
+          workingDirectory,
+          name,
+          row.content,
+          row.description ?? '',
+          packagedFiles,
+        );
+      }
+
       if (row.fs_path) {
         const candidate = row.fs_path;
         try {
@@ -301,14 +326,29 @@ export abstract class FilesystemSkillAdapter implements SkillMaterializationAdap
     return null;
   }
 
-  private writeDbSkillSourceDir(workingDirectory: string, name: string, content: string, description: string): string {
+  private writeDbSkillSourceDir(
+    workingDirectory: string,
+    name: string,
+    content: string,
+    description: string,
+    files: SkillPackageFile[] = [],
+  ): string {
     const safeName = encodeURIComponent(name).replace(/%/g, '_');
     const sourceDir = path.join(workingDirectory, '.agent-hq', 'skill-sources', safeName);
+    fs.rmSync(sourceDir, { recursive: true, force: true });
     fs.mkdirSync(sourceDir, { recursive: true });
-    const normalizedContent = content.trim().startsWith('#')
+    const trimmedContent = content.trimStart();
+    const normalizedContent = trimmedContent.startsWith('#') || trimmedContent.startsWith('---')
       ? content
       : `# ${name}\n\n${description ? `${description}\n\n` : ''}${content}`;
     fs.writeFileSync(path.join(sourceDir, 'SKILL.md'), normalizedContent.endsWith('\n') ? normalizedContent : `${normalizedContent}\n`, 'utf-8');
+    for (const file of files) {
+      const relativePath = normalizeSkillPackagePath(file.path);
+      if (!relativePath || relativePath === 'SKILL.md') continue;
+      const target = path.join(sourceDir, ...relativePath.split('/'));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, file.content, 'utf-8');
+    }
     return sourceDir;
   }
 

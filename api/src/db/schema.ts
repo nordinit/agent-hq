@@ -6014,6 +6014,38 @@ export function ensureDataMigration593(): void {
     }
   }
 
+  // Supplemental files that belong to a tenant-owned skill package. SKILL.md remains
+  // canonical in skills.content; this table stores references, scripts, and other files.
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_skills_tenant_id_id ON skills(tenant_id, id);
+    CREATE TABLE IF NOT EXISTS skill_files (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id   INTEGER NOT NULL,
+      skill_id    INTEGER NOT NULL,
+      path        TEXT NOT NULL,
+      content     TEXT NOT NULL DEFAULT '',
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, skill_id, path),
+      FOREIGN KEY (tenant_id, skill_id) REFERENCES skills(tenant_id, id) ON DELETE CASCADE,
+      CHECK (
+        path <> ''
+        AND path <> 'SKILL.md'
+        AND substr(path, 1, 1) <> '/'
+        AND instr(path, char(92)) = 0
+        AND instr(path, '//') = 0
+        AND path NOT IN ('.', '..')
+        AND path NOT LIKE './%'
+        AND path NOT LIKE '../%'
+        AND path NOT LIKE '%/./%'
+        AND path NOT LIKE '%/../%'
+        AND path NOT LIKE '%/.'
+        AND path NOT LIKE '%/..'
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_skill_files_tenant_skill ON skill_files(tenant_id, skill_id);
+  `);
+
   // ── Step 5: Validation — log Phase 5 pre-condition status ──
   try {
     const checks = [

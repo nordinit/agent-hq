@@ -187,6 +187,7 @@ export interface SkillDetail {
   id: number | null;
   name: string;
   content: string;
+  files: string[];
   source: 'atlas' | 'workspace' | 'system';
   description: string;
   fs_path: string | null;

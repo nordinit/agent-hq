@@ -34,6 +34,7 @@ import path from 'path';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
 import { createRequire } from 'module';
+import { csvCell } from './migration-csv.mjs';
 
 const require = createRequire(import.meta.url);
 const Database = require(path.resolve('api/node_modules/better-sqlite3'));
@@ -49,15 +50,6 @@ const only = rest.find((a) => a.startsWith('--only='))?.slice('--only='.length).
 
 const sqlite = new Database(SRC, { readonly: true });
 const pg = new Client({ connectionString: PG_URL });
-
-/** CSV-quotes one value. Returns an EMPTY (unquoted) field for null, which COPY reads as NULL. */
-function csvCell(value) {
-  if (value === null || value === undefined) return '';
-  if (Buffer.isBuffer(value)) return `"\\x${value.toString('hex')}"`;
-  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
-  const s = String(value);
-  return `"${s.replace(/"/g, '""')}"`;
-}
 
 async function main() {
   await pg.connect();
@@ -85,7 +77,11 @@ async function main() {
     const rows = sqlite.prepare(`SELECT ${quoted} FROM "${table}"`).iterate();
     const csvStream = Readable.from((function* () {
       for (const row of rows) {
-        yield colNames.map((c) => csvCell(row[c])).join(',') + '\n';
+        yield colNames.map((c, index) => csvCell(
+          row[c],
+          columns[index]?.type ?? '',
+          `${table}.${c}`,
+        )).join(',') + '\n';
       }
     })());
 

@@ -22,6 +22,14 @@ async function createDb(): Promise<Db> {
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(tenant_id, name)
     );
+    CREATE TABLE skill_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      skill_id INTEGER NOT NULL,
+      path TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      UNIQUE(tenant_id, skill_id, path)
+    );
   `);
   return db;
 }
@@ -79,6 +87,35 @@ describe('OpenClawSkillAdapter tenant-owned skill resolution', () => {
     expect((await resultB).count).toBe(1);
     expect(fs.readFileSync(path.join(workspaceA, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant A skill\n');
     expect(fs.readFileSync(path.join(workspaceB, 'skills', 'shared-skill', 'SKILL.md'), 'utf-8')).toBe('# Tenant B skill\n');
+    await db.close();
+  });
+
+  it('materializes supplemental database-backed package files without a filesystem path', async () => {
+    const db = await createDb();
+    const skill = await db.run(`
+      INSERT INTO skills (tenant_id, name, description, content)
+      VALUES (1, 'packaged-skill', 'Packaged', '---\nname: packaged-skill\n---\n\n# Packaged skill\n')
+    `);
+    await db.run(`
+      INSERT INTO skill_files (tenant_id, skill_id, path, content)
+      VALUES (1, ?, 'references/guide.md', '# Guide\n')
+    `, skill.lastInsertId);
+
+    const workspace = makeTempDir('packaged-skill-workspace');
+    tempDirs.push(workspace);
+
+    const result = await new OpenClawSkillAdapter().materialize({
+      workingDirectory: workspace,
+      skillNames: ['packaged-skill'],
+      db,
+      tenantId: 1,
+    });
+
+    expect(result.count).toBe(1);
+    expect(fs.readFileSync(path.join(workspace, 'skills', 'packaged-skill', 'SKILL.md'), 'utf-8'))
+      .toBe('---\nname: packaged-skill\n---\n\n# Packaged skill\n');
+    expect(fs.readFileSync(path.join(workspace, 'skills', 'packaged-skill', 'references', 'guide.md'), 'utf-8'))
+      .toBe('# Guide\n');
     await db.close();
   });
 

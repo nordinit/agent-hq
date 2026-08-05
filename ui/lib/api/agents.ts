@@ -1,6 +1,9 @@
 import { apiFetch } from './http';
 import type { Agent, AgentDoc, AgentMcpAssignment, AgentMcpPermissionPolicy, AgentMcpToolAllowlistPolicy, AgentToolAssignment, ClaudeMdResult, DeleteAgentResponse, GatewayConfig, GatewayRestartResponse, GatewayRuntimeHint, GatewayStatus, GatewayPairResponse, McpCatalog, McpServer, ProvisionResult, ProvisionStatus, RuntimeConfigResponse, SetupStatus, SkillDetail, SkillEntry, StarterPlanApplyResponse, StarterPlanInput, StarterPlanPreviewResponse, StarterTemplateCatalogResponse, Tool } from './types';
 
+const encodeSkillFilePath = (filePath: string): string =>
+  filePath.split('/').map(encodeURIComponent).join('/');
+
 export const agentsClient = {
 // Agents
 getAgents: (projectId?: number | null) => apiFetch<Agent[]>(projectId ? `/api/v1/agents?project_id=${projectId}` : '/api/v1/agents'),
@@ -44,7 +47,7 @@ getSkills: () => apiFetch<SkillEntry[]>('/api/v1/skills'),
 getSkill: (name: string) => apiFetch<SkillDetail>(`/api/v1/skills/${encodeURIComponent(name)}`),
 getSkillFile: (name: string, filePath: string) =>
   apiFetch<{ name: string; file: string; content: string; path: string }>(
-    `/api/v1/skills/${encodeURIComponent(name)}/file/${filePath}`
+    `/api/v1/skills/${encodeURIComponent(name)}/file/${encodeSkillFilePath(filePath)}`
   ),
 updateSkill: (name: string, content: string) =>
   apiFetch<{ ok: boolean }>(`/api/v1/skills/${encodeURIComponent(name)}`, {
