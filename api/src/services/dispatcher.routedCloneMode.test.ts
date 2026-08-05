@@ -40,6 +40,13 @@ jest.mock('../lib/githubIdentity', () => ({
 const { resolveRuntime } = jest.requireMock('../runtimes') as { resolveRuntime: jest.Mock };
 const { syncAssignedMcpForAgent } = jest.requireMock('../runtimes/mcpMaterialization') as { syncAssignedMcpForAgent: jest.Mock };
 
+async function waitForMockCall(mock: jest.Mock, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (mock.mock.calls.length === 0 && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
 describe('dispatchTaskToJob preserves clone repo mode', () => {
   let db: Db;
   let tempRoot: string;
@@ -160,7 +167,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
 
     const ok = await dispatchTaskToJob(db, job as never, task as never, 1, 'Rule: Backend Engineer (agent #1)');
     expect(ok).toBe(true);
-    await new Promise(resolve => setImmediate(resolve));
+    await waitForMockCall(runtimeDispatch);
     expect(runtimeDispatch).toHaveBeenCalledTimes(1);
     const runtimeParams = runtimeDispatch.mock.calls[0][0];
     expect(runtimeParams.repoAccessMode).toBe('clone');
