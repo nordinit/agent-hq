@@ -830,6 +830,7 @@ export class RemoteTranscriptProvider implements TranscriptProvider {
  *   - runtime_type='claude-code' → ClaudeCodeTranscriptProvider
  *   - runtime_type='veri'        → RemoteTranscriptProvider
  *   - runtime_type='hermes'      → RemoteTranscriptProvider (chat_messages-backed)
+ *   - runtime_type='codex'       → RemoteTranscriptProvider (chat_messages-backed)
  *   - runtime_type='openclaw'    → OpenClawTranscriptProvider (default)
  *   - runtime_type='webhook'     → OpenClawTranscriptProvider (hooks dispatch, local chat)
  *   - unknown                    → OpenClawTranscriptProvider (safe fallback)
@@ -858,6 +859,7 @@ export async function resolveTranscriptProviderByAgent(agentId: number): Promise
       return new ClaudeCodeTranscriptProvider();
 
     case 'veri':
+    case 'codex':
     case 'hermes': {
       const config = parseRuntimeConfig(agent);
       return new RemoteTranscriptProvider(agent, config);

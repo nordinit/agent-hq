@@ -424,6 +424,11 @@ export default function ProviderConnectionsManager({
         </div>
       )}
 
+      <RuntimeProviderConnections
+        onChanged={() => load(false)}
+        onConnectionStateChange={handleAnthropicSubscriptionState}
+      />
+
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2 space-y-3">
           {loading ? (
@@ -555,13 +560,6 @@ export default function ProviderConnectionsManager({
                         <WifiOff className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                         <span>{card.error}</span>
                       </div>
-                    )}
-
-                    {meta.slug === 'anthropic' && (
-                      <RuntimeProviderConnections
-                        onChanged={() => load(false)}
-                        onConnectionStateChange={handleAnthropicSubscriptionState}
-                      />
                     )}
 
                     {/* Embedded Codex OAuth sub-section */}

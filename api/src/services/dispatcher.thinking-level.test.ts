@@ -22,7 +22,7 @@ jest.mock('../lib/taskHistory', () => ({
 jest.mock('../runtimes/skillMaterialization', () => ({
   getSkillMaterializationAdapter: jest.fn(() => ({
     adapterName: 'test',
-    materialize: jest.fn(() => ({ ok: true, count: 0, warnings: [] })),
+    materialize: jest.fn(() => ({ ok: true, count: 0, details: [], warnings: [] })),
   })),
 }));
 
@@ -557,6 +557,7 @@ describe('runDispatcher thinking-level routing', () => {
       CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
+        tenant_id INTEGER NOT NULL DEFAULT 1,
         job_title TEXT NOT NULL,
         project_id INTEGER,
         job_instructions TEXT NOT NULL,
@@ -620,6 +621,7 @@ describe('runDispatcher thinking-level routing', () => {
 
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id INTEGER NOT NULL DEFAULT 1,
         agent_id INTEGER NOT NULL,
         task_id INTEGER,
         status TEXT NOT NULL,
@@ -675,6 +677,22 @@ describe('runDispatcher thinking-level routing', () => {
         job_title TEXT,
         level TEXT,
         message TEXT
+      );
+
+      CREATE TABLE skills (tenant_id INTEGER NOT NULL, name TEXT NOT NULL, updated_at TEXT);
+      CREATE TABLE mcp_servers (
+        id INTEGER PRIMARY KEY,
+        tenant_id INTEGER NOT NULL,
+        slug TEXT NOT NULL,
+        updated_at TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE agent_mcp_assignments (
+        id INTEGER PRIMARY KEY,
+        agent_id INTEGER NOT NULL,
+        mcp_server_id INTEGER NOT NULL,
+        overrides TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1
       );
     `);
 
@@ -792,6 +810,7 @@ describe('runDispatcher thinking-level routing', () => {
       await db.exec(`
         CREATE TABLE agents (
           id INTEGER PRIMARY KEY,
+          tenant_id INTEGER NOT NULL DEFAULT 1,
           job_title TEXT NOT NULL,
           project_id INTEGER,
           job_instructions TEXT NOT NULL,
@@ -855,6 +874,7 @@ describe('runDispatcher thinking-level routing', () => {
 
         CREATE TABLE job_instances (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL DEFAULT 1,
           agent_id INTEGER NOT NULL,
           task_id INTEGER,
           status TEXT NOT NULL,
@@ -910,6 +930,22 @@ describe('runDispatcher thinking-level routing', () => {
           job_title TEXT,
           level TEXT,
           message TEXT
+        );
+
+        CREATE TABLE skills (tenant_id INTEGER NOT NULL, name TEXT NOT NULL, updated_at TEXT);
+        CREATE TABLE mcp_servers (
+          id INTEGER PRIMARY KEY,
+          tenant_id INTEGER NOT NULL,
+          slug TEXT NOT NULL,
+          updated_at TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE agent_mcp_assignments (
+          id INTEGER PRIMARY KEY,
+          agent_id INTEGER NOT NULL,
+          mcp_server_id INTEGER NOT NULL,
+          overrides TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1
         );
       `);
 

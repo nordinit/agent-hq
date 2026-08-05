@@ -584,7 +584,7 @@ router.post('/:id/stop', async (req: Request, res: Response) => {
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'User').changedBy;
     const reasonRaw = req.body?.reason as string | undefined;
     const stopReason = typeof reasonRaw === 'string' && reasonRaw.trim().length > 0 ? reasonRaw.trim() : null;
-    const result = await stopTaskActiveInstance(db, id, changedBy, stopReason);
+    const result = await stopTaskActiveInstance(db, id, tenantId, changedBy, stopReason);
 
     const task = await getTaskById(db, id);
     return res.json({

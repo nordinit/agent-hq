@@ -1131,7 +1131,10 @@ router.post('/provision-full', async (req: Request, res: Response) => {
       runtime_config: body.runtime_config ?? null,
     }).prepareAuthProfiles({
       agentSlug: runtimeSlug,
+      agentId,
+      tenantId,
       preferredProvider,
+      providerConnectionId: body.provider_connection_id ?? null,
       runtimeConfig: body.runtime_config ?? null,
     });
     report.auth = {

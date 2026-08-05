@@ -1,6 +1,5 @@
 import {
-  DISALLOWED_EXTRA_ARG_PREFIXES,
-  DISALLOWED_EXTRA_ARG_VALUES,
+  ALLOWED_EXTRA_ARGS,
   normalizeClaudeCodeRuntimeConfig,
   validateClaudeCodeRuntimeConfig,
 } from './config';
@@ -21,7 +20,7 @@ describe('claude-code runtime config validation', () => {
     expect(
       validateClaudeCodeRuntimeConfig({
         workingDirectory: '/tmp/worktree',
-        claudeBin: '/usr/local/bin/claude',
+        claudeBin: 'claude',
         model: 'claude-opus-4-5',
         effort: 'high',
         allowedTools: ['Bash', 'Read'],
@@ -29,9 +28,10 @@ describe('claude-code runtime config validation', () => {
         maxTurns: 40,
         maxBudgetUsd: 2.5,
         permissionMode: 'allowlist',
+        allowDangerousBypass: false,
         systemPromptSuffix: 'Be terse.',
         extraArgs: ['--debug'],
-        env: { AGENT_HQ_RUNTIME: 'claude-code' },
+        env: { RUNTIME_LABEL: 'claude-code' },
         killGraceMs: 5_000,
         claudeConfigDir: '/tmp/claude-config',
       }),
@@ -46,6 +46,34 @@ describe('claude-code runtime config validation', () => {
         legacyField: 42,
       }),
     ).toBeNull();
+  });
+
+  it('rejects a custom executable unless the API host explicitly allowlists it', () => {
+    const previous = process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
+    delete process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
+    try {
+      expect(validateClaudeCodeRuntimeConfig({ claudeBin: '/tmp/attacker-claude' })).toBe(
+        'runtime_config.claudeBin path is not authorized by AGENT_HQ_ALLOWED_CLAUDE_BINARIES',
+      );
+      expect(() => normalizeClaudeCodeRuntimeConfig({ claudeBin: '/tmp/attacker-claude' }))
+        .toThrow(/not authorized/);
+    } finally {
+      if (previous == null) delete process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
+      else process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES = previous;
+    }
+  });
+
+  it('accepts an exact custom executable allowlisted by the API host', () => {
+    const previous = process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
+    process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES = '/opt/agent-hq/bin/claude';
+    try {
+      expect(normalizeClaudeCodeRuntimeConfig({
+        claudeBin: ' /opt/agent-hq/bin/claude ',
+      }).claudeBin).toBe('/opt/agent-hq/bin/claude');
+    } finally {
+      if (previous == null) delete process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
+      else process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES = previous;
+    }
   });
 
   it.each(['low', 'medium', 'high', 'xhigh', 'max'] as const)('accepts effort %s', (effort) => {
@@ -72,8 +100,17 @@ describe('claude-code runtime config validation', () => {
     );
   });
 
-  it.each(['bypass', 'allowlist'] as const)('accepts permission mode %s', (permissionMode) => {
-    expect(validateClaudeCodeRuntimeConfig({ permissionMode })).toBeNull();
+  it('accepts allowlist mode and requires an explicit latch for bypass', () => {
+    expect(validateClaudeCodeRuntimeConfig({ permissionMode: 'allowlist' })).toBeNull();
+    expect(validateClaudeCodeRuntimeConfig({ permissionMode: 'bypass' })).toBe(
+      'runtime_config.allowDangerousBypass must be true when permissionMode is bypass',
+    );
+    expect(validateClaudeCodeRuntimeConfig({
+      permissionMode: 'bypass', allowDangerousBypass: true,
+    })).toBeNull();
+    expect(validateClaudeCodeRuntimeConfig({ allowDangerousBypass: 'yes' as never })).toBe(
+      'runtime_config.allowDangerousBypass must be a boolean',
+    );
   });
 
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, '10' as never])(
@@ -135,6 +172,54 @@ describe('claude-code runtime config validation', () => {
     },
   );
 
+  it('accepts only simple built-in identifiers in the configured tool lists', () => {
+    expect(validateClaudeCodeRuntimeConfig({
+      allowedTools: ['Bash', 'NotebookEdit', 'Custom_Tool-2'],
+      disallowedTools: ['WebSearch'],
+    })).toBeNull();
+  });
+
+  it.each([
+    'Read,Bash',
+    'Bash(*)',
+    'Bash(git:*)',
+    'mcp__agent-hq__agent_hq_post_task_outcome',
+    ' Read',
+    'Read ',
+    'Read Write',
+    '',
+    'agent_hq_custom_tool',
+  ])('rejects non-built-in policy syntax in allowedTools: %p', (toolName) => {
+    expect(validateClaudeCodeRuntimeConfig({ allowedTools: [toolName] })).toContain(
+      'must be a simple built-in tool identifier',
+    );
+  });
+
+  it('rejects overlap between effective allowed and disallowed built-in tools', () => {
+    expect(validateClaudeCodeRuntimeConfig({
+      allowedTools: ['Bash', 'Read'],
+      disallowedTools: ['read'],
+    })).toBe('runtime_config.allowedTools and runtime_config.disallowedTools overlap on "read"');
+    // Omitted allowedTools means the hardened default list, not an empty set.
+    expect(validateClaudeCodeRuntimeConfig({ disallowedTools: ['Bash'] })).toContain('overlap');
+    expect(validateClaudeCodeRuntimeConfig({ allowedTools: [], disallowedTools: ['Bash'] }))
+      .toBeNull();
+  });
+
+  it.each([
+    'agent_hq_start_task_run',
+    'agent_hq_post_task_outcome',
+    'mcp__agent-hq__agent-42__agent_hq_start_task_run',
+    'mcp__agent-hq__agent-42__agent_hq_post_task_outcome',
+  ])('never permits disallowedTools to deny required lifecycle method %p', (toolName) => {
+    expect(validateClaudeCodeRuntimeConfig({
+      allowedTools: [],
+      disallowedTools: [toolName],
+    })).toBe(
+      `runtime_config.disallowedTools may not deny required Agent HQ lifecycle tool ${JSON.stringify(toolName)}`,
+    );
+  });
+
   it('rejects a non-object env', () => {
     expect(validateClaudeCodeRuntimeConfig({ env: [] as never })).toBe(
       'runtime_config.env must be an object of string environment values',
@@ -156,103 +241,106 @@ describe('claude-code runtime config validation', () => {
   it('accepts an empty env object', () => {
     expect(validateClaudeCodeRuntimeConfig({ env: {} })).toBeNull();
   });
-});
 
-describe('claude-code runtime extraArgs denylist', () => {
-  it('pins the adapter-owned flag denylist', () => {
-    // A silent drop from this list is a silent contract break: the CLI ignores
-    // unknown flags and tolerates repeated ones, so nothing downstream errors.
-    expect([...DISALLOWED_EXTRA_ARG_PREFIXES].sort()).toEqual(
-      [
-        '--print',
-        '-p',
-        '--output-format',
-        '--input-format',
-        '--verbose',
-        '--session-id',
-        '--resume',
-        '-r',
-        '--continue',
-        '-c',
-        '--fork-session',
-        '--no-session-persistence',
-        '--mcp-config',
-        '--strict-mcp-config',
-        '--model',
-        '--effort',
-        '--max-turns',
-        '--max-budget-usd',
-        '--append-system-prompt-file',
-        '--append-system-prompt',
-        '--system-prompt',
-        '--system-prompt-file',
-        '--permission-mode',
-        '--dangerously-skip-permissions',
-        '--allowedTools',
-        '--allowed-tools',
-        '--disallowedTools',
-        '--disallowed-tools',
-        '--tools',
-        '--add-dir',
-        '--settings',
-        '--setting-sources',
-        '--worktree',
-        '--bg',
-        '--background',
-        '--remote-control',
-      ].sort(),
+  it.each([
+    'AGENT_HQ_INSTANCE_ID',
+    'agent_hq_runtime_id',
+    'CLAUDE_CONFIG_DIR',
+    'cLaUdE_config_dir',
+    'ANTHROPIC_API_KEY',
+    'aNtHrOpIc_organization',
+    'CUSTOM_ACCESS_TOKEN',
+    'PATH',
+    'pAtHeXt',
+    'home',
+    'UserProfile',
+    'homedrive',
+    'HomePath',
+    'xdg_config_home',
+    'Pwd',
+    'oldpwd',
+    'bash_env',
+    'Env',
+    'zdotdir',
+    'comspec',
+    'Shell',
+    'LD_LIBRARY_PATH',
+    'dyld_library_path',
+    'Node_Path',
+    'pythonpath',
+    'NODE_OPTIONS',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
+    'NODE_EXTRA_CA_CERTS',
+    'REQUESTS_CA_BUNDLE',
+    'CURL_CA_BUNDLE',
+    'SSLKEYLOGFILE',
+  ])('rejects protected or credential environment key %s', (key) => {
+    expect(validateClaudeCodeRuntimeConfig({ env: { [key]: 'unsafe' } })).toBe(
+      `runtime_config.env may not set protected or credential variable ${JSON.stringify(key)}`,
     );
   });
 
-  it('does not inherit the Hermes denylist', () => {
-    // Hermes denies '-z' and treats '-p' as a Hermes-only flag; this adapter's
-    // list is derived from the claude CLI's own surface.
-    expect(DISALLOWED_EXTRA_ARG_PREFIXES).not.toContain('-z');
-    expect(DISALLOWED_EXTRA_ARG_PREFIXES).toContain('-p');
+  it('cannot redirect the default Claude executable through a runtime-owned PATH', () => {
+    expect(validateClaudeCodeRuntimeConfig({
+      claudeBin: 'claude',
+      env: { PATH: '/tmp/attacker-bin' },
+    })).toBe('runtime_config.env may not set protected or credential variable "PATH"');
+  });
+});
+
+describe('claude-code runtime extraArgs allowlist', () => {
+  it('pins the complete pass-through surface', () => {
+    expect([...ALLOWED_EXTRA_ARGS]).toEqual([
+      '--debug',
+      '--exclude-dynamic-system-prompt-sections',
+    ]);
   });
 
-  it.each([...DISALLOWED_EXTRA_ARG_PREFIXES])('rejects extraArgs entry %s', (arg) => {
+  it.each([...ALLOWED_EXTRA_ARGS])('allows the exact argument-free flag %s', (arg) => {
+    expect(validateClaudeCodeRuntimeConfig({ extraArgs: [arg] })).toBeNull();
+  });
+
+  it.each([
+    '--settings',
+    '--plugin-dir',
+    '--plugin-url',
+    '--safe-mode',
+    '--bare',
+    '--allowedTools',
+    '--tools',
+    '--permission-mode',
+    '--remote-control',
+    '--worktree',
+    '--ide',
+    'plugins',
+    '--printer',
+    '--brand-new-flag',
+  ])('rejects unowned or unknown extraArgs entry %s', (arg) => {
     expect(validateClaudeCodeRuntimeConfig({ extraArgs: [arg] })).toBe(
       `Claude Code runtime does not allow extraArgs entry ${JSON.stringify(arg)}`,
     );
   });
 
-  it.each([...DISALLOWED_EXTRA_ARG_PREFIXES])('rejects the flag=value form of %s', (arg) => {
-    const entry = `${arg}=value`;
-    expect(validateClaudeCodeRuntimeConfig({ extraArgs: [entry] })).toBe(
-      `Claude Code runtime does not allow extraArgs entry ${JSON.stringify(entry)}`,
+  it('rejects value-bearing forms even when the bare flag is allowed', () => {
+    expect(validateClaudeCodeRuntimeConfig({ extraArgs: ['--debug=api'] })).toBe(
+      'Claude Code runtime does not allow extraArgs entry "--debug=api"',
+    );
+    expect(validateClaudeCodeRuntimeConfig({ extraArgs: ['--debug', 'api'] })).toBe(
+      'Claude Code runtime does not allow extraArgs entry "api"',
     );
   });
 
-  it.each([...DISALLOWED_EXTRA_ARG_VALUES])('rejects the %s subcommand word', (value) => {
-    expect(validateClaudeCodeRuntimeConfig({ extraArgs: [value] })).toBe(
-      `Claude Code runtime does not allow extraArgs entry ${JSON.stringify(value)}`,
-    );
+  it('trims allowed flags and drops blank entries during normalization', () => {
+    expect(normalizeClaudeCodeRuntimeConfig({
+      extraArgs: ['  --debug  ', '', '   ', '--exclude-dynamic-system-prompt-sections'],
+    }).extraArgs).toEqual(['--debug', '--exclude-dynamic-system-prompt-sections']);
   });
 
-  it('trims before matching, so padded entries cannot smuggle a denied flag', () => {
-    expect(validateClaudeCodeRuntimeConfig({ extraArgs: ['  --session-id  '] })).toBe(
-      'Claude Code runtime does not allow extraArgs entry "--session-id"',
-    );
-  });
-
-  it('reports the first denied entry when several are present', () => {
+  it('reports the first unowned entry when several are present', () => {
     expect(
       validateClaudeCodeRuntimeConfig({ extraArgs: ['--debug', '--model', '--verbose'] }),
     ).toBe('Claude Code runtime does not allow extraArgs entry "--model"');
-  });
-
-  it.each(['--printer', '--models', '--verbosely', '--tools-config', '--add-dirs', 'mcp-proxy'])(
-    'allows the near-miss entry %s',
-    (arg) => {
-      expect(validateClaudeCodeRuntimeConfig({ extraArgs: [arg] })).toBeNull();
-    },
-  );
-
-  it('allows unrelated flags and skips blank entries', () => {
-    expect(
-      validateClaudeCodeRuntimeConfig({ extraArgs: ['--debug', '', '   ', '--ide'] }),
-    ).toBeNull();
   });
 });
 
@@ -263,16 +351,18 @@ describe('claude-code runtime config normalization', () => {
       claudeBin: 'claude',
       model: null,
       effort: null,
-      allowedTools: [],
+      allowedTools: ['Bash', 'Edit', 'Glob', 'Grep', 'Read', 'Write'],
       disallowedTools: [],
       maxTurns: null,
       maxBudgetUsd: null,
-      permissionMode: 'bypass',
+      permissionMode: 'allowlist',
+      allowDangerousBypass: false,
       systemPromptSuffix: null,
       extraArgs: [],
       env: {},
       killGraceMs: 10_000,
       claudeConfigDir: null,
+      providerConnectionExternalRef: null,
     });
   });
 
@@ -286,7 +376,7 @@ describe('claude-code runtime config normalization', () => {
     expect(
       normalizeClaudeCodeRuntimeConfig({
         workingDirectory: ' /tmp/worktree ',
-        claudeBin: ' /usr/local/bin/claude ',
+        claudeBin: ' claude ',
         model: ' claude-opus-4-5 ',
         effort: 'xhigh',
         allowedTools: ['Bash', 'Read'],
@@ -294,15 +384,16 @@ describe('claude-code runtime config normalization', () => {
         maxTurns: 40,
         maxBudgetUsd: 2.5,
         permissionMode: 'allowlist',
+        allowDangerousBypass: false,
         systemPromptSuffix: ' Be terse. ',
         extraArgs: ['--debug'],
-        env: { AGENT_HQ_RUNTIME: 'claude-code' },
+        env: { RUNTIME_LABEL: 'claude-code' },
         killGraceMs: 250,
         claudeConfigDir: ' /tmp/claude-config ',
       }),
     ).toEqual({
       workingDirectory: '/tmp/worktree',
-      claudeBin: '/usr/local/bin/claude',
+      claudeBin: 'claude',
       model: 'claude-opus-4-5',
       effort: 'xhigh',
       allowedTools: ['Bash', 'Read'],
@@ -310,11 +401,13 @@ describe('claude-code runtime config normalization', () => {
       maxTurns: 40,
       maxBudgetUsd: 2.5,
       permissionMode: 'allowlist',
+      allowDangerousBypass: false,
       systemPromptSuffix: 'Be terse.',
       extraArgs: ['--debug'],
-      env: { AGENT_HQ_RUNTIME: 'claude-code' },
+      env: { RUNTIME_LABEL: 'claude-code' },
       killGraceMs: 250,
       claudeConfigDir: '/tmp/claude-config',
+      providerConnectionExternalRef: null,
     });
   });
 
@@ -340,7 +433,7 @@ describe('claude-code runtime config normalization', () => {
       allowedTools: ['Bash'],
       disallowedTools: ['WebSearch'],
       extraArgs: ['--debug'],
-      env: { AGENT_HQ_RUNTIME: 'claude-code' },
+      env: { RUNTIME_LABEL: 'claude-code' },
     };
 
     const normalized = normalizeClaudeCodeRuntimeConfig(config);
@@ -353,12 +446,12 @@ describe('claude-code runtime config normalization', () => {
     config.allowedTools?.push('Write');
     config.disallowedTools?.push('Read');
     config.extraArgs?.push('--ide');
-    if (config.env) config.env.AGENT_HQ_RUNTIME = 'hermes';
+    if (config.env) config.env.RUNTIME_LABEL = 'hermes';
 
     expect(normalized.allowedTools).toEqual(['Bash']);
     expect(normalized.disallowedTools).toEqual(['WebSearch']);
     expect(normalized.extraArgs).toEqual(['--debug']);
-    expect(normalized.env).toEqual({ AGENT_HQ_RUNTIME: 'claude-code' });
+    expect(normalized.env).toEqual({ RUNTIME_LABEL: 'claude-code' });
   });
 
   it('does not mutate the input config', () => {

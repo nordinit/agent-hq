@@ -23,7 +23,7 @@ jest.mock('../runtimes', () => ({
 jest.mock('../runtimes/skillMaterialization', () => ({
   getSkillMaterializationAdapter: jest.fn(() => ({
     adapterName: 'test',
-    materialize: jest.fn(() => ({ ok: true, count: 0, warnings: [] })),
+    materialize: jest.fn(() => ({ ok: true, count: 0, details: [], warnings: [] })),
   })),
 }));
 
@@ -70,6 +70,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     await db.exec(`
       CREATE TABLE agents (
         id INTEGER PRIMARY KEY,
+        tenant_id INTEGER NOT NULL DEFAULT 1,
         name TEXT,
         job_title TEXT,
         project_id INTEGER,
@@ -126,6 +127,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       );
       CREATE TABLE job_instances (
         id INTEGER PRIMARY KEY,
+        tenant_id INTEGER NOT NULL DEFAULT 1,
         agent_id INTEGER,
         task_id INTEGER,
         status TEXT,
@@ -196,6 +198,25 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
         label TEXT,
         enabled INTEGER DEFAULT 1,
         preferred_provider TEXT
+      );
+      CREATE TABLE skills (
+        tenant_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        updated_at TEXT
+      );
+      CREATE TABLE mcp_servers (
+        id INTEGER PRIMARY KEY,
+        tenant_id INTEGER NOT NULL,
+        slug TEXT NOT NULL,
+        updated_at TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE agent_mcp_assignments (
+        id INTEGER PRIMARY KEY,
+        agent_id INTEGER NOT NULL,
+        mcp_server_id INTEGER NOT NULL,
+        overrides TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1
       );
     `);
 
@@ -298,6 +319,27 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     expect(runtimeParams.runtimeConfig).toEqual(expect.objectContaining({
       workingDirectory: path.join(workspaceRoot, 'task-373'),
     }));
+    expect(runtimeParams.runtimeBoundary).toMatchObject({
+      version: 1,
+      identity: {
+        tenantId: 1,
+        projectId: 1,
+        workflowId: 9,
+        taskId: 373,
+        agentId: 1,
+        agentSlug: 'cinder-backend',
+      },
+      runtime: { type: 'openclaw', driverVersion: 'openclaw-driver/1' },
+      workspace: {
+        workspaceRoot,
+        activeRepoRoot: path.join(workspaceRoot, 'task-373'),
+        repoAccessMode: 'clone',
+        repoSource: `clone:${remotePath}`,
+      },
+      executionTarget: { id: 'managed:openclaw-gateway', kind: 'managed' },
+      callback: { identity: expect.stringMatching(/^run:/) },
+    });
+    expect(runtimeParams.runtimeBoundary.prompt.bundleFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(syncAssignedMcpForAgent).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 1,
       workingDirectory: workspaceRoot,
@@ -426,5 +468,18 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       maxTurns: 3,
       workingDirectory: repoWorkspacePath,
     }));
+    expect(runtimeParams.runtimeBoundary).toMatchObject({
+      version: 1,
+      identity: { tenantId: 1, instanceId: 900, agentId: 1, agentSlug: 'cinder-backend' },
+      runtime: { type: 'claude-code', driverVersion: 'claude-code-driver/1', turnLimit: 3 },
+      workspace: {
+        workspaceRoot: repoWorkspacePath,
+        activeRepoRoot: repoWorkspacePath,
+        repoAccessMode: 'clone',
+        repoSource: `clone:${remotePath}`,
+      },
+      executionTarget: { id: 'local:claude-code', kind: 'local-process' },
+      callback: { identity: expect.stringMatching(/^run:/) },
+    });
   });
 });

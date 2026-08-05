@@ -9,6 +9,8 @@ import {
 } from '../domains/providers/runtimeAdapters';
 
 import { requireNumericId } from '../lib/routeParams';
+import { resolveRuntimeAgentSlug } from '../lib/sessionKeys';
+import { redactSensitiveRuntimeText } from '../runtimes/sensitiveText';
 
 const router = Router();
 // Rejects a non-numeric :id before it reaches the database, restoring the 404 SQLite
@@ -45,14 +47,26 @@ function parseMetadata(value: string): Record<string, unknown> {
   }
 }
 
+function parseRecordValue(value: unknown): Record<string, unknown> | null {
+  if (isRecord(value)) return value;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function serialize(row: ConnectionRow) {
   return { ...row, metadata: parseMetadata(row.metadata) };
 }
 
-function containsSecretMetadata(value: unknown, key = ''): boolean {
+export function containsSecretMetadata(value: unknown, key = ''): boolean {
   const normalizedKey = key.trim().toLowerCase();
   if (normalizedKey !== 'credential_owner' && /(^|[_-])(token|secret|password|credential|api[_-]?key|access[_-]?token|refresh[_-]?token)([_-]|$)/i.test(normalizedKey)) return true;
   if (Array.isArray(value)) return value.some(item => containsSecretMetadata(item));
+  if (typeof value === 'string' && redactSensitiveRuntimeText(value) !== value) return true;
   if (!isRecord(value)) return false;
   return Object.entries(value).some(([childKey, child]) => containsSecretMetadata(child, childKey));
 }
@@ -142,6 +156,10 @@ router.post('/', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const mergedMetadata = { ...match.metadata, ...metadata };
+    if (containsSecretMetadata(mergedMetadata)) {
+      res.status(500).json({ error: 'Provider adapter returned unsafe credential metadata.' });
+      return;
+    }
     const existing = await db.get(`
       SELECT id FROM provider_connections
       WHERE tenant_id = ? AND runtime_type = ? AND provider_slug = ? AND auth_mode = ? AND external_ref = ?
@@ -186,8 +204,28 @@ router.post('/:id/validate', async (req: Request, res: Response) => {
       return;
     }
     const metadata = parseMetadata(row.metadata);
-    const runtimeConfig = isRecord(req.body?.runtime_config) ? req.body.runtime_config : metadata;
-    const agentSlug = typeof metadata.agent_slug === 'string' ? metadata.agent_slug : null;
+    let runtimeConfig = isRecord(req.body?.runtime_config) ? req.body.runtime_config : null;
+    let agentSlug = typeof metadata.agent_slug === 'string' ? metadata.agent_slug : null;
+
+    // Isolated CLI homes are intentionally not persisted in provider metadata.
+    // Recover the current runtime config from the linked agent when validation
+    // is invoked without a config body, keeping paths out of connection records
+    // without making isolated profiles impossible to revalidate.
+    if (!runtimeConfig) {
+      const agentColumns = (await sharedTableColumns(db, 'agents')).map(name => ({ name }));
+      if (agentColumns.some(column => column.name === 'provider_connection_id')) {
+        const agent = await db.get(`
+          SELECT runtime_config, name, role, session_key, openclaw_agent_id, system_role
+          FROM agents
+          WHERE provider_connection_id = ? AND tenant_id = ?
+          ORDER BY id ASC
+          LIMIT 1
+        `, row.id, tenantId) as Record<string, unknown> | undefined;
+        runtimeConfig = parseRecordValue(agent?.runtime_config) ?? null;
+        agentSlug = agentSlug ?? resolveRuntimeAgentSlug(agent ?? null);
+      }
+    }
+    runtimeConfig = runtimeConfig ?? metadata;
     const discovered = await adapter.discover({ agentSlug, runtimeConfig });
     const match = discovered.find(connection => connection.externalRef === row.external_ref);
     const status = match ? 'connected' : 'failed';

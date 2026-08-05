@@ -1,6 +1,11 @@
-# Claude Code Runtime v2 — Design Plan
+# Claude Code Runtime v2 — Design and Implementation Record
 
-Status: **Phases 0–2 implemented, Phase 3 stage A implemented** (branch `claude-code-runtime-v2`); Phase 3 stage B and Phase 4 open
+Status: **CLI runtime, MCP preflight, live transcript, and local-hardening baseline implemented; production verification and Claude resume remain open**
+
+The current cross-runtime contract and release gates live in
+[`agent-runtime-boundary-v1.md`](./agent-runtime-boundary-v1.md). This document retains
+the original sprint-65 analysis and empirical CLI notes as history; statements in the
+archived plan describe the system at plan time, not the current runtime.
 
 ## Implementation status
 
@@ -8,16 +13,59 @@ Status: **Phases 0–2 implemented, Phase 3 stage A implemented** (branch `claud
 |---|---|---|
 | 0 — verification spike (#534) | **done** | §6 Phase 0 below, all findings empirical against CLI 2.1.220 |
 | 1 — CLI runtime with lifecycle parity (#537) | **done** | `api/src/runtimes/claudeCode/` |
-| 2 — MCP materialization + readiness gate (#539) | **done** | `claudeCode/mcpConfig.ts`, `api/src/bin/agent-tool-mcp.ts` |
+| 2 — MCP materialization + readiness gate (#539) | **done** | `claudeCode/mcpConfig.ts`, `claudeCode/mcpPreflight.ts` |
 | 3 — unified transcript ingestion (#538) | **stage A done** — shared normalizer + live claude-code streaming; Hermes/OpenClaw not migrated | `api/src/runtimes/transcript/`, `claudeCode/transcript.ts` |
-| 4 — resume + prompt bundle | deferred by design | gated on sprint 111 #903 |
+| 4 — resume + prompt bundle | **partial infrastructure only** | durable boundary/checkpoints exist, but Claude Code has no `--resume` path and normal dispatch does not produce `priorCheckpoint` |
 
-`1395 tests pass, tsc --noEmit clean.`
+The original implementation branch reported `1395 tests pass` with `tsc --noEmit`
+clean. That is a historical result, not current release evidence.
+
+### Current hardening status
+
+- Claude Code defaults to an explicit productive allowlist (`Bash`, `Edit`, `Glob`,
+  `Grep`, `Read`, `Write`) plus assigned MCP tools. `permissionMode: bypass` emits
+  `--dangerously-skip-permissions` only when the separately persisted
+  `allowDangerousBypass: true` safety latch is present.
+- Adapter-owned flags and protected identity, credential, loader, and proxy environment
+  variables cannot be overridden through `extraArgs` or `runtime_config.env`.
+- Production dispatch validates its complete tenant/agent/instance boundary before any
+  database write or MCP materialization. It then runs the exact canonical executable's
+  zero-spend version probe, compares its fingerprint with the immutable boundary, and
+  re-resolves the file immediately before `spawn` to reject binary replacement races.
+- Every dispatch gets a unique `0600` MCP config below an immutable numeric
+  `tenant-<id>/agent-<id>` state directory. Concurrent runs never overwrite one another.
+  The separate reusable snapshot contains only `AGENT_HQ_MCP_API_KEY`; third-party MCP
+  configuration and credentials are never carried between runs. Run configs are removed
+  after launch failure or confirmed process-group teardown. A 15-minute crash scavenger
+  removes only inactive files and protects both in-memory paths and active instance IDs
+  read from `runtime_executions`.
+- The exact materialized MCP server-name set must equal `RuntimeBoundaryV1`, and assignment
+  fingerprints/revisions are re-read immediately before launch. Boundaryless ad-hoc runs
+  may assign no MCP. Missing `toolFilter.include` becomes Claude's documented
+  `mcp__<server>__*` allow rule; an explicit empty/sentinel filter still grants zero.
+  Registry tools currently fail closed because that separate assignment system is not yet
+  represented in the boundary.
+- A selected Anthropic provider connection is verified immediately before launch with
+  fixed `claude auth status --json` arguments against the effective
+  `CLAUDE_CONFIG_DIR`; credential/account output is not returned. With no selected
+  connection, the same authentication check is mandatory against the operator-managed
+  effective home. An isolated `claudeConfigDir` remains a deployment-policy
+  responsibility because the code still permits the API user's shared `~/.claude`.
+- Local runs persist boundary, launch, native session, and terminal observations to the
+  PostgreSQL runtime-execution/checkpoint store when migration 18 is available. The
+  restart reconciler can identify a same-host live process or mark a missing/reused PID
+  `lost` after two observations; it cannot reattach the event stream or recover the
+  detached process's terminal result.
+- Claude Code still starts a fresh, pre-minted session for every dispatch. It does not
+  consume a prior checkpoint or invoke `claude --resume`. Codex's guarded resume parser
+  does not change Claude's status.
 
 ### End-to-end verification
 
-Run against the real `claude` CLI (2.1.220) and a real throwaway SQLite database —
-no mocks — with a stand-in Agent HQ MCP server. Two scenarios:
+The original sprint-65 implementation was run against the real `claude` CLI (2.1.220)
+and a throwaway SQLite test database, with no runtime mocks and a stand-in Agent HQ MCP
+server. These results remain useful protocol evidence; the SQLite references are an
+archived test-harness detail, not a current deployment requirement. Two scenarios:
 
 | Scenario | Result |
 |---|---|
@@ -55,9 +103,9 @@ verified before the run):
 So the full chain is proven: **Claude Code CLI → real Agent HQ MCP server → real
 REST API → real DB write.**
 
-A second dispatch of the same agent left `mcp_api_keys` at **one** row, which is
-the per-agent state dir carry-forward (deviation 2) working — without it that
-count would grow by one per dispatch, forever.
+A second dispatch of the same agent left `mcp_api_keys` at **one** row. The current
+implementation preserves that property with the minimal tenant/agent-scoped API-key
+snapshot (deviation 2), without retaining a previous run's full MCP config.
 
 Caveat worth keeping: invoking the server as `/usr/bin/env node …` rather than
 the node binary directly was necessary because `resolveAgentHqServerRuntimePaths`
@@ -70,17 +118,17 @@ bites development-from-source — the same pre-existing limitation noted under
 
 1. **MCP materialization happens inside the runtime, not in the dispatcher.**
    The plan proposed widening the dispatcher's `openclaw|hermes` gate. In the end the
-   runtime writes its own run-scoped `mcp-config.json` and passes it via
+   runtime writes its own unique run-scoped MCP config and passes it via
    `--mcp-config`, so `syncAssignedMcpForAgent` did not need a new branch at all.
    This keeps the API-key-bearing file out of the task worktree (a git checkout),
    which the dispatcher path could not have done.
 
-2. **The state dir is scoped per AGENT, not per instance.** Per-instance scoping
-   looked tidier but would hand `fetchAssignedMcpServers` an empty
-   `previousServers` on every dispatch, minting a fresh never-revoked
-   `mcp_api_keys` row each run. Per-agent scoping is what makes the carry-forward
-   actually work; the file is written via temp+rename since concurrent dispatches
-   of one agent now share it.
+2. **Reusable credential state and launch configuration have different lifetimes.**
+   The state directory is scoped by immutable tenant and agent IDs. Inside it, a
+   minimal snapshot carries only `AGENT_HQ_MCP_API_KEY`, preventing a new live key
+   row on every dispatch. Each instance/session gets a different immutable launch
+   config, so concurrent runs cannot overwrite argv-visible state or inherit a
+   third-party secret from one another.
 
 3. **No heartbeat was added.** The plan assumed Hermes heartbeats. It does not —
    `heartbeatIntervalMs` is validated and normalized but the timer is hard-coded
@@ -102,9 +150,9 @@ bites development-from-source — the same pre-existing limitation noted under
 6. **The Agent SDK dependency is gone entirely.** Removing the SDK runtime left
    `toolInjection.createAgentToolServer()` with no callers; deleting it dropped the
    last `@anthropic-ai/claude-agent-sdk` import, so the dependency, its jest
-   `moduleNameMapper` entry, and `src/__mocks__/` were all removed. Registry tools
-   (task #559) are now served out-of-process by `src/bin/agent-tool-mcp.ts`, which
-   also runs them in the run's own cwd instead of inside the API process.
+   `moduleNameMapper` entry, and `src/__mocks__/` were all removed. Claude dispatch
+   does not currently inject the separate registry-tool shim: assigned registry
+   tools fail closed until they have an explicit, fingerprinted boundary assignment.
 
 ### Known gaps
 
@@ -118,26 +166,44 @@ bites development-from-source — the same pre-existing limitation noted under
   `ensureCanonicalSessionForInstance` early-returns when `session_messages`
   already has rows, so shipping the normalizer does not fix past sessions; that
   needs an explicit backfill through the force path.
-- **The tool shim only materializes from a built `dist/`.** Its path is resolved
-  from `__dirname`; running the API from source via `tsx` resolves to a `.js` that
-  was never emitted, and the `existsSync` guard degrades to "no registry tools".
-  Same limitation `resolveAgentHqServerRuntimePaths` already has.
-- **`prepareAuthProfiles` is still a no-op.** Per-agent credential isolation is
-  available via `runtime_config.claudeConfigDir` but is opt-in; without it every
-  claude-code agent shares the API process's `~/.claude`.
+- **Registry tools need a boundary representation.** The hardened Claude adapter
+  rejects an agent with enabled registry tools rather than silently adding an
+  unrecorded MCP server. A future scoped API transport must add those assignments
+  to `RuntimeBoundaryV1` before the capability can be enabled.
+- **Claude resume is not implemented.** The durable boundary contains the shape for a
+  `priorCheckpoint`, but the normal builder currently sets it to `null`, and the Claude
+  adapter has no resume argv or poisoned-session recovery. Fresh session IDs are durable
+  handles, not proof of resumability.
+- **Credential isolation is enforceable but not automatic.** A selected provider profile
+  and a no-provider operator-managed profile are checked immediately before launch, but
+  `runtime_config.claudeConfigDir` remains optional. Without it (or process-level
+  `CLAUDE_CONFIG_DIR`), agents share the API user's `~/.claude`; multi-tenant deployment
+  policy must reject that posture.
+- **The local MCP credential is not a lease.** Materialized MCP configuration is
+  permission-restricted and redacted from durable boundary/launch records, but the key
+  itself has no expiry or run-scoped revocation. Managed, sandboxed, or strongly isolated
+  multi-tenant targets require opaque short-lived exchange before they can be enabled.
+- **Restart recovery is loss-only.** The local reconciler protects against PID reuse and
+  records `lost` after a confirmation window, but it does not adopt a surviving process,
+  reattach its stream, or reconstruct its exit status.
 
 ---
 
-Original plan follows.
+## Archived sprint-65 plan
 
-Status: proposal
+The material below is retained to explain the decisions and empirical findings that led
+to the CLI adapter. Any present-tense baseline, path, test count, or implementation status
+below is historical and is superseded by the current hardening status above and by
+`agent-runtime-boundary-v1.md`.
+
+Archived status: proposal at time of writing
 Covers: sprint 65 tasks #534 (research), #537 (implement), #538 (transcripts), #539 (MCP materialization)
 Informs: sprint 111 tasks #902–#906 (Agent Runtime Hardening)
 Reference implementation studied: `paperclipai/paperclip` → `packages/adapters/claude-local`
 
 ---
 
-## 1. Where we are today
+## 1. Where we were at plan time
 
 `api/src/runtimes/ClaudeCodeRuntime.ts` (330 lines) drives a headless Claude Code session
 **in-process** via `@anthropic-ai/claude-agent-sdk` `query()` (pinned `^0.2.81`).
@@ -156,7 +222,7 @@ Compared with the two runtimes that have already been through a full-runtime con
 | Timeout enforcement | yes | yes (SIGTERM → SIGKILL after `killGraceMs`) | **no** — `timeoutSeconds` is ignored entirely |
 | Live transcript during the run | yes | yes (2 s session-JSON poll) | **no** — one post-run JSONL ingest |
 | Truthful abort | process/session level | SIGTERM/SIGKILL | in-process `AbortController` only |
-| Session resume | n/a | intentionally blocked | not attempted |
+| Session resume | n/a | intentionally blocked | not attempted at plan time |
 | Error classification (auth / quota / transient / refusal) | yes | yes (`infra_failed` vs `runtime_failed`) | **no** — non-Abort errors rethrow into a `.catch` that only `console.error`s |
 
 Two smaller drifts worth fixing in passing: the default model is hardcoded
@@ -254,11 +320,12 @@ claude --print - --output-format stream-json --verbose
        --add-dir <prompt-bundle-dir>
 ```
 
-**Permissions differ by trust boundary** (`permissions.ts`). Local target →
-`--dangerously-skip-permissions`. Remote/sandbox target → an explicit
-`--allowedTools` allowlist, so a hosted target does not inherit blanket local bypass.
-Agent HQ's analogue is worktree-on-host vs. any future remote/clone execution target;
-worth adopting the same split now rather than retrofitting.
+**Permissions differ by trust boundary in Paperclip** (`permissions.ts`). Its local target
+uses `--dangerously-skip-permissions`, while remote/sandbox targets use an explicit
+`--allowedTools` allowlist. Agent HQ adopted the target-aware principle but intentionally
+chose a safer local default: the current Claude adapter uses a productive allowlist on
+local worktrees too, and requires `allowDangerousBypass: true` before emitting the bypass
+flag. Future remote/clone targets must remain allowlisted.
 
 **Session resume is fingerprinted, not blind** (`execute.ts:729-791`). A stored session is
 only passed to `--resume` when *all* of: valid UUID, cwd unchanged, prompt-bundle hash
@@ -482,6 +549,10 @@ Only worth doing once #903 settles resume semantics. Build the fingerprint first
 instance, and refuse resume on any mismatch. Add the poisoned-session guards from §4 in the
 same change — resume without validate-before-persist is how a task gets permanently stranded.
 
+Current status: the shared boundary fingerprint and PostgreSQL checkpoint schema now
+exist, and Codex rejects untrusted direct resume IDs. Claude Code still has no resume
+implementation, and the dispatcher does not yet produce a trusted `priorCheckpoint`.
+
 ---
 
 ## 7. How this feeds sprint 111
@@ -508,11 +579,10 @@ cheap hook that should be built in Phase 1–2 rather than retrofitted:
 - **Silent MCP degradation** (Phase 0 finding 2) is the highest-severity behavioural risk
   in this design. Without the Phase 2 readiness gate, the migration would make claude-code
   runs *look* healthier than the status quo while still being unable to post outcomes.
-- **Auth ownership.** The SDK inherits the API process's environment. The CLI will too
-  unless we set `CLAUDE_CONFIG_DIR` per agent. Recommend per-agent config dirs (Paperclip's
-  managed-config model) so agents don't share credentials or session history — but note
-  `prepareAuthProfiles()` currently returns `skipped` for claude-code, so this is new
-  surface, not a port.
+- **Auth ownership (plan-time risk, partially closed).** The CLI still uses the effective
+  `CLAUDE_CONFIG_DIR`, but a selected provider connection is now checked with fixed
+  `claude auth status --json` arguments immediately before launch. Per-agent config dirs
+  remain opt-in, so shared-home rejection is still a deployment-policy requirement.
 - **Secrets in the worktree.** Do not write `.mcp.json` into the task worktree; it carries
   `AGENT_HQ_MCP_API_KEY`. Run-scoped state dir, mode `0600`.
 - **Existing claude-code agents.** `db/seed-dev.ts` has three (`Forge`, `Kai`, `Pixel`).

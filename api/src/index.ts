@@ -41,6 +41,7 @@ import providerConnectionsRouter from './routes/provider-connections';
 import githubIdentitiesRouter from './routes/github-identities';
 import sessionsRouter from './routes/sessions';
 import recurringTaskSeriesRouter from './routes/recurring-task-series';
+import runtimeDriversRouter from './routes/runtime-drivers';
 import { shutdownPool as shutdownBrowserPool } from './services/browserPool';
 import { getMcpCatalog } from './mcp/catalog';
 import { registerAgentHqMcpCatalog } from './mcp/registerCatalog';
@@ -112,6 +113,7 @@ app.use('/api/v1/chat', chatRouter);
 app.use('/api/v1/tasks', tasksRouter);
 app.use('/api/v1/recurring-task-series', recurringTaskSeriesRouter);
 app.use('/api/v1/instances', instancesRouter);
+app.use('/api/v1/runtime-drivers', runtimeDriversRouter);
 app.use('/api/v1/external', externalTaskEventsRouter);
 function buildWorkflowEventMappingSuffix(req: Request): string {
   const query = new URLSearchParams();

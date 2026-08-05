@@ -5,8 +5,10 @@ import { CheckCircle2, Copy, Loader2, RefreshCw, Shield, Trash2 } from 'lucide-r
 import { api, type DiscoveredProviderConnection, type ProviderConnectionRecord } from '@/lib/api';
 
 const RUNTIMES = [
-  { key: 'openclaw', label: 'OpenClaw', note: 'Uses OpenClaw per-agent auth profiles.' },
-  { key: 'hermes', label: 'Hermes', note: 'Requires Claude Max with extra usage credits enabled.' },
+  { key: 'openclaw', label: 'OpenClaw', provider: 'anthropic', note: 'Uses OpenClaw per-agent auth profiles.' },
+  { key: 'claude-code', label: 'Claude Code', provider: 'anthropic', note: 'Uses a Claude Code-owned subscription login; Agent HQ stores only the profile reference.' },
+  { key: 'hermes', label: 'Hermes', provider: 'anthropic', note: 'Requires Claude Max with extra usage credits enabled.' },
+  { key: 'codex', label: 'Codex', provider: 'openai-codex', note: 'Uses a Codex-owned ChatGPT login; Agent HQ stores only the CODEX_HOME profile reference.' },
 ] as const;
 
 type RuntimeKey = (typeof RUNTIMES)[number]['key'];
@@ -35,10 +37,15 @@ export default function RuntimeProviderConnections({
     try {
       const result = await api.getProviderConnections();
       const subscriptionConnections = result.connections.filter(
-        item => item.provider_slug === 'anthropic' && item.auth_mode === 'subscription'
+        item => item.auth_mode === 'subscription'
+          && RUNTIMES.some(runtime => runtime.key === item.runtime_type && runtime.provider === item.provider_slug)
       );
       setConnections(subscriptionConnections);
-      onConnectionStateChange?.(subscriptionConnections.some(item => item.status === 'connected'));
+      // This callback feeds the Anthropic provider card. A connected Codex
+      // profile must not make Anthropic appear connected.
+      onConnectionStateChange?.(subscriptionConnections.some(
+        item => item.provider_slug === 'anthropic' && item.status === 'connected'
+      ));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -48,8 +55,9 @@ export default function RuntimeProviderConnections({
     setInstructionsLoading(true);
     setError(null);
     try {
+      const runtimeDefinition = RUNTIMES.find(item => item.key === runtime) ?? RUNTIMES[0];
       const result = await api.getProviderAuthInstructions({
-        provider: 'anthropic',
+        provider: runtimeDefinition.provider,
         runtime,
         auth_mode: 'subscription',
       });
@@ -86,7 +94,7 @@ export default function RuntimeProviderConnections({
     setBusy(`refresh:${selectedRuntime}`);
     setError(null);
     try {
-      const request = { provider: 'anthropic', runtime: selectedRuntime, auth_mode: 'subscription' };
+      const request = { provider: runtime.provider, runtime: selectedRuntime, auth_mode: 'subscription' };
       const [instructions, found] = await Promise.all([
         api.getProviderAuthInstructions(request),
         api.discoverProviderConnections({
@@ -116,7 +124,7 @@ export default function RuntimeProviderConnections({
     setError(null);
     try {
       await api.createProviderConnection({
-        provider_slug: 'anthropic',
+        provider_slug: runtime.provider,
         auth_mode: 'subscription',
         runtime_type: selectedRuntime,
         external_ref: connection.externalRef,
@@ -149,21 +157,21 @@ export default function RuntimeProviderConnections({
   }
 
   return (
-    <section className="mt-4 pt-4 border-t border-slate-700/60 space-y-3" aria-label="Claude subscription authentication">
+    <section className="rounded-xl border border-slate-700 bg-slate-800/40 p-4 space-y-3" aria-label="Runtime subscription authentication">
       <div className="flex items-start gap-2">
         <Shield className="w-4 h-4 text-amber-400 mt-0.5" />
         <div>
-          <h3 className="text-sm font-semibold text-slate-100">Claude Subscription (OAuth)</h3>
+          <h3 className="text-sm font-semibold text-slate-100">Runtime Subscription Authentication</h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Use a Claude subscription instead of an API key. The runtime keeps the credential; Agent HQ stores only the selected profile reference.
+            Use a runtime-owned subscription login instead of copying credentials into Agent HQ. Only the selected profile reference is stored.
           </p>
         </div>
       </div>
 
       <div>
-        <label htmlFor="anthropic-subscription-runtime" className="block text-xs text-slate-300 mb-1.5">Runtime</label>
+        <label htmlFor="runtime-subscription-runtime" className="block text-xs text-slate-300 mb-1.5">Runtime</label>
         <select
-          id="anthropic-subscription-runtime"
+          id="runtime-subscription-runtime"
           value={selectedRuntime}
           onChange={event => {
             setSelectedRuntime(event.target.value as RuntimeKey);
@@ -198,7 +206,7 @@ export default function RuntimeProviderConnections({
           </button>
         </div>
         {messages[selectedRuntime] && <p className="text-slate-500">{messages[selectedRuntime]}</p>}
-        <p><span className="font-semibold text-slate-100">2. Complete the Anthropic sign-in prompts in that terminal.</span> Enter the authorization code there if prompted.</p>
+        <p><span className="font-semibold text-slate-100">2. Complete the provider sign-in prompts in that terminal.</span> Enter the authorization code there if prompted.</p>
         <p><span className="font-semibold text-slate-100">3. Return here and refresh profiles.</span> Select the authenticated profile, then connect it.</p>
       </div>
 
@@ -235,9 +243,9 @@ export default function RuntimeProviderConnections({
       {availableProfiles.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-2 items-end">
           <div>
-            <label htmlFor="anthropic-subscription-profile" className="block text-xs text-slate-300 mb-1.5">Authenticated profile</label>
+            <label htmlFor="runtime-subscription-profile" className="block text-xs text-slate-300 mb-1.5">Authenticated profile</label>
             <select
-              id="anthropic-subscription-profile"
+              id="runtime-subscription-profile"
               value={selectedProfile}
               onChange={event => setSelectedProfile(event.target.value)}
               disabled={busy !== null}

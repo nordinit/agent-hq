@@ -6,6 +6,9 @@ import { stopInstanceExecution } from '../domains/runs/stopInstanceExecution';
 import { resolveTranscriptProvider } from '../domains/runs/transcriptProvider';
 import { resolveInstanceSessionKey } from '../domains/runs/sessionKey';
 import { ensureCanonicalSessionForInstance } from '../lib/canonicalSessions';
+import { columnExists, tableExists } from '../db/introspection';
+import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { mapRuntimeExecutionRow, redactRuntimeMetadata } from '../domains/runtimes/runtimeView';
 
 import { requireNumericId } from '../lib/routeParams';
 
@@ -25,6 +28,18 @@ function readOptionalPositiveInteger(value: unknown): number | null {
   if (value === undefined || value === null || value === '') return null;
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function fallbackExecutionState(status: unknown): string {
+  switch (status) {
+    case 'queued': return 'preparing';
+    case 'dispatched': return 'starting';
+    case 'running': return 'running';
+    case 'done': return 'succeeded';
+    case 'failed': return 'failed';
+    case 'cancelled': return 'cancelled';
+    default: return typeof status === 'string' && status ? status : 'unknown';
+  }
 }
 
 // GET /api/v1/instances — recent job runs for chat/run selectors.
@@ -92,6 +107,74 @@ router.get('/', async (req: Request, res: Response) => {
     return res.json(instances);
   } catch (err) {
     return res.status(500).json({ error: String(err) });
+  }
+});
+
+// GET /api/v1/instances/:id/runtime
+// Reads the durable runtime execution when available. During rollout, or for
+// historical instances, it falls back to the mirrored job_instances fields.
+router.get('/:id/runtime', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const id = Number(req.params.id);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const jobInstancesHaveTenant = await columnExists(db, 'job_instances', 'tenant_id');
+    const instance = await db.get<Record<string, unknown>>(`
+      SELECT
+        ji.*,
+        a.runtime_type AS agent_runtime_type
+      FROM job_instances ji
+      LEFT JOIN agents a ON a.id = ji.agent_id
+      WHERE ji.id = ?
+        AND ${jobInstancesHaveTenant ? 'ji.tenant_id' : 'a.tenant_id'} = ?
+    `, id, tenantId);
+    if (!instance) return res.status(404).json({ error: 'Instance not found.' });
+
+    let executionRow: Record<string, unknown> | undefined;
+    if (await tableExists(db, 'runtime_executions')) {
+      executionRow = await db.get<Record<string, unknown>>(`
+        SELECT *
+        FROM runtime_executions
+        WHERE instance_id = ? AND tenant_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+      `, id, tenantId);
+    }
+
+    const runtimeType = typeof executionRow?.runtime_type === 'string'
+      ? executionRow.runtime_type
+      : typeof instance.agent_runtime_type === 'string'
+        ? instance.agent_runtime_type
+        : 'openclaw';
+    const executionState = typeof executionRow?.state === 'string'
+      ? executionRow.state
+      : fallbackExecutionState(instance.status);
+    const fallback = {
+      status: instance.status ?? null,
+      session_id: instance.session_key ?? instance.durable_run_id ?? instance.run_id ?? null,
+      dispatched_at: instance.dispatched_at ?? null,
+      started_at: instance.started_at ?? null,
+      completed_at: instance.completed_at ?? null,
+      runtime_ended_at: instance.runtime_ended_at ?? null,
+      runtime_end_success: instance.runtime_end_success ?? null,
+      runtime_end_source: instance.runtime_end_source ?? null,
+      runtime_end_error: redactRuntimeMetadata(instance.runtime_end_error ?? null),
+    };
+
+    const execution = executionRow
+      ? mapRuntimeExecutionRow(executionRow, { instanceId: id, runtimeType, state: executionState })
+      : null;
+
+    return res.json({
+      instance_id: id,
+      source: execution ? 'runtime_executions' : 'job_instances',
+      runtime_type: runtimeType,
+      execution_state: executionState,
+      execution,
+      fallback,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -195,10 +278,11 @@ router.get('/:id/transcript', async (req: Request, res: Response) => {
 // PUT /api/v1/instances/:id/stop
 // Kills the running job, clears task linkage, and applies an explicit stop behavior.
 // Default behavior is `park` to prevent immediate redispatch loops.
-router.put('/:id/stop', async (req: Request, res: Response) => {
+export async function stopInstanceRoute(req: Request, res: Response): Promise<Response> {
   try {
     const db = getDb();
     const id = Number(req.params.id);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
     const body = (req.body ?? {}) as { behavior?: unknown; mode?: unknown; action?: unknown };
     // Manual stops (no explicit behavior specified) should not alter task status.
     // Default to 'stop' so the task remains in its current state; callers who want
@@ -206,12 +290,17 @@ router.put('/:id/stop', async (req: Request, res: Response) => {
     const rawBehavior = body.behavior ?? body.mode ?? body.action;
     const behavior = rawBehavior !== undefined ? normalizeStopBehavior(rawBehavior) : 'stop';
 
+    const jobInstancesHaveTenant = await columnExists(db, 'job_instances', 'tenant_id');
+    const agentsHaveTenant = await columnExists(db, 'agents', 'tenant_id');
+    if (!jobInstancesHaveTenant || !agentsHaveTenant) {
+      return res.status(503).json({ error: 'Tenant-scoped instance stop is unavailable.' });
+    }
     const instance = await db.get(`
       SELECT ji.*, a.session_key AS agent_session_key, a.runtime_type, a.runtime_config
       FROM job_instances ji
-      LEFT JOIN agents a ON a.id = ji.agent_id
-      WHERE ji.id = ?
-    `, id) as Record<string, unknown> | undefined;
+      LEFT JOIN agents a ON a.id = ji.agent_id AND a.tenant_id = ?
+      WHERE ji.id = ? AND ji.tenant_id = ?
+    `, tenantId, id, tenantId) as Record<string, unknown> | undefined;
     if (!instance) return res.status(404).json({ error: 'Instance not found' });
 
     const status = instance.status as string;
@@ -228,7 +317,7 @@ router.put('/:id/stop', async (req: Request, res: Response) => {
       });
     }
 
-    const stopResult = await stopInstanceExecution(db, id, behavior);
+    const stopResult = await stopInstanceExecution(db, id, tenantId, behavior);
     console.log(`[instances] Instance ${id} stopped (authoritative) — behavior=${behavior} abortOk=${stopResult.abortOk ?? !stopResult.sessionKey} abortStatus=${stopResult.abortStatus ?? 'not-attempted'} runtimeUncertain=${stopResult.runtimeUncertain} cronRemoved=${stopResult.cronRemoved}`);
     return res.json({
       ok: true,
@@ -237,6 +326,8 @@ router.put('/:id/stop', async (req: Request, res: Response) => {
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
-});
+}
+
+router.put('/:id/stop', stopInstanceRoute);
 
 export default router;

@@ -1,9 +1,14 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { execFile } from 'child_process';
 import { type Db } from "../../db/adapter/types";
+import { codexProviderHomeReference } from '../../runtimes/codex/auth';
+import { claudeProviderHomeReference } from '../../runtimes/claudeCode/auth';
+import { buildRuntimeChildEnv } from '../../runtimes/environment';
+import { resolveAllowedRuntimeExecutable } from '../../runtimes/executablePolicy';
 
-export type RuntimeProviderKind = 'openclaw' | 'hermes';
+export type RuntimeProviderKind = 'openclaw' | 'hermes' | 'claude-code' | 'codex';
 
 export interface RuntimeProviderCapability {
   runtime: RuntimeProviderKind;
@@ -63,6 +68,60 @@ function record(value: unknown): Record<string, unknown> {
 function anthropicProfileKeys(document: Record<string, unknown> | null): string[] {
   const profiles = record(document?.profiles);
   return Object.keys(profiles).filter(key => key === 'anthropic' || key.startsWith('anthropic:'));
+}
+
+function hasJsonObject(filePath: string): boolean {
+  return readObject(filePath) !== null;
+}
+
+function execFileOutput(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<{ ok: boolean; stdout: string }> {
+  return new Promise(resolve => {
+    execFile(command, args, {
+      env,
+      encoding: 'utf8',
+      timeout: 5_000,
+      maxBuffer: 128 * 1024,
+      windowsHide: true,
+    }, (error, stdout) => {
+      resolve({ ok: !error, stdout: typeof stdout === 'string' ? stdout : '' });
+    });
+  });
+}
+
+async function claudeCodeAuthReady(command: string, home: string): Promise<boolean> {
+  const status = await execFileOutput(
+    command,
+    ['auth', 'status', '--json'],
+    buildRuntimeChildEnv({ CLAUDE_CONFIG_DIR: home }),
+  );
+  if (!status.ok) return false;
+  try {
+    return readObjectFromText(status.stdout)?.loggedIn === true;
+  } catch {
+    return false;
+  }
+}
+
+async function codexAuthReady(command: string, home: string): Promise<boolean> {
+  const status = await execFileOutput(
+    command,
+    ['login', 'status'],
+    buildRuntimeChildEnv({ CODEX_HOME: home }),
+  );
+  return status.ok;
+}
+
+function readObjectFromText(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return record(parsed);
+  } catch {
+    return null;
+  }
 }
 
 class OpenClawAnthropicSubscriptionAdapter implements RuntimeProviderAdapter {
@@ -153,7 +212,7 @@ class HermesAnthropicSubscriptionAdapter implements RuntimeProviderAdapter {
     };
   }
 
-  async discover(context: { runtimeConfig?: Record<string, unknown> | null } = {}): Promise<DiscoveredProviderConnection[]> {
+  async discover(context: { agentSlug?: string | null; runtimeConfig?: Record<string, unknown> | null } = {}): Promise<DiscoveredProviderConnection[]> {
     const runtimeConfig = context.runtimeConfig ?? {};
     const profile = typeof runtimeConfig.profile === 'string' && runtimeConfig.profile.trim()
       ? runtimeConfig.profile.trim()
@@ -190,9 +249,149 @@ class HermesAnthropicSubscriptionAdapter implements RuntimeProviderAdapter {
   }
 }
 
+class ClaudeCodeAnthropicSubscriptionAdapter implements RuntimeProviderAdapter {
+  capability: RuntimeProviderCapability = {
+    runtime: 'claude-code',
+    provider: 'anthropic',
+    authModes: ['subscription'],
+    supportsProfiles: true,
+    supportsInteractiveLogin: true,
+    supportsHeadlessLogin: false,
+  };
+
+  authInstructions(): RuntimeAuthInstructions {
+    return {
+      command: 'claude',
+      args: ['auth', 'login'],
+      message: 'Claude Code owns this login. Agent HQ records only a reference to the CLI profile and never copies OAuth credentials.',
+    };
+  }
+
+  async discover(context: { agentSlug?: string | null; runtimeConfig?: Record<string, unknown> | null } = {}): Promise<DiscoveredProviderConnection[]> {
+    const executable = resolveAllowedRuntimeExecutable(
+      'claude-code',
+      context.runtimeConfig?.claudeBin,
+    );
+    const defaultHome = path.join(os.homedir(), '.claude');
+    const configured = typeof context.runtimeConfig?.claudeConfigDir === 'string'
+      ? context.runtimeConfig.claudeConfigDir.trim()
+      : '';
+    const home = configured || process.env.CLAUDE_CONFIG_DIR?.trim() || defaultHome;
+    const credentialPath = [
+      path.join(home, '.credentials.json'),
+      path.join(home, 'credentials.json'),
+    ].find(hasJsonObject);
+    // macOS commonly keeps Claude credentials in Keychain rather than a JSON
+    // file. The CLI status command is the source of truth and its output is
+    // reduced to a boolean so account identifiers never enter Agent HQ.
+    if (!credentialPath && !(await claudeCodeAuthReady(executable.path, home))) return [];
+
+    const externalRef = claudeProviderHomeReference(home);
+    return [{
+      externalRef,
+      displayName: externalRef.endsWith(':default')
+        ? 'Claude subscription (Claude Code default profile)'
+        : 'Claude subscription (Claude Code isolated profile)',
+      metadata: {
+        credential_owner: 'claude-code',
+        profile: externalRef.split(':').slice(1).join(':'),
+        ...(context.agentSlug ? { agent_slug: context.agentSlug } : {}),
+      },
+    }];
+  }
+
+  buildDispatchConfig(input: { model: string | null; externalRef: string; runtimeConfig: Record<string, unknown> }): RuntimeDispatchSelection {
+    const model = input.model?.startsWith('anthropic/')
+      ? input.model.slice('anthropic/'.length)
+      : input.model;
+    return {
+      provider: 'anthropic',
+      model,
+      runtimeConfig: { ...input.runtimeConfig, providerConnectionExternalRef: input.externalRef },
+    };
+  }
+}
+
+class CodexSubscriptionAdapter implements RuntimeProviderAdapter {
+  capability: RuntimeProviderCapability = {
+    runtime: 'codex',
+    provider: 'openai-codex',
+    authModes: ['subscription'],
+    supportsProfiles: true,
+    supportsInteractiveLogin: true,
+    supportsHeadlessLogin: true,
+  };
+
+  authInstructions(): RuntimeAuthInstructions {
+    return {
+      command: 'codex',
+      args: ['login'],
+      message: 'Codex owns this login. For an isolated profile, run it with CODEX_HOME set to that profile directory; Agent HQ stores only an opaque profile reference and never copies its OAuth credentials.',
+    };
+  }
+
+  async discover(context: { agentSlug?: string | null; runtimeConfig?: Record<string, unknown> | null } = {}): Promise<DiscoveredProviderConnection[]> {
+    const executable = resolveAllowedRuntimeExecutable(
+      'codex',
+      context.runtimeConfig?.codexBin,
+    );
+    const defaultHome = path.join(os.homedir(), '.codex');
+    const exactConfiguredHome = typeof context.runtimeConfig?.codexHome === 'string'
+      ? context.runtimeConfig.codexHome.trim()
+      : '';
+    // Compatibility: provider discovery historically treated codexHomeRoot as
+    // an exact CLI-owned profile. The local runtime does the same only when a
+    // provider connection is selected; without one it remains a managed parent.
+    const legacyConfiguredHome = typeof context.runtimeConfig?.codexHomeRoot === 'string'
+      ? context.runtimeConfig.codexHomeRoot.trim()
+      : '';
+    const environmentHome = process.env.CODEX_HOME?.trim() || '';
+    const homeSource = exactConfiguredHome
+      ? 'configured'
+      : legacyConfiguredHome
+        ? 'configured-legacy'
+        : environmentHome
+          ? 'environment'
+          : 'default';
+    const home = exactConfiguredHome || legacyConfiguredHome || environmentHome || defaultHome;
+    // `auth.json` is optional when Codex uses the OS keyring. Like Claude,
+    // validate through the CLI and retain only an opaque profile reference.
+    if (!hasJsonObject(path.join(home, 'auth.json')) && !(await codexAuthReady(executable.path, home))) return [];
+
+    const externalRef = codexProviderHomeReference(home);
+    return [{
+      externalRef,
+      displayName: externalRef.endsWith(':default')
+        ? 'ChatGPT subscription (Codex default profile)'
+        : 'ChatGPT subscription (Codex isolated profile)',
+      metadata: {
+        credential_owner: 'codex',
+        profile: externalRef.split(':').slice(1).join(':'),
+        home_source: homeSource,
+        ...(context.agentSlug ? { agent_slug: context.agentSlug } : {}),
+      },
+    }];
+  }
+
+  buildDispatchConfig(input: { model: string | null; externalRef: string; runtimeConfig: Record<string, unknown> }): RuntimeDispatchSelection {
+    const model = input.model?.startsWith('openai/')
+      ? input.model.slice('openai/'.length)
+      : input.model?.startsWith('openai-codex/')
+        ? input.model.slice('openai-codex/'.length)
+        : input.model;
+    return {
+      provider: 'openai-codex',
+      model,
+      runtimeConfig: { ...input.runtimeConfig, providerConnectionExternalRef: input.externalRef },
+    };
+  }
+}
+
 const ADAPTERS: RuntimeProviderAdapter[] = [
   new OpenClawAnthropicSubscriptionAdapter(),
   new HermesAnthropicSubscriptionAdapter(),
+  new ClaudeCodeAnthropicSubscriptionAdapter(),
+  new CodexSubscriptionAdapter(),
 ];
 
 export function listRuntimeProviderCapabilities(): RuntimeProviderCapability[] {

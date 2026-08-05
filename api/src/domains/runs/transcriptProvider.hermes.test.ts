@@ -36,4 +36,20 @@ describe('Hermes transcript provider mapping', () => {
     expect(provider).toBeInstanceOf(RemoteTranscriptProvider);
     expect(provider.getTranscriptSource()).toBe('remote-hermes');
   });
+
+  it('uses the chat-message-backed provider for streamed Codex events', async () => {
+    mockGet.mockReturnValue({
+      id: 42,
+      name: 'Codex Agent',
+      runtime_type: 'codex',
+      runtime_config: null,
+      session_key: 'agent:codex:main',
+      hooks_url: null,
+      openclaw_agent_id: null,
+    });
+
+    const provider = await resolveTranscriptProviderByAgent(42);
+    expect(provider).toBeInstanceOf(RemoteTranscriptProvider);
+    expect(provider.getTranscriptSource()).toBe('remote-codex');
+  });
 });

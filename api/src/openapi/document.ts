@@ -119,6 +119,7 @@ export const openApiDocument: OpenApiDocument = {
     { name: 'Workflow Definitions', description: 'Workflow type, status, field schema, relationship, and outcome definitions. Sprint type routes remain legacy aliases during compatibility.' },
     { name: 'Tasks', description: 'Task records, workflow outcomes, evidence, notes, blockers, attachments, and history.' },
     { name: 'Agents', description: 'Agent configuration, skills, tool assignments, and routing config.' },
+    { name: 'Runtime Drivers', description: 'Read-only runtime prerequisite diagnostics that do not launch a model.' },
     { name: 'Skills', description: 'Installed Agent HQ skill definitions.' },
     { name: 'Tools', description: 'Reusable local tool definitions and agent assignments.' },
     { name: 'Routing', description: 'Workflow assignment rules, statuses, transitions, and event mappings.' },
@@ -1361,6 +1362,23 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
+    '/runtime-drivers/diagnose': {
+      post: {
+        tags: ['Runtime Drivers'],
+        summary: 'Diagnose runtime launch prerequisites without starting a model.',
+        description: 'Checks runtime configuration, local CLI resolution/version, workspace access, and isolated config-home readiness. The endpoint never submits a prompt or launches an agent turn.',
+        operationId: 'diagnoseRuntimeDriver',
+        requestBody: requestBody(ref('RuntimeDriverDiagnosticRequest'), {
+          agent_id: 42,
+        }),
+        responses: {
+          '200': response('Runtime prerequisite diagnostic.', ref('RuntimeDriverDiagnostic')),
+          '400': errorResponseRef,
+          '404': notFoundResponseRef,
+          default: errorResponseRef,
+        },
+      },
+    },
     '/agents/{id}': {
       get: {
         tags: ['Agents'],
@@ -2483,7 +2501,11 @@ export const openApiDocument: OpenApiDocument = {
           job_title: { type: 'string', nullable: true },
           session_key: { type: 'string', nullable: true },
           workspace_path: { type: 'string', nullable: true },
-          runtime_type: { type: 'string', nullable: true },
+          runtime_type: {
+            type: 'string',
+            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook', 'veri'],
+            nullable: true,
+          },
           runtime_config: { type: 'object', nullable: true, additionalProperties: true },
           project_id: { type: 'integer', nullable: true },
           provider_id: { type: 'integer', nullable: true },
@@ -2501,7 +2523,10 @@ export const openApiDocument: OpenApiDocument = {
           role: { type: 'string' },
           session_key: { type: 'string' },
           workspace_path: { type: 'string' },
-          runtime_type: { type: 'string' },
+          runtime_type: {
+            type: 'string',
+            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook', 'veri'],
+          },
           runtime_config: { type: 'object', additionalProperties: true },
           project_id: { type: 'integer' },
           provider_id: { type: 'integer' },
@@ -2513,6 +2538,49 @@ export const openApiDocument: OpenApiDocument = {
       AgentUpdateRequest: {
         allOf: [ref('AgentCreateRequest')],
         description: 'Any subset of mutable agent fields. Repository ownership fields are workflow-owned and rejected here.',
+      },
+      RuntimeDriverDiagnosticRequest: {
+        type: 'object',
+        properties: {
+          agent_id: { type: 'integer', minimum: 1 },
+          runtime_type: {
+            type: 'string',
+            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook', 'veri'],
+          },
+          runtime_config: { type: 'object', nullable: true, additionalProperties: true },
+          workspace_path: { type: 'string', nullable: true },
+        },
+        description: 'Provide agent_id to diagnose stored settings, or runtime_type plus optional config/workspace to diagnose a draft.',
+      },
+      RuntimeDiagnosticCheck: {
+        type: 'object',
+        required: ['key', 'label', 'status', 'message'],
+        properties: {
+          key: { type: 'string', enum: ['config', 'command', 'version', 'workspace', 'config_home'] },
+          label: { type: 'string' },
+          status: { type: 'string', enum: ['pass', 'warn', 'fail', 'skipped'] },
+          message: { type: 'string' },
+          details: { type: 'object', additionalProperties: true },
+        },
+      },
+      RuntimeDriverDiagnostic: {
+        type: 'object',
+        required: ['ok', 'runtime_type', 'agent_id', 'checked_at', 'duration_ms', 'checks'],
+        properties: {
+          ok: { type: 'boolean' },
+          runtime_type: {
+            type: 'string',
+            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook', 'veri'],
+          },
+          agent_id: { type: 'integer', nullable: true },
+          checked_at: { type: 'string', format: 'date-time' },
+          duration_ms: { type: 'integer', minimum: 0 },
+          command: { type: 'string', nullable: true },
+          executable_path: { type: 'string', nullable: true },
+          version: { type: 'string', nullable: true },
+          workspace_path: { type: 'string', nullable: true },
+          checks: arrayOf(ref('RuntimeDiagnosticCheck')),
+        },
       },
       AgentSkillAssignRequest: {
         type: 'object',

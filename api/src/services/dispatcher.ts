@@ -35,6 +35,12 @@ import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from '.
 import { TASK_STATUSES, DEFAULT_TERMINAL_TASK_STATUS_SEEDS } from '../lib/taskStatuses';
 import { AGENT_HQ_DISPATCHER_SOURCE, DISPATCH_STARTUP_FAILED_EVENT, resolveWorkflowEventMapping } from '../domains/routing/externalEventMappings';
 import type { AgentRuntime, DispatchParams } from '../runtimes/types';
+import type { RuntimeExecutionTargetV1 } from '../runtimes/runtimeBoundary';
+import { resolveAllowedRuntimeExecutable } from '../runtimes/executablePolicy';
+import { normalizeClaudeCodeRuntimeConfig } from '../runtimes/claudeCode/config';
+import { normalizeCodexRuntimeConfig } from '../runtimes/codex/config';
+import { buildRuntimeBoundaryV1 } from './runtimeBoundaryBuilder';
+import { loadRuntimeBoundaryAssignments } from './runtimeBoundaryAssignments';
 import type { CandidateTask } from './dispatch/types';
 import { sortCandidates } from './dispatch/routing/candidates';
 export { sortCandidates } from './dispatch/routing/candidates';
@@ -59,6 +65,27 @@ import {
 } from './dispatch/prompt';
 import { type Db } from "../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
+
+/**
+ * Resolve local runtime binaries while the dispatcher is still constructing
+ * the immutable boundary. The runtime's zero-spend version probe must later
+ * return this exact fingerprint before it is allowed to spawn the path it
+ * probed. Remote/managed drivers intentionally carry no host executable.
+ */
+export function resolveRuntimeBoundaryExecutableFingerprint(
+  runtimeType: string,
+  runtimeConfig: unknown,
+): string | null {
+  if (runtimeType === 'claude-code') {
+    const config = normalizeClaudeCodeRuntimeConfig(runtimeConfig as never);
+    return resolveAllowedRuntimeExecutable('claude-code', config.claudeBin).fingerprint;
+  }
+  if (runtimeType === 'codex') {
+    const config = normalizeCodexRuntimeConfig(runtimeConfig as never);
+    return resolveAllowedRuntimeExecutable('codex', config.codexBin).fingerprint;
+  }
+  return null;
+}
 
 function hasMaterializedAgentHqLifecycleMcp(bundlePath: string | undefined, agentId: number | null | undefined): boolean {
   if (!bundlePath || agentId == null || !fs.existsSync(bundlePath)) return false;
@@ -281,21 +308,21 @@ function slugFromSessionKey(sessionKey: string | null | undefined, fallbackName?
 async function prepareRuntimeAuthProfiles(runtime: AgentRuntime, params: DispatchParams): Promise<void> {
   const result = await runtime.prepareAuthProfiles({
     agentSlug: params.agentSlug,
+    agentId: params.runtimeBoundary?.identity.agentId ?? null,
+    tenantId: params.runtimeBoundary?.identity.tenantId ?? null,
     preferredProvider: params.preferredProvider ?? null,
     providerConnectionId: params.providerConnectionId ?? null,
     runtimeConfig: params.runtimeConfig,
   });
   if (result.ok) return;
 
-  const authPath = result.runtimeAuthPath ?? result.openclawAuthPath ?? null;
   const provider = result.providersSynced[0]
     ?? result.runtimeAuthProvidersSynced[0]
     ?? result.openclawAuthProvidersSynced[0]
     ?? params.preferredProvider
     ?? 'provider';
-  const pathSuffix = authPath ? ` at ${authPath}` : '';
   throw new Error(
-    `Runtime credential preparation failed for ${provider}${pathSuffix}: ${result.error ?? 'unknown error'}`,
+    `Runtime credential preparation failed for ${provider}: ${result.error ?? 'unknown error'}`,
   );
 }
 
@@ -1447,6 +1474,7 @@ async function fireAgentRun(
 ): Promise<void> {
   const timeoutSec = job.timeout_seconds || 900;
   const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
+  const boundaryDurableRunId = durableRunId?.trim() || `legacy-instance:${instanceId}`;
   const sessionKey = buildSessionKey(instanceId, durableRunId);
   const pathContext = resolveDispatchPathContext({
     worktreePath,
@@ -1499,6 +1527,22 @@ async function fireAgentRun(
   const skillMaterializationRuntimeConfig = buildDispatchRuntimeConfig(job.runtime_config, {
     ...(activeRepoRoot ? { workingDirectory: activeRepoRoot } : {}),
   });
+  const runtimeType = job.runtime_type ?? 'openclaw';
+  const tenantId = Number(job.tenant_id ?? modelScope?.tenantId ?? 1);
+  const requiredLifecycleTools = taskId != null
+    ? ['agent_hq_post_task_outcome', 'agent_hq_start_task_run']
+    : [];
+  // Snapshot assignments before writing runtime artifacts. The local adapters
+  // re-read the live assignments immediately before spawn; using this same
+  // snapshot for materialization and boundary construction closes both sides
+  // of the prepare-A/launch-B race.
+  const boundaryAssignments = await loadRuntimeBoundaryAssignments({
+    db,
+    tenantId,
+    agentId: job.agent_id,
+    requiredLifecycleTools,
+    failClosed: runtimeType === 'claude-code' || runtimeType === 'codex',
+  });
 
   // Persist resolved runtime routing on the instance so it's visible in the UI/audit log.
   if (model || thinking || fastMode !== null) {
@@ -1528,17 +1572,11 @@ async function fireAgentRun(
     // Resolve the working directory (same logic as before, now shared across runtimes)
     const workingDirectory: string | null = activeRepoRoot;
 
-    // Parse skill names from the canonical agent/job record
-    let skillNames: string[] = [];
-    if (job.skill_names) {
-      try {
-        const parsed = JSON.parse(job.skill_names);
-        if (Array.isArray(parsed)) skillNames = parsed.filter((s): s is string => typeof s === 'string');
-      } catch { /* ignore */ }
-    }
+    const skillNames = boundaryAssignments.skills.map((skill) => skill.name);
 
     if (workingDirectory) {
       const adapter = getSkillMaterializationAdapter(job.runtime_type);
+      const strictRuntimeSkills = job.runtime_type === 'claude-code' || job.runtime_type === 'codex';
       try {
         const materializeResult = await adapter.materialize({
           workingDirectory,
@@ -1547,7 +1585,7 @@ async function fireAgentRun(
           hooksUrl: job.agent_hooks_url,
           runtimeConfig: skillMaterializationRuntimeConfig,
           db,
-          tenantId: Number(job.tenant_id ?? 0) || null,
+          tenantId,
         });
         for (const warn of materializeResult.warnings) {
           console.warn(`[dispatcher] ${warn}`);
@@ -1558,17 +1596,36 @@ async function fireAgentRun(
                     agentName: job.agent_name ?? null,
                     instanceId,
                     taskId,
-                    tenantId: Number(job.tenant_id ?? 0) || null,
+                    tenantId,
                     requestedSkillNames: skillNames,
                   });
-        if (!(await materializeResult).ok && (await materializeResult).error) {
-          console.warn(`[dispatcher] skill materialization error for instance #${instanceId}: ${(await materializeResult).error}`);
-        } else if ((await materializeResult).count > 0) {
+        const satisfiedSkills = new Set(
+          materializeResult.details
+            .filter((detail) => detail.action === 'created'
+              || detail.action === 'updated'
+              || (detail.action === 'skipped' && detail.reason === 'already correct'))
+            .map((detail) => detail.skill),
+        );
+        const missingSkills = skillNames.filter((name) => !satisfiedSkills.has(name));
+        if (strictRuntimeSkills && (
+          !materializeResult.ok
+          || missingSkills.length > 0
+          || (skillNames.length > 0 && materializeResult.warnings.length > 0)
+        )) {
+          throw new Error(
+            materializeResult.error
+              ?? `Assigned skills were not materialized exactly: ${missingSkills.join(', ') || materializeResult.warnings.join('; ')}`,
+          );
+        }
+        if (!materializeResult.ok && materializeResult.error) {
+          console.warn(`[dispatcher] skill materialization error for instance #${instanceId}: ${materializeResult.error}`);
+        } else if (materializeResult.count > 0) {
           console.log(
-            `[dispatcher] skill materialization (${adapter.adapterName}): ${(await materializeResult).count} skill(s) for instance #${instanceId}`,
+            `[dispatcher] skill materialization (${adapter.adapterName}): ${materializeResult.count} skill(s) for instance #${instanceId}`,
           );
         }
       } catch (matErr) {
+        if (strictRuntimeSkills) throw matErr;
         console.warn(`[dispatcher] skill materialization failed for instance #${instanceId}:`, matErr);
       }
     }
@@ -1579,7 +1636,7 @@ async function fireAgentRun(
   // extension bundles. Hermes full-runtime agents consume the same assigned MCP
   // servers from their prepared runtime cwd/profile context so lifecycle writes
   // happen through Agent HQ MCP callbacks instead of proxy-parsed stdout blocks.
-  const runtimeTypeForMcp = job.runtime_type ?? 'openclaw';
+  const runtimeTypeForMcp = runtimeType;
   let openClawMcpReadiness: DispatchParams['openClawMcpReadiness'] = null;
   let mcpStartupError: Error | null = null;
   if (runtimeTypeForMcp === 'openclaw' || runtimeTypeForMcp === 'hermes') {
@@ -1687,19 +1744,54 @@ async function fireAgentRun(
     const dispatchRuntimeConfig = buildDispatchRuntimeConfig(job.runtime_config, runtimeConfigOverride);
     const providerDispatch = await resolveRuntimeProviderDispatchSelection({
           db,
-          tenantId: Number(job.tenant_id ?? modelScope?.tenantId ?? 1),
-          runtimeType: job.runtime_type ?? 'openclaw',
+          tenantId,
+          runtimeType,
           providerConnectionId: job.provider_connection_id ?? null,
           preferredProvider,
           model,
           runtimeConfig: dispatchRuntimeConfig,
         });
+    const executableFingerprint = resolveRuntimeBoundaryExecutableFingerprint(
+      runtimeType,
+      providerDispatch.runtimeConfig,
+    );
 
     console.log(
       `[dispatcher] Instance #${instanceId} runtime config handoff: mode=${pathMode} workingDirectory=${typeof dispatchRuntimeConfig.workingDirectory === 'string' ? dispatchRuntimeConfig.workingDirectory : 'null'} activeRepoRoot=${activeRepoRoot ?? 'null'} workspaceRoot=${workspaceContainerRoot ?? 'null'} worktreePath=${worktreeRoot ?? 'null'} runtimeConfigWorkingDirectory=${runtimeConfigWorkingDirectory ?? 'null'} repoRootSource=${repoRootSource} workspaceRootSource=${workspaceContainerSource}`
     );
 
-    const runtimeParams = {
+    const runtimeBoundary = buildRuntimeBoundaryV1({
+      tenantId,
+      projectId: job.project_id ?? modelScope?.projectId ?? null,
+      workflowId: modelScope?.sprintId ?? null,
+      taskId: taskId ?? null,
+      instanceId,
+      durableRunId: boundaryDurableRunId,
+      agentId: job.agent_id,
+      agentSlug,
+      runtimeType,
+      executableFingerprint,
+      runtimeConfig: providerDispatch.runtimeConfig,
+      model: providerDispatch.model,
+      reasoning: thinking,
+      fastMode,
+      timeoutSeconds: timeoutSec,
+      prompt: message,
+      workspaceRoot: workspaceContainerRoot,
+      activeRepoRoot,
+      repoAccessMode: repoContext?.repoAccessMode ?? null,
+      repoSource: repoContext?.repoSource ?? null,
+      branch: repoContext?.repoBranch ?? null,
+      mcpServers: boundaryAssignments.mcpServers,
+      skills: boundaryAssignments.skills,
+      requiredLifecycleTools,
+      provider: providerDispatch.provider || preferredProvider,
+      providerConnectionId: job.provider_connection_id ?? null,
+      callbackIdentity: sessionKey,
+      requestedBy: 'dispatcher',
+    });
+
+    const runtimeParams: DispatchParams = {
       message,
       agentSlug,
       sessionKey,
@@ -1731,6 +1823,7 @@ async function fireAgentRun(
         runtimeConfigWorkingDirectory,
       },
       runtimeConfig: providerDispatch.runtimeConfig,
+      runtimeBoundary,
       openClawMcpReadiness,
       hooksUrl: job.agent_hooks_url ?? null,
       hooksAuthHeader: job.agent_hooks_auth_header ?? null,
@@ -2340,6 +2433,8 @@ export interface DispatchInstanceParams {
   repoSource?: string | null;
   repoWorkspacePath?: string | null;
   repoBranch?: string | null;
+  /** Explicit scheduler-selected target for remote/ssh/sandbox backends. */
+  executionTarget?: RuntimeExecutionTargetV1 | null;
 }
 
 /**
@@ -2376,6 +2471,7 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
   }
 
   const durableRunId = await ensureJobInstanceDurableRunId(db, params.instanceId);
+  const boundaryDurableRunId = durableRunId?.trim() || `legacy-instance:${params.instanceId}`;
   const runSessionKey = buildSessionKey(params.instanceId, durableRunId);
   const agentSlug = (await resolveDispatchAgentSlug(db, {
       agentId: params.agentId,
@@ -2467,17 +2563,90 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
     const dispatchRuntimeConfig = Object.keys(runtimeConfigOverride).length > 0
       ? { ...baseRuntimeConfig, ...runtimeConfigOverride }
       : baseRuntimeConfig;
+    const runtimeType = params.runtimeType ?? 'openclaw';
     const providerDispatch = await resolveRuntimeProviderDispatchSelection({
           db,
           tenantId,
-          runtimeType: params.runtimeType ?? 'openclaw',
+          runtimeType,
           providerConnectionId: params.providerConnectionId ?? null,
           preferredProvider,
           model: effectiveModel,
           runtimeConfig: dispatchRuntimeConfig,
         });
+    const executableFingerprint = resolveRuntimeBoundaryExecutableFingerprint(
+      runtimeType,
+      providerDispatch.runtimeConfig,
+    );
 
-    const runtimeParams = {
+    const boundaryAssignments = await loadRuntimeBoundaryAssignments({
+      db,
+      tenantId,
+      agentId: params.agentId,
+      failClosed: runtimeType === 'claude-code' || runtimeType === 'codex',
+    });
+    if ((runtimeType === 'claude-code' || runtimeType === 'codex') && repoWorkspacePath) {
+      const skillNames = boundaryAssignments.skills.map((skill) => skill.name);
+      const adapter = getSkillMaterializationAdapter(runtimeType);
+      const materialized = await adapter.materialize({
+        workingDirectory: repoWorkspacePath,
+        skillNames,
+        skillsBasePath: OPENCLAW_SKILLS_PATH,
+        runtimeConfig: dispatchRuntimeConfig,
+        db,
+        tenantId,
+      });
+      const satisfiedSkills = new Set(
+        materialized.details
+          .filter((detail) => detail.action === 'created'
+            || detail.action === 'updated'
+            || (detail.action === 'skipped' && detail.reason === 'already correct'))
+          .map((detail) => detail.skill),
+      );
+      const missingSkills = skillNames.filter((name) => !satisfiedSkills.has(name));
+      if (
+        !materialized.ok
+        || missingSkills.length > 0
+        || (skillNames.length > 0 && materialized.warnings.length > 0)
+      ) {
+        throw new Error(
+          materialized.error
+            ?? `Assigned skills were not materialized exactly: ${missingSkills.join(', ') || materialized.warnings.join('; ')}`,
+        );
+      }
+    }
+    const runtimeBoundary = buildRuntimeBoundaryV1({
+      tenantId,
+      projectId: params.projectId ?? null,
+      workflowId: params.sprintId ?? null,
+      taskId: null,
+      instanceId: params.instanceId,
+      durableRunId: boundaryDurableRunId,
+      agentId: params.agentId,
+      agentSlug,
+      runtimeType,
+      executableFingerprint,
+      runtimeConfig: providerDispatch.runtimeConfig,
+      model: providerDispatch.model,
+      reasoning: effectiveThinking,
+      fastMode: effectiveFastMode,
+      timeoutSeconds: params.timeoutSeconds ?? 900,
+      prompt: params.message,
+      workspaceRoot: repoWorkspacePath,
+      activeRepoRoot: repoWorkspacePath,
+      repoAccessMode,
+      repoSource,
+      branch: repoBranch,
+      executionTarget: params.executionTarget,
+      mcpServers: boundaryAssignments.mcpServers,
+      skills: boundaryAssignments.skills,
+      requiredLifecycleTools: [],
+      provider: providerDispatch.provider || preferredProvider,
+      providerConnectionId: params.providerConnectionId ?? null,
+      callbackIdentity: runSessionKey,
+      requestedBy: 'dispatch-instance',
+    });
+
+    const runtimeParams: DispatchParams = {
       message: params.message,
       agentSlug,
       sessionKey: runSessionKey,
@@ -2497,7 +2666,9 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
       repoWorkspacePath,
       repoBranch,
       workspaceRoot: repoWorkspacePath,
+      activeRepoRoot: repoWorkspacePath,
       runtimeConfig: providerDispatch.runtimeConfig,
+      runtimeBoundary,
       hooksUrl: params.hooksUrl,
       hooksAuthHeader: params.hooksAuthHeader,
     };

@@ -38,13 +38,14 @@ function nextTaskStatus(currentStatus: string, behavior: StopBehavior): string {
 export async function applyStopBehavior(
   db: Db,
   instanceId: number,
+  tenantId: number,
   behavior: StopBehavior,
 ): Promise<StopBehaviorResult> {
   const instance = await db.get(`
     SELECT id, task_id
     FROM job_instances
-    WHERE id = ?
-  `, instanceId) as { id: number; task_id: number | null } | undefined;
+    WHERE id = ? AND tenant_id = ?
+  `, instanceId, tenantId) as { id: number; task_id: number | null } | undefined;
 
   if (!instance) {
     throw new Error(`Instance ${instanceId} not found`);
@@ -52,7 +53,7 @@ export async function applyStopBehavior(
 
   const taskId = instance.task_id ?? null;
   if (!taskId) {
-    await db.run(`UPDATE job_instances SET task_id = NULL WHERE id = ?`, instanceId);
+    await db.run(`UPDATE job_instances SET task_id = NULL WHERE id = ? AND tenant_id = ?`, instanceId, tenantId);
     return {
       behavior,
       taskId: null,
@@ -65,15 +66,16 @@ export async function applyStopBehavior(
   const task = await db.get(`
     SELECT id, status, active_instance_id
     FROM tasks
-    WHERE id = ?
-  `, taskId) as { id: number; status: string; active_instance_id: number | null } | undefined;
+    WHERE id = ? AND tenant_id = ?
+  `, taskId, tenantId) as { id: number; status: string; active_instance_id: number | null } | undefined;
 
   const taskStatusBefore = task?.status ?? null;
   const taskStatusAfter = taskStatusBefore ? nextTaskStatus(taskStatusBefore, behavior) : null;
   const clearedTaskLinkage = task?.active_instance_id === instanceId;
+  const scopedTaskId = task?.id ?? null;
 
   await db.withTransaction(async (db) => {
-    await db.run(`UPDATE job_instances SET task_id = NULL WHERE id = ?`, instanceId);
+    await db.run(`UPDATE job_instances SET task_id = NULL WHERE id = ? AND tenant_id = ?`, instanceId, tenantId);
 
     if (!task) return;
 
@@ -84,8 +86,8 @@ export async function applyStopBehavior(
             active_instance_id = NULL,
             agent_id = NULL,
             updated_at = datetime('now')
-        WHERE id = ?
-      `, taskStatusAfter, taskId);
+        WHERE id = ? AND tenant_id = ? AND active_instance_id = ?
+      `, taskStatusAfter, taskId, tenantId, instanceId);
       if (taskStatusBefore && taskStatusAfter && taskStatusAfter !== taskStatusBefore) {
         await writeTaskStatusChange(db, taskId, 'instance_stop', taskStatusBefore, taskStatusAfter);
       }
@@ -99,7 +101,7 @@ export async function applyStopBehavior(
 
   return {
     behavior,
-    taskId,
+    taskId: scopedTaskId,
     taskStatusBefore,
     taskStatusAfter,
     clearedTaskLinkage,

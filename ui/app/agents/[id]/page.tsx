@@ -3,7 +3,7 @@ import { formatDateTime, formatTime } from '@/lib/date';
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { api, Agent, AgentRuntimeType, JobInstance, LogEntry, AgentDoc, ProvisionStatus, ClaudeMdResult, Tool, AgentToolAssignment, AgentMcpAssignment, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, McpServer, ProviderConnectionRecord, ProviderRecord, AgentMcpPermissionPolicy, AgentMcpPermissionCapability, AgentMcpServerToolAllowlist, AgentMcpToolAllowlistPolicy, ProviderSlug } from '@/lib/api';
+import { api, Agent, AgentRuntimeType, JobInstance, LogEntry, AgentDoc, ProvisionStatus, ClaudeMdResult, Tool, AgentToolAssignment, AgentMcpAssignment, ClaudeCodeRuntimeConfig, CodexRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, McpServer, ProviderConnectionRecord, ProviderRecord, AgentMcpPermissionPolicy, AgentMcpPermissionCapability, AgentMcpServerToolAllowlist, AgentMcpToolAllowlistPolicy, ProviderSlug, RuntimeDriverDiagnostic } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { Badge, StatusDot } from '@/components/ui/badge';
 import { getRunLifecycle, getRunStatusLabel } from '@/lib/runLifecycle';
@@ -16,23 +16,26 @@ import {
 import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { DEFAULT_CLAUDE_ALLOWED_TOOLS, claudeRuntimeConfigToJson, serializeClaudeRuntimeConfig } from '@/lib/claudeRuntimeConfig';
 import {
   getAgentModelLabel,
   getAgentModelOptionsForProvider,
   getAgentProviderOptions,
   isDynamicModelProvider,
-  isOpenClawOnlyProvider,
+  isProviderSupportedByRuntime,
   isProviderConnected,
   PROVIDER_LABELS,
 } from '@/lib/providerOptions';
 
 // ─── Edit form state ──────────────────────────────────────────────────────────
 
-const EFFORT_OPTIONS = ['low', 'medium', 'high', 'max'] as const;
+const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+const CODEX_REASONING_EFFORT_OPTIONS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 const RUNTIME_TYPE_OPTIONS: Array<{ value: AgentRuntimeType; label: string }> = [
   { value: 'openclaw', label: 'OpenClaw' },
   { value: 'claude-code', label: 'Claude Code' },
+  { value: 'codex', label: 'Codex' },
   { value: 'hermes', label: 'Hermes' },
   { value: 'webhook', label: 'Webhook' },
   { value: 'veri', label: 'Custom (Agent Runtime)' },
@@ -64,7 +67,9 @@ const emptyClaudeRuntimeConfig: ClaudeCodeRuntimeConfig = {
   workingDirectory: '',
   model: '',
   effort: 'medium',
-  allowedTools: [],
+  allowedTools: [...DEFAULT_CLAUDE_ALLOWED_TOOLS],
+  permissionMode: 'allowlist',
+  allowDangerousBypass: false,
   maxTurns: undefined,
   maxBudgetUsd: undefined,
   systemPromptSuffix: '',
@@ -84,16 +89,18 @@ const emptyHermesRuntimeConfig: HermesRuntimeConfig = {
   passSessionId: false,
 };
 
-function claudeRuntimeConfigToJson(cfg: ClaudeCodeRuntimeConfig): string {
-  const out: Record<string, unknown> = { workingDirectory: cfg.workingDirectory };
-  if (cfg.model) out.model = cfg.model;
-  if (cfg.effort) out.effort = cfg.effort;
-  if (cfg.allowedTools && cfg.allowedTools.length > 0) out.allowedTools = cfg.allowedTools;
-  if (cfg.maxTurns) out.maxTurns = cfg.maxTurns;
-  if (cfg.maxBudgetUsd) out.maxBudgetUsd = cfg.maxBudgetUsd;
-  if (cfg.systemPromptSuffix) out.systemPromptSuffix = cfg.systemPromptSuffix;
-  return JSON.stringify(out, null, 2);
-}
+const emptyCodexRuntimeConfig: CodexRuntimeConfig = {
+  codexBin: 'codex',
+  workingDirectory: '',
+  model: '',
+  reasoningEffort: 'high',
+  sandboxMode: 'workspace-write',
+  approvalPolicy: 'never',
+  skipGitRepoCheck: false,
+  codexHomeRoot: '',
+  extraArgs: [],
+  env: {},
+};
 
 function hermesRuntimeConfigToJson(cfg: HermesRuntimeConfig): string {
   const out: Record<string, unknown> = {};
@@ -111,9 +118,36 @@ function hermesRuntimeConfigToJson(cfg: HermesRuntimeConfig): string {
   return JSON.stringify(out, null, 2);
 }
 
+function codexRuntimeConfigToJson(cfg: CodexRuntimeConfig): string {
+  const out: Record<string, unknown> = {
+    codexBin: cfg.codexBin?.trim() || 'codex',
+    sandboxMode: cfg.sandboxMode ?? 'workspace-write',
+    approvalPolicy: cfg.approvalPolicy ?? 'never',
+  };
+  if (cfg.workingDirectory) out.workingDirectory = cfg.workingDirectory;
+  if (cfg.model) out.model = cfg.model;
+  if (cfg.reasoningEffort) out.reasoningEffort = cfg.reasoningEffort;
+  if (cfg.codexHomeRoot) out.codexHomeRoot = cfg.codexHomeRoot;
+  if (cfg.codexHome) out.codexHome = cfg.codexHome;
+  if (cfg.providerConnectionExternalRef) out.providerConnectionExternalRef = cfg.providerConnectionExternalRef;
+  if (cfg.skipGitRepoCheck) out.skipGitRepoCheck = true;
+  if (cfg.resumeSessionId) out.resumeSessionId = cfg.resumeSessionId;
+  if (cfg.extraArgs?.length) out.extraArgs = cfg.extraArgs;
+  if (cfg.env && Object.keys(cfg.env).length > 0) out.env = cfg.env;
+  if (cfg.killGraceMs != null) out.killGraceMs = cfg.killGraceMs;
+  if (cfg.allowDangerousFullAccess) out.allowDangerousFullAccess = true;
+  return JSON.stringify(out, null, 2);
+}
+
 function agentToForm(agent: Agent, providers: ProviderRecord[] = []): EditFormState {
   const runtimeType = agent.runtime_type ?? 'openclaw';
-  const rc = agent.runtime_config ?? (runtimeType === 'hermes' ? { ...emptyHermesRuntimeConfig } : { ...emptyClaudeRuntimeConfig });
+  const rc = agent.runtime_config ?? (
+    runtimeType === 'hermes'
+      ? { ...emptyHermesRuntimeConfig }
+      : runtimeType === 'codex'
+        ? { ...emptyCodexRuntimeConfig }
+        : { ...emptyClaudeRuntimeConfig }
+  );
   const providerOptions = getAgentProviderOptions(providers);
   const savedProvider = agent.preferred_provider ?? '';
   const preferredProvider = providerOptions.some(option => option.value === savedProvider)
@@ -145,17 +179,50 @@ function agentToForm(agent: Agent, providers: ProviderRecord[] = []): EditFormSt
             ignoreRules: (rc as HermesRuntimeConfig).ignoreRules ?? false,
             passSessionId: (rc as HermesRuntimeConfig).passSessionId ?? false,
           }
-        : {
+        : runtimeType === 'codex'
+          ? {
+              codexBin: (rc as CodexRuntimeConfig).codexBin ?? 'codex',
+              workingDirectory: (rc as CodexRuntimeConfig).workingDirectory ?? '',
+              model: (rc as CodexRuntimeConfig).model ?? '',
+              reasoningEffort: (rc as CodexRuntimeConfig).reasoningEffort ?? 'high',
+              sandboxMode: (rc as CodexRuntimeConfig).sandboxMode ?? 'workspace-write',
+              approvalPolicy: (rc as CodexRuntimeConfig).approvalPolicy ?? 'never',
+              allowDangerousFullAccess: (rc as CodexRuntimeConfig).allowDangerousFullAccess ?? false,
+              skipGitRepoCheck: (rc as CodexRuntimeConfig).skipGitRepoCheck ?? false,
+              codexHomeRoot: (rc as CodexRuntimeConfig).codexHomeRoot ?? '',
+              codexHome: (rc as CodexRuntimeConfig).codexHome,
+              providerConnectionExternalRef: (rc as CodexRuntimeConfig).providerConnectionExternalRef,
+              resumeSessionId: (rc as CodexRuntimeConfig).resumeSessionId,
+              extraArgs: (rc as CodexRuntimeConfig).extraArgs ?? [],
+              env: (rc as CodexRuntimeConfig).env ?? {},
+              killGraceMs: (rc as CodexRuntimeConfig).killGraceMs,
+            }
+          : {
+            claudeBin: (rc as ClaudeCodeRuntimeConfig).claudeBin,
             workingDirectory: (rc as ClaudeCodeRuntimeConfig).workingDirectory ?? '',
             model: (rc as ClaudeCodeRuntimeConfig).model ?? '',
             effort: (rc as ClaudeCodeRuntimeConfig).effort ?? 'medium',
-            allowedTools: (rc as ClaudeCodeRuntimeConfig).allowedTools ?? [],
+            allowedTools: (rc as ClaudeCodeRuntimeConfig).allowedTools ?? [...DEFAULT_CLAUDE_ALLOWED_TOOLS],
+            disallowedTools: [...((rc as ClaudeCodeRuntimeConfig).disallowedTools ?? [])],
+            permissionMode: (rc as ClaudeCodeRuntimeConfig).permissionMode ?? 'allowlist',
+            allowDangerousBypass: (rc as ClaudeCodeRuntimeConfig).allowDangerousBypass ?? false,
             maxTurns: (rc as ClaudeCodeRuntimeConfig).maxTurns,
             maxBudgetUsd: (rc as ClaudeCodeRuntimeConfig).maxBudgetUsd,
             systemPromptSuffix: (rc as ClaudeCodeRuntimeConfig).systemPromptSuffix ?? '',
+            extraArgs: [...((rc as ClaudeCodeRuntimeConfig).extraArgs ?? [])],
+            env: { ...((rc as ClaudeCodeRuntimeConfig).env ?? {}) },
+            killGraceMs: (rc as ClaudeCodeRuntimeConfig).killGraceMs,
+            claudeConfigDir: (rc as ClaudeCodeRuntimeConfig).claudeConfigDir,
+            providerConnectionExternalRef: (rc as ClaudeCodeRuntimeConfig).providerConnectionExternalRef,
           }),
     },
-    raw_json: runtimeType === 'claude-code' ? claudeRuntimeConfigToJson(rc as ClaudeCodeRuntimeConfig) : runtimeType === 'hermes' ? hermesRuntimeConfigToJson(rc as HermesRuntimeConfig) : '',
+    raw_json: runtimeType === 'claude-code'
+      ? claudeRuntimeConfigToJson(rc as ClaudeCodeRuntimeConfig)
+      : runtimeType === 'codex'
+        ? codexRuntimeConfigToJson(rc as CodexRuntimeConfig)
+        : runtimeType === 'hermes'
+          ? hermesRuntimeConfigToJson(rc as HermesRuntimeConfig)
+          : '',
     raw_json_expanded: false,
     job_instructions: agent.job_instructions ?? '',
     skill_names: (agent.skill_names ?? []).join(', '),
@@ -218,6 +285,9 @@ export default function AgentDetailPage() {
   const [dynamicModels, setDynamicModels] = useState<Array<{ id: string; label: string }>>([]);
   const [dynamicModelsLoading, setDynamicModelsLoading] = useState(false);
   const [dynamicModelsError, setDynamicModelsError] = useState<string | null>(null);
+  const [runtimeDiagnostic, setRuntimeDiagnostic] = useState<RuntimeDriverDiagnostic | null>(null);
+  const [runtimeDiagnosticLoading, setRuntimeDiagnosticLoading] = useState(false);
+  const [runtimeDiagnosticError, setRuntimeDiagnosticError] = useState<string | null>(null);
 
   // Capabilities (assigned tools)
   const [agentTools, setAgentTools] = useState<AgentToolAssignment[]>([]);
@@ -347,18 +417,22 @@ export default function AgentDetailPage() {
         base.runtime_config = JSON.parse(form.raw_json) as ClaudeCodeRuntimeConfig;
       } else {
         const runtimeConfig = form.runtime_config as ClaudeCodeRuntimeConfig;
-        const cfg: ClaudeCodeRuntimeConfig = {
-          workingDirectory: runtimeConfig.workingDirectory,
+        base.runtime_config = serializeClaudeRuntimeConfig(runtimeConfig);
+      }
+    }
+
+    if (form.runtime_type === 'codex') {
+      if (form.raw_json_expanded) {
+        base.runtime_config = JSON.parse(form.raw_json) as CodexRuntimeConfig;
+      } else {
+        const runtimeConfig = form.runtime_config as CodexRuntimeConfig;
+        base.runtime_config = {
+          ...runtimeConfig,
+          codexBin: runtimeConfig.codexBin?.trim() || 'codex',
+          workingDirectory: runtimeConfig.workingDirectory?.trim() || undefined,
+          model: runtimeConfig.model?.trim() || undefined,
+          codexHomeRoot: runtimeConfig.codexHomeRoot?.trim() || undefined,
         };
-        if (runtimeConfig.model) cfg.model = runtimeConfig.model;
-        if (runtimeConfig.effort) cfg.effort = runtimeConfig.effort;
-        if (runtimeConfig.allowedTools && runtimeConfig.allowedTools.length > 0) {
-          cfg.allowedTools = runtimeConfig.allowedTools;
-        }
-        if (runtimeConfig.maxTurns) cfg.maxTurns = Number(runtimeConfig.maxTurns);
-        if (runtimeConfig.maxBudgetUsd) cfg.maxBudgetUsd = Number(runtimeConfig.maxBudgetUsd);
-        if (runtimeConfig.systemPromptSuffix) cfg.systemPromptSuffix = runtimeConfig.systemPromptSuffix;
-        base.runtime_config = cfg;
       }
     }
 
@@ -403,14 +477,6 @@ export default function AgentDetailPage() {
         setSaving(false);
         return;
       }
-      // Validate claude-code required field
-      if (editForm.runtime_type === 'claude-code' && !editForm.raw_json_expanded) {
-        if (!(editForm.runtime_config as ClaudeCodeRuntimeConfig).workingDirectory.trim()) {
-          setSaveError('Working Directory is required for Claude Code runtime.');
-          setSaving(false);
-          return;
-        }
-      }
       if (editForm.runtime_type === 'hermes' && !editForm.raw_json_expanded) {
         if (!((editForm.runtime_config as HermesRuntimeConfig).profile ?? '').trim()) {
           setSaveError('Hermes profile is required so the runtime stays isolated per agent.');
@@ -418,16 +484,16 @@ export default function AgentDetailPage() {
           return;
         }
       }
-      if ((editForm.runtime_type === 'claude-code' || editForm.runtime_type === 'hermes') && editForm.raw_json_expanded) {
+      if ((editForm.runtime_type === 'claude-code' || editForm.runtime_type === 'codex' || editForm.runtime_type === 'hermes') && editForm.raw_json_expanded) {
         try {
           const parsed = JSON.parse(editForm.raw_json) as Record<string, unknown>;
-          if (editForm.runtime_type === 'claude-code' && !parsed.workingDirectory) {
-            setSaveError('runtime_config.workingDirectory is required for claude-code runtime.');
+          if (editForm.runtime_type === 'hermes' && !String(parsed.profile ?? '').trim()) {
+            setSaveError('runtime_config.profile is required for hermes runtime.');
             setSaving(false);
             return;
           }
-          if (editForm.runtime_type === 'hermes' && !String(parsed.profile ?? '').trim()) {
-            setSaveError('runtime_config.profile is required for hermes runtime.');
+          if (editForm.runtime_type === 'codex' && parsed.sandboxMode === 'danger-full-access' && parsed.allowDangerousFullAccess !== true) {
+            setSaveError('Codex danger-full-access requires allowDangerousFullAccess: true.');
             setSaving(false);
             return;
           }
@@ -647,6 +713,19 @@ export default function AgentDetailPage() {
     }
   };
 
+  const handleRuntimeDiagnostic = async () => {
+    setRuntimeDiagnosticLoading(true);
+    setRuntimeDiagnosticError(null);
+    try {
+      setRuntimeDiagnostic(await api.diagnoseRuntimeDriver({ agent_id: id }));
+    } catch (diagnosticError) {
+      setRuntimeDiagnostic(null);
+      setRuntimeDiagnosticError(diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError));
+    } finally {
+      setRuntimeDiagnosticLoading(false);
+    }
+  };
+
   // ── Guards ───────────────────────────────────────────────────────────────────
 
   if (loading) return (
@@ -681,10 +760,7 @@ export default function AgentDetailPage() {
         .filter(slug => !configuredProviderOptions.some(option => option.value === slug))
         .map(slug => ({ value: slug, label: PROVIDER_LABELS[slug as keyof typeof PROVIDER_LABELS] ?? slug })),
     ];
-    // Filter out OpenClaw-only providers (e.g. MiniMax) if the runtime is not OpenClaw
-    const providerOptions = editForm.runtime_type === 'openclaw'
-      ? allProviderOptions
-      : allProviderOptions.filter(opt => !isOpenClawOnlyProvider(opt.value));
+    const providerOptions = allProviderOptions.filter(opt => isProviderSupportedByRuntime(opt.value, editForm.runtime_type));
     const matchingConnections = eligibleConnections.filter(connection => connection.provider_slug === editForm.preferred_provider);
     const modelOptions = getAgentModelOptionsForProvider(editForm.preferred_provider);
     const modelSuggestions = isDynamicModelProvider(editForm.preferred_provider)
@@ -886,7 +962,7 @@ export default function AgentDetailPage() {
               {!editForm.raw_json_expanded && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <label className="block md:col-span-2">
-                    <span className="text-slate-400 text-xs mb-1 block">Working Directory <span className="text-red-400">*</span></span>
+                    <span className="text-slate-400 text-xs mb-1 block">Working Directory <span className="text-slate-600">(optional workflow fallback)</span></span>
                     <input
                       className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500 font-mono"
                       value={(editForm.runtime_config as ClaudeCodeRuntimeConfig).workingDirectory}
@@ -961,6 +1037,39 @@ export default function AgentDetailPage() {
                       placeholder="Bash, Read, Write, Edit"
                     />
                   </label>
+                  <label className="block">
+                    <span className="text-slate-400 text-xs mb-1 block">Permission Posture</span>
+                    <select
+                      className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+                      value={(editForm.runtime_config as ClaudeCodeRuntimeConfig).permissionMode ?? 'allowlist'}
+                      onChange={e => setF({
+                        runtime_config: {
+                          ...(editForm.runtime_config as ClaudeCodeRuntimeConfig),
+                          permissionMode: e.target.value as ClaudeCodeRuntimeConfig['permissionMode'],
+                          ...(e.target.value === 'allowlist' ? { allowDangerousBypass: false } : {}),
+                        },
+                      })}
+                    >
+                      <option value="allowlist">Tool allowlist (recommended)</option>
+                      <option value="bypass">Unrestricted bypass</option>
+                    </select>
+                  </label>
+                  {(editForm.runtime_config as ClaudeCodeRuntimeConfig).permissionMode === 'bypass' && (
+                    <label className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-950/20 p-3 text-xs text-red-200">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={(editForm.runtime_config as ClaudeCodeRuntimeConfig).allowDangerousBypass === true}
+                        onChange={e => setF({
+                          runtime_config: {
+                            ...(editForm.runtime_config as ClaudeCodeRuntimeConfig),
+                            allowDangerousBypass: e.target.checked,
+                          },
+                        })}
+                      />
+                      I understand this disables Claude Code permission checks and grants host-level tool access.
+                    </label>
+                  )}
                 </div>
               )}
               <div className="border-t border-purple-500/10 pt-3">
@@ -986,6 +1095,76 @@ export default function AgentDetailPage() {
                     spellCheck={false}
                   />
                 )}
+              </div>
+            </div>
+          )}
+
+          {editForm.runtime_type === 'codex' && (
+            <div className="mt-4 p-4 bg-sky-950/20 border border-sky-500/20 rounded-lg space-y-4">
+              <div>
+                <span className="text-xs font-semibold text-sky-300 uppercase tracking-wider">Codex Runtime Config</span>
+                <p className="text-xs text-slate-400 mt-1">Defaults to a non-interactive workspace-write sandbox and an isolated per-agent CODEX_HOME.</p>
+              </div>
+              {!editForm.raw_json_expanded && (() => {
+                const config = editForm.runtime_config as CodexRuntimeConfig;
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label className="block">
+                      <span className="text-slate-400 text-xs mb-1 block">Codex Binary</span>
+                      <input className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-sky-500" value={config.codexBin ?? 'codex'} onChange={e => setF({ runtime_config: { ...config, codexBin: e.target.value } })} />
+                    </label>
+                    <label className="block">
+                      <span className="text-slate-400 text-xs mb-1 block">Model Override <span className="text-slate-600">(optional)</span></span>
+                      <input className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-sky-500" value={config.model ?? ''} onChange={e => setF({ runtime_config: { ...config, model: e.target.value } })} placeholder="gpt-5.5" />
+                    </label>
+                    <label className="block md:col-span-2">
+                      <span className="text-slate-400 text-xs mb-1 block">Working Directory <span className="text-slate-600">(optional workflow fallback)</span></span>
+                      <input className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-sky-500" value={config.workingDirectory ?? ''} onChange={e => setF({ runtime_config: { ...config, workingDirectory: e.target.value } })} />
+                    </label>
+                    <label className="block">
+                      <span className="text-slate-400 text-xs mb-1 block">Reasoning Effort</span>
+                      <select className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500" value={config.reasoningEffort ?? 'high'} onChange={e => setF({ runtime_config: { ...config, reasoningEffort: e.target.value as CodexRuntimeConfig['reasoningEffort'] } })}>
+                        {CODEX_REASONING_EFFORT_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-slate-400 text-xs mb-1 block">Approval Policy</span>
+                      <select className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500" value={config.approvalPolicy ?? 'never'} onChange={e => setF({ runtime_config: { ...config, approvalPolicy: e.target.value as CodexRuntimeConfig['approvalPolicy'] } })}>
+                        <option value="never">Never (non-interactive)</option>
+                        <option value="on-request">On request</option>
+                        <option value="untrusted">Untrusted commands</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-slate-400 text-xs mb-1 block">Sandbox</span>
+                      <select className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500" value={config.sandboxMode ?? 'workspace-write'} onChange={e => setF({ runtime_config: { ...config, sandboxMode: e.target.value as CodexRuntimeConfig['sandboxMode'], allowDangerousFullAccess: e.target.value === 'danger-full-access' ? false : undefined } })}>
+                        <option value="workspace-write">Workspace write (recommended)</option>
+                        <option value="read-only">Read only</option>
+                        <option value="danger-full-access">Danger: full host access</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-slate-400 text-xs mb-1 block">Codex Home Root <span className="text-slate-600">(optional)</span></span>
+                      <input className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-sky-500" value={config.codexHomeRoot ?? ''} onChange={e => setF({ runtime_config: { ...config, codexHomeRoot: e.target.value } })} />
+                    </label>
+                    <label className="md:col-span-2 flex items-start gap-2 text-sm text-slate-300">
+                      <input type="checkbox" className="mt-0.5" checked={Boolean(config.skipGitRepoCheck)} onChange={e => setF({ runtime_config: { ...config, skipGitRepoCheck: e.target.checked } })} />
+                      <span><span className="font-medium text-white">Skip Git repository check</span><br /><span className="text-xs text-slate-500">Only enable for intentionally non-Git workflows.</span></span>
+                    </label>
+                    {config.sandboxMode === 'danger-full-access' && (
+                      <label className="md:col-span-2 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-950/30 p-3 text-sm text-red-200">
+                        <input type="checkbox" className="mt-0.5" checked={config.allowDangerousFullAccess === true} onChange={e => setF({ runtime_config: { ...config, allowDangerousFullAccess: e.target.checked } })} />
+                        <span><span className="font-semibold">I understand this disables the Codex filesystem sandbox.</span><br /><span className="text-xs text-red-300/80">The run can modify files outside its worktree. This confirmation is required and never enabled automatically.</span></span>
+                      </label>
+                    )}
+                  </div>
+                );
+              })()}
+              <div className="border-t border-sky-500/10 pt-3">
+                <button type="button" className="flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300" onClick={() => setF({ raw_json: !editForm.raw_json_expanded ? codexRuntimeConfigToJson(editForm.runtime_config as CodexRuntimeConfig) : editForm.raw_json, raw_json_expanded: !editForm.raw_json_expanded })}>
+                  <ChevronRight className={`w-3.5 h-3.5 transition-transform ${editForm.raw_json_expanded ? 'rotate-90' : ''}`} /> Raw JSON editor {editForm.raw_json_expanded ? '(collapse)' : '(advanced)'}
+                </button>
+                {editForm.raw_json_expanded && <textarea className="mt-2 w-full bg-slate-900 border border-sky-500/30 rounded-lg px-3 py-2 text-sky-200 text-xs font-mono min-h-[180px]" value={editForm.raw_json} onChange={e => setF({ raw_json: e.target.value })} spellCheck={false} />}
               </div>
             </div>
           )}
@@ -1278,6 +1457,9 @@ export default function AgentDetailPage() {
           <Badge variant={agent.status}>{agent.status}</Badge>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={handleRuntimeDiagnostic} loading={runtimeDiagnosticLoading}>
+            <Activity className="w-3.5 h-3.5" /> Test Runtime
+          </Button>
           <Button variant="secondary" size="sm" onClick={() => enterEditMode(agent)}>
             <Pencil className="w-3.5 h-3.5" /> Edit
           </Button>
@@ -1286,6 +1468,33 @@ export default function AgentDetailPage() {
           </Button>
         </div>
       </div>
+
+      {(runtimeDiagnostic || runtimeDiagnosticError) && (
+        <Card className={runtimeDiagnostic?.ok ? 'border-emerald-500/30' : 'border-red-500/30'}>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2">
+              {runtimeDiagnostic?.ok ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <AlertCircle className="w-4 h-4 text-red-400" />}
+              <h2 className="font-semibold text-white">Runtime Diagnostic</h2>
+            </div>
+            {runtimeDiagnostic?.version && <code className="text-xs text-slate-400">{runtimeDiagnostic.version}</code>}
+          </div>
+          {runtimeDiagnosticError ? (
+            <p className="text-sm text-red-300">{runtimeDiagnosticError}</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {runtimeDiagnostic?.checks.map(check => (
+                <div key={check.key} className="rounded-lg bg-slate-900/50 border border-slate-700 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-slate-200">{check.label}</span>
+                    <span className={`text-[10px] uppercase tracking-wide ${check.status === 'pass' ? 'text-emerald-400' : check.status === 'fail' ? 'text-red-400' : check.status === 'warn' ? 'text-amber-400' : 'text-slate-500'}`}>{check.status}</span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">{check.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Delete confirmation dialog */}
       {deleteConfirmOpen && (

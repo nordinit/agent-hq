@@ -25,6 +25,7 @@
  *   openclaw     → OpenClawSkillAdapter   — copies into workspace `skills/`
  *   claude-code  → ClaudeCodeSkillAdapter — symlinks into workspace `.claude/skills/`
  *                                            + CLAUDE.md skill section
+ *   codex        → CodexSkillAdapter      — copies into workspace `.agents/skills/`
  *   hermes       → HermesSkillAdapter     — copies concrete skill artifacts into the
  *                                            Hermes profile/workspace contract
  *   veri         → PromptInjectionSkillAdapter — embeds skill names in prompt metadata
@@ -513,6 +514,30 @@ export class ClaudeCodeSkillAdapter extends FilesystemSkillAdapter {
   }
 }
 
+// ── CodexSkillAdapter ────────────────────────────────────────────────────────
+
+/**
+ * Codex discovers repository skills from `.agents/skills` between cwd and the
+ * repository root. Keep the projection inside the active worktree so Codex's
+ * workspace sandbox can read it and a task worktree cannot accidentally inherit
+ * another agent's mutable, user-global skill state.
+ *
+ * Copying (instead of symlinking to Agent HQ's source store) also keeps the
+ * complete skill package within the runtime filesystem boundary and lets the
+ * managed-skills manifest reconcile only artifacts Agent HQ owns.
+ */
+export class CodexSkillAdapter extends FilesystemSkillAdapter {
+  readonly adapterName = 'codex';
+
+  protected override getSkillsDir(workingDirectory: string): string {
+    return path.join(workingDirectory, '.agents', 'skills');
+  }
+
+  protected override shouldCopySkillDirectories(): boolean {
+    return true;
+  }
+}
+
 // ── HermesSkillAdapter ────────────────────────────────────────────────────────
 
 interface HermesMaterializationTargets {
@@ -810,6 +835,8 @@ export function getSkillMaterializationAdapter(
       return new OpenClawSkillAdapter();
     case 'claude-code':
       return new ClaudeCodeSkillAdapter();
+    case 'codex':
+      return new CodexSkillAdapter();
     case 'hermes':
       return new HermesSkillAdapter();
     case 'veri':

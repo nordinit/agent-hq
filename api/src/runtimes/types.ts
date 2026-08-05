@@ -1,9 +1,12 @@
 import type { RuntimeEndEvent, RuntimeEndEventType, RuntimeEventCallbacks } from './runtimeEvents';
 import { type Db } from "../db/adapter/types";
+import type { RuntimeBoundaryV1 } from './runtimeBoundary';
 
 export type { RuntimeEndEvent, RuntimeEndEventType, RuntimeEventCallbacks } from './runtimeEvents';
 
 export interface DispatchParams extends RuntimeEventCallbacks {
+  /** Explicit escape for boundaryless local diagnostics; durable fields must be absent. */
+  dispatchMode?: 'ad-hoc' | null;
   message: string;
   agentSlug: string;
   sessionKey: string;
@@ -45,6 +48,8 @@ export interface DispatchParams extends RuntimeEventCallbacks {
   repoBranch?: string | null;
   /** Runtime-specific config override assembled by dispatcher. */
   runtimeConfig?: unknown;
+  /** Versioned, secret-free driver boundary persisted for recovery/resume. */
+  runtimeBoundary?: RuntimeBoundaryV1 | null;
   /**
    * Parent workspace container root for this agent (normally agents.workspace_path).
    * This remains the broader allowed container boundary when the active repo is a
@@ -96,6 +101,10 @@ export interface DispatchParams extends RuntimeEventCallbacks {
 
 export interface PrepareAuthProfilesParams {
   agentSlug: string;
+  /** Trusted database ownership used to isolate managed local runtime homes. */
+  agentId?: number | null;
+  /** Trusted database ownership used to isolate managed local runtime homes. */
+  tenantId?: number | null;
   preferredProvider?: string | null;
   providerConnectionId?: number | null;
   runtimeConfig?: unknown;
@@ -126,6 +135,17 @@ export function skippedRuntimeAuthProfileSync(reason: string): RuntimeAuthProfil
   };
 }
 
+export type RuntimeAbortStatus = 'signalled' | 'already_gone' | 'not_found' | 'failed';
+
+export interface RuntimeAbortResult {
+  attempted: boolean;
+  ok: boolean;
+  status: RuntimeAbortStatus;
+  /** True only when the runtime could identify the target and accept/prove the stop. */
+  confirmed: boolean;
+  error?: string;
+}
+
 export interface AgentRuntime {
   /**
    * prepareAuthProfiles — materialize provider credentials into the files the
@@ -147,5 +167,5 @@ export interface AgentRuntime {
    * abort — request cancellation of a running agent turn.
    * Implementations should treat "already gone" as a success.
    */
-  abort(runId: string, sessionKey: string): Promise<void>;
+  abort(runId: string, sessionKey: string): Promise<RuntimeAbortResult | void>;
 }

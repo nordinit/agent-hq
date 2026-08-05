@@ -7,6 +7,7 @@ import type {
   DispatchParams,
   PrepareAuthProfilesParams,
   RuntimeAuthProfileSyncResult,
+  RuntimeAbortResult,
   RuntimeEndEvent,
 } from "../types";
 import { skippedRuntimeAuthProfileSync } from "../types";
@@ -32,11 +33,15 @@ import {
 } from "./config";
 import {
   parseHermesInstanceIdFromRunId,
-  stopHermesActiveRun,
   waitForHermesChildProcess,
   type ActiveHermesRun,
   type ProcessExitResult,
 } from "./abort";
+import {
+  localProcessGroupId,
+  localProcessSpawnOptions,
+  localProcessSupervisor,
+} from "../localProcessSupervisor";
 import { nowTimestamp } from '../../lib/timestamps';
 import { type Db } from "../../db/adapter/types";
 
@@ -184,7 +189,6 @@ function hermesOpenAiCodexAuthReady(filePath: string): boolean {
 
 export class HermesRuntime implements AgentRuntime {
   private readonly baseConfig: HermesRuntimeConfig;
-  private readonly activeRuns = new Map<number, ActiveHermesRun>();
 
   constructor(config: HermesRuntimeConfig = {}) {
     this.baseConfig = config;
@@ -310,6 +314,7 @@ export class HermesRuntime implements AgentRuntime {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
+      ...localProcessSpawnOptions(),
     });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -339,7 +344,7 @@ export class HermesRuntime implements AgentRuntime {
       const message = `Hermes runtime failed to launch: ${err instanceof Error ? err.message : String(err)}`;
 
       // Persist a terminal record before rethrowing. This path runs before
-      // activeRuns.set and before monitorRun, so previously a launch failure
+      // supervisor registration and before monitorRun, so previously a launch failure
       // produced NO RuntimeEndEvent at all — no turn_end chat message and no
       // response.runtimeEnd. Those two rows are the only inputs to the
       // watchdog's crash-recovery path, so a Hermes agent whose binary was
@@ -361,8 +366,14 @@ export class HermesRuntime implements AgentRuntime {
       throw new Error(message);
     }
 
+    localProcessSupervisor.register({
+      runId,
+      runtimeType: "hermes",
+      instanceId: params.instanceId ?? null,
+      state: processState,
+      processGroupId: localProcessGroupId(child),
+    });
     if (params.instanceId != null) {
-      this.activeRuns.set(params.instanceId, processState);
       await db?.run("UPDATE job_instances SET run_id = ? WHERE id = ?", runId, params.instanceId);
       if (db && agentId != null) {
         processState.transcriptPoller = this.startTranscriptPoller({
@@ -381,14 +392,7 @@ export class HermesRuntime implements AgentRuntime {
       params.timeoutSeconds > 0
         ? setTimeout(() => {
             processState.timedOut = true;
-            if (!processState.exited) {
-              processState.child.kill("SIGTERM");
-              setTimeout(() => {
-                if (!processState.exited) {
-                  processState.child.kill("SIGKILL");
-                }
-              }, mergedConfig.killGraceMs).unref();
-            }
+            localProcessSupervisor.terminate(runId, "hermes");
           }, params.timeoutSeconds * 1000)
         : null;
 
@@ -441,14 +445,27 @@ export class HermesRuntime implements AgentRuntime {
     return { runId };
   }
 
-  async abort(runId: string, _sessionKey: string): Promise<void> {
+  async abort(runId: string, _sessionKey: string): Promise<RuntimeAbortResult> {
     const instanceId = parseHermesInstanceIdFromRunId(runId);
-    if (instanceId == null) return;
-
-    const active = this.activeRuns.get(instanceId);
-    if (!active || active.exited) return;
-
-    stopHermesActiveRun(active);
+    if (instanceId == null) {
+      return {
+        attempted: false,
+        ok: false,
+        confirmed: false,
+        status: "not_found",
+        error: `Invalid Hermes run id: ${runId}`,
+      };
+    }
+    const result = localProcessSupervisor.stop(runId, "hermes");
+    return {
+      attempted: true,
+      ok: result.status !== "not_found",
+      confirmed: result.status === "signalled" || result.status === "already_gone",
+      status: result.status,
+      ...(result.status === "not_found"
+        ? { error: `No supervised Hermes process exists for ${runId}` }
+        : {}),
+    };
   }
 
   private buildCommandArgs(
@@ -501,7 +518,7 @@ export class HermesRuntime implements AgentRuntime {
     try {
       const result = await exited;
       state.exited = true;
-      if (params.instanceId != null) this.activeRuns.delete(params.instanceId);
+      localProcessSupervisor.unregister(runId, state.child);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (state.transcriptPoller) clearInterval(state.transcriptPoller);

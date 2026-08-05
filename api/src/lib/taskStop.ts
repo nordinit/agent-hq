@@ -12,14 +12,15 @@ export interface StopTaskActiveInstanceResult {
 export async function stopTaskActiveInstance(
   db: Db,
   taskId: number,
+  tenantId: number,
   changedBy: string,
   stopReason: string | null,
 ): Promise<StopTaskActiveInstanceResult> {
   const existing = await db.get(`
     SELECT id, status, active_instance_id, paused_at, pause_reason
     FROM tasks
-    WHERE id = ?
-  `, taskId) as {
+    WHERE id = ? AND tenant_id = ?
+  `, taskId, tenantId) as {
     id: number;
     status: string;
     active_instance_id: number | null;
@@ -40,20 +41,20 @@ export async function stopTaskActiveInstance(
     const instance = await db.get(`
       SELECT id, status
       FROM job_instances
-      WHERE id = ?
-    `, existing.active_instance_id) as { id: number; status: string } | undefined;
+      WHERE id = ? AND tenant_id = ?
+    `, existing.active_instance_id, tenantId) as { id: number; status: string } | undefined;
 
     if (instance && !['done', 'failed', 'cancelled'].includes(instance.status)) {
       hadActiveRun = true;
-      stopResult = await stopInstanceExecution(db, instance.id, 'stop');
+      stopResult = await stopInstanceExecution(db, instance.id, tenantId, 'stop');
     } else {
       await db.run(`
         UPDATE tasks
         SET active_instance_id = NULL,
             agent_id = NULL,
             updated_at = datetime('now')
-        WHERE id = ? AND active_instance_id = ?
-      `, taskId, existing.active_instance_id);
+        WHERE id = ? AND tenant_id = ? AND active_instance_id = ?
+      `, taskId, tenantId, existing.active_instance_id);
       // A manual stop is one of the likeliest ways the link disappears, so it is one of the
       // most important to record — otherwise the next refused lifecycle write looks unexplained.
       await writeTaskHistory(db, taskId, 'task_stop', 'active_instance_id', existing.active_instance_id, null);

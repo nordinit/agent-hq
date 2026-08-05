@@ -3,6 +3,7 @@
  */
 
 export { ClaudeCodeRuntime } from './ClaudeCodeRuntime';
+export { prepareClaudeCodeAuthProfiles } from './auth';
 
 export {
   validateClaudeCodeRuntimeConfig,
@@ -16,6 +17,7 @@ export { classifyClaudeRun, retryNotBeforeFromRateLimit } from './errors';
 export {
   preflightMcpServer,
   preflightMcpServers,
+  assertExactMcpServerBoundary,
   describeMcpPreflightFailure,
   DEFAULT_MCP_PREFLIGHT_TIMEOUT_MS,
 } from './mcpPreflight';

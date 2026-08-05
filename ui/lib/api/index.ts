@@ -8,6 +8,7 @@ import { observabilityClient } from './observability';
 import { projectsClient } from './projects';
 import { providersClient } from './providers';
 import { routingClient } from './routing';
+import { runtimesClient } from './runtimes';
 import { runsClient } from './runs';
 import { tasksClient } from './tasks';
 import { workflowsClient } from './workflows';
@@ -23,4 +24,5 @@ export const api = {
   ...workflowsClient,
   ...tasksClient,
   ...routingClient,
+  ...runtimesClient,
 };

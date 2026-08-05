@@ -3,7 +3,7 @@ import { formatDateTime } from '@/lib/date';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, Agent, AgentRuntimeType, Project, ClaudeCodeRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, ProviderConnectionRecord, ProviderRecord, ProviderSlug } from '@/lib/api';
+import { api, Agent, AgentRuntimeType, Project, ClaudeCodeRuntimeConfig, CodexRuntimeConfig, HermesRuntimeConfig, AgentRuntimeConfig, ProviderConnectionRecord, ProviderRecord, ProviderSlug } from '@/lib/api';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
 import { Card } from '@/components/ui/card';
 import { Badge, StatusDot } from '@/components/ui/badge';
@@ -11,21 +11,24 @@ import { Button } from '@/components/ui/button';
 import { Bot, Plus, Pencil, Trash2, X, Check, FolderOpen, ChevronDown, Zap, CheckCircle, AlertCircle, Loader2, ChevronRight, Power } from 'lucide-react';
 import Link from 'next/link';
 import { AgentDeleteNotice, buildAgentDeleteNotice, type AgentDeleteNoticeData } from '@/components/AgentDeleteNotice';
+import { DEFAULT_CLAUDE_ALLOWED_TOOLS, claudeRuntimeConfigToJson, serializeClaudeRuntimeConfig } from '@/lib/claudeRuntimeConfig';
 import {
   getAgentModelLabel,
   getAgentModelOptionsForProvider,
   getAgentProviderOptions,
   isDynamicModelProvider,
-  isOpenClawOnlyProvider,
+  isProviderSupportedByRuntime,
   isProviderConnected,
   PROVIDER_LABELS,
 } from '@/lib/providerOptions';
 
-const EFFORT_OPTIONS = ['low', 'medium', 'high', 'max'] as const;
+const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+const CODEX_REASONING_EFFORT_OPTIONS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 const RUNTIME_TYPE_OPTIONS: Array<{ value: AgentRuntimeType; label: string }> = [
   { value: 'openclaw', label: 'OpenClaw' },
   { value: 'claude-code', label: 'Claude Code' },
+  { value: 'codex', label: 'Codex' },
   { value: 'hermes', label: 'Hermes' },
   { value: 'webhook', label: 'Webhook' },
   { value: 'veri', label: 'Custom (Agent Runtime)' },
@@ -58,7 +61,9 @@ const emptyClaudeRuntimeConfig: ClaudeCodeRuntimeConfig = {
   workingDirectory: '',
   model: '',
   effort: 'medium',
-  allowedTools: [],
+  allowedTools: [...DEFAULT_CLAUDE_ALLOWED_TOOLS],
+  permissionMode: 'allowlist',
+  allowDangerousBypass: false,
   maxTurns: undefined,
   maxBudgetUsd: undefined,
   systemPromptSuffix: '',
@@ -78,6 +83,19 @@ const emptyHermesRuntimeConfig: HermesRuntimeConfig = {
   passSessionId: false,
 };
 
+const emptyCodexRuntimeConfig: CodexRuntimeConfig = {
+  codexBin: 'codex',
+  workingDirectory: '',
+  model: '',
+  reasoningEffort: 'high',
+  sandboxMode: 'workspace-write',
+  approvalPolicy: 'never',
+  skipGitRepoCheck: false,
+  codexHomeRoot: '',
+  extraArgs: [],
+  env: {},
+};
+
 function normalizeClaudeRuntimeConfig(config: AgentRuntimeConfig | null | undefined): ClaudeCodeRuntimeConfig {
   const cfg = config && typeof config === 'object' ? config as Partial<ClaudeCodeRuntimeConfig> : {};
   return {
@@ -86,7 +104,9 @@ function normalizeClaudeRuntimeConfig(config: AgentRuntimeConfig | null | undefi
     workingDirectory: cfg.workingDirectory ?? '',
     model: cfg.model ?? '',
     effort: cfg.effort ?? 'medium',
-    allowedTools: cfg.allowedTools ?? [],
+    allowedTools: cfg.allowedTools ?? [...DEFAULT_CLAUDE_ALLOWED_TOOLS],
+    permissionMode: cfg.permissionMode ?? 'allowlist',
+    allowDangerousBypass: cfg.allowDangerousBypass ?? false,
     systemPromptSuffix: cfg.systemPromptSuffix ?? '',
   };
 }
@@ -110,6 +130,24 @@ function normalizeHermesRuntimeConfig(config: AgentRuntimeConfig | null | undefi
   };
 }
 
+function normalizeCodexRuntimeConfig(config: AgentRuntimeConfig | null | undefined): CodexRuntimeConfig {
+  const cfg = config && typeof config === 'object' ? config as Partial<CodexRuntimeConfig> : {};
+  return {
+    ...emptyCodexRuntimeConfig,
+    ...cfg,
+    codexBin: cfg.codexBin?.trim() || 'codex',
+    workingDirectory: cfg.workingDirectory ?? '',
+    model: cfg.model ?? '',
+    reasoningEffort: cfg.reasoningEffort ?? 'high',
+    sandboxMode: cfg.sandboxMode ?? 'workspace-write',
+    approvalPolicy: cfg.approvalPolicy ?? 'never',
+    skipGitRepoCheck: cfg.skipGitRepoCheck ?? false,
+    codexHomeRoot: cfg.codexHomeRoot ?? '',
+    extraArgs: cfg.extraArgs ?? [],
+    env: cfg.env ?? {},
+  };
+}
+
 const emptyForm: FormState = {
   name: '',
   role: '',
@@ -127,17 +165,6 @@ const emptyForm: FormState = {
   raw_json_expanded: false,
 };
 
-function claudeRuntimeConfigToJson(cfg: ClaudeCodeRuntimeConfig): string {
-  const out: Record<string, unknown> = { workingDirectory: cfg.workingDirectory };
-  if (cfg.model) out.model = cfg.model;
-  if (cfg.effort) out.effort = cfg.effort;
-  if (cfg.allowedTools && cfg.allowedTools.length > 0) out.allowedTools = cfg.allowedTools;
-  if (cfg.maxTurns) out.maxTurns = cfg.maxTurns;
-  if (cfg.maxBudgetUsd) out.maxBudgetUsd = cfg.maxBudgetUsd;
-  if (cfg.systemPromptSuffix) out.systemPromptSuffix = cfg.systemPromptSuffix;
-  return JSON.stringify(out, null, 2);
-}
-
 function hermesRuntimeConfigToJson(cfg: HermesRuntimeConfig): string {
   const out: Record<string, unknown> = {};
   if (cfg.hermesBin) out.hermesBin = cfg.hermesBin;
@@ -154,12 +181,39 @@ function hermesRuntimeConfigToJson(cfg: HermesRuntimeConfig): string {
   return JSON.stringify(out, null, 2);
 }
 
+function codexRuntimeConfigToJson(cfg: CodexRuntimeConfig): string {
+  const out: Record<string, unknown> = {
+    codexBin: cfg.codexBin?.trim() || 'codex',
+    sandboxMode: cfg.sandboxMode ?? 'workspace-write',
+    approvalPolicy: cfg.approvalPolicy ?? 'never',
+  };
+  if (cfg.workingDirectory) out.workingDirectory = cfg.workingDirectory;
+  if (cfg.model) out.model = cfg.model;
+  if (cfg.reasoningEffort) out.reasoningEffort = cfg.reasoningEffort;
+  if (cfg.codexHomeRoot) out.codexHomeRoot = cfg.codexHomeRoot;
+  if (cfg.codexHome) out.codexHome = cfg.codexHome;
+  if (cfg.providerConnectionExternalRef) out.providerConnectionExternalRef = cfg.providerConnectionExternalRef;
+  if (cfg.skipGitRepoCheck) out.skipGitRepoCheck = true;
+  if (cfg.resumeSessionId) out.resumeSessionId = cfg.resumeSessionId;
+  if (cfg.extraArgs?.length) out.extraArgs = cfg.extraArgs;
+  if (cfg.env && Object.keys(cfg.env).length > 0) out.env = cfg.env;
+  if (cfg.killGraceMs != null) out.killGraceMs = cfg.killGraceMs;
+  if (cfg.allowDangerousFullAccess) out.allowDangerousFullAccess = true;
+  return JSON.stringify(out, null, 2);
+}
+
 function runtimeBadge(agent: Agent) {
   switch (agent.runtime_type) {
     case 'claude-code':
       return (
         <span className="inline-flex items-center text-xs font-medium text-purple-300 bg-purple-900/30 border border-purple-500/30 px-1.5 py-0.5 rounded-full whitespace-nowrap">
           Claude Code
+        </span>
+      );
+    case 'codex':
+      return (
+        <span className="inline-flex items-center text-xs font-medium text-sky-300 bg-sky-900/30 border border-sky-500/30 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+          Codex
         </span>
       );
     case 'veri':
@@ -263,6 +317,9 @@ export default function AgentsPage() {
     if (form.runtime_type === 'hermes' && !form.raw_json_expanded) {
       setForm(f => ({ ...f, raw_json: hermesRuntimeConfigToJson(normalizeHermesRuntimeConfig(f.runtime_config)) }));
     }
+    if (form.runtime_type === 'codex' && !form.raw_json_expanded) {
+      setForm(f => ({ ...f, raw_json: codexRuntimeConfigToJson(normalizeCodexRuntimeConfig(f.runtime_config)) }));
+    }
   }, [form.runtime_config, form.runtime_type]);
 
   // Fetch dynamic models when a dynamic-model provider is selected
@@ -336,18 +393,22 @@ export default function AgentsPage() {
         base.runtime_config = JSON.parse(form.raw_json) as ClaudeCodeRuntimeConfig;
       } else {
         const runtimeConfig = normalizeClaudeRuntimeConfig(form.runtime_config);
-        const cfg: ClaudeCodeRuntimeConfig = {
-          workingDirectory: runtimeConfig.workingDirectory,
+        base.runtime_config = serializeClaudeRuntimeConfig(runtimeConfig);
+      }
+    }
+
+    if (form.runtime_type === 'codex') {
+      if (form.raw_json_expanded) {
+        base.runtime_config = JSON.parse(form.raw_json) as CodexRuntimeConfig;
+      } else {
+        const runtimeConfig = normalizeCodexRuntimeConfig(form.runtime_config);
+        base.runtime_config = {
+          ...runtimeConfig,
+          codexBin: runtimeConfig.codexBin?.trim() || 'codex',
+          workingDirectory: runtimeConfig.workingDirectory?.trim() || undefined,
+          model: runtimeConfig.model?.trim() || undefined,
+          codexHomeRoot: runtimeConfig.codexHomeRoot?.trim() || undefined,
         };
-        if (runtimeConfig.model) cfg.model = runtimeConfig.model;
-        if (runtimeConfig.effort) cfg.effort = runtimeConfig.effort;
-        if (runtimeConfig.allowedTools && runtimeConfig.allowedTools.length > 0) {
-          cfg.allowedTools = runtimeConfig.allowedTools;
-        }
-        if (runtimeConfig.maxTurns) cfg.maxTurns = Number(runtimeConfig.maxTurns);
-        if (runtimeConfig.maxBudgetUsd) cfg.maxBudgetUsd = Number(runtimeConfig.maxBudgetUsd);
-        if (runtimeConfig.systemPromptSuffix) cfg.systemPromptSuffix = runtimeConfig.systemPromptSuffix;
-        base.runtime_config = cfg;
       }
     }
 
@@ -396,15 +457,6 @@ export default function AgentsPage() {
         return;
       }
 
-      // Validate claude-code required fields client-side
-      if (form.runtime_type === 'claude-code' && !form.raw_json_expanded) {
-        if (!normalizeClaudeRuntimeConfig(form.runtime_config).workingDirectory.trim()) {
-          setFormError('Working Directory is required for Claude Code runtime.');
-          setSaving(false);
-          return;
-        }
-      }
-
       if (form.runtime_type === 'hermes' && !form.raw_json_expanded) {
         const hermesConfig = normalizeHermesRuntimeConfig(form.runtime_config);
         if (!hermesConfig?.profile?.trim()) {
@@ -415,16 +467,16 @@ export default function AgentsPage() {
       }
 
       // Validate raw JSON if expanded
-      if ((form.runtime_type === 'claude-code' || form.runtime_type === 'hermes') && form.raw_json_expanded) {
+      if ((form.runtime_type === 'claude-code' || form.runtime_type === 'codex' || form.runtime_type === 'hermes') && form.raw_json_expanded) {
         try {
           const parsed = JSON.parse(form.raw_json) as Record<string, unknown>;
-          if (form.runtime_type === 'claude-code' && !parsed.workingDirectory) {
-            setFormError('runtime_config.workingDirectory is required for claude-code runtime.');
+          if (form.runtime_type === 'hermes' && !String(parsed.profile ?? '').trim()) {
+            setFormError('runtime_config.profile is required for hermes runtime.');
             setSaving(false);
             return;
           }
-          if (form.runtime_type === 'hermes' && !String(parsed.profile ?? '').trim()) {
-            setFormError('runtime_config.profile is required for hermes runtime.');
+          if (form.runtime_type === 'codex' && parsed.sandboxMode === 'danger-full-access' && parsed.allowDangerousFullAccess !== true) {
+            setFormError('Codex danger-full-access requires allowDangerousFullAccess: true.');
             setSaving(false);
             return;
           }
@@ -448,7 +500,7 @@ export default function AgentsPage() {
           provider_connection_id: createData.provider_connection_id ? Number(createData.provider_connection_id) : null,
           provision_openclaw: form.provision_openclaw,
           // Only attach runtime_config when relevant to the selected runtime
-          runtime_config: (form.runtime_type === 'claude-code' || form.runtime_type === 'hermes') ? buildUpdatePayload().runtime_config : null,
+          runtime_config: (form.runtime_type === 'claude-code' || form.runtime_type === 'codex' || form.runtime_type === 'hermes') ? buildUpdatePayload().runtime_config : null,
         };
         const created = await api.createAgent(payload);
         // Only offer OpenClaw provision when the runtime is openclaw
@@ -515,11 +567,9 @@ export default function AgentsPage() {
   ];
   const matchingConnections = eligibleConnections.filter(connection => connection.provider_slug === form.preferred_provider);
   const isSelectedProviderConnected = isProviderConnected(providers, form.preferred_provider) || matchingConnections.length > 0;
-  // Filter out OpenClaw-only providers (e.g. MiniMax) if the runtime is not OpenClaw
-  const providerOptions = form.runtime_type === 'openclaw'
-    ? allProviderOptions
-    : allProviderOptions.filter(opt => !isOpenClawOnlyProvider(opt.value));
+  const providerOptions = allProviderOptions.filter(opt => isProviderSupportedByRuntime(opt.value, form.runtime_type));
   const claudeRuntimeConfig = normalizeClaudeRuntimeConfig(form.runtime_config);
+  const codexRuntimeConfig = normalizeCodexRuntimeConfig(form.runtime_config);
   const hermesRuntimeConfig = normalizeHermesRuntimeConfig(form.runtime_config);
   const modelOptions = getAgentModelOptionsForProvider(form.preferred_provider);
   const modelSuggestions = isDynamicModelProvider(form.preferred_provider)
@@ -670,26 +720,47 @@ export default function AgentsPage() {
                       onChange={e => {
                         const rt = e.target.value as FormState['runtime_type'];
                         setForm(f => {
-                          const nextProvider = rt !== 'openclaw' && isOpenClawOnlyProvider(f.preferred_provider)
-                            ? (allProviderOptions.find(opt => !isOpenClawOnlyProvider(opt.value))?.value ?? '')
-                            : f.preferred_provider;
+                          const targetConnections = providerConnections.filter(
+                            connection => connection.runtime_type === rt && connection.status === 'connected'
+                          );
+                          const targetProviderOptions = [
+                            ...configuredProviderOptions,
+                            ...Array.from(new Set(targetConnections.map(connection => connection.provider_slug)))
+                              .filter(slug => !configuredProviderOptions.some(option => option.value === slug))
+                              .map(slug => ({ value: slug, label: PROVIDER_LABELS[slug as keyof typeof PROVIDER_LABELS] ?? slug })),
+                          ].filter(option => isProviderSupportedByRuntime(option.value, rt));
+                          const nextProvider = targetProviderOptions.some(option => option.value === f.preferred_provider)
+                            ? f.preferred_provider
+                            : (targetProviderOptions[0]?.value ?? '');
+                          const nextConnection = targetConnections.find(
+                            connection => connection.provider_slug === nextProvider
+                          );
+                          // A runtime change is a boundary change. Start with a
+                          // clean config for that driver so fields such as
+                          // Claude's bypass latch cannot leak into Codex (or the
+                          // reverse) through the union-shaped form state.
+                          const nextRuntimeConfig: AgentRuntimeConfig | null = rt === 'claude-code'
+                            ? { ...emptyClaudeRuntimeConfig, allowedTools: [...DEFAULT_CLAUDE_ALLOWED_TOOLS] }
+                            : rt === 'codex'
+                              ? { ...emptyCodexRuntimeConfig, extraArgs: [], env: {} }
+                              : rt === 'hermes'
+                                ? { ...emptyHermesRuntimeConfig, extraArgs: [], env: {} }
+                                : null;
                           return {
                             ...f,
                             runtime_type: rt,
-                            runtime_config: rt === 'claude-code'
-                              ? normalizeClaudeRuntimeConfig(f.runtime_config)
-                              : rt === 'hermes'
-                                ? normalizeHermesRuntimeConfig(f.runtime_config)
-                                : null,
+                            runtime_config: nextRuntimeConfig,
                             preferred_provider: nextProvider,
-                            provider_connection_id: '',
+                            provider_connection_id: nextConnection ? String(nextConnection.id) : '',
                             model: nextProvider !== f.preferred_provider ? '' : f.model,
                             // Reset openclaw-specific provision toggle if switching away
                             provision_openclaw: rt === 'openclaw' ? f.provision_openclaw : false,
                             raw_json: rt === 'claude-code'
-                              ? claudeRuntimeConfigToJson(normalizeClaudeRuntimeConfig(f.runtime_config))
+                              ? claudeRuntimeConfigToJson(nextRuntimeConfig as ClaudeCodeRuntimeConfig)
+                              : rt === 'codex'
+                                ? codexRuntimeConfigToJson(nextRuntimeConfig as CodexRuntimeConfig)
                               : rt === 'hermes'
-                                ? hermesRuntimeConfigToJson(normalizeHermesRuntimeConfig(f.runtime_config))
+                                ? hermesRuntimeConfigToJson(nextRuntimeConfig as HermesRuntimeConfig)
                                 : '',
                             raw_json_expanded: false,
                           };
@@ -851,7 +922,7 @@ export default function AgentsPage() {
                 </div>
               )}
 
-              {(form.runtime_type === 'openclaw' || form.runtime_type === 'claude-code' || form.runtime_type === 'hermes') && (
+              {(form.runtime_type === 'openclaw' || form.runtime_type === 'claude-code' || form.runtime_type === 'codex' || form.runtime_type === 'hermes') && (
                 <div className="mt-4 rounded-lg border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
                   Repository settings live on workflows. Create or assign the agent first, then configure repo access from the workflow page.
                 </div>
@@ -868,7 +939,7 @@ export default function AgentsPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <label className="block md:col-span-2">
                         <span className="text-slate-400 text-xs mb-1 block">
-                          Working Directory <span className="text-red-400">*</span>
+                          Working Directory <span className="text-slate-600">(optional workflow fallback)</span>
                         </span>
                         <input
                           className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
@@ -960,6 +1031,43 @@ export default function AgentsPage() {
                           placeholder="Bash, Read, Write, Edit"
                         />
                       </label>
+
+                      <label className="block">
+                        <span className="text-slate-400 text-xs mb-1 block">Permission Posture</span>
+                        <select
+                          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+                          value={claudeRuntimeConfig.permissionMode ?? 'allowlist'}
+                          onChange={e => setForm(f => ({
+                            ...f,
+                            runtime_config: {
+                              ...normalizeClaudeRuntimeConfig(f.runtime_config),
+                              permissionMode: e.target.value as ClaudeCodeRuntimeConfig['permissionMode'],
+                              ...(e.target.value === 'allowlist' ? { allowDangerousBypass: false } : {}),
+                            },
+                          }))}
+                        >
+                          <option value="allowlist">Tool allowlist (recommended)</option>
+                          <option value="bypass">Unrestricted bypass</option>
+                        </select>
+                      </label>
+
+                      {claudeRuntimeConfig.permissionMode === 'bypass' && (
+                        <label className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-950/20 p-3 text-xs text-red-200">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={claudeRuntimeConfig.allowDangerousBypass === true}
+                            onChange={e => setForm(f => ({
+                              ...f,
+                              runtime_config: {
+                                ...normalizeClaudeRuntimeConfig(f.runtime_config),
+                                allowDangerousBypass: e.target.checked,
+                              },
+                            }))}
+                          />
+                          I understand this disables Claude Code permission checks and grants host-level tool access.
+                        </label>
+                      )}
                     </div>
                   )}
 
@@ -992,8 +1100,142 @@ export default function AgentsPage() {
                           onChange={e => setForm(f => ({ ...f, raw_json: e.target.value }))}
                           spellCheck={false}
                         />
-                        <p className="text-xs text-slate-500 mt-1">JSON is used as-is. <code>workingDirectory</code> is required.</p>
+                        <p className="text-xs text-slate-500 mt-1">JSON is used as-is. Workflow worktrees override <code>workingDirectory</code>.</p>
                       </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {form.runtime_type === 'codex' && (
+                <div className="mt-4 p-4 bg-sky-950/20 border border-sky-500/20 rounded-lg space-y-4">
+                  <div>
+                    <span className="text-xs font-semibold text-sky-300 uppercase tracking-wider">Codex Runtime Config</span>
+                    <p className="text-xs text-slate-400 mt-1">Runs the local Codex CLI with JSONL output. Agent HQ isolates CODEX_HOME per agent under the configured root.</p>
+                  </div>
+
+                  {!form.raw_json_expanded && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <label className="block">
+                        <span className="text-slate-400 text-xs mb-1 block">Codex Binary</span>
+                        <input
+                          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500 font-mono"
+                          value={codexRuntimeConfig.codexBin ?? 'codex'}
+                          onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeCodexRuntimeConfig(f.runtime_config), codexBin: e.target.value } }))}
+                          placeholder="codex"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-slate-400 text-xs mb-1 block">Model Override <span className="text-slate-600">(optional)</span></span>
+                        <input
+                          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500 font-mono"
+                          value={codexRuntimeConfig.model ?? ''}
+                          onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeCodexRuntimeConfig(f.runtime_config), model: e.target.value } }))}
+                          placeholder="gpt-5.5"
+                        />
+                      </label>
+                      <label className="block md:col-span-2">
+                        <span className="text-slate-400 text-xs mb-1 block">Working Directory <span className="text-slate-600">(optional workflow fallback)</span></span>
+                        <input
+                          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500 font-mono"
+                          value={codexRuntimeConfig.workingDirectory ?? ''}
+                          onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeCodexRuntimeConfig(f.runtime_config), workingDirectory: e.target.value } }))}
+                          placeholder="Supplied by the workflow worktree when omitted"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-slate-400 text-xs mb-1 block">Reasoning Effort</span>
+                        <select
+                          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500"
+                          value={codexRuntimeConfig.reasoningEffort ?? 'high'}
+                          onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeCodexRuntimeConfig(f.runtime_config), reasoningEffort: e.target.value as CodexRuntimeConfig['reasoningEffort'] } }))}
+                        >
+                          {CODEX_REASONING_EFFORT_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-slate-400 text-xs mb-1 block">Approval Policy</span>
+                        <select
+                          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500"
+                          value={codexRuntimeConfig.approvalPolicy ?? 'never'}
+                          onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeCodexRuntimeConfig(f.runtime_config), approvalPolicy: e.target.value as CodexRuntimeConfig['approvalPolicy'] } }))}
+                        >
+                          <option value="never">Never (non-interactive)</option>
+                          <option value="on-request">On request</option>
+                          <option value="untrusted">Untrusted commands</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-slate-400 text-xs mb-1 block">Sandbox</span>
+                        <select
+                          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500"
+                          value={codexRuntimeConfig.sandboxMode ?? 'workspace-write'}
+                          onChange={e => setForm(f => ({
+                            ...f,
+                            runtime_config: {
+                              ...normalizeCodexRuntimeConfig(f.runtime_config),
+                              sandboxMode: e.target.value as CodexRuntimeConfig['sandboxMode'],
+                              allowDangerousFullAccess: e.target.value === 'danger-full-access' ? false : undefined,
+                            },
+                          }))}
+                        >
+                          <option value="workspace-write">Workspace write (recommended)</option>
+                          <option value="read-only">Read only</option>
+                          <option value="danger-full-access">Danger: full host access</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-slate-400 text-xs mb-1 block">Codex Home Root <span className="text-slate-600">(optional)</span></span>
+                        <input
+                          className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-sky-500 font-mono"
+                          value={codexRuntimeConfig.codexHomeRoot ?? ''}
+                          onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeCodexRuntimeConfig(f.runtime_config), codexHomeRoot: e.target.value } }))}
+                          placeholder="Managed default"
+                        />
+                      </label>
+                      <label className="md:col-span-2 flex items-start gap-2 text-sm text-slate-300">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={Boolean(codexRuntimeConfig.skipGitRepoCheck)}
+                          onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeCodexRuntimeConfig(f.runtime_config), skipGitRepoCheck: e.target.checked } }))}
+                        />
+                        <span><span className="font-medium text-white">Skip Git repository check</span><br /><span className="text-xs text-slate-500">Only enable for intentionally non-Git workflows.</span></span>
+                      </label>
+                      {codexRuntimeConfig.sandboxMode === 'danger-full-access' && (
+                        <label className="md:col-span-2 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-950/30 p-3 text-sm text-red-200">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={codexRuntimeConfig.allowDangerousFullAccess === true}
+                            onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeCodexRuntimeConfig(f.runtime_config), allowDangerousFullAccess: e.target.checked } }))}
+                          />
+                          <span><span className="font-semibold">I understand this disables the Codex filesystem sandbox.</span><br /><span className="text-xs text-red-300/80">The run can read and modify files outside its worktree. This confirmation is required and is never enabled automatically.</span></span>
+                        </label>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="border-t border-sky-500/10 pt-3">
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 transition-colors"
+                      onClick={() => setForm(f => ({
+                        ...f,
+                        raw_json: !f.raw_json_expanded ? codexRuntimeConfigToJson(normalizeCodexRuntimeConfig(f.runtime_config)) : f.raw_json,
+                        raw_json_expanded: !f.raw_json_expanded,
+                      }))}
+                    >
+                      <ChevronRight className={`w-3.5 h-3.5 transition-transform ${form.raw_json_expanded ? 'rotate-90' : ''}`} />
+                      Raw JSON editor {form.raw_json_expanded ? '(collapse)' : '(advanced)'}
+                    </button>
+                    {form.raw_json_expanded && (
+                      <textarea
+                        className="mt-2 w-full bg-slate-900 border border-sky-500/30 rounded-lg px-3 py-2 text-sky-200 text-xs font-mono focus:outline-none focus:border-sky-400 resize-y min-h-[180px]"
+                        value={form.raw_json}
+                        onChange={e => setForm(f => ({ ...f, raw_json: e.target.value }))}
+                        spellCheck={false}
+                      />
                     )}
                   </div>
                 </div>
@@ -1257,6 +1499,11 @@ export default function AgentsPage() {
               {agent.runtime_type === 'claude-code' && agent.runtime_config && (
                 <div className="mt-2 text-xs text-purple-300/70 font-mono bg-purple-950/20 border border-purple-500/10 rounded px-2 py-1 truncate">
                   📁 {(agent.runtime_config as ClaudeCodeRuntimeConfig).workingDirectory || '—'}
+                </div>
+              )}
+              {agent.runtime_type === 'codex' && agent.runtime_config && (
+                <div className="mt-2 text-xs text-sky-300/70 font-mono bg-sky-950/20 border border-sky-500/10 rounded px-2 py-1 truncate">
+                  ◇ {(agent.runtime_config as CodexRuntimeConfig).sandboxMode || 'workspace-write'} · {(agent.runtime_config as CodexRuntimeConfig).reasoningEffort || 'runtime default'}
                 </div>
               )}
               {agent.runtime_type === 'hermes' && agent.runtime_config && (

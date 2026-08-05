@@ -4,8 +4,10 @@ import {
 } from '../../runtimes/hermes/config';
 import { validateClaudeCodeRuntimeConfig } from '../../runtimes/claudeCode/config';
 import type { ClaudeCodeRuntimeConfig } from '../../runtimes/claudeCode/types';
+import { validateCodexRuntimeConfig } from '../../runtimes/codex/config';
+import type { CodexRuntimeConfig } from '../../runtimes/codex/types';
 
-export const SUPPORTED_AGENT_RUNTIME_TYPES = ['openclaw', 'claude-code', 'webhook', 'veri', 'hermes'] as const;
+export const SUPPORTED_AGENT_RUNTIME_TYPES = ['openclaw', 'claude-code', 'codex', 'webhook', 'veri', 'hermes'] as const;
 
 export type AgentRuntimeType = (typeof SUPPORTED_AGENT_RUNTIME_TYPES)[number];
 
@@ -18,8 +20,9 @@ export type AgentRuntimeType = (typeof SUPPORTED_AGENT_RUNTIME_TYPES)[number];
  * config was. The runtime's definition is now the single source of truth.
  */
 export type { ClaudeCodeRuntimeConfig };
+export type { CodexRuntimeConfig };
 
-export type AgentRuntimeConfigPayload = ClaudeCodeRuntimeConfig | HermesRuntimeConfig | Record<string, unknown> | null;
+export type AgentRuntimeConfigPayload = ClaudeCodeRuntimeConfig | CodexRuntimeConfig | HermesRuntimeConfig | Record<string, unknown> | null;
 
 export function isSupportedAgentRuntimeType(value: string): value is AgentRuntimeType {
   return (SUPPORTED_AGENT_RUNTIME_TYPES as readonly string[]).includes(value);
@@ -72,6 +75,9 @@ export function validateAgentRuntimeConfig(runtimeType: string, runtimeConfig: u
   const parsedConfig = parseRuntimeConfigObject(runtimeConfig);
   if (runtimeType === 'claude-code') {
     return validateClaudeCodeRuntimeConfig(parsedConfig);
+  }
+  if (runtimeType === 'codex') {
+    return validateCodexRuntimeConfig(parsedConfig);
   }
   if (runtimeType === 'hermes') {
     return validateHermesRuntimeConfig(parsedConfig);

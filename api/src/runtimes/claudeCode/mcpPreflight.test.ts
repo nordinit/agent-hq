@@ -3,9 +3,12 @@ import * as os from 'os';
 import * as path from 'path';
 
 import {
+  assertExactMcpServerBoundary,
+  buildMcpPreflightRequirements,
   describeMcpPreflightFailure,
   preflightMcpServer,
   preflightMcpServers,
+  resolveRequiredMcpPreflightServerNames,
 } from './mcpPreflight';
 
 /**
@@ -50,6 +53,81 @@ afterAll(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+describe('assertExactMcpServerBoundary', () => {
+  const boundary = {
+    tools: {
+      mcpServers: [
+        { name: 'agent-hq__agent-42', configFingerprint: 'sha256:agent-hq', requiredToolNames: [] },
+        { name: 'linear__agent-42', configFingerprint: 'sha256:linear', requiredToolNames: [] },
+      ],
+    },
+  } as never;
+
+  it('accepts exact set equality independent of order', () => {
+    expect(() => assertExactMcpServerBoundary(
+      ['linear__agent-42', 'agent-hq__agent-42'],
+      boundary,
+    )).not.toThrow();
+  });
+
+  it('reports both missing and extra materialized server names', () => {
+    expect(() => assertExactMcpServerBoundary(
+      ['agent-hq__agent-42', 'github__agent-42'],
+      boundary,
+    )).toThrow(/missing: linear__agent-42; extra: github__agent-42/);
+  });
+
+  it('allows a boundaryless ad-hoc run only when no MCP server was assigned', () => {
+    expect(() => assertExactMcpServerBoundary([], null)).not.toThrow();
+    expect(() => assertExactMcpServerBoundary(['agent-hq__agent-42'], null))
+      .toThrow(/Boundaryless runtime dispatch may not materialize MCP servers/);
+  });
+});
+
+describe('resolveRequiredMcpPreflightServerNames', () => {
+  const boundary = {
+    tools: {
+      mcpServers: [{
+        name: 'agent-hq__agent-42',
+        configFingerprint: 'sha256:test',
+        requiredToolNames: ['agent_hq_start_task_run'],
+      }],
+      requiredLifecycleTools: ['agent_hq_start_task_run'],
+    },
+  } as never;
+
+  it('requires exactly the boundary-assigned lifecycle server', () => {
+    expect(resolveRequiredMcpPreflightServerNames(
+      ['agent-hq__agent-42'],
+      [],
+      boundary,
+    )).toEqual(['agent-hq__agent-42']);
+  });
+
+  it('fails closed when lifecycle tools have no materialized Agent HQ server', () => {
+    expect(() => resolveRequiredMcpPreflightServerNames([], [], boundary))
+      .toThrow(/missing: agent-hq__agent-42/);
+  });
+
+  it('includes non-lifecycle servers with required boundary tools', () => {
+    const withRequiredThirdParty = {
+      tools: {
+        mcpServers: [{
+          name: 'github__agent-42',
+          configFingerprint: 'sha256:github',
+          requiredToolNames: ['create_issue'],
+        }],
+        requiredLifecycleTools: [],
+      },
+    } as never;
+    expect(resolveRequiredMcpPreflightServerNames(
+      ['github__agent-42'],
+      [],
+      withRequiredThirdParty,
+    )).toEqual(['github__agent-42']);
+  });
+});
+
 describe('preflightMcpServer', () => {
   it('completes the handshake and reports the advertised tools', async () => {
     const server = writeServer('good.js', GOOD_SERVER);
@@ -62,6 +140,48 @@ describe('preflightMcpServer', () => {
     expect(result.serverName).toBe('agent-hq__agent-42');
     expect(result.toolNames).toEqual(['alpha', 'beta']);
     expect(result.error).toBeUndefined();
+  });
+
+  it('fails when the server initializes but omits a required lifecycle tool', async () => {
+    const server = writeServer('missing-lifecycle-tool.js', GOOD_SERVER);
+    const result = await preflightMcpServer(
+      'agent-hq__agent-42',
+      { command: process.execPath, args: [server] },
+      2_000,
+      ['alpha', 'agent_hq_post_task_outcome'],
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.toolNames).toEqual(['alpha', 'beta']);
+    expect(result.requiredToolNames).toEqual(['agent_hq_post_task_outcome', 'alpha']);
+    expect(result.missingToolNames).toEqual(['agent_hq_post_task_outcome']);
+    expect(result.error).toContain('did not advertise required tool(s)');
+    expect(result.error).toContain('agent_hq_post_task_outcome');
+  });
+
+  it('fails when tools/list returns a JSON-RPC error', async () => {
+    const server = writeServer(
+      'tools-list-error.js',
+      `
+      let buf='';
+      process.stdin.on('data',(c)=>{buf+=c;let i;while((i=buf.indexOf('\\n'))>=0){
+        const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line)continue;
+        const msg=JSON.parse(line);
+        if(msg.method==='initialize'){process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:msg.id,result:{}})+'\\n');}
+        else if(msg.method==='tools/list'){process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:msg.id,error:{code:-32601,message:'not supported'}})+'\\n');}
+      }});
+      `,
+    );
+
+    const result = await preflightMcpServer(
+      'agent-hq',
+      { command: process.execPath, args: [server] },
+      2_000,
+      ['agent_hq_start_task_run'],
+    );
+    expect(result.ok).toBe(false);
+    expect(result.missingToolNames).toEqual(['agent_hq_start_task_run']);
+    expect(result.error).toContain('tools/list failed');
   });
 
   it('passes configured env through to the server', async () => {
@@ -107,6 +227,19 @@ describe('preflightMcpServer', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/exited with code 3/);
     expect(result.error).toMatch(/boom/);
+  });
+
+  it('redacts credentials from server startup failures', async () => {
+    const server = writeServer(
+      'leaks-secret.js',
+      `process.stderr.write('ANTHROPIC_API_KEY=operator-secret sk-ant-oat01-verysecretvalue\\n'); process.exit(3);`,
+    );
+    const result = await preflightMcpServer('s', { command: process.execPath, args: [server] });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('[REDACTED]');
+    expect(result.error).not.toContain('operator-secret');
+    expect(result.error).not.toContain('sk-ant-oat01-verysecretvalue');
   });
 
   it('fails when the server never answers initialize', async () => {
@@ -162,6 +295,35 @@ describe('preflightMcpServer', () => {
     // the real assertion. rss is only read to keep the intent explicit.
     expect(typeof before).toBe('number');
   });
+
+  (process.platform === 'win32' ? it.skip : it)(
+    'kills and confirms descendants in the isolated preflight process group',
+    async () => {
+      const pidFile = path.join(tmpDir, 'preflight-descendant.pid');
+      const server = writeServer(
+        'descendant.js',
+        `
+        const fs = require('fs');
+        const { spawn } = require('child_process');
+        const descendant = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], { stdio: 'ignore' });
+        fs.writeFileSync(${JSON.stringify(pidFile)}, String(descendant.pid));
+        ${GOOD_SERVER}
+        `,
+      );
+
+      let descendantPid = 0;
+      try {
+        const result = await preflightMcpServer('s', { command: process.execPath, args: [server] });
+        descendantPid = Number(fs.readFileSync(pidFile, 'utf8'));
+        expect(result.ok).toBe(true);
+        expect(() => process.kill(descendantPid, 0)).toThrow();
+      } finally {
+        if (descendantPid > 0) {
+          try { process.kill(descendantPid, 'SIGKILL'); } catch { /* already gone */ }
+        }
+      }
+    },
+  );
 });
 
 describe('preflightMcpServers', () => {
@@ -187,8 +349,71 @@ describe('preflightMcpServers', () => {
     expect(results[1].ok).toBe(true);
   });
 
+  it('validates each server against its own required tool names', async () => {
+    const good = writeServer('requirements.js', GOOD_SERVER);
+    const results = await preflightMcpServers(
+      {
+        first: { command: process.execPath, args: [good] },
+        second: { command: process.execPath, args: [good] },
+      },
+      [
+        { serverName: 'first', requiredToolNames: ['alpha'] },
+        { serverName: 'second', requiredToolNames: ['agent_hq_start_task_run'] },
+      ],
+    );
+
+    expect(results[0].ok).toBe(true);
+    expect(results[1].ok).toBe(false);
+    expect(results[1].missingToolNames).toEqual(['agent_hq_start_task_run']);
+  });
+
   it('is trivially satisfied when nothing is required', async () => {
     expect(await preflightMcpServers({}, [])).toEqual([]);
+  });
+});
+
+describe('buildMcpPreflightRequirements', () => {
+  it('uses the exact per-server tool policy from the runtime boundary', () => {
+    const requirements = buildMcpPreflightRequirements(
+      ['agent-hq__agent-42', 'lease__agent-42'],
+      {
+        tools: {
+          mcpServers: [
+            {
+              name: 'agent-hq__agent-42',
+              configFingerprint: 'sha256:agent-hq',
+              requiredToolNames: ['agent_hq_start_task_run'],
+            },
+            {
+              name: 'lease__agent-42',
+              configFingerprint: 'sha256:lease',
+              requiredToolNames: ['dev_env_deploy_worktree'],
+            },
+          ],
+          requiredLifecycleTools: ['agent_hq_post_task_outcome'],
+        },
+      } as never,
+    );
+
+    expect(requirements).toEqual([
+      {
+        serverName: 'agent-hq__agent-42',
+        requiredToolNames: ['agent_hq_post_task_outcome', 'agent_hq_start_task_run'],
+      },
+      {
+        serverName: 'lease__agent-42',
+        requiredToolNames: ['dev_env_deploy_worktree'],
+      },
+    ]);
+  });
+
+  it('fails closed to the minimum lifecycle surface without a boundary', () => {
+    expect(buildMcpPreflightRequirements(['agent-hq__agent-42'], null)).toEqual([
+      {
+        serverName: 'agent-hq__agent-42',
+        requiredToolNames: ['agent_hq_post_task_outcome', 'agent_hq_start_task_run'],
+      },
+    ]);
   });
 });
 
@@ -211,5 +436,20 @@ describe('describeMcpPreflightFailure', () => {
     expect(message).not.toContain('a (');
     // The operator-facing reason the run was stopped at all.
     expect(message).toContain('lifecycle tools');
+  });
+
+  it('redacts a caller-supplied credential before composing the failure', () => {
+    const message = describeMcpPreflightFailure([
+      {
+        serverName: 'agent-hq',
+        ok: false,
+        toolNames: [],
+        error: 'Authorization: Bearer bearer-secret',
+        durationMs: 1,
+      },
+    ]);
+
+    expect(message).toContain('Bearer [REDACTED]');
+    expect(message).not.toContain('bearer-secret');
   });
 });

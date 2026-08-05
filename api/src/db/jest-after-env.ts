@@ -15,6 +15,8 @@ if (process.env.AGENT_HQ_TEST_PG_URL) {
 afterEach(() => {
   const taskLifecycle = require('../lib/taskLifecycle') as Partial<typeof import('../lib/taskLifecycle')>;
   taskLifecycle.clearPendingEndedActiveInstanceLinkageCleanupTimers?.();
+  const localProcesses = require('../runtimes/localProcessSupervisor') as typeof import('../runtimes/localProcessSupervisor');
+  localProcesses.localProcessSupervisor.clearForTests();
 });
 
 // The PostgreSQL pool is deliberately NOT closed here.

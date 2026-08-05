@@ -11,10 +11,29 @@ export type {
   DispatchParams,
   PrepareAuthProfilesParams,
   RuntimeAuthProfileSyncResult,
+  RuntimeAbortResult,
+  RuntimeAbortStatus,
   RuntimeEndEvent,
   RuntimeEndEventType,
   RuntimeEventCallbacks,
 } from './types';
+export * from './runtimeBoundary';
+export * from './dispatchContextGuard';
+export * from './runtimeExecutionStore';
+export * from './runtimeExecutionReconciler';
+export {
+  LocalProcessSupervisor,
+  localProcessSupervisor,
+  localProcessSpawnOptions,
+  localProcessGroupId,
+  localProcessIdentity,
+} from './localProcessSupervisor';
+export type {
+  ActiveLocalProcessRun,
+  LocalProcessSignalResult,
+  LocalProcessSignalStatus,
+  RegisterLocalProcessRun,
+} from './localProcessSupervisor';
 
 // Skill materialization — task #644
 export {
@@ -23,6 +42,7 @@ export {
   FilesystemSkillAdapter,
   OpenClawSkillAdapter,
   ClaudeCodeSkillAdapter,
+  CodexSkillAdapter,
   PromptInjectionSkillAdapter,
   HermesSkillAdapter,
 } from './skillMaterialization';
@@ -44,6 +64,18 @@ export {
   validateClaudeCodeRuntimeConfig,
   normalizeClaudeCodeRuntimeConfig,
 } from './claudeCode';
+export {
+  CodexRuntime,
+  validateCodexRuntimeConfig,
+  normalizeCodexRuntimeConfig,
+} from './codex';
+export type {
+  CodexRuntimeConfig,
+  NormalizedCodexRuntimeConfig,
+  CodexReasoningEffort,
+  CodexSandboxMode,
+  CodexApprovalPolicy,
+} from './codex';
 export { HermesRuntime, validateHermesRuntimeConfig } from './hermes';
 export type { HermesRuntimeConfig } from './hermes';
 export { WebhookRuntime } from './WebhookRuntime';
@@ -55,6 +87,7 @@ export type { CustomAgentRuntimeConfig } from './CustomAgentRuntime';
 import type { AgentRuntime } from './types';
 import { OpenClawRuntime } from './openclaw';
 import { ClaudeCodeRuntime } from './claudeCode';
+import { CodexRuntime } from './codex';
 import { HermesRuntime } from './hermes';
 import { WebhookRuntime, type WebhookRuntimeConfig } from './WebhookRuntime';
 import { CustomAgentRuntime, type CustomAgentRuntimeConfig } from './CustomAgentRuntime';
@@ -70,7 +103,7 @@ export function resolveRuntime(agent: {
   runtime_type?: string | null;
   runtime_config?: unknown;
 }): AgentRuntime {
-  const type = agent.runtime_type ?? 'openclaw';
+  const type = agent.runtime_type?.trim() || 'openclaw';
 
   // Parse runtime_config JSON string if needed
   let config: Record<string, unknown> = {};
@@ -89,6 +122,8 @@ export function resolveRuntime(agent: {
   switch (type) {
     case 'claude-code':
       return new ClaudeCodeRuntime(config);
+    case 'codex':
+      return new CodexRuntime(config);
     case 'hermes':
       return new HermesRuntime(config);
     case 'webhook': {
@@ -102,7 +137,8 @@ export function resolveRuntime(agent: {
     case 'veri':
       return new CustomAgentRuntime(config as unknown as CustomAgentRuntimeConfig);
     case 'openclaw':
-    default:
       return new OpenClawRuntime();
+    default:
+      throw new Error(`Unsupported agent runtime type: ${type}`);
   }
 }

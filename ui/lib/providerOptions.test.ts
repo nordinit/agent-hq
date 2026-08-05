@@ -7,6 +7,8 @@ import {
   isDynamicModelProvider,
   isLocalModelProvider,
   isModelAllowedForProvider,
+  isOpenClawOnlyProvider,
+  isProviderSupportedByRuntime,
 } from './providerOptions.ts';
 import type { ProviderRecord } from './api/types.ts';
 
@@ -69,4 +71,11 @@ test('provider dropdown options include only connected configured providers', ()
     { value: 'openai-codex', label: 'OpenAI Codex' },
     { value: 'mlx-studio', label: 'MLX Studio' },
   ]);
+});
+
+test('Codex OAuth is available to Codex without becoming an OpenClaw-only provider', () => {
+  assert.equal(isOpenClawOnlyProvider('openai-codex'), false);
+  assert.equal(isProviderSupportedByRuntime('openai-codex', 'codex'), true);
+  assert.equal(isProviderSupportedByRuntime('anthropic', 'codex'), false);
+  assert.equal(isProviderSupportedByRuntime('minimax', 'codex'), false);
 });

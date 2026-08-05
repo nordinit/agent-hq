@@ -1,4 +1,4 @@
-import { BASE_CLAUDE_ARGS, buildClaudeArgs } from './args';
+import { BASE_CLAUDE_ARGS, CLAUDE_BOUNDARY_SETTINGS, buildClaudeArgs } from './args';
 import {
   NO_ALLOWED_MCP_TOOLS_SENTINEL,
   type ClaudeArgsInput,
@@ -7,10 +7,10 @@ import {
 
 /**
  * Every assertion in this file compares the WHOLE argv with `toEqual`, never
- * `toContain`. The CLI silently ignores unknown flags (verified 2.1.220), so a
+ * `toContain`. The CLI silently ignores unknown flags (verified 2.1.222), so a
  * typo or a future flag rename produces no error and no log line — an exact
- * vector is the only thing that can catch it. Order matters too: `extraArgs`
- * must stay last, because the CLI lets a later occurrence win.
+ * vector is the only thing that can catch it. The small validated `extraArgs`
+ * surface stays last, but cannot replace adapter-owned boundary flags.
  */
 
 const SESSION_ID = '9278eeca-b7af-44f7-bc1f-2e6d4c16ee09';
@@ -28,11 +28,13 @@ function config(
     maxTurns: null,
     maxBudgetUsd: null,
     permissionMode: 'bypass',
+    allowDangerousBypass: true,
     systemPromptSuffix: null,
     extraArgs: [],
     env: {},
     killGraceMs: 10_000,
     claudeConfigDir: null,
+    providerConnectionExternalRef: null,
     ...overrides,
   };
 }
@@ -46,15 +48,38 @@ function input(overrides: Partial<ClaudeArgsInput> = {}): ClaudeArgsInput {
 }
 
 /** The argv every case starts with, up to and including the permission posture. */
-const BYPASS_HEAD = [
-  '--print',
-  '-',
-  '--output-format',
-  'stream-json',
-  '--verbose',
+const SESSION_HEAD = [
+  ...BASE_CLAUDE_ARGS,
   '--session-id',
   SESSION_ID,
+];
+
+function bypassHead(tools = ''): string[] {
+  return [
+    ...SESSION_HEAD,
+    '--dangerously-skip-permissions',
+    '--tools',
+    tools,
+  ];
+}
+
+function allowlistHead(builtInTools = '', allowedTools = builtInTools): string[] {
+  return [
+    ...SESSION_HEAD,
+    '--permission-mode',
+    'dontAsk',
+    '--tools',
+    builtInTools,
+    '--allowedTools',
+    allowedTools,
+  ];
+}
+
+const BYPASS_HEAD = [
+  ...SESSION_HEAD,
   '--dangerously-skip-permissions',
+  '--tools',
+  '',
 ];
 
 describe('BASE_CLAUDE_ARGS', () => {
@@ -65,6 +90,13 @@ describe('BASE_CLAUDE_ARGS', () => {
       '--output-format',
       'stream-json',
       '--verbose',
+      '--setting-sources',
+      '',
+      '--settings',
+      CLAUDE_BOUNDARY_SETTINGS,
+      '--disable-slash-commands',
+      '--no-chrome',
+      '--strict-mcp-config',
     ]);
   });
 
@@ -81,21 +113,19 @@ describe('buildClaudeArgs — minimal argv', () => {
 
   it('does not mutate BASE_CLAUDE_ARGS across calls', () => {
     buildClaudeArgs(input({ config: config({ effort: 'xhigh' }) }));
-    expect([...BASE_CLAUDE_ARGS]).toHaveLength(5);
+    expect([...BASE_CLAUDE_ARGS]).toHaveLength(12);
     expect(buildClaudeArgs(input())).toEqual(BYPASS_HEAD);
   });
 
   it('passes the pre-minted session id through verbatim', () => {
     const args = buildClaudeArgs(input({ sessionId: 'a-b-c' }));
     expect(args).toEqual([
-      '--print',
-      '-',
-      '--output-format',
-      'stream-json',
-      '--verbose',
+      ...BASE_CLAUDE_ARGS,
       '--session-id',
       'a-b-c',
       '--dangerously-skip-permissions',
+      '--tools',
+      '',
     ]);
   });
 });
@@ -106,38 +136,19 @@ describe('buildClaudeArgs — permission posture fork', () => {
     expect(args).toEqual(BYPASS_HEAD);
   });
 
-  it('uses --allowedTools under allowlist and never the bypass flag', () => {
+  it('combines exclusive --tools with dontAsk and --allowedTools under allowlist', () => {
     const args = buildClaudeArgs(
       input({ config: config({ permissionMode: 'allowlist', allowedTools: ['Bash', 'Read'] }) }),
     );
-    expect(args).toEqual([
-      '--print',
-      '-',
-      '--output-format',
-      'stream-json',
-      '--verbose',
-      '--session-id',
-      SESSION_ID,
-      '--allowedTools',
-      'Bash,Read',
-    ]);
+    expect(args).toEqual(allowlistHead('Bash,Read'));
+    expect(args).not.toContain('--dangerously-skip-permissions');
   });
 
   it('emits an EMPTY --allowedTools rather than omitting it when nothing is allowed', () => {
-    // Omitting the flag would hand the run the CLI's full default tool set:
-    // the strictest config would become the loosest. Must stay fail-closed.
+    // Both availability and auto-approval must remain empty; omitting either
+    // flag would hand the run more authority than the stored policy.
     const args = buildClaudeArgs(input({ config: config({ permissionMode: 'allowlist' }) }));
-    expect(args).toEqual([
-      '--print',
-      '-',
-      '--output-format',
-      'stream-json',
-      '--verbose',
-      '--session-id',
-      SESSION_ID,
-      '--allowedTools',
-      '',
-    ]);
+    expect(args).toEqual(allowlistHead());
   });
 });
 
@@ -149,11 +160,10 @@ describe('buildClaudeArgs — MCP allowlist assembly', () => {
         mcpAllowedToolNames: ['mcp__agent-hq__post_outcome', 'mcp__agent-hq__get_task'],
       }),
     );
-    expect(args).toEqual([
-      ...BYPASS_HEAD.slice(0, 7),
-      '--allowedTools',
+    expect(args).toEqual(allowlistHead(
+      'Read,Bash',
       'Read,Bash,mcp__agent-hq__post_outcome,mcp__agent-hq__get_task',
-    ]);
+    ));
   });
 
   it('de-duplicates the merged list while preserving first-seen order', () => {
@@ -163,11 +173,17 @@ describe('buildClaudeArgs — MCP allowlist assembly', () => {
         mcpAllowedToolNames: ['mcp__a__x', 'Bash', 'mcp__a__x'],
       }),
     );
-    expect(args).toEqual([
-      ...BYPASS_HEAD.slice(0, 7),
-      '--allowedTools',
-      'Read,Bash,mcp__a__x',
-    ]);
+    expect(args).toEqual(allowlistHead('Read,Bash', 'Read,Bash,mcp__a__x'));
+  });
+
+  it('passes an assigned-server wildcard to --allowedTools verbatim', () => {
+    const args = buildClaudeArgs(
+      input({
+        config: config({ permissionMode: 'allowlist' }),
+        mcpAllowedToolNames: ['mcp__agent-hq__agent-42__*'],
+      }),
+    );
+    expect(args).toEqual(allowlistHead('', 'mcp__agent-hq__agent-42__*'));
   });
 
   it('drops the no-tools sentinel instead of passing it off as a tool name', () => {
@@ -177,7 +193,7 @@ describe('buildClaudeArgs — MCP allowlist assembly', () => {
         mcpAllowedToolNames: [NO_ALLOWED_MCP_TOOLS_SENTINEL],
       }),
     );
-    expect(args).toEqual([...BYPASS_HEAD.slice(0, 7), '--allowedTools', '']);
+    expect(args).toEqual(allowlistHead());
   });
 
   it('ignores mcpAllowedToolNames entirely under bypass', () => {
@@ -244,19 +260,19 @@ describe('buildClaudeArgs — numeric and enum flags', () => {
 describe('buildClaudeArgs — tool set flags', () => {
   it('emits --tools under bypass, where it is the only way to narrow the built-ins', () => {
     const args = buildClaudeArgs(input({ config: config({ allowedTools: ['Bash', 'Read'] }) }));
-    expect(args).toEqual([...BYPASS_HEAD, '--tools', 'Bash,Read']);
+    expect(args).toEqual(bypassHead('Bash,Read'));
   });
 
-  it('suppresses --tools under allowlist, where --allowedTools already states the policy', () => {
+  it('emits --tools under allowlist because --allowedTools alone is not exclusive', () => {
     const args = buildClaudeArgs(
       input({ config: config({ permissionMode: 'allowlist', allowedTools: ['Bash', 'Read'] }) }),
     );
-    expect(args).toEqual([...BYPASS_HEAD.slice(0, 7), '--allowedTools', 'Bash,Read']);
-    expect(args).not.toContain('--tools');
+    expect(args).toEqual(allowlistHead('Bash,Read'));
   });
 
-  it('omits --tools when no built-ins are configured', () => {
+  it('emits empty --tools when no built-ins are configured', () => {
     expect(buildClaudeArgs(input({ config: config({ allowedTools: [] }) }))).toEqual(BYPASS_HEAD);
+    expect(BYPASS_HEAD).toContain('--tools');
   });
 
   it('emits --disallowedTools when set, in both postures', () => {
@@ -270,7 +286,7 @@ describe('buildClaudeArgs — tool set flags', () => {
           config: config({ permissionMode: 'allowlist', disallowedTools: ['WebFetch'] }),
         }),
       ),
-    ).toEqual([...BYPASS_HEAD.slice(0, 7), '--allowedTools', '', '--disallowedTools', 'WebFetch']);
+    ).toEqual([...allowlistHead(), '--disallowedTools', 'WebFetch']);
   });
 
   it('omits --disallowedTools when empty', () => {
@@ -289,22 +305,21 @@ describe('buildClaudeArgs — file and directory flags', () => {
     expect(buildClaudeArgs(input({ appendSystemPromptFilePath: null }))).toEqual(BYPASS_HEAD);
   });
 
-  it('always pairs --mcp-config with --strict-mcp-config', () => {
-    // Unpaired, the CLI merges the operator's personal ~/.claude MCP servers
-    // into an Agent HQ run.
+  it('adds a materialized config inside the invariant strict MCP boundary', () => {
     const args = buildClaudeArgs(input({ mcpConfigPath: '/run/42/mcp-config.json' }));
     expect(args).toEqual([
       ...BYPASS_HEAD,
       '--mcp-config',
       '/run/42/mcp-config.json',
-      '--strict-mcp-config',
     ]);
+    expect(args).toContain('--strict-mcp-config');
   });
 
-  it('omits both MCP flags when no config was materialized', () => {
+  it('keeps strict MCP mode when no config was materialized', () => {
     const args = buildClaudeArgs(input({ mcpConfigPath: null }));
     expect(args).toEqual(BYPASS_HEAD);
-    expect(args).not.toContain('--strict-mcp-config');
+    expect(args).toContain('--strict-mcp-config');
+    expect(args).not.toContain('--mcp-config');
   });
 
   it('repeats --add-dir once per directory, in order', () => {
@@ -326,10 +341,10 @@ describe('buildClaudeArgs — file and directory flags', () => {
 });
 
 describe('buildClaudeArgs — extraArgs', () => {
-  it('appends operator extraArgs LAST so adapter args cannot override them', () => {
+  it('appends validated argument-free extraArgs last', () => {
     const args = buildClaudeArgs(
       input({
-        config: config({ model: 'claude-haiku-4-5', extraArgs: ['--model', 'claude-opus-4-5'] }),
+        config: config({ model: 'claude-haiku-4-5', extraArgs: ['--debug'] }),
         mcpConfigPath: '/run/42/mcp-config.json',
         addDirs: ['/repos/a'],
       }),
@@ -340,11 +355,9 @@ describe('buildClaudeArgs — extraArgs', () => {
       'claude-haiku-4-5',
       '--mcp-config',
       '/run/42/mcp-config.json',
-      '--strict-mcp-config',
       '--add-dir',
       '/repos/a',
-      '--model',
-      'claude-opus-4-5',
+      '--debug',
     ]);
   });
 
@@ -365,7 +378,7 @@ describe('buildClaudeArgs — full argv ordering', () => {
           maxBudgetUsd: 7,
           allowedTools: ['Bash', 'Read'],
           disallowedTools: ['WebFetch'],
-          extraArgs: ['--settings', '/etc/agent-hq/claude.json'],
+          extraArgs: ['--debug'],
         }),
         model: 'claude-opus-4-5',
         mcpConfigPath: '/run/42/mcp-config.json',
@@ -375,14 +388,12 @@ describe('buildClaudeArgs — full argv ordering', () => {
     );
 
     expect(args).toEqual([
-      '--print',
-      '-',
-      '--output-format',
-      'stream-json',
-      '--verbose',
+      ...BASE_CLAUDE_ARGS,
       '--session-id',
       SESSION_ID,
       '--dangerously-skip-permissions',
+      '--tools',
+      'Bash,Read',
       '--model',
       'claude-opus-4-5',
       '--effort',
@@ -391,21 +402,17 @@ describe('buildClaudeArgs — full argv ordering', () => {
       '12',
       '--max-budget-usd',
       '7',
-      '--tools',
-      'Bash,Read',
       '--disallowedTools',
       'WebFetch',
       '--append-system-prompt-file',
       '/run/42/system.md',
       '--mcp-config',
       '/run/42/mcp-config.json',
-      '--strict-mcp-config',
       '--add-dir',
       '/repos/a',
       '--add-dir',
       '/repos/b',
-      '--settings',
-      '/etc/agent-hq/claude.json',
+      '--debug',
     ]);
   });
 
@@ -430,13 +437,13 @@ describe('buildClaudeArgs — full argv ordering', () => {
     );
 
     expect(args).toEqual([
-      '--print',
-      '-',
-      '--output-format',
-      'stream-json',
-      '--verbose',
+      ...BASE_CLAUDE_ARGS,
       '--session-id',
       SESSION_ID,
+      '--permission-mode',
+      'dontAsk',
+      '--tools',
+      'Read',
       '--allowedTools',
       'Read,mcp__agent-hq__post_outcome',
       '--model',
@@ -453,7 +460,6 @@ describe('buildClaudeArgs — full argv ordering', () => {
       '/run/9/system.md',
       '--mcp-config',
       '/run/9/mcp-config.json',
-      '--strict-mcp-config',
       '--add-dir',
       '/repos/z',
       '--debug',
@@ -477,9 +483,7 @@ describe('buildClaudeArgs — full argv ordering', () => {
       }),
     );
     expect(args).toEqual([
-      ...BYPASS_HEAD.slice(0, 7),
-      '--allowedTools',
-      'Read,mcp__a__x',
+      ...allowlistHead('Read', 'Read,mcp__a__x'),
       '--add-dir',
       '/repos/a',
     ]);

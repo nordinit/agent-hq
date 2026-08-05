@@ -132,6 +132,27 @@ describe('Agent HQ OpenAPI document', () => {
     expect(document.components.schemas.WorkflowLifecycleResponse).toBeDefined();
   });
 
+  it('documents Codex as a runtime and exposes no-model-spend runtime diagnostics', () => {
+    const document = getOpenApiDocument();
+    const agentSchema = document.components.schemas.Agent as Record<string, any>;
+    const createSchema = document.components.schemas.AgentCreateRequest as Record<string, any>;
+
+    expect(agentSchema.properties.runtime_type.enum).toContain('codex');
+    expect(createSchema.properties.runtime_type.enum).toContain('codex');
+    expect(document.paths['/api/v1/runtime-drivers/diagnose'].post).toMatchObject({
+      operationId: 'diagnoseRuntimeDriver',
+      responses: {
+        '200': {
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/RuntimeDriverDiagnostic' },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it('serves the same document from root and versioned OpenAPI routes', async () => {
     const app = express();
     app.use(openApiRouter);

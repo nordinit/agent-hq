@@ -4,20 +4,36 @@
  * Pure module: no DB, no filesystem, no process handles. Given a
  * `ClaudeArgsInput` it returns the exact argument vector to hand to `spawn`.
  *
- * Two verified CLI behaviours (2.1.220) shape everything here:
+ * Three verified CLI behaviours (2.1.222) shape everything here:
  *
  *  1. `--print -` reads the PROMPT FROM STDIN. The prompt is therefore absent
  *     from this payload entirely; putting a multi-KB task context in argv would
  *     risk E2BIG.
  *
- *  2. **The CLI SILENTLY IGNORES UNKNOWN FLAGS.** A typo, or a flag renamed in a
- *     future release, does not error — it just stops taking effect. A dropped
- *     `--allowedTools` degrades a locked-down run into an unrestricted one with
- *     no signal anywhere. That is why argv order is fixed and asserted
- *     exactly in args.test.ts rather than spot-checked.
+ *  2. `--allowedTools` is a permission allow rule, NOT an available-tool
+ *     boundary. `--tools` replaces the built-in tool set, while
+ *     `--permission-mode dontAsk` denies every unapproved call.
+ *
+ *  3. **The CLI SILENTLY IGNORES UNKNOWN FLAGS.** A typo, or a flag renamed in a
+ *     future release, does not error — it just stops taking effect. That is why
+ *     all three boundary flags and argv order are asserted exactly in
+ *     args.test.ts rather than spot-checked.
  */
 
 import { NO_ALLOWED_MCP_TOOLS_SENTINEL, type ClaudeArgsInput } from './types';
+
+/**
+ * Adapter-owned settings are passed at CLI precedence while ambient user,
+ * project and local settings are disabled with `--setting-sources ''`.
+ * `--strict-mcp-config` separately owns the MCP boundary. Managed organization
+ * policy remains authoritative by Claude Code design and cannot be bypassed by
+ * a child-process caller.
+ */
+export const CLAUDE_BOUNDARY_SETTINGS = JSON.stringify({
+  disableAllHooks: true,
+  enabledPlugins: {},
+  extraKnownMarketplaces: {},
+});
 
 /**
  * The invariant prefix every Agent HQ claude-code run starts with.
@@ -32,6 +48,13 @@ export const BASE_CLAUDE_ARGS: readonly string[] = [
   '--output-format',
   'stream-json',
   '--verbose',
+  '--setting-sources',
+  '',
+  '--settings',
+  CLAUDE_BOUNDARY_SETTINGS,
+  '--disable-slash-commands',
+  '--no-chrome',
+  '--strict-mcp-config',
 ];
 
 /** Drop blank entries so a comma-join can never produce `Read,,Bash`. */
@@ -52,10 +75,9 @@ function isPositive(value: number | null | undefined): value is number {
 /**
  * Build the argument vector for one dispatched run.
  *
- * Ordering is deterministic by construction: adapter-owned flags first, operator
- * `extraArgs` LAST. Later occurrences of a repeated flag win in the CLI's own
- * parser, so putting operator args last is what makes them an escape hatch
- * instead of something the adapter can silently override.
+ * Ordering is deterministic by construction: adapter-owned flags first, then a
+ * tiny validated allowlist of argument-free operator observability flags. No
+ * operator argument can replace a boundary flag.
  */
 export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
   const { config } = input;
@@ -63,10 +85,13 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
 
   args.push('--session-id', input.sessionId);
 
-  const builtInTools = compact(config.allowedTools);
+  const builtInTools = dedupe(compact(config.allowedTools));
 
   if (config.permissionMode === 'bypass') {
     args.push('--dangerously-skip-permissions');
+    // Even the explicitly dangerous posture gets a deterministic built-in tool
+    // surface. In particular, an explicit [] must not degrade into CLI defaults.
+    args.push('--tools', builtInTools.join(','));
   } else {
     // The MCP names arrive already fully-qualified (`mcp__<server>__<tool>`);
     // the built-ins are bare. Both share one namespace in --allowedTools.
@@ -76,10 +101,11 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
       (name) => name !== NO_ALLOWED_MCP_TOOLS_SENTINEL,
     );
 
-    // Emitted even when the combined list is empty. An empty allowlist means a
-    // tool-less run; omitting the flag would instead hand the run the CLI's
-    // full default tool set, turning the strictest configuration into the
-    // loosest one. Fail-open here defeats the entire posture.
+    // `--tools` is the exclusive built-in availability boundary; `--allowedTools`
+    // only pre-approves calls. `dontAsk` turns every unlisted MCP call into a hard
+    // denial instead of an interactive prompt. All three are required.
+    args.push('--permission-mode', 'dontAsk');
+    args.push('--tools', builtInTools.join(','));
     args.push('--allowedTools', dedupe([...builtInTools, ...mcpTools]).join(','));
   }
 
@@ -90,14 +116,6 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
   if (isPositive(config.maxTurns)) args.push('--max-turns', String(config.maxTurns));
   if (isPositive(config.maxBudgetUsd)) args.push('--max-budget-usd', String(config.maxBudgetUsd));
 
-  // `--tools` REPLACES the built-in tool set outright (verified 2.1.220), which
-  // is how a bypass run gets narrowed at all. Under 'allowlist' the same names
-  // are already carried by --allowedTools, and passing both states the policy
-  // twice in two mechanisms — contradictory, so we pick one.
-  if (builtInTools.length > 0 && config.permissionMode === 'bypass') {
-    args.push('--tools', builtInTools.join(','));
-  }
-
   const disallowedTools = compact(config.disallowedTools);
   if (disallowedTools.length > 0) args.push('--disallowedTools', disallowedTools.join(','));
 
@@ -105,12 +123,10 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
     args.push('--append-system-prompt-file', input.appendSystemPromptFilePath);
   }
 
-  if (input.mcpConfigPath) {
-    // ALWAYS paired. `--mcp-config` alone MERGES the operator's personal
-    // ~/.claude MCP servers into the run; `--strict-mcp-config` restricts the
-    // run to exactly the servers Agent HQ materialized for it.
-    args.push('--mcp-config', input.mcpConfigPath, '--strict-mcp-config');
-  }
+  if (input.mcpConfigPath) args.push('--mcp-config', input.mcpConfigPath);
+  // `--strict-mcp-config` is in the invariant prefix, including for a run with
+  // zero assignments. Omitting it when no file exists would re-enable ambient
+  // user/project/plugin MCP servers.
 
   for (const dir of compact(input.addDirs)) args.push('--add-dir', dir);
 

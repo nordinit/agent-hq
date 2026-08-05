@@ -1,11 +1,40 @@
 export interface ClaudeCodeRuntimeConfig {
-  workingDirectory: string;
+  workingDirectory?: string;
+  claudeBin?: string;
   model?: string;
-  effort?: 'low' | 'medium' | 'high' | 'max';
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   allowedTools?: string[];
+  disallowedTools?: string[];
+  permissionMode?: 'allowlist' | 'bypass';
+  /** Explicit confirmation required for Claude Code's unrestricted bypass flag. */
+  allowDangerousBypass?: boolean;
   maxTurns?: number;
   maxBudgetUsd?: number;
   systemPromptSuffix?: string;
+  extraArgs?: string[];
+  env?: Record<string, string>;
+  killGraceMs?: number;
+  claudeConfigDir?: string;
+  providerConnectionExternalRef?: string;
+}
+
+export interface CodexRuntimeConfig {
+  workingDirectory?: string;
+  codexBin?: string;
+  model?: string;
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  approvalPolicy?: 'untrusted' | 'on-request' | 'never';
+  skipGitRepoCheck?: boolean;
+  codexHomeRoot?: string;
+  codexHome?: string;
+  providerConnectionExternalRef?: string;
+  resumeSessionId?: string;
+  extraArgs?: string[];
+  env?: Record<string, string>;
+  killGraceMs?: number;
+  /** Required when sandboxMode is danger-full-access. Prefer execution-target policy once available. */
+  allowDangerousFullAccess?: boolean;
 }
 
 export interface HermesRuntimeConfig {
@@ -22,8 +51,72 @@ export interface HermesRuntimeConfig {
   passSessionId?: boolean;
 }
 
-export type AgentRuntimeConfig = ClaudeCodeRuntimeConfig | HermesRuntimeConfig | Record<string, unknown>;
-export type AgentRuntimeType = 'openclaw' | 'claude-code' | 'hermes' | 'webhook' | 'veri';
+export type AgentRuntimeConfig = ClaudeCodeRuntimeConfig | CodexRuntimeConfig | HermesRuntimeConfig | Record<string, unknown>;
+export type AgentRuntimeType = 'openclaw' | 'claude-code' | 'codex' | 'hermes' | 'webhook' | 'veri';
+
+export type RuntimeDiagnosticStatus = 'pass' | 'warn' | 'fail' | 'skipped';
+
+export interface RuntimeDiagnosticCheck {
+  key: 'config' | 'command' | 'version' | 'workspace' | 'config_home' | 'auth';
+  label: string;
+  status: RuntimeDiagnosticStatus;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface RuntimeDriverDiagnostic {
+  ok: boolean;
+  runtime_type: AgentRuntimeType;
+  agent_id: number | null;
+  checked_at: string;
+  duration_ms: number;
+  command: string | null;
+  executable_path: string | null;
+  version: string | null;
+  workspace_path: string | null;
+  checks: RuntimeDiagnosticCheck[];
+}
+
+export interface RuntimeExecutionSummary {
+  id: number | null;
+  instance_id: number;
+  driver_type: string;
+  backend_type: string | null;
+  execution_target_id: string | null;
+  state: string;
+  session_id: string | null;
+  boundary_version: string | number | null;
+  boundary: Record<string, unknown> | null;
+  launch_spec: Record<string, unknown> | null;
+  handle: Record<string, unknown> | null;
+  checkpoint_fingerprint: string | null;
+  capabilities: unknown[];
+  lease_expires_at: string | null;
+  heartbeat_at: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  terminal_reason: string | null;
+  error: string | null;
+}
+
+export interface InstanceRuntimeView {
+  instance_id: number;
+  source: 'runtime_executions' | 'job_instances';
+  runtime_type: string;
+  execution_state: string;
+  execution: RuntimeExecutionSummary | null;
+  fallback: {
+    status: string | null;
+    session_id: string | null;
+    dispatched_at: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    runtime_ended_at: string | null;
+    runtime_end_success: boolean | number | null;
+    runtime_end_source: string | null;
+    runtime_end_error: string | null;
+  };
+}
 
 export interface Agent {
   id: number;

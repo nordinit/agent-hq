@@ -20,6 +20,7 @@ import { resolveSprintTaskRoutingAssignment } from '../domains/routing/policy/st
 import { runRecurringTaskSchedulerTick, type RecurringTaskSchedulerSummary } from './recurringTaskScheduler';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
 import { type Db } from "../db/adapter/types";
+import { reconcileRuntimeExecutions } from '../runtimes/runtimeExecutionReconciler';
 
 const POLL_INTERVAL_MS = 12_000; // ~12 seconds
 const DEFAULT_RECONCILER_TICK_TIMEOUT_MS = 2 * 60_000;
@@ -777,6 +778,21 @@ export async function runReconcilerTick(
   deps: ReconcilerDeps = DEFAULT_RECONCILER_DEPS,
   db: Db = getDb(),
 ): Promise<ReconcilerTickSummary> {
+  try {
+    const runtimeSummary = await reconcileRuntimeExecutions(db);
+    if (runtimeSummary.lost > 0 || runtimeSummary.converged > 0 || runtimeSummary.errors > 0) {
+      console.warn(
+        `[runtime-reconciler] inspected=${runtimeSummary.inspected} alive=${runtimeSummary.alive} lost=${runtimeSummary.lost} converged=${runtimeSummary.converged} errors=${runtimeSummary.errors}`,
+      );
+    }
+  } catch (error) {
+    // Runtime integrity must not block workflow reconciliation during a rolling
+    // migration or a transient database failure.
+    console.warn(
+      '[runtime-reconciler] tick failed:',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
   await reconcileMissingLifecycleOutcomeAfterRuntimeEnd(db);
   await cleanupImpossibleTaskLifecycleStates(db);
 

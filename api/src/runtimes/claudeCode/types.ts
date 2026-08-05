@@ -34,6 +34,16 @@ export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
 export const CLAUDE_PERMISSION_MODES = ['bypass', 'allowlist'] as const;
 export type ClaudePermissionMode = (typeof CLAUDE_PERMISSION_MODES)[number];
 
+/** Productive local default without the unrestricted bypass-permissions flag. */
+export const DEFAULT_CLAUDE_ALLOWED_TOOLS = [
+  'Bash',
+  'Edit',
+  'Glob',
+  'Grep',
+  'Read',
+  'Write',
+] as const;
+
 /**
  * Agent-level `runtime_config` for `runtime_type: 'claude-code'`.
  *
@@ -61,9 +71,11 @@ export interface ClaudeCodeRuntimeConfig {
   maxTurns?: number;
   maxBudgetUsd?: number;
   permissionMode?: ClaudePermissionMode;
+  /** Explicit safety latch required with permissionMode=bypass. */
+  allowDangerousBypass?: boolean;
   /** Appended to the system prompt on fresh sessions only. */
   systemPromptSuffix?: string;
-  /** Extra CLI args. Validated against a denylist of adapter-owned flags. */
+  /** Extra CLI args. Limited to a small, argument-free allowlist. */
   extraArgs?: string[];
   /** Extra environment for the child process. String values only. */
   env?: Record<string, string>;
@@ -75,6 +87,8 @@ export interface ClaudeCodeRuntimeConfig {
    * process's `~/.claude`, which shares credentials across every agent.
    */
   claudeConfigDir?: string;
+  /** Opaque selected provider-home reference injected by the provider adapter. */
+  providerConnectionExternalRef?: string;
   [key: string]: unknown;
 }
 
@@ -89,11 +103,13 @@ export interface NormalizedClaudeCodeRuntimeConfig {
   maxTurns: number | null;
   maxBudgetUsd: number | null;
   permissionMode: ClaudePermissionMode;
+  allowDangerousBypass: boolean;
   systemPromptSuffix: string | null;
   extraArgs: string[];
   env: Record<string, string>;
   killGraceMs: number;
   claudeConfigDir: string | null;
+  providerConnectionExternalRef: string | null;
 }
 
 // ── argv construction ────────────────────────────────────────────────────────
@@ -211,14 +227,6 @@ export const CLAUDE_CODE_RUNTIME_END_MESSAGE_PREFIX = 'claude-code-runtime-end-'
 
 /** MCP slug that carries the Agent HQ lifecycle tools. */
 export const AGENT_HQ_MCP_SLUG = 'agent-hq';
-
-/**
- * MCP slug for the registry-tool shim (src/bin/agent-tool-mcp.ts).
- *
- * Unlike the lifecycle server this one is not in the `mcp_servers` registry — it
- * is synthesised per run from the agent's `agent_tool_assignments`.
- */
-export const AGENT_TOOLS_MCP_SLUG = 'agent-tools';
 
 /**
  * Sentinel the materializer writes into `toolFilter.include` when an assignment

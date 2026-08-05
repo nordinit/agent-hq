@@ -103,4 +103,66 @@ describe('runtime-owned provider connections', () => {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
   });
+
+  it('revalidates an isolated CLI profile from the linked agent without persisting its path', async () => {
+    const claudeHome = path.join(tempDir, 'claude-builder');
+    fs.mkdirSync(claudeHome, { recursive: true });
+    fs.writeFileSync(path.join(claudeHome, '.credentials.json'), JSON.stringify({
+      claudeAiOauth: { accessToken: 'never-return-this-token' },
+    }));
+
+    const { server, baseUrl } = await startServer();
+    try {
+      const discover = await fetch(`${baseUrl}/api/v1/provider-connections/discover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'anthropic',
+          runtime: 'claude-code',
+          auth_mode: 'subscription',
+          agent_slug: 'builder',
+          runtime_config: { claudeConfigDir: claudeHome },
+        }),
+      });
+      const discovered = await discover.json() as { connections: Array<{ externalRef: string; displayName: string; metadata: Record<string, unknown> }> };
+      const connection = discovered.connections[0];
+      expect(connection).toBeDefined();
+      expect(JSON.stringify(connection)).not.toContain(claudeHome);
+
+      const create = await fetch(`${baseUrl}/api/v1/provider-connections`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider_slug: 'anthropic',
+          auth_mode: 'subscription',
+          runtime_type: 'claude-code',
+          external_ref: connection.externalRef,
+          display_name: connection.displayName,
+          agent_slug: 'builder',
+          runtime_config: { claudeConfigDir: claudeHome },
+        }),
+      });
+      const saved = await create.json() as { id: number; metadata: Record<string, unknown> };
+      expect(create.status).toBe(201);
+      expect(JSON.stringify(saved)).not.toContain(claudeHome);
+      expect(JSON.stringify(saved)).not.toContain('never-return-this-token');
+
+      await getDb().run(`
+        INSERT INTO agents (
+          tenant_id, name, session_key, runtime_type, runtime_config,
+          preferred_provider, provider_connection_id
+        ) VALUES (1, 'Builder', 'agent:builder:main', 'claude-code', ?, 'anthropic', ?)
+      `, JSON.stringify({ claudeConfigDir: claudeHome }), saved.id);
+
+      const validate = await fetch(`${baseUrl}/api/v1/provider-connections/${saved.id}/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      expect(validate.status).toBe(200);
+      expect(await validate.json()).toMatchObject({ ok: true, status: 'connected' });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
 });

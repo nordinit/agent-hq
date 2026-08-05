@@ -12,7 +12,7 @@ jest.mock('../runtimes', () => ({
 jest.mock('../runtimes/skillMaterialization', () => ({
   getSkillMaterializationAdapter: jest.fn(() => ({
     adapterName: 'test',
-    materialize: jest.fn(() => ({ ok: true, count: 0, warnings: [] })),
+    materialize: jest.fn(() => ({ ok: true, count: 0, details: [], warnings: [] })),
   })),
 }));
 

@@ -230,6 +230,22 @@ describe('executeAgentTool', () => {
     expect(result.content[0].text).toBe(`${JSON.stringify({ focus: 'routing', depth: 3 })}|routing|3`);
   });
 
+  it('does not pass API-process secrets into registry tool commands', () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'postgres://agent:database-secret@db/agent_hq';
+    try {
+      const result = executeAgentTool(
+        makeTool({ implementation_body: 'printf "%s" "${DATABASE_URL-unset}"' }),
+        {},
+        workdir,
+      );
+      expect(result.content[0].text).toBe('unset');
+    } finally {
+      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousDatabaseUrl;
+    }
+  });
+
   it('runs shell tools, including the capability payload body form', () => {
     const raw = executeAgentTool(
       makeTool({ implementation_type: 'shell', implementation_body: 'printf raw-body' }),

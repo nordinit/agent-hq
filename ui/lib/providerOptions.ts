@@ -127,5 +127,18 @@ export function isDynamicModelProvider(provider: string | null | undefined): boo
  * MiniMax requires the OpenClaw runtime to work correctly.
  */
 export function isOpenClawOnlyProvider(provider: string | null | undefined): boolean {
-  return provider === 'minimax' || provider === 'openai-codex';
+  return provider === 'minimax';
+}
+
+/** Runtime-aware provider filtering for agent create/edit forms. */
+export function isProviderSupportedByRuntime(
+  provider: string | null | undefined,
+  runtimeType: string | null | undefined,
+): boolean {
+  if (!provider || !runtimeType) return false;
+  if (provider === 'minimax') return runtimeType === 'openclaw';
+  // `codex` is the runtime driver; `openai-codex` remains the provider/auth slug.
+  if (provider === 'openai-codex') return runtimeType === 'openclaw' || runtimeType === 'codex';
+  if (runtimeType === 'codex') return false;
+  return true;
 }

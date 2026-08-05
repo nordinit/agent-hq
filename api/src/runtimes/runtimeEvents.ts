@@ -13,7 +13,7 @@
 export const RUNTIME_END_EVENT_TYPES = ['runEnded', 'turnEnded'] as const;
 export type RuntimeEndEventType = typeof RUNTIME_END_EVENT_TYPES[number];
 
-export const RUNTIME_EVENT_SOURCES = ['openclaw', 'claude-code', 'veri', 'hermes', 'webhook'] as const;
+export const RUNTIME_EVENT_SOURCES = ['openclaw', 'claude-code', 'codex', 'veri', 'hermes', 'webhook'] as const;
 export type RuntimeEventSource = typeof RUNTIME_EVENT_SOURCES[number];
 
 export const RUNTIME_END_REASONS = ['completed', 'aborted', 'timeout', 'error'] as const;

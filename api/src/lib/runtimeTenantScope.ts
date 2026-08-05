@@ -89,6 +89,7 @@ export async function tenantUpsertUpdateSql(db: Db, table: string): Promise<stri
 export async function insertRuntimeLog(
   db: Db,
   input: {
+    tenantId?: number | null;
     instanceId?: number | null;
     agentId?: number | null;
     taskId?: number | null;
@@ -98,12 +99,12 @@ export async function insertRuntimeLog(
     message: string;
   },
 ): Promise<void> {
-  const tenantId = await resolveRuntimeTenantId(db, {
-      taskId: input.taskId,
-      instanceId: input.instanceId,
-      agentId: input.agentId,
-      projectId: input.projectId,
-    });
+  const tenantId = input.tenantId ?? await resolveRuntimeTenantId(db, {
+    taskId: input.taskId,
+    instanceId: input.instanceId,
+    agentId: input.agentId,
+    projectId: input.projectId,
+  });
   const columns: string[] = [];
   const placeholders: string[] = [];
   const values: unknown[] = [];

@@ -36,6 +36,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { getDb } from '../db/client';
 import { type Db } from '../db/adapter/types';
+import { sanitizedRuntimeProcessEnv } from '../runtimes/environment';
 
 export const SERVER_NAME = 'agent-hq-agent-tools';
 export const SERVER_VERSION = '1.0.0';
@@ -321,7 +322,7 @@ export function buildToolDefinitions(
 
 function toolExecutionEnv(input: Record<string, unknown>): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    ...sanitizedRuntimeProcessEnv(),
     TOOL_INPUT: JSON.stringify(input),
     ...Object.fromEntries(
       Object.entries(input).map(([k, v]) => [
