@@ -2041,6 +2041,34 @@ describe('routing rules API', () => {
     }
   });
 
+  it('does not restore a deleted starter transition after policy installation', async () => {
+    const db = getDb();
+    await db.run(`INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (11, 1, 'Development', 'dev')`);
+    await seedSprintTaskPolicy(db, 11);
+
+    const starter = await db.get(`
+      SELECT id, from_status, outcome
+      FROM sprint_task_transitions
+      WHERE sprint_id = ?
+      ORDER BY id ASC
+      LIMIT 1
+    `, 11) as { id: number; from_status: string; outcome: string } | undefined;
+    expect(starter).toBeDefined();
+
+    await db.run(`DELETE FROM sprint_task_transitions WHERE id = ?`, starter?.id);
+
+    // Routing mutations still call this initializer for compatibility with workflows created
+    // before eager installation. The completed-install marker must make that call a no-op.
+    await seedSprintTaskPolicy(db, 11);
+
+    const recreated = await db.get(`
+      SELECT id
+      FROM sprint_task_transitions
+      WHERE sprint_id = ? AND from_status = ? AND outcome = ?
+    `, 11, starter?.from_status, starter?.outcome);
+    expect(recreated).toBeUndefined();
+  });
+
   it('does not seed sprint status policy while listing statuses', async () => {
     const db = getDb();
     await db.run(`

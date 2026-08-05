@@ -115,10 +115,17 @@ export async function seedSprintTaskPolicy(
   if (!sprint) return;
 
   const force = options?.force === true;
+  const policySeeded = Boolean(sprint.task_policy_seeded_at);
+
+  // Starter policy is installation data, not a desired-state template. Once installation has
+  // completed, the persisted rows belong to the operator: missing rows may have been deleted
+  // intentionally and must never be reconciled by an unrelated routing write. Only an explicit
+  // forced install/migration is allowed to replace the policy after this marker is set.
+  if (policySeeded && !force) return;
+
   const statusCount = (await db.get(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, sprintId) as { n: number }).n;
   const transitionCount = (await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`, sprintId) as { n: number }).n;
   const requirementCount = (await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transition_requirements WHERE sprint_id = ?`, sprintId) as { n: number }).n;
-  const policySeeded = Boolean(sprint.task_policy_seeded_at);
   const shouldSeedStatuses = force || (!policySeeded && statusCount === 0);
   const shouldSeedTransitions = force || (!policySeeded && transitionCount === 0);
   const shouldSeedRequirements = force || (!policySeeded && requirementCount === 0);

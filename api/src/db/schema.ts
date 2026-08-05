@@ -2767,6 +2767,8 @@ export async function initSchema(options: InitSchemaOptions = {}): Promise<void>
     WHERE id IN (
       SELECT sprint_id FROM sprint_task_statuses
       UNION
+      SELECT sprint_id FROM sprint_task_transitions
+      UNION
       SELECT sprint_id FROM sprint_task_transition_requirements
       UNION
       SELECT sprint_id FROM sprint_task_routing_rules

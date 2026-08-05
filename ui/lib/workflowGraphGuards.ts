@@ -113,11 +113,6 @@ export function deleteConsequences(entity: 'transition' | 'rule' | 'requirement'
     // task holding a live instance.
     notes.push('Tasks currently assigned by this rule will be unassigned, except any with a run in flight.');
   }
-  if (entity === 'transition') {
-    // seedSprintTaskPolicy re-inserts starter policy on the next routing write, and there is
-    // no tombstone for transitions the way there is for requirements.
-    notes.push('If this is a starter transition, the next routing change to this workflow may recreate it.');
-  }
   if (entity === 'requirement') {
     notes.push('A tombstone is recorded, so this requirement will not be re-seeded.');
   }

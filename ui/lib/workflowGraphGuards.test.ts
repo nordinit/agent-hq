@@ -83,8 +83,8 @@ test('warns that deleting a rule unassigns tasks, except running ones', () => {
   assert.match(notes[0], /unassigned, except any with a run in flight/);
 });
 
-test('warns that a deleted starter transition may be re-seeded', () => {
-  assert.match(deleteConsequences('transition')[0], /may recreate it/);
+test('does not claim deleted transitions can be re-seeded', () => {
+  assert.deepEqual(deleteConsequences('transition'), []);
 });
 
 test('notes that a deleted requirement is tombstoned rather than re-seeded', () => {
