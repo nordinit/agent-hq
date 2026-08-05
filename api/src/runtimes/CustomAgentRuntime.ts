@@ -37,6 +37,7 @@ import type {
 import { skippedRuntimeAuthProfileSync } from './types';
 import { getDb } from '../db/client';
 import { renderNamedContractTemplate } from '../services/contracts/templateStore';
+import { runtimeTenantInsertColumns } from '../lib/runtimeTenantScope';
 import { nowTimestamp } from '../lib/timestamps';
 
 // ── Config ───────────────────────────────────────────────────────────────────
@@ -446,6 +447,7 @@ export class CustomAgentRuntime implements AgentRuntime {
     const instRow = await db.get('SELECT agent_id FROM job_instances WHERE id = ?', instanceId) as { agent_id: number } | undefined;
     const agentId = instRow?.agent_id ?? null;
     if (agentId == null) return;
+    const tenant = await chatTenantColumns(db, instanceId, agentId);
 
     // Discover session ID from the Custom status endpoint if needed
     if (!sessionId) {
@@ -517,8 +519,8 @@ export class CustomAgentRuntime implements AgentRuntime {
 
         if (newEvents.length > 0) {
           const insertSql = `
-            INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-            VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
+            INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+            VALUES (?, ${tenant.valueSql}?, ?, 'assistant', ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp,
               event_type = excluded.event_type, event_meta = excluded.event_meta
           `;
@@ -585,6 +587,7 @@ export class CustomAgentRuntime implements AgentRuntime {
             await db.run(
               insertSql,
               evtId,
+              ...tenant.values,
               agentId,
               instanceId,
               content,
@@ -774,15 +777,16 @@ export class CustomAgentRuntime implements AgentRuntime {
       if (agentId == null) return;
 
       const instanceId = params.instanceId ?? 0;
+      const tenant = await chatTenantColumns(db, instanceId, agentId);
       const now = nowTimestamp();
       const msgId = `veri-asst-${instanceId}`;
 
       // Upsert the rolling assistant message (backward compat)
       await db.run(`
-        INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-        VALUES (?, ?, ?, 'assistant', ?, ?, 'text', '{}')
+        INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+        VALUES (?, ${tenant.valueSql}?, ?, 'assistant', ?, ?, 'text', '{}')
         ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp
-      `, msgId, agentId, instanceId, content, now);
+      `, msgId, ...tenant.values, agentId, instanceId, content, now);
 
       // Persist individual structured event rows (task #532)
       if (events && events.length > 0) {
@@ -815,11 +819,12 @@ export class CustomAgentRuntime implements AgentRuntime {
       if (agentId == null) return;
 
       const instanceId = params.instanceId ?? 0;
+      const tenant = await chatTenantColumns(db, instanceId, agentId);
       const now = nowTimestamp();
 
       await db.run(`
-        INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-        VALUES (?, ?, ?, 'user', ?, ?) ON CONFLICT DO NOTHING`, `veri-user-${instanceId}`, agentId, instanceId, params.message, now);
+        INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp)
+        VALUES (?, ${tenant.valueSql}?, ?, 'user', ?, ?) ON CONFLICT DO NOTHING`, `veri-user-${instanceId}`, ...tenant.values, agentId, instanceId, params.message, now);
 
       console.log(`[CustomAgentRuntime] Run ${runId} — persisted user prompt at run start`);
     } catch (err) {
@@ -851,20 +856,21 @@ export class CustomAgentRuntime implements AgentRuntime {
       if (agentId == null) return;
 
       const instanceId = params.instanceId ?? 0;
+      const tenant = await chatTenantColumns(db, instanceId, agentId);
       const now = nowTimestamp();
 
       // Save the dispatched prompt as a "user" message
       await db.run(`
-        INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-        VALUES (?, ?, ?, 'user', ?, ?) ON CONFLICT DO NOTHING`, `veri-user-${instanceId}`, agentId, instanceId, params.message, now);
+        INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp)
+        VALUES (?, ${tenant.valueSql}?, ?, 'user', ?, ?) ON CONFLICT DO NOTHING`, `veri-user-${instanceId}`, ...tenant.values, agentId, instanceId, params.message, now);
 
       // Save the final assistant response (upsert to replace any partial streaming content)
       if (assistantMessage) {
         await db.run(`
-          INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-          VALUES (?, ?, ?, 'assistant', ?, ?)
+          INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp)
+          VALUES (?, ${tenant.valueSql}?, ?, 'assistant', ?, ?)
           ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp
-        `, `veri-asst-${instanceId}`, agentId, instanceId, assistantMessage, now);
+        `, `veri-asst-${instanceId}`, ...tenant.values, agentId, instanceId, assistantMessage, now);
       }
 
       console.log(
@@ -882,8 +888,8 @@ export class CustomAgentRuntime implements AgentRuntime {
     try {
       const db = getDb();
       await db.run(`
-        INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-        SELECT ?, agent_id, id, 'system', ?, ?, 'turn_end', ?
+        INSERT INTO chat_messages (id, tenant_id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+        SELECT ?, tenant_id, agent_id, id, 'system', ?, ?, 'turn_end', ?
         FROM job_instances
         WHERE id = ?
         ON CONFLICT(id) DO UPDATE SET
@@ -1048,6 +1054,14 @@ function parseSSEAssistantMessage(raw: string): string {
   return parseSSEEvents(raw).assistantMessage;
 }
 
+async function chatTenantColumns(
+  db: ReturnType<typeof getDb>,
+  instanceId: number,
+  agentId: number,
+) {
+  return await runtimeTenantInsertColumns(db, 'chat_messages', { instanceId, agentId });
+}
+
 /**
  * Persist structured SSE events as individual chat_messages rows (task #532).
  *
@@ -1060,10 +1074,11 @@ async function persistEventRows(
   instanceId: number,
   events: SSEEvent[],
 ): Promise<void> {
+  const tenant = await chatTenantColumns(db, instanceId, agentId);
   const now = nowTimestamp();
   const insertSql = `
-    INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-    VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)
+    INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+    VALUES (?, ${tenant.valueSql}?, ?, 'assistant', ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp,
       event_type = excluded.event_type, event_meta = excluded.event_meta
   `;
@@ -1073,6 +1088,7 @@ async function persistEventRows(
     await db.run(
       insertSql,
       `veri-evt-${instanceId}-${i}`,
+      ...tenant.values,
       agentId,
       instanceId,
       evt.content,

@@ -1015,8 +1015,8 @@ router.post('/provision-full', async (req: Request, res: Response) => {
         }
 
         const sprintRoutingSql = `
-          INSERT INTO sprint_task_routing_rules (sprint_id, task_type, status, agent_id, priority)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, task_type, status, agent_id, priority)
+          VALUES (?, ?, ?, ?, ?, ?)
         `;
         const activeProjectSprintIds = body.project_id == null
           ? []
@@ -1034,7 +1034,7 @@ router.post('/provision-full', async (req: Request, res: Response) => {
             throw new Error('routing_rules entries must include sprint_id or the agent project must have at least one non-closed sprint');
           }
           for (const sprintId of targetSprintIds) {
-            const result = await db.run(sprintRoutingSql, sprintId, rule.task_type, rule.status, agentId, rule.priority ?? 0);
+            const result = await db.run(sprintRoutingSql, tenantId, sprintId, rule.task_type, rule.status, agentId, rule.priority ?? 0);
             createdRoutingRuleIds.push(Number(result.lastInsertId));
           }
         }

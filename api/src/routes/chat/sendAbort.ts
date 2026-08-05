@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../../db/client';
-import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
+import { runtimeTenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { gatewayWsSend } from '../../runtimes/openclaw/gatewayClient';
 import { abortChatRunBySessionKey } from '../../runtimes/openclaw';
 import { nowTimestamp } from '../../lib/timestamps';
@@ -38,8 +38,7 @@ export function registerSendAbortRoutes(router: Router): void {
 
       const fullMessage = [message, attachmentLines].filter(Boolean).join('\n');
       const now = nowTimestamp();
-      const tenantId = await resolveRuntimeTenantId(db, { instanceId, agentId: inst.agent_id });
-      const tenant = await tenantInsertColumns(db, 'chat_messages', tenantId);
+      const tenant = await runtimeTenantInsertColumns(db, 'chat_messages', { instanceId, agentId: inst.agent_id });
       await db.run(`
         INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, session_key, role, content, timestamp, event_type, event_meta)
         VALUES (?, ${tenant.valueSql}?, ?, ?, 'user', ?, ?, 'text', '{}') ON CONFLICT DO NOTHING`, `oc-chat-user-${instanceId}-${Date.now()}`, ...tenant.values, inst.agent_id, instanceId, inst.session_key, fullMessage, now);

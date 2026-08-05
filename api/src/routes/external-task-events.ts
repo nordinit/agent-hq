@@ -14,6 +14,7 @@ import {
 } from '../domains/routing/externalEventMappings';
 import { type Db } from "../db/adapter/types";
 import { isPostgresUniqueViolation } from '../lib/postgresErrors';
+import { tenantInsertColumns } from '../lib/runtimeTenantScope';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export { DEV_ENV_LEASE_MANAGER_SOURCE };
@@ -341,11 +342,12 @@ async function markReceiptProcessed(
   `, ...values, receiptId);
 }
 
-async function addTaskNote(db: Db, taskId: number, author: string, content: string): Promise<void> {
+async function addTaskNote(db: Db, taskId: number, tenantId: number | null, author: string, content: string): Promise<void> {
+  const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
   await db.run(`
-    INSERT INTO task_notes (task_id, author, content)
-    VALUES (?, ?, ?)
-  `, taskId, author, content);
+    INSERT INTO task_notes (${tenant.columnSql}task_id, author, content)
+    VALUES (${tenant.valueSql}?, ?, ?)
+  `, ...tenant.values, taskId, author, content);
 }
 
 async function updateTaskEvidence(db: Db, taskId: number, changedBy: string, updates: Record<string, unknown>): Promise<void> {
@@ -830,7 +832,7 @@ router.post('/task-events', async (req: Request, res: Response) => {
         let outcome: string | null = null;
 
         await writeWorkflowEventHistory(tx, normalized.taskId, changedBy, normalized, mapping);
-        await addTaskNote(tx, normalized.taskId, changedBy, buildEventNote(normalized, mapping));
+        await addTaskNote(tx, normalized.taskId, task.tenant_id, changedBy, buildEventNote(normalized, mapping));
 
         if (mapping?.apply_review_evidence) {
           await updateTaskEvidence(tx, normalized.taskId, changedBy, {

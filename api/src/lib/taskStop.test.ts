@@ -14,19 +14,19 @@ async function createDb(): Promise<Db> {
 
   await db.run(`
     INSERT INTO tenants (id, name, slug, is_default)
-    VALUES (1, 'Default', 'default', 1)
+    VALUES (1, 'Default', 'default', 1), (2, 'Task Stop Workspace', 'task-stop', 0)
   `);
   await db.run(`
     INSERT INTO projects (id, tenant_id, name)
-    VALUES (1, 1, 'Task stop')
+    VALUES (1, 2, 'Task stop')
   `);
   await db.run(`
     INSERT INTO sprints (id, tenant_id, project_id, name)
-    VALUES (1, 1, 1, 'Task stop')
+    VALUES (1, 2, 1, 'Task stop')
   `);
   await db.run(`
     INSERT INTO agents (id, tenant_id, name, role, session_key)
-    VALUES (7, 1, 'Cinder', 'Implementation', 'agent:cinder')
+    VALUES (7, 2, 'Cinder', 'Implementation', 'agent:cinder')
   `);
 
   return db;
@@ -44,7 +44,7 @@ async function seedTask(db: Db, input: {
       id, tenant_id, project_id, sprint_id, title, status,
       active_instance_id, paused_at, pause_reason, manual_intervention_count
     )
-    VALUES (486, 1, 1, 1, 'Stop an active task', ?, NULL, ?, ?, ?)
+    VALUES (486, 2, 1, 1, 'Stop an active task', ?, NULL, ?, ?, ?)
   `,
     input.status,
     input.pausedAt ?? null,
@@ -55,7 +55,7 @@ async function seedTask(db: Db, input: {
   if (input.activeInstance) {
     await db.run(`
       INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status)
-      VALUES (91, 1, 7, 486, 'running')
+      VALUES (91, 2, 7, 486, 'running')
     `);
     await db.run(`UPDATE tasks SET active_instance_id = 91 WHERE id = 486`);
   }
@@ -125,13 +125,14 @@ describe('stopTaskActiveInstance', () => {
     expect(history).toEqual([]);
 
     const note = await db.get(`
-      SELECT author, content
+      SELECT tenant_id, author, content
       FROM task_notes
       WHERE task_id = ?
       ORDER BY id DESC
       LIMIT 1
-    `, 486) as { author: string; content: string };
+    `, 486) as { tenant_id: number; author: string; content: string };
     expect(note).toEqual({
+      tenant_id: 2,
       author: 'cinder-backend',
       content: 'Active instance manually stopped by cinder-backend: Operator clicked Stop',
     });

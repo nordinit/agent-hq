@@ -17,6 +17,8 @@ let db: Db;
 let openclawHome: string;
 let previousOpenClawHome: string | undefined;
 
+const TENANT_ID = 37;
+
 jest.mock('../db/client', () => ({
   getDb: () => db,
 }));
@@ -127,9 +129,17 @@ async function setupDb(): Promise<void> {
   db = await setupTestDb();
 
   await db.run(`
-    INSERT INTO agents (id, name, runtime_type, session_key, openclaw_agent_id)
-    VALUES (2, 'Atlas', 'openclaw', 'agent:atlas:main', 'atlas')
-  `);
+    INSERT INTO tenants (id, name, slug, is_default)
+    VALUES (?, 'Chat Test Tenant', 'chat-test', 1)
+  `, TENANT_ID);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)
+  `, TENANT_ID, TENANT_ID);
+  await db.run(`
+    INSERT INTO agents (id, tenant_id, name, runtime_type, session_key, openclaw_agent_id)
+    VALUES (2, ?, 'Atlas', 'openclaw', 'agent:atlas:main', 'atlas')
+  `, TENANT_ID);
 }
 
 function waitForAsyncFrames(): Promise<void> {
@@ -326,9 +336,9 @@ describe('chat websocket live structured persistence', () => {
   it('rotates a direct chat session even when the key has an existing chat-stage instance', async () => {
     const sessionKey = 'agent:atlas:web:direct:8fa72628-c1d7-401c-a106-9190b2b623d6';
     await db.run(`
-      INSERT INTO job_instances (id, agent_id, task_id, session_key, status, run_stage, durable_run_id)
-      VALUES (99974585, 2, NULL, ?, 'done', 'chat', 'chat-existing')
-    `, sessionKey);
+      INSERT INTO job_instances (id, tenant_id, agent_id, task_id, session_key, status, run_stage, durable_run_id)
+      VALUES (99974585, ?, 2, NULL, ?, 'done', 'chat', 'chat-existing')
+    `, TENANT_ID, sessionKey);
     const client = connectProxyClient();
 
     await waitForAsyncFrames();

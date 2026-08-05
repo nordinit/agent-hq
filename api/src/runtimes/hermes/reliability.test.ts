@@ -4,6 +4,7 @@ import { PassThrough } from 'stream';
 const mockSpawn = jest.fn();
 const mockApplyRuntimeEnd = jest.fn(async (..._a: unknown[]) => ({ changed: true }));
 const mockRecordRunCheckIn = jest.fn(async (..._a: unknown[]) => ({ taskId: null, noteCreated: false }));
+const TENANT_ID = 23;
 
 jest.mock('child_process', () => ({
   ...(jest.requireActual('child_process') as object),
@@ -49,7 +50,21 @@ function createMockDb() {
     runs,
     dialect: 'postgres' as const,
     inTransaction: false,
-    get: jest.fn(async () => ({ agent_id: 17 })),
+    get: jest.fn(async (sql: string) => {
+      if (sql.includes('information_schema.columns') || sql.includes('information_schema.tables')) {
+        return { found: 1 };
+      }
+      if (sql.includes('SELECT agent_id FROM job_instances')) return { agent_id: 17 };
+      if (sql.includes('FROM job_instances ji')) {
+        return {
+          instance_tenant_id: TENANT_ID,
+          task_tenant_id: TENANT_ID,
+          agent_tenant_id: TENANT_ID,
+        };
+      }
+      if (sql.includes('SELECT tenant_id FROM agents')) return { tenant_id: TENANT_ID };
+      return undefined;
+    }),
     all: jest.fn(async () => []),
     value: jest.fn(async () => undefined),
     run: jest.fn(async (sql: string, ...params: unknown[]) => {
@@ -108,6 +123,10 @@ describe('Hermes launch failure', () => {
     expect(args.event.reason).toBe('error');
     expect(String(args.event.error)).toMatch(/ENOENT/);
     expect((args.event.metadata as Record<string, unknown>).spawn_failed).toBe(true);
+
+    const promptInsert = db.runs.find((entry) => entry.sql.includes("'user'"));
+    expect(promptInsert?.sql).toContain('tenant_id');
+    expect(promptInsert?.params[1]).toBe(TENANT_ID);
   });
 
   it('writes the turn_end row the watchdog reads back', async () => {

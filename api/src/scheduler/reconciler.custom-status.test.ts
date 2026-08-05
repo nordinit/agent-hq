@@ -177,4 +177,31 @@ describe('reconciler workflow-defined status routing', () => {
       { id: 803, assigned_agent_id: 1 },
     ]);
   });
+
+  it('owns a queued review instance with the non-default task tenant', async () => {
+    const db = await setupDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Workspace Two', 'workspace-two', 0)`);
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (87, 2, 'Workspace Two Project')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (11, 2, 87, 'Workspace Two Review', 'Review', 'dev', 'active')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, job_instructions, enabled, timeout_seconds, session_key, runtime_type) VALUES (3, 2, 'Workspace Two Dev', 'Dev', 'Dev', 1, 900, 'agent:workspace-two-dev', 'openclaw')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, job_instructions, enabled, timeout_seconds, session_key, runtime_type) VALUES (4, 2, 'Workspace Two QA', 'QA', 'Review', 1, 900, 'agent:workspace-two-qa', 'openclaw')`);
+    await db.run(`
+      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      VALUES (2, 11, 87, 'dev', 'backend', 'review', 4, 10)
+    `);
+    await db.run(`
+      INSERT INTO tasks (
+        id, tenant_id, title, description, status, priority, agent_id, assigned_agent_id,
+        review_owner_agent_id, active_instance_id, project_id, sprint_id, task_type, updated_at
+      ) VALUES (805, 2, 'Workspace Two Review', 'Task', 'review', 'high', 3, 3, NULL, NULL, 87, 11, 'backend', '2026-06-04T12:00:00.000Z')
+    `);
+
+    await reconcileReviewQaRouting({ dispatchInstance: jest.fn(async () => undefined) }, db);
+
+    expect(await db.get(`SELECT tenant_id, task_id, agent_id FROM job_instances WHERE task_id = 805`)).toEqual({
+      tenant_id: 2,
+      task_id: 805,
+      agent_id: 4,
+    });
+  });
 });

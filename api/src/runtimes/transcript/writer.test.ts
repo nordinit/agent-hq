@@ -130,7 +130,7 @@ describe('RuntimeTranscriptWriter', () => {
     await writer.drain();
 
     expect(db.runs).toHaveLength(3);
-    expect(mockTableHasColumn).toHaveBeenCalledTimes(2); // durable_run_id, session_key
+    expect(mockTableHasColumn).toHaveBeenCalledTimes(3); // tenant_id, durable_run_id, session_key
   });
 
   it('writes tenant_id only when explicitly opted in', async () => {

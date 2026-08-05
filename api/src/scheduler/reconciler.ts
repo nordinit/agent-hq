@@ -94,6 +94,7 @@ const MISSING_LIFECYCLE_OUTCOME_GRACE_MS: number = (() => {
 
 interface TaskRow {
   id: number;
+  tenant_id: number;
   title: string;
   description: string;
   status: string;
@@ -215,10 +216,7 @@ async function logHistory(
   oldValue: string | null,
   newValue: string | null,
 ): Promise<void> {
-  await db.run(`
-    INSERT INTO task_history (task_id, changed_by, field, old_value, new_value)
-    VALUES (?, ?, ?, ?, ?)
-  `, taskId, changedBy, field, oldValue, newValue);
+  await writeTaskHistory(db, taskId, changedBy, field, oldValue, newValue, false);
 }
 
 async function resolveAgentName(db: Db, agentId: number | null): Promise<string | null> {
@@ -418,13 +416,13 @@ export async function reconcileReviewQaRouting(
     const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
     const instanceResult = supportsDurableRunId
       ? await db.run(`
-          INSERT INTO job_instances (agent_id, status, durable_run_id)
-          VALUES (?, 'queued', ?)
-        `, agent.id, createDurableRunId())
+          INSERT INTO job_instances (tenant_id, agent_id, status, durable_run_id)
+          VALUES (?, ?, 'queued', ?)
+        `, task.tenant_id, agent.id, createDurableRunId())
       : await db.run(`
-          INSERT INTO job_instances (agent_id, status)
-          VALUES (?, 'queued')
-        `, agent.id);
+          INSERT INTO job_instances (tenant_id, agent_id, status)
+          VALUES (?, ?, 'queued')
+        `, task.tenant_id, agent.id);
     const instanceId = instanceResult.lastInsertId as number;
     await attachInstanceToTask(db, instanceId, task.id);
 

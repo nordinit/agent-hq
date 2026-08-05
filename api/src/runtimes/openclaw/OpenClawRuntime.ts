@@ -30,6 +30,7 @@ import { handleOpenClawRuntimeEnd } from './runtimeEnd';
 import {
   startRawSessionTerminalPoll,
 } from './transcript';
+import { requireRuntimeTenantId } from '../../lib/runtimeTenantScope';
 import { nowTimestamp } from '../../lib/timestamps';
 
 function normalizeRepoContextValue(value: string | null | undefined): string | null {
@@ -510,6 +511,13 @@ export class OpenClawRuntime implements AgentRuntime {
 
       const identityColumns: string[] = [];
       const identityValues: unknown[] = [];
+      if (await tableHasColumn(db, 'chat_messages', 'tenant_id')) {
+        identityColumns.push('tenant_id');
+        identityValues.push(await requireRuntimeTenantId(db, {
+          instanceId: params.instanceId,
+          agentId,
+        }));
+      }
       if (await tableHasColumn(db, 'chat_messages', 'durable_run_id')) {
         identityColumns.push('durable_run_id');
         identityValues.push(instRow?.durable_run_id ?? null);

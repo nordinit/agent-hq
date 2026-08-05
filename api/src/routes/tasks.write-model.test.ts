@@ -4,6 +4,7 @@ import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import * as dispatchTrigger from '../services/dispatchTrigger';
 import tasksRouter from './tasks';
+import { createTaskRecord, updateTaskRecord } from '../domains/tasks/writeModel';
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -540,6 +541,56 @@ describe('tasks route write-model handoff', () => {
       WHERE source_task_id = 102 AND target_task_id = 101 AND relationship_type_key = 'defect_of'
     `);
     expect(clearedRelationship).toBeUndefined();
+  });
+
+  it('owns created and resynchronized defect metrics with each non-default origin task tenant', async () => {
+    const db = getDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Workspace Two', 'workspace-two', 0)`);
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (287, 2, 'Workspace Two Project')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status) VALUES (242, 2, 287, 'Workspace Two Workflow', 'generic', 'active')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key) VALUES (27, 2, 287, 'Workspace Two Agent', 'agent:workspace-two')`);
+    await db.run(`
+      INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, title, status, task_type)
+      VALUES
+        (201, 2, 287, 242, 27, 27, 'First origin', 'done', 'backend'),
+        (202, 2, 287, 242, 27, 27, 'Second origin', 'done', 'backend')
+    `);
+
+    const created = await createTaskRecord(db, {
+      title: 'Workspace Two defect',
+      status: 'todo',
+      project_id: 287,
+      sprint_id: 242,
+      agent_id: 27,
+      task_type: 'backend',
+      origin_task_id: 201,
+      defect_type: 'regression',
+      tenant_id: 2,
+    }, 'tenant-test');
+
+    expect(await db.get(`SELECT tenant_id, spawned_defects FROM task_outcome_metrics WHERE task_id = 201`)).toEqual({
+      tenant_id: 2,
+      spawned_defects: 1,
+    });
+
+    await updateTaskRecord(db, Number(created.id), {
+      origin_task_id: 202,
+      defect_type: 'qa_miss',
+    }, {
+      changedBy: 'tenant-test',
+      authorityBy: 'tenant-test',
+      isManualOverride: false,
+    });
+
+    expect(await db.all(`
+      SELECT task_id, tenant_id, spawned_defects
+      FROM task_outcome_metrics
+      WHERE task_id IN (201, 202)
+      ORDER BY task_id
+    `)).toEqual([
+      { task_id: 201, tenant_id: 2, spawned_defects: 0 },
+      { task_id: 202, tenant_id: 2, spawned_defects: 1 },
+    ]);
   });
 
   it('rejects self-referential origin task relationships', async () => {

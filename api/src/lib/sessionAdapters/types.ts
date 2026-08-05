@@ -29,6 +29,8 @@ export type EventType =
 export interface AdapterSource {
   /** Runtime-specific session identifier (e.g., session key, cron run id, claude-code uuid). */
   externalKey: string;
+  /** Tenant that authorized this ingestion request. */
+  tenantId: number;
   /** If we already know the linked job instance. */
   instanceId?: number;
   /** If we already know the linked agent. */

@@ -2,6 +2,7 @@ import { AGENT_HQ_RUNTIME_SOURCE, RUNTIME_FAILED_EVENT, resolveWorkflowEventMapp
 import { notifyTaskStatusChange } from '../../lib/taskNotifications';
 import { applyTaskOutcome } from '../../lib/taskOutcome';
 import { writeTaskHistory, writeTaskStatusChange } from '../tasks/history';
+import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
 
 export interface RuntimeFailureWorkflowEventParams {
@@ -56,7 +57,9 @@ export async function applyConfiguredRuntimeFailedEvent(
   await writeTaskHistory(db, params.taskId, changedBy, 'workflow_event_action_target', null, mapping?.action_target ?? null, false);
 
   try {
-    await db.run(`INSERT INTO task_notes (task_id, author, content) VALUES (?, ?, ?)`, params.taskId, changedBy, [
+    const tenantId = (await resolveRuntimeTenantId(db, { taskId: params.taskId })) ?? params.tenantId ?? null;
+    const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
+    await db.run(`INSERT INTO task_notes (${tenant.columnSql}task_id, author, content) VALUES (${tenant.valueSql}?, ?, ?)`, ...tenant.values, params.taskId, changedBy, [
             'Runtime workflow event received',
             `Source: ${AGENT_HQ_RUNTIME_SOURCE}`,
             `Event: ${RUNTIME_FAILED_EVENT}`,

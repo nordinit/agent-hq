@@ -96,11 +96,11 @@ export async function completeSprint(sprintId: number): Promise<void> {
     const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
     const instanceResult = supportsDurableRunId
       ? await db.run(`
-          INSERT INTO job_instances (agent_id, status, durable_run_id) VALUES (?, 'queued', ?)
-        `, job.id, createDurableRunId())
+          INSERT INTO job_instances (tenant_id, agent_id, status, durable_run_id) VALUES (?, ?, 'queued', ?)
+        `, job.tenant_id, job.id, createDurableRunId())
       : await db.run(`
-          INSERT INTO job_instances (agent_id, status) VALUES (?, 'queued')
-        `, job.id);
+          INSERT INTO job_instances (tenant_id, agent_id, status) VALUES (?, ?, 'queued')
+        `, job.tenant_id, job.id);
     const instanceId = instanceResult.lastInsertId as number;
 
     let message = buildDispatchMessage({

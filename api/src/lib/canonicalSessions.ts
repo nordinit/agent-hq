@@ -34,6 +34,49 @@ export interface CanonicalSessionRow {
   updated_at: string;
 }
 
+interface SessionTenantLinks {
+  agentId?: number | null;
+  taskId?: number | null;
+  instanceId?: number | null;
+  projectId?: number | null;
+}
+
+export class SessionIngestTenantError extends Error {
+  constructor(message = 'Session source is not available for the active tenant') {
+    super(message);
+    this.name = 'SessionIngestTenantError';
+  }
+}
+
+async function assertSessionTenantOwnership(
+  db: Db,
+  tenantId: number,
+  links: SessionTenantLinks,
+): Promise<void> {
+  const references: Array<{ label: string; table: string; id: number | null | undefined }> = [
+    { label: 'agent_id', table: 'agents', id: links.agentId },
+    { label: 'task_id', table: 'tasks', id: links.taskId },
+    { label: 'instance_id', table: 'job_instances', id: links.instanceId },
+    { label: 'project_id', table: 'projects', id: links.projectId },
+  ];
+
+  for (const reference of references) {
+    if (reference.id == null) continue;
+    const row = await db.get(
+      `SELECT tenant_id FROM ${reference.table} WHERE id = ? LIMIT 1`,
+      reference.id,
+    ) as { tenant_id: number | null } | undefined;
+    if (!row || Number(row.tenant_id) !== tenantId) {
+      throw new SessionIngestTenantError(`${reference.label} is not available for the active tenant`);
+    }
+  }
+
+  const linkedTenantId = await resolveRuntimeTenantId(db, links);
+  if (linkedTenantId != null && linkedTenantId !== tenantId) {
+    throw new SessionIngestTenantError();
+  }
+}
+
 interface InstanceContextRow {
   id: number;
   session_key: string | null;
@@ -440,26 +483,38 @@ export async function ensureCanonicalSessionForInstance(
   return await db.get('SELECT * FROM sessions WHERE id = ?', session.id) as CanonicalSessionRow;
 }
 
-export async function ensureCanonicalSessionByExternalKey(externalKey: string): Promise<CanonicalSessionRow | null> {
+export async function ensureCanonicalSessionByExternalKey(externalKey: string, tenantId: number): Promise<CanonicalSessionRow | null> {
   const db = getDb();
   const existing = await db.get('SELECT * FROM sessions WHERE external_key = ?', externalKey) as CanonicalSessionRow | undefined;
-  if (existing) return existing;
+  if (existing) {
+    if (Number(existing.tenant_id) !== tenantId) throw new SessionIngestTenantError();
+    return existing;
+  }
 
   // Instance-linked path — direct match or hook:atlas:jobrun:<id> pattern
-  const directInstance = await db.get('SELECT id FROM job_instances WHERE session_key = ? LIMIT 1', externalKey) as { id: number } | undefined;
-  if (directInstance) return await ensureCanonicalSessionForInstance(directInstance.id);
+  const directInstance = await db.get(
+    'SELECT id FROM job_instances WHERE session_key = ? AND tenant_id = ? LIMIT 1',
+    externalKey,
+    tenantId,
+  ) as { id: number } | undefined;
+  if (directInstance) {
+    await assertSessionTenantOwnership(db, tenantId, { instanceId: directInstance.id });
+    return await ensureCanonicalSessionForInstance(directInstance.id);
+  }
 
   const runIdMatch = externalKey.match(/hook:atlas:jobrun:(\d+)$/);
   if (runIdMatch) {
-    return await ensureCanonicalSessionForInstance(Number(runIdMatch[1]));
+    const instanceId = Number(runIdMatch[1]);
+    await assertSessionTenantOwnership(db, tenantId, { instanceId });
+    return await ensureCanonicalSessionForInstance(instanceId);
   }
 
   // Adapter-based pull ingestion (cron runs, claude-code JSONL, etc.)
   const adapter = resolveSessionAdapterForKey(externalKey);
-  const source: AdapterSource = { externalKey };
+  const source: AdapterSource = { externalKey, tenantId };
   const result = await adapter.ingest(source);
   if (result) {
-    return await writeIngestResult(db, result);
+    return await writeIngestResult(db, result, tenantId);
   }
 
   return null;
@@ -470,15 +525,23 @@ export async function ensureCanonicalSessionByExternalKey(externalKey: string): 
  *
  * Handles upsert conflicts on external_key and ordinal so it's safe to call
  * repeatedly (idempotent ingestion).
+ * tenantId is supplied by the caller rather than inferred so adapter-only sessions are owned.
  */
-export async function writeIngestResult(db: Db, result: IngestResult): Promise<CanonicalSessionRow | null> {
+export async function writeIngestResult(db: Db, result: IngestResult, tenantId: number): Promise<CanonicalSessionRow | null> {
   const { session, messages } = result;
-  const tenantId = await resolveRuntimeTenantId(db, {
-      taskId: session.taskId ?? null,
-      agentId: session.agentId ?? null,
-      projectId: session.projectId ?? null,
-      instanceId: session.instanceId ?? null,
-    });
+  await assertSessionTenantOwnership(db, tenantId, {
+    taskId: session.taskId ?? null,
+    agentId: session.agentId ?? null,
+    projectId: session.projectId ?? null,
+    instanceId: session.instanceId ?? null,
+  });
+  const existing = await db.get(
+    'SELECT tenant_id FROM sessions WHERE external_key = ? LIMIT 1',
+    session.externalKey,
+  ) as { tenant_id: number | null } | undefined;
+  if (existing && Number(existing.tenant_id) !== tenantId) {
+    throw new SessionIngestTenantError();
+  }
   const tenant = await tenantInsertColumns(db, 'sessions', tenantId);
 
   // Upsert the session row
@@ -551,22 +614,25 @@ export async function writeIngestResult(db: Db, result: IngestResult): Promise<C
  * (useful for forced refresh after a run completes).
  *
  * @param externalKey  The runtime session key to ingest.
+ * @param tenantId     The tenant that authorized the ingestion request.
  * @param source       Optional additional context (instanceId, agentId, etc.).
  * @param runtime      Optional explicit runtime (skips key-based inference).
  */
 export async function ingestSessionByExternalKey(
   externalKey: string,
-  source: Partial<AdapterSource> = {},
+  tenantId: number,
+  source: Omit<Partial<AdapterSource>, 'externalKey' | 'tenantId'> = {},
   runtime?: string,
 ): Promise<CanonicalSessionRow | null> {
   const db = getDb();
+  await assertSessionTenantOwnership(db, tenantId, source);
   const adapter = runtime
     ? (resolveSessionAdapter(runtime) ?? resolveSessionAdapterForKey(externalKey))
     : resolveSessionAdapterForKey(externalKey);
 
-  const fullSource: AdapterSource = { externalKey, ...source };
+  const fullSource: AdapterSource = { externalKey, tenantId, ...source };
   const result = await adapter.ingest(fullSource);
   if (!result) return null;
 
-  return await writeIngestResult(db, result);
+  return await writeIngestResult(db, result, tenantId);
 }

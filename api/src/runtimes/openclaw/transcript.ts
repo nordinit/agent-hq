@@ -11,6 +11,7 @@ import {
 } from './gatewayClient';
 import { nowTimestamp, timestampFromEpochMs, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { trimOpenClawHistoryRows } from '../../lib/openclawHistoryRows';
+import { runtimeTenantInsertColumns } from '../../lib/runtimeTenantScope';
 
 const activeTerminalSignalCaptures = new Map<string, { stop: () => void }>();
 const activeRawSessionTerminalPolls = new Map<number, { stop: () => void }>();
@@ -129,9 +130,10 @@ export function extractGatewayEvents(msg: Record<string, unknown>): PersistedGat
 
 export async function persistGatewayHistory(instanceId: number, agentId: number, messages: Array<Record<string, unknown>>): Promise<void> {
   const db = getDb();
+  const tenant = await runtimeTenantInsertColumns(db, 'chat_messages', { instanceId, agentId });
   const insertSql = `
-    INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+    VALUES (?, ${tenant.valueSql}?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       content = excluded.content,
       timestamp = excluded.timestamp,
@@ -150,7 +152,7 @@ export async function persistGatewayHistory(instanceId: number, agentId: number,
     for (const evt of extractGatewayEvents(m)) {
       const rowId = `oc-hist-${instanceId}-${rowIndex++}`;
       const meta = { ...evt.event_meta, ...(sourceRole !== role ? { source_role: sourceRole } : {}) };
-      await db.run(insertSql, rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(meta));
+      await db.run(insertSql, rowId, ...tenant.values, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(meta));
     }
   }
 

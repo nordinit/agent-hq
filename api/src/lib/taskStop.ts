@@ -1,5 +1,6 @@
 import { stopInstanceExecution, type StopInstanceExecutionResult } from '../domains/runs/stopInstanceExecution';
 import { writeTaskHistory } from '../domains/tasks/history';
+import { resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
 import { type Db } from "../db/adapter/types";
 
 export interface StopTaskActiveInstanceResult {
@@ -65,10 +66,12 @@ export async function stopTaskActiveInstance(
     const note = stopReason
       ? `Active instance manually stopped by ${changedBy}: ${stopReason}`
       : `Active instance manually stopped by ${changedBy}.`;
+    const tenantId = await resolveRuntimeTenantId(db, { taskId });
+    const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
     await db.run(`
-      INSERT INTO task_notes (task_id, author, content)
-      VALUES (?, ?, ?)
-    `, taskId, changedBy, note);
+      INSERT INTO task_notes (${tenant.columnSql}task_id, author, content)
+      VALUES (${tenant.valueSql}?, ?, ?)
+    `, ...tenant.values, taskId, changedBy, note);
   }
 
   return {

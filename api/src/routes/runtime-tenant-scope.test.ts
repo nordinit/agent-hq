@@ -210,6 +210,39 @@ describe('runtime tenant scope', () => {
     });
   });
 
+  it('refuses runtime log writes with conflicting parent ownership', async () => {
+    await expect(insertRuntimeLog(db, {
+      instanceId: 602,
+      agentId: 101,
+      jobTitle: 'writer-test',
+      level: 'error',
+      message: 'conflicting runtime log must not persist',
+    })).rejects.toThrow('Conflicting runtime tenant ownership');
+
+    const row = await db.get(`
+      SELECT COUNT(*)::int AS count
+      FROM logs
+      WHERE message = 'conflicting runtime log must not persist'
+    `) as { count: number };
+    expect(row.count).toBe(0);
+  });
+
+  it('refuses runtime log writes when tenant ownership cannot be resolved', async () => {
+    await expect(insertRuntimeLog(db, {
+      instanceId: 999999,
+      jobTitle: 'writer-test',
+      level: 'error',
+      message: 'unowned runtime log must not persist',
+    })).rejects.toThrow('Runtime tenant ownership could not be resolved (instanceId=999999)');
+
+    const row = await db.get(`
+      SELECT COUNT(*)::int AS count
+      FROM logs
+      WHERE message = 'unowned runtime log must not persist'
+    `) as { count: number };
+    expect(row.count).toBe(0);
+  });
+
   // Regression guard for a defect class the type system cannot see, and which the tenant
   // isolation tests above did NOT catch.
   //

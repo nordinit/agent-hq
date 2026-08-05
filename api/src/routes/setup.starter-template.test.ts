@@ -146,10 +146,11 @@ describe('starter template setup API', () => {
       const agentCount = (await db.get(`SELECT COUNT(*) AS n FROM agents WHERE project_id = ?`, applied.project_id) as { n: number }).n;
       expect(agentCount).toBe(4);
       const disabledRoute = await db.get(`
-        SELECT enabled
+        SELECT tenant_id, enabled
         FROM sprint_task_routing_rules
         WHERE sprint_id = ? AND task_type = 'frontend' AND status = 'ready'
-      `, applied.workflow_id) as { enabled: number } | undefined;
+      `, applied.workflow_id) as { tenant_id: number; enabled: number } | undefined;
+      expect(disabledRoute?.tenant_id).toBe(await tenantId());
       expect(disabledRoute?.enabled).toBe(0);
       const docsRoute = await db.get(`
         SELECT rr.agent_id, a.name

@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import { randomUUID } from 'crypto';
 import { getDb } from '../../db/client';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
-import { tenantInsertColumns, tenantUpsertUpdateSql } from '../../lib/runtimeTenantScope';
+import { runtimeTenantInsertColumns, tenantUpsertUpdateSql } from '../../lib/runtimeTenantScope';
 import { nowTimestamp, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { SessionContext } from './sessionContext';
 import { StructuredEvent, extractStructuredEvents, normalizeChatRole } from './structuredEvents';
@@ -11,6 +11,17 @@ function contextRowScope(ctx: SessionContext): string {
   if (ctx.durableRunId) return ctx.durableRunId;
   if (ctx.instanceId !== null) return String(ctx.instanceId);
   return crypto.createHash('sha1').update(ctx.sessionKey).digest('hex').slice(0, 12);
+}
+
+async function tenantColumnsForContext(
+  db: ReturnType<typeof getDb>,
+  table: string,
+  ctx: SessionContext,
+) {
+  return await runtimeTenantInsertColumns(db, table, {
+    instanceId: ctx.instanceId,
+    agentId: ctx.agentId,
+  });
 }
 
 function stableLiveEventSuffix(evt: StructuredEvent): string {
@@ -48,7 +59,7 @@ export async function persistHistoryMessages(ctx: SessionContext, messages: Arra
     const db = getDb();
     const rowScope = contextRowScope(ctx);
     const durable = await chatMessageDurableColumns(db, ctx);
-    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    const tenant = await tenantColumnsForContext(db, 'chat_messages', ctx);
     const insertSql = `
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, ?, ?, ?, ?, ?)
@@ -104,7 +115,7 @@ export async function persistLiveStructuredMessage(ctx: SessionContext, message:
     const db = getDb();
     const rowScope = contextRowScope(ctx);
     const durable = await chatMessageDurableColumns(db, ctx);
-    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    const tenant = await tenantColumnsForContext(db, 'chat_messages', ctx);
     const ts = toCanonicalTimestampOrNow(message.timestamp);
     const insertSql = `
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
@@ -146,7 +157,7 @@ export async function persistStreamDelta(ctx: SessionContext, cumulativeText: st
     const db = getDb();
     const now = nowTimestamp();
     const durable = await chatMessageDurableColumns(db, ctx);
-    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    const tenant = await tenantColumnsForContext(db, 'chat_messages', ctx);
     await db.run(`
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, 'assistant', ?, ?, 'text', '{}')
@@ -161,7 +172,7 @@ export async function persistFinalMessage(ctx: SessionContext, text: string, msg
     const now = nowTimestamp();
     const rowScope = contextRowScope(ctx);
     const durable = await chatMessageDurableColumns(db, ctx);
-    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    const tenant = await tenantColumnsForContext(db, 'chat_messages', ctx);
     await db.run(`
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
       VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, 'assistant', ?, ?, 'text', '{}')
@@ -180,7 +191,7 @@ export async function startChatRunInstance(ctx: SessionContext): Promise<{ insta
 
     const durableRunId = `chat-${randomUUID()}`;
     const hasDurable = await tableHasColumn(db, 'job_instances', 'durable_run_id');
-    const tenant = await tenantInsertColumns(db, 'job_instances', ctx.tenantId);
+    const tenant = await tenantColumnsForContext(db, 'job_instances', ctx);
     const info = hasDurable
       ? await db.run(`INSERT INTO job_instances (${tenant.columnSql}agent_id, task_id, status, session_key, run_stage, started_at, durable_run_id)
            VALUES (${tenant.valueSql}?, NULL, 'running', ?, 'chat', ?, ?)`, ...tenant.values, ctx.agentId, ctx.sessionKey, now, durableRunId)
@@ -207,7 +218,7 @@ export async function persistUserChatMessage(ctx: SessionContext, message: strin
     const db = getDb();
     const now = nowTimestamp();
     const durable = await chatMessageDurableColumns(db, ctx);
-    const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
+    const tenant = await tenantColumnsForContext(db, 'chat_messages', ctx);
     const msgId = `oc-chat-user-${contextRowScope(ctx)}-${Date.now()}`;
     await db.run(`
       INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)

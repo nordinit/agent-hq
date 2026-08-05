@@ -10,6 +10,7 @@ import {
 } from './atlasAgent';
 import { resolveRuntimeAgentSlug } from './sessionKeys';
 import { ensureTenantSchema, resolveTenantIdFromRequest, verifyTenantSchemaForStartup } from './tenantContext';
+import { resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
 import { type Db } from "../db/adapter/types";
 import { columnExists as sharedColumnExists, tableExists as sharedTableExists } from "../db/introspection";
 
@@ -1713,10 +1714,12 @@ async function insertMcpScopeDeniedNote(db: Db, params: {
   reason: string;
 }): Promise<void> {
   if (!params.taskId) return;
+  const tenantId = await resolveRuntimeTenantId(db, { taskId: params.taskId });
+  const tenant = await tenantInsertColumns(db, 'task_notes', tenantId);
   await db.run(`
-    INSERT INTO task_notes (task_id, author, content)
-    VALUES (?, ?, ?)
-  `, params.taskId, 'agent-hq-mcp-auth', `Scoped MCP write refused for ${params.identity.auditActor}: ${params.reason}`);
+    INSERT INTO task_notes (${tenant.columnSql}task_id, author, content)
+    VALUES (${tenant.valueSql}?, ?, ?)
+  `, ...tenant.values, params.taskId, 'agent-hq-mcp-auth', `Scoped MCP write refused for ${params.identity.auditActor}: ${params.reason}`);
 }
 
 async function sendMcpScopeDenied(res: Response, params: {

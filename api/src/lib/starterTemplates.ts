@@ -746,11 +746,11 @@ async function insertAgent(db: Db, tenantId: number, projectId: number, projectN
   return Number(result.lastInsertId);
 }
 
-async function insertRoutingRule(db: Db, sprintId: number, projectId: number, sprintType: string, route: StarterRoutePlan, agentId: number): Promise<number> {
+async function insertRoutingRule(db: Db, tenantId: number, sprintId: number, projectId: number, sprintType: string, route: StarterRoutePlan, agentId: number): Promise<number> {
   const result = await db.run(`
-    INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, enabled, priority, is_system, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
-  `, sprintId, projectId, sprintType, route.task_type, route.status, agentId, route.enabled ? 1 : 0, route.priority);
+    INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, enabled, priority, is_system, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+  `, tenantId, sprintId, projectId, sprintType, route.task_type, route.status, agentId, route.enabled ? 1 : 0, route.priority);
   return Number(result.lastInsertId);
 }
 
@@ -825,7 +825,7 @@ export async function applyStarterSetupPlan(db: Db, tenantId: number, input: Sta
       for (const route of workflow.routes) {
         const agentId = agentIds[route.owner_role];
         if (!agentId) continue;
-        routeIds.push(await insertRoutingRule(db, workflowId, projectId, workflow.workflow.sprint_type, route, agentId));
+        routeIds.push(await insertRoutingRule(db, tenantId, workflowId, projectId, workflow.workflow.sprint_type, route, agentId));
       }
       for (const rule of workflow.model_routing) {
         modelRoutingIds.push(await insertModelRouting(db, tenantId, projectId, workflowId, rule));

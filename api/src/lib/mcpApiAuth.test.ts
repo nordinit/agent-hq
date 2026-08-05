@@ -1165,11 +1165,13 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     const db = getDb();
-    const deniedNote = await db.get(`SELECT author, content FROM task_notes WHERE task_id = ? ORDER BY id DESC LIMIT 1`, 449) as {
+    const deniedNote = await db.get(`SELECT tenant_id, author, content FROM task_notes WHERE task_id = ? ORDER BY id DESC LIMIT 1`, 449) as {
+      tenant_id: number;
       author: string;
       content: string;
     } | undefined;
     expect(deniedNote).toMatchObject({
+      tenant_id: 2,
       author: 'agent-hq-mcp-auth',
       content: expect.stringContaining('Scoped MCP write refused'),
     });

@@ -41,6 +41,7 @@ module.exports = {
       name: env.AGENT_HQ_API_PROCESS_NAME || 'agent-hq-api',
       cwd: path.join(repoRoot, 'api'),
       script: nodeBin,
+      interpreter: 'none',
       args: 'dist/index.js',
       env: {
         NODE_ENV: env.NODE_ENV || 'production',
@@ -65,6 +66,7 @@ module.exports = {
       name: env.AGENT_HQ_UI_PROCESS_NAME || 'agent-hq-ui',
       cwd: path.join(repoRoot, 'ui'),
       script: 'npm',
+      interpreter: 'none',
       args: 'run start',
       env: {
         NODE_ENV: env.NODE_ENV || 'production',

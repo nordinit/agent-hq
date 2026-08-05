@@ -68,6 +68,8 @@ describe('agents Hermes runtime CRUD support', () => {
     const workspacePath = path.join(tempDir, 'workspace-hermes-full');
     const hermesHome = path.join(tempDir, 'hermes-home');
     await db.run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (?, 1, ?, ?, ?, ?)`, 30, 'Agent HQ', 'agent-hq', 'node', '["server.js"]');
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (40, 1, 'Hermes Project')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, status) VALUES (41, 1, 40, 'Hermes Workflow', 'planning')`);
 
     const runtimeConfig = {
       profile: 'agent-hq-hermes-full',
@@ -88,6 +90,8 @@ describe('agents Hermes runtime CRUD support', () => {
           workspace_path: workspacePath,
           runtime_type: 'hermes',
           runtime_config: runtimeConfig,
+          project_id: 40,
+          routing_rules: [{ sprint_id: 41, task_type: 'backend', status: 'ready', priority: 25 }],
           mcp_server_ids: [30],
         }),
       });
@@ -118,6 +122,26 @@ describe('agents Hermes runtime CRUD support', () => {
       expect(JSON.parse(row.runtime_config ?? 'null')).toEqual(runtimeConfig);
       expect(row.openclaw_agent_id).toBeNull();
       expect(row.workspace_path).toBe(workspacePath);
+      const routingRule = await db.get(`
+        SELECT tenant_id, sprint_id, agent_id, task_type, status, priority
+        FROM sprint_task_routing_rules
+        WHERE sprint_id = 41
+      `) as {
+        tenant_id: number;
+        sprint_id: number;
+        agent_id: number;
+        task_type: string;
+        status: string;
+        priority: number;
+      };
+      expect(routingRule).toEqual({
+        tenant_id: 1,
+        sprint_id: 41,
+        agent_id: 1,
+        task_type: 'backend',
+        status: 'ready',
+        priority: 25,
+      });
 
       for (const doc of ['SOUL.md', 'AGENTS.md', 'IDENTITY.md', 'USER.md', 'TOOLS.md', 'MEMORY.md', 'LESSONS.md']) {
         expect(fs.existsSync(path.join(workspacePath, doc))).toBe(true);

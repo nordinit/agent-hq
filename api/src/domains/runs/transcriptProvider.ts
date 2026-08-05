@@ -28,6 +28,7 @@ import { buildGatewayRunSessionKey, parseHookSessionKey, resolveRuntimeAgentSlug
 import { backfillOpenClawJsonlTranscript, isRunChatTranscriptSparse } from './openclawJsonlBackfill';
 import { nowTimestamp, timestampFromEpochMs, toCanonicalTimestampOrNow } from '../../lib/timestamps';
 import { trimOpenClawHistoryRows } from '../../lib/openclawHistoryRows';
+import { runtimeTenantInsertColumns } from '../../lib/runtimeTenantScope';
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -461,9 +462,10 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
     messages: Array<Record<string, unknown>>,
   ): Promise<void> {
     const db = getDb();
+    const tenant = await runtimeTenantInsertColumns(db, 'chat_messages', { instanceId, agentId });
     const insertSql = `
-      INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp, event_type, event_meta)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, role, content, timestamp, event_type, event_meta)
+      VALUES (?, ${tenant.valueSql}?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         content = excluded.content,
         timestamp = excluded.timestamp,
@@ -482,7 +484,7 @@ export class OpenClawTranscriptProvider implements TranscriptProvider {
       for (const evt of extractGatewayEvents(m)) {
         const rowId = `oc-hist-${instanceId}-${rowIndex++}`;
         const role = normalizeTranscriptRole(baseRole, evt.event_type);
-        await db.run(insertSql, rowId, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(evt.event_meta));
+        await db.run(insertSql, rowId, ...tenant.values, agentId, instanceId, role, evt.content, ts, evt.event_type, JSON.stringify(evt.event_meta));
       }
     }
 

@@ -12,7 +12,7 @@ import {
   resolveTaskFieldSchema,
   validateTaskCustomFields,
 } from './fields';
-import { emitTaskEvent } from './history';
+import { emitTaskEvent, writeTaskHistory } from './history';
 import {
   addTaskNote,
   logHistory,
@@ -119,6 +119,22 @@ async function taskTenantId(db: Db, taskId: number): Promise<number | null | und
   return (await db.get('SELECT tenant_id FROM tasks WHERE id = ?', taskId) as { tenant_id: number | null } | undefined)?.tenant_id;
 }
 
+async function requireTaskTenantId(db: Db, taskId: number): Promise<number> {
+  const tenantId = await taskTenantId(db, taskId);
+  if (tenantId == null) throw new Error(`tenant ownership is required for task ${taskId}`);
+  return tenantId;
+}
+
+async function assertMetricTenant(db: Db, taskId: number, tenantId: number): Promise<void> {
+  const existing = await db.get(
+    'SELECT tenant_id FROM task_outcome_metrics WHERE task_id = ?',
+    taskId,
+  ) as { tenant_id: number | null } | undefined;
+  if (existing && existing.tenant_id !== tenantId) {
+    throw new Error(`task_outcome_metrics tenant ownership conflicts with task ${taskId}`);
+  }
+}
+
 function normalizeOptionalTaskType(raw: unknown): string | null | undefined {
   if (raw === undefined) return undefined;
   if (raw === null || raw === '') return null;
@@ -127,14 +143,16 @@ function normalizeOptionalTaskType(raw: unknown): string | null | undefined {
 
 async function syncSpawnedDefectMetric(db: Db, originTaskId: number | null | undefined): Promise<void> {
   if (originTaskId == null) return;
+  const tenantId = await requireTaskTenantId(db, originTaskId);
+  await assertMetricTenant(db, originTaskId, tenantId);
   const row = await db.get('SELECT COUNT(*) as count FROM tasks WHERE origin_task_id = ?', originTaskId) as { count: number };
   await db.run(`
-    INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at)
-    VALUES (?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+    INSERT INTO task_outcome_metrics (tenant_id, task_id, spawned_defects, updated_at)
+    VALUES (?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(task_id) DO UPDATE SET
       spawned_defects = excluded.spawned_defects,
       updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-  `, originTaskId, row.count);
+  `, tenantId, originTaskId, row.count);
 }
 
 async function syncDefectRelationship(
@@ -314,18 +332,17 @@ export async function createTaskRecord(
   });
 
   if (origin_task_id != null) {
+    const originTenantId = await requireTaskTenantId(db, origin_task_id);
+    await assertMetricTenant(db, origin_task_id, originTenantId);
     const existingMetrics = await db.get('SELECT id FROM task_outcome_metrics WHERE task_id = ?', origin_task_id) as { id: number } | undefined;
     if (existingMetrics) {
-      await db.run('UPDATE task_outcome_metrics SET spawned_defects = spawned_defects + 1, updated_at = to_char(now() AT TIME ZONE \'utc\', \'YYYY-MM-DD HH24:MI:SS\') WHERE task_id = ?', origin_task_id);
+      await db.run('UPDATE task_outcome_metrics SET spawned_defects = spawned_defects + 1, updated_at = to_char(now() AT TIME ZONE \'utc\', \'YYYY-MM-DD HH24:MI:SS\') WHERE task_id = ? AND tenant_id = ?', origin_task_id, originTenantId);
     } else {
-      await db.run('INSERT INTO task_outcome_metrics (task_id, spawned_defects) VALUES (?, 1)', origin_task_id);
+      await db.run('INSERT INTO task_outcome_metrics (tenant_id, task_id, spawned_defects) VALUES (?, ?, 1)', originTenantId, origin_task_id);
     }
   }
 
-  await db.run(`
-    INSERT INTO task_history (task_id, field, old_value, new_value, changed_by)
-    VALUES (?, 'created', NULL, ?, ?)
-  `, taskId, title, createdBy);
+  await writeTaskHistory(db, taskId, createdBy, 'created', null, title, false);
 
   const task = await db.get(`${TASK_SELECT} WHERE t.id = ?`, taskId) as TaskRecord;
   if (status === 'ready' || status === 'todo') {
@@ -736,10 +753,7 @@ export async function deleteTaskRecord(db: Db, taskId: number, deletedBy: string
     }
   }
 
-  await db.run(`
-    INSERT INTO task_history (task_id, changed_by, field, old_value, new_value)
-    VALUES (?, ?, 'deleted', ?, NULL)
-  `, taskId, deletedBy, String(existing.title ?? ''));
+  await writeTaskHistory(db, taskId, deletedBy, 'deleted', String(existing.title ?? ''), null, false);
 
   await db.run('DELETE FROM tasks WHERE id = ?', taskId);
 
