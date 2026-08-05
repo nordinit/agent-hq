@@ -1,94 +1,124 @@
-import Database from 'better-sqlite3';
+import { getDb } from '../../db/client';
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
+import { timestampFromEpochMs } from '../../lib/timestamps';
 import { listRecentlyCompletedTasks } from './readModel';
-import { type Db } from "../../db/adapter/types";
-import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
+
+/**
+ * Tenant isolation for the "recently completed" read model.
+ *
+ * The fixture is the real schema on both engines, so every row here needs its parents:
+ * tasks.sprint_id is NOT NULL and tasks/sprints/projects all carry foreign keys to tenants.
+ * The two tenants matter to the assertions themselves — they are what "isolation" means here —
+ * and the PostgreSQL fixture truncates them between tests, so they are seeded explicitly rather
+ * than inherited from initSchema's seeding side effects on SQLite.
+ */
+
+const DEFAULT_TENANT_ID = 1;
+const ECOPOOL_TENANT_ID = 2;
+const DEFAULT_PROJECT_ID = 10;
+const ECOPOOL_PROJECT_ID = 20;
+const DEFAULT_SPRINT_ID = 100;
+const ECOPOOL_SPRINT_ID = 200;
+
+/** A canonical-format timestamp N hours in the past, the same form the query's cutoff uses. */
+function hoursAgo(hours: number): string {
+  return timestampFromEpochMs(Date.now() - hours * 60 * 60 * 1000) as string;
+}
+
+async function ensureTenant(id: number, name: string, slug: string, isDefault: 0 | 1): Promise<void> {
+  const db = getDb();
+  // initSchema seeds the default tenant on SQLite; the PostgreSQL template carries DDL only.
+  if (await db.get(`SELECT id FROM tenants WHERE id = ?`, id)) return;
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?)`, id, name, slug, isDefault);
+}
+
+async function seedScope(): Promise<void> {
+  const db = getDb();
+  await ensureTenant(DEFAULT_TENANT_ID, 'Default', 'default', 1);
+  await ensureTenant(ECOPOOL_TENANT_ID, 'EcoPool', 'ecopool', 0);
+  await db.run(
+    `INSERT INTO projects (id, name, tenant_id) VALUES (?, ?, ?), (?, ?, ?)`,
+    DEFAULT_PROJECT_ID, 'Default Project', DEFAULT_TENANT_ID,
+    ECOPOOL_PROJECT_ID, 'EcoPool Project', ECOPOOL_TENANT_ID,
+  );
+  await db.run(
+    `INSERT INTO sprints (id, project_id, name, tenant_id) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+    DEFAULT_SPRINT_ID, DEFAULT_PROJECT_ID, 'Default Workflow', DEFAULT_TENANT_ID,
+    ECOPOOL_SPRINT_ID, ECOPOOL_PROJECT_ID, 'EcoPool Workflow', ECOPOOL_TENANT_ID,
+  );
+}
+
+async function insertTask(task: {
+  id: number;
+  tenantId: number;
+  title: string;
+  projectId: number;
+  sprintId: number;
+  updatedAt: string;
+}): Promise<void> {
+  await getDb().run(
+    `INSERT INTO tasks (id, tenant_id, title, status, priority, project_id, sprint_id, updated_at)
+     VALUES (?, ?, ?, 'done', 'medium', ?, ?, ?)`,
+    task.id, task.tenantId, task.title, task.projectId, task.sprintId, task.updatedAt,
+  );
+}
+
+async function insertDoneHistory(taskId: number, tenantId: number, createdAt: string): Promise<void> {
+  await getDb().run(
+    `INSERT INTO task_history (task_id, tenant_id, field, new_value, created_at)
+     VALUES (?, ?, 'status', 'done', ?)`,
+    taskId, tenantId, createdAt,
+  );
+}
 
 describe('listRecentlyCompletedTasks tenant isolation', () => {
-  let db: Db;
-
   beforeEach(async () => {
-    db = new SqliteAdapter(new Database(':memory:'));
-    await db.exec(`
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        name TEXT,
-        job_title TEXT
-      );
-      CREATE TABLE projects (
-        id INTEGER PRIMARY KEY,
-        name TEXT
-      );
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        name TEXT
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        title TEXT,
-        status TEXT,
-        priority TEXT,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        agent_id INTEGER,
-        live_verified_at TEXT,
-        live_verified_by TEXT,
-        updated_at TEXT
-      );
-      CREATE TABLE task_history (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        field TEXT,
-        new_value TEXT,
-        created_at TEXT
-      );
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        task_outcome TEXT,
-        completed_at TEXT
-      );
-    `);
+    await setupTestDb();
+    await seedScope();
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('returns only recently completed tasks for the requested tenant', async () => {
-    await db.exec(`
-      INSERT INTO projects (id, name) VALUES (10, 'Default Project'), (20, 'EcoPool Project');
-      INSERT INTO sprints (id, name) VALUES (100, 'Default Workflow'), (200, 'EcoPool Workflow');
-      INSERT INTO tasks (id, tenant_id, title, status, priority, project_id, sprint_id, updated_at)
-      VALUES
-        (1, 1, 'Default completed task', 'done', 'medium', 10, 100, datetime('now', '-1 hour')),
-        (2, 2, 'EcoPool completed task', 'done', 'medium', 20, 200, datetime('now', '-1 hour')),
-        (3, 2, 'EcoPool stale task', 'done', 'medium', 20, 200, datetime('now', '-25 hours'));
-      INSERT INTO task_history (task_id, field, new_value, created_at)
-      VALUES
-        (1, 'status', 'done', datetime('now', '-1 hour')),
-        (2, 'status', 'done', datetime('now', '-1 hour')),
-        (3, 'status', 'done', datetime('now', '-25 hours'));
-    `);
+    await insertTask({
+      id: 1, tenantId: DEFAULT_TENANT_ID, title: 'Default completed task',
+      projectId: DEFAULT_PROJECT_ID, sprintId: DEFAULT_SPRINT_ID, updatedAt: hoursAgo(1),
+    });
+    await insertTask({
+      id: 2, tenantId: ECOPOOL_TENANT_ID, title: 'EcoPool completed task',
+      projectId: ECOPOOL_PROJECT_ID, sprintId: ECOPOOL_SPRINT_ID, updatedAt: hoursAgo(1),
+    });
+    await insertTask({
+      id: 3, tenantId: ECOPOOL_TENANT_ID, title: 'EcoPool stale task',
+      projectId: ECOPOOL_PROJECT_ID, sprintId: ECOPOOL_SPRINT_ID, updatedAt: hoursAgo(25),
+    });
+    await insertDoneHistory(1, DEFAULT_TENANT_ID, hoursAgo(1));
+    await insertDoneHistory(2, ECOPOOL_TENANT_ID, hoursAgo(1));
+    await insertDoneHistory(3, ECOPOOL_TENANT_ID, hoursAgo(25));
 
-    const ecoPool = await listRecentlyCompletedTasks(db, 24, undefined, 2);
+    const db = getDb();
+    const ecoPool = await listRecentlyCompletedTasks(db, 24, undefined, ECOPOOL_TENANT_ID);
     expect(ecoPool.tasks.map(task => task.title)).toEqual(['EcoPool completed task']);
 
-    const defaultCompany = await listRecentlyCompletedTasks(db, 24, undefined, 1);
+    const defaultCompany = await listRecentlyCompletedTasks(db, 24, undefined, DEFAULT_TENANT_ID);
     expect(defaultCompany.tasks.map(task => task.title)).toEqual(['Default completed task']);
   });
 
   it('applies project and tenant scope together', async () => {
-    await db.exec(`
-      INSERT INTO projects (id, name) VALUES (10, 'Default Project'), (20, 'EcoPool Project');
-      INSERT INTO sprints (id, name) VALUES (100, 'Default Workflow'), (200, 'EcoPool Workflow');
-      INSERT INTO tasks (id, tenant_id, title, status, priority, project_id, sprint_id, updated_at)
-      VALUES
-        (1, 1, 'Default project task', 'done', 'medium', 10, 100, datetime('now', '-1 hour')),
-        (2, 2, 'EcoPool project task', 'done', 'medium', 20, 200, datetime('now', '-1 hour'));
-    `);
+    await insertTask({
+      id: 1, tenantId: DEFAULT_TENANT_ID, title: 'Default project task',
+      projectId: DEFAULT_PROJECT_ID, sprintId: DEFAULT_SPRINT_ID, updatedAt: hoursAgo(1),
+    });
+    await insertTask({
+      id: 2, tenantId: ECOPOOL_TENANT_ID, title: 'EcoPool project task',
+      projectId: ECOPOOL_PROJECT_ID, sprintId: ECOPOOL_SPRINT_ID, updatedAt: hoursAgo(1),
+    });
 
-    expect((await listRecentlyCompletedTasks(db, 24, 10, 2)).tasks).toEqual([]);
-    expect((await listRecentlyCompletedTasks(db, 24, 20, 2)).tasks.map(task => task.title)).toEqual(['EcoPool project task']);
+    const db = getDb();
+    expect((await listRecentlyCompletedTasks(db, 24, DEFAULT_PROJECT_ID, ECOPOOL_TENANT_ID)).tasks).toEqual([]);
+    expect((await listRecentlyCompletedTasks(db, 24, ECOPOOL_PROJECT_ID, ECOPOOL_TENANT_ID)).tasks.map(task => task.title))
+      .toEqual(['EcoPool project task']);
   });
 });

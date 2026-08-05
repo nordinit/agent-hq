@@ -12,10 +12,11 @@ import artifactsRouter from './artifacts';
 import sprintsRouter from './sprints';
 import toolsRouter, { agentToolsRouter } from './tools';
 import mcpServersRouter, { agentMcpServersRouter } from './mcp-servers';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import { initSchema } from '../db/schema';
+import { describeSqliteOnly, setupTestDb, teardownTestDb, usingPostgres } from '../db/testDb';
 import { ensureTenantSchema } from '../lib/tenantContext';
-import { ATLAS_AGENT_NAME, ATLAS_SYSTEM_ROLE } from '../lib/atlasAgent';
+import { ATLAS_AGENT_NAME, ATLAS_SYSTEM_ROLE, ensureCanonicalAtlasSessionKey } from '../lib/atlasAgent';
 import { DEFAULT_PROJECT_NAME, STARTER_AGENT_DEFINITIONS } from '../lib/starterCatalog';
 import {
   AGENT_HQ_DISPATCHER_SOURCE,
@@ -26,9 +27,8 @@ import {
 import { materializeAgentMcpConfig } from '../runtimes/mcpMaterialization';
 import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
-const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 const originalWorkspaceParent = process.env.WORKSPACE_PARENT;
-let tempDir = '';
+let workspaceDir = '';
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -57,21 +57,31 @@ async function stopServer(server: Server): Promise<void> {
 }
 
 async function resetFullDb(): Promise<void> {
-  closeDb();
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenants-'));
-  process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-  process.env.WORKSPACE_PARENT = path.join(tempDir, 'openclaw');
-  await initSchema();
+  // WORKSPACE_PARENT is set BEFORE the database is built: provisioning bakes absolute paths into
+  // agents.workspace_path and writes the identity docs to disk, and on SQLite the default tenant
+  // is provisioned inside setupTestDb()'s initSchema() call.
+  workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenants-'));
+  process.env.WORKSPACE_PARENT = path.join(workspaceDir, 'openclaw');
+  await setupTestDb();
+  // The PostgreSQL fixture carries DDL only, so the default tenant, its starter workspace and the
+  // tenant-local agent-hq MCP server that initSchema() seeds on SQLite do not exist yet.
+  // ensureTenantSchema() is the engine-neutral seeder the request path itself calls on every
+  // request, and it provisions exactly that on first run; on SQLite it is an idempotent no-op.
+  await ensureTenantSchema(getDb());
+  // The rest of what a PostgreSQL install does, from db/migrate.ts. ATLAS_SESSION_KEY is written
+  // at creation only by initSchema's seedInitialData(), which is SQLite-only, so a PostgreSQL
+  // install normalises the default tenant's Atlas here instead. Without it the default Atlas
+  // carries an ordinary tenant-shaped key and every caller that treats the key as an identifier
+  // — db/seed-dev.ts most visibly — misses it. Idempotent, and 'unchanged' on SQLite.
+  await ensureCanonicalAtlasSessionKey(getDb());
 }
 
-function cleanup(): void {
-  closeDb();
-  if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-  else process.env.AGENT_HQ_DB_PATH = originalDbPath;
+async function cleanup(): Promise<void> {
+  await teardownTestDb();
   if (originalWorkspaceParent == null) delete process.env.WORKSPACE_PARENT;
   else process.env.WORKSPACE_PARENT = originalWorkspaceParent;
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-  tempDir = '';
+  if (workspaceDir) fs.rmSync(workspaceDir, { recursive: true, force: true });
+  workspaceDir = '';
 }
 
 async function json<T>(url: string, options?: RequestInit): Promise<T> {
@@ -91,12 +101,29 @@ async function setActiveTenant(baseUrl: string, tenantId: number): Promise<void>
   });
 }
 
-describe('tenant workspace isolation', () => {
-  afterEach(cleanup);
+/**
+ * Deliberately SQLite-only, and not a conversion gap.
+ *
+ * Both cases drive ensureTenantSchema() over a hand-written PRE-tenant schema — the shape a
+ * long-lived SQLite file actually had before tenants existed — to prove the repair pass backfills
+ * ownership and renames the legacy default tenant. There is no PostgreSQL equivalent to port them
+ * to: every helper that does this work (backfillOperationalTenantOwnership,
+ * ensureMcpServersTenantLocalSlugSchema, rebuildSprintTypesForTenantLocalKeys) returns early on
+ * `db.dialect === 'postgres'`, because a PostgreSQL install is created from a baseline that has
+ * tenant_id from the start and never passes through the legacy shape. Running them against the
+ * PostgreSQL fixture would assert on code that is a no-op there.
+ */
+describeSqliteOnly('legacy tenant schema repair', () => {
+  let legacyDir = '';
+
+  afterEach(() => {
+    if (legacyDir) fs.rmSync(legacyDir, { recursive: true, force: true });
+    legacyDir = '';
+  });
 
   it('backfills legacy tenant-owned rows into the default tenant', async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-backfill-'));
-    const dbRaw = new Database(path.join(tempDir, 'legacy.db'));
+    legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-backfill-'));
+    const dbRaw = new Database(path.join(legacyDir, 'legacy.db'));
       const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT (datetime('now')));
@@ -118,8 +145,8 @@ describe('tenant workspace isolation', () => {
   });
 
   it('renames the legacy default company tenant label during tenant schema repair', async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-name-repair-'));
-    const dbRaw = new Database(path.join(tempDir, 'legacy-name.db'));
+    legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-tenant-name-repair-'));
+    const dbRaw = new Database(path.join(legacyDir, 'legacy-name.db'));
       const db = new SqliteAdapter(dbRaw);
     await db.exec(`
       CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT (datetime('now')));
@@ -144,6 +171,10 @@ describe('tenant workspace isolation', () => {
     expect((await db.get(`SELECT name FROM tenants WHERE id = 2`) as { name: string }).name).toBe('Acme Company');
     dbRaw.close();
   });
+});
+
+describe('tenant workspace isolation', () => {
+  afterEach(cleanup);
 
   it('creates tenants with default starter data idempotently by slug', async () => {
     await resetFullDb();
@@ -437,7 +468,13 @@ describe('tenant workspace isolation', () => {
       });
       expect(retry.tenant.id).toBe(created.tenant.id);
       await ensureTenantSchema(db);
-      await initSchema();
+      // The second startup vector, and the only engine-specific line in this file. initSchema() is
+      // the SQLite repair engine that runs on install and rewrites whatever it finds; PostgreSQL
+      // has no counterpart — db/migrate.ts applies numbered SQL files and index.ts only VERIFIES
+      // at boot (verifyStartupSchema), so nothing on that engine can reseed here. Calling it under
+      // a PostgreSQL run would not test anything either: it opens better-sqlite3 directly and
+      // would build an unrelated SQLite file at the default path.
+      if (!usingPostgres()) await initSchema();
 
       expect((await db.get(`
         SELECT COUNT(*) AS n
@@ -528,16 +565,18 @@ describe('tenant workspace isolation', () => {
 
       const db = getDb();
       const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 LIMIT 1`) as { id: number };
-      const insertStatus = (db as unknown as { raw: import('better-sqlite3').Database }).raw.prepare(`
-        INSERT OR IGNORE INTO sprint_type_task_statuses (
-          tenant_id, sprint_type_key, status_key, label, color, terminal, is_system,
-          allowed_transitions_json, stage_order, is_default_entry, metadata_json,
-          created_at, updated_at
-        ) VALUES (?, 'generic', 'todo', ?, 'slate', 0, 1, '[]', 0, 1, '{}', datetime('now'), datetime('now'))
-      `);
-      insertStatus.run(defaultTenant.id, 'Default Todo');
-      insertStatus.run(acme.tenant.id, 'Acme Todo');
-      insertStatus.run(beta.tenant.id, 'Beta Todo');
+      const insertStatus = async (tenantId: number, label: string): Promise<void> => {
+        await db.run(`
+          INSERT OR IGNORE INTO sprint_type_task_statuses (
+            tenant_id, sprint_type_key, status_key, label, color, terminal, is_system,
+            allowed_transitions_json, stage_order, is_default_entry, metadata_json,
+            created_at, updated_at
+          ) VALUES (?, 'generic', 'todo', ?, 'slate', 0, 1, '[]', 0, 1, '{}', datetime('now'), datetime('now'))
+        `, tenantId, label);
+      };
+      await insertStatus(defaultTenant.id, 'Default Todo');
+      await insertStatus(acme.tenant.id, 'Acme Todo');
+      await insertStatus(beta.tenant.id, 'Beta Todo');
 
       const created = await json<{ tenant: { id: number } }>(`${baseUrl}/api/v1/tenants`, {
         method: 'POST',

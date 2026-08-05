@@ -1,30 +1,23 @@
 import express from 'express';
 import type { Server } from 'http';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
+import { getDefaultTenantId } from '../lib/tenantContext';
 import { saveRuntimeConnectionConfig } from '../lib/runtimeOnboarding';
 import setupRouter from './setup';
 import sprintsRouter from './sprints';
 
-const originalDbPath = process.env.AGENT_HQ_DB_PATH;
-let tempDir = '';
-
-async function resetDb(): Promise<void> {
-  closeDb();
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-setup-template-'));
-  process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-  await initSchema();
-}
-
-function cleanup(): void {
-  closeDb();
-  if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-  else process.env.AGENT_HQ_DB_PATH = originalDbPath;
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-  tempDir = '';
+/**
+ * The tenant every row this file seeds by hand belongs to.
+ *
+ * getDefaultTenantId() is what bootstraps it: setupTestDb() hands back an EMPTY database, so on
+ * PostgreSQL there is no tenants row until something creates one, and every table seeded here
+ * (provider_config, sprint_type_task_types, task_field_schemas) has a real foreign key to it.
+ * The routes reach the same code through resolveTenantIdFromRequest(), so this only moves the
+ * bootstrap earlier — it does not seed anything a request would not have seeded itself.
+ */
+async function tenantId(): Promise<number> {
+  return await getDefaultTenantId(getDb());
 }
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -48,8 +41,8 @@ async function seedCompatibility(): Promise<void> {
   const db = getDb();
   await db.run(`
     INSERT INTO provider_config (tenant_id, slug, display_name, status, config)
-    VALUES (1, 'openai', 'OpenAI', 'connected', '{}')
-  `);
+    VALUES (?, 'openai', 'OpenAI', 'connected', '{}')
+  `, await tenantId());
   await saveRuntimeConnectionConfig(db, {
         kind: 'openclaw',
         endpoint: 'ws://127.0.0.1:17601',
@@ -58,8 +51,8 @@ async function seedCompatibility(): Promise<void> {
 }
 
 describe('starter template setup API', () => {
-  beforeEach(resetDb);
-  afterEach(cleanup);
+  beforeEach(async () => { await setupTestDb(); });
+  afterEach(async () => { await teardownTestDb(); });
 
   it('lists only MVP starter templates', async () => {
     const { server, baseUrl } = await startServer();
@@ -321,14 +314,19 @@ describe('starter template setup API', () => {
   it('reconciles stale system-owned ops registry rows when the ops template is applied', async () => {
     await seedCompatibility();
     const db = getDb();
+    const tenant = await tenantId();
+    // tenant_id is explicit, and it must be the tenant the request resolves to. These rows stand
+    // in for STALE registry entries the ops template has to reconcile away, and the reconciler is
+    // tenant-scoped — seeded under any other tenant they survive, and the assertions below pass
+    // without reconciliation ever having run.
     await db.run(`
-      INSERT INTO sprint_type_task_types (sprint_type_key, task_type, is_system)
-      VALUES ('ops', 'backend', 1), ('ops', 'qa', 1)
-    `);
+      INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
+      VALUES (?, 'ops', 'backend', 1), (?, 'ops', 'qa', 1)
+    `, tenant, tenant);
     await db.run(`
-      INSERT INTO task_field_schemas (sprint_type_key, task_type, schema_json, is_system)
-      VALUES ('ops', NULL, ?, 1)
-    `, JSON.stringify({ fields: [
+      INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json, is_system)
+      VALUES (?, 'ops', NULL, ?, 1)
+    `, tenant, JSON.stringify({ fields: [
             { key: 'environment', label: 'Environment', type: 'text', required: false },
             { key: 'runbook_url', label: 'Runbook URL', type: 'url', required: false },
           ] }));

@@ -74,7 +74,10 @@ describe('OpenClaw raw session state', () => {
       try {
         // The real schema requires agents.name/session_key and job_instances.agent_id, and
         // job_instances.agent_id is a genuine foreign key, so the agent row has to exist first.
-        // task_id stays NULL: it is also a foreign key now, and backfill never reads it.
+        // task_id stays NULL rather than the 491 the old hand-built schema used: it is a real
+        // foreign key to tasks(id) now, and seeding a task purely to satisfy it would be noise.
+        // Backfill only consumes task_id when it writes instance_artifacts, which is downstream
+        // of the durable_session_file_not_found return this case exercises.
         await db.run(`
           INSERT INTO agents (id, name, runtime_type, session_key, openclaw_agent_id)
           VALUES (94, 'Cinder', 'openclaw', 'agent:cinder-backend:main', 'cinder-backend')

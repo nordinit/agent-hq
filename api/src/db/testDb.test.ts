@@ -57,8 +57,23 @@ describe('dual-engine test conversion', () => {
         const body = code(src);
         // An initSchema() call guarded by usingPostgres() is legitimate: the SQLite branch may
         // still want the seeding, so long as the PostgreSQL branch does something else.
-        const unguardedInitSchema = /\binitSchema\s*\(/.test(body) && !/usingPostgres\s*\(/.test(body);
-        return unguardedInitSchema || /AGENT_HQ_DB_PATH\s*=/.test(body);
+        //
+        // describeSqliteOnly counts as that guard, because it IS that guard —
+        // `usingPostgres() ? describe.skip : describe`, exported from testDb.ts for exactly this
+        // case. A conversion that correctly quarantines its PRAGMA-driven legacy tests in a
+        // describeSqliteOnly block was being reported as an offender for using the helper
+        // provided for the purpose, which trains people to work around the lint rather than heed it.
+        //
+        // This check is FILE-level, not statement-level, which is a real limitation: a file
+        // containing a describeSqliteOnly block anywhere is trusted about initSchema and
+        // AGENT_HQ_DB_PATH everywhere. Making it precise means parsing, and a lint nobody can
+        // read is worse than a coarse one. It catches the case it was written for — a file
+        // converted in name only — and the hard invariant in setupTestDb() catches the rest at
+        // runtime, by throwing when a PostgreSQL run gets any other dialect.
+        const guarded = /usingPostgres\s*\(/.test(body) || /describeSqliteOnly\s*\(/.test(body);
+        const unguardedInitSchema = /\binitSchema\s*\(/.test(body) && !guarded;
+        const unguardedDbPath = /AGENT_HQ_DB_PATH\s*=/.test(body) && !guarded;
+        return unguardedInitSchema || unguardedDbPath;
       })
       .map(({ file }) => path.relative(TEST_ROOT, file));
 

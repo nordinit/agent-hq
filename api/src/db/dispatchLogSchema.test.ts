@@ -1,34 +1,22 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { closeDb, getDb } from './client';
-import { initSchema } from './schema';
+import { getDb } from './client';
+import { tableColumns } from './introspection';
+import { setupTestDb, teardownTestDb } from './testDb';
 
 describe('dispatch log schema', () => {
-  const originalDbPath = process.env.AGENT_HQ_DB_PATH;
-  let tempDir = '';
-
-  beforeEach(() => {
-    closeDb();
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-log-schema-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
+  beforeEach(async () => {
+    await setupTestDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-    else process.env.AGENT_HQ_DB_PATH = originalDbPath;
-    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-    tempDir = '';
+  afterEach(async () => {
+    await teardownTestDb();
   });
 
   it('creates dispatch_log on a fresh database for dispatch status and log endpoints', async () => {
-    await initSchema();
-
     const db = getDb();
-    const columns = await db.all(`PRAGMA table_info(dispatch_log)`) as Array<{ name: string }>;
+    // PRAGMA table_info does not exist on PostgreSQL; tableColumns asks whichever catalog applies.
+    const columns = await tableColumns(db, 'dispatch_log');
 
-    expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+    expect(columns).toEqual(expect.arrayContaining([
       'id',
       'task_id',
       'agent_id',

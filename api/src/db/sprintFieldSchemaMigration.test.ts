@@ -4,46 +4,52 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import { closeDb, getDb } from './client';
 import { initSchema } from './schema';
+import { describeSqliteOnly, setupTestDb, teardownTestDb } from './testDb';
 import { resolveWorkflowMetadata } from '../domains/sprint-definitions/workflowMetadata';
 import { seedSprintTaskPolicy } from '../domains/routing/policy';
+import { ensureTenantSchema } from '../lib/tenantContext';
 import { SqliteAdapter } from "./adapter/SqliteAdapter";
+import type { Db } from './adapter/types';
 
-let tempDir = '';
-const originalDbPath = process.env.AGENT_HQ_DB_PATH;
-
-function resetDb(): void {
-  closeDb();
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sprint-field-schema-'));
-  process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
+/**
+ * Starter workflow definitions, seeded through the path that survives the PostgreSQL move.
+ *
+ * initSchema() did three jobs in one call — create the schema, run data migrations, seed defaults
+ * — and the tests below only ever wanted the third. The PostgreSQL fixture carries DDL and is
+ * truncated between tests, so the seeding has to be asked for explicitly. ensureTenantSchema() is
+ * that ask: it creates the default tenant and provisions its workspace through
+ * applyDefaultInstallPackage, which is what writes sprint_types, task_field_schemas,
+ * sprint_type_task_statuses and sprint_type_outcomes. ensureRoutingMetadata() is NOT a substitute
+ * — it seeds task_statuses and nothing else.
+ *
+ * On SQLite initSchema() has already run inside setupTestDb() and the default tenant exists, so
+ * this returns that tenant's id without reseeding.
+ */
+async function seedStarterDefinitions(db: Db): Promise<number> {
+  return await ensureTenantSchema(db);
 }
 
-async function defaultTenantId(): Promise<number> {
-  const row = await getDb().get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id: number } | undefined;
-  if (!row) throw new Error('default tenant missing');
-  return row.id;
-}
+describe('sprint field schema seeding', () => {
+  let workspaceRoot = '';
 
-describe('sprint field schema migration', () => {
-  beforeEach(() => {
-    resetDb();
+  beforeEach(async () => {
+    // applyDefaultInstallPackage writes each starter agent's docs to disk, so provisioning is
+    // pointed at a temp directory rather than the developer's ~/.openclaw.
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sprint-field-schema-ws-'));
+    process.env.WORKSPACE_PARENT = workspaceRoot;
+    await setupTestDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-    else process.env.AGENT_HQ_DB_PATH = originalDbPath;
-    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-    tempDir = '';
+  afterEach(async () => {
+    await teardownTestDb();
+    delete process.env.WORKSPACE_PARENT;
+    if (workspaceRoot) fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    workspaceRoot = '';
   });
 
   it('seeds dev sprint fields as unified task fields', async () => {
-    // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
-    // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
-    // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
-    // async fn simply never matched. Both forms must go through the promise.
-    await initSchema();
     const db = getDb();
+    await seedStarterDefinitions(db);
 
     const row = await db.get(`
       SELECT schema_json
@@ -69,8 +75,8 @@ describe('sprint field schema migration', () => {
   });
 
   it('resolves dev task workflow metadata from sprint task policy', async () => {
-    await initSchema();
     const db = getDb();
+    await seedStarterDefinitions(db);
 
     await db.run(`
       INSERT INTO projects (id, name, description, context_md, created_at)
@@ -118,9 +124,8 @@ describe('sprint field schema migration', () => {
   });
 
   it('filters stale starter transitions out of custom workflow metadata readbacks', async () => {
-    await initSchema();
     const db = getDb();
-    const tenantId = await defaultTenantId();
+    const tenantId = await seedStarterDefinitions(db);
 
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, description, context_md, created_at)
@@ -174,8 +179,8 @@ describe('sprint field schema migration', () => {
   });
 
   it('seeds only generic, dev, and ops sprint types', async () => {
-    await initSchema();
     const db = getDb();
+    await seedStarterDefinitions(db);
 
     const keys = await db.all(`
       SELECT key
@@ -185,6 +190,126 @@ describe('sprint field schema migration', () => {
     `) as Array<{ key: string }>;
 
     expect(keys.map(row => row.key)).toEqual(['dev', 'generic', 'ops']);
+  });
+
+  it('seeds ops as a distinct operational workflow', async () => {
+    const db = getDb();
+    const tenantId = await seedStarterDefinitions(db);
+
+    const opsStatuses = await db.all(`
+      SELECT status_key
+      FROM sprint_type_task_statuses
+      WHERE tenant_id = ? AND sprint_type_key = 'ops'
+      ORDER BY stage_order ASC
+    `, tenantId) as Array<{ status_key: string }>;
+    expect(opsStatuses.map(row => row.status_key)).toEqual([
+      'todo',
+      'intake',
+      'triage',
+      'risk_review',
+      'impact_review',
+      'action_plan',
+      'stakeholder_update',
+      'human_approval',
+      'blocked',
+      'stalled',
+      'done',
+    ]);
+
+    await db.run(`
+      INSERT INTO projects (id, name, description, context_md, created_at)
+      VALUES (920, 'Ops Project', '', '', datetime('now'))
+    `);
+    await db.run(`
+      INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
+      VALUES (9201, 920, 'Ops Sprint', '', 'ops', 'active', 'time', '2w', datetime('now'))
+    `);
+    await seedSprintTaskPolicy(db, 9201);
+
+    const metadata = await resolveWorkflowMetadata(db, { sprintId: 9201, taskType: 'ops' });
+    expect(metadata.statuses.map(status => status.name)).toEqual([
+      'todo',
+      'intake',
+      'triage',
+      'risk_review',
+      'impact_review',
+      'action_plan',
+      'stakeholder_update',
+      'human_approval',
+      'blocked',
+      'stalled',
+      'done',
+    ]);
+    expect(metadata.outcomes.map(outcome => outcome.outcome_key)).toEqual(expect.arrayContaining([
+      'completed',
+      'blocked',
+      'env_blocked',
+      'approval_blocked',
+      'failed',
+      'infra_failed',
+    ]));
+
+    const transitions = await db.all(`
+      SELECT from_status, outcome, to_status
+      FROM sprint_task_transitions
+      WHERE sprint_id = ?
+      ORDER BY from_status ASC, outcome ASC
+    `, 9201) as Array<{ from_status: string; outcome: string; to_status: string }>;
+    expect(transitions).toEqual(expect.arrayContaining([
+      { from_status: 'action_plan', outcome: 'completed', to_status: 'stakeholder_update' },
+      { from_status: 'stakeholder_update', outcome: 'completed', to_status: 'human_approval' },
+      { from_status: 'human_approval', outcome: 'completed', to_status: 'done' },
+      { from_status: 'action_plan', outcome: 'blocked', to_status: 'blocked' },
+      { from_status: 'human_approval', outcome: 'approval_blocked', to_status: 'stalled' },
+    ]));
+    expect(transitions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ outcome: 'completed_for_review' }),
+      expect.objectContaining({ to_status: 'dev_deploy_queued' }),
+      expect.objectContaining({ to_status: 'qa_pass' }),
+    ]));
+  });
+});
+
+/**
+ * The rest of this file tests initSchema() itself — the legacy-database upgrades it performs and
+ * the customisations it must not clobber on restart. They are SQLite-only by subject, not by
+ * accident: initSchema() builds SQLite whatever the environment says, and the assertions read
+ * sqlite_master DDL and PRAGMA index_list/table_info, which have no PostgreSQL equivalent. Several
+ * start from a hand-built pre-migration database that only exists because SQLite installs were
+ * upgraded in place; PostgreSQL installs start from db/pg-baseline with the migration already
+ * applied.
+ *
+ * They stay here and stay green on SQLite until initSchema() is deleted, at which point they go
+ * with it. Skipping them under AGENT_HQ_TEST_PG_URL is what stops them reporting a false green:
+ * run against PostgreSQL they would build a SQLite database and pass, proving nothing.
+ */
+describeSqliteOnly('initSchema legacy migrations (SQLite only)', () => {
+  let tempDir = '';
+  const originalDbPath = process.env.AGENT_HQ_DB_PATH;
+
+  function resetDb(): void {
+    closeDb();
+    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sprint-field-schema-'));
+    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
+  }
+
+  async function defaultTenantId(): Promise<number> {
+    const row = await getDb().get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id: number } | undefined;
+    if (!row) throw new Error('default tenant missing');
+    return row.id;
+  }
+
+  beforeEach(() => {
+    resetDb();
+  });
+
+  afterEach(() => {
+    closeDb();
+    if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
+    else process.env.AGENT_HQ_DB_PATH = originalDbPath;
+    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+    tempDir = '';
   });
 
   it('seeds simplified generic workflow definitions and preserves them on rerun', async () => {
@@ -338,84 +463,6 @@ describe('sprint field schema migration', () => {
       HAVING COUNT(*) > 1
     `, tenantId) as Array<{ sprint_type_key: string; outcome_key: string; n: number }>;
     expect(outcomeDuplicates).toEqual([]);
-  });
-
-  it('seeds ops as a distinct operational workflow', async () => {
-    await initSchema();
-    const db = getDb();
-    const tenantId = await defaultTenantId();
-
-    const opsStatuses = await db.all(`
-      SELECT status_key
-      FROM sprint_type_task_statuses
-      WHERE tenant_id = ? AND sprint_type_key = 'ops'
-      ORDER BY stage_order ASC
-    `, tenantId) as Array<{ status_key: string }>;
-    expect(opsStatuses.map(row => row.status_key)).toEqual([
-      'todo',
-      'intake',
-      'triage',
-      'risk_review',
-      'impact_review',
-      'action_plan',
-      'stakeholder_update',
-      'human_approval',
-      'blocked',
-      'stalled',
-      'done',
-    ]);
-
-    await db.run(`
-      INSERT INTO projects (id, name, description, context_md, created_at)
-      VALUES (920, 'Ops Project', '', '', datetime('now'))
-    `);
-    await db.run(`
-      INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
-      VALUES (9201, 920, 'Ops Sprint', '', 'ops', 'active', 'time', '2w', datetime('now'))
-    `);
-    await seedSprintTaskPolicy(db, 9201);
-
-    const metadata = await resolveWorkflowMetadata(db, { sprintId: 9201, taskType: 'ops' });
-    expect(metadata.statuses.map(status => status.name)).toEqual([
-      'todo',
-      'intake',
-      'triage',
-      'risk_review',
-      'impact_review',
-      'action_plan',
-      'stakeholder_update',
-      'human_approval',
-      'blocked',
-      'stalled',
-      'done',
-    ]);
-    expect(metadata.outcomes.map(outcome => outcome.outcome_key)).toEqual(expect.arrayContaining([
-      'completed',
-      'blocked',
-      'env_blocked',
-      'approval_blocked',
-      'failed',
-      'infra_failed',
-    ]));
-
-    const transitions = await db.all(`
-      SELECT from_status, outcome, to_status
-      FROM sprint_task_transitions
-      WHERE sprint_id = ?
-      ORDER BY from_status ASC, outcome ASC
-    `, 9201) as Array<{ from_status: string; outcome: string; to_status: string }>;
-    expect(transitions).toEqual(expect.arrayContaining([
-      { from_status: 'action_plan', outcome: 'completed', to_status: 'stakeholder_update' },
-      { from_status: 'stakeholder_update', outcome: 'completed', to_status: 'human_approval' },
-      { from_status: 'human_approval', outcome: 'completed', to_status: 'done' },
-      { from_status: 'action_plan', outcome: 'blocked', to_status: 'blocked' },
-      { from_status: 'human_approval', outcome: 'approval_blocked', to_status: 'stalled' },
-    ]));
-    expect(transitions).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ outcome: 'completed_for_review' }),
-      expect.objectContaining({ to_status: 'dev_deploy_queued' }),
-      expect.objectContaining({ to_status: 'qa_pass' }),
-    ]));
   });
 
   it('does not repair or add workflow relationship type config on API restart', async () => {

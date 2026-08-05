@@ -4,6 +4,26 @@ import { canonicalTaskStatusEmoji, listSprintTaskStatuses, listSprintTypeTaskSta
 import { getActiveTenantId } from './tenantContext';
 import { type Db } from "../db/adapter/types";
 
+/**
+ * A row id that is actually present, or null.
+ *
+ * `Number.isFinite(Number(x))` looks like a null guard and is not one: `Number(null)` is 0 and
+ * `Number('')` is 0, both finite. So a NULL column took the "present" branch and yielded the id
+ * ZERO. For `tenant_id` that reached `createNotificationRecord`, and `notification_records.tenant_id`
+ * has a foreign key to `tenants(id)` — no tenant 0 exists, so the insert failed and the fallback
+ * the ternary existed to provide was unreachable for exactly the case it was written for.
+ *
+ * A hand-built test fixture hid it: its `tasks` table had no `tenant_id` column at all, so the
+ * value was `undefined`, `Number(undefined)` is NaN, and the fallback ran. The real schema has the
+ * column and allows it to be NULL, which is why converting the test onto the real baseline
+ * surfaced it on both engines at once.
+ */
+function rowId(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 // ── Deduplication ─────────────────────────────────────────────────────────────
 
 /** TTL (ms) within which an identical transition is considered a duplicate */
@@ -66,11 +86,11 @@ async function loadTaskContext(db: Db, taskId: number): Promise<TaskContext | nu
     if (!row) return null;
     return {
       id: row.id,
-      tenantId: Number.isFinite(Number(row.tenant_id)) ? Number(row.tenant_id) : await getActiveTenantId(db),
+      tenantId: rowId(row.tenant_id) ?? await getActiveTenantId(db),
       title: row.title,
       projectName: row.project_name ?? null,
       sprintName: row.sprint_name ?? null,
-      sprintId: Number.isFinite(Number(row.sprint_id)) ? Number(row.sprint_id) : null,
+      sprintId: rowId(row.sprint_id),
       sprintType: typeof row.sprint_type === 'string' && row.sprint_type.trim().length > 0 ? row.sprint_type : null,
     };
   } catch {
@@ -83,7 +103,7 @@ async function loadTaskContext(db: Db, taskId: number): Promise<TaskContext | nu
       title: row.title,
       projectName: null,
       sprintName: null,
-      sprintId: Number.isFinite(Number(row.sprint_id)) ? Number(row.sprint_id) : null,
+      sprintId: rowId(row.sprint_id),
       sprintType: null,
     };
   }

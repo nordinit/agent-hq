@@ -1,10 +1,12 @@
 import express from 'express';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import type { Db } from '../db/adapter/types';
+import { getDb } from '../db/client';
+import { columnExists } from '../db/introspection';
+import { POSTGRES_MIGRATION_DIRS } from '../db/pg/migrationDirs';
+import { loadMigrations } from '../db/pg/migrationRunner';
+import { STARTUP_SCHEMA_LEDGER_CHECKSUM, STARTUP_SCHEMA_LEDGER_ID, verifyStartupSchema } from '../db/startupVerifier';
+import { setupTestDb, teardownTestDb, usingPostgres } from '../db/testDb';
 import {
   authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
@@ -17,10 +19,9 @@ import {
   resetAgentMcpPermissionPolicy,
 } from './mcpApiAuth';
 import { handleJsonRequestErrors } from './jsonRequestErrors';
-import { resolveTenantIdFromRequest } from './tenantContext';
+import { getDefaultTenantId, resolveTenantIdFromRequest } from './tenantContext';
 import projectFilesRouter from '../routes/project-files';
 
-const ORIGINAL_DB_PATH = process.env.AGENT_HQ_DB_PATH;
 const ORIGINAL_MCP_API_KEY = process.env.AGENT_HQ_MCP_API_KEY;
 const ORIGINAL_MCP_API_KEY_AGENT_ID = process.env.AGENT_HQ_MCP_API_KEY_AGENT_ID;
 const ORIGINAL_MCP_API_KEY_AGENT_OPENCLAW_ID = process.env.AGENT_HQ_MCP_API_KEY_AGENT_OPENCLAW_ID;
@@ -38,8 +39,95 @@ function redirectPreservingQuery(req: express.Request, path: string): string {
   return queryStart === -1 ? path : `${path}${req.originalUrl.slice(queryStart)}`;
 }
 
+/**
+ * The tenants, projects, workflows, agents, tasks and runs every scope assertion below reasons
+ * about.
+ *
+ * This replaces a hand-written 15-table CREATE TABLE fixture, and the real baseline carries the
+ * foreign keys that fixture left out. Two consequences are not obvious from the row order alone:
+ * every parent must exist before its children, and tasks/job_instances reference each other
+ * (tasks.active_instance_id against job_instances.task_id), so that cycle is broken by inserting
+ * the tasks first and linking the active instance afterwards.
+ *
+ * The other difference is that the fixture database is no longer empty on SQLite: setupTestDb()
+ * builds it with initSchema(), which seeds a default tenant, an Atlas agent and the system
+ * workflow definitions, where the PostgreSQL template seeds nothing. The few places that collide
+ * with those seeds are marked below.
+ */
+async function seedScopeFixture(db: Db): Promise<void> {
+  // OR IGNORE, because initSchema() already seeds tenant 1 and these two settings with exactly
+  // these values. Both engines reach the same state either way.
+  await db.run(
+    `INSERT OR IGNORE INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+    1, 'Default Tenant', 'default', 1, 2, 'EcoPool', 'ecopool', 0,
+  );
+  await db.run(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(
+    `INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`,
+    86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project',
+  );
+  await db.run(`
+    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
+    VALUES (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active')
+  `, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint');
+  // session_key is NOT NULL and unique in the real schema, which the minimal fixture did not have
+  // at all. The admin agent is still named Atlas — that is what makes it trusted — but it cannot
+  // reuse the seeded Atlas agent's session key.
+  await db.run(`
+    INSERT INTO agents (id, tenant_id, project_id, name, session_key, enabled, system_role)
+    VALUES (?, ?, ?, ?, ?, 1, NULL),
+           (?, ?, ?, ?, ?, 1, 'admin'),
+           (?, ?, ?, ?, ?, 1, NULL),
+           (?, ?, ?, ?, ?, 1, NULL),
+           (?, ?, ?, ?, ?, 1, NULL)
+  `,
+    7, 1, 86, 'Cinder', 'agent:cinder:main',
+    8, 1, 86, 'Atlas', 'agent:atlas-admin:main',
+    9, 1, 86, 'QA', 'agent:qa:main',
+    10, 2, 99, 'EcoPool Worker', 'agent:ecopool-worker:main',
+    11, 1, null, 'No Project Agent', 'agent:no-project:main',
+  );
+  await db.run(`
+    INSERT INTO sprint_task_routing_rules (id, tenant_id, project_id, sprint_id, sprint_type, task_type, status, agent_id, priority)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, 501, 1, 86, null, 'dev', 'backend', 'ready', 7, 10, 502, 1, 86, 42, 'dev', 'qa', 'review', 9, 20, 503, 1, 87, null, 'dev', 'backend', 'ready', 9, 10, 504, 2, 99, null, 'dev', 'backend', 'ready', 10, 10);
+  await db.run(`
+    INSERT INTO sprint_task_transition_requirements (id, tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, 601, 1, null, 86, 'dev', null, 'completed_for_review', 'review_commit', 'required', null, 'block', 'Review commit is required', 1, 10, 602, 1, 42, 86, 'dev', 'backend', 'completed_for_review', 'review_branch', 'required', null, 'block', 'Review branch is required', 1, 20, 603, 1, null, 87, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Other project row', 1, 10, 604, 2, null, 99, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Cross tenant row', 1, 10);
+  // These three workflow definitions ARE the fixture: every scope assertion below turns on 'dev'
+  // being owned by project 86. initSchema() seeds a tenant-wide 'dev' with no project, which would
+  // both collide on (tenant_id, key) and answer the scope lookup with "no project", so the seeded
+  // set is replaced rather than added to. On PostgreSQL there is nothing to replace.
+  await db.run(`DELETE FROM sprint_types`);
+  // initSchema()'s tenant-local rebuild of sprint_types drops project_id, a column the PostgreSQL
+  // baseline — and therefore production — has. Every project-scoped workflow definition assertion
+  // below needs it, and the fixture this replaced declared it by hand for exactly that reason.
+  if (!await columnExists(db, 'sprint_types', 'project_id')) {
+    await db.exec(`ALTER TABLE sprint_types ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
+  }
+  await db.run(`
+    INSERT INTO sprint_types (tenant_id, project_id, key, name, description, is_system)
+    VALUES (?, ?, ?, ?, ?, 0), (?, ?, ?, ?, ?, 0), (?, ?, ?, ?, ?, 0)
+  `, 1, 86, 'dev', 'Development', 'Agent HQ project development workflow', 1, 87, 'other-project-dev', 'Other project development', 'Other project workflow', 2, 99, 'eco-dev', 'Eco development', 'EcoPool workflow');
+  await db.run(`
+    INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, title)
+    VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)
+  `, 448, 1, 86, 42, 7, 9, 'Dispatched Agent HQ task', 449, 2, 99, 43, 9, 9, 'Cross tenant dispatched task', 450, 2, 99, 43, 10, 10, 'EcoPool worker task', 451, 1, 86, 42, null, null, 'Unassigned Agent HQ task', 452, 1, 87, 44, null, null, 'Other project task');
+  await db.run(`
+    INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status)
+    VALUES (?, ?, ?, ?, 'running'), (?, ?, ?, ?, 'running'), (?, ?, ?, ?, 'running')
+  `, 2551, 1, 448, 7, 2552, 2, 449, 9, 2553, 2, 450, 10);
+  await db.run(`UPDATE tasks SET active_instance_id = ? WHERE id = ?`, 2551, 448);
+  await db.run(`UPDATE tasks SET active_instance_id = ? WHERE id = ?`, 2552, 449);
+  await db.run(`UPDATE tasks SET active_instance_id = ? WHERE id = ?`, 2553, 450);
+  await db.run(`
+    INSERT INTO task_relationships (id, source_task_id, target_task_id, relationship_type_key)
+    VALUES (?, ?, ?, ?), (?, ?, ?, ?)
+  `, 12, 451, 448, 'relates_to', 13, 451, 452, 'relates_to');
+}
+
 describe('mcpApiAuth scoped Agent HQ permissions', () => {
-  let tempDir: string;
   let server: Server | null = null;
   let baseUrl = '';
   let normalKey = '';
@@ -48,169 +136,9 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   let noProjectKey = '';
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-api-auth-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
-    closeDb();
-
-    const db = getDb();
-    await db.exec(`
-      CREATE TABLE tenants (
-        id INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        slug TEXT NOT NULL UNIQUE,
-        is_default INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE TABLE app_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL DEFAULT '',
-        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        project_id INTEGER,
-        name TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        system_role TEXT,
-        deleted_at TEXT
-      );
-      CREATE TABLE projects (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        name TEXT NOT NULL
-      );
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        project_id INTEGER,
-        name TEXT NOT NULL,
-        sprint_type TEXT
-      );
-      CREATE TABLE sprint_task_routing_rules (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        sprint_type TEXT,
-        task_type TEXT,
-        status TEXT,
-        agent_id INTEGER,
-        priority INTEGER NOT NULL DEFAULT 0,
-        enabled INTEGER NOT NULL DEFAULT 1
-      );
-      CREATE TABLE sprint_task_transition_requirements (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        sprint_id INTEGER,
-        project_id INTEGER,
-        sprint_type TEXT,
-        task_type TEXT,
-        outcome TEXT NOT NULL,
-        field_name TEXT NOT NULL,
-        requirement_type TEXT NOT NULL DEFAULT 'required',
-        match_field TEXT,
-        severity TEXT NOT NULL DEFAULT 'block',
-        message TEXT NOT NULL DEFAULT '',
-        enabled INTEGER NOT NULL DEFAULT 1,
-        priority INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE sprint_types (
-        key TEXT PRIMARY KEY,
-        tenant_id INTEGER,
-        project_id INTEGER,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        is_system INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        agent_id INTEGER,
-        assigned_agent_id INTEGER,
-        active_instance_id INTEGER
-      );
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        agent_id INTEGER,
-        status TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER NOT NULL,
-        author TEXT,
-        content TEXT
-      );
-      CREATE TABLE task_relationships (
-        id INTEGER PRIMARY KEY,
-        source_task_id INTEGER NOT NULL,
-        target_task_id INTEGER NOT NULL,
-        relationship_type_key TEXT NOT NULL
-      );
-      CREATE TABLE project_files (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
-        filename TEXT NOT NULL,
-        original_name TEXT NOT NULL,
-        mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-        size_bytes INTEGER NOT NULL DEFAULT 0,
-        file_path TEXT NOT NULL,
-        uploaded_by TEXT NOT NULL DEFAULT 'manual',
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_by TEXT NOT NULL DEFAULT 'manual',
-        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        current_version INTEGER NOT NULL DEFAULT 1,
-        current_version_id INTEGER
-      );
-      CREATE TABLE project_file_versions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tenant_id INTEGER NOT NULL,
-        project_id INTEGER NOT NULL,
-        file_id INTEGER NOT NULL,
-        version_number INTEGER NOT NULL,
-        filename TEXT NOT NULL,
-        original_name TEXT NOT NULL,
-        mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-        size_bytes INTEGER NOT NULL DEFAULT 0,
-        file_path TEXT NOT NULL,
-        created_by TEXT NOT NULL DEFAULT 'manual',
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        change_source TEXT NOT NULL DEFAULT 'api',
-        UNIQUE(file_id, version_number)
-      );
-    `);
-
+    const db = await setupTestDb();
+    await seedScopeFixture(db);
     await ensureMcpApiKeyTable(db);
-
-    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`, 1, 'Default Tenant', 'default', 1, 2, 'EcoPool', 'ecopool', 0);
-    await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
-    await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, enabled, system_role) VALUES (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, 'admin'), (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, NULL), (?, ?, ?, ?, 1, NULL)`, 7, 1, 86, 'Cinder', 8, 1, 86, 'Atlas', 9, 1, 86, 'QA', 10, 2, 99, 'EcoPool Worker', 11, 1, null, 'No Project Agent');
-    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`, 86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project');
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint');
-    await db.run(`UPDATE sprints SET sprint_type = ? WHERE id = ?`, 'dev', 42);
-    await db.run(`UPDATE sprints SET sprint_type = ? WHERE id = ?`, 'dev', 44);
-    await db.run(`UPDATE sprints SET sprint_type = ? WHERE id = ?`, 'dev', 43);
-    await db.run(`
-      INSERT INTO sprint_task_routing_rules (id, tenant_id, project_id, sprint_id, sprint_type, task_type, status, agent_id, priority)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, 501, 1, 86, null, 'dev', 'backend', 'ready', 7, 10, 502, 1, 86, 42, 'dev', 'qa', 'review', 9, 20, 503, 1, 87, null, 'dev', 'backend', 'ready', 9, 10, 504, 2, 99, null, 'dev', 'backend', 'ready', 10, 10);
-    await db.run(`
-      INSERT INTO sprint_task_transition_requirements (id, tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, 601, 1, null, 86, 'dev', null, 'completed_for_review', 'review_commit', 'required', null, 'block', 'Review commit is required', 1, 10, 602, 1, 42, 86, 'dev', 'backend', 'completed_for_review', 'review_branch', 'required', null, 'block', 'Review branch is required', 1, 20, 603, 1, null, 87, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Other project row', 1, 10, 604, 2, null, 99, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Cross tenant row', 1, 10);
-    await db.run(`
-      INSERT INTO sprint_types (key, tenant_id, project_id, name, description, is_system)
-      VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)
-    `, 'dev', 1, 86, 'Development', 'Agent HQ project development workflow', 0, 'other-project-dev', 1, 87, 'Other project development', 'Other project workflow', 0, 'eco-dev', 2, 99, 'Eco development', 'EcoPool workflow', 0);
-    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)`, 2551, 448, 7, 'running', 2552, 449, 9, 'running', 2553, 450, 10, 'running');
-    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, active_instance_id) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)`, 448, 1, 86, 42, 7, 9, 2551, 449, 2, 99, 43, 9, 9, 2552, 450, 2, 99, 43, 10, 10, 2553, 451, 1, 86, 42, null, null, null, 452, 1, 87, 44, null, null, null);
-    await db.run(`INSERT INTO task_relationships (id, source_task_id, target_task_id, relationship_type_key) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`, 12, 451, 448, 'relates_to', 13, 451, 452, 'relates_to');
 
     normalKey = (await issueMcpApiKeyForAgent(db, 7)).apiKey;
     adminKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
@@ -335,9 +263,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       server.close((err) => err ? reject(err) : resolve());
     });
     server = null;
-    closeDb();
-    restoreEnv('AGENT_HQ_DB_PATH', ORIGINAL_DB_PATH);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await teardownTestDb();
   });
 
   function authHeaders(apiKey: string): Record<string, string> {
@@ -980,40 +906,20 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
   async function seedRecurringTaskSeries(seriesId: number, projectId: number, sprintId: number): Promise<void> {
     const db = getDb();
-    // The auth fixture does not build this table, and the gate only reads
-    // project_id, so a minimal shape without foreign keys is enough here and
-    // lets the cross-project case use a project id the fixture never created.
+    // The cross-project case deliberately names a project no agent here is assigned to. The real
+    // schema has a recurring_task_series -> projects foreign key, so that project has to exist as
+    // a row rather than only as an id; the gate still sees a project outside the caller's scope,
+    // which is the whole point of the case.
+    await db.run(
+      `INSERT OR IGNORE INTO projects (id, tenant_id, name) VALUES (?, 1, 'Recurring Series Project')`,
+      projectId,
+    );
     await db.run(`
-      CREATE TABLE IF NOT EXISTS recurring_task_series (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
-        sprint_id INTEGER NOT NULL,
-        title_template TEXT NOT NULL,
-        description_template TEXT NOT NULL DEFAULT '',
-        task_type TEXT NOT NULL,
-        priority TEXT NOT NULL DEFAULT 'medium',
-        story_points INTEGER NOT NULL,
-        status_on_create TEXT NOT NULL,
-        schedule_expression TEXT NOT NULL,
-        timezone TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        next_run_at TEXT,
-        last_run_at TEXT,
-        overlap_policy TEXT NOT NULL DEFAULT 'skip_if_active',
-        agent_id INTEGER,
-        created_by TEXT NOT NULL DEFAULT 'system',
-        updated_by TEXT NOT NULL DEFAULT 'system',
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        tenant_id INTEGER
-      )
-    `);
-    await db.run(`
-      INSERT OR REPLACE INTO recurring_task_series (
-        id, project_id, sprint_id, title_template, description_template, task_type,
+      INSERT INTO recurring_task_series (
+        id, tenant_id, project_id, sprint_id, title_template, description_template, task_type,
         priority, story_points, status_on_create, schedule_expression, timezone,
         enabled, overlap_policy, created_by, updated_by, created_at, updated_at
-      ) VALUES (?, ?, ?, 'Series', 'Series body', 'ops', 'high', 2, 'ready',
+      ) VALUES (?, 1, ?, ?, 'Series', 'Series body', 'ops', 'high', 2, 'ready',
         'every monday 09:00', 'America/New_York', 0, 'skip_if_active', 'test', 'test',
         '2026-07-01 00:00:00', '2026-07-01 00:00:00')
     `, seriesId, projectId, sprintId);
@@ -2255,40 +2161,93 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 });
 
-describe('ensureConfiguredRuntimeMcpApiKey', () => {
-  let tempDir: string;
-  let dbPath: string;
+/**
+ * The Atlas agent these tests bootstrap against is a seeding side effect of initSchema(), which
+ * only ever runs on SQLite — the PostgreSQL fixture template carries DDL only and is truncated
+ * between tests. Reuse the seeded row where there is one and insert it where there is not, so the
+ * fixture states its own dependency instead of inheriting it from whichever engine built the
+ * schema.
+ */
+async function ensureAtlasAgent(): Promise<void> {
+  const db = getDb();
+  const tenantId = await getDefaultTenantId(db);
+  const existing = await db.get(`
+    SELECT id FROM agents
+    WHERE system_role = 'atlas' OR openclaw_agent_id = 'atlas' OR name = 'Atlas'
+    ORDER BY id ASC
+    LIMIT 1
+  `);
+  if (existing) return;
+  await db.run(`
+    INSERT INTO agents (name, role, session_key, workspace_path, status, openclaw_agent_id, slug, system_role, tenant_id)
+    VALUES ('Atlas', 'Built-in assistant', 'agent:atlas:main', '', 'idle', 'atlas', 'atlas', 'atlas', ?)
+  `, tenantId);
+}
 
+/**
+ * Records the migration ledger the boot gate reads.
+ *
+ * setupTestDb() builds the schema directly — initSchema() on SQLite, a template clone on
+ * PostgreSQL — and neither writes the ledger `npm run db:migrate` does. verifyStartupSchema()
+ * judges a database solely by that ledger, so without this it refuses one whose schema is in fact
+ * current.
+ */
+async function recordAppliedSchemaLedger(): Promise<void> {
+  const db = getDb();
+  if (usingPostgres()) {
+    for (const migration of loadMigrations(POSTGRES_MIGRATION_DIRS)) {
+      await db.run(
+        `INSERT OR IGNORE INTO schema_migrations (id, checksum) VALUES (?, ?)`,
+        migration.id, migration.checksum,
+      );
+    }
+    return;
+  }
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id         TEXT PRIMARY KEY,
+      checksum   TEXT NOT NULL,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  await db.run(
+    `INSERT OR IGNORE INTO schema_migrations (id, checksum) VALUES (?, ?)`,
+    STARTUP_SCHEMA_LEDGER_ID, STARTUP_SCHEMA_LEDGER_CHECKSUM,
+  );
+}
+
+describe('ensureConfiguredRuntimeMcpApiKey', () => {
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-api-auth-'));
-    dbPath = path.join(tempDir, 'agent-hq-test.db');
-    closeDb();
-    process.env.AGENT_HQ_DB_PATH = dbPath;
+    await setupTestDb();
     delete process.env.AGENT_HQ_MCP_API_KEY;
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_ID;
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_OPENCLAW_ID;
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_SESSION_KEY;
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_SLUG;
     delete process.env.AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN;
-    await initSchema();
+    await ensureAtlasAgent();
   });
 
-  afterEach(() => {
-    closeDb();
-    restoreEnv('AGENT_HQ_DB_PATH', ORIGINAL_DB_PATH);
+  afterEach(async () => {
     restoreEnv('AGENT_HQ_MCP_API_KEY', ORIGINAL_MCP_API_KEY);
     restoreEnv('AGENT_HQ_MCP_API_KEY_AGENT_ID', ORIGINAL_MCP_API_KEY_AGENT_ID);
     restoreEnv('AGENT_HQ_MCP_API_KEY_AGENT_OPENCLAW_ID', ORIGINAL_MCP_API_KEY_AGENT_OPENCLAW_ID);
     restoreEnv('AGENT_HQ_MCP_API_KEY_AGENT_SESSION_KEY', ORIGINAL_MCP_API_KEY_AGENT_SESSION_KEY);
     restoreEnv('AGENT_HQ_MCP_API_KEY_AGENT_SLUG', ORIGINAL_MCP_API_KEY_AGENT_SLUG);
     restoreEnv('AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN', ORIGINAL_MCP_API_KEY_GLOBAL_ADMIN);
-    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+    await teardownTestDb();
   });
 
   it('does not materialize configured runtime keys during schema startup', async () => {
     process.env.AGENT_HQ_MCP_API_KEY = 'ahq_mcp_runtime_bootstrap_test';
 
-    await initSchema();
+    // Pointed at the engine-aware boot gate rather than at initSchema(), which builds SQLite
+    // whatever DATABASE_URL says and would therefore move this assertion quietly off PostgreSQL.
+    // The contract is the same one on either engine, and the explicit
+    // ensureConfiguredRuntimeMcpApiKey() call in the next test is its only sanctioned exception:
+    // bringing the database up must never mint the configured runtime key.
+    await recordAppliedSchemaLedger();
+    await verifyStartupSchema();
 
     expect(await getDb().get(`SELECT COUNT(*) AS count FROM mcp_api_keys`)).toEqual({ count: 0 });
   });

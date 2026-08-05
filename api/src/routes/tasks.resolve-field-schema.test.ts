@@ -1,18 +1,8 @@
 import express from 'express';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import tasksRouter from './tasks';
-
-const ORIGINAL_DB_PATH = process.env.AGENT_HQ_DB_PATH;
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value == null) delete process.env[name];
-  else process.env[name] = value;
-}
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -32,50 +22,93 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 }
 
-async function seedFieldSchemaFixture(): Promise<void> {
+/**
+ * task_field_schemas.tenant_id and sprint_type_task_types.tenant_id are NOT NULL with a real
+ * foreign key to tenants, so the literal `1` this fixture used to bind is only valid where
+ * something has already created a tenant. initSchema() does; the PostgreSQL fixture carries DDL
+ * only and truncates between tests, so it does not. Resolve the tenant instead of assuming it —
+ * that works on both engines and does not depend on the default tenant landing on id 1.
+ */
+async function resolveTenantId(): Promise<number> {
   const db = getDb();
+  const existing = await db.get(
+    `SELECT id FROM tenants ORDER BY is_default DESC, id ASC LIMIT 1`,
+  ) as { id: number } | undefined;
+  if (existing) return Number(existing.id);
+  const inserted = await db.run(
+    `INSERT INTO tenants (name, slug, is_default) VALUES ('Agent HQ', 'agent-hq', 1)`,
+  );
+  return Number(inserted.lastInsertId);
+}
 
-  await db.run(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`);
-  await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Backend Domain Refactor', '', 'dev', 'active')`);
+const GENERIC_SCHEMA = JSON.stringify({
+  fields: [{ key: 'generic_only', label: 'Generic Only', type: 'text' }],
+});
+const DEV_SCHEMA = JSON.stringify({
+  fields: [
+    { key: 'review_branch', label: 'Review Branch', type: 'text', required: true },
+    { key: 'review_commit', label: 'Review Commit', type: 'text', required: true },
+    { key: 'qa_verified_commit', label: 'QA Verified Commit', type: 'text' },
+  ],
+});
+const DEV_BACKEND_SCHEMA = JSON.stringify({
+  fields: [
+    { key: 'target_surface', label: 'Target Surface', type: 'select', options: ['api', 'ui'] },
+    { key: 'review_commit', label: 'Backend Review Commit', type: 'text', help_text: 'Backend-specific label override.' },
+  ],
+});
+
+async function seedFieldSchemaFixture(): Promise<{ sprintId: number }> {
+  const db = getDb();
+  const tenantId = await resolveTenantId();
+
+  const project = await db.run(
+    `INSERT INTO projects (tenant_id, name, description, context_md) VALUES (?, 'Agent HQ', '', '')`,
+    tenantId,
+  );
+  const sprint = await db.run(
+    `INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status)
+     VALUES (?, ?, 'Backend Domain Refactor', '', 'dev', 'active')`,
+    tenantId, Number(project.lastInsertId),
+  );
+
+  // The DELETEs are what make this fixture authoritative rather than additive: on SQLite
+  // initSchema() has already seeded starter 'generic' and 'dev' schemas, and the resolver reads
+  // whichever row it finds without filtering by tenant, so leaving them would merge the starter
+  // fields into every assertion below. They are no-ops on the truncated PostgreSQL database.
   await db.run(`DELETE FROM sprint_type_task_types WHERE sprint_type_key = 'dev'`);
-  await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type) VALUES (1, 'dev', 'backend'), (1, 'dev', 'frontend'), (1, 'dev', 'qa')`);
+  await db.run(
+    `INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type)
+     VALUES (?, 'dev', 'backend'), (?, 'dev', 'frontend'), (?, 'dev', 'qa')`,
+    tenantId, tenantId, tenantId,
+  );
   await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key IN ('generic', 'dev') AND task_type IS NULL`);
   await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'dev' AND task_type = 'backend'`);
   await db.run(`
     INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
     VALUES
-      (1, 'generic', NULL, ?),
-      (1, 'dev', NULL, ?),
-      (1, 'dev', 'backend', ?)
-  `, JSON.stringify({ fields: [{ key: 'generic_only', label: 'Generic Only', type: 'text' }] }), JSON.stringify({ fields: [
-          { key: 'review_branch', label: 'Review Branch', type: 'text', required: true },
-          { key: 'review_commit', label: 'Review Commit', type: 'text', required: true },
-          { key: 'qa_verified_commit', label: 'QA Verified Commit', type: 'text' },
-        ] }), JSON.stringify({ fields: [
-          { key: 'target_surface', label: 'Target Surface', type: 'select', options: ['api', 'ui'] },
-          { key: 'review_commit', label: 'Backend Review Commit', type: 'text', help_text: 'Backend-specific label override.' },
-        ] }));
+      (?, 'generic', NULL, ?),
+      (?, 'dev', NULL, ?),
+      (?, 'dev', 'backend', ?)
+  `, tenantId, GENERIC_SCHEMA, tenantId, DEV_SCHEMA, tenantId, DEV_BACKEND_SCHEMA);
+
+  return { sprintId: Number(sprint.lastInsertId) };
 }
 
 describe('GET /api/v1/tasks/field-schema/resolve', () => {
-  let tempDir: string;
   let server: Server;
   let baseUrl: string;
+  let sprintId: number;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-field-schema-resolve-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
-    closeDb();
-    await initSchema();
-    await seedFieldSchemaFixture();
+    await setupTestDb();
+    ({ sprintId } = await seedFieldSchemaFixture());
     ({ server, baseUrl } = await startServer());
   });
 
   afterEach(async () => {
     await stopServer(server);
-    closeDb();
-    restoreEnv('AGENT_HQ_DB_PATH', ORIGINAL_DB_PATH);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await teardownTestDb();
   });
 
   it('resolves the sprint-type schema when sprint_type is provided directly', async () => {
@@ -99,7 +132,7 @@ describe('GET /api/v1/tasks/field-schema/resolve', () => {
   });
 
   it('still resolves the sprint-type schema when sprint_id is provided', async () => {
-    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?sprint_id=42&task_type=backend`);
+    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?sprint_id=${sprintId}&task_type=backend`);
     expect(res.status).toBe(200);
     const body = await res.json() as {
       sprint_type: string;
@@ -111,7 +144,7 @@ describe('GET /api/v1/tasks/field-schema/resolve', () => {
   });
 
   it('returns only workflow default fields when no task-type schema is configured', async () => {
-    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?sprint_id=42&task_type=qa`);
+    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?sprint_id=${sprintId}&task_type=qa`);
     expect(res.status).toBe(200);
     const body = await res.json() as {
       sprint_type: string;

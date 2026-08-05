@@ -1,18 +1,8 @@
 import express from 'express';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import tasksRouter from './tasks';
-
-const ORIGINAL_DB_PATH = process.env.AGENT_HQ_DB_PATH;
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value == null) delete process.env[name];
-  else process.env[name] = value;
-}
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -32,8 +22,26 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
 }
 
+/**
+ * The fixture below leaves tenant_id NULL on every row, exactly as it always has, and relies on the
+ * first request adopting those rows into the default tenant — the context route resolves a tenant
+ * and then filters `tasks WHERE id = ? AND tenant_id = ?`.
+ *
+ * That adoption only happens if a default tenant already exists. On SQLite initSchema seeds one;
+ * the PostgreSQL fixture template carries DDL only, and with no default tenant present
+ * resolveTenantIdFromRequest() creates one AND provisions a whole starter workspace — its own
+ * projects, sprints and agents — inside the first request under test. So the row is seeded here
+ * instead: cheaper, and it keeps the database to the rows this file actually asserts on.
+ */
+async function ensureDefaultTenant(): Promise<void> {
+  const db = getDb();
+  if (await db.get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`)) return;
+  await db.run(`INSERT INTO tenants (name, slug, is_default) VALUES ('Agent HQ', 'default', 1)`);
+}
+
 async function seedTaskContextFixture(): Promise<void> {
   const db = getDb();
+  await ensureDefaultTenant();
 
   await db.run(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`);
   await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Enhancements', '', 'generic', 'active')`);
@@ -98,24 +106,18 @@ async function seedTaskContextFixture(): Promise<void> {
 }
 
 describe('GET /api/v1/tasks/:id/context', () => {
-  let tempDir: string;
   let server: Server;
   let baseUrl: string;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-context-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
-    closeDb();
-    await initSchema();
+    await setupTestDb();
     await seedTaskContextFixture();
     ({ server, baseUrl } = await startServer());
   });
 
   afterEach(async () => {
     await stopServer(server);
-    closeDb();
-    restoreEnv('AGENT_HQ_DB_PATH', ORIGINAL_DB_PATH);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await teardownTestDb();
   });
 
   it('returns a concise, meaningful summary context', async () => {

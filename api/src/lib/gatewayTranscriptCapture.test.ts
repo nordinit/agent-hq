@@ -1,5 +1,3 @@
-import Database from 'better-sqlite3';
-
 type SentRequest = {
   method: string;
   params: Record<string, unknown>;
@@ -11,13 +9,12 @@ const mockSockets: Array<{
 }> = [];
 let mockHistoryMessages: Array<Record<string, unknown>> = [];
 let mockHistoryResponses: Array<Record<string, unknown>> = [];
-let db: Db;
 
-jest.mock('../db/client', () => ({
-  getDb: () => db,
-}));
-
+// Only the gateway URL is faked. The rest of ../config is spread through because the shared
+// fixture pulls in db/schema.ts, which imports NODE_BIN_DIR from here — a factory returning
+// this one key alone leaves every other consumer with undefined.
 jest.mock('../config', () => ({
+  ...jest.requireActual('../config'),
   OPENCLAW_GATEWAY_WS_URL: 'ws://gateway.test',
 }));
 
@@ -97,42 +94,38 @@ jest.mock('ws', () => {
 });
 
 import { getActiveCaptureCount, startTranscriptCapture, stopTranscriptCapture } from './gatewayTranscriptCapture';
-import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 
-async function setupDb(): Promise<void> {
-  db = new SqliteAdapter(new Database(':memory:'));
-  await db.exec(`
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      durable_run_id TEXT
-    );
+const SESSION_KEY = 'agent:cinder-backend:run:4698:durable-4698';
 
-    CREATE TABLE chat_messages (
-      id TEXT PRIMARY KEY,
-      agent_id INTEGER NOT NULL,
-      instance_id INTEGER,
-      durable_run_id TEXT,
-      session_key TEXT NOT NULL DEFAULT '',
-      role TEXT NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      timestamp TEXT NOT NULL,
-      event_type TEXT NOT NULL DEFAULT 'text',
-      event_meta TEXT NOT NULL DEFAULT '{}'
-    );
-  `);
+async function seedRunFixtures(): Promise<void> {
+  const db = getDb();
+  // The real baseline declares chat_messages.agent_id -> agents.id and
+  // job_instances.agent_id -> agents.id as genuine foreign keys. The minimal schema this test
+  // used to hand-build had neither, so agent 94 never had to exist for the capture's writes to
+  // land. It does now.
+  await db.run(`INSERT INTO agents (id, name, session_key) VALUES (94, 'Cinder Backend', 'agent:cinder-backend')`);
+  await db.run(`INSERT INTO job_instances (id, agent_id, durable_run_id) VALUES (4698, 94, 'durable-4698')`);
 }
 
-function waitForAsyncFrames(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(() => {
-      setImmediate(() => {
-        setImmediate(() => {
-          setImmediate(resolve);
-        });
-      });
-    });
-  });
+/**
+ * Drains the event loop until the capture's in-flight persistence has settled.
+ *
+ * This used to be four chained setImmediate frames, which was enough only because every write
+ * was a synchronous better-sqlite3 call that resolved on the microtask queue. On PostgreSQL a
+ * single history persist is a dozen socket round trips — two introspection queries, a
+ * checkout, BEGIN, a DELETE, one INSERT per row, COMMIT — so a fixed frame count no longer
+ * bounds the work it is waiting for. Yielding repeatedly for a wall-clock budget does, and
+ * setImmediate resolves after the poll phase, so socket replies are processed each turn.
+ */
+const SETTLE_MS = 150;
+
+async function waitForAsyncFrames(): Promise<void> {
+  const deadline = Date.now() + SETTLE_MS;
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 function delay(ms: number): Promise<void> {
@@ -161,17 +154,21 @@ describe('gatewayTranscriptCapture', () => {
         content: 'command output',
       },
     ];
-    await setupDb();
-    await db.run(`INSERT INTO job_instances (id, durable_run_id) VALUES (4698, 'durable-4698')`);
+    await setupTestDb();
+    await seedRunFixtures();
   });
 
   afterEach(async () => {
-    await stopTranscriptCapture('agent:cinder-backend:run:4698:durable-4698');
-    await db.close();
+    // Quiesce BEFORE teardown. A capture that saw a terminal event kicks off one last
+    // chat.history persist that nothing in the test awaits; teardown ends the connection pool,
+    // and that write would then fail into the module's catch-and-warn and disappear.
+    await waitForAsyncFrames();
+    await stopTranscriptCapture(SESSION_KEY);
+    await teardownTestDb();
   });
 
   it('subscribes with the routed agent run key and persists assistant/tool history rows', async () => {
-    await startTranscriptCapture(4698, 94, 'agent:cinder-backend:run:4698:durable-4698');
+    await startTranscriptCapture(4698, 94, SESSION_KEY);
 
     await waitForAsyncFrames();
 
@@ -179,13 +176,13 @@ describe('gatewayTranscriptCapture', () => {
       expect.objectContaining({
         method: 'chat.history',
         params: expect.objectContaining({
-          sessionKey: 'agent:cinder-backend:run:4698:durable-4698',
+          sessionKey: SESSION_KEY,
           limit: 200,
         }),
       }),
     ]));
 
-    const rows = await db.all(`
+    const rows = await getDb().all(`
       SELECT role, event_type, content, session_key, durable_run_id
       FROM chat_messages
       WHERE instance_id = 4698
@@ -196,21 +193,21 @@ describe('gatewayTranscriptCapture', () => {
         role: 'assistant',
         event_type: 'text',
         content: 'Working through the task',
-        session_key: 'agent:cinder-backend:run:4698:durable-4698',
+        session_key: SESSION_KEY,
         durable_run_id: 'durable-4698',
       },
       {
         role: 'assistant',
         event_type: 'tool_call',
         content: 'exec_command',
-        session_key: 'agent:cinder-backend:run:4698:durable-4698',
+        session_key: SESSION_KEY,
         durable_run_id: 'durable-4698',
       },
       {
         role: 'tool',
         event_type: 'tool_result',
         content: 'command output',
-        session_key: 'agent:cinder-backend:run:4698:durable-4698',
+        session_key: SESSION_KEY,
         durable_run_id: 'durable-4698',
       },
     ]);
@@ -218,7 +215,7 @@ describe('gatewayTranscriptCapture', () => {
 
   it('persists short live deltas and live tool events before the run finishes', async () => {
     mockHistoryMessages = [];
-    await startTranscriptCapture(4698, 94, 'agent:cinder-backend:run:4698:durable-4698');
+    await startTranscriptCapture(4698, 94, SESSION_KEY);
 
     await waitForAsyncFrames();
 
@@ -226,7 +223,7 @@ describe('gatewayTranscriptCapture', () => {
       type: 'event',
       event: 'chat',
       payload: {
-        sessionKey: 'agent:cinder-backend:run:4698:durable-4698',
+        sessionKey: SESSION_KEY,
         state: 'delta',
         message: {
           role: 'assistant',
@@ -238,7 +235,7 @@ describe('gatewayTranscriptCapture', () => {
       type: 'event',
       event: 'chat',
       payload: {
-        sessionKey: 'agent:cinder-backend:run:4698:durable-4698',
+        sessionKey: SESSION_KEY,
         state: 'tool_call',
         message: {
           role: 'assistant',
@@ -254,7 +251,7 @@ describe('gatewayTranscriptCapture', () => {
     // work. Let the in-flight writes settle before asserting on the rows.
     await waitForAsyncFrames();
 
-    const rows = await db.all(`
+    const rows = await getDb().all(`
       SELECT id, role, event_type, content, session_key, durable_run_id
       FROM chat_messages
       WHERE instance_id = 4698
@@ -267,7 +264,7 @@ describe('gatewayTranscriptCapture', () => {
         role: 'assistant',
         event_type: 'tool_call',
         content: 'exec_command',
-        session_key: 'agent:cinder-backend:run:4698:durable-4698',
+        session_key: SESSION_KEY,
         durable_run_id: 'durable-4698',
       },
       {
@@ -275,7 +272,7 @@ describe('gatewayTranscriptCapture', () => {
         role: 'assistant',
         event_type: 'text',
         content: 'Short update',
-        session_key: 'agent:cinder-backend:run:4698:durable-4698',
+        session_key: SESSION_KEY,
         durable_run_id: 'durable-4698',
       },
     ]);
@@ -283,14 +280,14 @@ describe('gatewayTranscriptCapture', () => {
 
   it('force-refreshes an existing capture after chat.send indexes the session', async () => {
     mockHistoryMessages = [];
-    await startTranscriptCapture(4698, 94, 'agent:cinder-backend:run:4698:durable-4698', {
+    await startTranscriptCapture(4698, 94, SESSION_KEY, {
             historyRetryCount: 0,
           });
 
     await waitForAsyncFrames();
 
     expect(sentRequests.filter((req) => req.method === 'chat.history')).toHaveLength(1);
-    expect(await db.get('SELECT COUNT(*) AS count FROM chat_messages WHERE instance_id = 4698')).toEqual({ count: 0 });
+    expect(await getDb().get('SELECT COUNT(*) AS count FROM chat_messages WHERE instance_id = 4698')).toEqual({ count: 0 });
 
     mockHistoryMessages = [
       {
@@ -301,7 +298,7 @@ describe('gatewayTranscriptCapture', () => {
         ],
       },
     ];
-    await startTranscriptCapture(4698, 94, 'agent:cinder-backend:run:4698:durable-4698', {
+    await startTranscriptCapture(4698, 94, SESSION_KEY, {
             forceHistoryRefresh: true,
             historyRetryCount: 0,
           });
@@ -309,7 +306,7 @@ describe('gatewayTranscriptCapture', () => {
     await waitForAsyncFrames();
 
     expect(sentRequests.filter((req) => req.method === 'chat.history')).toHaveLength(2);
-    const rows = await db.all(`
+    const rows = await getDb().all(`
       SELECT id, role, event_type, content
       FROM chat_messages
       WHERE instance_id = 4698
@@ -329,13 +326,13 @@ describe('gatewayTranscriptCapture', () => {
     mockHistoryMessages = [];
     const onTurnEnd = jest.fn();
 
-    await startTranscriptCapture(4698, 94, 'agent:cinder-backend:run:4698:durable-4698', {
+    await startTranscriptCapture(4698, 94, SESSION_KEY, {
             onTurnEnd,
             historyRetryCount: 0,
           });
     await waitForAsyncFrames();
 
-    await startTranscriptCapture(4698, 94, 'agent:cinder-backend:run:4698:durable-4698', {
+    await startTranscriptCapture(4698, 94, SESSION_KEY, {
             forceHistoryRefresh: true,
             runId: 'run-4698',
             onTurnEnd,
@@ -363,7 +360,7 @@ describe('gatewayTranscriptCapture', () => {
       type: 'event',
       event: 'chat',
       payload: {
-        sessionKey: 'agent:cinder-backend:run:4698:durable-4698',
+        sessionKey: SESSION_KEY,
         state: 'final',
         message: {
           role: 'assistant',
@@ -378,14 +375,14 @@ describe('gatewayTranscriptCapture', () => {
       source: 'openclaw',
       success: true,
       reason: 'completed',
-      sessionKey: 'agent:cinder-backend:run:4698:durable-4698',
+      sessionKey: SESSION_KEY,
       runId: 'run-4698',
     }));
   });
 
   it('cleans up the shared capture on gateway disconnect', async () => {
     mockHistoryMessages = [];
-    await startTranscriptCapture(4698, 94, 'agent:cinder-backend:run:4698:durable-4698');
+    await startTranscriptCapture(4698, 94, SESSION_KEY);
 
     await waitForAsyncFrames();
     expect(getActiveCaptureCount()).toBe(1);
@@ -397,12 +394,12 @@ describe('gatewayTranscriptCapture', () => {
 
   it('closes the shared capture when abort cleanup stops the transcript capture', async () => {
     mockHistoryMessages = [];
-    await startTranscriptCapture(4698, 94, 'agent:cinder-backend:run:4698:durable-4698');
+    await startTranscriptCapture(4698, 94, SESSION_KEY);
 
     await waitForAsyncFrames();
     expect(getActiveCaptureCount()).toBe(1);
 
-    await stopTranscriptCapture('agent:cinder-backend:run:4698:durable-4698');
+    await stopTranscriptCapture(SESSION_KEY);
 
     expect(getActiveCaptureCount()).toBe(0);
     expect(mockSockets[0]).toEqual(expect.objectContaining({ readyState: 3 }));
@@ -426,7 +423,7 @@ describe('gatewayTranscriptCapture', () => {
       },
     ];
 
-    await startTranscriptCapture(4698, 94, 'agent:cinder-backend:run:4698:durable-4698', {
+    await startTranscriptCapture(4698, 94, SESSION_KEY, {
             historyRetryCount: 1,
             historyRetryDelayMs: 1,
           });
@@ -436,7 +433,7 @@ describe('gatewayTranscriptCapture', () => {
     await waitForAsyncFrames();
 
     expect(sentRequests.filter((req) => req.method === 'chat.history')).toHaveLength(2);
-    const rows = await db.all(`
+    const rows = await getDb().all(`
       SELECT id, role, event_type, content
       FROM chat_messages
       WHERE instance_id = 4698

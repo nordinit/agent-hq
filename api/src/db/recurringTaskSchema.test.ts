@@ -1,8 +1,7 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { closeDb, getDb } from './client';
+import { getDb } from './client';
 import { initSchema } from './schema';
+import { describeSqliteOnly, setupTestDb, teardownTestDb, usingPostgres } from './testDb';
+import { getDefaultTenantId } from '../lib/tenantContext';
 import { createTaskRecord } from '../domains/tasks/writeModel';
 import {
   createRecurringTaskSeries,
@@ -10,43 +9,71 @@ import {
   recordRecurringTaskRun,
 } from '../domains/recurring-tasks';
 
-describe('recurring task scheduling schema', () => {
-  const originalDbPath = process.env.AGENT_HQ_DB_PATH;
-  let tempDir = '';
+/**
+ * Each engine words a unique-index violation in its own way, and nothing between the domain code
+ * and the driver normalises it. The phrase is still engine-EXACT rather than a loose /unique/i, so
+ * a foreign-key or CHECK failure cannot satisfy the assertion by accident.
+ */
+const UNIQUE_VIOLATION = usingPostgres()
+  ? 'duplicate key value violates unique constraint'
+  : 'UNIQUE constraint failed';
 
+const LOOKUP_INDEXES = [
+  'idx_recurring_task_series_due',
+  'idx_recurring_task_runs_series_history',
+  'idx_tasks_generated_lookup',
+  'idx_tasks_generated_occurrence_unique',
+];
+
+/** sqlite_master has no PostgreSQL equivalent; pg_indexes is the catalog that answers the same question. */
+async function lookupIndexNames(): Promise<string[]> {
+  const db = getDb();
+  const placeholders = LOOKUP_INDEXES.map(() => '?').join(', ');
+  const rows = usingPostgres()
+    ? await db.all(`
+        SELECT indexname AS name
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname IN (${placeholders})
+        ORDER BY indexname ASC
+      `, ...LOOKUP_INDEXES)
+    : await db.all(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'index'
+          AND name IN (${placeholders})
+        ORDER BY name ASC
+      `, ...LOOKUP_INDEXES);
+  return (rows as Array<{ name: string }>).map(row => row.name);
+}
+
+describe('recurring task scheduling schema', () => {
   beforeEach(async () => {
-    closeDb();
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'recurring-task-schema-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-    // expect(fn).toThrow() calls fn SYNCHRONOUSLY. An async fn returns a promise instead of
-    // throwing, so not.toThrow() passed trivially while the call ran DETACHED — and then
-    // rejected after teardown closed the connection, killing the jest worker. toThrow() on an
-    // async fn simply never matched. Both forms must go through the promise.
-    await initSchema();
+    await setupTestDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-    else process.env.AGENT_HQ_DB_PATH = originalDbPath;
-    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-    tempDir = '';
+  afterEach(async () => {
+    await teardownTestDb();
   });
 
   async function seedProjectSprint(): Promise<void> {
     const db = getDb();
+    // The real baseline carries the foreign keys the hand-written fixture schema never had:
+    // projects/sprints/agents all point at tenants, and recurring_task_series points at all three.
+    // So the tenant has to exist before its children rather than being left implicit.
+    const tenantId = await getDefaultTenantId(db);
     await db.run(`
-      INSERT INTO projects (id, name, description, context_md, created_at)
-      VALUES (612, 'Recurring Tasks', '', '', datetime('now'))
-    `);
+      INSERT INTO projects (id, tenant_id, name, description, context_md)
+      VALUES (612, ?, 'Recurring Tasks', '', '')
+    `, tenantId);
     await db.run(`
-      INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
-      VALUES (6121, 612, 'Fixed Sprint', '', 'dev', 'active', 'time', '2w', datetime('now'))
-    `);
+      INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+      VALUES (6121, ?, 612, 'Fixed Sprint', '', 'dev', 'active', 'time', '2w')
+    `, tenantId);
     await db.run(`
-      INSERT INTO agents (id, name, role, session_key)
-      VALUES (6122, 'Pinned Backend', 'backend', 'agent:pinned-backend:main')
-    `);
+      INSERT INTO agents (id, tenant_id, name, role, session_key)
+      VALUES (6122, ?, 'Pinned Backend', 'backend', 'agent:pinned-backend:main')
+    `, tenantId);
   }
 
   it('creates a fixed-sprint series, records a run, and links the generated task metadata', async () => {
@@ -155,7 +182,7 @@ describe('recurring task scheduling schema', () => {
                 scheduled_for: scheduledFor,
                 status: 'started',
                 idempotency_key: `${series.id}:${scheduledFor}:duplicate-worker`,
-              }))()).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
+              }))()).rejects.toMatchObject({ message: expect.stringContaining(UNIQUE_VIOLATION) });
 
     await createTaskRecord(db, {
             title: 'Daily QA sweep',
@@ -191,39 +218,43 @@ describe('recurring task scheduling schema', () => {
                 scheduled_for: scheduledFor,
                 schedule_run_id: run.id,
                 generated_from: 'recurring_task_series',
-              }, 'scheduler'))()).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
+              }, 'scheduler'))()).rejects.toMatchObject({ message: expect.stringContaining(UNIQUE_VIOLATION) });
   });
 
   it('creates lookup indexes for due series, run history, and generated tasks', async () => {
-    const db = getDb();
-    const indexes = await db.all(`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'index'
-        AND name IN (
-          'idx_recurring_task_series_due',
-          'idx_recurring_task_runs_series_history',
-          'idx_tasks_generated_lookup',
-          'idx_tasks_generated_occurrence_unique'
-        )
-      ORDER BY name ASC
-    `) as Array<{ name: string }>;
-
-    expect(indexes.map(row => row.name)).toEqual([
+    expect(await lookupIndexNames()).toEqual([
       'idx_recurring_task_runs_series_history',
       'idx_recurring_task_series_due',
       'idx_tasks_generated_lookup',
       'idx_tasks_generated_occurrence_unique',
     ]);
   });
+});
+
+/**
+ * SQLite-only on purpose, and not a conversion gap.
+ *
+ * What this covers is initSchema()'s in-place ALTER TABLE migration of a pre-existing tasks table,
+ * which exists solely to carry legacy SQLite installs forward. PostgreSQL gets those columns from
+ * db/pg-baseline, so there is no PostgreSQL behaviour here to exercise — running it there would
+ * assert against the baseline rather than against the migration.
+ */
+describeSqliteOnly('recurring task schema legacy migration', () => {
+  beforeEach(async () => {
+    await setupTestDb();
+  });
+
+  afterEach(async () => {
+    await teardownTestDb();
+  });
 
   it('migrates an existing tasks table before creating generated-task indexes', async () => {
-    closeDb();
-    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'recurring-task-legacy-schema-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-    const db = getDb();
-    await db.exec(`
+    // Replace the fully-migrated tasks table with the legacy shape, rather than bootstrapping a
+    // second database by hand: setupTestDb() owns AGENT_HQ_DB_PATH now. initSchema() creates tasks
+    // with IF NOT EXISTS, so the legacy table below is what it has to migrate. Dropping it also
+    // drops its indexes, so idx_tasks_generated_lookup really is re-created rather than left over.
+    await getDb().exec(`
+      DROP TABLE tasks;
       CREATE TABLE tasks (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         title        TEXT NOT NULL,
@@ -242,8 +273,15 @@ describe('recurring task scheduling schema', () => {
       );
     `);
 
+    // The premise, pinned: setupTestDb() hands over a fully-migrated tasks table, so if the drop
+    // above ever stopped working this test would assert the migration's outcome against a table
+    // that never needed migrating, and pass for no reason.
+    const before = await getDb().all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>;
+    expect(before.map(col => col.name)).not.toContain('recurring_series_id');
+
     await initSchema();
 
+    const db = getDb();
     const columns = await db.all(`PRAGMA table_info(tasks)`) as Array<{ name: string }>;
     expect(columns.map(col => col.name)).toEqual(expect.arrayContaining([
       'recurring_series_id',

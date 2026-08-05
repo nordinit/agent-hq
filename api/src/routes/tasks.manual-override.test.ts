@@ -1,15 +1,24 @@
 import express from 'express';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent, ensureMcpApiKeyTable, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 import { getDefaultTenantId } from '../lib/tenantContext';
 import tasksRouter from './tasks';
 
 describe('manual MCP/admin task moves', () => {
   beforeEach(async () => {
-    await initSchema();
+    await setupTestDb();
     const db = getDb();
+
+    // Tenant bootstrap FIRST, wipe second — the reverse of the order this file used to use.
+    // getDefaultTenantId() is not a read: on a database with no default tenant it provisions
+    // the tenant's whole default workspace, including a Default Project that takes project
+    // id 1 and collides with the explicit `VALUES (1, ...)` below. The old order worked only
+    // because the SQLite schema builder had already seeded the tenant before the first call,
+    // so the provisioning step never ran here at all.
+    const tenantId = await getDefaultTenantId(db);
+
     await db.exec(`
       DELETE FROM sprint_task_transitions;
       DELETE FROM sprint_type_task_types;
@@ -21,7 +30,6 @@ describe('manual MCP/admin task moves', () => {
       DELETE FROM agents;
     `);
 
-    const tenantId = await getDefaultTenantId(db);
     await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md, created_at) VALUES (1, ?, 'Agent HQ', '', '', datetime('now'))`, tenantId);
     await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'bugs', 'Bugs', '', 0, datetime('now'), datetime('now'))`, tenantId);
     await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at) VALUES (56, ?, 1, 'Bugs', '', 'bugs', 'active', 'time', '2w', datetime('now'))`, tenantId);
@@ -45,8 +53,8 @@ describe('manual MCP/admin task moves', () => {
     await ensureMcpApiKeyTable(db);
   });
 
-  afterEach(() => {
-    closeDb();
+  afterEach(async () => {
+    await teardownTestDb();
   });
 
   async function withApp<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {

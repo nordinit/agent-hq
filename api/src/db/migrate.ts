@@ -1,5 +1,6 @@
 import { closeDb, getDb, getDbPath, getEngine } from './client';
 import { ensureConfiguredRuntimeMcpApiKey } from '../lib/mcpApiAuth';
+import { ensureCanonicalAtlasSessionKey } from '../lib/atlasAgent';
 import { initSchema } from './schema';
 import { bootstrapRoutingAndWorkflowDefaults } from './bootstrapDefaults';
 import { migrationStatus, runMigrations } from './pg/migrationRunner';
@@ -45,6 +46,11 @@ async function migratePostgres(): Promise<void> {
   // Seeding is deliberately after the schema and deliberately part of install, not of boot.
   await bootstrapRoutingAndWorkflowDefaults(db);
   const runtimeMcpKey = await ensureConfiguredRuntimeMcpApiKey(db);
+  // The canonical Atlas identity. On SQLite this is a side effect of initSchema's seedInitialData,
+  // which runs on the raw better-sqlite3 handle and has no PostgreSQL counterpart — so an install
+  // created on PostgreSQL had an Atlas whose session_key was never normalised, and seed-dev.ts,
+  // which guards its insert on that key, would then add a second one.
+  const atlasIdentity = await ensureCanonicalAtlasSessionKey(db);
 
   const after = await migrationStatus(db, POSTGRES_MIGRATION_DIRS);
   if (after.pending.length > 0) {
@@ -57,6 +63,7 @@ async function migratePostgres(): Promise<void> {
     applied,
     already_applied: before.applied.length,
     runtime_mcp_api_key: runtimeMcpKey.status,
+    atlas_identity: atlasIdentity,
   }));
 }
 
