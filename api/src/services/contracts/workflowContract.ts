@@ -355,39 +355,18 @@ async function loadConfiguredGateRequirements(
   sprintId?: number | null,
   taskType?: string | null,
 ): Promise<ContractGateRequirement[]> {
+  // Mirrors loadTransitionRequirements in lib/taskRelease.ts: workflow-scoped rows only. The
+  // global `transition_requirements` fallback this used to consult was dropped by migration 15
+  // — see the note there for why a replace-not-accumulate fallback was worth removing.
   const sprintRows = await loadSprintTaskTransitionRequirements(db, sprintId ?? null, outcome, taskType);
-  if (sprintRows.length > 0) {
-    return sprintRows.map((row) => ({
-      outcome,
-      field_name: row.field_name,
-      requirement_type: row.requirement_type,
-      match_field: row.match_field,
-      severity: row.severity,
-      message: row.message,
-    }));
-  }
-
-  try {
-    if (taskType) {
-      const typeRows = await db.all(`
-        SELECT field_name, requirement_type, match_field, severity, message
-        FROM transition_requirements
-        WHERE task_type = ? AND outcome = ? AND enabled = 1
-        ORDER BY priority DESC, id ASC
-      `, taskType, outcome) as Array<Omit<ContractGateRequirement, 'outcome'>>;
-      if (typeRows.length > 0) return typeRows.map((row) => ({ ...row, outcome }));
-    }
-
-    const rows = await db.all(`
-      SELECT field_name, requirement_type, match_field, severity, message
-      FROM transition_requirements
-      WHERE task_type IS NULL AND outcome = ? AND enabled = 1
-      ORDER BY priority DESC, id ASC
-    `, outcome) as Array<Omit<ContractGateRequirement, 'outcome'>>;
-    return rows.map((row) => ({ ...row, outcome }));
-  } catch {
-    return [];
-  }
+  return sprintRows.map((row) => ({
+    outcome,
+    field_name: row.field_name,
+    requirement_type: row.requirement_type,
+    match_field: row.match_field,
+    severity: row.severity,
+    message: row.message,
+  }));
 }
 
 export async function resolveEvidenceRequirements(options: {

@@ -54,7 +54,6 @@ const LINT_LABELS: Record<string, string> = {
   no_entry_point: 'No entry point',
   scope_not_configured: 'Scope not configured',
   event_to_unknown_status: 'Event targets unknown status',
-  gate_from_global_fallback: 'Global gate applies',
   gate_task_type_replaces_default: 'Task-type gates replace defaults',
 };
 
@@ -1282,7 +1281,7 @@ function ArcInspector({
                 <ul className="space-y-0.5">
                   {edge.gates.map(gate => (
                     // Global and workflow ids come from different tables and do collide.
-                    <li key={`${gate.source}-${gate.requirement_id}`} className="flex items-start justify-between gap-2">
+                    <li key={gate.requirement_id} className="flex items-start justify-between gap-2">
                       <button
                         onClick={() => onEditGate?.(gate)}
                         disabled={!onEditGate}
@@ -1292,17 +1291,14 @@ function ArcInspector({
                         <span className={gate.severity === 'block' ? 'text-red-400' : 'text-amber-400'}>
                           {' '}({gate.severity})
                         </span>
-                        {/* A global gate is not this workflow's row — say so, or the operator
-                            will reasonably assume editing it affects only them. */}
-                        {gate.source === 'global' && <span className="text-slate-600"> · global fallback</span>}
-                        {gate.source === 'workflow' && gate.is_override && (
+                        {gate.is_override && (
                           <span className="text-purple-300"> · this workflow</span>
                         )}
                         {gate.effective_for_sprint === false && (
                           <span className="text-slate-600"> · superseded</span>
                         )}
                       </button>
-                      {gate.source === 'workflow' && gate.is_inherited && !gate.is_override && onOverrideGate && (
+                      {gate.is_inherited && !gate.is_override && onOverrideGate && (
                         <button
                           onClick={() => onOverrideGate(gate)}
                           className="shrink-0 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-purple-500/50 hover:text-purple-300"

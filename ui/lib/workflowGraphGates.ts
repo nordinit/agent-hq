@@ -1,17 +1,15 @@
-// Gate requirement drafts, and the consequence that has to be said out loud.
+// Gate requirement drafts.
 //
-// Gate resolution REPLACES rather than accumulates. `loadTransitionRequirements` takes the
-// first non-empty set of: this workflow's enabled rows, then the global `transition_requirements`
-// table. Two things follow, and neither is visible anywhere in the rows themselves:
+// Gate resolution REPLACES rather than accumulates, and the one surprise left in it is the
+// task-type dimension: a task-type gate substitutes the entire all-types set for that type
+// rather than adding to it. The graph raises `gate_task_type_replaces_default` for that.
 //
-//   * Declaring the FIRST workflow gate for an outcome drops the entire global set for it —
-//     not just the row you replaced. Four global gates can vanish behind one new gate.
-//   * Removing or disabling the LAST workflow gate for an outcome brings that whole global set
-//     back. Every enabled global row in production is severity 'block', so a gate disabled to
-//     unblock work can return stricter than it left.
-//
-// The second has deadlocked real tasks. These helpers are pure and tested because the warning
-// is only useful if the count in it is right.
+// There used to be a second, worse surprise here. A global `transition_requirements` table
+// applied whenever a workflow's own set for an outcome was empty, so declaring the FIRST gate
+// on an outcome silently dropped a whole set of gates, and removing the LAST one brought that
+// set back — every row of it severity 'block'. That deadlocked real tasks. Migration 15 moved
+// the table into the dev workflow default and dropped it; nothing outside this workflow's own
+// rows can gate an outcome now, so there is no longer a replacement notice to show.
 
 import type { WorkflowGraph } from '@/lib/api';
 
@@ -20,7 +18,7 @@ export type GraphGate = WorkflowGraph['edges'][number]['gates'][number];
 export interface GateDraft {
   /** Null means create. */
   requirement_id: number | null;
-  /** Heading, since the same form serves add / edit / override / take-control. */
+  /** Heading, since the same form serves add / edit / override. */
   title: string;
   outcome: string;
   task_type: string | null;
@@ -32,8 +30,6 @@ export interface GateDraft {
   priority: number;
   enabled: boolean;
   is_override: boolean;
-  /** True when this draft would be the first workflow gate for its outcome. */
-  takes_over_from_global: boolean;
 }
 
 const BLANK = {
@@ -50,27 +46,20 @@ const BLANK = {
 
 /** Every gate the graph currently shows for an outcome, across all edges carrying it. */
 export function gatesForOutcome(graph: WorkflowGraph, outcome: string): GraphGate[] {
-  const seen = new Set<string>();
+  const seen = new Set<number>();
   const gates: GraphGate[] = [];
   for (const edge of graph.edges) {
     if (edge.outcome !== outcome) continue;
     for (const gate of edge.gates) {
-      const key = `${gate.source ?? 'workflow'}-${gate.requirement_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      if (seen.has(gate.requirement_id)) continue;
+      seen.add(gate.requirement_id);
       gates.push(gate);
     }
   }
   return gates;
 }
 
-/** True when the outcome is gated only because the global table stepped in. */
-export function isOnGlobalFallback(graph: WorkflowGraph, outcome: string): boolean {
-  const gates = gatesForOutcome(graph, outcome);
-  return gates.length > 0 && gates.every(gate => gate.source === 'global');
-}
-
-/** A new gate on an outcome that currently has none of its own. */
+/** A new gate on an outcome. */
 export function newGateDraft(graph: WorkflowGraph, outcome: string, taskType: string | null = null): GateDraft {
   return {
     ...BLANK,
@@ -78,22 +67,14 @@ export function newGateDraft(graph: WorkflowGraph, outcome: string, taskType: st
     title: 'Add gate',
     outcome,
     task_type: taskType,
-    takes_over_from_global: isOnGlobalFallback(graph, outcome),
   };
 }
 
-/**
- * Editing an existing gate.
- *
- * A global row cannot be edited from a workflow canvas — it is shared by every project and
- * lives in another table — so selecting one produces a CREATE seeded from its values. That is
- * the only way to take control of the outcome here, and it takes over the whole global set.
- */
+/** Editing an existing gate. */
 export function gateDraftFrom(gate: GraphGate, graph: WorkflowGraph): GateDraft {
-  const isGlobal = gate.source === 'global';
   return {
-    requirement_id: isGlobal ? null : gate.requirement_id,
-    title: isGlobal ? 'Define workflow gate' : 'Edit gate',
+    requirement_id: gate.requirement_id,
+    title: 'Edit gate',
     outcome: outcomeOf(gate, graph),
     task_type: gate.task_type,
     field_name: gate.field_name,
@@ -103,8 +84,7 @@ export function gateDraftFrom(gate: GraphGate, graph: WorkflowGraph): GateDraft 
     message: gate.message ?? '',
     priority: 0,
     enabled: true,
-    is_override: !isGlobal && Boolean(gate.is_override),
-    takes_over_from_global: isGlobal,
+    is_override: Boolean(gate.is_override),
   };
 }
 
@@ -126,30 +106,12 @@ export function gateOverrideDraft(gate: GraphGate, graph: WorkflowGraph): GateDr
     title: 'Override for this workflow',
     severity: 'warn',
     is_override: true,
-    takes_over_from_global: false,
   };
 }
 
 function outcomeOf(gate: GraphGate, graph: WorkflowGraph): string {
   for (const edge of graph.edges) {
-    if (edge.gates.some(g => g.requirement_id === gate.requirement_id && g.source === gate.source)) return edge.outcome;
+    if (edge.gates.some(g => g.requirement_id === gate.requirement_id)) return edge.outcome;
   }
   return '';
-}
-
-/**
- * The sentence to show above the form, or null when nothing surprising happens.
- *
- * Only the replacement direction is stated here. The reverse — removing the last gate and
- * handing the outcome back to the global set — arrives through the preview as an introduced
- * `gate_from_global_fallback` finding, which carries the actual field names.
- */
-export function gateReplacementNotice(draft: GateDraft, graph: WorkflowGraph): string | null {
-  if (!draft.takes_over_from_global) return null;
-  const replaced = gatesForOutcome(graph, draft.outcome).filter(gate => gate.source === 'global');
-  if (replaced.length === 0) return null;
-  const fields = [...new Set(replaced.map(gate => gate.field_name))];
-  return `"${draft.outcome}" is currently gated by the shared global requirements `
-    + `(${fields.join(', ')}). Defining a gate here replaces all ${replaced.length} of them, `
-    + 'not just the one — the workflow set is used instead of the global set, never alongside it.';
 }

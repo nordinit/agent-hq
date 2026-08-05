@@ -3,11 +3,12 @@ import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import {
   createTransitionRequirement,
   deleteTransitionRequirement,
+  listTransitionRequirements,
   updateTransitionRequirement,
 } from './requirements';
 
 /**
- * A requirement write that names no scope must be refused.
+ * A requirement request that names no scope must be refused.
  *
  * With no sprint_id, project_id or sprint_type these calls used to fall through to the legacy
  * global `transition_requirements` table — no project, no tenant, and consulted as the fallback
@@ -15,8 +16,9 @@ import {
  * delete addressed a global row by an id the caller had taken from a scoped one, hitting an
  * unrelated row that happened to share it.
  *
- * These tests pin the refusal rather than the old behaviour, so a future refactor that
- * "helpfully" restores the fallthrough fails here instead of in production.
+ * Migration 15 dropped that table, so there is no longer anywhere unscoped for a request to
+ * land. The guard outlives it: these tests pin the refusal, so a future refactor that
+ * "helpfully" restores a fallthrough fails here instead of in production.
  */
 
 const VALID = {
@@ -52,6 +54,12 @@ describe('transition requirement scope guard', () => {
 
   test('refuses to delete a requirement with no scope', async () => {
     await expectScopeRefusal(() => deleteTransitionRequirement(getDb(), { id: 1 }));
+  });
+
+  test('refuses to list requirements with no scope', async () => {
+    // Reads were the last unscoped path: they returned the global table verbatim, so a caller
+    // that forgot its scope got a plausible-looking set belonging to no workflow at all.
+    await expectScopeRefusal(() => listTransitionRequirements(getDb(), {}));
   });
 
   test('validation still runs before the scope guard on create', async () => {

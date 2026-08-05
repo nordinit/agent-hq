@@ -3,9 +3,7 @@ import { test } from 'node:test';
 import {
   gateDraftFrom,
   gateOverrideDraft,
-  gateReplacementNotice,
   gatesForOutcome,
-  isOnGlobalFallback,
   newGateDraft,
   type GraphGate,
 } from './workflowGraphGates.ts';
@@ -13,7 +11,6 @@ import type { WorkflowGraph } from '@/lib/api';
 
 function gate(over: Partial<GraphGate> = {}): GraphGate {
   return {
-    source: 'workflow',
     requirement_id: 1,
     field_name: 'review_commit',
     requirement_type: 'required',
@@ -44,75 +41,25 @@ test('gates for an outcome are deduped across the edges that share it', () => {
   assert.equal(gatesForOutcome(graph, 'qa_pass').length, 1);
 });
 
-test('a workflow gate and a global gate with the same id are different gates', () => {
-  // The ids come from different tables and do collide in practice.
+test('every gate on an outcome belongs to this workflow', () => {
+  // There was a second source once — a global table consulted when this workflow's set for the
+  // outcome was empty — and its ids collided with these. Migration 15 dropped it, so
+  // requirement_id is unambiguous again and is the whole dedupe key.
   const graph = graphWith([{
     outcome: 'qa_pass',
-    gates: [gate({ requirement_id: 3, source: 'workflow' }), gate({ requirement_id: 3, source: 'global' })],
+    gates: [gate({ requirement_id: 3 }), gate({ requirement_id: 4 })],
   }]);
   assert.equal(gatesForOutcome(graph, 'qa_pass').length, 2);
 });
 
-test('an outcome gated only by global rows is on the fallback', () => {
-  const graph = graphWith([{ outcome: 'qa_pass', gates: [gate({ source: 'global' })] }]);
-  assert.equal(isOnGlobalFallback(graph, 'qa_pass'), true);
-});
-
-test('one workflow gate means the outcome is not on the fallback', () => {
-  const graph = graphWith([{ outcome: 'qa_pass', gates: [gate({ source: 'workflow' })] }]);
-  assert.equal(isOnGlobalFallback(graph, 'qa_pass'), false);
-});
-
-test('an ungated outcome is not on the fallback either', () => {
-  const graph = graphWith([{ outcome: 'qa_pass', gates: [] }]);
-  assert.equal(isOnGlobalFallback(graph, 'qa_pass'), false);
-});
-
-test('the replacement notice counts every global row, not just the one selected', () => {
-  // The whole point: replacing one visible gate silently drops the other three.
-  const graph = graphWith([{
-    outcome: 'live_verified',
-    gates: [
-      gate({ requirement_id: 1, source: 'global', field_name: 'status' }),
-      gate({ requirement_id: 2, source: 'global', field_name: 'deployed_commit' }),
-      gate({ requirement_id: 3, source: 'global', field_name: 'live_verified_by' }),
-      gate({ requirement_id: 4, source: 'global', field_name: 'live_verified_at' }),
-    ],
-  }]);
-  const notice = gateReplacementNotice(newGateDraft(graph, 'live_verified'), graph);
-  assert.match(notice ?? '', /replaces all 4 of them/);
-  assert.match(notice ?? '', /status, deployed_commit, live_verified_by, live_verified_at/);
-});
-
-test('no replacement notice when the outcome already has a workflow gate', () => {
-  const graph = graphWith([{ outcome: 'qa_pass', gates: [gate({ source: 'workflow' })] }]);
-  assert.equal(gateReplacementNotice(newGateDraft(graph, 'qa_pass'), graph), null);
-});
-
-test('no replacement notice for an ungated outcome', () => {
-  const graph = graphWith([{ outcome: 'qa_pass', gates: [] }]);
-  assert.equal(gateReplacementNotice(newGateDraft(graph, 'qa_pass'), graph), null);
-});
-
-test('selecting a global gate produces a create, not an edit', () => {
-  // A global row belongs to another table and every project; it cannot be edited from here.
-  const global = gate({ requirement_id: 12, source: 'global', field_name: 'review_branch' });
-  const graph = graphWith([{ outcome: 'completed_for_review', gates: [global] }]);
-  const draft = gateDraftFrom(global, graph);
-  assert.equal(draft.requirement_id, null);
-  assert.equal(draft.field_name, 'review_branch');
-  assert.equal(draft.outcome, 'completed_for_review');
-  assert.equal(draft.takes_over_from_global, true);
-});
-
-test('selecting a workflow gate produces an edit that keeps its identity', () => {
-  const own = gate({ requirement_id: 12, source: 'workflow', is_override: true, severity: 'warn' });
+test('selecting a gate produces an edit that keeps its identity', () => {
+  const own = gate({ requirement_id: 12, is_override: true, severity: 'warn' });
   const graph = graphWith([{ outcome: 'qa_pass', gates: [own] }]);
   const draft = gateDraftFrom(own, graph);
   assert.equal(draft.requirement_id, 12);
   assert.equal(draft.is_override, true);
   assert.equal(draft.severity, 'warn');
-  assert.equal(draft.takes_over_from_global, false);
+  assert.equal(draft.outcome, 'qa_pass');
 });
 
 test('an override draft is a create that keeps the identity and warns instead of blocking', () => {
@@ -130,18 +77,12 @@ test('an override draft is a create that keeps the identity and warns instead of
   assert.equal(draft.is_override, true);
 });
 
-test('overriding never claims to take over the global set', () => {
-  // An inherited row exists, so the outcome is not on the fallback by definition.
-  const inherited = gate({ requirement_id: 5, source: 'workflow' });
-  const graph = graphWith([{ outcome: 'qa_pass', gates: [inherited] }]);
-  const draft = gateOverrideDraft(inherited, graph);
-  assert.equal(draft.takes_over_from_global, false);
-  assert.equal(gateReplacementNotice(draft, graph), null);
-});
-
-test('a new gate on an outcome sitting on the fallback is flagged as a takeover', () => {
-  const graph = graphWith([{ outcome: 'qa_pass', gates: [gate({ source: 'global' })] }]);
-  assert.equal(newGateDraft(graph, 'qa_pass').takes_over_from_global, true);
+test('a new gate on an ungated outcome is an ordinary create', () => {
+  const graph = graphWith([{ outcome: 'qa_pass', gates: [] }]);
+  const draft = newGateDraft(graph, 'qa_pass');
+  assert.equal(draft.requirement_id, null);
+  assert.equal(draft.outcome, 'qa_pass');
+  assert.equal(draft.title, 'Add gate');
 });
 
 test('a new gate carries the task type lens it was created under', () => {

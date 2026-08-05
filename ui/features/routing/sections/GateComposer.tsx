@@ -5,17 +5,18 @@ import { api, type RoutingPreview, type WorkflowGraph } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { getTaskTypeLabel } from '@/lib/taskTypes';
 import { deleteConsequences, guardCreate, guardMutate, type GuardContext } from '@/lib/workflowGraphGuards';
-import { type GateDraft, gateReplacementNotice } from '@/lib/workflowGraphGates';
+import { type GateDraft } from '@/lib/workflowGraphGates';
 import { AlertTriangle, Check, ShieldAlert, X } from 'lucide-react';
 
 /**
  * Add, edit, override or remove a gate requirement on a transition.
  *
- * Same preview-then-commit contract as the transition and assignment composers, but gates
- * carry a consequence the others do not: gate resolution REPLACES rather than accumulates, at
- * two levels. Declaring the first workflow gate for an outcome drops the whole global set;
- * removing the last one brings it back. Both are stated before the operator commits, and both
- * also surface through the preview as introduced or resolved lint.
+ * Same preview-then-commit contract as the transition and assignment composers. Gates used to
+ * carry a consequence the others did not — declaring the first gate on an outcome dropped a
+ * whole set inherited from a global table, and removing the last one brought it back — which
+ * is why this composer led with a replacement notice. Migration 15 removed that fallback, so
+ * a gate now only ever affects the outcome it names, and the preview's introduced/resolved
+ * lint covers what remains.
  *
  * Note there is no `scope_kind` input for requirements the way there is for rules — scope is
  * derived from sprint_id/project_id/sprint_type alone. project_id and sprint_type must always
@@ -61,8 +62,6 @@ export default function GateComposer({
     ? guardCreate(context)
     : guardMutate(intent === 'delete' ? 'delete' : 'update', { is_override: form.is_override }, context);
 
-  const replacement = gateReplacementNotice(form, graph);
-
   const update = <K extends keyof GateDraft>(key: K, value: GateDraft[K]) => {
     setForm(current => ({ ...current, [key]: value }));
     setPreview(null);
@@ -70,7 +69,8 @@ export default function GateComposer({
 
   const payload = useCallback((): Record<string, unknown> => ({
     ...(form.requirement_id != null ? { id: form.requirement_id } : {}),
-    // Always sent. Omitting either one drops the write into the global table.
+    // Always sent. A requirement write with neither is rejected: there is no unscoped place
+    // for one to land.
     project_id: context.projectId,
     sprint_type: graph.scope.workflow_type,
     // Scope follows the ROW on edit and the selection on create, as elsewhere on this canvas.
@@ -147,16 +147,6 @@ export default function GateComposer({
           <X className="h-4 w-4" />
         </button>
       </div>
-
-      {/* The replacement notice is the whole point of this composer. It is not a guard — the
-          action is legitimate — it is the consequence nothing else in the app states. */}
-      {replacement && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-950/25 p-2.5 text-xs text-amber-200">
-          <p className="flex items-start gap-1.5">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{replacement}
-          </p>
-        </div>
-      )}
 
       {!guard.allow && (
         <div className="rounded-lg border border-red-500/40 bg-red-950/30 p-2.5 text-xs text-red-200">

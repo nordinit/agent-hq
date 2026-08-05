@@ -1608,12 +1608,6 @@ export interface WorkflowGraphNode {
 }
 
 export interface WorkflowGraphGate {
-  /**
-   * Which table the gate came from. 'global' rows live in the shared `transition_requirements`
-   * table and apply only because this workflow defines no gate of its own for the outcome —
-   * they cannot be edited from a workflow canvas.
-   */
-  source: 'workflow' | 'global';
   requirement_id: number;
   field_name: string;
   requirement_type: string;

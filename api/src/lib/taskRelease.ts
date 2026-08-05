@@ -126,34 +126,20 @@ async function loadTransitionRequirements(
   sprintId?: number | null,
   taskType?: string | null,
 ): Promise<TransitionRequirementRow[]> {
+  // Workflow-scoped rows are the whole answer. There is deliberately no fallback: a global
+  // `transition_requirements` table used to back this up, and because the fallback replaced
+  // rather than accumulated, disabling a workflow's last gate for an outcome handed that
+  // outcome to block-severity rows nobody had configured. Migration 15 moved its contents to
+  // the dev workflow default and dropped it. An outcome with no rows here is now ungated,
+  // which is what the configuration says.
   const sprintRows = await loadSprintTaskTransitionRequirements(db, sprintId ?? null, outcome, taskType);
-  if (sprintRows.length > 0) {
-    return sprintRows.map((row) => ({
-      field_name: row.field_name,
-      requirement_type: row.requirement_type,
-      match_field: row.match_field,
-      severity: row.severity,
-      message: row.message,
-    }));
-  }
-
-  if (taskType) {
-    const typeReqs = await db.all(`
-      SELECT field_name, requirement_type, match_field, severity, message
-      FROM transition_requirements
-      WHERE task_type = ? AND outcome = ? AND enabled = 1
-      ORDER BY priority DESC, id ASC
-    `, taskType, outcome) as TransitionRequirementRow[];
-
-    if (typeReqs.length > 0) return typeReqs;
-  }
-
-  return await db.all(`
-    SELECT field_name, requirement_type, match_field, severity, message
-    FROM transition_requirements
-    WHERE task_type IS NULL AND outcome = ? AND enabled = 1
-    ORDER BY priority DESC, id ASC
-  `, outcome) as TransitionRequirementRow[];
+  return sprintRows.map((row) => ({
+    field_name: row.field_name,
+    requirement_type: row.requirement_type,
+    match_field: row.match_field,
+    severity: row.severity,
+    message: row.message,
+  }));
 }
 
 async function statusRequiresQaEvidence(
@@ -281,9 +267,12 @@ export interface ReleaseGateResult {
 /**
  * Evaluate transition requirements for a given outcome.
  *
- * Resolution order for each requirement:
- *  1. transition_requirements WHERE task_type = ? (highest priority first)
- *  2. transition_requirements WHERE task_type IS NULL (defaults)
+ * Resolution order for each requirement, all within this workflow's scope:
+ *  1. sprint_task_transition_requirements WHERE task_type = ? (highest priority first)
+ *  2. sprint_task_transition_requirements WHERE task_type IS NULL (defaults)
+ *
+ * There is no step 3. A global table used to sit there as a fallback; migration 15 moved it
+ * to the dev workflow default and dropped it.
  *
  * When task-type-specific requirements exist for an outcome, they REPLACE
  * the defaults for that outcome (they are overrides, not additions).

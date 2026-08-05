@@ -67,9 +67,20 @@ afterEach(async () => {
 async function createGateDb(): Promise<Db> {
   const dbRaw = new Database(':memory:');
     const db = new SqliteAdapter(dbRaw);
+  // Gate rows only exist inside a workflow scope — the global `transition_requirements` table
+  // this used to write to was dropped by migration 15 — so the fixture needs a workflow to
+  // hang them on.
   await db.exec(`
-    CREATE TABLE transition_requirements (
+    CREATE TABLE sprints (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER,
+      sprint_type TEXT
+    );
+    CREATE TABLE sprint_task_transition_requirements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sprint_id INTEGER,
+      project_id INTEGER,
+      sprint_type TEXT,
       task_type TEXT,
       outcome TEXT NOT NULL,
       field_name TEXT NOT NULL,
@@ -78,8 +89,11 @@ async function createGateDb(): Promise<Db> {
       severity TEXT NOT NULL DEFAULT 'block',
       message TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0
+      priority INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    INSERT INTO sprints (id, project_id, sprint_type) VALUES (1, 1, 'generic');
   `);
   extraDbs.push(db);
   return db;
@@ -173,14 +187,16 @@ describe('dispatch contract template renderer', () => {
   it('renders configured gate fields from the template placeholders', async () => {
     const db = await createGateDb();
     await db.run(`
-      INSERT INTO transition_requirements (outcome, field_name, requirement_type, severity, message)
-      VALUES ('qa_pass', 'qa_verified_commit', 'required', 'block', 'qa_pass requires qa_verified_commit')
+      INSERT INTO sprint_task_transition_requirements
+        (sprint_id, project_id, sprint_type, outcome, field_name, requirement_type, severity, message)
+      VALUES (1, 1, 'generic', 'qa_pass', 'qa_verified_commit', 'required', 'block', 'qa_pass requires qa_verified_commit')
     `);
 
     const contract = await buildContractInstructions(buildContext({
       taskStatus: 'review',
       transportMode: 'local',
       sprintType: 'generic',
+      sprintId: 1,
       db,
     }));
 

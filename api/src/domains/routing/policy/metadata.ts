@@ -478,6 +478,11 @@ export function policyTransitionsForSprintType(sprintType: string | null | undef
 
 export function devWorkflowRequirements(): PolicyRequirementSeed[] {
   const rows: PolicyRequirementSeed[] = [
+    // approval_blocked came from the old global `transition_requirements` table, which every
+    // workflow of every project read as a fallback. Migration 15 moved that table's contents
+    // here, where they had always belonged: the other fourteen rows were already this list
+    // verbatim, and this was the only one missing from it.
+    { task_type: null, outcome: 'approval_blocked', field_name: 'review_branch', requirement_type: 'required', match_field: null, severity: 'block', message: 'approval_blocked requires review_branch', enabled: 1, priority: 0 },
     { task_type: null, outcome: 'completed_for_review', field_name: 'review_branch', requirement_type: 'required', match_field: null, severity: 'block', message: 'completed_for_review requires review_branch', enabled: 1, priority: 0 },
     { task_type: null, outcome: 'completed_for_review', field_name: 'review_commit', requirement_type: 'required', match_field: null, severity: 'block', message: 'completed_for_review requires review_commit', enabled: 1, priority: 0 },
     { task_type: null, outcome: 'qa_pass', field_name: 'status', requirement_type: 'from_status', match_field: 'review', severity: 'block', message: 'qa_pass requires task status review', enabled: 1, priority: 0 },

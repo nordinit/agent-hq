@@ -189,8 +189,9 @@ Key fields: id, title, description, status, priority, agent_id, project_id, spri
 ### 8.4 Routing tables
 - `sprint_task_transitions` — primary workflow transitions (sprint, task_type, from_status, outcome, to_status)
 - `sprint_task_routing_rules` — primary task→agent routing (sprint, task_type, status, agent, priority)
-- `sprint_task_transition_requirements` — sprint-specific evidence gates per outcome
-- `transition_requirements` — global fallback evidence gates per outcome
+- `sprint_task_transition_requirements` — evidence gates per outcome, scoped to a workflow type
+  or a single workflow. The only place gates live: a global `transition_requirements` fallback
+  was moved into the dev workflow default and dropped by migration 15.
 - `routing_config` / `lifecycle_rules` — legacy configuration tables retained for compatibility and migration; runtime task outcome routing must use explicit `sprint_task_transitions`
 - `system_policies` — stall detection, auto-retry
 

@@ -2,7 +2,6 @@ import {
   buildWorkflowGraph,
   effectiveEventSources,
   type GraphEventMappingInput,
-  type GraphGlobalRequirementInput,
   type GraphRequirementInput,
   type GraphRuleInput,
   type GraphStatusInput,
@@ -48,19 +47,6 @@ function requirement(id: number, outcome: string, over: Partial<GraphRequirement
   };
 }
 
-function globalRequirement(id: number, outcome: string, over: Partial<GraphGlobalRequirementInput> = {}): GraphGlobalRequirementInput {
-  return {
-    id,
-    outcome,
-    task_type: null,
-    field_name: 'review_commit',
-    requirement_type: 'required',
-    severity: 'block',
-    message: '',
-    ...over,
-  };
-}
-
 function eventMapping(id: number, over: Partial<GraphEventMappingInput> = {}): GraphEventMappingInput {
   return {
     id,
@@ -82,7 +68,6 @@ function build(over: {
   transitions?: GraphTransitionInput[];
   rules?: GraphRuleInput[];
   requirements?: GraphRequirementInput[];
-  globalRequirements?: GraphGlobalRequirementInput[];
   agents?: Array<{ id: number; name: string; enabled: boolean }>;
   eventMappings?: GraphEventMappingInput[];
 } = {}) {
@@ -92,7 +77,6 @@ function build(over: {
     transitions: over.transitions ?? [],
     rules: over.rules ?? [],
     requirements: over.requirements ?? [],
-    globalRequirements: over.globalRequirements ?? [],
     agents: over.agents ?? [{ id: 1, name: 'Piper', enabled: true }],
     eventMappings: over.eventMappings ?? [],
   });
@@ -740,92 +724,42 @@ describe('buildWorkflowGraph', () => {
   });
 });
 
-// ── Global gate fallback ──────────────────────────────────────────────────────
+// ── No global gate fallback ───────────────────────────────────────────────────
 //
-// loadTransitionRequirements REPLACES rather than accumulates: an empty workflow-scoped set
-// hands the outcome to the global table. Every enabled global row in production is severity
-// 'block', so this is the difference between "no gate" and "the strictest gate there is".
+// A global `transition_requirements` table used to apply whenever the workflow-scoped set for
+// an outcome came back empty, so an ungated outcome and a de-gated one were indistinguishable
+// and the latter silently enforced block-severity rows from another project's contract.
+// Migration 15 moved it into the dev workflow default and dropped it. These tests exist to
+// keep a fallback from growing back: what the workflow says is now the whole answer.
 
-test('an outcome with no workflow gate falls back to the global table', () => {
+test('an outcome with no workflow gate is ungated', () => {
   const graph = build({
     statuses: [status('review'), status('done')],
     transitions: [transition(1, 'review', 'done', 'qa_pass')],
-    globalRequirements: [globalRequirement(9, 'qa_pass', { field_name: 'qa_verified_commit' })],
   });
-  const gates = graph.edges[0].gates;
-  expect(gates.length).toBe(1);
-  expect(gates[0].source).toBe('global');
-  expect(gates[0].field_name).toBe('qa_verified_commit');
-  expect(gates[0].scope_kind).toBe('global_default');
-  expect(codes(graph).includes('gate_from_global_fallback')).toBe(true);
+  expect(graph.edges[0].gates).toEqual([]);
 });
 
-test('one surviving workflow gate short-circuits the global table entirely', () => {
-  // This is why disabling gates one at a time looks safe right up until the last one.
-  const graph = build({
-    statuses: [status('review'), status('done')],
-    transitions: [transition(1, 'review', 'done', 'qa_pass')],
-    requirements: [requirement(1, 'qa_pass', { field_name: 'pr_url' })],
-    globalRequirements: [globalRequirement(9, 'qa_pass', { field_name: 'qa_verified_commit' })],
-  });
-  const gates = graph.edges[0].gates;
-  expect(gates.length).toBe(1);
-  expect(gates[0].source).toBe('workflow');
-  expect(gates[0].field_name).toBe('pr_url');
-  expect(codes(graph).includes('gate_from_global_fallback')).toBe(false);
-});
-
-test('disabling the last workflow gate hands the outcome to the global table', () => {
-  // The trap in full: the operator disables a gate to unblock work and gets a stricter one.
+test('disabling the last workflow gate leaves the outcome ungated, not gated harder', () => {
+  // The trap this replaced: the operator disabled a gate to unblock work and got a stricter
+  // one. Now the disabled row is still listed, and nothing runs.
   const graph = build({
     statuses: [status('review'), status('done')],
     transitions: [transition(1, 'review', 'done', 'completed_for_review')],
     requirements: [requirement(1, 'completed_for_review', { enabled: false, severity: 'warn' })],
-    globalRequirements: [
-      globalRequirement(9, 'completed_for_review', { field_name: 'review_branch' }),
-      globalRequirement(10, 'completed_for_review', { field_name: 'review_commit' }),
-    ],
   });
-  const gates = graph.edges[0].gates;
-  expect(gates.length).toBe(2);
-  expect(gates.every(gate => gate.source === 'global' && gate.severity === 'block')).toBe(true);
-  const finding = graph.lint.find(f => f.code === 'gate_from_global_fallback');
-  expect(finding).toBeDefined();
-  expect(finding?.message).toMatch(/review_branch, review_commit/);
+  expect(graph.edges[0].gates.filter(gate => gate.enabled)).toEqual([]);
+  expect(codes(graph)).not.toContain('gate_from_global_fallback');
 });
 
-test('a task-type-specific global row beats the all-types global row', () => {
+test('an outcome whose only gates are task-type scoped is ungated for other types', () => {
+  // 'backend' matches no workflow gate. There is nowhere else to look.
   const graph = build({
     statuses: [status('review'), status('done')],
-    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'qa' })],
-    globalRequirements: [
-      globalRequirement(9, 'qa_pass', { task_type: null, field_name: 'generic_field' }),
-      globalRequirement(10, 'qa_pass', { task_type: 'qa', field_name: 'qa_field' }),
-    ],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'backend' })],
+    requirements: [requirement(1, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' })],
   });
-  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['qa_field']);
-});
-
-test('an outcome with no global row and no workflow gate stays ungated', () => {
-  const graph = build({
-    statuses: [status('review'), status('done')],
-    transitions: [transition(1, 'review', 'done', 'looks_good')],
-    globalRequirements: [globalRequirement(9, 'qa_pass')],
-  });
-  expect(graph.edges[0].gates.length).toBe(0);
-  expect(codes(graph).includes('gate_from_global_fallback')).toBe(false);
-});
-
-test('global fallback is reported once per outcome, not once per edge', () => {
-  const graph = build({
-    statuses: [status('review'), status('done'), status('failed')],
-    transitions: [
-      transition(1, 'review', 'done', 'qa_pass'),
-      transition(2, 'review', 'failed', 'qa_pass'),
-    ],
-    globalRequirements: [globalRequirement(9, 'qa_pass')],
-  });
-  expect(codes(graph).filter(code => code === 'gate_from_global_fallback').length).toBe(1);
+  expect(graph.edges[0].gates).toEqual([]);
 });
 
 test('task-type gates replacing the all-types set is reported', () => {
@@ -864,22 +798,19 @@ test('a disabled row does not count toward the task-type replacement warning', (
 });
 
 test('outcome-scoped findings carry their outcome so the preview diff can tell them apart', () => {
-  // preview.ts keys findings by code + node + edge + outcome. Several outcomes raise
-  // gate_from_global_fallback at once, so without the anchor they collapse to a single key and
-  // a change that fixes exactly one of them is reported as fixing none.
+  // preview.ts keys findings by code + node + edge + outcome. Several outcomes can raise the
+  // same code at once, so without the anchor they collapse to a single key and a change that
+  // fixes exactly one of them is reported as fixing none.
   const graph = build({
-    statuses: [status('review'), status('done'), status('live')],
-    transitions: [
-      transition(1, 'review', 'done', 'qa_pass'),
-      transition(2, 'done', 'live', 'live_verified'),
-    ],
-    globalRequirements: [
-      globalRequirement(9, 'qa_pass'),
-      globalRequirement(10, 'live_verified'),
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'looks_good')],
+    requirements: [
+      requirement(1, 'qa_pass', { field_name: 'qa_verified_commit' }),
+      requirement(2, 'live_verified', { field_name: 'deployed_commit' }),
     ],
   });
-  const fallbacks = graph.lint.filter(f => f.code === 'gate_from_global_fallback');
-  expect(fallbacks.map(f => f.outcome).sort()).toEqual(['live_verified', 'qa_pass']);
+  const orphaned = graph.lint.filter(f => f.code === 'gate_without_transition');
+  expect(orphaned.map(f => f.outcome).sort()).toEqual(['live_verified', 'qa_pass']);
 });
 
 test('an unused-gate finding is anchored to its outcome too', () => {
@@ -958,7 +889,6 @@ test('the task-type lens resolves gates for an otherwise all-types edge', () => 
       requirement(1, 'qa_pass', { task_type: null, field_name: 'pr_url' }),
       requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' }),
     ],
-    globalRequirements: [],
     agents: [],
     eventMappings: [],
   });
@@ -1006,14 +936,3 @@ test('a task-type set that is entirely superseded falls back to the all-types se
   expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['pr_url']);
 });
 
-test('an outcome whose only gates are task-type scoped falls through to global for other types', () => {
-  // 'backend' matches no workflow gate, so the workflow set is empty and the global table wins.
-  const graph = build({
-    statuses: [status('review'), status('done')],
-    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'backend' })],
-    requirements: [requirement(1, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' })],
-    globalRequirements: [globalRequirement(9, 'qa_pass', { field_name: 'review_commit' })],
-  });
-  expect(graph.edges[0].gates.map(g => [g.source, g.field_name]))
-    .toEqual([['global', 'review_commit']]);
-});

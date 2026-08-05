@@ -333,24 +333,9 @@ export async function listSprintTaskTransitionRequirements(
     return await db.all(query, ...params) as SprintTaskTransitionRequirementRow[];
   }
 
-  if (!await tableExists(db, 'transition_requirements')) return [];
-  let query = `
-    SELECT id, NULL AS sprint_id, task_type, outcome, field_name, requirement_type, match_field,
-           severity, message, enabled, priority, created_at, updated_at
-    FROM transition_requirements
-    WHERE 1 = 1
-  `;
-  const params: unknown[] = [];
-  if (taskType) {
-    query += ` AND (task_type = ? OR task_type IS NULL)`;
-    params.push(taskType);
-  }
-  if (outcome) {
-    query += ` AND outcome = ?`;
-    params.push(outcome);
-  }
-  query += ` ORDER BY outcome ASC, task_type IS NULL ASC, priority DESC, id ASC`;
-  return await db.all(query, ...params) as SprintTaskTransitionRequirementRow[];
+  // No sprint id means no scope, and gate requirements only exist inside one. This used to
+  // list the global `transition_requirements` table instead, which migration 15 dropped.
+  return [];
 }
 
 export async function listSprintTaskRoutingRules(

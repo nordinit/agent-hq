@@ -5081,7 +5081,9 @@ async function migrateAtlasToDedicatedAgent(): Promise<void> {
 
 // ── Task #612: Data-driven lifecycle rules ────────────────────────────────────
 // lifecycle_rules replaces the hardcoded canonicalOutcomeRoute map.
-// transition_requirements replaces the hardcoded requireReleaseGate checks.
+// Gate requirements live in sprint_task_transition_requirements, always inside a workflow
+// scope. A global `transition_requirements` twin used to sit here as their fallback; migration
+// 15 moved it into the dev workflow default and dropped it.
 export function ensureLifecycleRulesTable(): void {
   const db = getRawDb();
 
@@ -5101,27 +5103,6 @@ export function ensureLifecycleRulesTable(): void {
       ON lifecycle_rules(task_type, from_status, outcome);
     CREATE INDEX IF NOT EXISTS idx_lifecycle_rules_type
       ON lifecycle_rules(task_type);
-
-    CREATE TABLE IF NOT EXISTS transition_requirements (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_type        TEXT,
-      outcome          TEXT NOT NULL,
-      field_name       TEXT NOT NULL,
-      requirement_type TEXT NOT NULL DEFAULT 'required'
-                       CHECK(requirement_type IN ('required','match','from_status')),
-      match_field      TEXT,
-      severity         TEXT NOT NULL DEFAULT 'block'
-                       CHECK(severity IN ('block','warn')),
-      message          TEXT NOT NULL DEFAULT '',
-      enabled          INTEGER NOT NULL DEFAULT 1,
-      priority         INTEGER NOT NULL DEFAULT 0,
-      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_transition_req_lookup
-      ON transition_requirements(task_type, outcome);
-    CREATE INDEX IF NOT EXISTS idx_transition_req_type
-      ON transition_requirements(task_type);
   `);
 
   // Seed lifecycle_rules from the hardcoded canonicalOutcomeRoute map (idempotent)
@@ -5197,51 +5178,94 @@ export function ensureLifecycleRulesTable(): void {
     console.error('[schema] Task #743: failed to drop legacy lifecycle_rules.lane column:', err);
   }
 
-  // Seed transition_requirements from the hardcoded requireReleaseGate checks (idempotent)
-  const existingReqs = (db.prepare(`SELECT COUNT(*) as n FROM transition_requirements`).get() as { n: number }).n;
-  if (existingReqs === 0) {
-    const insertReq = db.prepare(`
-      INSERT INTO transition_requirements (task_type, outcome, field_name, requirement_type, match_field, severity, message, priority)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+  // Migration 15: move the global gate requirements to the dev workflow, then drop the table.
+  //
+  // `transition_requirements` had no project, workflow or tenant. Every workflow of every
+  // project read it as a fallback whenever its own set for an outcome was empty, and because
+  // the fallback REPLACED rather than accumulated, disabling a workflow's last gate handed
+  // that outcome to block-severity rows nobody had configured. Mirrors
+  // db/pg-migrations/15-drop-global-transition-requirements.sql — see it for the two guards,
+  // which are the same here: never touch an outcome the workflow already answers at workflow
+  // level, and never insert where some workflow resolves a non-empty set that the global rows
+  // are not already a subset of.
+  try {
+    const hasGlobalRequirements = db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='transition_requirements'`
+    ).get() as { name?: string } | undefined;
 
-    const seedReqsTx = db.transaction(() => {
-      // completed_for_review requirements
-      insertReq.run(null, 'completed_for_review', 'review_branch', 'required', null, 'block', 'completed_for_review requires review_branch', 0);
-      insertReq.run(null, 'completed_for_review', 'review_commit', 'required', null, 'block', 'completed_for_review requires review_commit', 0);
+    if (hasGlobalRequirements) {
+      const typedRows = (db.prepare(
+        `SELECT COUNT(*) AS n FROM transition_requirements WHERE enabled = 1 AND task_type IS NOT NULL`
+      ).get() as { n: number }).n;
+      if (typedRows > 0) {
+        console.warn(
+          `[schema] Migration 15: ${typedRows} task-typed global requirement(s) present. `
+          + 'Only task_type IS NULL rows are moved to the dev workflow; the rest are dropped.'
+        );
+      }
 
-      // qa_pass requirements
-      insertReq.run(null, 'qa_pass', 'status', 'from_status', 'review', 'block', 'qa_pass requires task status review', 0);
-      insertReq.run(null, 'qa_pass', 'qa_verified_commit', 'required', null, 'block', 'qa_pass requires qa_verified_commit', 0);
-      insertReq.run(null, 'qa_pass', 'review_commit', 'required', null, 'block', 'qa_pass requires review_commit', 0);
-      insertReq.run(null, 'qa_pass', 'qa_verified_commit', 'match', 'review_commit', 'block', 'qa_pass requires qa_verified_commit to match review_commit', 0);
+      db.exec(`
+        INSERT INTO sprint_task_transition_requirements (
+          sprint_id, project_id, sprint_type, task_type, outcome, field_name,
+          requirement_type, match_field, severity, message, enabled, priority,
+          created_at, updated_at
+        )
+        SELECT
+          NULL, w.project_id, 'dev', NULL, g.outcome, g.field_name,
+          g.requirement_type, g.match_field, g.severity, g.message, 1, g.priority,
+          datetime('now'), datetime('now')
+        FROM (SELECT DISTINCT project_id FROM sprints WHERE sprint_type = 'dev') w
+        CROSS JOIN (
+          SELECT outcome, field_name, requirement_type, match_field,
+                 MIN(severity) AS severity, MIN(message) AS message, MIN(priority) AS priority
+          FROM transition_requirements
+          WHERE enabled = 1 AND task_type IS NULL
+          GROUP BY outcome, field_name, requirement_type, COALESCE(match_field, '')
+        ) g
+        WHERE NOT EXISTS (
+          SELECT 1 FROM sprint_task_transition_requirements existing
+          WHERE existing.project_id = w.project_id AND existing.sprint_type = 'dev'
+            AND existing.sprint_id IS NULL AND existing.task_type IS NULL
+            AND existing.enabled = 1 AND existing.outcome = g.outcome
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM sprints s
+          WHERE s.project_id = w.project_id AND s.sprint_type = 'dev'
+            AND EXISTS (
+              SELECT 1 FROM sprint_task_transition_requirements cur
+              WHERE cur.project_id = s.project_id AND cur.sprint_type = 'dev'
+                AND (cur.sprint_id = s.id OR cur.sprint_id IS NULL)
+                AND cur.task_type IS NULL AND cur.enabled = 1 AND cur.outcome = g.outcome
+            )
+            AND EXISTS (
+              SELECT 1 FROM transition_requirements missing
+              WHERE missing.enabled = 1 AND missing.task_type IS NULL
+                AND missing.outcome = g.outcome
+                AND NOT EXISTS (
+                  SELECT 1 FROM sprint_task_transition_requirements have
+                  WHERE have.project_id = s.project_id AND have.sprint_type = 'dev'
+                    AND (have.sprint_id = s.id OR have.sprint_id IS NULL)
+                    AND have.task_type IS NULL AND have.enabled = 1
+                    AND have.outcome = missing.outcome
+                    AND have.field_name = missing.field_name
+                    AND have.requirement_type = missing.requirement_type
+                    AND COALESCE(have.match_field, '') = COALESCE(missing.match_field, '')
+                )
+            )
+        );
 
-      // deployed_live requirements
-      insertReq.run(null, 'deployed_live', 'status', 'from_status', 'ready_to_merge', 'block', 'deployed_live requires task status ready_to_merge', 0);
-      insertReq.run(null, 'deployed_live', 'merged_commit|deployed_commit', 'required', null, 'block', 'deployed_live requires merged_commit or deployed_commit', 0);
-      insertReq.run(null, 'deployed_live', 'deploy_target', 'required', null, 'block', 'deployed_live requires deploy_target', 0);
-      insertReq.run(null, 'deployed_live', 'deployed_at', 'required', null, 'block', 'deployed_live requires deployed_at', 0);
-
-      // live_verified requirements
-      insertReq.run(null, 'live_verified', 'status', 'from_status', 'deployed', 'block', 'live_verified requires task status deployed', 0);
-      insertReq.run(null, 'live_verified', 'deployed_commit', 'required', null, 'block', 'live_verified requires deployed_commit', 0);
-      insertReq.run(null, 'live_verified', 'live_verified_by', 'required', null, 'block', 'live_verified requires live_verified_by', 0);
-      insertReq.run(null, 'live_verified', 'live_verified_at', 'required', null, 'block', 'live_verified requires live_verified_at', 0);
-
-    });
-    seedReqsTx();
-    console.log('[schema] Seeded transition_requirements from requireReleaseGate defaults');
+        DROP INDEX IF EXISTS idx_transition_req_lookup;
+        DROP INDEX IF EXISTS idx_transition_req_type;
+        DROP TABLE transition_requirements;
+      `);
+      console.log('[schema] Migration 15: moved global gate requirements to the dev workflow and dropped the table');
+    }
+  } catch (err) {
+    console.error('[schema] Migration 15: failed to drop global transition_requirements:', err);
   }
 
   // Backfill: ensure deployed_live can be satisfied by either merged_commit or deployed_commit.
   try {
-    db.prepare(`
-      UPDATE transition_requirements
-      SET field_name = 'merged_commit|deployed_commit'
-      WHERE outcome = 'deployed_live'
-        AND field_name = 'merged_commit'
-        AND message LIKE '%or deployed_commit%'
-    `).run();
     db.prepare(`
       UPDATE sprint_task_transition_requirements
       SET field_name = 'merged_commit|deployed_commit'
@@ -5249,19 +5273,6 @@ export function ensureLifecycleRulesTable(): void {
         AND field_name = 'merged_commit'
         AND message LIKE '%or deployed_commit%'
     `).run();
-
-    const hasMergedCommitReq = db.prepare(`
-      SELECT id FROM transition_requirements
-      WHERE task_type IS NULL AND outcome = 'deployed_live' AND field_name = 'merged_commit|deployed_commit'
-      LIMIT 1
-    `).get();
-    if (!hasMergedCommitReq) {
-      db.prepare(`
-        INSERT INTO transition_requirements (task_type, outcome, field_name, requirement_type, match_field, severity, message, priority)
-        VALUES (NULL, 'deployed_live', 'merged_commit|deployed_commit', 'required', NULL, 'block', 'deployed_live requires merged_commit or deployed_commit', 0)
-      `).run();
-      console.log('[schema] Backfilled: deployed_live merged/deployed commit requirement');
-    }
   } catch { /* table may not exist yet */ }
 
   // Backfill (task #451): Dev deploy queue workflow statuses.
@@ -5490,7 +5501,6 @@ export function ensureLifecycleRulesTable(): void {
   // Backfill cleanup (task #528): remove legacy approved_for_merge visible workflow semantics.
   try {
     db.prepare(`DELETE FROM lifecycle_rules WHERE outcome = 'approved_for_merge'`).run();
-    db.prepare(`DELETE FROM transition_requirements WHERE outcome = 'approved_for_merge'`).run();
     db.prepare(`DELETE FROM sprint_task_transitions WHERE outcome = 'approved_for_merge'`).run();
     db.prepare(`DELETE FROM sprint_task_transition_requirements WHERE outcome = 'approved_for_merge'`).run();
   } catch (err) {

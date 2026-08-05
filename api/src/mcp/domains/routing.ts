@@ -86,12 +86,12 @@ export function registerRoutingTools(ctx: McpDomainContext) {
   const previewOperationSchema = z.object({
     entity: z.enum(['transition', 'rule', 'requirement']).describe('Which kind of row the operation touches'),
     action: z.enum(['create', 'update', 'delete']).describe('What the operation does to it'),
-    payload: z.record(z.string(), z.unknown()).describe('The same body the corresponding write endpoint takes, including its own project_id/sprint_type/sprint_id scope. Scope is NOT inherited from the envelope: a payload without it targets the shared global requirements table'),
+    payload: z.record(z.string(), z.unknown()).describe('The same body the corresponding write endpoint takes, including its own project_id/sprint_type/sprint_id scope. Scope is NOT inherited from the envelope: a payload without it is rejected'),
   });
 
   registerTool(
     ['agent_hq_preview_routing_change', 'atlas_preview_routing_change'],
-    'Cost a routing config change before making it. Applies the real mutations inside a transaction that never commits, then reports rows written per table, how many workflows the change reaches, and the lint findings it introduces or resolves. Use it before every create, update or delete of a transition, assignment rule or gate requirement. The lint delta is the reason it exists: gate resolution replaces rather than accumulates, so removing the last gate on an outcome hands that outcome to the shared global requirements — all of them severity block — and this is the only place that shows it before the change lands. Measured row counts also catch the seeding side effect, where the first write to an unseeded workflow materialises its whole starter policy. Requires workflow.edit_routing_config.',
+    'Cost a routing config change before making it. Applies the real mutations inside a transaction that never commits, then reports rows written per table, how many workflows the change reaches, and the lint findings it introduces or resolves. Use it before every create, update or delete of a transition, assignment rule or gate requirement. The lint delta is the reason it exists: gate resolution replaces rather than accumulates, so a task-type gate substitutes the whole all-types set for that type instead of adding to it, and this is the only place that shows it before the change lands. Measured row counts also catch the seeding side effect, where the first write to an unseeded workflow materialises its whole starter policy. Requires workflow.edit_routing_config.',
     {
       ...tenantSelectorSchema,
       project_id: z.number().int().positive().optional().describe('Project scope for the change'),

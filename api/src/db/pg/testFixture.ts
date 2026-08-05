@@ -65,6 +65,7 @@ const APPLIED_MIGRATIONS = [
   '12-drop-dead-workflow-template-model.sql',
   '13-drop-sprints-workflow-template-key.sql',
   '14-routing-config-audit-log.sql',
+  '15-drop-global-transition-requirements.sql',
 ];
 
 function baselineFiles(): string[] {

@@ -67,52 +67,29 @@ export async function listTransitionRequirements(
     };
   }
 
-  let query = `SELECT * FROM transition_requirements`;
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-
-  if (taskType) {
-    conditions.push(`(task_type = ? OR task_type IS NULL)`);
-    params.push(String(taskType));
-  }
-  if (outcomeFilter) {
-    conditions.push(`outcome = ?`);
-    params.push(String(outcomeFilter));
-  }
-
-  if (conditions.length > 0) {
-    query += ` WHERE ${conditions.join(' AND ')}`;
-  }
-
-  query += ` ORDER BY task_type NULLS LAST, outcome, priority DESC, id ASC`;
-
-  return { transition_requirements: await db.all(query, ...params) };
+  requireRequirementScope(input, 'list');
 }
 
 /**
- * Refuse a requirement write that names no scope.
+ * Refuse a requirement request that names no scope.
  *
- * With no sprint_id, project_id or sprint_type these functions fall through to the legacy
- * global `transition_requirements` table — a table with no project and no tenant, consulted as
- * the fallback for EVERY workflow in every project. Reaching it by omission is never what the
- * caller meant:
+ * Every gate requirement belongs to a workflow type or a single workflow; there is no
+ * scope-less place to put one, and no scope-less set to read. There used to be: a global
+ * `transition_requirements` table with no project and no tenant, consulted as the fallback for
+ * EVERY workflow in every project, which an omitted scope silently addressed. Migration 15
+ * moved its rows to the dev workflow default and dropped it.
  *
- *   * a create silently gates every project at once, escaping project scoping entirely;
- *   * an update or delete addresses a GLOBAL row by an id the caller almost certainly took
- *     from a scoped one, so it edits or destroys an unrelated row that happens to share it.
- *
- * The MCP layer already rejects unscoped requests for non-admin keys (lib/mcpApiAuth). This
- * closes the same gap for admin keys, the REST API and the UI. The global rows are seeded
- * (db/schema.ts) and are deliberately not managed through this endpoint.
+ * The guard outlives the table. An unscoped request is a caller that has lost track of which
+ * workflow it is configuring, and the ids it is passing came from somewhere — most likely a
+ * scoped row, whose id means something different here.
  */
 function requireRequirementScope(
   input: { sprint_id?: unknown; project_id?: unknown; sprint_type?: unknown },
-  action: 'create' | 'update' | 'delete',
+  action: 'create' | 'update' | 'delete' | 'list',
 ): never {
   throw withStatus(
-    `Refusing to ${action} a transition requirement with no scope. `
-    + 'Send project_id and sprint_type for a workflow-type default, or sprint_id for a workflow override. '
-    + 'Without either this would target the shared global requirements table, which applies to every project.',
+    `Refusing to ${action} transition requirements with no scope. `
+    + 'Send project_id and sprint_type for a workflow-type default, or sprint_id for a workflow override.',
     400,
   );
 }
