@@ -1,8 +1,7 @@
-import Database from 'better-sqlite3';
 import { spawnSync } from 'child_process';
 import { backfillInstanceTokens } from './tokenBackfill';
-import { type Db } from "../../db/adapter/types";
-import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
+import { getDb } from '../../db/client';
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
 
 jest.mock('child_process', () => ({
   spawnSync: jest.fn(),
@@ -11,40 +10,37 @@ jest.mock('child_process', () => ({
 
 const mockSpawnSync = spawnSync as jest.MockedFunction<typeof spawnSync>;
 
-async function createDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      status TEXT,
-      created_at TEXT,
-      session_key TEXT,
-      token_input INTEGER,
-      token_output INTEGER,
-      token_total INTEGER
-    );
-  `);
-  return db;
+const INSTANCE_ID = 99974450;
+
+/**
+ * job_instances.agent_id is NOT NULL and a real foreign key in both baselines, which the old
+ * hand-written CREATE TABLE in this file did not have — so the instance now needs an owner.
+ */
+async function seedInstance(): Promise<void> {
+  const db = getDb();
+  const agent = await db.run(
+    `INSERT INTO agents (name, session_key) VALUES ('Token Backfill Agent', 'token-backfill-agent')`,
+  );
+  await db.run(
+    `INSERT INTO job_instances (id, agent_id, status, created_at, session_key)
+     VALUES (?, ?, 'done', datetime('now', '-5 minutes'), 'run:99974450:d6252a6b-6160-4f62-b288-4ad972449e65')`,
+    INSTANCE_ID,
+    Number(agent.lastInsertId),
+  );
 }
 
 describe('backfillInstanceTokens', () => {
-  let db: Db;
-
   beforeEach(async () => {
-    db = await createDb();
+    await setupTestDb();
     mockSpawnSync.mockReset();
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('persists token usage from canonical OpenClaw run sessions with durable suffixes', async () => {
-    await db.run(`
-      INSERT INTO job_instances (id, status, created_at, session_key)
-      VALUES (99974450, 'done', datetime('now', '-5 minutes'), 'run:99974450:d6252a6b-6160-4f62-b288-4ad972449e65')
-    `);
+    await seedInstance();
 
     mockSpawnSync.mockReturnValue({
       status: 0,
@@ -63,13 +59,13 @@ describe('backfillInstanceTokens', () => {
       signal: null,
     });
 
-    expect(await backfillInstanceTokens(db)).toBe(1);
+    expect(await backfillInstanceTokens(getDb())).toBe(1);
 
-    const row = await db.get(`
+    const row = await getDb().get(`
       SELECT token_input, token_output, token_total
       FROM job_instances
-      WHERE id = 99974450
-    `) as { token_input: number | null; token_output: number | null; token_total: number | null };
+      WHERE id = ?
+    `, INSTANCE_ID) as { token_input: number | null; token_output: number | null; token_total: number | null };
 
     expect(row).toEqual({
       token_input: 1621,

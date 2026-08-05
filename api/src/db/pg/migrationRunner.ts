@@ -203,6 +203,20 @@ export async function runMigrations(db: Db, dir: string | string[]): Promise<str
  * single-actor operation.
  */
 export async function verifyMigrationsCurrent(db: Db, dir: string | string[]): Promise<void> {
+  // An empty migration set is not a current schema, it is a missing one. loadMigrations returns
+  // [] for a directory that does not exist, so a deployment that fails to ship db/pg-baseline and
+  // db/pg-migrations — a container image copying only api/dist, say — would find nothing pending
+  // and boot happily against ANY schema, including an empty database. That is the exact opposite
+  // of what this gate exists to do, and it fails silently, which is worse than failing loudly.
+  const found = loadMigrations(dir);
+  if (found.length === 0) {
+    throw new Error(
+      'No migrations found in ' + (Array.isArray(dir) ? dir.join(', ') : dir) + '. '
+      + 'The schema cannot be verified against an empty migration set, so refusing to serve. '
+      + 'Check that db/pg-baseline and db/pg-migrations are present in the deployment.',
+    );
+  }
+
   const status = await migrationStatus(db, dir);
 
   if (status.drifted.length) {

@@ -1,7 +1,6 @@
-import Database from 'better-sqlite3';
 import { applyRuntimeEndToJobInstance } from './runtimeEnd';
-import { type Db } from "../../db/adapter/types";
-import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
+import { getDb } from '../../db/client';
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
 
 jest.mock('./observability', () => ({
   recordRunCheckIn: jest.fn(),
@@ -20,44 +19,30 @@ jest.mock('../../lib/taskLifecycle', () => ({
   scheduleEndedActiveInstanceLinkageCleanup: jest.fn(),
 }));
 
-async function createDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      status TEXT,
-      task_id INTEGER,
-      session_key TEXT,
-      lifecycle_outcome_posted_at TEXT,
-      task_outcome TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      runtime_ended_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT,
-      token_input INTEGER,
-      token_output INTEGER,
-      token_total INTEGER
-    );
-  `);
-  return db;
+/** job_instances.agent_id is NOT NULL and references agents, so an instance needs a real owner. */
+async function seedAgent(): Promise<number> {
+  const inserted = await getDb().run(
+    `INSERT INTO agents (name, session_key) VALUES ('Hermes', 'run:915')`,
+  );
+  return Number(inserted.lastInsertId);
 }
 
 describe('applyRuntimeEndToJobInstance token usage persistence', () => {
-  let db: Db;
+  beforeEach(async () => {
+    await setupTestDb();
+  });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('persists token usage from runtime end metadata without overwriting existing non-null values with null', async () => {
-    db = await createDb();
+    const db = getDb();
+    const agentId = await seedAgent();
     await db.run(`
-      INSERT INTO job_instances (id, status, session_key, token_input)
-      VALUES (915, 'running', 'run:915', 12)
-    `);
+      INSERT INTO job_instances (id, agent_id, status, session_key, token_input)
+      VALUES (915, ?, 'running', 'run:915', 12)
+    `, agentId);
 
     await applyRuntimeEndToJobInstance(db, {
       instanceId: 915,

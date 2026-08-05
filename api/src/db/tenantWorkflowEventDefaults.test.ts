@@ -1,6 +1,5 @@
 import { getDb } from './client';
-import { initSchema } from './schema';
-import { setupTestDb, teardownTestDb, usingPostgres } from './testDb';
+import { setupTestDb, teardownTestDb } from './testDb';
 import { bootstrapRoutingAndWorkflowDefaults } from './bootstrapDefaults';
 import {
   AGENT_HQ_RUNTIME_SOURCE,
@@ -233,12 +232,11 @@ describe('tenant workflow-event default seeding and repair', () => {
     expect(await devLeaseMappingCount(2)).toBe(0);
 
     // Re-run startup so the guarantee "startup must not resurrect what the repair deleted" is
-    // still covered. initSchema() is SQLite-only machinery — it goes through getRawDb(), the raw
-    // better-sqlite3 handle, so calling it under a PostgreSQL run would open an unrelated SQLite
-    // file and assert nothing. On PostgreSQL run the startup path that actually could re-add the
-    // rows: the defaults bootstrap (schema DDL itself seeds no mappings).
-    if (usingPostgres()) await bootstrapRoutingAndWorkflowDefaults(getDb());
-    else await initSchema();
+    // still covered. The defaults bootstrap is the only half of startup that can re-add these
+    // rows — migrate() is initSchema()/migrations followed by bootstrapRoutingAndWorkflowDefaults(),
+    // and the schema DDL seeds no mappings at all — so it is the half worth re-running, on either
+    // engine.
+    await bootstrapRoutingAndWorkflowDefaults(getDb());
     expect(await devLeaseMappingCount(1)).toBe(expectedDevLeaseMappings);
     expect(await devLeaseMappingCount(2)).toBe(0);
   });

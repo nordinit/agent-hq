@@ -1,60 +1,31 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import Database from 'better-sqlite3';
 import {
   backfillOpenClawJsonlTranscript,
   isRunChatTranscriptSparse,
 } from './openclawJsonlBackfill';
 import { type Db } from "../../db/adapter/types";
-import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
+import { setupTestDb, teardownTestDb } from "../../db/testDb";
 
-async function createDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT,
-      runtime_type TEXT,
-      session_key TEXT,
-      openclaw_agent_id TEXT
-    );
-
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      agent_id INTEGER,
-      task_id INTEGER,
-      session_key TEXT,
-      durable_run_id TEXT
-    );
-
-    CREATE TABLE instance_artifacts (
-      instance_id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      started_at TEXT,
-      last_agent_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      updated_at TEXT
-    );
-
-    CREATE TABLE chat_messages (
-      id TEXT PRIMARY KEY,
-      agent_id INTEGER,
-      instance_id INTEGER,
-      durable_run_id TEXT,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      timestamp TEXT NOT NULL,
-      session_key TEXT NOT NULL DEFAULT '',
-      event_type TEXT NOT NULL DEFAULT 'text',
-      event_meta TEXT NOT NULL DEFAULT '{}'
-    );
-  `);
-  return db;
-}
-
+/**
+ * The run the backfill is pointed at.
+ *
+ * The real schema carries genuine foreign keys the hand-written fixture did not: the
+ * instance's task_id lands in instance_artifacts.task_id, so task 491 has to exist, and a
+ * task needs a sprint which needs a project. They are seeded for referential integrity only —
+ * nothing in these tests reads them.
+ */
 async function seedRun(db: Db): Promise<void> {
+  const project = await db.run(`INSERT INTO projects (name) VALUES ('Backfill Project')`);
+  const sprint = await db.run(
+    `INSERT INTO sprints (project_id, name) VALUES (?, 'Backfill Sprint')`,
+    project.lastInsertId,
+  );
+  await db.run(
+    `INSERT INTO tasks (id, title, sprint_id) VALUES (491, 'Backfilled run', ?)`,
+    sprint.lastInsertId,
+  );
   await db.run(`
     INSERT INTO agents (id, name, runtime_type, session_key, openclaw_agent_id)
     VALUES (94, 'Cinder', 'openclaw', 'agent:cinder-backend:main', 'cinder-backend')
@@ -115,7 +86,7 @@ describe('OpenClaw JSONL transcript backfill', () => {
   let openclawHome: string;
 
   beforeEach(async () => {
-    db = await createDb();
+    db = await setupTestDb();
     await seedRun(db);
     openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-openclaw-'));
   });
@@ -238,7 +209,7 @@ describe('OpenClaw JSONL transcript backfill', () => {
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
     fs.rmSync(openclawHome, { recursive: true, force: true });
   });
 

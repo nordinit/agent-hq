@@ -53,7 +53,6 @@ async function lastAuditRow(): Promise<AuditRow> {
 describe('routing config audit log', () => {
   beforeEach(async () => {
     await setupTestDb();
-    await ensureRoutingConfigAuditLogTable(getDb());
     await ensureTenant();
   });
 
@@ -61,11 +60,26 @@ describe('routing config audit log', () => {
     await teardownTestDb();
   });
 
+  /*
+   * The two ensure-path cases below call ensureRoutingConfigAuditLogTable themselves rather than
+   * leaning on the fixture, which no longer builds any schema: setupTestDb() already hands back a
+   * database that has the table on either engine — from initSchema on SQLite, from
+   * db/pg-migrations/14-routing-config-audit-log.sql in the PostgreSQL template.
+   *
+   * So both exercise it against a database that already has the table. That is the only state a
+   * caller ever finds it in (its one production caller is inside initSchema), and it is the
+   * property worth pinning: re-running the DDL must be a safe no-op on both dialects rather than
+   * an error. Creation-from-nothing is deliberately not tested by dropping the table first — the
+   * PostgreSQL fixture reuses one database per worker and resets by truncation, so a DROP would
+   * take the table away from every later test in that worker.
+   */
   it('creates the table through the ensure path', async () => {
+    await ensureRoutingConfigAuditLogTable(getDb());
     expect(await tableExists(getDb(), 'routing_config_audit_log')).toBe(true);
   });
 
   it('is idempotent when the ensure path runs again', async () => {
+    await ensureRoutingConfigAuditLogTable(getDb());
     await ensureRoutingConfigAuditLogTable(getDb());
     expect(await tableExists(getDb(), 'routing_config_audit_log')).toBe(true);
   });

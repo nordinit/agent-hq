@@ -19,8 +19,19 @@
  * Runs inside a single transaction: either the database ends up fully consistent or it
  * is left exactly as found. --dry-run reports without writing.
  *
- * Usage: node scripts/pg/purge-orphans.mjs <sqlite-db> [--dry-run]
+ * CONSTRAINTS COME FROM THE TARGET, NOT THE SOURCE
+ * ------------------------------------------------
+ * Reading only SQLite's PRAGMA foreign_key_list is not enough, and the gap is silent.
+ * SQLite declares 7 foreign keys on `tasks`; db/pg-baseline/03-foreign-keys.sql declares
+ * 10. A row violating one of the other three is invisible here and surfaces much later,
+ * as an ERROR from psql in provision.mjs step 5 — after the data has already been loaded,
+ * with no indication that the purge could never have seen it. So the baseline's ALTER
+ * TABLE ... ADD CONSTRAINT statements are parsed and unioned in: the constraints that
+ * matter are the ones the TARGET will enforce.
+ *
+ * Usage: node scripts/pg/purge-orphans.mjs <sqlite-db> [--dry-run] [--fk-file=<path>]
  */
+import fs from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
 
@@ -33,6 +44,8 @@ if (!SRC) {
   process.exit(1);
 }
 const dryRun = flags.includes('--dry-run');
+const FK_FILE = flags.find((f) => f.startsWith('--fk-file='))?.slice('--fk-file='.length)
+  ?? path.resolve('db/pg-baseline/03-foreign-keys.sql');
 
 const db = new Database(SRC, { readonly: dryRun });
 // The rebuild must not itself be policed while it repairs; and these statements are
@@ -45,6 +58,31 @@ const tableNames = new Set(
 );
 
 /** Every foreign key in the database, resolved to concrete column pairs. */
+/**
+ * Foreign keys the PostgreSQL baseline will enforce, parsed from its ALTER TABLE statements.
+ *
+ * Single-column only. Every constraint in the generated baseline is single-column, and a
+ * composite one would need the pair ordering that this regex does not attempt — so it is
+ * skipped loudly rather than half-parsed.
+ */
+function targetConstraints(fkFile) {
+  if (!fs.existsSync(fkFile)) return [];
+  const sql = fs.readFileSync(fkFile, 'utf8');
+  const re = /ALTER TABLE\s+"?(\w+)"?\s+ADD CONSTRAINT\s+"?(\w+)"?\s+FOREIGN KEY\s*\(\s*"?(\w+)"?\s*\)\s*REFERENCES\s+"?(\w+)"?\s*\(\s*"?(\w+)"?\s*\)([^;]*);/gi;
+  const out = [];
+  for (const m of sql.matchAll(re)) {
+    const [, table, id, childCol, parent, parentCol, tail] = m;
+    if (!tableNames.has(table) || !tableNames.has(parent)) continue;
+    // The action the TARGET declares decides whether an orphan is nulled or deleted, which is
+    // the whole point of the distinction documented above.
+    const onDelete = /ON DELETE SET NULL/i.test(tail) ? 'SET NULL'
+      : /ON DELETE CASCADE/i.test(tail) ? 'CASCADE'
+      : 'NO ACTION';
+    out.push({ table, id, parent, pairs: [{ child: childCol, parentCol }], onDelete });
+  }
+  return out;
+}
+
 function allConstraints() {
   const out = [];
   for (const table of tableNames) {
@@ -63,6 +101,16 @@ function allConstraints() {
       if (pairs.some((p) => !p.parentCol)) continue;
       out.push({ table, id, parent, pairs, onDelete: (ordered[0].on_delete || 'NO ACTION').toUpperCase() });
     }
+  }
+
+  // Union with the target's constraints, keyed on table+column+parent so a constraint declared
+  // by both engines is not scanned twice.
+  const seen = new Set(out.map((c) => `${c.table}.${c.pairs.map((p) => p.child).join(',')}->${c.parent}`));
+  for (const c of targetConstraints(FK_FILE)) {
+    const key = `${c.table}.${c.pairs[0].child}->${c.parent}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
   }
   return out;
 }

@@ -1,74 +1,68 @@
-import Database from 'better-sqlite3';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { markTaskNeedsAttentionForMissingSemanticHandoff } from './lifecycleHandoff';
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
+
+interface SeedInput {
+  taskId: number;
+  instanceId: number;
+  status: string;
+  runtimeEndedAt: string;
+  taskType?: string | null;
+  /** Only the mapping case scopes its task to a project and agent; the others leave both null. */
+  scoped?: boolean;
+}
+
+/**
+ * The real schema declares tasks.sprint_id and job_instances.agent_id NOT NULL with genuine
+ * foreign keys, so a task and an instance cannot stand on their own the way they did against a
+ * hand-written minimal schema — each needs a project, workflow and agent behind it.
+ *
+ * Task and instance ids stay explicit because the assertions read them back out of the operator
+ * note and the workflow-event history ("instance_id=2029"), so they have to be known up front.
+ */
+async function seed(input: SeedInput): Promise<{ projectId: number; agentId: number; sprintId: number }> {
+  const db = getDb();
+  const project = await db.run(`INSERT INTO projects (name) VALUES ('Lifecycle Handoff Project')`);
+  const projectId = Number(project.lastInsertId);
+  const sprint = await db.run(
+    `INSERT INTO sprints (project_id, name) VALUES (?, 'Lifecycle Handoff Workflow')`,
+    projectId,
+  );
+  const sprintId = Number(sprint.lastInsertId);
+  const agent = await db.run(
+    `INSERT INTO agents (name, session_key) VALUES ('Lifecycle Handoff Agent', 'lifecycle-handoff-agent')`,
+  );
+  const agentId = Number(agent.lastInsertId);
+
+  await db.run(
+    `INSERT INTO tasks (id, title, status, task_type, sprint_id, project_id, agent_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    input.taskId,
+    `Task ${input.taskId}`,
+    input.status,
+    input.taskType ?? null,
+    sprintId,
+    input.scoped ? projectId : null,
+    input.scoped ? agentId : null,
+  );
+  await db.run(
+    `INSERT INTO job_instances (id, task_id, agent_id, runtime_ended_at) VALUES (?, ?, ?, ?)`,
+    input.instanceId,
+    input.taskId,
+    agentId,
+    input.runtimeEndedAt,
+  );
+
+  return { projectId, agentId, sprintId };
+}
 
 describe('markTaskNeedsAttentionForMissingSemanticHandoff', () => {
-  it('records a structured operator recovery note without auto-moving visible workflow status', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT,
-        status TEXT,
-        previous_status TEXT,
-        updated_at TEXT,
-        task_type TEXT,
-        sprint_id INTEGER
-      );
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        sprint_type TEXT
-      );
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        task_outcome TEXT,
-        lifecycle_outcome_posted_at TEXT,
-        lifecycle_handoff_status TEXT,
-        semantic_outcome_missing INTEGER NOT NULL DEFAULT 0,
-        runtime_completed_at TEXT,
-        runtime_ended_at TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT
-      );
-      CREATE TABLE task_history (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        changed_by TEXT,
-        field TEXT,
-        old_value TEXT,
-        new_value TEXT
-      );
-      CREATE TABLE integrity_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        instance_id INTEGER,
-        anomaly_type TEXT,
-        detail TEXT
-      );
-      CREATE TABLE task_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        from_status TEXT,
-        to_status TEXT,
-        moved_by TEXT,
-        move_type TEXT,
-        instance_id INTEGER,
-        reason TEXT
-      );
-    `);
+  beforeEach(async () => { await setupTestDb(); });
+  afterEach(async () => { await teardownTestDb(); });
 
-    await db.run(`INSERT INTO tasks (id, title, status) VALUES (403, 'Task 403', 'review')`);
-    await db.run(`INSERT INTO job_instances (id, task_id, runtime_ended_at) VALUES (2028, 403, '2026-05-01T19:44:23.584Z')`);
+  it('records a structured operator recovery note without auto-moving visible workflow status', async () => {
+    const db = getDb();
+    await seed({ taskId: 403, instanceId: 2028, status: 'review', runtimeEndedAt: '2026-05-01T19:44:23.584Z' });
 
     const changed = await markTaskNeedsAttentionForMissingSemanticHandoff(db, {
           taskId: 403,
@@ -117,71 +111,8 @@ describe('markTaskNeedsAttentionForMissingSemanticHandoff', () => {
   });
 
   it('preserves runtime-success context in the operator note for outcome-less completions', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT,
-        status TEXT,
-        previous_status TEXT,
-        updated_at TEXT,
-        task_type TEXT,
-        sprint_id INTEGER
-      );
-      CREATE TABLE sprints (
-        id INTEGER PRIMARY KEY,
-        sprint_type TEXT
-      );
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        task_outcome TEXT,
-        lifecycle_outcome_posted_at TEXT,
-        lifecycle_handoff_status TEXT,
-        semantic_outcome_missing INTEGER NOT NULL DEFAULT 0,
-        runtime_completed_at TEXT,
-        runtime_ended_at TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT
-      );
-      CREATE TABLE task_history (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        changed_by TEXT,
-        field TEXT,
-        old_value TEXT,
-        new_value TEXT
-      );
-      CREATE TABLE integrity_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        instance_id INTEGER,
-        anomaly_type TEXT,
-        detail TEXT
-      );
-      CREATE TABLE task_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        from_status TEXT,
-        to_status TEXT,
-        moved_by TEXT,
-        move_type TEXT,
-        instance_id INTEGER,
-        reason TEXT
-      );
-    `);
-
-    await db.run(`INSERT INTO tasks (id, title, status) VALUES (404, 'Task 404', 'review')`);
-    await db.run(`INSERT INTO job_instances (id, task_id, runtime_ended_at) VALUES (2029, 404, '2026-05-01T21:25:17.102Z')`);
+    const db = getDb();
+    await seed({ taskId: 404, instanceId: 2029, status: 'review', runtimeEndedAt: '2026-05-01T21:25:17.102Z' });
 
     const changed = await markTaskNeedsAttentionForMissingSemanticHandoff(db, {
           taskId: 404,
@@ -210,56 +141,15 @@ describe('markTaskNeedsAttentionForMissingSemanticHandoff', () => {
   });
 
   it('applies configured missing-outcome workflow event status actions while recording the event', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        title TEXT,
-        status TEXT,
-        previous_status TEXT,
-        updated_at TEXT,
-        task_type TEXT,
-        sprint_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER
-      );
-      CREATE TABLE sprints (id INTEGER PRIMARY KEY, sprint_type TEXT);
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        task_outcome TEXT,
-        lifecycle_outcome_posted_at TEXT,
-        lifecycle_handoff_status TEXT,
-        semantic_outcome_missing INTEGER NOT NULL DEFAULT 0,
-        runtime_completed_at TEXT,
-        runtime_ended_at TEXT
-      );
-      CREATE TABLE external_event_mappings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER,
-        source TEXT,
-        event_name TEXT NOT NULL,
-        task_type TEXT,
-        status_includes_json TEXT NOT NULL DEFAULT '[]',
-        status_excludes_json TEXT NOT NULL DEFAULT '[]',
-        action_kind TEXT NOT NULL,
-        action_target TEXT,
-        apply_review_evidence INTEGER NOT NULL DEFAULT 0,
-        apply_failure_detail INTEGER NOT NULL DEFAULT 0,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        priority INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT,
-        updated_at TEXT
-      );
-      CREATE TABLE task_notes (id INTEGER PRIMARY KEY, task_id INTEGER, author TEXT, content TEXT);
-      CREATE TABLE task_history (id INTEGER PRIMARY KEY, task_id INTEGER, changed_by TEXT, field TEXT, old_value TEXT, new_value TEXT);
-      CREATE TABLE integrity_events (id INTEGER PRIMARY KEY, task_id INTEGER, project_id INTEGER, agent_id INTEGER, instance_id INTEGER, anomaly_type TEXT, detail TEXT);
-      CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id INTEGER, project_id INTEGER, agent_id INTEGER, from_status TEXT, to_status TEXT, moved_by TEXT, move_type TEXT, instance_id INTEGER, reason TEXT);
-    `);
-
-    await db.run(`INSERT INTO tasks (id, title, status, task_type, project_id, agent_id) VALUES (405, 'Task 405', 'review', 'backend', 86, 94)`);
-    await db.run(`INSERT INTO job_instances (id, task_id, runtime_ended_at) VALUES (2030, 405, '2026-05-01T22:00:00.000Z')`);
+    const db = getDb();
+    await seed({
+      taskId: 405,
+      instanceId: 2030,
+      status: 'review',
+      taskType: 'backend',
+      runtimeEndedAt: '2026-05-01T22:00:00.000Z',
+      scoped: true,
+    });
     await db.run(`
       INSERT INTO external_event_mappings (source, event_name, task_type, status_includes_json, status_excludes_json, action_kind, action_target, enabled, priority)
       VALUES ('agent_hq_runtime', 'no_semantic_handoff_posted', 'backend', '[]', '[]', 'status', 'blocked', 1, 200)

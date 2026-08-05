@@ -1,13 +1,13 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import Database from 'better-sqlite3';
 import {
   decideOpenClawSessionTerminal,
   evaluateOpenClawInstanceSessionState,
   evaluateOpenClawSessionFile,
 } from './openclawSessionState';
-import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
+import { getDb } from '../../db/client';
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
 
 function writeJsonl(lines: Array<Record<string, unknown>>): { dir: string; file: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-session-state-'));
@@ -62,77 +62,69 @@ describe('OpenClaw raw session state', () => {
     }
   });
 
-  it('defers terminal evaluation while a durable run session is not indexed', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    const openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-session-state-'));
-    try {
-      await db.exec(`
-        CREATE TABLE agents (
-          id INTEGER PRIMARY KEY,
-          name TEXT,
-          runtime_type TEXT,
-          session_key TEXT,
-          openclaw_agent_id TEXT
-        );
-        CREATE TABLE job_instances (
-          id INTEGER PRIMARY KEY,
-          agent_id INTEGER,
-          task_id INTEGER,
-          session_key TEXT,
-          durable_run_id TEXT
-        );
-      `);
-      await db.run(`
-        INSERT INTO agents (id, name, runtime_type, session_key, openclaw_agent_id)
-        VALUES (94, 'Cinder', 'openclaw', 'agent:cinder-backend:main', 'cinder-backend')
-      `);
-      await db.run(`
-        INSERT INTO job_instances (id, agent_id, task_id, session_key, durable_run_id)
-        VALUES (77, 94, 491, 'run:77:current-run', 'current-run')
-      `);
+  // Scoped to its own describe so the seven filesystem-only cases above and below do not pay for a
+  // database per test — this is the only case here that touches one.
+  describe('durable run session indexing', () => {
+    beforeEach(async () => { await setupTestDb(); });
+    afterEach(async () => { await teardownTestDb(); });
 
-      const sessionsDir = path.join(openclawHome, 'agents', 'cinder-backend', 'sessions');
-      fs.mkdirSync(sessionsDir, { recursive: true });
-      const oldSessionFile = path.join(sessionsDir, 'old-77.jsonl');
-      fs.writeFileSync(oldSessionFile, `${JSON.stringify({
-        type: 'message',
-        timestamp: '2026-05-13T10:00:00.000Z',
-        message: { role: 'assistant', content: [{ type: 'text', text: 'old run' }] },
-      })}\n`);
-      fs.writeFileSync(
-        path.join(sessionsDir, 'sessions.json'),
-        JSON.stringify({
-          'agent:cinder-backend:run:77': {
-            sessionId: 'old-77',
-            sessionFile: oldSessionFile,
-            updatedAt: Date.parse('2026-05-13T10:00:00.000Z'),
+    it('defers terminal evaluation while a durable run session is not indexed', async () => {
+      const db = getDb();
+      const openclawHome = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-session-state-'));
+      try {
+        // The real schema requires agents.name/session_key and job_instances.agent_id, and
+        // job_instances.agent_id is a genuine foreign key, so the agent row has to exist first.
+        // task_id stays NULL: it is also a foreign key now, and backfill never reads it.
+        await db.run(`
+          INSERT INTO agents (id, name, runtime_type, session_key, openclaw_agent_id)
+          VALUES (94, 'Cinder', 'openclaw', 'agent:cinder-backend:main', 'cinder-backend')
+        `);
+        await db.run(`
+          INSERT INTO job_instances (id, agent_id, task_id, session_key, durable_run_id)
+          VALUES (77, 94, NULL, 'run:77:current-run', 'current-run')
+        `);
+
+        const sessionsDir = path.join(openclawHome, 'agents', 'cinder-backend', 'sessions');
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const oldSessionFile = path.join(sessionsDir, 'old-77.jsonl');
+        fs.writeFileSync(oldSessionFile, `${JSON.stringify({
+          type: 'message',
+          timestamp: '2026-05-13T10:00:00.000Z',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'old run' }] },
+        })}\n`);
+        fs.writeFileSync(
+          path.join(sessionsDir, 'sessions.json'),
+          JSON.stringify({
+            'agent:cinder-backend:run:77': {
+              sessionId: 'old-77',
+              sessionFile: oldSessionFile,
+              updatedAt: Date.parse('2026-05-13T10:00:00.000Z'),
+            },
+          }),
+        );
+
+        const result = await evaluateOpenClawInstanceSessionState(db, 77, {
+          openclawHome,
+          now,
+          terminalQuiescenceMs: 5000,
+        });
+
+        expect(result).toMatchObject({
+          state: null,
+          sessionFile: null,
+          backfillReason: 'durable_session_file_not_found',
+          decision: {
+            terminal: false,
+            success: false,
+            reason: 'completed',
+            deferReason: 'openclaw_durable_session_not_indexed',
+            retryAfterMs: 5000,
           },
-        }),
-      );
-
-      const result = await evaluateOpenClawInstanceSessionState(db, 77, {
-              openclawHome,
-              now,
-              terminalQuiescenceMs: 5000,
-            });
-
-      expect(result).toMatchObject({
-        state: null,
-        sessionFile: null,
-        backfillReason: 'durable_session_file_not_found',
-        decision: {
-          terminal: false,
-          success: false,
-          reason: 'completed',
-          deferReason: 'openclaw_durable_session_not_indexed',
-          retryAfterMs: 5000,
-        },
-      });
-    } finally {
-      dbRaw.close();
-      fs.rmSync(openclawHome, { recursive: true, force: true });
-    }
+        });
+      } finally {
+        fs.rmSync(openclawHome, { recursive: true, force: true });
+      }
+    });
   });
 
   it('requires quiescence before treating unsigned provider stop as terminal', () => {

@@ -1,9 +1,9 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import Database from 'better-sqlite3';
 
-import { SqliteAdapter } from './adapter/SqliteAdapter';
+import { getDb } from './client';
+import { setupTestDb, teardownTestDb } from './testDb';
 import { type Db } from './adapter/types';
 import { findCandidates, processCandidate, type Candidate } from './backfill-hermes-transcripts';
 import { buildAgentHqRunContextBlock } from '../runtimes/hermesTranscriptIngestion';
@@ -18,20 +18,18 @@ const CONTEXT = {
 
 const FULL_TEXT = 'The complete assistant answer, streamed to the very end.';
 
-async function setupDb(runtimeConfig: string): Promise<Db> {
-  const db = new SqliteAdapter(new Database(':memory:'));
-  await db.exec(`
-    CREATE TABLE chat_messages (
-      id TEXT PRIMARY KEY, agent_id INTEGER NOT NULL, instance_id INTEGER,
-      durable_run_id TEXT, session_key TEXT NOT NULL DEFAULT '', role TEXT NOT NULL,
-      content TEXT NOT NULL DEFAULT '', timestamp TEXT NOT NULL,
-      event_type TEXT NOT NULL DEFAULT 'text', event_meta TEXT NOT NULL DEFAULT '{}'
-    );
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY, agent_id INTEGER NOT NULL, durable_run_id TEXT, session_key TEXT
-    );
-    CREATE TABLE agents (id INTEGER PRIMARY KEY, runtime_config TEXT);
-  `);
+/**
+ * The run the backfill will be pointed at: a real agent and a real job_instance, because
+ * chat_messages carries genuine foreign keys to both and findCandidates joins through them.
+ */
+async function seedRun(runtimeConfig: string): Promise<Db> {
+  const db = getDb();
+  await db.run(
+    `INSERT INTO agents (id, name, session_key, runtime_type, runtime_config)
+     VALUES (?, 'Cinder', 'hermes-backfill-agent', 'hermes', ?)`,
+    AGENT_ID,
+    runtimeConfig,
+  );
   await db.run(
     'INSERT INTO job_instances (id, agent_id, durable_run_id, session_key) VALUES (?, ?, ?, ?)',
     INSTANCE_ID,
@@ -39,7 +37,6 @@ async function setupDb(runtimeConfig: string): Promise<Db> {
     CONTEXT.durableRunId,
     CONTEXT.sessionKey,
   );
-  await db.run('INSERT INTO agents (id, runtime_config) VALUES (?, ?)', AGENT_ID, runtimeConfig);
   return db;
 }
 
@@ -90,8 +87,16 @@ async function contentOf(db: Db): Promise<string> {
 }
 
 describe('Hermes transcript backfill', () => {
+  beforeEach(async () => {
+    await setupTestDb();
+  });
+
+  afterEach(async () => {
+    await teardownTestDb();
+  });
+
   it('finds instances that have Hermes transcript rows', async () => {
-    const db = await setupDb(JSON.stringify({ profile: 'cinder' }));
+    const db = await seedRun(JSON.stringify({ profile: 'cinder' }));
     await seedTruncatedRow(db);
 
     const candidates = await findCandidates(db, null);
@@ -103,7 +108,7 @@ describe('Hermes transcript backfill', () => {
   it('repairs a row the old ingest truncated', async () => {
     const root = makeProfileHome();
     const runtimeConfig = JSON.stringify({ profile: 'cinder', hermesHome: root });
-    const db = await setupDb(runtimeConfig);
+    const db = await seedRun(runtimeConfig);
     await seedTruncatedRow(db);
 
     const outcome = await processCandidate(db, candidateFor(runtimeConfig), true);
@@ -116,7 +121,7 @@ describe('Hermes transcript backfill', () => {
   it('changes nothing in dry-run mode', async () => {
     const root = makeProfileHome();
     const runtimeConfig = JSON.stringify({ profile: 'cinder', hermesHome: root });
-    const db = await setupDb(runtimeConfig);
+    const db = await seedRun(runtimeConfig);
     await seedTruncatedRow(db);
 
     const outcome = await processCandidate(db, candidateFor(runtimeConfig), false);
@@ -128,7 +133,7 @@ describe('Hermes transcript backfill', () => {
   it('is idempotent — a second apply reports no further growth', async () => {
     const root = makeProfileHome();
     const runtimeConfig = JSON.stringify({ profile: 'cinder', hermesHome: root });
-    const db = await setupDb(runtimeConfig);
+    const db = await seedRun(runtimeConfig);
     await seedTruncatedRow(db);
 
     await processCandidate(db, candidateFor(runtimeConfig), true);
@@ -146,7 +151,7 @@ describe('Hermes transcript backfill', () => {
       profile: 'cinder',
       hermesHome: path.join(os.tmpdir(), 'definitely-not-here-12345'),
     });
-    const db = await setupDb(runtimeConfig);
+    const db = await seedRun(runtimeConfig);
     await seedTruncatedRow(db);
 
     const outcome = await processCandidate(db, candidateFor(runtimeConfig), true);
@@ -159,7 +164,7 @@ describe('Hermes transcript backfill', () => {
 
   it('reports a config it cannot use rather than throwing', async () => {
     const runtimeConfig = JSON.stringify({});
-    const db = await setupDb(runtimeConfig);
+    const db = await seedRun(runtimeConfig);
     await seedTruncatedRow(db);
 
     const outcome = await processCandidate(db, candidateFor(runtimeConfig), true);

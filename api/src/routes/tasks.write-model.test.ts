@@ -1,19 +1,9 @@
 import express from 'express';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import * as dispatchTrigger from '../services/dispatchTrigger';
 import tasksRouter from './tasks';
-
-const ORIGINAL_DB_PATH = process.env.AGENT_HQ_DB_PATH;
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value == null) delete process.env[name];
-  else process.env[name] = value;
-}
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -33,8 +23,86 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
 }
 
+const DEFAULT_TENANT_ID = 1;
+
+/**
+ * initSchema() does three jobs at once — create the schema, migrate it, and seed the starter
+ * workflow catalogue — and this file leaned on all three. The PostgreSQL fixture carries DDL only
+ * and truncates between tests, so the seeded rows the tasks router reads have to be inserted here.
+ *
+ * Each row is guarded by a SELECT rather than written with INSERT OR IGNORE, because on SQLite
+ * initSchema has already seeded it and sprint_type_relationship_types has no unique index there —
+ * OR IGNORE would quietly duplicate the row instead of skipping it.
+ */
+async function ensureRow(
+  existsSql: string,
+  existsParams: unknown[],
+  insertSql: string,
+  insertParams: unknown[],
+): Promise<void> {
+  const db = getDb();
+  if (await db.get(existsSql, ...existsParams)) return;
+  await db.run(insertSql, ...insertParams);
+}
+
+async function seedWorkflowCatalog(): Promise<void> {
+  await ensureRow(
+    `SELECT id FROM tenants WHERE id = ?`, [DEFAULT_TENANT_ID],
+    `INSERT INTO tenants (id, name, slug, is_default) VALUES (?, 'Agent HQ', 'agent-hq', 1)`, [DEFAULT_TENANT_ID],
+  );
+
+  for (const [key, name] of [['generic', 'Generic'], ['dev', 'Dev']]) {
+    await ensureRow(
+      `SELECT id FROM sprint_types WHERE tenant_id = ? AND key = ?`, [DEFAULT_TENANT_ID, key],
+      `INSERT INTO sprint_types (tenant_id, key, name, description, is_system) VALUES (?, ?, ?, '', 1)`,
+      [DEFAULT_TENANT_ID, key, name],
+    );
+  }
+
+  for (const taskType of ['adhoc', 'backend', 'frontend', 'fullstack', 'qa', 'other']) {
+    await ensureRow(
+      `SELECT id FROM sprint_type_task_types WHERE tenant_id = ? AND sprint_type_key = 'generic' AND task_type = ?`,
+      [DEFAULT_TENANT_ID, taskType],
+      `INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'generic', ?, 1)`,
+      [DEFAULT_TENANT_ID, taskType],
+    );
+  }
+
+  await ensureRow(
+    `SELECT id FROM task_field_schemas WHERE tenant_id = ? AND sprint_type_key = 'generic' AND task_type IS NULL`,
+    [DEFAULT_TENANT_ID],
+    `INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json, is_system) VALUES (?, 'generic', NULL, ?, 1)`,
+    [DEFAULT_TENANT_ID, JSON.stringify({
+      fields: [{ key: 'success_criteria', label: 'Success Criteria', type: 'textarea', required: false }],
+    })],
+  );
+
+  // blocked_by is a generic-workflow type; defect_of is seeded only for 'dev', and reaches a
+  // generic task through the deliberate cross-workflow fallback in getRelationshipTypeForTask().
+  // Seeding it under 'generic' instead would pass while quietly stopping that fallback being
+  // exercised at all.
+  const relationshipTypes: Array<[string, string, string, string, number, string, string, string]> = [
+    ['generic', 'blocked_by', 'Blocked by', 'dependency', 1, 'target_blocks_source',
+      JSON.stringify(['todo', 'ready', 'in_progress', 'review']), JSON.stringify(['done'])],
+    ['dev', 'defect_of', 'Defect of', 'quality', 0, 'informational', '[]', '[]'],
+  ];
+  for (const [sprintTypeKey, key, label, category, affects, semantics, active, resolved] of relationshipTypes) {
+    await ensureRow(
+      `SELECT id FROM sprint_type_relationship_types WHERE tenant_id = ? AND sprint_type_key = ? AND key = ?`,
+      [DEFAULT_TENANT_ID, sprintTypeKey, key],
+      `INSERT INTO sprint_type_relationship_types (
+         tenant_id, sprint_type_key, key, label, inverse_label, category,
+         affects_dispatch_eligibility, direction_semantics, active_statuses_json, resolved_statuses_json,
+         is_system, metadata_json
+       ) VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, 1, '{}')`,
+      [DEFAULT_TENANT_ID, sprintTypeKey, key, label, category, affects, semantics, active, resolved],
+    );
+  }
+}
+
 async function seedFixture(): Promise<void> {
   const db = getDb();
+  await seedWorkflowCatalog();
 
   await db.run(`INSERT INTO projects (id, name, description, context_md) VALUES (86, 'Agent HQ', '', '')`);
   await db.run(`INSERT INTO sprints (id, project_id, name, goal, sprint_type, status) VALUES (42, 86, 'Backend Domain Refactor', '', 'generic', 'active')`);
@@ -56,16 +124,12 @@ async function seedFixture(): Promise<void> {
 }
 
 describe('tasks route write-model handoff', () => {
-  let tempDir: string;
   let server: Server;
   let baseUrl: string;
   let triggerDispatchSpy: jest.SpyInstance;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-write-model-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
-    closeDb();
-    await initSchema();
+    await setupTestDb();
     await seedFixture();
     triggerDispatchSpy = jest.spyOn(dispatchTrigger, 'triggerDispatch').mockImplementation(() => {});
     ({ server, baseUrl } = await startServer());
@@ -74,9 +138,7 @@ describe('tasks route write-model handoff', () => {
   afterEach(async () => {
     triggerDispatchSpy.mockRestore();
     await stopServer(server);
-    closeDb();
-    restoreEnv('AGENT_HQ_DB_PATH', ORIGINAL_DB_PATH);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    await teardownTestDb();
   });
 
   it('creates tasks through the route and preserves skipped blocker reporting', async () => {

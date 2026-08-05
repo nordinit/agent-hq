@@ -40,6 +40,20 @@ module.exports = {
         NODE_ENV: env.NODE_ENV || 'production',
         PORT: apiPort,
         AGENT_HQ_DB_PATH: env.AGENT_HQ_DB_PATH || path.join(repoRoot, 'agent-hq-dev.db'),
+        // Selects the engine: db/client.ts picks PostgreSQL on this being present at all, so an
+        // unset value leaves the instance on the SQLite file above. Naming the key here is what
+        // lets .env decide — pm2 does not read .env, parseEnvFile above is the only thing that
+        // does, so an unlisted key reaches the process only if pm2 itself was started with it.
+        //
+        // ONLY the dev-scoped key, with no fallback to a plain DATABASE_URL. Dev checkouts carry
+        // copies of production's .env — both of them did until today — where DATABASE_URL names
+        // the production database, so a fallback silently attaches a dev API to production the
+        // first time someone runs this file from the wrong directory. Verified: with this repo's
+        // own .env, `env.DATABASE_URL` resolves to postgresql://localhost/agent_hq_prod.
+        //
+        // AGENT_HQ_DB_PATH is left set beside it, as production does, so the SQLite file stays
+        // reachable while the PostgreSQL copy earns trust.
+        DATABASE_URL: env.AGENT_HQ_DEV_DATABASE_URL,
         OPENCLAW_GATEWAY_URL: env.OPENCLAW_GATEWAY_URL,
         OPENCLAW_GATEWAY_TOKEN: env.OPENCLAW_GATEWAY_TOKEN,
         OPENCLAW_HOOKS_TOKEN: env.OPENCLAW_HOOKS_TOKEN,

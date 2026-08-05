@@ -1,34 +1,22 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { createRecurringTaskSeries, recordRecurringTaskRun } from '../domains/recurring-tasks';
 import { createTaskRecord } from '../domains/tasks/writeModel';
 import * as dispatchTrigger from '../services/dispatchTrigger';
 import { calculateNextRecurringRunAt, runRecurringTaskSchedulerTick } from './recurringTaskScheduler';
 
 describe('recurring task scheduler', () => {
-  const originalDbPath = process.env.AGENT_HQ_DB_PATH;
-  let tempDir = '';
   let triggerDispatchSpy: jest.SpyInstance;
 
   beforeEach(async () => {
-    closeDb();
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'recurring-task-scheduler-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
-    await initSchema();
+    await setupTestDb();
     await seedBaseRows();
     triggerDispatchSpy = jest.spyOn(dispatchTrigger, 'triggerDispatch').mockImplementation(() => {});
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     triggerDispatchSpy.mockRestore();
-    closeDb();
-    if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-    else process.env.AGENT_HQ_DB_PATH = originalDbPath;
-    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-    tempDir = '';
+    await teardownTestDb();
   });
 
   async function seedBaseRows(status = 'active'): Promise<void> {

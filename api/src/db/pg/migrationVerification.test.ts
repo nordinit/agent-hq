@@ -133,3 +133,22 @@ describe('the status command does not migrate', () => {
     expect(imports).toEqual(['path']);
   });
 });
+
+describe('an empty migration set is a missing schema, not a current one', () => {
+  it('refuses to serve when the migration directories are absent', async () => {
+    // loadMigrations returns [] for a directory that does not exist, so without this check a
+    // deployment that ships api/dist but not db/pg-baseline finds nothing pending and boots
+    // against any schema at all, including an empty database. Found while containerising:
+    // migrationDirs.ts resolves the repo root four levels up from its compiled location, which
+    // lands outside the image unless db/ is copied in.
+    const db = ledgerStub([]);
+    await expect(verifyMigrationsCurrent(db as never, '/nonexistent-migrations'))
+      .rejects.toThrow(/No migrations found/);
+  });
+
+  it('names the directories it looked in, so the fix is obvious', async () => {
+    const db = ledgerStub([]);
+    await expect(verifyMigrationsCurrent(db as never, ['/nope/a', '/nope/b']))
+      .rejects.toThrow(/\/nope\/a, \/nope\/b/);
+  });
+});

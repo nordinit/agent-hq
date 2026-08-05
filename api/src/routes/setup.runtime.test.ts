@@ -1,10 +1,7 @@
 import express from 'express';
 import type { Server } from 'http';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { closeDb, getDb } from '../db/client';
-import { initSchema } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { buildRuntimeConfigDefaults } from '../lib/runtimeOnboarding';
 import { probeGateway } from '../lib/gatewayHealth';
 import setupRouter from './setup';
@@ -14,27 +11,20 @@ jest.mock('../lib/gatewayHealth', () => ({
 }));
 
 const mockedProbeGateway = probeGateway as jest.MockedFunction<typeof probeGateway>;
-const originalDbPath = process.env.AGENT_HQ_DB_PATH;
 const originalApiUrl = process.env.AGENT_HQ_API_URL;
-let tempDir = '';
 
 async function resetDb(): Promise<void> {
-  closeDb();
-  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-setup-runtime-'));
-  process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
+  await setupTestDb();
+  // The callback-readiness assertions turn on this value, so it is pinned to a non-localhost URL
+  // for every test and overridden in place by the one test that cares about localhost.
   process.env.AGENT_HQ_API_URL = 'http://agent-hq.test';
   mockedProbeGateway.mockReset();
-  await initSchema();
 }
 
-function cleanup(): void {
-  closeDb();
-  if (originalDbPath == null) delete process.env.AGENT_HQ_DB_PATH;
-  else process.env.AGENT_HQ_DB_PATH = originalDbPath;
+async function cleanup(): Promise<void> {
+  await teardownTestDb();
   if (originalApiUrl == null) delete process.env.AGENT_HQ_API_URL;
   else process.env.AGENT_HQ_API_URL = originalApiUrl;
-  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
-  tempDir = '';
 }
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {

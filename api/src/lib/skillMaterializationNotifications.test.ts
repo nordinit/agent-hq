@@ -1,17 +1,20 @@
-import Database from 'better-sqlite3';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
+import { type Db } from '../db/adapter/types';
 import type { MaterializationResult } from '../runtimes/skillMaterialization';
 import { recordSkillMaterializationIssues } from './skillMaterializationNotifications';
-import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
-async function makeDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE tenants (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '');
-    INSERT INTO tenants (id, name) VALUES (1, 'Default');
-  `);
-  return db;
+const TENANT_ID = 1;
+
+/**
+ * The tenant every notification here is scoped to.
+ *
+ * initSchema seeds one on SQLite, but the PostgreSQL fixture template carries DDL only and is
+ * truncated between tests — and notification_records.tenant_id is a real foreign key there, which
+ * the hand-written minimal schema this file used to build did not have.
+ */
+async function ensureTenant(db: Db): Promise<void> {
+  if (await db.get(`SELECT id FROM tenants WHERE id = ?`, TENANT_ID)) return;
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, 1)`, TENANT_ID, 'Default', 'default');
 }
 
 function baseContext() {
@@ -21,7 +24,7 @@ function baseContext() {
     agentName: 'Vega (Frontend)',
     instanceId: 9001,
     taskId: 42,
-    tenantId: 1,
+    tenantId: TENANT_ID,
     requestedSkillNames: ['ui-ux-pro-max-skill'],
   };
 }
@@ -47,13 +50,22 @@ async function listRecords(db: Db) {
 }
 
 describe('recordSkillMaterializationIssues', () => {
+  let db: Db;
+
+  beforeEach(async () => {
+    db = await setupTestDb();
+    await ensureTenant(db);
+  });
+
+  afterEach(async () => {
+    await teardownTestDb();
+  });
+
   it('does not record a notification for a fully successful materialization', async () => {
-    const db = await makeDb();
     expect(await recordSkillMaterializationIssues(db, okResult(), baseContext())).toBe(false);
   });
 
   it('does not treat benign already-correct skips as failures', async () => {
-    const db = await makeDb();
     const result: MaterializationResult = {
       ok: true,
       count: 1,
@@ -64,7 +76,6 @@ describe('recordSkillMaterializationIssues', () => {
   });
 
   it('records a notification when a skill has no resolvable source', async () => {
-    const db = await makeDb();
     const result: MaterializationResult = {
       ok: true,
       count: 0,
@@ -76,7 +87,7 @@ describe('recordSkillMaterializationIssues', () => {
 
     const records = await listRecords(db);
     expect(records).toHaveLength(1);
-    expect(records[0].tenant_id).toBe(1);
+    expect(records[0].tenant_id).toBe(TENANT_ID);
     expect(records[0].type).toBe('skill_materialization_failure');
     expect(records[0].source).toBe('dispatcher');
     expect(records[0].body).toContain('ui-ux-pro-max-skill');
@@ -87,7 +98,6 @@ describe('recordSkillMaterializationIssues', () => {
   });
 
   it('records a notification for per-skill materialization errors', async () => {
-    const db = await makeDb();
     const result: MaterializationResult = {
       ok: true,
       count: 0,
@@ -101,7 +111,6 @@ describe('recordSkillMaterializationIssues', () => {
   });
 
   it('records a notification for fatal materialization failures', async () => {
-    const db = await makeDb();
     const result: MaterializationResult = {
       ok: false,
       count: 0,
@@ -115,7 +124,6 @@ describe('recordSkillMaterializationIssues', () => {
   });
 
   it('records a notification when requested skills are skipped entirely', async () => {
-    const db = await makeDb();
     const result: MaterializationResult = {
       ok: true,
       count: 0,
@@ -129,7 +137,6 @@ describe('recordSkillMaterializationIssues', () => {
   });
 
   it('does not record anything when no skills were requested', async () => {
-    const db = await makeDb();
     const result: MaterializationResult = { ok: true, count: 0, details: [], warnings: [] };
     expect(await recordSkillMaterializationIssues(db, result, { ...baseContext(), requestedSkillNames: [] })).toBe(false);
   });

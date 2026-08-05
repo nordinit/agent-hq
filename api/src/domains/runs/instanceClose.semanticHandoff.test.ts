@@ -1,7 +1,6 @@
-import Database from 'better-sqlite3';
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { closeActiveInstanceAfterSemanticHandoff } from './instanceClose';
 import { type Db } from "../../db/adapter/types";
-import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 jest.mock('../../runtimes/OpenClawRuntime', () => ({
   abortChatRunBySessionKey: jest.fn(() => ({ ok: true, status: 'aborted' })),
@@ -11,97 +10,37 @@ jest.mock('../../services/browserPool', () => ({
   destroyAgentContext: jest.fn(() => Promise.resolve()),
 }));
 
-async function setupDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      title TEXT NOT NULL,
-      status TEXT NOT NULL,
-      agent_id INTEGER,
-      active_instance_id INTEGER,
-      updated_at TEXT
-    );
+const TENANT_ID = 8801;
+const PROJECT_ID = 8802;
+const SPRINT_ID = 8803;
+const AGENT_ID = 7;
 
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      job_title TEXT,
-      session_key TEXT,
-      repo_path TEXT,
-      repo_access_mode TEXT
-    );
+/**
+ * The owning tenant/project/workflow chain, which the old hand-written schema did without.
+ * tasks.sprint_id is NOT NULL and foreign-keyed to sprints, so a task cannot be seeded without
+ * one, and sprints in turn needs a project and a tenant.
+ *
+ * Ids are deliberately far from 1: on SQLite the fixture builds the schema with initSchema, which
+ * seeds its own default tenant and project, and low explicit ids would collide with them.
+ */
+async function seedTenantScope(db: Db): Promise<void> {
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, 'Semantic Handoff', 'semantic-handoff', 0)`, TENANT_ID);
+  await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (?, ?, 'Semantic Handoff', '', '')`, PROJECT_ID, TENANT_ID);
+  await db.run(`
+    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+    VALUES (?, ?, ?, 'Handoff', '', 'generic', 'active', 'time', '2w')
+  `, SPRINT_ID, TENANT_ID, PROJECT_ID);
+  await db.run(`
+    INSERT INTO agents (id, tenant_id, name, job_title, session_key, workspace_path)
+    VALUES (?, ?, 'Vulcan', 'Backend', 'agent:vulcan-backend:local', '')
+  `, AGENT_ID, TENANT_ID);
+}
 
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      agent_id INTEGER,
-      status TEXT,
-      session_key TEXT,
-      lifecycle_outcome_posted_at TEXT,
-      task_outcome TEXT,
-      completed_at TEXT,
-      runtime_ended_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT,
-      started_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE instance_artifacts (
-      instance_id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      current_stage TEXT,
-      summary TEXT,
-      latest_commit_hash TEXT,
-      branch_name TEXT,
-      changed_files_json TEXT,
-      changed_files_count INTEGER,
-      blocker_reason TEXT,
-      outcome TEXT,
-      last_agent_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      stale INTEGER,
-      stale_at TEXT,
-      session_key TEXT,
-      updated_at TEXT,
-      last_note_at TEXT
-    );
-
-    CREATE TABLE task_notes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      author TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE task_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id INTEGER NOT NULL,
-      changed_by TEXT NOT NULL,
-      field TEXT NOT NULL,
-      old_value TEXT,
-      new_value TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      instance_id INTEGER,
-      agent_id INTEGER,
-      job_title TEXT,
-      level TEXT,
-      message TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-  await db.run(`INSERT INTO agents (id, name, job_title, session_key) VALUES (7, 'Vulcan', 'Backend', 'agent:vulcan-backend:local')`);
-  return db;
+async function insertTask(db: Db, taskId: number, status: string): Promise<void> {
+  await db.run(`
+    INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id, updated_at)
+    VALUES (?, ?, ?, ?, 'Task', ?, ?, NULL, datetime('now'))
+  `, taskId, TENANT_ID, PROJECT_ID, SPRINT_ID, status, AGENT_ID);
 }
 
 async function seedTaskAndInstance(db: Db, options?: {
@@ -115,23 +54,40 @@ async function seedTaskAndInstance(db: Db, options?: {
 }): Promise<void> {
   const taskId = options?.taskId ?? 731;
   const instanceId = options?.instanceId ?? 4702;
+  const instanceTaskId = options?.instanceTaskId ?? taskId;
   const activeInstanceId = options?.activeInstanceId === undefined ? instanceId : options.activeInstanceId;
-  await db.run(`INSERT INTO tasks (id, title, status, agent_id, active_instance_id, updated_at) VALUES (?, 'Task', ?, 7, ?, datetime('now'))`, taskId, options?.taskStatus ?? 'review', activeInstanceId);
+
+  await insertTask(db, taskId, options?.taskStatus ?? 'review');
+  // The cross-task case points the instance at a task id that is not the one under test.
+  // job_instances.task_id is a real foreign key here, so that other task has to exist.
+  if (instanceTaskId !== taskId) {
+    await insertTask(db, instanceTaskId, 'review');
+  }
+
   await db.run(`
     INSERT INTO job_instances (id, task_id, agent_id, status, session_key, runtime_ended_at, started_at)
-    VALUES (?, ?, 7, ?, NULL, ?, datetime('now'))
-  `, instanceId, options?.instanceTaskId ?? taskId, options?.instanceStatus ?? 'running', options?.runtimeEndedAt ?? null);
+    VALUES (?, ?, ?, ?, NULL, ?, datetime('now'))
+  `, instanceId, instanceTaskId, AGENT_ID, options?.instanceStatus ?? 'running', options?.runtimeEndedAt ?? null);
+
+  // tasks.active_instance_id and job_instances.task_id reference each other, so the link is made
+  // after both rows exist rather than in the tasks INSERT.
+  if (activeInstanceId !== null) {
+    await db.run(`UPDATE tasks SET active_instance_id = ? WHERE id = ?`, activeInstanceId, taskId);
+  }
 }
 
 describe('closeActiveInstanceAfterSemanticHandoff', () => {
   let db: Db;
 
   beforeEach(async () => {
-    db = await setupDb();
+    // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
+    // SQLite and on PostgreSQL, against the real schema either way.
+    db = await setupTestDb();
+    await seedTenantScope(db);
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
     jest.clearAllMocks();
   });
 

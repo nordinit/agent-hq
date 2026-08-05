@@ -1,466 +1,160 @@
-import Database from 'better-sqlite3';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { recordRunCheckIn } from './runObservability';
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
+
+/**
+ * A completion check-in that only reports "the runtime ended without a lifecycle outcome" must not
+ * leave a generic "Run completed/failed" note on the task, and must not rewrite the runtime
+ * completion state it was handed.
+ */
+
+interface SeededRun {
+  taskId: number;
+  instanceId: number;
+}
+
+/**
+ * The real schema has the foreign keys the old hand-written one did not, so an instance needs a
+ * task, a task needs a sprint, and a sprint needs a project — all of which recordRunCheckIn is
+ * indifferent to beyond the row existing.
+ */
+async function seedRun(): Promise<SeededRun> {
+  const db = getDb();
+  const project = await db.run(
+    `INSERT INTO projects (name, description, context_md) VALUES ('Observability Project', '', '')`,
+  );
+  const sprint = await db.run(
+    `INSERT INTO sprints (project_id, name, goal, sprint_type, status, length_kind, length_value)
+     VALUES (?, 'Observability Workflow', '', 'dev', 'active', 'time', '2w')`,
+    Number(project.lastInsertId),
+  );
+  const task = await db.run(
+    `INSERT INTO tasks (title, status, project_id, sprint_id) VALUES ('Observability Task', 'review', ?, ?)`,
+    Number(project.lastInsertId),
+    Number(sprint.lastInsertId),
+  );
+  const agent = await db.run(
+    `INSERT INTO agents (name, session_key, project_id) VALUES ('Cinder (Backend)', 'cinder-backend', ?)`,
+    Number(project.lastInsertId),
+  );
+  const taskId = Number(task.lastInsertId);
+  const instance = await db.run(
+    `INSERT INTO job_instances (task_id, agent_id, status, session_key) VALUES (?, ?, 'running', 'run:observability')`,
+    taskId,
+    Number(agent.lastInsertId),
+  );
+  return { taskId, instanceId: Number(instance.lastInsertId) };
+}
+
+const notesFor = async (taskId: number): Promise<Array<{ content: string }>> =>
+  await getDb().all(`SELECT content FROM task_notes WHERE task_id = ?`, taskId) as Array<{ content: string }>;
+
+beforeEach(async () => { await setupTestDb(); });
+afterEach(async () => { await teardownTestDb(); });
 
 describe('recordRunCheckIn missing lifecycle handoff note suppression', () => {
   it('does not write the generic completion note for missing lifecycle handoff completions when the runtime end error uses the canonical text', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        agent_id INTEGER,
-        status TEXT,
-        session_key TEXT,
-        started_at TEXT,
-        lifecycle_outcome_posted_at TEXT,
-        task_outcome TEXT,
-        completed_at TEXT,
-        runtime_ended_at TEXT,
-        runtime_end_success INTEGER,
-        runtime_end_error TEXT,
-        runtime_end_source TEXT
-      );
-      CREATE TABLE instance_artifacts (
-        instance_id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        current_stage TEXT,
-        summary TEXT,
-        latest_commit_hash TEXT,
-        branch_name TEXT,
-        changed_files_json TEXT,
-        changed_files_count INTEGER,
-        blocker_reason TEXT,
-        outcome TEXT,
-        last_agent_heartbeat_at TEXT,
-        last_meaningful_output_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        stale INTEGER,
-        stale_at TEXT,
-        session_key TEXT,
-        updated_at TEXT,
-        last_note_at TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        status TEXT,
-        previous_status TEXT,
-        active_instance_id INTEGER
-      );
-      CREATE TABLE task_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        from_status TEXT,
-        to_status TEXT,
-        moved_by TEXT,
-        move_type TEXT,
-        instance_id INTEGER,
-        reason TEXT
-      );
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        name TEXT
-      );
-    `);
+    const { taskId, instanceId } = await seedRun();
 
-    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
-    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
-    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2030, 403, 96, 'running', 'run:2030')`);
-
-    const result = await recordRunCheckIn(db, {
-          instanceId: 2030,
-          stage: 'completion',
-          summary: 'OpenClaw runtime ended without required lifecycle outcome',
-          outcome: 'failed',
-          meaningfulOutput: true,
-          statusLabel: 'failed',
-          forceNote: true,
-          runtimeEndSuccess: false,
-          runtimeEndError: 'Runtime ended without required lifecycle outcome',
-          runtimeEndSource: 'instance_complete',
-        });
+    const result = await recordRunCheckIn(getDb(), {
+      instanceId,
+      stage: 'completion',
+      summary: 'OpenClaw runtime ended without required lifecycle outcome',
+      outcome: 'failed',
+      meaningfulOutput: true,
+      statusLabel: 'failed',
+      forceNote: true,
+      runtimeEndSuccess: false,
+      runtimeEndError: 'Runtime ended without required lifecycle outcome',
+      runtimeEndSource: 'instance_complete',
+    });
 
     expect(result.noteCreated).toBe(false);
-    const notes = await db.all(`SELECT content FROM task_notes WHERE task_id = 403`) as Array<{ content: string }>;
-    expect(notes).toHaveLength(0);
+    expect(await notesFor(taskId)).toHaveLength(0);
   });
 
   it('does not write the generic completion note for missing lifecycle handoff completions when the runtime end error is a longer failure summary', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        agent_id INTEGER,
-        status TEXT,
-        session_key TEXT,
-        started_at TEXT,
-        lifecycle_outcome_posted_at TEXT,
-        task_outcome TEXT,
-        completed_at TEXT,
-        runtime_ended_at TEXT,
-        runtime_end_success INTEGER,
-        runtime_end_error TEXT,
-        runtime_end_source TEXT
-      );
-      CREATE TABLE instance_artifacts (
-        instance_id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        current_stage TEXT,
-        summary TEXT,
-        latest_commit_hash TEXT,
-        branch_name TEXT,
-        changed_files_json TEXT,
-        changed_files_count INTEGER,
-        blocker_reason TEXT,
-        outcome TEXT,
-        last_agent_heartbeat_at TEXT,
-        last_meaningful_output_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        stale INTEGER,
-        stale_at TEXT,
-        session_key TEXT,
-        updated_at TEXT,
-        last_note_at TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        status TEXT,
-        previous_status TEXT,
-        active_instance_id INTEGER
-      );
-      CREATE TABLE task_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        from_status TEXT,
-        to_status TEXT,
-        moved_by TEXT,
-        move_type TEXT,
-        instance_id INTEGER,
-        reason TEXT
-      );
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        name TEXT
-      );
-    `);
+    const { taskId, instanceId } = await seedRun();
 
-    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
-    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
-    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2031, 403, 96, 'running', 'run:2031')`);
-
-    const result = await recordRunCheckIn(db, {
-          instanceId: 2031,
-          stage: 'completion',
-          summary: 'OpenClaw runtime ended without required lifecycle outcome',
-          outcome: 'failed',
-          meaningfulOutput: true,
-          statusLabel: 'failed',
-          forceNote: true,
-          runtimeEndSuccess: false,
-          runtimeEndError: 'OpenClaw runtime ended without required lifecycle outcome after stale reconciler fallback fix',
-          runtimeEndSource: 'instance_complete',
-        });
+    const result = await recordRunCheckIn(getDb(), {
+      instanceId,
+      stage: 'completion',
+      summary: 'OpenClaw runtime ended without required lifecycle outcome',
+      outcome: 'failed',
+      meaningfulOutput: true,
+      statusLabel: 'failed',
+      forceNote: true,
+      runtimeEndSuccess: false,
+      runtimeEndError: 'OpenClaw runtime ended without required lifecycle outcome after stale reconciler fallback fix',
+      runtimeEndSource: 'instance_complete',
+    });
 
     expect(result.noteCreated).toBe(false);
-    const notes = await db.all(`SELECT content FROM task_notes WHERE task_id = 403`) as Array<{ content: string }>;
-    expect(notes).toHaveLength(0);
+    expect(await notesFor(taskId)).toHaveLength(0);
   });
 
   it('does not write the generic completion note for missing lifecycle handoff completions when runtime success is still true before quarantine handling normalizes it', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        agent_id INTEGER,
-        status TEXT,
-        session_key TEXT,
-        started_at TEXT,
-        lifecycle_outcome_posted_at TEXT,
-        task_outcome TEXT,
-        completed_at TEXT,
-        runtime_ended_at TEXT,
-        runtime_end_success INTEGER,
-        runtime_end_error TEXT,
-        runtime_end_source TEXT
-      );
-      CREATE TABLE instance_artifacts (
-        instance_id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        current_stage TEXT,
-        summary TEXT,
-        latest_commit_hash TEXT,
-        branch_name TEXT,
-        changed_files_json TEXT,
-        changed_files_count INTEGER,
-        blocker_reason TEXT,
-        outcome TEXT,
-        last_agent_heartbeat_at TEXT,
-        last_meaningful_output_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        stale INTEGER,
-        stale_at TEXT,
-        session_key TEXT,
-        updated_at TEXT,
-        last_note_at TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        status TEXT,
-        previous_status TEXT,
-        active_instance_id INTEGER
-      );
-      CREATE TABLE task_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        from_status TEXT,
-        to_status TEXT,
-        moved_by TEXT,
-        move_type TEXT,
-        instance_id INTEGER,
-        reason TEXT
-      );
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        name TEXT
-      );
-    `);
+    const { taskId, instanceId } = await seedRun();
 
-    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
-    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
-    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2032, 403, 96, 'running', 'run:2032')`);
-
-    const result = await recordRunCheckIn(db, {
-          instanceId: 2032,
-          stage: 'completion',
-          summary: 'OpenClaw runtime ended without required lifecycle outcome',
-          outcome: 'failed',
-          meaningfulOutput: true,
-          statusLabel: 'done',
-          forceNote: true,
-          runtimeEndSuccess: true,
-          runtimeEndError: 'OpenClaw runtime ended without required lifecycle outcome after stale short-note suppression fix',
-          runtimeEndSource: 'instance_complete',
-        });
+    const result = await recordRunCheckIn(getDb(), {
+      instanceId,
+      stage: 'completion',
+      summary: 'OpenClaw runtime ended without required lifecycle outcome',
+      outcome: 'failed',
+      meaningfulOutput: true,
+      statusLabel: 'done',
+      forceNote: true,
+      runtimeEndSuccess: true,
+      runtimeEndError: 'OpenClaw runtime ended without required lifecycle outcome after stale short-note suppression fix',
+      runtimeEndSource: 'instance_complete',
+    });
 
     expect(result.noteCreated).toBe(false);
-    const notes = await db.all(`SELECT content FROM task_notes WHERE task_id = 403`) as Array<{ content: string }>;
-    expect(notes).toHaveLength(0);
+    expect(await notesFor(taskId)).toHaveLength(0);
   });
 
   it('does not write the generic completion note when the summary says the runtime ended without posting a lifecycle outcome', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        agent_id INTEGER,
-        status TEXT,
-        session_key TEXT,
-        started_at TEXT,
-        lifecycle_outcome_posted_at TEXT,
-        task_outcome TEXT,
-        completed_at TEXT,
-        runtime_ended_at TEXT,
-        runtime_end_success INTEGER,
-        runtime_end_error TEXT,
-        runtime_end_source TEXT
-      );
-      CREATE TABLE instance_artifacts (
-        instance_id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        current_stage TEXT,
-        summary TEXT,
-        latest_commit_hash TEXT,
-        branch_name TEXT,
-        changed_files_json TEXT,
-        changed_files_count INTEGER,
-        blocker_reason TEXT,
-        outcome TEXT,
-        last_agent_heartbeat_at TEXT,
-        last_meaningful_output_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        stale INTEGER,
-        stale_at TEXT,
-        session_key TEXT,
-        updated_at TEXT,
-        last_note_at TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        status TEXT,
-        previous_status TEXT,
-        active_instance_id INTEGER
-      );
-      CREATE TABLE task_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        from_status TEXT,
-        to_status TEXT,
-        moved_by TEXT,
-        move_type TEXT,
-        instance_id INTEGER,
-        reason TEXT
-      );
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        name TEXT
-      );
-    `);
+    const { taskId, instanceId } = await seedRun();
 
-    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
-    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
-    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2033, 403, 96, 'running', 'run:2033')`);
-
-    const result = await recordRunCheckIn(db, {
-          instanceId: 2033,
-          stage: 'completion',
-          summary: 'QA simulation: runtime ended without posting lifecycle outcome after the latest control-plane patch.',
-          outcome: 'done',
-          meaningfulOutput: true,
-          statusLabel: 'done',
-          forceNote: true,
-          runtimeEndSuccess: true,
-          runtimeEndError: 'Runtime ended without required lifecycle outcome',
-          runtimeEndSource: 'instance_complete',
-        });
+    const result = await recordRunCheckIn(getDb(), {
+      instanceId,
+      stage: 'completion',
+      summary: 'QA simulation: runtime ended without posting lifecycle outcome after the latest control-plane patch.',
+      outcome: 'done',
+      meaningfulOutput: true,
+      statusLabel: 'done',
+      forceNote: true,
+      runtimeEndSuccess: true,
+      runtimeEndError: 'Runtime ended without required lifecycle outcome',
+      runtimeEndSource: 'instance_complete',
+    });
 
     expect(result.noteCreated).toBe(false);
-    const notes = await db.all(`SELECT content FROM task_notes WHERE task_id = 403`) as Array<{ content: string }>;
-    expect(notes).toHaveLength(0);
+    expect(await notesFor(taskId)).toHaveLength(0);
   });
 });
 
 describe('recordRunCheckIn preserves runtime completion state when lifecycle handoff is missing', () => {
   it('does not force the instance status to failed solely because the lifecycle outcome is still missing', async () => {
-    const dbRaw = new Database(':memory:');
-      const db = new SqliteAdapter(dbRaw);
-    await db.exec(`
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        agent_id INTEGER,
-        status TEXT,
-        session_key TEXT,
-        started_at TEXT,
-        lifecycle_outcome_posted_at TEXT,
-        task_outcome TEXT,
-        completed_at TEXT,
-        runtime_ended_at TEXT,
-        runtime_end_success INTEGER,
-        runtime_end_error TEXT,
-        runtime_end_source TEXT
-      );
-      CREATE TABLE instance_artifacts (
-        instance_id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        current_stage TEXT,
-        summary TEXT,
-        latest_commit_hash TEXT,
-        branch_name TEXT,
-        changed_files_json TEXT,
-        changed_files_count INTEGER,
-        blocker_reason TEXT,
-        outcome TEXT,
-        last_agent_heartbeat_at TEXT,
-        last_meaningful_output_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        stale INTEGER,
-        stale_at TEXT,
-        session_key TEXT,
-        updated_at TEXT,
-        last_note_at TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        author TEXT,
-        content TEXT
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        status TEXT,
-        previous_status TEXT,
-        active_instance_id INTEGER
-      );
-      CREATE TABLE task_events (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        project_id INTEGER,
-        agent_id INTEGER,
-        from_status TEXT,
-        to_status TEXT,
-        moved_by TEXT,
-        move_type TEXT,
-        instance_id INTEGER,
-        reason TEXT
-      );
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        name TEXT
-      );
-    `);
+    const { instanceId } = await seedRun();
 
-    await db.run(`INSERT INTO tasks (id, status) VALUES (403, 'review')`);
-    await db.run(`INSERT INTO agents (id, name) VALUES (96, 'Cinder (Backend)')`);
-    await db.run(`INSERT INTO job_instances (id, task_id, agent_id, status, session_key) VALUES (2034, 403, 96, 'running', 'run:2034')`);
+    await recordRunCheckIn(getDb(), {
+      instanceId,
+      stage: 'completion',
+      summary: 'Runtime ended without required lifecycle outcome',
+      outcome: 'done',
+      meaningfulOutput: true,
+      statusLabel: 'done',
+      forceNote: true,
+      runtimeEndSuccess: true,
+      runtimeEndError: 'Runtime ended without required lifecycle outcome',
+      runtimeEndSource: 'instance_complete',
+    });
 
-    await recordRunCheckIn(db, {
-            instanceId: 2034,
-            stage: 'completion',
-            summary: 'Runtime ended without required lifecycle outcome',
-            outcome: 'done',
-            meaningfulOutput: true,
-            statusLabel: 'done',
-            forceNote: true,
-            runtimeEndSuccess: true,
-            runtimeEndError: 'Runtime ended without required lifecycle outcome',
-            runtimeEndSource: 'instance_complete',
-          });
-
-    const instance = await db.get(`SELECT status, runtime_end_success, runtime_end_error FROM job_instances WHERE id = 2034`) as {
+    const instance = await getDb().get(
+      `SELECT status, runtime_end_success, runtime_end_error FROM job_instances WHERE id = ?`,
+      instanceId,
+    ) as {
       status: string;
       runtime_end_success: number;
       runtime_end_error: string | null;
