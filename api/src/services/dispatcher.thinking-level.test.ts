@@ -8,6 +8,14 @@ jest.mock('../runtimes', () => ({
   resolveRuntime: jest.fn(),
 }));
 
+jest.mock('../runtimes/executablePolicy', () => ({
+  ...(jest.requireActual('../runtimes/executablePolicy') as object),
+  resolveAllowedRuntimeExecutable: jest.fn(() => ({
+    path: '/opt/agent-hq/test-bin/claude',
+    fingerprint: `sha256:${'a'.repeat(64)}`,
+  })),
+}));
+
 jest.mock('./worktreeManager', () => ({
   createTaskWorktree: jest.fn(() => ({ created: false, workspacePath: null, branch: null, error: null })),
 }));

@@ -8,6 +8,7 @@ import { setupTestDb, teardownTestDb } from '../db/testDb';
 import router from './provider-connections';
 
 const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+const originalClaudeBinaryAllowlist = process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
 let tempDir = '';
 
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -45,6 +46,8 @@ describe('runtime-owned provider connections', () => {
     await teardownTestDb();
     if (originalOpenClawStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
     else process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+    if (originalClaudeBinaryAllowlist == null) delete process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
+    else process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES = originalClaudeBinaryAllowlist;
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -110,10 +113,15 @@ describe('runtime-owned provider connections', () => {
 
   it('revalidates an isolated CLI profile from the linked agent without persisting its path', async () => {
     const claudeHome = path.join(tempDir, 'claude-builder');
+    const claudeBin = path.join(tempDir, 'claude');
     fs.mkdirSync(claudeHome, { recursive: true });
     fs.writeFileSync(path.join(claudeHome, '.credentials.json'), JSON.stringify({
       claudeAiOauth: { accessToken: 'never-return-this-token' },
     }));
+    fs.writeFileSync(claudeBin, '#!/bin/sh\nexit 0\n', 'utf8');
+    fs.chmodSync(claudeBin, 0o755);
+    process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES = claudeBin;
+    const runtimeConfig = { claudeConfigDir: claudeHome, claudeBin };
 
     const { server, baseUrl } = await startServer();
     try {
@@ -125,9 +133,10 @@ describe('runtime-owned provider connections', () => {
           runtime: 'claude-code',
           auth_mode: 'subscription',
           agent_slug: 'builder',
-          runtime_config: { claudeConfigDir: claudeHome },
+          runtime_config: runtimeConfig,
         }),
       });
+      expect(discover.status).toBe(200);
       const discovered = await discover.json() as { connections: Array<{ externalRef: string; displayName: string; metadata: Record<string, unknown> }> };
       const connection = discovered.connections[0];
       expect(connection).toBeDefined();
@@ -143,7 +152,7 @@ describe('runtime-owned provider connections', () => {
           external_ref: connection.externalRef,
           display_name: connection.displayName,
           agent_slug: 'builder',
-          runtime_config: { claudeConfigDir: claudeHome },
+          runtime_config: runtimeConfig,
         }),
       });
       const saved = await create.json() as { id: number; metadata: Record<string, unknown> };
@@ -156,7 +165,7 @@ describe('runtime-owned provider connections', () => {
           tenant_id, name, session_key, runtime_type, runtime_config,
           preferred_provider, provider_connection_id
         ) VALUES (1, 'Builder', 'agent:builder:main', 'claude-code', ?, 'anthropic', ?)
-      `, JSON.stringify({ claudeConfigDir: claudeHome }), saved.id);
+      `, JSON.stringify(runtimeConfig), saved.id);
 
       const validate = await fetch(`${baseUrl}/api/v1/provider-connections/${saved.id}/validate`, {
         method: 'POST',

@@ -282,6 +282,10 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
 
   it('dispatchInstance uses persisted repo workspace as runtime working directory', async () => {
     const repoWorkspacePath = path.join(workspaceRoot, 'task-373');
+    const claudeBin = path.join(tempRoot, 'claude');
+    fs.writeFileSync(claudeBin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.chmodSync(claudeBin, 0o755);
+    const previousClaudeAllowlist = process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
     await db.run(`
       INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, payload_sent, created_at)
       VALUES (?, 1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -294,6 +298,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
 
     const getDbSpy = jest.spyOn(require('../db/client'), 'getDb').mockReturnValue(db);
     await db.run(`UPDATE agents SET session_key = ? WHERE id = 1`, 'agent:agent-hq:cinder-platform-engineer:backend-engineer:main');
+    process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES = claudeBin;
     try {
       const { dispatchInstance } = await import('./dispatcher');
       await dispatchInstance({
@@ -304,10 +309,12 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
         message: 'Run the task',
         storyPoints: null,
         runtimeType: 'claude-code',
-        runtimeConfig: { maxTurns: 3 },
+        runtimeConfig: { maxTurns: 3, claudeBin },
       });
     } finally {
       getDbSpy.mockRestore();
+      if (previousClaudeAllowlist == null) delete process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES;
+      else process.env.AGENT_HQ_ALLOWED_CLAUDE_BINARIES = previousClaudeAllowlist;
     }
 
     expect(runtimeDispatch).toHaveBeenCalledTimes(1);
@@ -320,12 +327,18 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     expect(runtimeParams.workspaceRoot).toBe(repoWorkspacePath);
     expect(runtimeParams.runtimeConfig).toEqual(expect.objectContaining({
       maxTurns: 3,
+      claudeBin,
       workingDirectory: repoWorkspacePath,
     }));
     expect(runtimeParams.runtimeBoundary).toMatchObject({
       version: 1,
       identity: { tenantId: 1, instanceId: 900, agentId: 1, agentSlug: 'cinder-backend' },
-      runtime: { type: 'claude-code', driverVersion: 'claude-code-driver/1', turnLimit: 3 },
+      runtime: {
+        type: 'claude-code',
+        driverVersion: 'claude-code-driver/1',
+        executableFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        turnLimit: 3,
+      },
       workspace: {
         workspaceRoot: repoWorkspacePath,
         activeRepoRoot: repoWorkspacePath,
