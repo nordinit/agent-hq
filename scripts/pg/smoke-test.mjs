@@ -5,10 +5,10 @@
  *
  * The adapter's own contract suite proves it behaves like the SQLite one on a toy schema of
  * two tables. That is necessary but not sufficient: it says nothing about whether the
- * REAL queries — against the renamed 71-table schema, holding 937k rows of production data
- * — actually run. The failures this catches are the ones the contract tests structurally
- * cannot: a dialect construct the translator mishandles, a renamed identifier the schema
- * migration moved but a query did not, a NULL/empty-string distinction lost in the load.
+ * REAL queries — against the current PostgreSQL schema and loaded production-shaped data —
+ * actually run. The failures this catches are the ones the contract tests structurally
+ * cannot: a stale identifier, a PostgreSQL-incompatible query shape, a broken sequence, or
+ * a NULL/empty-string distinction lost in a one-time transfer.
  *
  * Read-only except for one explicitly-rolled-back transaction.
  *
@@ -66,32 +66,32 @@ const q = async (sql, params = []) => (await pool.query(toPositional(sql), param
 async function main() {
   console.log(`Smoke-testing ${PG_URL}\n`);
 
-  // ---- the rename actually took, in queryable form -----------------------------------
-  await check('workflows table exists and has rows', async () => {
-    const rows = await q(`SELECT COUNT(*)::int AS c FROM workflows`);
-    if (!rows[0].c) throw new Error('workflows is empty');
-    return `${rows[0].c} workflows`;
+  // ---- the intentionally unrenamed current schema is queryable -----------------------
+  await check('sprints table exists and has rows', async () => {
+    const rows = await q(`SELECT COUNT(*)::int AS c FROM sprints`);
+    if (!rows[0].c) throw new Error('sprints is empty');
+    return `${rows[0].c} sprints`;
   });
 
-  await check('tasks.workflow_id resolves and joins to workflows', async () => {
+  await check('tasks.sprint_id resolves and joins to sprints', async () => {
     const rows = await q(`
       SELECT COUNT(*)::int AS c
-      FROM tasks t JOIN workflows w ON w.id = t.workflow_id
+      FROM tasks t JOIN sprints s ON s.id = t.sprint_id
     `);
     return `${rows[0].c} tasks joined`;
   });
 
-  await check('agents renamed columns are queryable', async () => {
-    const rows = await q(`SELECT COUNT(*)::int AS c FROM agents WHERE title IS NOT NULL`);
-    return `${rows[0].c} agents with a title`;
+  await check('agents current columns are queryable', async () => {
+    const rows = await q(`SELECT COUNT(*)::int AS c FROM agents WHERE job_title IS NOT NULL`);
+    return `${rows[0].c} agents with a job title`;
   });
 
-  await check('no sprint-named table remains', async () => {
+  await check('deferred workflow rename is not partially applied', async () => {
     const rows = await q(`
       SELECT COUNT(*)::int AS c FROM information_schema.tables
-       WHERE table_schema = 'public' AND table_name LIKE '%sprint%'`);
-    if (rows[0].c !== 0) throw new Error(`${rows[0].c} sprint-named table(s) remain`);
-    return '0';
+       WHERE table_schema = 'public' AND table_name = 'workflows'`);
+    if (rows[0].c !== 0) throw new Error('unexpected workflows table: the deferred rename is partially applied');
+    return 'not applied';
   });
 
   // ---- query shapes the application actually issues -----------------------------------
@@ -106,20 +106,20 @@ async function main() {
     const rows = await q(`
       SELECT t.id, t.title, t.priority, t.status
         FROM tasks t
-       WHERE t.status = ? AND t.workflow_id IS NOT NULL
+       WHERE t.status = ? AND t.sprint_id IS NOT NULL
        ORDER BY CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, t.id
        LIMIT 5`, ['todo']);
     return `${rows.length} candidate task(s)`;
   });
 
-  await check('aggregate + GROUP BY over the renamed schema', async () => {
+  await check('aggregate + GROUP BY over the current schema', async () => {
     const rows = await q(`
-      SELECT w.id, w.name, COUNT(t.id)::int AS task_count
-        FROM workflows w LEFT JOIN tasks t ON t.workflow_id = w.id
-       GROUP BY w.id, w.name
+      SELECT s.id, s.name, COUNT(t.id)::int AS task_count
+        FROM sprints s LEFT JOIN tasks t ON t.sprint_id = s.id
+       GROUP BY s.id, s.name
        ORDER BY task_count DESC
        LIMIT 5`);
-    return `top workflow has ${rows[0]?.task_count ?? 0} tasks`;
+    return `top sprint has ${rows[0]?.task_count ?? 0} tasks`;
   });
 
   await check('string_agg replaces GROUP_CONCAT', async () => {
@@ -129,8 +129,8 @@ async function main() {
   });
 
   await check('NULL-safe comparison (IS NOT DISTINCT FROM)', async () => {
-    // SQLite spells this `col IS ?`; PostgreSQL rejects a parameter after IS, which is why
-    // the dialect translator REPORTS this construct instead of rewriting it.
+    // PostgreSQL rejects the former SQLite `col IS ?` spelling. Application SQL uses
+    // the native null-safe operator directly now that no dialect translator exists.
     const rows = await q(
       `SELECT COUNT(*)::int AS c FROM tasks WHERE agent_id IS NOT DISTINCT FROM ?`, [null]);
     return `${rows[0].c} unassigned`;
@@ -177,7 +177,7 @@ async function main() {
       let rejected = false;
       try {
         await client.query(
-          `INSERT INTO tasks (title, workflow_id, tenant_id) VALUES ($1, $2, $3)`,
+          `INSERT INTO tasks (title, sprint_id, tenant_id) VALUES ($1, $2, $3)`,
           ['smoke-test-orphan', 999999999, 1],
         );
       } catch { rejected = true; }

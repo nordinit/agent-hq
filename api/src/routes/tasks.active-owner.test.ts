@@ -1,23 +1,20 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { Server } from 'http';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import {
   authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
-  ensureMcpApiKeyTable,
   issueMcpApiKeyForAgent,
   replaceAgentMcpPermissionPolicy,
 } from '../lib/mcpApiAuth';
 import tasksRouter from './tasks';
 
-const ORIGINAL_DB_PATH = process.env.AGENT_HQ_DB_PATH;
 
 function restoreDbPath(): void {
-  if (ORIGINAL_DB_PATH == null) delete process.env.AGENT_HQ_DB_PATH;
-  else process.env.AGENT_HQ_DB_PATH = ORIGINAL_DB_PATH;
 }
 
 describe('task active-owner endpoint', () => {
@@ -29,66 +26,39 @@ describe('task active-owner endpoint', () => {
 
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-active-owner-'));
-    process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq.db');
-    closeDb();
+    await setupTestDb();
 
     const db = getDb();
-    await db.exec(`
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        project_id INTEGER,
-        name TEXT NOT NULL,
-        slug TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        system_role TEXT,
-        deleted_at TEXT
-      );
-      CREATE TABLE tasks (
-        id INTEGER PRIMARY KEY,
-        tenant_id INTEGER,
-        title TEXT,
-        status TEXT,
-        project_id INTEGER,
-        sprint_id INTEGER,
-        agent_id INTEGER,
-        active_instance_id INTEGER
-      );
-      CREATE TABLE job_instances (
-        id INTEGER PRIMARY KEY,
-        task_id INTEGER,
-        agent_id INTEGER,
-        status TEXT
-      );
-      CREATE TABLE task_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id INTEGER NOT NULL,
-        author TEXT,
-        content TEXT
-      );
-    `);
-    await ensureMcpApiKeyTable(db);
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+    await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Agent HQ')`);
+    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (57, 1, 86, 'Development', 'dev')`);
 
     await db.run(`
-      INSERT INTO agents (id, tenant_id, project_id, name, slug, enabled, system_role)
+      INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, enabled, system_role)
       VALUES
-        (94, 1, 86, 'Cinder', 'cinder-backend', 1, NULL),
-        (95, 1, 86, 'Prism', 'prism-qa', 1, NULL)
+        (94, 1, 86, 'Cinder', 'agent:cinder:main', 'cinder-backend', 1, NULL),
+        (95, 1, 86, 'Prism', 'agent:prism:main', 'prism-qa', 1, NULL)
     `);
     await db.run(`
       INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id, agent_id, active_instance_id)
       VALUES
         (398, 1, 'Wrong task', 'review', 86, 57, 94, NULL),
-        (551, 1, 'Routing rule fix', 'in_progress', 86, 57, 94, 7001),
-        (552, 1, 'Other agent task', 'in_progress', 86, 57, 95, 7002),
-        (553, 1, 'Finished run task', 'review', 86, 57, 94, 7003)
+        (551, 1, 'Routing rule fix', 'in_progress', 86, 57, 94, NULL),
+        (552, 1, 'Other agent task', 'in_progress', 86, 57, 95, NULL),
+        (553, 1, 'Finished run task', 'review', 86, 57, 94, NULL)
     `);
     await db.run(`
-      INSERT INTO job_instances (id, task_id, agent_id, status)
+      INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status)
       VALUES
-        (7001, 551, 94, 'running'),
-        (7002, 552, 95, 'running'),
-        (7003, 553, 94, 'done')
+        (7001, 1, 551, 94, 'running'),
+        (7002, 1, 552, 95, 'running'),
+        (7003, 1, 553, 94, 'done')
+    `);
+    await db.run(`
+      UPDATE tasks
+      SET active_instance_id = CASE id WHEN 551 THEN 7001 WHEN 552 THEN 7002 WHEN 553 THEN 7003 END
+      WHERE id IN (551, 552, 553)
     `);
 
     cinderKey = (await issueMcpApiKeyForAgent(db, 94, 'cinder test key')).apiKey;
@@ -116,7 +86,7 @@ describe('task active-owner endpoint', () => {
       server.close((err) => err ? reject(err) : resolve());
     });
     server = null;
-    closeDb();
+    await teardownTestDb();
     restoreDbPath();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });

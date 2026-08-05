@@ -1,14 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 
-function sameResolvedTarget(targetPath, sourcePath) {
-  try {
-    return fs.realpathSync(targetPath) === fs.realpathSync(sourcePath);
-  } catch {
-    return false;
-  }
-}
-
 function copyDirectory(sourceDir, targetDir) {
   fs.rmSync(targetDir, { recursive: true, force: true });
   fs.cpSync(sourceDir, targetDir, { recursive: true });
@@ -18,33 +10,9 @@ function copyDirectory(sourceDir, targetDir) {
 function ensureDirectoryMirror(sourceDir, targetDir) {
   if (!fs.existsSync(sourceDir)) return;
   fs.mkdirSync(path.dirname(targetDir), { recursive: true });
-
-  try {
-    const existing = fs.lstatSync(targetDir);
-    if (existing.isSymbolicLink() || sameResolvedTarget(targetDir, sourceDir)) {
-      const existingTarget = existing.isSymbolicLink()
-        ? path.resolve(path.dirname(targetDir), fs.readlinkSync(targetDir))
-        : sourceDir;
-      if (sameResolvedTarget(existingTarget, sourceDir)) {
-        return;
-      }
-    }
-    fs.rmSync(targetDir, { recursive: true, force: true });
-  } catch {
-    // No existing target to replace.
-  }
-
-  const symlinkType = process.platform === 'win32' ? 'junction' : 'dir';
-  try {
-    fs.symlinkSync(sourceDir, targetDir, symlinkType);
-    console.log('[standalone] Linked static assets:', targetDir, '->', sourceDir);
-  } catch (error) {
-    const code = error && typeof error === 'object' ? error.code : '';
-    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'UNKNOWN') {
-      throw error;
-    }
-    copyDirectory(sourceDir, targetDir);
-  }
+  // Standalone output is copied into the runtime image without the builder filesystem. Absolute
+  // symlinks back into `.next/static` therefore become broken in Docker; materialize the assets.
+  copyDirectory(sourceDir, targetDir);
 }
 
 function findStandaloneServerDirs(standaloneRoot) {
@@ -70,7 +38,7 @@ function findStandaloneServerDirs(standaloneRoot) {
       const entryPath = path.join(current, entry.name);
       if (entry.isFile() && entry.name === 'server.js') {
         dirs.add(path.dirname(entryPath));
-      } else if (entry.isDirectory()) {
+      } else if (entry.isDirectory() && entry.name !== 'node_modules') {
         stack.push(entryPath);
       }
     }

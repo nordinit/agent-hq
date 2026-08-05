@@ -34,7 +34,7 @@ export async function getDispatchTaskNotesContext(
     WHERE task_id = ?
       AND agent_id = ?
       AND id != ?
-    ORDER BY datetime(created_at) DESC, id DESC
+    ORDER BY created_at DESC, id DESC
     LIMIT 1
   `, params.taskId, params.agentId, params.currentInstanceId) as { created_at: string } | undefined;
 
@@ -47,13 +47,13 @@ export async function getDispatchTaskNotesContext(
         FROM task_notes
         WHERE task_id = ?
           AND created_at >= ?
-        ORDER BY datetime(created_at) ASC, id ASC
+        ORDER BY created_at ASC, id ASC
       `, params.taskId, cutoff)
     : await db.all(`
         SELECT created_at, author, content
         FROM task_notes
         WHERE task_id = ?
-        ORDER BY datetime(created_at) ASC, id ASC
+        ORDER BY created_at ASC, id ASC
       `, params.taskId)) as DispatchTaskNoteRow[];
 
   let totalChars = 0;

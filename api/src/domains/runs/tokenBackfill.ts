@@ -188,7 +188,7 @@ async function getBackfillCandidates(db: Db): Promise<Array<{ id: number; sessio
       AND token_output IS NULL
       AND token_total IS NULL
       AND status IN ('done', 'failed')
-      AND created_at >= datetime('now', '-14 days')
+      AND created_at >= to_char((now() AT TIME ZONE 'utc' - interval '14 day'), 'YYYY-MM-DD HH24:MI:SS')
     ORDER BY created_at DESC, id DESC
     LIMIT 500
   `) as Array<{ id: number; session_key: string | null }>;

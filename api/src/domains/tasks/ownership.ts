@@ -15,7 +15,7 @@ export async function syncTaskActiveAgentFromInstance(db: Db, taskId: number): P
           FROM job_instances ji
           WHERE ji.id = tasks.active_instance_id
         ),
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, taskId);
 }

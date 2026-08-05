@@ -1,5 +1,4 @@
 import { isValidTaskType } from '../../lib/taskTypes';
-import { seedSprintTaskPolicy } from './policy/seed';
 import {
   annotateRoutingRuleScope,
   detectDuplicateRoutingRule,
@@ -160,7 +159,6 @@ export async function createRoutingRule(db: Db, input: Record<string, unknown>) 
     if (!validationSprintId) {
       throw withStatus('sprint_id is required for sprint-specific routing rules', 400);
     }
-    await seedSprintTaskPolicy(db, validationSprintId);
     if (typeof taskType === 'string') await requireRoutingRuleTaskTypeForSprint(db, validationSprintId, taskType);
     await requireRoutingRuleStatusForSprint(db, validationSprintId, status);
   }
@@ -254,7 +252,6 @@ export async function updateRoutingRule(db: Db, input: Record<string, unknown> &
     if (!validationSprintId) {
       throw withStatus('sprint_id is required for sprint-specific routing rules', 400);
     }
-    await seedSprintTaskPolicy(db, validationSprintId);
     if (typeof nextTaskType === 'string') await requireRoutingRuleTaskTypeForSprint(db, validationSprintId, nextTaskType);
     await requireRoutingRuleStatusForSprint(db, validationSprintId, nextStatus);
   }
@@ -281,7 +278,7 @@ export async function updateRoutingRule(db: Db, input: Record<string, unknown> &
     }
     await db.run(`
       UPDATE sprint_task_routing_rules
-      SET project_id = ?, sprint_type = ?, sprint_id = ?, task_type = ?, status = ?, agent_id = ?, priority = ?, enabled = ?, is_system = 0, updated_at = datetime('now')
+      SET project_id = ?, sprint_type = ?, sprint_id = ?, task_type = ?, status = ?, agent_id = ?, priority = ?, enabled = ?, is_system = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?${initialTenant.sql}
     `, scope.projectId, scope.sprintType, nextSprintId, nextTaskType, nextStatus, target.agent_id, nextPriority, nextEnabled, id, ...initialTenant.params);
   } else {
@@ -302,7 +299,7 @@ export async function updateRoutingRule(db: Db, input: Record<string, unknown> &
     }
     await db.run(`
       UPDATE sprint_task_routing_rules
-      SET sprint_id = ?, task_type = ?, status = ?, agent_id = ?, priority = ?, enabled = ?, is_system = 0, updated_at = datetime('now')
+      SET sprint_id = ?, task_type = ?, status = ?, agent_id = ?, priority = ?, enabled = ?, is_system = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?${initialTenant.sql}
     `, scope.sprintId, nextTaskType, nextStatus, target.agent_id, nextPriority, nextEnabled, id, ...initialTenant.params);
   }

@@ -126,7 +126,7 @@ export async function attachInstanceToTask(db: Db, instanceId: number, taskId: n
 
     await db.run(`
       UPDATE tasks
-      SET active_instance_id = ?, updated_at = datetime('now')
+      SET active_instance_id = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, instanceId, taskId);
     await syncTaskActiveAgentFromInstance(db, taskId);

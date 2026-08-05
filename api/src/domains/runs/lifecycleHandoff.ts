@@ -147,7 +147,7 @@ export async function markTaskNeedsAttentionForMissingSemanticHandoff(
   if (mapping?.action_kind === 'status' && mapping.action_target && mapping.action_target !== priorStatus) {
     await db.run(`
       UPDATE tasks
-      SET status = ?, updated_at = datetime('now')
+      SET status = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, mapping.action_target, params.taskId);
     await writeTaskStatusChange(db, params.taskId, params.changedBy, priorStatus, mapping.action_target, {

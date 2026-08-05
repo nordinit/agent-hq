@@ -2,17 +2,13 @@ import express from 'express';
 import type { Server } from 'http';
 import type { Db } from '../db/adapter/types';
 import { getDb } from '../db/client';
-import { columnExists } from '../db/introspection';
-import { POSTGRES_MIGRATION_DIRS } from '../db/pg/migrationDirs';
-import { loadMigrations } from '../db/pg/migrationRunner';
-import { STARTUP_SCHEMA_LEDGER_CHECKSUM, STARTUP_SCHEMA_LEDGER_ID, verifyStartupSchema } from '../db/startupVerifier';
-import { setupTestDb, teardownTestDb, usingPostgres } from '../db/testDb';
+import { verifyStartupSchema } from '../db/startupVerifier';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import {
   authenticateMcpApiKeyIfPresent,
   authorizeMcpApiRequestIfPresent,
   ensureConfiguredRuntimeMcpApiKey,
   getAgentMcpPermissionPolicy,
-  ensureMcpApiKeyTable,
   issueMcpApiKeyForAgent,
   replaceAgentMcpPermissionPolicy,
   resolveMcpApiIdentityForKey,
@@ -48,20 +44,14 @@ function redirectPreservingQuery(req: express.Request, path: string): string {
  * every parent must exist before its children, and tasks/job_instances reference each other
  * (tasks.active_instance_id against job_instances.task_id), so that cycle is broken by inserting
  * the tasks first and linking the active instance afterwards.
- *
- * The other difference is that the fixture database is no longer empty on SQLite: setupTestDb()
- * builds it with initSchema(), which seeds a default tenant, an Atlas agent and the system
- * workflow definitions, where the PostgreSQL template seeds nothing. The few places that collide
- * with those seeds are marked below.
  */
 async function seedScopeFixture(db: Db): Promise<void> {
-  // OR IGNORE, because initSchema() already seeds tenant 1 and these two settings with exactly
-  // these values. Both engines reach the same state either way.
+  // State tenant selection explicitly so this fixture never depends on installation seeding.
   await db.run(
-    `INSERT OR IGNORE INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+    `INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?), (?, ?, ?, ?) ON CONFLICT DO NOTHING`,
     1, 'Default Tenant', 'default', 1, 2, 'EcoPool', 'ecopool', 0,
   );
-  await db.run(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1') ON CONFLICT DO NOTHING`);
   await db.run(
     `INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`,
     86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project',
@@ -70,9 +60,8 @@ async function seedScopeFixture(db: Db): Promise<void> {
     INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
     VALUES (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active')
   `, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint');
-  // session_key is NOT NULL and unique in the real schema, which the minimal fixture did not have
-  // at all. The admin agent is still named Atlas — that is what makes it trusted — but it cannot
-  // reuse the seeded Atlas agent's session key.
+  // session_key is NOT NULL and unique in the real schema. The admin agent is still named Atlas —
+  // that is what makes it trusted — but every fixture agent needs its own key.
   await db.run(`
     INSERT INTO agents (id, tenant_id, project_id, name, session_key, enabled, system_role)
     VALUES (?, ?, ?, ?, ?, 1, NULL),
@@ -95,17 +84,10 @@ async function seedScopeFixture(db: Db): Promise<void> {
     INSERT INTO sprint_task_transition_requirements (id, tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, 601, 1, null, 86, 'dev', null, 'completed_for_review', 'review_commit', 'required', null, 'block', 'Review commit is required', 1, 10, 602, 1, 42, 86, 'dev', 'backend', 'completed_for_review', 'review_branch', 'required', null, 'block', 'Review branch is required', 1, 20, 603, 1, null, 87, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Other project row', 1, 10, 604, 2, null, 99, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Cross tenant row', 1, 10);
-  // These three workflow definitions ARE the fixture: every scope assertion below turns on 'dev'
-  // being owned by project 86. initSchema() seeds a tenant-wide 'dev' with no project, which would
-  // both collide on (tenant_id, key) and answer the scope lookup with "no project", so the seeded
-  // set is replaced rather than added to. On PostgreSQL there is nothing to replace.
+  // These three workflow definitions are authoritative: every scope assertion below depends on
+  // 'dev' being owned by project 86, so replace any rows left by earlier fixture setup.
   await db.run(`DELETE FROM sprint_types`);
-  // initSchema()'s tenant-local rebuild of sprint_types drops project_id, a column the PostgreSQL
-  // baseline — and therefore production — has. Every project-scoped workflow definition assertion
-  // below needs it, and the fixture this replaced declared it by hand for exactly that reason.
-  if (!await columnExists(db, 'sprint_types', 'project_id')) {
-    await db.exec(`ALTER TABLE sprint_types ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE`);
-  }
+  // sprint_types.project_id is part of the migrated PostgreSQL baseline.
   await db.run(`
     INSERT INTO sprint_types (tenant_id, project_id, key, name, description, is_system)
     VALUES (?, ?, ?, ?, ?, 0), (?, ?, ?, ?, ?, 0), (?, ?, ?, ?, ?, 0)
@@ -138,7 +120,6 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   beforeEach(async () => {
     const db = await setupTestDb();
     await seedScopeFixture(db);
-    await ensureMcpApiKeyTable(db);
 
     normalKey = (await issueMcpApiKeyForAgent(db, 7)).apiKey;
     adminKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
@@ -911,7 +892,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     // a row rather than only as an id; the gate still sees a project outside the caller's scope,
     // which is the whole point of the case.
     await db.run(
-      `INSERT OR IGNORE INTO projects (id, tenant_id, name) VALUES (?, 1, 'Recurring Series Project')`,
+      `INSERT INTO projects (id, tenant_id, name) VALUES (?, 1, 'Recurring Series Project') ON CONFLICT DO NOTHING`,
       projectId,
     );
     await db.run(`
@@ -2161,13 +2142,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 });
 
-/**
- * The Atlas agent these tests bootstrap against is a seeding side effect of initSchema(), which
- * only ever runs on SQLite — the PostgreSQL fixture template carries DDL only and is truncated
- * between tests. Reuse the seeded row where there is one and insert it where there is not, so the
- * fixture states its own dependency instead of inheriting it from whichever engine built the
- * schema.
- */
+/** Establishes the Atlas identity required by these authentication cases. */
 async function ensureAtlasAgent(): Promise<void> {
   const db = getDb();
   const tenantId = await getDefaultTenantId(db);
@@ -2184,41 +2159,11 @@ async function ensureAtlasAgent(): Promise<void> {
   `, tenantId);
 }
 
-/**
- * Records the migration ledger the boot gate reads.
- *
- * setupTestDb() builds the schema directly — initSchema() on SQLite, a template clone on
- * PostgreSQL — and neither writes the ledger `npm run db:migrate` does. verifyStartupSchema()
- * judges a database solely by that ledger, so without this it refuses one whose schema is in fact
- * current.
- */
-async function recordAppliedSchemaLedger(): Promise<void> {
-  const db = getDb();
-  if (usingPostgres()) {
-    for (const migration of loadMigrations(POSTGRES_MIGRATION_DIRS)) {
-      await db.run(
-        `INSERT OR IGNORE INTO schema_migrations (id, checksum) VALUES (?, ?)`,
-        migration.id, migration.checksum,
-      );
-    }
-    return;
-  }
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      id         TEXT PRIMARY KEY,
-      checksum   TEXT NOT NULL,
-      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-  await db.run(
-    `INSERT OR IGNORE INTO schema_migrations (id, checksum) VALUES (?, ?)`,
-    STARTUP_SCHEMA_LEDGER_ID, STARTUP_SCHEMA_LEDGER_CHECKSUM,
-  );
-}
-
 describe('ensureConfiguredRuntimeMcpApiKey', () => {
   beforeEach(async () => {
-    await setupTestDb();
+    const db = await setupTestDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+    await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
     delete process.env.AGENT_HQ_MCP_API_KEY;
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_ID;
     delete process.env.AGENT_HQ_MCP_API_KEY_AGENT_OPENCLAW_ID;
@@ -2241,12 +2186,8 @@ describe('ensureConfiguredRuntimeMcpApiKey', () => {
   it('does not materialize configured runtime keys during schema startup', async () => {
     process.env.AGENT_HQ_MCP_API_KEY = 'ahq_mcp_runtime_bootstrap_test';
 
-    // Pointed at the engine-aware boot gate rather than at initSchema(), which builds SQLite
-    // whatever DATABASE_URL says and would therefore move this assertion quietly off PostgreSQL.
-    // The contract is the same one on either engine, and the explicit
-    // ensureConfiguredRuntimeMcpApiKey() call in the next test is its only sanctioned exception:
-    // bringing the database up must never mint the configured runtime key.
-    await recordAppliedSchemaLedger();
+    // The read-only PostgreSQL boot gate must not mint configured runtime credentials. The next
+    // test's explicit ensureConfiguredRuntimeMcpApiKey() call is the sanctioned install action.
     await verifyStartupSchema();
 
     expect(await getDb().get(`SELECT COUNT(*) AS count FROM mcp_api_keys`)).toEqual({ count: 0 });

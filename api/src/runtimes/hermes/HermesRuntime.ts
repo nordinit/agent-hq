@@ -781,9 +781,8 @@ export class HermesRuntime implements AgentRuntime {
     if (agentId == null) return;
 
     await db.run(`
-      INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-      VALUES (?, ?, ?, 'user', ?, ?)
-    `, `hermes-user-${instanceId}`, agentId, instanceId, prompt, nowTimestamp());
+      INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
+      VALUES (?, ?, ?, 'user', ?, ?) ON CONFLICT DO NOTHING`, `hermes-user-${instanceId}`, agentId, instanceId, prompt, nowTimestamp());
   }
 
   private async persistAssistantMessage(
@@ -832,7 +831,7 @@ export class HermesRuntime implements AgentRuntime {
 
     await db.run(`
       UPDATE job_instances
-      SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+      SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
       WHERE id = ?
     `, JSON.stringify(event), instanceId);
   }

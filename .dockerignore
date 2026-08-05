@@ -13,6 +13,9 @@ ui/out
 *.db
 *.db-shm
 *.db-wal
+*.dump
+backups
+uploads
 
 # Local env / secrets
 .env
@@ -25,6 +28,7 @@ ui/out
 
 # Logs
 *.log
+logs
 npm-debug.log*
 
 # OS

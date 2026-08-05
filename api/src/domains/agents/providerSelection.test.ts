@@ -1,7 +1,8 @@
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../../db/client';
+import { getDb } from '../../db/client';
 import {
   defaultAgentModelForProvider,
   validateAgentProviderSelection,
@@ -10,18 +11,10 @@ import {
 let tempDir: string;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-selection-'));
-  process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
   const db = getDb();
-  await db.exec(`
-    CREATE TABLE provider_config (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER,
-      slug TEXT NOT NULL,
-      status TEXT NOT NULL
-    );
-  `);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
 }
 
 async function connectProvider(slug: string): Promise<void> {
@@ -33,9 +26,8 @@ describe('agent provider/model selection', () => {
     await resetDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

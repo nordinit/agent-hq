@@ -1,7 +1,7 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import Database from 'better-sqlite3';
 import { describe, expect, it, beforeEach, afterEach, jest } from '@jest/globals';
 
 type SentRequest = {
@@ -35,7 +35,7 @@ class MockGatewaySocket {
   static CLOSED = 3;
 
   readyState = MockGatewaySocket.OPEN;
-  private handlers = new Map<string, Array<(value?: unknown) => void>>();
+  private handlers = new Map<string, Array<(value?: unknown) => unknown>>();
 
   constructor() {
     gatewaySockets.push(this);
@@ -48,7 +48,7 @@ class MockGatewaySocket {
     });
   }
 
-  on(event: string, handler: (value?: unknown) => void): this {
+  on(event: string, handler: (value?: unknown) => unknown): this {
     const handlers = this.handlers.get(event) ?? [];
     handlers.push(handler);
     this.handlers.set(event, handlers);
@@ -77,16 +77,14 @@ class MockGatewaySocket {
     });
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.readyState = MockGatewaySocket.CLOSED;
-    this.emit('close');
+    await this.emit('close');
   }
 
-  emit(event: string, value?: unknown): void {
+  async emit(event: string, value?: unknown): Promise<void> {
     const handlers = this.handlers.get(event) ?? [];
-    for (const handler of handlers) {
-      handler(value);
-    }
+    await Promise.all(handlers.map(handler => handler(value)));
   }
 }
 
@@ -97,14 +95,13 @@ jest.mock('ws', () => ({
 
 import { setupChatProxy } from './chat';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 class MockClientSocket {
   readyState = MockGatewaySocket.OPEN;
   sent: Array<Record<string, unknown>> = [];
-  private handlers = new Map<string, Array<(value?: unknown) => void>>();
+  private handlers = new Map<string, Array<(value?: unknown) => unknown>>();
 
-  on(event: string, handler: (value?: unknown) => void): this {
+  on(event: string, handler: (value?: unknown) => unknown): this {
     const handlers = this.handlers.get(event) ?? [];
     handlers.push(handler);
     this.handlers.set(event, handlers);
@@ -115,75 +112,20 @@ class MockClientSocket {
     this.sent.push(JSON.parse(raw) as Record<string, unknown>);
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.readyState = MockGatewaySocket.CLOSED;
-    this.emit('close');
+    await this.emit('close');
   }
 
-  emit(event: string, value?: unknown): void {
+  async emit(event: string, value?: unknown): Promise<void> {
     const handlers = this.handlers.get(event) ?? [];
-    for (const handler of handlers) {
-      handler(value);
-    }
+    await Promise.all(handlers.map(handler => handler(value)));
   }
 }
 
 async function setupDb(): Promise<void> {
-  db = new SqliteAdapter(new Database(':memory:'));
-  await db.exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT,
-      runtime_type TEXT,
-      session_key TEXT,
-      openclaw_agent_id TEXT,
-      hooks_url TEXT
-    );
+  db = await setupTestDb();
 
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      agent_id INTEGER,
-      task_id INTEGER,
-      session_key TEXT,
-      status TEXT,
-      run_stage TEXT,
-      started_at TEXT,
-      completed_at TEXT,
-      runtime_ended_at TEXT,
-      durable_run_id TEXT
-    );
-
-    CREATE TABLE instance_artifacts (
-      instance_id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      started_at TEXT,
-      last_agent_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      updated_at TEXT
-    );
-
-    CREATE TABLE canonical_chat_sessions (
-      agent_id INTEGER NOT NULL,
-      channel TEXT NOT NULL,
-      session_key TEXT NOT NULL,
-      created_at TEXT,
-      updated_at TEXT,
-      PRIMARY KEY (agent_id, channel)
-    );
-
-    CREATE TABLE chat_messages (
-      id TEXT PRIMARY KEY,
-      agent_id INTEGER NOT NULL,
-      instance_id INTEGER,
-      durable_run_id TEXT,
-      session_key TEXT NOT NULL DEFAULT '',
-      role TEXT NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      timestamp TEXT NOT NULL,
-      event_type TEXT NOT NULL DEFAULT 'text',
-      event_meta TEXT NOT NULL DEFAULT '{}'
-    );
-  `);
   await db.run(`
     INSERT INTO agents (id, name, runtime_type, session_key, openclaw_agent_id)
     VALUES (2, 'Atlas', 'openclaw', 'agent:atlas:main', 'atlas')
@@ -253,9 +195,9 @@ describe('chat websocket live structured persistence', () => {
 
   afterEach(async () => {
     for (const client of proxyClients) {
-      if (client.readyState === MockGatewaySocket.OPEN) client.close();
+      if (client.readyState === MockGatewaySocket.OPEN) await client.close();
     }
-    await db.close();
+    await teardownTestDb();
     if (previousOpenClawHome === undefined) {
       delete process.env.OPENCLAW_HOME;
     } else {
@@ -270,7 +212,7 @@ describe('chat websocket live structured persistence', () => {
 
     await waitForAsyncFrames();
 
-    client.emit('message', Buffer.from(JSON.stringify({
+    await client.emit('message', Buffer.from(JSON.stringify({
       type: 'chat.send',
       sessionKey,
       message: 'Inspect the current session state.',
@@ -343,7 +285,7 @@ describe('chat websocket live structured persistence', () => {
       },
     )}\n`);
 
-    gatewaySockets[0]?.emit('message', Buffer.from(JSON.stringify({
+    await gatewaySockets[0]?.emit('message', Buffer.from(JSON.stringify({
       type: 'event',
       event: 'chat',
       payload: {
@@ -391,7 +333,7 @@ describe('chat websocket live structured persistence', () => {
 
     await waitForAsyncFrames();
 
-    client.emit('message', Buffer.from(JSON.stringify({
+    await client.emit('message', Buffer.from(JSON.stringify({
       type: 'chat.new',
       sessionKey,
       channel: 'web',
@@ -412,14 +354,14 @@ describe('chat websocket live structured persistence', () => {
 
     await waitForAsyncFrames();
 
-    client.emit('message', Buffer.from(JSON.stringify({
+    await client.emit('message', Buffer.from(JSON.stringify({
       type: 'chat.send',
       sessionKey,
       message: 'first turn',
     })));
     await waitForAsyncFrames();
 
-    client.emit('message', Buffer.from(JSON.stringify({
+    await client.emit('message', Buffer.from(JSON.stringify({
       type: 'chat.send',
       sessionKey,
       message: 'second turn',

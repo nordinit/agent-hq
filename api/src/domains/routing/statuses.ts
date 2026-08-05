@@ -1,5 +1,4 @@
 import { listSprintTaskStatuses } from './policy/statuses';
-import { seedSprintTaskPolicy } from './policy/seed';
 import { parseObjectJson, parseSprintId, requireSprint, withStatus, StatusError } from './scope';
 import { type Db } from "../../db/adapter/types";
 
@@ -24,7 +23,6 @@ export async function updateRoutingStatus(
   const sprintId = await requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
   const { label, color, allowed_transitions, emoji } = input;
 
-  await seedSprintTaskPolicy(db, sprintId);
   const existing = await db.get(`
     SELECT *
     FROM sprint_task_statuses
@@ -56,7 +54,7 @@ export async function updateRoutingStatus(
   vals.push(sprintId, name);
   await db.run(`
     UPDATE sprint_task_statuses
-    SET ${sets.join(', ')}, updated_at = datetime('now')
+    SET ${sets.join(', ')}, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE sprint_id = ? AND status_key = ?
   `, ...vals);
 
@@ -76,7 +74,6 @@ export async function createRoutingStatus(db: Db, input: Record<string, unknown>
     throw withStatus('name and label are required', 400);
   }
 
-  await seedSprintTaskPolicy(db, sprintId);
   const existing = await db.get(`
     SELECT status_key
     FROM sprint_task_statuses
@@ -88,7 +85,7 @@ export async function createRoutingStatus(db: Db, input: Record<string, unknown>
   await db.run(`
     INSERT INTO sprint_task_statuses (
       sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, 0, 0, ?, COALESCE((SELECT MAX(stage_order) + 1 FROM sprint_task_statuses WHERE sprint_id = ?), 0), 0, '{}', datetime('now'), datetime('now'))
+    ) VALUES (?, ?, ?, ?, 0, 0, ?, COALESCE((SELECT MAX(stage_order) + 1 FROM sprint_task_statuses WHERE sprint_id = ?), 0), 0, '{}', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
   `, sprintId, name, label, color || 'slate', JSON.stringify(allowedTransitions ?? []), sprintId);
 
   const created = (await listSprintTaskStatuses(db, sprintId)).find(status => status.name === name);
@@ -103,7 +100,6 @@ export async function deleteRoutingStatus(
   const { name } = input;
   const sprintId = await requireSprintStatusScope(db, input.sprint_id, input.tenant_id);
 
-  await seedSprintTaskPolicy(db, sprintId);
   const existing = await db.get(`
     SELECT *
     FROM sprint_task_statuses

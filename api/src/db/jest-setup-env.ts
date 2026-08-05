@@ -1,16 +1,17 @@
 /**
- * jest-setup-env.ts — Set DB env var for each test worker process.
- *
- * Jest's globalSetup runs in a separate Node process, so env changes there
- * don't propagate to test workers automatically. This file runs in every
- * test worker via jest.setupFiles and overrides AGENT_HQ_DB_PATH before
- * any module under test imports client.ts.
- *
- * Registered in package.json under jest.setupFiles.
+ * Every Jest worker is PostgreSQL-only. setupTestDb() assigns a cloned worker database before
+ * application code opens a connection; keeping the base URL separate prevents a test from ever
+ * writing to the administrative database by accident.
  */
-
-// Use :memory: for full isolation, or a per-worker temp file if shared state is needed.
-process.env.AGENT_HQ_DB_PATH = ':memory:';
-if (!process.env.PORT) {
-  process.env.PORT = '0';
+if (!process.env.AGENT_HQ_TEST_PG_URL) {
+  throw new Error(
+    'AGENT_HQ_TEST_PG_URL is required. Agent HQ tests run on PostgreSQL and have no SQLite fallback.',
+  );
 }
+
+delete process.env.AGENT_HQ_DB_PATH;
+delete process.env.DATABASE_PATH;
+delete process.env.DATABASE_URL;
+delete process.env.AGENT_HQ_DATABASE_URL;
+
+if (!process.env.PORT) process.env.PORT = '0';

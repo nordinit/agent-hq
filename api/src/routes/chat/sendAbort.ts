@@ -41,9 +41,8 @@ export function registerSendAbortRoutes(router: Router): void {
       const tenantId = await resolveRuntimeTenantId(db, { instanceId, agentId: inst.agent_id });
       const tenant = await tenantInsertColumns(db, 'chat_messages', tenantId);
       await db.run(`
-        INSERT OR IGNORE INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, session_key, role, content, timestamp, event_type, event_meta)
-        VALUES (?, ${tenant.valueSql}?, ?, ?, 'user', ?, ?, 'text', '{}')
-      `, `oc-chat-user-${instanceId}-${Date.now()}`, ...tenant.values, inst.agent_id, instanceId, inst.session_key, fullMessage, now);
+        INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, session_key, role, content, timestamp, event_type, event_meta)
+        VALUES (?, ${tenant.valueSql}?, ?, ?, 'user', ?, ?, 'text', '{}') ON CONFLICT DO NOTHING`, `oc-chat-user-${instanceId}-${Date.now()}`, ...tenant.values, inst.agent_id, instanceId, inst.session_key, fullMessage, now);
 
       const result = await gatewayWsSend({
         sessionKey: inst.session_key,

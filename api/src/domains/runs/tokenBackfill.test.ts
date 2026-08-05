@@ -18,12 +18,15 @@ const INSTANCE_ID = 99974450;
  */
 async function seedInstance(): Promise<void> {
   const db = getDb();
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1')`);
   const agent = await db.run(
-    `INSERT INTO agents (name, session_key) VALUES ('Token Backfill Agent', 'token-backfill-agent')`,
+    `INSERT INTO agents (tenant_id, name, session_key)
+     VALUES (1, 'Token Backfill Agent', 'token-backfill-agent')`,
   );
   await db.run(
-    `INSERT INTO job_instances (id, agent_id, status, created_at, session_key)
-     VALUES (?, ?, 'done', datetime('now', '-5 minutes'), 'run:99974450:d6252a6b-6160-4f62-b288-4ad972449e65')`,
+    `INSERT INTO job_instances (id, tenant_id, agent_id, status, created_at, session_key)
+     VALUES (?, 1, ?, 'done', to_char(now() AT TIME ZONE 'utc' - interval '5 minutes', 'YYYY-MM-DD HH24:MI:SS'), 'run:99974450:d6252a6b-6160-4f62-b288-4ad972449e65')`,
     INSTANCE_ID,
     Number(agent.lastInsertId),
   );

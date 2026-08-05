@@ -79,6 +79,24 @@ function errorWithBody(status: number, body: Record<string, unknown>): Error & {
   return error;
 }
 
+class RollbackOnly<T> extends Error {
+  constructor(readonly value: T) {
+    super('rollback-only transaction completed');
+  }
+}
+
+async function withRolledBackTransaction<T>(db: Db, fn: (tx: Db) => Promise<T>): Promise<T> {
+  try {
+    await db.withTransaction(async (tx) => {
+      throw new RollbackOnly(await fn(tx));
+    });
+  } catch (error) {
+    if (error instanceof RollbackOnly) return error.value as T;
+    throw error;
+  }
+  throw new Error('Rollback-only transaction unexpectedly committed');
+}
+
 async function resolveMcpActiveOutcomeInstance(
   db: Db,
   taskId: number,
@@ -270,21 +288,21 @@ export async function postTaskOutcome(
   );
 
   if (dryRun) {
-    await db.exec('BEGIN');
     try {
-      if (hasInline) {
-        await updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>);
-      }
-      const result = await applyTaskOutcome(db, {
-        taskId,
-        outcome,
-        changedBy,
-        summary,
-        instanceId: authoritativeInstanceId,
-        failureDetail,
-        dryRun: true,
+      const result = await withRolledBackTransaction(db, async (tx) => {
+        if (hasInline) {
+          await updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>, { db: tx });
+        }
+        return await applyTaskOutcome(tx, {
+          taskId,
+          outcome,
+          changedBy,
+          summary,
+          instanceId: authoritativeInstanceId,
+          failureDetail,
+          dryRun: true,
+        });
       });
-      await db.exec('ROLLBACK');
       return {
         ok: true,
         dry_run: true,
@@ -313,11 +331,6 @@ export async function postTaskOutcome(
         },
       };
     } catch (error) {
-      try {
-        await db.exec('ROLLBACK');
-      } catch {
-        // surface original preview failure below
-      }
       const message = error instanceof Error ? error.message : String(error);
       return {
         ok: false,
@@ -339,43 +352,38 @@ export async function postTaskOutcome(
     }
   }
 
-  await db.exec('BEGIN');
   let result;
   try {
-    if (hasInline) {
-      await updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>);
+    result = await db.withTransaction(async (tx) => {
+      if (hasInline) {
+        await updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>, { db: tx });
 
-      const evFields: string[] = [];
-      if (inlineEvidence.review_branch) evFields.push(`Branch: ${inlineEvidence.review_branch}`);
-      if (inlineEvidence.review_commit) evFields.push(`Commit: ${inlineEvidence.review_commit}`);
-      if (inlineEvidence.review_url) evFields.push(`URL: ${inlineEvidence.review_url}`);
-      if (inlineEvidence.qa_verified_commit) evFields.push(`QA commit: ${inlineEvidence.qa_verified_commit}`);
-      if (inlineEvidence.qa_tested_url) evFields.push(`QA URL: ${inlineEvidence.qa_tested_url}`);
-      if (inlineEvidence.merged_commit) evFields.push(`Merged: ${inlineEvidence.merged_commit}`);
-      if (inlineEvidence.deployed_commit) evFields.push(`Deployed: ${inlineEvidence.deployed_commit}`);
-      if (inlineEvidence.deploy_target) evFields.push(`Target: ${inlineEvidence.deploy_target}`);
-      if (inlineEvidence.deployed_at) evFields.push(`At: ${inlineEvidence.deployed_at}`);
-      if (inlineEvidence.live_verified_by) evFields.push(`Verified by: ${inlineEvidence.live_verified_by}`);
-      if (evFields.length > 0) {
-        await addTaskNote(taskId, changedBy, `Atomic evidence (with ${outcome})\n${evFields.join('\n')}`);
+        const evFields: string[] = [];
+        if (inlineEvidence.review_branch) evFields.push(`Branch: ${inlineEvidence.review_branch}`);
+        if (inlineEvidence.review_commit) evFields.push(`Commit: ${inlineEvidence.review_commit}`);
+        if (inlineEvidence.review_url) evFields.push(`URL: ${inlineEvidence.review_url}`);
+        if (inlineEvidence.qa_verified_commit) evFields.push(`QA commit: ${inlineEvidence.qa_verified_commit}`);
+        if (inlineEvidence.qa_tested_url) evFields.push(`QA URL: ${inlineEvidence.qa_tested_url}`);
+        if (inlineEvidence.merged_commit) evFields.push(`Merged: ${inlineEvidence.merged_commit}`);
+        if (inlineEvidence.deployed_commit) evFields.push(`Deployed: ${inlineEvidence.deployed_commit}`);
+        if (inlineEvidence.deploy_target) evFields.push(`Target: ${inlineEvidence.deploy_target}`);
+        if (inlineEvidence.deployed_at) evFields.push(`At: ${inlineEvidence.deployed_at}`);
+        if (inlineEvidence.live_verified_by) evFields.push(`Verified by: ${inlineEvidence.live_verified_by}`);
+        if (evFields.length > 0) {
+          await addTaskNote(taskId, changedBy, `Atomic evidence (with ${outcome})\n${evFields.join('\n')}`, tx);
+        }
       }
-    }
 
-    result = await applyTaskOutcome(db, {
-      taskId,
-      outcome,
-      changedBy,
-      summary,
-      instanceId: authoritativeInstanceId,
-      failureDetail,
+      return await applyTaskOutcome(tx, {
+        taskId,
+        outcome,
+        changedBy,
+        summary,
+        instanceId: authoritativeInstanceId,
+        failureDetail,
+      });
     });
-    await db.exec('COMMIT');
   } catch (error) {
-    try {
-      await db.exec('ROLLBACK');
-    } catch {
-      // surface original failure below
-    }
     const message = error instanceof Error ? error.message : String(error);
     if (isOutcomeRefusalMessage(message) && !(error instanceof RefusedTaskOutcomeError)) {
       // Awaited so the refusal is recorded before the original error propagates and the request

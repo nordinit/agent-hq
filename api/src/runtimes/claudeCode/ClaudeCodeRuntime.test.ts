@@ -62,7 +62,7 @@ function createMockDb() {
   const runs: Array<{ sql: string; params: unknown[] }> = [];
   return {
     runs,
-    dialect: 'sqlite' as const,
+    dialect: 'postgres' as const,
     inTransaction: false,
     get: jest.fn(async (sql: string) =>
       sql.includes('agent_id') ? { agent_id: 42 } : undefined,
@@ -366,7 +366,7 @@ describe('ClaudeCodeRuntime terminal handling', () => {
     const meta = JSON.parse(turnEnd[0].params[3] as string);
     expect(meta.source).toBe('claude-code');
 
-    expect(runsMatching(db, '$.runtimeEnd')).toHaveLength(1);
+    expect(runsMatching(db, "'{runtimeEnd}'")).toHaveLength(1);
   });
 
   it('rejects dispatch when a required MCP server fails preflight', async () => {

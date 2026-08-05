@@ -1,5 +1,4 @@
 import { STARTER_BACKLOG_SPRINT_NAME } from './starterCatalog';
-import { seedSprintTaskPolicy } from '../domains/routing/policy/seed';
 import { type Db } from "../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
@@ -48,11 +47,7 @@ export async function ensureProjectBacklogSprint(db: Db, projectId: number): Pro
     VALUES (?, ?, ?, '', ?, 'active', 'time', 'ongoing')
   `, project?.tenant_id ?? null, projectId, STARTER_BACKLOG_SPRINT_NAME, tenantSprintType);
 
-  const sprintId = Number(result.lastInsertId);
-  // Statuses and transitions come from the workflow definition. Routing rules do
-  // NOT get inferred here — a workflow with no declared rules correctly has none.
-  await seedSprintTaskPolicy(db, sprintId);
-  return sprintId;
+  return Number(result.lastInsertId);
 }
 
 export async function resolveDefaultProjectSprintId(db: Db, projectId: number | null | undefined): Promise<number | null> {

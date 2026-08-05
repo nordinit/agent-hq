@@ -250,11 +250,11 @@ async function ensureDefaultSkills(db: Db, tenantId: number, result: DefaultInst
   `;
   const insertSql = `
     INSERT INTO skills (tenant_id, name, description, content, source, fs_path, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 'system', NULL, datetime('now'), datetime('now'))
+    VALUES (?, ?, ?, ?, 'system', NULL, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
   `;
   const updateSql = `
     UPDATE skills
-    SET description = ?, content = ?, fs_path = NULL, updated_at = datetime('now')
+    SET description = ?, content = ?, fs_path = NULL, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `;
 
@@ -286,25 +286,6 @@ async function ensureDefaultSkills(db: Db, tenantId: number, result: DefaultInst
       addCount(result.updated, 'skills');
     }
   }
-}
-
-async function ensurePackageLedger(db: Db): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS default_package_applications (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id        INTEGER NOT NULL,
-      package_key      TEXT NOT NULL,
-      package_version  INTEGER NOT NULL,
-      applied_at       TEXT NOT NULL DEFAULT (datetime('now')),
-      mode             TEXT NOT NULL DEFAULT 'install',
-      created_json     TEXT NOT NULL DEFAULT '{}',
-      restored_json    TEXT NOT NULL DEFAULT '{}',
-      updated_json     TEXT NOT NULL DEFAULT '{}',
-      conflicts_json   TEXT NOT NULL DEFAULT '[]'
-    );
-    CREATE INDEX IF NOT EXISTS idx_default_package_applications_tenant
-      ON default_package_applications(tenant_id, package_key, package_version);
-  `);
 }
 
 function createResult(tenantId: number, mode: PackageMode): DefaultInstallPackageResult {
@@ -339,11 +320,11 @@ async function ensureWorkflowTypes(db: Db, tenantId: number, result: DefaultInst
     LIMIT 1
   `;
   const insertSql = hasTenant
-    ? `INSERT INTO sprint_types (tenant_id, key, name, description${hasRepoRequired ? ', repo_required' : ''}, is_system, created_at, updated_at) VALUES (?, ?, ?, ?${hasRepoRequired ? ', ?' : ''}, 1, datetime('now'), datetime('now'))`
-    : `INSERT INTO sprint_types (key, name, description${hasRepoRequired ? ', repo_required' : ''}, is_system, created_at, updated_at) VALUES (?, ?, ?${hasRepoRequired ? ', ?' : ''}, 1, datetime('now'), datetime('now'))`;
+    ? `INSERT INTO sprint_types (tenant_id, key, name, description${hasRepoRequired ? ', repo_required' : ''}, is_system, created_at, updated_at) VALUES (?, ?, ?, ?${hasRepoRequired ? ', ?' : ''}, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`
+    : `INSERT INTO sprint_types (key, name, description${hasRepoRequired ? ', repo_required' : ''}, is_system, created_at, updated_at) VALUES (?, ?, ?${hasRepoRequired ? ', ?' : ''}, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`;
   const updateSql = `
     UPDATE sprint_types
-    SET name = ?, description = ?${hasRepoRequired ? ', repo_required = ?' : ''}, is_system = 1, updated_at = datetime('now')
+    SET name = ?, description = ?${hasRepoRequired ? ', repo_required = ?' : ''}, is_system = 1, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE key = ?
       ${await tenantPredicate(db, 'sprint_types')}
   `;
@@ -374,11 +355,11 @@ async function ensureWorkflowDefinitionRows(db: Db, tenantId: number, result: De
     LIMIT 1
   `;
   const fieldInsertSql = fieldHasTenant
-    ? `INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json, is_system, created_at, updated_at) VALUES (?, ?, NULL, ?, 1, datetime('now'), datetime('now'))`
-    : `INSERT INTO task_field_schemas (sprint_type_key, task_type, schema_json, is_system, created_at, updated_at) VALUES (?, NULL, ?, 1, datetime('now'), datetime('now'))`;
+    ? `INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json, is_system, created_at, updated_at) VALUES (?, ?, NULL, ?, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`
+    : `INSERT INTO task_field_schemas (sprint_type_key, task_type, schema_json, is_system, created_at, updated_at) VALUES (?, NULL, ?, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`;
   const fieldUpdateSql = `
     UPDATE task_field_schemas
-    SET schema_json = ?, is_system = 1, updated_at = datetime('now')
+    SET schema_json = ?, is_system = 1, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE sprint_type_key = ? AND task_type IS NULL
       ${await tenantPredicate(db, 'task_field_schemas')}
   `;
@@ -406,8 +387,8 @@ async function ensureWorkflowDefinitionRows(db: Db, tenantId: number, result: De
     LIMIT 1
   `;
   const taskTypeInsertSql = taskTypeHasTenant
-    ? `INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system, created_at, updated_at) VALUES (?, ?, ?, 1, datetime('now'), datetime('now'))`
-    : `INSERT INTO sprint_type_task_types (sprint_type_key, task_type, is_system, created_at, updated_at) VALUES (?, ?, 1, datetime('now'), datetime('now'))`;
+    ? `INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system, created_at, updated_at) VALUES (?, ?, ?, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`
+    : `INSERT INTO sprint_type_task_types (sprint_type_key, task_type, is_system, created_at, updated_at) VALUES (?, ?, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`;
   for (const seed of STARTER_SPRINT_TYPE_TASK_TYPE_SEEDS) {
     for (const taskType of seed.taskTypes) {
       const existing = await db.get(taskTypeSelectSql, seed.sprintType, taskType, ...await tenantArgs(db, 'sprint_type_task_types', tenantId));
@@ -422,19 +403,19 @@ async function ensureWorkflowDefinitionRows(db: Db, tenantId: number, result: De
     SELECT id, is_system, label, description, enabled, behavior, badge_variant, stage_order, metadata_json
     FROM sprint_type_outcomes
     WHERE sprint_type_key = ?
-      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
       AND outcome_key = ?
       ${await tenantPredicate(db, 'sprint_type_outcomes')}
     LIMIT 1
   `;
   const outcomeInsertSql = outcomeHasTenant
-    ? `INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))`
-    : `INSERT INTO sprint_type_outcomes (sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))`;
+    ? `INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`
+    : `INSERT INTO sprint_type_outcomes (sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`;
   const outcomeUpdateSql = `
     UPDATE sprint_type_outcomes
-    SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
+    SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE sprint_type_key = ?
-      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
       AND outcome_key = ?
       ${await tenantPredicate(db, 'sprint_type_outcomes')}
   `;
@@ -619,7 +600,7 @@ async function ensureAgent(db: Db, tenantId: number, tenantSlug: string, project
           ${hasJobInstructions ? `job_instructions = CASE WHEN job_instructions IS NULL OR trim(job_instructions) = '' THEN ? ELSE job_instructions END,` : ''}
           enabled = COALESCE(enabled, 1),
           status = CASE WHEN status IS NULL OR trim(status) = '' THEN 'idle' ELSE status END,
-          last_active = COALESCE(last_active, datetime('now'))
+          last_active = COALESCE(last_active, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       WHERE id = ?
     `, ...(hasJobInstructions
             ? [projectId, seed.role, seed.jobTitle, seed.systemRole, JSON.stringify(runtimeConfig), runtimeSlug, sessionKey, workspacePath, seed.provider, seed.model, skillNames, instructions, existing.id]
@@ -653,7 +634,7 @@ async function ensureAgentCapabilities(db: Db, agentId: number, seed: StarterAge
   const desired = new Set(seed.capabilityKeys.filter((key) => validKeys.has(key)));
   const insertSql = `
     INSERT INTO agent_mcp_capability_policies (agent_id, capability_key, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, datetime('now'), datetime('now'))
+    VALUES (?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(agent_id, capability_key) DO NOTHING
   `;
   for (const capability of AGENT_MCP_CAPABILITY_CATALOG) {
@@ -668,9 +649,8 @@ async function ensureAgentHqMcpAssignment(db: Db, tenantId: number, agentId: num
   if (!serverId) return;
   await repairAgentMcpAssignmentsForTenant(db, tenantId, agentId);
   const inserted = await db.run(`
-    INSERT OR IGNORE INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
-    VALUES (?, ?, '{}', 1)
-  `, agentId, serverId);
+    INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
+    VALUES (?, ?, '{}', 1) ON CONFLICT DO NOTHING`, agentId, serverId);
   if (inserted.changes > 0) addCount(result.created, 'agent_mcp_assignments');
 }
 
@@ -720,15 +700,13 @@ async function ensureRouting(db: Db, tenantId: number, projectId: number, agents
   `;
   const insertSql = hasTenant
     ? `
-      INSERT OR IGNORE INTO sprint_task_routing_rules (
+      INSERT INTO sprint_task_routing_rules (
         tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority, is_system, created_at, updated_at
-      ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
-    `
+      ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`
     : `
-      INSERT OR IGNORE INTO sprint_task_routing_rules (
+      INSERT INTO sprint_task_routing_rules (
         sprint_id, project_id, sprint_type, task_type, status, agent_id, priority, is_system, created_at, updated_at
-      ) VALUES (NULL, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
-    `;
+      ) VALUES (NULL, ?, ?, ?, ?, ?, ?, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`;
   for (const rule of rules) {
     const existing = await db.get(existsSql, projectId, rule.sprintType, rule.taskType, rule.status, rule.agentId, ...(hasTenant ? [tenantId] : []));
     if (existing) continue;
@@ -746,7 +724,7 @@ async function ensureAutomaticTransitions(db: Db, tenantId: number, workflows: M
     SELECT id
     FROM sprint_task_transitions
     WHERE sprint_id = ?
-      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
       AND from_status = ?
       AND outcome = ?
       ${hasTenant ? 'AND tenant_id = ?' : ''}
@@ -755,14 +733,14 @@ async function ensureAutomaticTransitions(db: Db, tenantId: number, workflows: M
   const insertSql = hasTenant
     ? (hasScope
       ? `INSERT INTO sprint_task_transitions (tenant_id, sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`
       : `INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`)
     : (hasScope
       ? `INSERT INTO sprint_task_transitions (sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`
       : `INSERT INTO sprint_task_transitions (sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`);
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))`);
 
   for (const [sprintType, sprintId] of workflows.entries()) {
     const sprint = await db.get(sprintRowSql, sprintId) as { id: number; project_id: number; sprint_type: string } | undefined;
@@ -820,7 +798,7 @@ async function ensureModelRouting(db: Db, tenantId: number, projectId: number, r
   ];
   const insertSql = `
     INSERT INTO story_point_model_routing (${columns.join(', ')})
-    VALUES (${columns.map((column) => column === 'created_at' || column === 'updated_at' ? "datetime('now')" : '?').join(', ')})
+    VALUES (${columns.map((column) => column === 'created_at' || column === 'updated_at' ? "to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')" : '?').join(', ')})
   `;
   for (const row of rows) {
     if (await db.get(existsSql, projectId, row.maxPoints, ...(hasTenant ? [tenantId] : []))) continue;
@@ -843,7 +821,6 @@ async function ensureModelRouting(db: Db, tenantId: number, projectId: number, r
 }
 
 async function recordLedger(db: Db, result: DefaultInstallPackageResult): Promise<void> {
-  await ensurePackageLedger(db);
   await db.run(`
     INSERT INTO default_package_applications (
       tenant_id, package_key, package_version, mode, created_json, restored_json, updated_json, conflicts_json

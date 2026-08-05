@@ -51,7 +51,7 @@ export async function stopTaskActiveInstance(
         UPDATE tasks
         SET active_instance_id = NULL,
             agent_id = NULL,
-            updated_at = datetime('now')
+            updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ? AND active_instance_id = ?
       `, taskId, existing.active_instance_id);
       // A manual stop is one of the likeliest ways the link disappears, so it is one of the

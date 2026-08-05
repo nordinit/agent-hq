@@ -319,7 +319,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const result = await db.run(`
       INSERT INTO provider_config (tenant_id, slug, display_name, status, config, last_validated_at, validation_error)
-      VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
+      VALUES (?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), ?)
     `, tenantId, slug, label, status, JSON.stringify(effectiveConfig), validation.error || null);
 
     const row = await db.get('SELECT * FROM provider_config WHERE id = ?', result.lastInsertId) as ProviderRow;
@@ -369,8 +369,8 @@ router.put('/:id', async (req: Request, res: Response) => {
 
     await db.run(`
       UPDATE provider_config
-      SET display_name = ?, status = ?, config = ?, last_validated_at = datetime('now'),
-          validation_error = ?, updated_at = datetime('now')
+      SET display_name = ?, status = ?, config = ?, last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+          validation_error = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, newLabel, status, JSON.stringify(newConfig), validation.error || null, existing.id);
 
@@ -404,7 +404,7 @@ router.post('/:id/validate', async (req: Request, res: Response) => {
 
     await db.run(`
       UPDATE provider_config
-      SET status = ?, last_validated_at = datetime('now'), validation_error = ?, updated_at = datetime('now')
+      SET status = ?, last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), validation_error = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, status, validation.error || null, row.id);
 
@@ -689,7 +689,7 @@ router.post('/:slug/oauth/initiate', async (req: Request, res: Response) => {
           }
 
           const db = getDb();
-          await db.run("UPDATE provider_config SET status = 'connected', config = ?, validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", JSON.stringify(storedConfig), validation.error || null, slug, tenantId);
+          await db.run("UPDATE provider_config SET status = 'connected', config = ?, validation_error = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE slug = ? AND tenant_id = ?", JSON.stringify(storedConfig), validation.error || null, slug, tenantId);
 
           await reloadOpenClawSecretsAfterProviderCredentialWrite(slug);
 
@@ -743,7 +743,7 @@ router.post('/:slug/oauth/initiate', async (req: Request, res: Response) => {
       const db = getDb();
       const existing = await db.get('SELECT id FROM provider_config WHERE slug = ? AND tenant_id = ?', slug, tenantId) as { id: number } | undefined;
       if (existing) {
-        await db.run("UPDATE provider_config SET status = 'pending', updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", slug, tenantId);
+        await db.run("UPDATE provider_config SET status = 'pending', updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE slug = ? AND tenant_id = ?", slug, tenantId);
       } else {
         await db.run("INSERT INTO provider_config (tenant_id, slug, display_name, status, config) VALUES (?, ?, ?, 'pending', '{}')", tenantId, slug, 'OpenAI Codex (OAuth)');
       }
@@ -759,7 +759,7 @@ router.post('/:slug/oauth/initiate', async (req: Request, res: Response) => {
       console.error(`[providers] OpenAI Codex OAuth failed:`, err instanceof Error ? err.message : err);
       try {
         const db = getDb();
-        await db.run("UPDATE provider_config SET status = 'failed', validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", err instanceof Error ? err.message : String(err), slug, tenantId);
+        await db.run("UPDATE provider_config SET status = 'failed', validation_error = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE slug = ? AND tenant_id = ?", err instanceof Error ? err.message : String(err), slug, tenantId);
       } catch { /* best effort */ }
     });
   } catch (err) {
@@ -852,7 +852,7 @@ router.post('/:slug/oauth/exchange', async (req: Request, res: Response) => {
     }
 
     const db = getDb();
-    await db.run("UPDATE provider_config SET status = 'connected', config = ?, validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", JSON.stringify(storedConfig), validation.error || null, slug, tenantId);
+    await db.run("UPDATE provider_config SET status = 'connected', config = ?, validation_error = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE slug = ? AND tenant_id = ?", JSON.stringify(storedConfig), validation.error || null, slug, tenantId);
 
     const reload = await reloadOpenClawSecretsAfterProviderCredentialWrite(slug);
 
@@ -869,7 +869,7 @@ router.post('/:slug/oauth/exchange', async (req: Request, res: Response) => {
 
     try {
       const db = getDb();
-      await db.run("UPDATE provider_config SET status = 'failed', validation_error = ?, updated_at = datetime('now') WHERE slug = ? AND tenant_id = ?", msg, slug, tenantId);
+      await db.run("UPDATE provider_config SET status = 'failed', validation_error = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE slug = ? AND tenant_id = ?", msg, slug, tenantId);
     } catch { /* best effort */ }
 
     res.status(500).json({ error: msg });
@@ -936,13 +936,13 @@ router.post('/:slug/setup-token', async (req: Request, res: Response) => {
 
     if (existing) {
       await db.run(`
-        UPDATE provider_config SET status = ?, config = ?, last_validated_at = datetime('now'), validation_error = ?, updated_at = datetime('now')
+        UPDATE provider_config SET status = ?, config = ?, last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), validation_error = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
       `, status, JSON.stringify({ setup_token: true }), validation.error || null, existing.id);
     } else {
       await db.run(`
         INSERT INTO provider_config (tenant_id, slug, display_name, status, config, last_validated_at, validation_error)
-        VALUES (?, ?, 'Anthropic', ?, ?, datetime('now'), ?)
+        VALUES (?, ?, 'Anthropic', ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), ?)
       `, tenantId, slug, status, JSON.stringify({ setup_token: true }), validation.error || null);
     }
 

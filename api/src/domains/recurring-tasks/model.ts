@@ -546,7 +546,7 @@ export async function updateRecurringTaskSeries(
     SET project_id = ?, sprint_id = ?, title_template = ?, description_template = ?,
         task_type = ?, priority = ?, story_points = ?, status_on_create = ?,
         schedule_expression = ?, timezone = ?, enabled = ?, next_run_at = ?,
-        overlap_policy = ?, agent_id = ?, updated_by = ?, updated_at = datetime('now')
+        overlap_policy = ?, agent_id = ?, updated_by = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, normalized.project_id, normalized.sprint_id, normalized.title_template, normalized.description_template ?? '', normalized.task_type, normalized.priority, normalized.story_points, normalized.status_on_create, normalized.schedule_expression, normalized.timezone, normalized.enabled, normalized.next_run_at ?? null, normalized.overlap_policy ?? 'skip_if_active', normalized.agent_id ?? null, normalized.updated_by ?? normalized.created_by ?? existing.updated_by ?? 'system', seriesId);
   return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, seriesId) as RecurringTaskSeriesRecord;
@@ -564,7 +564,7 @@ export async function setRecurringTaskSeriesEnabled(
   const normalized = await normalizeCreateInput(db, { ...existing, enabled: enabled ? 1 : 0, next_run_at: undefined, updated_by: updatedBy });
   await db.run(`
     UPDATE recurring_task_series
-    SET enabled = ?, next_run_at = ?, updated_by = ?, updated_at = datetime('now')
+    SET enabled = ?, next_run_at = ?, updated_by = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, normalized.enabled, normalized.next_run_at ?? null, updatedBy, seriesId);
   return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, seriesId) as RecurringTaskSeriesRecord;
@@ -613,7 +613,7 @@ export async function recordRecurringTaskRun(
       series_id, scheduled_for, created_task_id, status, error_message,
       started_at, finished_at, idempotency_key
     )
-    VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?)
+    VALUES (?, ?, ?, ?, ?, COALESCE(?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')), ?, ?)
   `, input.series_id, input.scheduled_for, input.created_task_id ?? null, input.status, input.error_message ?? null, input.started_at ?? null, input.finished_at ?? null, input.idempotency_key);
 
   return await db.get(`SELECT * FROM recurring_task_runs WHERE id = ?`, result.lastInsertId) as RecurringTaskRunRecord;
@@ -626,7 +626,7 @@ export async function linkRecurringRunToGeneratedTask(
 ): Promise<RecurringTaskRunRecord> {
   await db.run(`
     UPDATE recurring_task_runs
-    SET created_task_id = ?, status = 'created', finished_at = COALESCE(finished_at, datetime('now')), updated_at = datetime('now')
+    SET created_task_id = ?, status = 'created', finished_at = COALESCE(finished_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')), updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, taskId, runId);
 
@@ -647,8 +647,8 @@ export async function finishRecurringTaskRun(
     SET status = ?,
         created_task_id = ?,
         error_message = ?,
-        finished_at = COALESCE(finished_at, datetime('now')),
-        updated_at = datetime('now')
+        finished_at = COALESCE(finished_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, input.status, input.created_task_id ?? null, input.error_message ?? null, runId);
 
@@ -691,7 +691,7 @@ export async function runRecurringTaskSeriesNow(
     const linkedRun = await linkRecurringRunToGeneratedTask(db, run.id, Number(task.id));
     await db.run(`
       UPDATE recurring_task_series
-      SET last_run_at = ?, next_run_at = ?, updated_at = datetime('now')
+      SET last_run_at = ?, next_run_at = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, scheduledFor, calculateNextRunAt(series.schedule_expression, series.timezone, series.enabled), series.id);
     return { run: linkedRun, task };

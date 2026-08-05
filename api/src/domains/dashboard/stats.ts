@@ -30,7 +30,7 @@ export async function getDashboardTokenUsageLast24h(db: Db, projectId: number | 
     SELECT COALESCE(SUM(COALESCE(ji.token_total, COALESCE(ji.token_input, 0) + COALESCE(ji.token_output, 0))), 0) as n
     FROM job_instances ji
     ${scopedJobJoin}
-    WHERE datetime(${usageActivityAt}) >= datetime('now', '-24 hours')
+    WHERE ${usageActivityAt} >= to_char((now() AT TIME ZONE 'utc' - interval '24 hour'), 'YYYY-MM-DD HH24:MI:SS')
     ${scopedJobWhere}
   `, ...scopedJobParams) as { n: number }).n;
 }

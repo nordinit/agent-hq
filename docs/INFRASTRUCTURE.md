@@ -52,8 +52,8 @@ It provides:
 └───────────────┬───────────────────────┬────────────────────┘
                 │                       │
                 ▼                       ▼
-        SQLite database         Agent Runtimes
-         agent-hq.db              │
+       PostgreSQL 17           Agent Runtimes
+      agent_hq database           │
                                   ├─ OpenClaw Gateway (localhost:18789)
                                   │    └─ local agents via hooks protocol
                                   ├─ Claude Code (local subprocess)
@@ -86,7 +86,7 @@ It provides:
 | Purpose | Path |
 |--------|------|
 | Agent HQ repo | `~/agent-hq` |
-| SQLite DB | `~/agent-hq/agent-hq.db` |
+| PostgreSQL connection | `DATABASE_URL` (production) / `AGENT_HQ_DEV_DATABASE_URL` (dev config input) |
 | OpenClaw root | `~/.openclaw/` |
 | Agent sessions | `~/.openclaw/agents/*/sessions/` |
 | Agent workspaces | `~/.openclaw/workspace-*` |

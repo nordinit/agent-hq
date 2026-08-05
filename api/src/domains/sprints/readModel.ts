@@ -145,7 +145,7 @@ export async function getSprintMetrics(db: Db, sprintId: number) {
 
   const durationRow = await db.get(`
     SELECT AVG(
-      (strftime('%s', updated_at) - strftime('%s', created_at)) * 1000
+      (EXTRACT(EPOCH FROM (updated_at)::timestamp) - EXTRACT(EPOCH FROM (created_at)::timestamp)) * 1000
     ) as avg_ms
     FROM tasks
     WHERE sprint_id = ? AND status = 'done'

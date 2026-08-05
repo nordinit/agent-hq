@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
-import type { Db, Dialect, RunResult, SqlParam } from './types';
+import type { Db, RunResult, SqlParam } from './types';
 import { TransactionClosedError } from './types';
-import { translateToPostgres } from './dialect';
+import { toPostgresParams } from './postgresParams';
 
 /**
  * Db implementation over node-postgres.
@@ -66,8 +66,6 @@ function registerInt8Parser(): void {
 }
 
 export class PostgresAdapter implements Db {
-  readonly dialect: Dialect = 'postgres';
-
   /**
    * Primary key column per table, resolved lazily from the catalog and cached.
    * Needed to synthesise RETURNING for inserts — see run().
@@ -94,7 +92,7 @@ export class PostgresAdapter implements Db {
 
   private async query(sql: string, params: SqlParam[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
     this.assertUsable();
-    const text = translateToPostgres(sql);
+    const text = toPostgresParams(sql);
     const executor = this.client ?? this.pool;
     const result = await executor.query(text, params as unknown[]);
     return { rows: result.rows as Record<string, unknown>[], rowCount: result.rowCount ?? 0 };
@@ -171,9 +169,7 @@ export class PostgresAdapter implements Db {
   async exec(sql: string): Promise<void> {
     this.assertUsable();
     const executor = this.client ?? this.pool;
-    // No parameters here, so only the safe rewrites apply; placeholder translation would
-    // be meaningless and could corrupt DDL containing a literal '?'.
-    await executor.query(translateToPostgres(sql));
+    await executor.query(sql);
   }
 
   async withTransaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {

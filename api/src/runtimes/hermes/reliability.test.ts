@@ -47,7 +47,7 @@ function createMockDb() {
   const runs: Array<{ sql: string; params: unknown[] }> = [];
   return {
     runs,
-    dialect: 'sqlite' as const,
+    dialect: 'postgres' as const,
     inTransaction: false,
     get: jest.fn(async () => ({ agent_id: 17 })),
     all: jest.fn(async () => []),
@@ -123,7 +123,7 @@ describe('Hermes launch failure', () => {
     await flush();
 
     expect(db.runs.filter((r) => r.sql.includes("'turn_end'"))).toHaveLength(1);
-    expect(db.runs.filter((r) => r.sql.includes('$.runtimeEnd'))).toHaveLength(1);
+    expect(db.runs.filter((r) => r.sql.includes("'{runtimeEnd}'"))).toHaveLength(1);
   });
 
   it('still rethrows so the dispatcher can classify the startup failure', async () => {

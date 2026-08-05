@@ -12,9 +12,8 @@ import { AlertTriangle, Check, Lock, ShieldAlert, X } from 'lucide-react';
  *
  * Nothing here writes directly. Every gesture is costed by POST /routing/preview first — which
  * applies the real mutation in a transaction that never commits — so the operator sees the rows
- * it touches and the lint it introduces before deciding. That matters more than it sounds:
- * routing writes fire policy seeding as a side effect, so "add one transition" can materialise
- * dozens of rows, and the preview is the only place that becomes visible.
+ * it touches and the lint it introduces before deciding. Starter policy is installation data;
+ * routing writes never seed or reconcile it, so the preview describes only the requested change.
  */
 
 export interface TransitionDraft {

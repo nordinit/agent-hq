@@ -5,13 +5,7 @@ import { recordSkillMaterializationIssues } from './skillMaterializationNotifica
 
 const TENANT_ID = 1;
 
-/**
- * The tenant every notification here is scoped to.
- *
- * initSchema seeds one on SQLite, but the PostgreSQL fixture template carries DDL only and is
- * truncated between tests — and notification_records.tenant_id is a real foreign key there, which
- * the hand-written minimal schema this file used to build did not have.
- */
+/** The tenant parent required by notification_records.tenant_id. */
 async function ensureTenant(db: Db): Promise<void> {
   if (await db.get(`SELECT id FROM tenants WHERE id = ?`, TENANT_ID)) return;
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, 1)`, TENANT_ID, 'Default', 'default');

@@ -11,6 +11,8 @@ node_modules/
 *.tsbuildinfo
 .env
 .env.*
+!.env.example
+!docker/.env.agents.example
 .env.local
 dist/
 

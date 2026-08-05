@@ -177,7 +177,7 @@ async function syncSessionMessageCount(db: Db, sessionId: number): Promise<void>
     UPDATE sessions
     SET message_count = (
       SELECT COUNT(*) FROM session_messages WHERE session_id = ?
-    ), updated_at = datetime('now')
+    ), updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, sessionId, sessionId);
 }
@@ -218,7 +218,7 @@ async function insertFailurePlaceholderMessage(
   await db.run(`
     INSERT INTO session_messages (
       session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
-    ) VALUES (?, 0, 'system', 'error', ?, ?, ?, ?, datetime('now'))
+    ) VALUES (?, 0, 'system', 'error', ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(session_id, ordinal) DO UPDATE SET
       role = excluded.role,
       event_type = excluded.event_type,
@@ -276,7 +276,7 @@ export async function syncSessionMessagesFromChatMessages(db: Db, sessionId: num
   const insertSql = `
     INSERT INTO session_messages (
       session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(session_id, ordinal) DO UPDATE SET
       role = excluded.role,
       event_type = excluded.event_type,
@@ -340,7 +340,7 @@ export async function upsertCanonicalSessionForInstance(
       status, title, started_at, ended_at, token_input, token_output,
       metadata, created_at, updated_at
     )
-    VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(external_key) DO UPDATE SET
       ${await tenantUpsertUpdateSql(db, 'sessions')}
       runtime = excluded.runtime,
@@ -355,7 +355,7 @@ export async function upsertCanonicalSessionForInstance(
       token_input = COALESCE(excluded.token_input, sessions.token_input),
       token_output = COALESCE(excluded.token_output, sessions.token_output),
       metadata = CASE WHEN excluded.metadata != '{}' THEN excluded.metadata ELSE sessions.metadata END,
-      updated_at = datetime('now')
+      updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
   `, ...tenant.values, externalKey, runtime, row.agent_id, row.task_id, row.id, row.project_id, status, deriveTitle(row), startedAt, endedAt, row.token_input, row.token_output, buildMetadata(row));
 
   const session = await db.get(`SELECT * FROM sessions WHERE external_key = ?`, externalKey) as CanonicalSessionRow | undefined;
@@ -393,7 +393,7 @@ export async function ensureCanonicalSessionForInstance(
   const insertSql = `
     INSERT INTO session_messages (
       session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(session_id, ordinal) DO UPDATE SET
       role = excluded.role,
       event_type = excluded.event_type,
@@ -430,7 +430,7 @@ export async function ensureCanonicalSessionForInstance(
             WHEN ? = 1 THEN 'active'
             ELSE status
           END,
-          updated_at = datetime('now')
+          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
     `, session.id, transcript.in_progress ? 1 : 0, session.id);
   });
@@ -488,7 +488,7 @@ export async function writeIngestResult(db: Db, result: IngestResult): Promise<C
       status, title, started_at, ended_at, token_input, token_output,
       metadata, created_at, updated_at
     )
-    VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(external_key) DO UPDATE SET
       ${await tenantUpsertUpdateSql(db, 'sessions')}
       runtime = excluded.runtime,
@@ -503,7 +503,7 @@ export async function writeIngestResult(db: Db, result: IngestResult): Promise<C
       token_input = COALESCE(excluded.token_input, sessions.token_input),
       token_output = COALESCE(excluded.token_output, sessions.token_output),
       metadata = CASE WHEN excluded.metadata IS NOT NULL AND excluded.metadata != '{}' THEN excluded.metadata ELSE sessions.metadata END,
-      updated_at = datetime('now')
+      updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
   `, ...tenant.values, session.externalKey, session.runtime, session.agentId ?? null, session.taskId ?? null, session.instanceId ?? null, session.projectId ?? null, session.status, session.title ?? '', toCanonicalTimestamp(session.startedAt), toCanonicalTimestamp(session.endedAt), session.tokenInput ?? null, session.tokenOutput ?? null, session.metadata ? JSON.stringify(session.metadata) : '{}');
 
   const sessionRow = await db.get('SELECT * FROM sessions WHERE external_key = ?', session.externalKey) as CanonicalSessionRow | undefined;
@@ -513,7 +513,7 @@ export async function writeIngestResult(db: Db, result: IngestResult): Promise<C
     const insertMsgSql = `
       INSERT INTO session_messages (
         session_id, ordinal, role, event_type, content, event_meta, raw_payload, timestamp, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ON CONFLICT(session_id, ordinal) DO UPDATE SET
         role = excluded.role,
         event_type = excluded.event_type,

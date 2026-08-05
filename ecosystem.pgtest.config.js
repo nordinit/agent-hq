@@ -15,12 +15,10 @@
  * That fourth one was learned the hard way and is the least obvious: the first three are all
  * inbound, and none of them constrains where a dispatched agent sends its own MCP calls.
  *
- * AGENT_HQ_DB_PATH is deliberately NOT set. db/client.ts selects PostgreSQL purely on
- * DATABASE_URL being present, and leaving the SQLite path unset means a misconfiguration
- * that dropped DATABASE_URL would fail to find a database rather than silently opening one.
- *
  * Usage:
- *   node scripts/pg/provision.mjs <snapshot> agent_hq_pgtest
+ *   createdb agent_hq_pgtest
+ *   cd api && npm run build
+ *   DATABASE_URL=postgresql://localhost/agent_hq_pgtest npm run db:install
  *   pm2 start ecosystem.pgtest.config.js
  *   pm2 logs agent-hq-pgtest-api
  */
@@ -31,14 +29,8 @@ const repoRoot = __dirname;
 
 const apiPort = process.env.AGENT_HQ_PGTEST_API_PORT || '3531';
 const uiPort = process.env.AGENT_HQ_PGTEST_UI_PORT || '3530';
-// agent_hq_pgtest_LEGACY, deliberately — the one provisioned with --keep-legacy-names.
-//
-// The application's SQL still says sprint_id / sprints. Pointing this at the RENAMED database
-// (agent_hq_pgtest) would change two variables at once, and a failure could be either the
-// engine swap or the rename. The renamed database exists and is smoke-tested separately; it
-// becomes the target once the application speaks the new vocabulary.
 const databaseUrl = process.env.AGENT_HQ_PGTEST_DATABASE_URL
-  || 'postgresql://localhost/agent_hq_pgtest_legacy';
+  || 'postgresql://localhost/agent_hq_pgtest';
 
 const nodeBin = [
   process.env.AGENT_HQ_NODE_BIN,
@@ -70,6 +62,7 @@ module.exports = {
         // workspace directory that the production instance is actively using.
         WORKSPACE_PARENT: path.join(repoRoot, '.pgtest-workspaces'),
         WORKSPACE_ROOT: path.join(repoRoot, '.pgtest-workspaces'),
+        AGENT_HQ_UPLOADS_DIR: path.join(repoRoot, '.pgtest-uploads'),
       },
       autorestart: false, // a crash should stay visible during testing, not restart-loop
       watch: false,

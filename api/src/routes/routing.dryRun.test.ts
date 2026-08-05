@@ -1,7 +1,7 @@
 import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
-import { setupTestDb, teardownTestDb, usingPostgres } from '../db/testDb';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import router from './routing';
 
 /**
@@ -32,18 +32,41 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
 
 async function seedScope(): Promise<{ projectId: number; sprintId: number; agentId: number }> {
   const db = getDb();
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'DryRun Tenant', 'dry-run', 1)`);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
+  `);
+  await db.run(`
+    INSERT INTO task_statuses (name, label, terminal, is_system)
+    VALUES ('ready', 'Ready', 0, 1)
+  `);
+  await db.run(`
+    INSERT INTO sprint_types (tenant_id, key, name, status_seeded_at, repo_required)
+    VALUES (1, 'dev', 'Development', '2026-08-05T00:00:00.000Z', 0)
+  `);
+  await db.run(`
+    INSERT INTO sprint_type_task_statuses
+      (tenant_id, sprint_type_key, status_key, label, terminal, is_system, stage_order, is_default_entry)
+    VALUES (1, 'dev', 'ready', 'Ready', 0, 1, 0, 1)
+  `);
   const project = await db.run(
-    `INSERT INTO projects (name, description, context_md) VALUES ('DryRun Project', '', '')`,
+    `INSERT INTO projects (tenant_id, name, description, context_md) VALUES (1, 'DryRun Project', '', '')`,
   );
   const projectId = Number(project.lastInsertId);
   const sprint = await db.run(
-    `INSERT INTO sprints (project_id, name, goal, sprint_type, status, length_kind, length_value)
-     VALUES (?, 'DryRun Workflow', '', 'dev', 'active', 'time', '2w')`,
+    `INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+     VALUES (1, ?, 'DryRun Workflow', '', 'dev', 'active', 'time', '2w')`,
     projectId,
   );
   const sprintId = Number(sprint.lastInsertId);
+  await db.run(`
+    INSERT INTO sprint_task_statuses
+      (sprint_id, status_key, label, terminal, is_system, stage_order, is_default_entry)
+    VALUES (?, 'ready', 'Ready', 0, 1, 0, 1)
+  `, sprintId);
   const agent = await db.run(
-    `INSERT INTO agents (name, session_key, enabled, project_id) VALUES ('DryRun Agent', 'dryrun-agent', 1, ?)`,
+    `INSERT INTO agents (tenant_id, name, session_key, enabled, project_id) VALUES (1, 'DryRun Agent', 'dryrun-agent', 1, ?)`,
     projectId,
   );
   return { projectId, sprintId, agentId: Number(agent.lastInsertId) };
@@ -54,15 +77,10 @@ async function countRules(): Promise<number> {
   return Number(row.n);
 }
 
-/**
- * The first request of a process triggers tenant bootstrap via resolveTenantIdFromRequest
- * -> ensureTenantSchema, which seeds default policy rows on the POOLED handle, outside any
- * transaction the handler later opens. Baselining before that runs attributes ~37 seeded
- * rows to the dry run and reports a leak that is not there. Warm it with a read first.
- */
-async function warmTenantBootstrap(baseUrl: string, projectId: number): Promise<void> {
+/** Primes the read endpoint before measuring whether the later dry run wrote anything. */
+async function primeRoutingRead(baseUrl: string, projectId: number): Promise<void> {
   const response = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=${projectId}&workflow_type=dev`);
-  if (!response.ok) throw new Error(`tenant warm-up failed: ${response.status}`);
+  if (!response.ok) throw new Error(`routing read failed: ${response.status} ${await response.text()}`);
 }
 
 describe('routing dry_run does not persist', () => {
@@ -79,9 +97,9 @@ describe('routing dry_run does not persist', () => {
     await teardownTestDb();
   });
 
-  it(`rolls a previewed assignment rule back on ${usingPostgres() ? 'postgres' : 'sqlite'}`, async () => {
+  it('rolls a previewed assignment rule back on PostgreSQL', async () => {
     const { projectId, sprintId, agentId } = await seedScope();
-    await warmTenantBootstrap(baseUrl, projectId);
+    await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
     const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
@@ -111,7 +129,7 @@ describe('routing dry_run does not persist', () => {
 
   it('still persists when dry_run is absent, so the rollback is not swallowing real writes', async () => {
     const { projectId, sprintId, agentId } = await seedScope();
-    await warmTenantBootstrap(baseUrl, projectId);
+    await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
     const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
@@ -133,7 +151,7 @@ describe('routing dry_run does not persist', () => {
 
   it('surfaces a validation failure as an error rather than a successful preview', async () => {
     const { projectId, sprintId } = await seedScope();
-    await warmTenantBootstrap(baseUrl, projectId);
+    await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
     // agent_id 999999 does not exist. The sentinel that carries a preview out of the
@@ -164,7 +182,7 @@ describe('routing dry_run does not persist', () => {
     // state (25P02), where every subsequent statement fails. The symptom is the NEXT
     // request failing, not this one.
     const { projectId, sprintId, agentId } = await seedScope();
-    await warmTenantBootstrap(baseUrl, projectId);
+    await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
     await fetch(`${baseUrl}/api/v1/routing/rules`, {

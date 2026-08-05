@@ -754,9 +754,8 @@ export class CustomAgentRuntime implements AgentRuntime {
    * appendTranscriptChunk — upsert the assistant message row with the latest
    * streamed content so the Chats tab shows a live-updating transcript.
    *
-   * Uses INSERT OR REPLACE: if the row already exists it is replaced with the
-   * full accumulated content (not just the delta). This avoids duplicating
-   * message rows while keeping the content fresh.
+   * Uses an explicit PostgreSQL upsert: if the row already exists, its content
+   * and timestamp are updated with the full accumulated response.
    */
   private async appendTranscriptChunk(
     params: DispatchParams,
@@ -819,9 +818,8 @@ export class CustomAgentRuntime implements AgentRuntime {
       const now = nowTimestamp();
 
       await db.run(`
-        INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-        VALUES (?, ?, ?, 'user', ?, ?)
-      `, `veri-user-${instanceId}`, agentId, instanceId, params.message, now);
+        INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
+        VALUES (?, ?, ?, 'user', ?, ?) ON CONFLICT DO NOTHING`, `veri-user-${instanceId}`, agentId, instanceId, params.message, now);
 
       console.log(`[CustomAgentRuntime] Run ${runId} — persisted user prompt at run start`);
     } catch (err) {
@@ -857,9 +855,8 @@ export class CustomAgentRuntime implements AgentRuntime {
 
       // Save the dispatched prompt as a "user" message
       await db.run(`
-        INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
-        VALUES (?, ?, ?, 'user', ?, ?)
-      `, `veri-user-${instanceId}`, agentId, instanceId, params.message, now);
+        INSERT INTO chat_messages (id, agent_id, instance_id, role, content, timestamp)
+        VALUES (?, ?, ?, 'user', ?, ?) ON CONFLICT DO NOTHING`, `veri-user-${instanceId}`, agentId, instanceId, params.message, now);
 
       // Save the final assistant response (upsert to replace any partial streaming content)
       if (assistantMessage) {
@@ -906,7 +903,7 @@ export class CustomAgentRuntime implements AgentRuntime {
 
       await db.run(`
         UPDATE job_instances
-        SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+        SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
         WHERE id = ?
       `, JSON.stringify(event), instanceId);
     } catch (err) {

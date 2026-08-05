@@ -97,7 +97,7 @@ export async function rememberDeletedSprintTaskTransitionRequirement(
     await db.run(`
       INSERT INTO sprint_task_transition_requirement_tombstones (
         sprint_id, task_type_key, outcome, field_name, requirement_type, match_field_key, deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     `, ...values);
   });
 }
@@ -197,7 +197,7 @@ export async function seedSprintTaskPolicy(
       const insertSql = `
         INSERT INTO sprint_task_statuses (
           sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       const policyStatuses = await loadPolicyStatuses(db);
       for (const [index, row] of policyStatuses.entries()) {
@@ -219,21 +219,25 @@ export async function seedSprintTaskPolicy(
 
     const transitionScopeColumns = await tableHasColumn(db, 'sprint_task_transitions', 'project_id')
       && await tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
+    const transitionTenantInsert = await tableHasColumn(db, 'sprint_task_transitions', 'tenant_id')
+      ? { columns: 'tenant_id, ', placeholders: '?, ', params: [sprint.tenant_id ?? null] }
+      : { columns: '', placeholders: '', params: [] };
 
     if (shouldSeedTransitions) {
       await db.run(`DELETE FROM sprint_task_transitions WHERE sprint_id = ?`, sprintId);
       const insertSql = transitionScopeColumns ? `
         INSERT INTO sprint_task_transitions (
-          sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
+          ${transitionTenantInsert.columns}sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
+        ) VALUES (${transitionTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ` : `
         INSERT INTO sprint_task_transitions (
-          sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
+          ${transitionTenantInsert.columns}sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
+        ) VALUES (${transitionTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       for (const row of loadPolicyTransitions()) {
         await db.run(
           insertSql,
+          ...transitionTenantInsert.params,
           ...(transitionScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
           row.task_type ?? null,
           row.from_status,
@@ -246,12 +250,12 @@ export async function seedSprintTaskPolicy(
     } else {
       const insertMissingSql = transitionScopeColumns ? `
         INSERT INTO sprint_task_transitions (
-          sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
+          ${transitionTenantInsert.columns}sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
+        ) VALUES (${transitionTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ` : `
         INSERT INTO sprint_task_transitions (
-          sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
+          ${transitionTenantInsert.columns}sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
+        ) VALUES (${transitionTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       const existingKeys = new Set(
         (await db.all(`
@@ -266,6 +270,7 @@ export async function seedSprintTaskPolicy(
         if (existingKeys.has(key)) continue;
         await db.run(
           insertMissingSql,
+          ...transitionTenantInsert.params,
           ...(transitionScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
           row.task_type ?? null,
           row.from_status,
@@ -280,22 +285,26 @@ export async function seedSprintTaskPolicy(
 
     const requirementScopeColumns = await tableHasColumn(db, 'sprint_task_transition_requirements', 'project_id')
       && await tableHasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
+    const requirementTenantInsert = await tableHasColumn(db, 'sprint_task_transition_requirements', 'tenant_id')
+      ? { columns: 'tenant_id, ', placeholders: '?, ', params: [sprint.tenant_id ?? null] }
+      : { columns: '', placeholders: '', params: [] };
 
     if (shouldSeedRequirements) {
       await db.run(`DELETE FROM sprint_task_transition_requirements WHERE sprint_id = ?`, sprintId);
       const insertSql = requirementScopeColumns ? `
         INSERT INTO sprint_task_transition_requirements (
-          sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+          ${requirementTenantInsert.columns}sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
+        ) VALUES (${requirementTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ` : `
         INSERT INTO sprint_task_transition_requirements (
-          sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+          ${requirementTenantInsert.columns}sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
+        ) VALUES (${requirementTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       for (const row of loadPolicyRequirements()) {
         if (requirementTombstones.has(requirementSeedIdentityKey(row))) continue;
         await db.run(
           insertSql,
+          ...requirementTenantInsert.params,
           ...(requirementScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
           row.task_type ?? null,
           row.outcome,
@@ -311,12 +320,12 @@ export async function seedSprintTaskPolicy(
     } else {
       const insertMissingSql = requirementScopeColumns ? `
         INSERT INTO sprint_task_transition_requirements (
-          sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+          ${requirementTenantInsert.columns}sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
+        ) VALUES (${requirementTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ` : `
         INSERT INTO sprint_task_transition_requirements (
-          sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+          ${requirementTenantInsert.columns}sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
+        ) VALUES (${requirementTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       const existingKeys = new Set(
         (await db.all(`
@@ -332,6 +341,7 @@ export async function seedSprintTaskPolicy(
         if (existingKeys.has(key)) continue;
         await db.run(
           insertMissingSql,
+          ...requirementTenantInsert.params,
           ...(requirementScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
           row.task_type ?? null,
           row.outcome,
@@ -365,7 +375,7 @@ export async function backfillMissingSprintTypeStatusEmoji(db: Db, sprintType: s
   if (rows.length === 0) return;
   const updateEmojiSql = `
     UPDATE sprint_type_task_statuses
-    SET metadata_json = ?, updated_at = datetime('now')
+    SET metadata_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `;
   for (const row of rows) {
@@ -420,15 +430,13 @@ async function ensureOpsIntakeStarterStatus(
   const hasStatusTenantId = await tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
   const insertSql = hasStatusTenantId
     ? `
-      INSERT OR IGNORE INTO sprint_type_task_statuses (
+      INSERT INTO sprint_type_task_statuses (
         tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-      ) VALUES (?, 'ops', ?, ?, ?, ?, ?, ?, 0, 1, ?, datetime('now'), datetime('now'))
-    `
+      ) VALUES (?, 'ops', ?, ?, ?, ?, ?, ?, 0, 1, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`
     : `
-      INSERT OR IGNORE INTO sprint_type_task_statuses (
+      INSERT INTO sprint_type_task_statuses (
         sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-      ) VALUES ('ops', ?, ?, ?, ?, ?, ?, 0, 1, ?, datetime('now'), datetime('now'))
-    `;
+      ) VALUES ('ops', ?, ?, ?, ?, ?, ?, 0, 1, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`;
   const params = [
     canonical.name,
     canonical.label,
@@ -470,13 +478,13 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
         stage_order = ?,
         is_default_entry = ?,
         metadata_json = ?,
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE sprint_type_key = ? AND status_key = ?
   `;
   const insertSql = `
     INSERT INTO sprint_type_task_statuses (
       sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
   `;
 
   for (const row of existingRows) {
@@ -585,15 +593,13 @@ export async function seedSprintTypeTaskStatuses(
     const hasStatusTenantId = await tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
     const insertSql = hasStatusTenantId
       ? `
-        INSERT OR IGNORE INTO sprint_type_task_statuses (
+        INSERT INTO sprint_type_task_statuses (
           tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`
       : `
-        INSERT OR IGNORE INTO sprint_type_task_statuses (
+        INSERT INTO sprint_type_task_statuses (
           sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-      `;
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`;
     for (const [index, status] of statusesToSeed.entries()) {
       await db.run(
         insertSql,

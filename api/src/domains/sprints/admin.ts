@@ -1,4 +1,3 @@
-import { seedSprintTaskPolicy } from '../routing/policy/seed';
 import { writeProjectAudit, diffFields } from '../../lib/projectAudit';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
 import { normalizeRepoConfig, validateRepoConfig } from '../../lib/repoConfig';
@@ -394,8 +393,6 @@ export async function updateSprint(
     WHERE id = ?
   `, newValues.project_id, newValues.name, newValues.goal, newValues.sprint_type, newValues.status, newValues.length_kind, newValues.length_value, newValues.started_at, newValues.ended_at, newValues.repo_path, newValues.repo_url, newValues.repo_access_mode, sprintId);
 
-  await seedSprintTaskPolicy(db, sprintId);
-
   const changes = diffFields(
     {
       name: existing.name,
@@ -486,7 +483,7 @@ export async function closeSprint(db: Db, sprintId: number, actor: string) {
 
   const oldStatus = sprint.status;
   await db.run(`
-    UPDATE sprints SET status = 'closed', ended_at = COALESCE(ended_at, datetime('now')) WHERE id = ?
+    UPDATE sprints SET status = 'closed', ended_at = COALESCE(ended_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) WHERE id = ?
   `, sprintId);
 
   await writeProjectAudit(db, sprint.project_id, 'sprint', sprintId, 'updated', actor, {

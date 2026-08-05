@@ -5,9 +5,11 @@ import { writeProjectAudit } from './projectAudit';
 import { nowTimestamp } from './timestamps';
 import { type Db } from "../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
+import { resolveUploadsRoot } from '../config';
 
-const REPO_ROOT = path.resolve(__dirname, '../../..');
-const UPLOADS_BASE = process.env.AGENT_HQ_PROJECT_UPLOADS_DIR ?? path.join(REPO_ROOT, 'uploads', 'projects');
+function getProjectUploadsBase(): string {
+  return process.env.AGENT_HQ_PROJECT_UPLOADS_DIR ?? path.join(resolveUploadsRoot(), 'projects');
+}
 
 export const PROJECT_MANIFEST_SCHEMA_VERSION = 'agent_hq.project_manifest.v1';
 const TENANT_SCOPED_PROJECT_CONFIG_TABLES = [
@@ -485,7 +487,7 @@ export async function importProjectManifest(
           const existing = await db.get(`
             SELECT id FROM task_field_schemas
             WHERE sprint_type_key = ?
-              AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+              AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
             LIMIT 1
           `, schema.sprint_type_key, schema.task_type ?? null, schema.task_type ?? null);
           if (!existing) {
@@ -566,7 +568,7 @@ export async function importProjectManifest(
     for (const row of manifest.recurring_task_templates ?? []) await insertDynamic(db, 'recurring_task_series', { ...(await scopedRow('recurring_task_series', row)), enabled: 0, next_run_at: null, last_run_at: null });
 
     if (options.importFiles) {
-      const dir = path.join(UPLOADS_BASE, String(projectId));
+      const dir = path.join(getProjectUploadsBase(), String(projectId));
       fs.mkdirSync(dir, { recursive: true });
       for (const file of manifest.files ?? []) {
         if (!file.payload_base64) continue;
@@ -616,7 +618,7 @@ export async function repairImportedProjectTenantScope(
         UPDATE ${table}
         SET tenant_id = ?
         WHERE project_id = ?
-          AND (tenant_id IS NOT ?)
+          AND (tenant_id IS DISTINCT FROM ?)
       `, tenantId, project.id, tenantId);
       updated[table] = result.changes;
     }

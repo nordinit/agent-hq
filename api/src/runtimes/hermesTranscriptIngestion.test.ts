@@ -1,35 +1,36 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import Database from 'better-sqlite3';
 import {
   buildAgentHqRunContextBlock,
   ingestHermesTranscriptForRun,
 } from './hermesTranscriptIngestion';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
 async function setupDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE chat_messages (
-      id TEXT PRIMARY KEY,
-      agent_id INTEGER NOT NULL,
-      instance_id INTEGER,
-      durable_run_id TEXT,
-      session_key TEXT NOT NULL DEFAULT '',
-      role TEXT NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      timestamp TEXT NOT NULL,
-      event_type TEXT NOT NULL DEFAULT 'text',
-      event_meta TEXT NOT NULL DEFAULT '{}'
-    );
+  const db = await setupTestDb();
+
+  await db.run(`
+    INSERT INTO tenants (id, name, slug, is_default)
+    VALUES (1, 'Default', 'default', 1)
   `);
+  await db.run(`
+    INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type)
+    VALUES (17, 1, 'Hermes Cinder', 'Implementation', 'agent:hermes-cinder', 'hermes')
+  `);
+  await db.run(`
+    INSERT INTO job_instances (id, tenant_id, agent_id, status, session_key)
+    VALUES
+      (4806, 1, 17, 'running', 'run:4806'),
+      (5100, 1, 17, 'running', 'run:5100'),
+      (5101, 1, 17, 'running', 'run:5101')
+  `);
+
   return db;
 }
 
@@ -42,6 +43,10 @@ function writeSession(hermesHome: string, name: string, data: Record<string, unk
 }
 
 describe('Hermes transcript ingestion', () => {
+  afterEach(async () => {
+    await teardownTestDb();
+  });
+
   it('parses user text, assistant text, tool calls, tool results, and plain reasoning into chat_messages', async () => {
     const db = await setupDb();
     const hermesHome = makeTempDir('hermes-ingest-');

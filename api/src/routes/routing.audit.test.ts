@@ -27,18 +27,32 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
 
 async function seedScope(): Promise<{ projectId: number; sprintId: number; agentId: number }> {
   const db = getDb();
-  const project = await db.run(`INSERT INTO projects (name, description, context_md) VALUES ('Audit Project', '', '')`);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(`INSERT INTO sprint_types (tenant_id, key, name) VALUES (1, 'dev', 'Development')`);
+  await db.run(`
+    INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, stage_order, is_default_entry)
+    VALUES
+      (1, 'dev', 'todo', 'To Do', 0, 1),
+      (1, 'dev', 'ready', 'Ready', 1, 0)
+  `);
+  const project = await db.run(`INSERT INTO projects (tenant_id, name, description, context_md) VALUES (1, 'Audit Project', '', '')`);
   const projectId = Number(project.lastInsertId);
   const sprint = await db.run(
-    `INSERT INTO sprints (project_id, name, goal, sprint_type, status, length_kind, length_value)
-     VALUES (?, 'Audit Workflow', '', 'dev', 'active', 'time', '2w')`,
+    `INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+     VALUES (1, ?, 'Audit Workflow', '', 'dev', 'active', 'time', '2w')`,
     projectId,
   );
+  const sprintId = Number(sprint.lastInsertId);
+  await db.run(`
+    INSERT INTO sprint_task_statuses (sprint_id, status_key, label, stage_order, is_default_entry)
+    VALUES (?, 'todo', 'To Do', 0, 1), (?, 'ready', 'Ready', 1, 0)
+  `, sprintId, sprintId);
   const agent = await db.run(
-    `INSERT INTO agents (name, session_key, enabled, project_id) VALUES ('Audit Agent', 'audit-agent', 1, ?)`,
+    `INSERT INTO agents (tenant_id, name, session_key, enabled, project_id) VALUES (1, 'Audit Agent', 'audit-agent', 1, ?)`,
     projectId,
   );
-  return { projectId, sprintId: Number(sprint.lastInsertId), agentId: Number(agent.lastInsertId) };
+  return { projectId, sprintId, agentId: Number(agent.lastInsertId) };
 }
 
 interface AuditRow {

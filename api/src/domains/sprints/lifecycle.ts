@@ -61,7 +61,7 @@ export async function completeSprint(sprintId: number): Promise<void> {
   if (!sprint || sprint.status === 'complete') return;
 
   await db.run(`
-    UPDATE sprints SET status = 'complete', ended_at = datetime('now') WHERE id = ?
+    UPDATE sprints SET status = 'complete', ended_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
   `, sprintId);
 
   const paused = await db.run(`

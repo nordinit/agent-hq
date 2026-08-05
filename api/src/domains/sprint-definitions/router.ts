@@ -1,7 +1,5 @@
 import { Router, type Request, type Response } from 'express';
 import { getDb } from '../../db/client';
-import { isStarterPolicySprintType } from '../routing/policy/metadata';
-import { seedSprintTypeTaskStatuses } from '../routing/policy/seed';
 import { listSprintTypeTaskStatuses } from '../routing/policy/statuses';
 import {
   normalizeBooleanInt,
@@ -392,13 +390,13 @@ async function syncSprintTypeStatusToExistingSprints(
         stage_order = ?,
         is_default_entry = ?,
         metadata_json = ?,
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE sprint_id = ? AND status_key = ?
   `;
   const insertSql = `
     INSERT INTO sprint_task_statuses (
       sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
   `;
   for (const sprint of sprints) {
     if (await db.get(existingSql, sprint.id, row.status_key)) {
@@ -801,15 +799,10 @@ router.post('/types', async (req: Request, res: Response) => {
     if (existing) return res.status(409).json({ error: `Sprint type "${key}" already exists` });
     const tenant = await sprintTypeTenantInsertFragment(db, tenantId);
 
-    await db.withTransaction(async (db) => {
-      await db.run(`
-        INSERT INTO sprint_types (${tenant.columns}${project.columns}key, name, description, is_system, created_at, updated_at)
-        VALUES (${tenant.placeholders}${project.placeholders}?, ?, ?, 0, datetime('now'), datetime('now'))
-      `, ...tenant.params, ...project.params, key, name, description);
-      if (isStarterPolicySprintType(key)) {
-        await seedSprintTypeTaskStatuses(db, key, { tenantId });
-      }
-    });
+    await db.run(`
+      INSERT INTO sprint_types (${tenant.columns}${project.columns}key, name, description, is_system, created_at, updated_at)
+      VALUES (${tenant.placeholders}${project.placeholders}?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+    `, ...tenant.params, ...project.params, key, name, description);
 
     return res.status(201).json(await getSprintTypeOr404(db, key, tenantId));
   } catch (err) {
@@ -837,7 +830,7 @@ router.put('/types/:key', async (req: Request, res: Response) => {
     const tenant = await sprintTypeTenantPredicate(db, tenantId);
     await db.run(`
       UPDATE sprint_types
-      SET ${project.projectId != null ? 'project_id = ?, ' : ''}name = ?, description = ?, updated_at = datetime('now')
+      SET ${project.projectId != null ? 'project_id = ?, ' : ''}name = ?, description = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE key = ?
         ${tenant.sql}
     `, ...project.params, name, description, sprintTypeKey, ...tenant.params);
@@ -906,13 +899,13 @@ router.put('/types/:key/task-types', async (req: Request, res: Response) => {
       const insertTenant = await configTenantInsertFragment(db, 'sprint_type_task_types', tenantId);
       const insertSql = `
         INSERT INTO sprint_type_task_types (${insertTenant.columns}sprint_type_key, task_type, is_system, created_at, updated_at)
-        VALUES (${insertTenant.placeholders}?, ?, 0, datetime('now'), datetime('now'))
+        VALUES (${insertTenant.placeholders}?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       for (const taskType of dedupedTaskTypes) {
         await db.run(insertSql, ...insertTenant.params, sprintTypeKey, taskType);
       }
       const sprintTypeTenant = await sprintTypeTenantPredicate(db, tenantId);
-      await db.run(`UPDATE sprint_types SET updated_at = datetime('now') WHERE key = ?${sprintTypeTenant.sql}`, sprintTypeKey, ...sprintTypeTenant.params);
+      await db.run(`UPDATE sprint_types SET updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE key = ?${sprintTypeTenant.sql}`, sprintTypeKey, ...sprintTypeTenant.params);
     });
 
     return res.json({
@@ -965,10 +958,10 @@ router.post('/types/:key/statuses', async (req: Request, res: Response) => {
       await db.run(`
         INSERT INTO sprint_type_task_statuses (
           ${insertTenant.columns}sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
-        ) VALUES (${insertTenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        ) VALUES (${insertTenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `, ...insertTenant.params, sprintTypeKey, row.status_key, row.label, row.color, row.terminal, row.is_system, row.allowed_transitions_json, row.stage_order, row.is_default_entry, row.metadata_json);
       await syncSprintTypeStatusToExistingSprints(db, sprintTypeKey, tenantId, row);
-      await db.run(`UPDATE sprint_types SET updated_at = datetime('now') WHERE key = ?${(await sprintTypeTenantPredicate(db, tenantId)).sql}`, sprintTypeKey, ...(await sprintTypeTenantPredicate(db, tenantId)).params);
+      await db.run(`UPDATE sprint_types SET updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE key = ?${(await sprintTypeTenantPredicate(db, tenantId)).sql}`, sprintTypeKey, ...(await sprintTypeTenantPredicate(db, tenantId)).params);
     });
 
     return res.status(201).json((await getStatusesForSprintType(db, sprintTypeKey, tenantId)).find(status => status.name === statusKey));
@@ -1034,7 +1027,7 @@ router.put('/types/:key/statuses/:statusKey', async (req: Request, res: Response
             stage_order = ?,
             is_default_entry = ?,
             metadata_json = ?,
-            updated_at = datetime('now')
+            updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE sprint_type_key = ? AND status_key = ?
           ${statusTenant.sql}
       `, row.status_key, row.label, row.color, row.terminal, row.allowed_transitions_json, row.stage_order, row.is_default_entry, row.metadata_json, sprintTypeKey, currentStatusKey, ...statusTenant.params);
@@ -1043,20 +1036,20 @@ router.put('/types/:key/statuses/:statusKey', async (req: Request, res: Response
         const sprintTenantParams = await tableHasColumn(db, 'sprints', 'tenant_id') ? [tenantId] : [];
         await db.run(`
           UPDATE tasks
-          SET status = ?, updated_at = datetime('now')
+          SET status = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
           WHERE sprint_id IN (SELECT id FROM sprints WHERE sprint_type = ?${sprintTenantSql}) AND status = ?
         `, nextStatusKey, sprintTypeKey, ...sprintTenantParams, currentStatusKey);
         await db.run(`
           UPDATE sprint_task_transitions
           SET from_status = CASE WHEN from_status = ? THEN ? ELSE from_status END,
               to_status = CASE WHEN to_status = ? THEN ? ELSE to_status END,
-              updated_at = datetime('now')
+              updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
           WHERE sprint_id IN (SELECT id FROM sprints WHERE sprint_type = ?${sprintTenantSql})
             AND (from_status = ? OR to_status = ?)
         `, currentStatusKey, nextStatusKey, currentStatusKey, nextStatusKey, sprintTypeKey, ...sprintTenantParams, currentStatusKey, currentStatusKey);
       }
       await syncSprintTypeStatusToExistingSprints(db, sprintTypeKey, tenantId, row);
-      await db.run(`UPDATE sprint_types SET updated_at = datetime('now') WHERE key = ?${(await sprintTypeTenantPredicate(db, tenantId)).sql}`, sprintTypeKey, ...(await sprintTypeTenantPredicate(db, tenantId)).params);
+      await db.run(`UPDATE sprint_types SET updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE key = ?${(await sprintTypeTenantPredicate(db, tenantId)).sql}`, sprintTypeKey, ...(await sprintTypeTenantPredicate(db, tenantId)).params);
     });
 
     return res.json((await getStatusesForSprintType(db, sprintTypeKey, tenantId)).find(status => status.name === nextStatusKey));
@@ -1135,7 +1128,7 @@ router.delete('/types/:key/statuses/:statusKey', async (req: Request, res: Respo
         WHERE status_key = ?
           AND sprint_id IN (SELECT id FROM sprints WHERE sprint_type = ?${sprintTenantSql})
       `, statusKey, sprintTypeKey, ...sprintTenantParams);
-      await db.run(`UPDATE sprint_types SET updated_at = datetime('now') WHERE key = ?${(await sprintTypeTenantPredicate(db, tenantId)).sql}`, sprintTypeKey, ...(await sprintTypeTenantPredicate(db, tenantId)).params);
+      await db.run(`UPDATE sprint_types SET updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE key = ?${(await sprintTypeTenantPredicate(db, tenantId)).sql}`, sprintTypeKey, ...(await sprintTypeTenantPredicate(db, tenantId)).params);
     });
 
     return res.json({ ok: true });
@@ -1161,7 +1154,7 @@ router.post('/types/:key/field-schemas', async (req: Request, res: Response) => 
     const existing = await db.get(`
       SELECT id FROM task_field_schemas
       WHERE sprint_type_key = ?
-        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+        AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
         ${schemaTenant.sql}
     `, sprintTypeKey, taskType, taskType, ...schemaTenant.params) as { id: number } | undefined;
     if (existing) return res.status(409).json({ error: 'A field schema for this sprint type/task type already exists' });
@@ -1169,7 +1162,7 @@ router.post('/types/:key/field-schemas', async (req: Request, res: Response) => 
     const insertTenant = await configTenantInsertFragment(db, 'task_field_schemas', tenantId);
     const result = await db.run(`
       INSERT INTO task_field_schemas (${insertTenant.columns}sprint_type_key, task_type, schema_json, is_system, created_at, updated_at)
-      VALUES (${insertTenant.placeholders}?, ?, ?, 0, datetime('now'), datetime('now'))
+      VALUES (${insertTenant.placeholders}?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     `, ...insertTenant.params, sprintTypeKey, taskType, JSON.stringify(schema));
 
     const created = await db.get(`
@@ -1212,7 +1205,7 @@ router.put('/types/:key/field-schemas/:schemaId', async (req: Request, res: Resp
     const duplicate = await db.get(`
       SELECT id FROM task_field_schemas
       WHERE sprint_type_key = ?
-        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+        AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
         AND id != ?
         ${schemaTenant.sql}
     `, sprintTypeKey, taskType, taskType, schemaId, ...schemaTenant.params) as { id: number } | undefined;
@@ -1220,7 +1213,7 @@ router.put('/types/:key/field-schemas/:schemaId', async (req: Request, res: Resp
 
     await db.run(`
       UPDATE task_field_schemas
-      SET task_type = ?, schema_json = ?, updated_at = datetime('now')
+      SET task_type = ?, schema_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
         ${schemaTenant.sql}
     `, taskType, JSON.stringify(schema), schemaId, ...schemaTenant.params);
@@ -1318,7 +1311,7 @@ router.post('/types/:key/relationship-types', async (req: Request, res: Response
         ${insertTenant.columns}sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility, direction_semantics,
         active_statuses_json, resolved_statuses_json, allow_create_related_task,
         default_related_task_type, default_related_task_status, is_system, metadata_json, created_at, updated_at
-      ) VALUES (${insertTenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      ) VALUES (${insertTenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     `, ...insertTenant.params, sprintTypeKey, payload.key, payload.label, payload.inverse_label, payload.category, payload.affects_dispatch_eligibility, payload.direction_semantics, JSON.stringify(payload.active_statuses), JSON.stringify(payload.resolved_statuses), payload.allow_create_related_task, payload.default_related_task_type, payload.default_related_task_status, isSystem, JSON.stringify(payload.metadata));
 
     const created = await getRelationshipTypeRow(db, sprintTypeKey, Number(result.lastInsertId), tenantId);
@@ -1365,7 +1358,7 @@ router.put('/types/:key/relationship-types/:relationshipTypeId', async (req: Req
       UPDATE sprint_type_relationship_types
       SET key = ?, label = ?, inverse_label = ?, category = ?, affects_dispatch_eligibility = ?, direction_semantics = ?,
           active_statuses_json = ?, resolved_statuses_json = ?, allow_create_related_task = ?,
-          default_related_task_type = ?, default_related_task_status = ?, is_system = ?, metadata_json = ?, updated_at = datetime('now')
+          default_related_task_type = ?, default_related_task_status = ?, is_system = ?, metadata_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
         ${tenant.sql}
     `, payload.key, payload.label, payload.inverse_label, payload.category, payload.affects_dispatch_eligibility, payload.direction_semantics, JSON.stringify(payload.active_statuses), JSON.stringify(payload.resolved_statuses), payload.allow_create_related_task, payload.default_related_task_type, payload.default_related_task_status, isSystem, JSON.stringify(payload.metadata), relationshipTypeId, ...tenant.params);
@@ -1454,7 +1447,7 @@ router.post('/types/:key/outcomes', async (req: Request, res: Response) => {
     const duplicate = await db.get(`
       SELECT id FROM sprint_type_outcomes
       WHERE sprint_type_key = ?
-        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+        AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
         AND outcome_key = ?
         ${tenant.sql}
     `, sprintTypeKey, payload.task_type, payload.task_type, payload.outcome_key, ...tenant.params) as { id: number } | undefined;
@@ -1464,7 +1457,7 @@ router.post('/types/:key/outcomes', async (req: Request, res: Response) => {
     const insertTenant = await configTenantInsertFragment(db, 'sprint_type_outcomes', tenantId);
     const result = await db.run(`
       INSERT INTO sprint_type_outcomes (${insertTenant.columns}sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at)
-      VALUES (${insertTenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      VALUES (${insertTenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     `, ...insertTenant.params, sprintTypeKey, payload.task_type, payload.outcome_key, payload.label, payload.description, payload.enabled, payload.behavior, payload.badge_variant, payload.stage_order, isSystem, JSON.stringify(payload.metadata));
 
     const created = await db.get(`
@@ -1513,7 +1506,7 @@ router.put('/types/:key/outcomes/:outcomeId', async (req: Request, res: Response
     const duplicate = await db.get(`
       SELECT id FROM sprint_type_outcomes
       WHERE sprint_type_key = ?
-        AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+        AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
         AND outcome_key = ?
         AND id != ?
         ${tenant.sql}
@@ -1522,7 +1515,7 @@ router.put('/types/:key/outcomes/:outcomeId', async (req: Request, res: Response
 
     await db.run(`
       UPDATE sprint_type_outcomes
-      SET task_type = ?, outcome_key = ?, label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = ?, metadata_json = ?, updated_at = datetime('now')
+      SET task_type = ?, outcome_key = ?, label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = ?, metadata_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
         ${tenant.sql}
     `, payload.task_type, payload.outcome_key, payload.label, payload.description, payload.enabled, payload.behavior, payload.badge_variant, payload.stage_order, isSystem, JSON.stringify(payload.metadata), outcomeId, ...tenant.params);

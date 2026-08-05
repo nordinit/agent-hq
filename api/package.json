@@ -10,20 +10,20 @@
   "scripts": {
     "mcp": "tsx src/mcp/server.ts",
     "dev": "tsx watch src/index.ts",
-    "dev:dev": "AGENT_HQ_DB_PATH=../agent-hq-dev.db PORT=3511 tsx watch src/index.ts",
+    "dev:dev": "PORT=3511 tsx watch src/index.ts",
     "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc",
     "db:migrate": "node dist/db/migrate.js",
-    "db:install": "node dist/db/migrate.js",
+    "db:install": "node dist/db/migrate.js --install",
     "db:migrate:preflight": "node dist/db/migrate.js",
-    "db:repair-tenants": "node dist/db/repair-tenant-ownership.js",
     "db:migrate:status": "node dist/db/migrateStatus.js",
     "db:provision-defaults": "npx tsx src/db/provision-defaults.ts",
     "start": "node dist/index.js",
-    "start:dev": "AGENT_HQ_DB_PATH=../agent-hq-dev.db PORT=3511 node dist/index.js",
-    "lint": "tsc --noEmit",
+    "start:dev": "PORT=3511 node dist/index.js",
+    "lint": "tsc --noEmit && npm run lint:sql",
+    "lint:sql": "node --import tsx src/tooling/sqlPortabilityLint.ts",
     "test": "jest",
     "test:chat-deep-link": "jest --runInBand --config '{\"preset\":\"ts-jest\",\"testEnvironment\":\"node\",\"testMatch\":[\"**/src/lib/chatDeepLink.test.js\"]}'",
-    "seed:dev": "AGENT_HQ_DB_PATH=../agent-hq-dev.db npx tsx src/db/seed-dev.ts"
+    "seed:dev": "npx tsx src/db/seed-dev.ts"
   },
   "jest": {
     "preset": "ts-jest",

@@ -3,6 +3,7 @@ import { getDb } from '../db/client';
 import { materializeAssignedToolForOpenClaw } from '../capability-tools/materialize';
 import { executeToolImplementation, fetchAgentTools } from '../runtimes/toolInjection';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
+import { isPostgresUniqueViolation } from '../lib/postgresErrors';
 
 import { requireNumericId } from '../lib/routeParams';
 
@@ -131,7 +132,7 @@ router.post('/', async (req: Request, res: Response) => {
     const created = await db.get(`SELECT * FROM tools WHERE id = ?`, result.lastInsertId);
     return res.status(201).json(created);
   } catch (err: any) {
-    if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
+    if (isPostgresUniqueViolation(err)) {
       return res.status(409).json({ error: 'A tool with this slug already exists' });
     }
     return res.status(500).json({ error: String(err) });
@@ -165,14 +166,14 @@ router.put('/:id', async (req: Request, res: Response) => {
         permissions = ?,
         tags = ?,
         enabled = ?,
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ? AND tenant_id = ?
     `, name ?? existing.name, slug ?? existing.slug, description ?? existing.description, implementation_type ?? existing.implementation_type, implementation_body ?? existing.implementation_body, input_schema !== undefined ? JSON.stringify(input_schema) : existing.input_schema, permissions ?? existing.permissions, tags !== undefined ? JSON.stringify(tags) : existing.tags, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
 
     const updated = await db.get(`SELECT * FROM tools WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     return res.json(updated);
   } catch (err: any) {
-    if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
+    if (isPostgresUniqueViolation(err)) {
       return res.status(409).json({ error: 'A tool with this slug already exists' });
     }
     return res.status(500).json({ error: String(err) });
@@ -189,7 +190,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
     const existing = await db.get(`SELECT id FROM tools WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     if (!existing) return res.status(404).json({ error: 'Tool not found' });
 
-    await db.run(`UPDATE tools SET enabled = 0, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
+    await db.run(`UPDATE tools SET enabled = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ? AND tenant_id = ?`, req.params.id, tenantId);
     return res.json({ ok: true, id: Number(req.params.id) });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
@@ -392,7 +393,7 @@ agentToolsRouter.post('/', async (req: Request, res: Response) => {
 
     return res.status(201).json(created);
   } catch (err: any) {
-    if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || String(err).includes('UNIQUE constraint failed')) {
+    if (isPostgresUniqueViolation(err)) {
       return res.status(409).json({ error: 'This tool is already assigned to the agent' });
     }
     return res.status(500).json({ error: String(err) });

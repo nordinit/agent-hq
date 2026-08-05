@@ -266,11 +266,11 @@ export async function listTaskRelationships(db: Db, taskId: number): Promise<Tas
 async function mirrorDispatchDependency(db: Db, sourceTaskId: number, targetTaskId: number, type: TaskRelationshipTypeConfig): Promise<void> {
   if (type.affects_dispatch_eligibility !== 1) return;
   if (type.direction_semantics === 'target_blocks_source') {
-    await db.run(`INSERT OR IGNORE INTO task_dependencies (blocker_id, blocked_id) VALUES (?, ?)`, targetTaskId, sourceTaskId);
+    await db.run(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (?, ?) ON CONFLICT DO NOTHING`, targetTaskId, sourceTaskId);
     return;
   }
   if (type.direction_semantics === 'source_blocks_target') {
-    await db.run(`INSERT OR IGNORE INTO task_dependencies (blocker_id, blocked_id) VALUES (?, ?)`, sourceTaskId, targetTaskId);
+    await db.run(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (?, ?) ON CONFLICT DO NOTHING`, sourceTaskId, targetTaskId);
   }
 }
 
@@ -315,10 +315,10 @@ export async function createTaskRelationship(db: Db, input: {
   await db.withTransaction(async (db) => {
     await db.run(`
       INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key, metadata_json, created_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      VALUES (?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ON CONFLICT(source_task_id, target_task_id, relationship_type_key) DO UPDATE SET
         metadata_json = excluded.metadata_json,
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     `, sourceTaskId, targetTaskId, relationshipTypeKey, JSON.stringify(metadata), createdBy);
     await mirrorDispatchDependency(db, sourceTaskId, targetTaskId, type);
   });

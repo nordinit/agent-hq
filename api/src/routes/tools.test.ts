@@ -1,39 +1,17 @@
 import express from 'express';
 import type { Server } from 'http';
 import toolsRouter from './tools';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 
-async function resetDb(): Promise<void> {
-  closeDb();
-  await getDb().exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      openclaw_agent_id TEXT
-    );
-
-    CREATE TABLE tools (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      description TEXT NOT NULL DEFAULT '',
-      implementation_type TEXT NOT NULL,
-      implementation_body TEXT NOT NULL DEFAULT '',
-      input_schema TEXT NOT NULL DEFAULT '{}',
-      permissions TEXT NOT NULL DEFAULT 'read_only',
-      tags TEXT NOT NULL DEFAULT '[]',
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE agent_tool_assignments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      agent_id INTEGER NOT NULL,
-      tool_id INTEGER NOT NULL,
-      overrides TEXT NOT NULL DEFAULT '{}',
-      enabled INTEGER NOT NULL DEFAULT 1,
-      UNIQUE(agent_id, tool_id)
-    );
+async function seedFixture(): Promise<void> {
+  const db = await setupTestDb();
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Agent HQ', 'agent-hq', 1)`);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
   `);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Agent HQ')`);
 }
 
 function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -57,15 +35,18 @@ async function stopTestServer(server: Server): Promise<void> {
 }
 
 describe('OpenClaw materialized tools route', () => {
-  beforeEach(resetDb);
-  afterEach(closeDb);
+  beforeEach(seedFixture);
+  afterEach(teardownTestDb);
 
   it('returns materialized assigned tools with real JSON fields by openclaw_agent_id', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO agents (id, name, openclaw_agent_id) VALUES (1, 'Atlas', 'atlas')`);
     await db.run(`
-      INSERT INTO tools (id, name, slug, description, implementation_type, implementation_body, input_schema, permissions, tags, enabled)
-      VALUES (10, 'Deploy', 'deploy_dev_worktree', 'Deploy tool', 'shell', ?, ?, 'exec', ?, 1)
+      INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, openclaw_agent_id)
+      VALUES (1, 1, 86, 'Atlas', 'Project manager', 'agent:atlas:test', 'atlas')
+    `);
+    await db.run(`
+      INSERT INTO tools (id, tenant_id, name, slug, description, implementation_type, implementation_body, input_schema, permissions, tags, enabled)
+      VALUES (10, 1, 'Deploy', 'deploy_dev_worktree', 'Deploy tool', 'shell', ?, ?, 'exec', ?, 1)
     `, JSON.stringify({ command: 'echo "$repo_path"', timeoutMs: 1000 }), JSON.stringify({ type: 'object', properties: { repo_path: { type: 'string' } }, required: ['repo_path'] }), JSON.stringify(['deployment']));
     await db.run(`INSERT INTO agent_tool_assignments (id, agent_id, tool_id, enabled) VALUES (20, 1, 10, 1)`);
 
@@ -100,7 +81,10 @@ describe('OpenClaw materialized tools route', () => {
   });
 
   it('returns an empty tools array for a mapped OpenClaw agent with no assignments', async () => {
-    await getDb().run(`INSERT INTO agents (id, name, openclaw_agent_id) VALUES (1, 'Atlas', 'atlas')`);
+    await getDb().run(`
+      INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, openclaw_agent_id)
+      VALUES (1, 1, 86, 'Atlas', 'Project manager', 'agent:atlas:test', 'atlas')
+    `);
 
     const { server, baseUrl } = await startTestServer();
     try {

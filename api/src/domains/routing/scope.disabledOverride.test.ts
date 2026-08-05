@@ -85,8 +85,8 @@ describe('annotateRequirementScope', () => {
 });
 
 describe('isRowEnabled', () => {
-  it('accepts what each engine returns for true', () => {
-    // PostgreSQL yields booleans, SQLite yields 0/1, and some paths stringify.
+  it('accepts supported true representations', () => {
+    // Query and serialization paths may expose boolean, numeric, or string values.
     expect([true, 1, '1'].map(isRowEnabled)).toEqual([true, true, true]);
   });
 

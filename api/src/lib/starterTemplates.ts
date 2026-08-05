@@ -611,12 +611,12 @@ async function ensureStarterSprintTypeRegistry(db: Db, tenantId: number, workflo
     const insert = await tenantInsert(db, 'sprint_types', tenantId);
     await db.run(`
       INSERT INTO sprint_types (${insert.columns}key, name, description, is_system, created_at, updated_at)
-      VALUES (${insert.placeholders}?, ?, ?, 1, datetime('now'), datetime('now'))
+      VALUES (${insert.placeholders}?, ?, ?, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     `, ...insert.params, sprintTypeSeed.key, sprintTypeSeed.name, sprintTypeSeed.description);
   } else if (existingType.is_system === 1) {
     await db.run(`
       UPDATE sprint_types
-      SET name = ?, description = ?, is_system = 1, updated_at = datetime('now')
+      SET name = ?, description = ?, is_system = 1, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE key = ?
         ${typeTenant.sql}
     `, sprintTypeSeed.name, sprintTypeSeed.description, sprintType, ...typeTenant.params);
@@ -643,11 +643,11 @@ async function ensureStarterSprintTypeRegistry(db: Db, tenantId: number, workflo
   `;
   const taskTypeCreateSql = `
     INSERT INTO sprint_type_task_types (${taskTypeInsert.columns}sprint_type_key, task_type, is_system, created_at, updated_at)
-    VALUES (${taskTypeInsert.placeholders}?, ?, 1, datetime('now'), datetime('now'))
+    VALUES (${taskTypeInsert.placeholders}?, ?, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
   `;
   const taskTypeUpdateSql = `
     UPDATE sprint_type_task_types
-    SET is_system = 1, updated_at = datetime('now')
+    SET is_system = 1, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE sprint_type_key = ? AND task_type = ?
       ${taskTypeTenant.sql}
   `;
@@ -672,12 +672,12 @@ async function ensureStarterSprintTypeRegistry(db: Db, tenantId: number, workflo
       const insert = await tenantInsert(db, 'task_field_schemas', tenantId);
       await db.run(`
         INSERT INTO task_field_schemas (${insert.columns}sprint_type_key, task_type, schema_json, is_system, created_at, updated_at)
-        VALUES (${insert.placeholders}?, NULL, ?, 1, datetime('now'), datetime('now'))
+        VALUES (${insert.placeholders}?, NULL, ?, 1, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `, ...insert.params, sprintType, schemaJson);
     } else if (existing.is_system === 1) {
       await db.run(`
         UPDATE task_field_schemas
-        SET schema_json = ?, is_system = 1, updated_at = datetime('now')
+        SET schema_json = ?, is_system = 1, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE sprint_type_key = ? AND task_type IS NULL
           ${fieldTenant.sql}
       `, schemaJson, sprintType, ...fieldTenant.params);
@@ -695,7 +695,7 @@ async function ensureStarterSprintTypeRegistry(db: Db, tenantId: number, workflo
     SELECT id, is_system
     FROM sprint_type_outcomes
     WHERE sprint_type_key = ?
-      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
       AND outcome_key = ?
       ${outcomeTenant.sql}
     LIMIT 1
@@ -703,13 +703,13 @@ async function ensureStarterSprintTypeRegistry(db: Db, tenantId: number, workflo
   const createOutcomeSql = `
     INSERT INTO sprint_type_outcomes (
       ${outcomeInsert.columns}sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at
-    ) VALUES (${outcomeInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))
+    ) VALUES (${outcomeInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
   `;
   const updateOutcomeSql = `
     UPDATE sprint_type_outcomes
-    SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = datetime('now')
+    SET label = ?, description = ?, enabled = ?, behavior = ?, badge_variant = ?, stage_order = ?, is_system = 1, metadata_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE sprint_type_key = ?
-      AND (task_type = ? OR (task_type IS NULL AND ? IS NULL))
+      AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
       AND outcome_key = ?
       ${outcomeTenant.sql}
   `;
@@ -749,7 +749,7 @@ async function insertAgent(db: Db, tenantId: number, projectId: number, projectN
 async function insertRoutingRule(db: Db, sprintId: number, projectId: number, sprintType: string, route: StarterRoutePlan, agentId: number): Promise<number> {
   const result = await db.run(`
     INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, enabled, priority, is_system, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
   `, sprintId, projectId, sprintType, route.task_type, route.status, agentId, route.enabled ? 1 : 0, route.priority);
   return Number(result.lastInsertId);
 }

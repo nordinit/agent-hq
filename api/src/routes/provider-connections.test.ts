@@ -24,12 +24,16 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
 
 describe('runtime-owned provider connections', () => {
   beforeEach(async () => {
-    // setupTestDb() selects the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
-    // SQLite and on PostgreSQL. tempDir is still needed for OPENCLAW_STATE_DIR, which is
-    // filesystem state unrelated to the database.
+    // tempDir isolates the external OpenClaw state read by discovery from PostgreSQL fixture state.
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hq-provider-connections-'));
     process.env.OPENCLAW_STATE_DIR = path.join(tempDir, 'openclaw');
     await setupTestDb();
+    const db = getDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+    await db.run(`
+      INSERT INTO app_settings (key, value)
+      VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
+    `);
     const authPath = path.join(process.env.OPENCLAW_STATE_DIR, 'agents', 'builder', 'agent', 'auth-profiles.json');
     fs.mkdirSync(path.dirname(authPath), { recursive: true });
     fs.writeFileSync(authPath, JSON.stringify({

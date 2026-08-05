@@ -508,8 +508,8 @@ export async function persistOAuthCredentialToProviderConfig(
       SET status = 'connected',
           config = ?,
           validation_error = NULL,
-          last_validated_at = datetime('now'),
-          updated_at = datetime('now')
+          last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE slug = ? AND tenant_id = ?
     `, config, provider, tenantId);
     return;
@@ -517,7 +517,7 @@ export async function persistOAuthCredentialToProviderConfig(
 
   await db.run(`
     INSERT INTO provider_config (tenant_id, slug, display_name, status, config, last_validated_at, validation_error)
-    VALUES (?, ?, ?, 'connected', ?, datetime('now'), NULL)
+    VALUES (?, ?, ?, 'connected', ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), NULL)
   `, tenantId, provider, 'OpenAI Codex (OAuth)', config);
 }
 
@@ -610,9 +610,9 @@ export async function upsertOAuthProfileStore(
   try {
     db = new Database(filePath, { fileMustExist: true });
     db.pragma('busy_timeout = 5000');
-    // Raw better-sqlite3 on purpose: this opens OPENCLAW'S OWN auth-profile file, an
-    // external SQLite database Agent HQ only reads. It is not Agent HQ's database and does
-    // not migrate to PostgreSQL with it, so sqlite_master here is correct and permanent.
+    // Raw better-sqlite3 on purpose: this opens OPENCLAW'S OWN auth-profile file. This explicit
+    // sync operation may update that external store; it is not Agent HQ's database and does not
+    // migrate to PostgreSQL with Agent HQ, so sqlite_master here is correct and permanent.
     const table = db.prepare(`
       SELECT 1 AS present
       FROM sqlite_master

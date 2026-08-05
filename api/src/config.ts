@@ -137,6 +137,18 @@ export const WORKSPACE_ROOT: string =
   process.env.WORKSPACE_ROOT ??
   path.join(HOME, '.openclaw', 'workspace');
 
+// ── Persistent uploads ────────────────────────────────────────────────────
+
+/**
+ * One root for every filesystem upload class. Keep this as a function so tests and
+ * one-shot commands can set an isolated root after module loading.
+ */
+export function resolveUploadsRoot(): string {
+  return path.resolve(
+    process.env.AGENT_HQ_UPLOADS_DIR ?? path.join(__dirname, '../..', 'uploads'),
+  );
+}
+
 // ── Custom runtime LLM fleet integration ──────────────────────────────────
 // Credentials are supplied via environment or other Agent HQ-managed secret/config surfaces.
 // Used by CustomAgentRuntime (Mode 2) and available for model routing (Mode 1).

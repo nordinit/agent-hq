@@ -27,21 +27,15 @@ describe('workflow file versions', () => {
   let baseUrl = '';
 
   beforeEach(async () => {
-    // tempDir is still needed for AGENT_HQ_WORKFLOW_UPLOADS_DIR — that is filesystem state, not
-    // database state. setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs
-    // unchanged on SQLite and on PostgreSQL.
+    // tempDir isolates filesystem uploads; setupTestDb() owns the PostgreSQL fixture state.
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-files-'));
     process.env.AGENT_HQ_WORKFLOW_UPLOADS_DIR = path.join(tempDir, 'uploads');
 
     await setupTestDb();
     const db = getDb();
 
-    // The PostgreSQL fixture template carries DDL only and is truncated between tests, so nothing
-    // initSchema would have SEEDED on SQLite exists here: no default tenant row and no app_settings
-    // defaults. The router resolves its tenant through resolveTenantIdFromRequest, which needs a
-    // default tenant plus an active_tenant_id setting, so seed both explicitly rather than relying
-    // on an initSchema side effect. `ON CONFLICT DO NOTHING` without a target keeps this a no-op on
-    // SQLite, where initSchema has already created the default tenant.
+    // The PostgreSQL fixture is schema-only and truncated between tests. Seed the default tenant
+    // and selection settings explicitly because resolveTenantIdFromRequest validates both.
     await db.run(`INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 1) ON CONFLICT DO NOTHING`, 'Default Tenant', 'default');
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, 0), (?, ?, ?, 0) ON CONFLICT DO NOTHING`, 101, 'Tenant One', 'tenant-one', 202, 'Tenant Two', 'tenant-two');
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?)`, 700, 101, 'Tenant One Project', 800, 202, 'Tenant Two Project');
@@ -52,7 +46,7 @@ describe('workflow file versions', () => {
 
     const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 ORDER BY id ASC LIMIT 1`) as { id: number } | undefined;
     if (!defaultTenant) throw new Error('test fixture failed to establish a default tenant');
-    // An UPDATE would match no row against the DDL-only template, leaving the active tenant at the
+    // An UPDATE would match no row against the schema-only fixture, leaving the active tenant at the
     // default and turning every cross-tenant 404 below into an assertion about nothing.
     await db.run(
       `INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)

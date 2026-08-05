@@ -6,11 +6,10 @@ import { listRecentlyCompletedTasks } from './readModel';
 /**
  * Tenant isolation for the "recently completed" read model.
  *
- * The fixture is the real schema on both engines, so every row here needs its parents:
+ * The PostgreSQL fixture enforces the real parent relationships:
  * tasks.sprint_id is NOT NULL and tasks/sprints/projects all carry foreign keys to tenants.
  * The two tenants matter to the assertions themselves — they are what "isolation" means here —
- * and the PostgreSQL fixture truncates them between tests, so they are seeded explicitly rather
- * than inherited from initSchema's seeding side effects on SQLite.
+ * and the fixture truncates them between tests, so they are seeded explicitly.
  */
 
 const DEFAULT_TENANT_ID = 1;
@@ -27,7 +26,6 @@ function hoursAgo(hours: number): string {
 
 async function ensureTenant(id: number, name: string, slug: string, isDefault: 0 | 1): Promise<void> {
   const db = getDb();
-  // initSchema seeds the default tenant on SQLite; the PostgreSQL template carries DDL only.
   if (await db.get(`SELECT id FROM tenants WHERE id = ?`, id)) return;
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, ?)`, id, name, slug, isDefault);
 }

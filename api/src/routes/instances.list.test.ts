@@ -1,17 +1,12 @@
-import Database from 'better-sqlite3';
 import express from 'express';
 import { AddressInfo } from 'net';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 let db: Db;
 
-jest.mock('../db/client', () => ({
-  getDb: () => db,
-}));
-
 import instancesRouter from './instances';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 
 async function getJson(app: express.Express, route: string): Promise<{ status: number; body: any }> {
   const server = app.listen(0);
@@ -28,67 +23,24 @@ async function getJson(app: express.Express, route: string): Promise<{ status: n
   }
 }
 
-async function setupDb(): Promise<void> {
-  await db.exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      name TEXT,
-      job_title TEXT,
-      session_key TEXT
-    );
-
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      title TEXT,
-      status TEXT,
-      project_id INTEGER
-    );
-
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      agent_id INTEGER,
-      session_key TEXT,
-      status TEXT,
-      created_at TEXT,
-      task_outcome TEXT,
-      runtime_ended_at TEXT,
-      runtime_completed_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT,
-      lifecycle_handoff_status TEXT,
-      semantic_outcome_missing INTEGER,
-      lifecycle_outcome_posted_at TEXT
-    );
-
-    CREATE TABLE instance_artifacts (
-      instance_id INTEGER PRIMARY KEY,
-      current_stage TEXT,
-      last_agent_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      latest_commit_hash TEXT,
-      branch_name TEXT,
-      changed_files_json TEXT,
-      changed_files_count INTEGER,
-      summary TEXT,
-      blocker_reason TEXT,
-      outcome TEXT,
-      stale INTEGER,
-      stale_at TEXT
-    );
-  `);
-}
-
 describe('GET /api/v1/instances', () => {
   beforeEach(async () => {
-    db = new SqliteAdapter(new Database(':memory:'));
-    await setupDb();
-    await db.run(`INSERT INTO agents (id, name, job_title, session_key) VALUES (1, 'Cinder', 'Backend', 'agent:cinder:main')`);
-    await db.run(`INSERT INTO agents (id, name, job_title, session_key) VALUES (2, 'Atlas', 'Assistant', 'agent:atlas:main')`);
-    await db.run(`INSERT INTO tasks (id, title, status, project_id) VALUES (10, 'Backend one', 'ready', 7)`);
-    await db.run(`INSERT INTO tasks (id, title, status, project_id) VALUES (11, 'Backend two', 'ready', 7)`);
-    await db.run(`INSERT INTO tasks (id, title, status, project_id) VALUES (12, 'Mobile', 'ready', 8)`);
+    db = await setupTestDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+    await db.run(`
+      INSERT INTO app_settings (key, value)
+      VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
+    `);
+    await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (7, 1, 'Seven'), (8, 1, 'Eight')`);
+    await db.run(`
+      INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+      VALUES (70, 1, 7, 'Seven workflow', 'generic'), (80, 1, 8, 'Eight workflow', 'generic')
+    `);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, session_key) VALUES (1, 1, 'Cinder', 'Backend', 'agent:cinder:main')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, session_key) VALUES (2, 1, 'Atlas', 'Assistant', 'agent:atlas:main')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id) VALUES (10, 1, 'Backend one', 'ready', 7, 70)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id) VALUES (11, 1, 'Backend two', 'ready', 7, 70)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id) VALUES (12, 1, 'Mobile', 'ready', 8, 80)`);
     await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, session_key, status, created_at)
       VALUES
@@ -99,7 +51,7 @@ describe('GET /api/v1/instances', () => {
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('filters server-side by agent_id and project_id', async () => {

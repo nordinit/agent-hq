@@ -167,7 +167,7 @@ router.put('/:id(\\d+)', async (req: Request, res: Response) => {
         lane = ?,
         notes = ?,
         enabled = ?,
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?
         AND tenant_id = ?
     `, github_username ?? existing.github_username, token ?? existing.token, git_author_name ?? existing.git_author_name, git_author_email ?? existing.git_author_email, (lane && validLanes.includes(lane)) ? lane : existing.lane, notes ?? existing.notes, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, req.params.id, tenantId);
@@ -229,7 +229,7 @@ router.post('/:id(\\d+)/validate', async (req: Request, res: Response) => {
       const body = await resp.text().catch(() => '');
       await db.run(`
         UPDATE github_identities
-        SET last_validated_at = datetime('now'), validation_status = 'failed', validation_error = ?
+        SET last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), validation_status = 'failed', validation_error = ?
         WHERE id = ?
           AND tenant_id = ?
       `, `HTTP ${resp.status}: ${body.slice(0, 500)}`, req.params.id, tenantId);
@@ -245,7 +245,7 @@ router.post('/:id(\\d+)/validate', async (req: Request, res: Response) => {
 
     await db.run(`
       UPDATE github_identities
-      SET last_validated_at = datetime('now'), validation_status = 'valid', validation_error = NULL
+      SET last_validated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), validation_status = 'valid', validation_error = NULL
       WHERE id = ?
         AND tenant_id = ?
     `, req.params.id, tenantId);

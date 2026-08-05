@@ -1,10 +1,9 @@
-import Database from 'better-sqlite3';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { getSkillMaterializationAdapter } from './skillMaterialization';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 
 const TENANT_ID = 1;
 
@@ -13,28 +12,19 @@ function makeTempDir(prefix: string): string {
 }
 
 async function makeSkillsDb(skillNames: string[]): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE skills (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id   INTEGER NOT NULL,
-      name        TEXT NOT NULL,
-      fs_path     TEXT,
-      content     TEXT,
-      description TEXT,
-      source      TEXT
-    );
-  `);
-  const insert = dbRaw.prepare(`
-    INSERT INTO skills (tenant_id, name, fs_path, content, description, source)
-    VALUES (?, ?, NULL, NULL, '', 'system')
-  `);
-  for (const name of skillNames) insert.run(TENANT_ID, name);
+  const db = await setupTestDb();
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+  for (const name of skillNames) {
+    await db.run(`
+      INSERT INTO skills (tenant_id, name, fs_path, content, description, source)
+      VALUES (?, ?, NULL, '', '', 'system')
+    `, TENANT_ID, name);
+  }
   return db;
 }
 
 describe('Hermes skill materialization', () => {
+  afterEach(async () => { await teardownTestDb(); });
   it('uses concrete Hermes profile artifacts instead of prompt injection', async () => {
     const workspaceDir = makeTempDir('hermes-workspace-');
     const hermesHome = makeTempDir('hermes-home-');

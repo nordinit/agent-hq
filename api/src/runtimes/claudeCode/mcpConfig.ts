@@ -269,11 +269,9 @@ async function buildAgentToolShimServer(
   if (!(await agentHasRegistryTools(db, agentId))) return null;
 
   const env: Record<string, string> = { AGENT_HQ_TOOL_AGENT_ID: String(agentId) };
-  // The shim opens its own DB handle, so it must resolve the same database the
-  // API is using rather than the default path.
-  const dbPath = process.env.AGENT_HQ_DB_PATH?.trim();
-  if (dbPath) env.AGENT_HQ_DB_PATH = dbPath;
-  const databaseUrl = process.env.DATABASE_URL?.trim();
+  // The shim opens its own pool, so pass the exact PostgreSQL URL selected by
+  // the API. Normalize the namespaced alias to the canonical child variable.
+  const databaseUrl = (process.env.AGENT_HQ_DATABASE_URL ?? process.env.DATABASE_URL)?.trim();
   if (databaseUrl) env.DATABASE_URL = databaseUrl;
 
   return { command: process.execPath, args: [shimPath], env };

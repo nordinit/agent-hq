@@ -1,6 +1,5 @@
 import { isValidTaskType } from '../../lib/taskTypes';
 import { listSprintTaskTransitions } from './policy/statuses';
-import { seedSprintTaskPolicy } from './policy/seed';
 import {
   parseSprintId,
   requireProjectSprintTypeScope,
@@ -58,7 +57,6 @@ export async function createRoutingTransition(db: Db, input: Record<string, unkn
   }
 
   if (scope.sprintId != null) {
-    await seedSprintTaskPolicy(db, scope.sprintId);
     await requireRoutingRuleStatusForSprint(db, scope.sprintId, String(from_status));
     await requireRoutingRuleStatusForSprint(db, scope.sprintId, String(to_status));
     if (task_type) await requireRoutingRuleTaskTypeForSprint(db, scope.sprintId, String(task_type));
@@ -72,11 +70,11 @@ export async function createRoutingTransition(db: Db, input: Record<string, unkn
   const result = await tableHasTransitionScopeColumns(db)
     ? await db.run(`
         INSERT INTO sprint_task_transitions (${tenant.columns}sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-        VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `, ...tenant.params, scope.sprintId, scope.projectId, scope.sprintType, task_type ?? null, from_status, outcome, to_status, enabled ? 1 : 0, priority, is_protected ? 1 : 0)
     : await db.run(`
         INSERT INTO sprint_task_transitions (${tenant.columns}sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-        VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `, ...tenant.params, scope.sprintId, task_type ?? null, from_status, outcome, to_status, enabled ? 1 : 0, priority, is_protected ? 1 : 0);
 
   return await readScopedRoutingTransition(db, { projectId: scope.projectId, sprintType: scope.sprintType, sprintId: scope.sprintId, tenantId: scope.tenantId, scopeLabel: scope.sprintName ?? scope.sprintType }, Number(result.lastInsertId));
@@ -87,7 +85,6 @@ export async function updateRoutingTransition(db: Db, input: Record<string, unkn
   if (!Number.isFinite(id)) throw withStatus('Valid transition id is required', 400);
 
   const scope = await requireScopedTransitionContext(db, input.project_id, input.sprint_id, input.sprint_type, input.tenant_id);
-  if (scope.sprintId != null) await seedSprintTaskPolicy(db, scope.sprintId);
   const tenant = await tenantPredicateFor(db, 'sprint_task_transitions', 'stt', scope.tenantId);
   const existing = await tableHasTransitionScopeColumns(db)
     ? await db.get(`
@@ -97,7 +94,7 @@ export async function updateRoutingTransition(db: Db, input: Record<string, unkn
         WHERE stt.id = ?
           AND COALESCE(stt.project_id, s.project_id) = ?
           AND COALESCE(stt.sprint_type, s.sprint_type) = ?
-          AND ((stt.sprint_id IS NULL AND ? IS NULL) OR stt.sprint_id = ?)
+          AND ((stt.sprint_id IS NULL AND ?::text IS NULL) OR stt.sprint_id = ?)
           ${tenant.sql}
       `, id, scope.projectId, scope.sprintType, scope.sprintId, scope.sprintId, ...tenant.params) as RoutingRuleRecord | undefined
     : await db.get(`
@@ -135,7 +132,7 @@ export async function updateRoutingTransition(db: Db, input: Record<string, unkn
       enabled = ?,
       priority = ?,
       is_protected = ?,
-      updated_at = datetime('now')
+      updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?${updateTenant.sql}
   `, nextTaskType, nextFromStatus, outcome ?? existing.outcome, nextToStatus, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, priority !== undefined ? priority : existing.priority, is_protected !== undefined ? (is_protected ? 1 : 0) : existing.is_protected, id, ...updateTenant.params);
 
@@ -156,7 +153,7 @@ export async function deleteRoutingTransition(db: Db, input: { id: unknown; proj
         WHERE stt.id = ?
           AND COALESCE(stt.project_id, s.project_id) = ?
           AND COALESCE(stt.sprint_type, s.sprint_type) = ?
-          AND ((stt.sprint_id IS NULL AND ? IS NULL) OR stt.sprint_id = ?)
+          AND ((stt.sprint_id IS NULL AND ?::text IS NULL) OR stt.sprint_id = ?)
           ${tenant.sql}
       `, id, scope.projectId, scope.sprintType, scope.sprintId, scope.sprintId, ...tenant.params)
     : await db.get('SELECT id FROM sprint_task_transitions WHERE id = ? AND sprint_id = ?', id, scope.sprintId);

@@ -402,22 +402,7 @@ function isOpenClawAgent(agent: BackfillAgentRow): boolean {
   return !runtimeType || runtimeType === 'openclaw';
 }
 
-async function ensureOpenClawTranscriptIngestSchema(db: Db): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS openclaw_transcript_ingest_state (
-      instance_id INTEGER PRIMARY KEY REFERENCES job_instances(id) ON DELETE CASCADE,
-      session_file TEXT NOT NULL,
-      last_line_index INTEGER NOT NULL DEFAULT 0,
-      last_event_at TEXT,
-      last_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-}
-
 async function readIngestState(db: Db, instanceId: number, sessionFile: string): Promise<IngestStateRow | null> {
-  await ensureOpenClawTranscriptIngestSchema(db);
   const row = await db.get(`
     SELECT instance_id, session_file, last_line_index, last_event_at,
            last_heartbeat_at, last_meaningful_output_at
@@ -437,7 +422,6 @@ async function writeIngestState(db: Db, params: {
   meaningfulOutputAt: string | null;
   now: string;
 }): Promise<void> {
-  await ensureOpenClawTranscriptIngestSchema(db);
   await db.run(`
     INSERT INTO openclaw_transcript_ingest_state (
       instance_id, session_file, last_line_index, last_event_at,

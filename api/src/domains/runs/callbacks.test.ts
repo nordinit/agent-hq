@@ -53,18 +53,18 @@ async function seedScope(db: Db): Promise<void> {
 async function seedReadyTaskRun(db: Db, activeInstanceId: number | null = null): Promise<void> {
   await db.run(`
     INSERT INTO tasks (id, title, status, task_type, sprint_id, project_id, agent_id, updated_at)
-    VALUES (?, 'Allow task routing rules that apply to all task types', 'ready', 'backend', ?, ?, ?, datetime('now'))
+    VALUES (?, 'Allow task routing rules that apply to all task types', 'ready', 'backend', ?, ?, ?, CURRENT_TIMESTAMP)
   `, TASK_ID, SPRINT_ID, PROJECT_ID, AGENT_ID);
   await db.run(`
     INSERT INTO job_instances (id, agent_id, task_id, status, dispatched_at)
-    VALUES (?, ?, ?, 'running', datetime('now'))
+    VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)
   `, INSTANCE_ID, AGENT_ID, TASK_ID);
   if (activeInstanceId === OTHER_INSTANCE_ID) {
     // active_instance_id is a foreign key now, so "owned by another instance" has to be a real
     // competing run rather than a dangling id.
     await db.run(`
       INSERT INTO job_instances (id, agent_id, task_id, status, dispatched_at)
-      VALUES (?, ?, ?, 'running', datetime('now'))
+      VALUES (?, ?, ?, 'running', CURRENT_TIMESTAMP)
     `, OTHER_INSTANCE_ID, AGENT_ID, TASK_ID);
   }
   if (activeInstanceId !== null) {

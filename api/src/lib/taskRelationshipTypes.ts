@@ -100,19 +100,17 @@ export async function seedStarterWorkflowRelationshipTypes(
 
   const insertRelationshipTypeSql = relationshipTypesHasTenantId
     ? `
-      INSERT OR IGNORE INTO sprint_type_relationship_types (
+      INSERT INTO sprint_type_relationship_types (
         tenant_id, sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
         direction_semantics, active_statuses_json, resolved_statuses_json, allow_create_related_task,
         default_related_task_type, default_related_task_status, is_system, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '{}')
-    `
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '{}') ON CONFLICT DO NOTHING`
     : `
-      INSERT OR IGNORE INTO sprint_type_relationship_types (
+      INSERT INTO sprint_type_relationship_types (
         sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
         direction_semantics, active_statuses_json, resolved_statuses_json, allow_create_related_task,
         default_related_task_type, default_related_task_status, is_system, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '{}')
-    `;
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '{}') ON CONFLICT DO NOTHING`;
 
   await db.withTransaction(async (db) => {
     for (const sprintType of sprintTypes) {

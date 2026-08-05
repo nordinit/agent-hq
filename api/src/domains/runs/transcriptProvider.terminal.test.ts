@@ -1,12 +1,8 @@
-import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
 
 let db: Db;
 const mockGatewayGetHistory = jest.fn();
-
-jest.mock('../../db/client', () => ({
-  getDb: () => db,
-}));
 
 // transcriptProvider only imports gatewayGetHistory from OpenClawRuntime.
 jest.mock('../../runtimes/OpenClawRuntime', () => ({
@@ -21,31 +17,15 @@ jest.mock('./openclawJsonlBackfill', () => ({
 
 import { OpenClawTranscriptProvider } from './transcriptProvider';
 import { type Db } from "../../db/adapter/types";
-import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
-
-async function setupSchema(): Promise<void> {
-  await db.exec(`
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY, session_key TEXT, agent_id INTEGER, status TEXT,
-      runtime_ended_at TEXT, run_id TEXT
-    );
-    CREATE TABLE agents (id INTEGER PRIMARY KEY, name TEXT, session_key TEXT, runtime_type TEXT);
-    CREATE TABLE chat_messages (
-      id TEXT PRIMARY KEY, agent_id INTEGER, instance_id INTEGER, session_key TEXT,
-      role TEXT, content TEXT, timestamp TEXT, event_type TEXT, event_meta TEXT
-    );
-  `);
-  await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (5, 'Atlas', 'agent:atlas:main', 'openclaw')`);
-}
 
 beforeEach(async () => {
-  db = new SqliteAdapter(new Database(':memory:'));
-  await setupSchema();
+  db = await setupTestDb();
+  await db.run(`INSERT INTO agents (id, name, session_key, runtime_type) VALUES (5, 'Atlas', 'agent:atlas:main', 'openclaw')`);
   mockGatewayGetHistory.mockReset();
 });
 
 afterEach(async () => {
-  await db.close();
+  await teardownTestDb();
 });
 
 describe('OpenClawTranscriptProvider.getTranscript — terminal runs skip the gateway', () => {

@@ -1,38 +1,16 @@
-import Database from 'better-sqlite3';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 
 describe('agents repo source mode defaults', () => {
   let db: Db;
 
   beforeEach(async () => {
     jest.resetModules();
-    process.env.AGENT_HQ_DB_PATH = ':memory:';
-    db = new SqliteAdapter(new Database(':memory:'));
-    await db.exec(`
-      CREATE TABLE agents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        role TEXT,
-        session_key TEXT,
-        workspace_path TEXT,
-        repo_path TEXT,
-        repo_url TEXT,
-        repo_access_mode TEXT,
-        status TEXT,
-        openclaw_agent_id TEXT,
-        runtime_type TEXT,
-        runtime_config TEXT,
-        project_id INTEGER,
-        preferred_provider TEXT,
-        model TEXT,
-        system_role TEXT
-      );
-    `);
+    db = await setupTestDb();
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
     jest.clearAllMocks();
   });
 
@@ -41,7 +19,7 @@ describe('agents repo source mode defaults', () => {
       INSERT INTO agents (
         name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, runtime_type, runtime_config, project_id, preferred_provider, model, system_role
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, 'Clone Candidate', 'Backend Engineer', 'agent:test:main', '/tmp/agent-workspace', null, null, null, 'idle', 'openclaw', null, null, null, null, null);
+    `, 'Clone Candidate', 'Backend Engineer', 'agent:test:main', '/tmp/agent-workspace', null, null, null, 'idle', 'openclaw', null, null, 'anthropic', null, null);
 
     const { parseAgentRuntimeConfig } = await import('./agents');
     const row = await db.get('SELECT * FROM agents WHERE name = ?', 'Clone Candidate') as Record<string, unknown>;
@@ -58,7 +36,7 @@ describe('agents repo source mode defaults', () => {
       INSERT INTO agents (
         name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, runtime_type, runtime_config, project_id, preferred_provider, model, system_role
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, 'Clone Agent', 'Backend Engineer', 'agent:test:main', '/tmp/agent-workspace', null, 'https://example.com/repo.git', 'clone', 'idle', 'openclaw', null, null, null, null, null);
+    `, 'Clone Agent', 'Backend Engineer', 'agent:test:main', '/tmp/agent-workspace', null, 'https://example.com/repo.git', 'clone', 'idle', 'openclaw', null, null, 'anthropic', null, null);
 
     const { parseAgentRuntimeConfig } = await import('./agents');
     const row = await db.get('SELECT * FROM agents WHERE name = ?', 'Clone Agent') as Record<string, unknown>;
@@ -74,7 +52,7 @@ describe('agents repo source mode defaults', () => {
       INSERT INTO agents (
         name, role, session_key, workspace_path, repo_path, repo_url, repo_access_mode, status, runtime_type, runtime_config, project_id, preferred_provider, model, system_role
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, 'Worktree Agent', 'Backend Engineer', 'agent:test:main', '/tmp/agent-workspace', '/tmp/canonical-repo', null, null, 'idle', 'openclaw', null, null, null, null, null);
+    `, 'Worktree Agent', 'Backend Engineer', 'agent:test:main', '/tmp/agent-workspace', '/tmp/canonical-repo', null, null, 'idle', 'openclaw', null, null, 'anthropic', null, null);
 
     const { parseAgentRuntimeConfig } = await import('./agents');
     const row = await db.get('SELECT * FROM agents WHERE name = ?', 'Worktree Agent') as Record<string, unknown>;

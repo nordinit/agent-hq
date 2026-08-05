@@ -1,282 +1,170 @@
 # PostgreSQL-only migration — handoff
 
-Written 2026-08-04, at commit `d4e24f3e`.
-Companion to `docs/postgres-only-migration-spec.md`, which holds the decisions and rationale.
-This document is the *state of play* and the *order of work*, for a session picking this up cold.
+Updated 2026-08-04. Companion to `docs/postgres-only-migration-spec.md`.
 
-Read the spec's decisions D1–D7 before starting. They are settled; do not re-litigate them.
+## Current state
 
----
+The PostgreSQL-only implementation is present in the shared worktree. The remaining work is to
+stabilize the combined edits, perform the old dev and production operational cutovers, verify the
+release, commit it, and push it to `origin/main`.
 
-## Where things actually stand
+Do not describe this as deployed yet. Full API verification has not completed for the final
+combined worktree, the old dev processes have not been moved to clean official-main checkouts in
+this turn, and the production release has not been deployed in this turn.
 
-Production has run on PostgreSQL (`agent_hq_prod`) since 2026-07-29. Everything below is about
-removing the SQLite code that is still in the repository.
+## What is implemented
 
-| | Then | Now |
-|---|---:|---:|
-| Test files genuinely exercising PostgreSQL | 17 | **48** |
-| Test files still pinned to SQLite | 78 | **57** |
-| — of those, calling `initSchema()` | 31 | 25 |
-| — of those, constructing `new Database(` | 52 | 37 |
-| CI PostgreSQL coverage | 1 file, 12 tests | **whole suite** |
+- Runtime database access is PostgreSQL-only. `DATABASE_URL` or `AGENT_HQ_DATABASE_URL` is
+  required; the SQLite adapter, dialect translator, `initSchema`, repair engine, and SQLite runtime
+  branches are removed.
+- Jest requires PostgreSQL and CI runs the API suite against PostgreSQL 17.
+- `db/pg-migrations/` is the sole active schema directory. The old three-file baseline is folded
+  into `00-baseline.sql`; deferred rename migrations stay under `staged/`.
+- Explicit migration can adopt migration 00 only from the exact historical 01/02/03 checksums.
+  Startup and status are read-only and reject pending, changed, or unknown ledger entries.
+- `db:migrate` changes schema only. `db:install` installs starter configuration only when no tenant
+  exists. Ordinary reads, routing changes, and restarts do not reseed deleted configuration.
+- The graph UI no longer warns that a deleted starter transition may be recreated, because the
+  automatic recreation path has been removed.
+- Compose bundles PostgreSQL 17 and persists PostgreSQL data, workspaces, editable contracts, and
+  uploads in separate named volumes.
+- The CLI is Docker-first. Explicit native mode requires a PostgreSQL URL.
+- The only intentional `better-sqlite3` use is OpenClaw OAuth/profile interoperability. It reads
+  and writes OpenClaw-owned SQLite files, not Agent HQ data.
+- The SQLite transfer/repair/codemod tools are slated for deletion with this release. Preserve a
+  usable pre-removal copy until the final dev transfers and comparisons are complete.
 
-Both engines are green at HEAD: **164 suites on PostgreSQL, 162 on SQLite.**
+## Configuration ownership contract
 
-Verify with:
+This is the behavior that prompted the work and must survive every cleanup:
 
-```bash
-cd api
-npx jest                                                              # SQLite
-AGENT_HQ_TEST_PG_URL="postgresql://localhost/postgres" npx jest       # PostgreSQL
+```text
+explicit install (once) -> create starter configuration
+normal reads/writes     -> never reconcile starter configuration
+explicit reinstall      -> recreate only because the operator requested it
 ```
 
-### Done
+A transition, requirement, status, mapping, or routing rule deleted after installation stays
+deleted. Treat any later automatic recreation as a release blocker.
 
-- **Phase 0** — PostgreSQL backups exist and a restore has been performed (`scripts/backup-pg.sh`,
-  launchd job `com.atlas-hq.backup`, daily 02:00 with `--verify`). The boot gate verifies real
-  migrations. Dev `.env` files no longer point at production.
-- **Phase 1** — `npm run db:install` creates a PostgreSQL database from empty. Verified
-  byte-identical to production: 69 tables, 291 indexes, 130 FKs, 862 columns, diffed not counted.
-- **Phase 2, partial** — 31 files converted, CI runs the full suite on PostgreSQL.
-- **Phase 4, partial** — both dev *databases* migrated and current (`agent_hq_dev`,
-  `agent_hq_dev_2`), data verified row-for-row. The dev *processes* still run on SQLite.
+## Migration ledger constraints
 
-### Not done
+Keep these rules exact:
 
-Phase 2 remainder, Phase 3, Phase 3b, the rest of Phase 4, Phase 5.
+1. `00-baseline.sql` is the current baseline and normal fresh-install path.
+2. An old PostgreSQL database with all three exact 01/02/03 ledger entries may be adopted by an
+   explicit `db:migrate`; partial or altered history fails without writes.
+3. The exact historical `init_schema` provenance row is tolerated but never generated anew.
+4. Applied migration IDs absent from the running release are an error. This prevents an old release
+   from booting against a newer database.
+5. `17-skill-package-files-and-content-repair.sql` is unrelated concurrent feature work, but
+   production has already recorded its exact contents. Do not edit, omit, squash, or renumber it.
 
----
+## External SQLite exception
 
-## Traps already paid for
+Do not remove `better-sqlite3` from dependencies. `openclawOAuthProfiles.ts` deliberately accesses
+OpenClaw's SQLite stores: provider discovery is read-only, while OAuth profile synchronization can
+write OpenClaw's auth-profile store. Keep the exception isolated to that module and its tests. It
+does not authorize SQLite in Agent HQ's data layer, fixtures, CLI, or deployment configuration.
 
-Each of these cost real time to find. Do not rediscover them.
+## Remaining sequence
 
-1. **A green suite is not evidence of PostgreSQL.** A file calling `initSchema()` builds SQLite no
-   matter what the environment says, and then passes. The only files that prove anything are those
-   using `setupTestDb()`, where a hard invariant throws if the dialect is not `postgres`.
+### 1. Stabilize the shared worktree
 
-2. **Jest gives every test file a fresh module registry.** `pg/testFixture.ts` caches the worker
-   pool in module state, so it is null again at the start of each file. The fixture reuses an
-   existing worker database rather than recreating it; do not "fix" that back.
+- Wait for all in-flight implementation edits to finish and inspect the complete diff.
+- Remove stale SQLite-era test comments where they obscure current behavior, without weakening
+  tests.
+- Confirm migration 17 is unchanged from the already-recorded production bytes.
+- Confirm the obsolete transfer-tool deletions do not remove the only copy needed for the final dev
+  import; use a preserved checkout if they do.
 
-3. **Never `pg_terminate_backend` to clear a database.** The connection you kill is usually the one
-   serving the test running right now. It converts a setup failure into a baffling mid-assertion
-   error. Recorded in `testFixture.ts`.
+### 2. Verify code before touching deployments
 
-4. **A failed statement poisons the whole PostgreSQL transaction.** Any `try { insert } catch {
-   select }` duplicate-detector is broken on PostgreSQL — the recovery query cannot run. Wrap the
-   insert in `db.withTransaction` (a savepoint). Fixed once in `recurringTaskScheduler.ts`; **look
-   for this shape elsewhere, it is likely not the only one.**
+Run the repository's final API lint, PostgreSQL suite, and build from the combined worktree. Run the
+UI verification/build and CLI tests as well. Do not copy old green counts into the release notes;
+record the results from the final tree.
 
-5. **`Number.isFinite(Number(x))` is not a null guard.** `Number(null)` is `0`. There were 16 sites
-   of this shape; only `taskNotifications.ts` is fixed. The others are worth auditing.
+At minimum, retain focused coverage for:
 
-6. **The source schema is looser than the target.** SQLite declares 7 foreign keys on `tasks`; the
-   baseline declares 10. `initSchema` and the baseline have also diverged on columns. Any tooling
-   driven by `PRAGMA foreign_key_list` is blind to the difference — `purge-orphans.mjs` was, and is
-   now fixed to parse the target's `ALTER TABLE` statements instead.
-
-7. **`migrate.ts` ends in a top-level `void main()`.** Importing anything from it runs a migration.
-   Shared constants live in `pg/migrationDirs.ts` for that reason.
+- fresh PostgreSQL install and idempotent install rerun;
+- exact legacy baseline adoption and rejection of partial/changed ledgers;
+- startup verification producing zero writes;
+- deleting a starter transition/requirement and observing no recreation;
+- Docker/native CLI mode selection;
+- SQL portability and `better-sqlite3` isolation.
 
-8. **`loadMigrations` returns `[]` for a missing directory.** That once made the boot gate pass on
-   any schema at all. It now refuses on an empty migration set — keep that.
+### 3. Back up before each operational change
 
----
+Take fresh PostgreSQL dumps and consistent SQLite backups before cutover. Retain every existing
+`.db`, WAL, dump, and prior backup; this task does not authorize cleanup. Verify new PostgreSQL
+archives before relying on them.
 
-## Phase 2 remainder — convert the last 57 test files
+Compose database dumps do not contain `agent-hq-workspaces`, `agent-hq-contracts`, or
+`agent-hq-uploads`; back up those named volumes separately when they contain operator changes.
 
-**The bulk of the work.** By directory: `db` 16, `routes` 14, `lib` 14, `services` 4, `scheduler` 3,
-`runtimes` 3, `domains` 2, `mcp` 1. Get the current list with:
+### 4. Cut over development safely
 
-```bash
-cd api
-sort -u <(grep -rl 'initSchema(' src --include='*.test.ts') \
-        <(grep -rl 'new Database(' src --include='*.test.ts')
-```
+The old dev checkouts have divergent history. Preserve them rather than forcing them onto main.
+Create clean checkouts/worktrees from the verified release, carry forward only the intended dev
+environment settings, and point each process at its own PostgreSQL database.
 
-### How to convert one
+For each dev instance:
 
-Replace the SQLite bootstrap — `initSchema()`, `new Database()`, `AGENT_HQ_DB_PATH` juggling, temp
-files, hand-written `CREATE TABLE` blocks — with `setupTestDb()` / `teardownTestDb()` from
-`api/src/db/testDb.ts`. Application code reaches its database through `getDb()` as it already does.
-Read `api/src/routes/routing.audit.test.ts` for the shape.
+1. quiesce writers;
+2. create/verify SQLite and PostgreSQL backups;
+3. complete or repeat the data transfer from the preserved tooling copy;
+4. run the explicit migration/status commands from the release checkout;
+5. start the API only after the read-only boot gate passes;
+6. compare critical row counts and exercise health, routing, task, and integration paths;
+7. confirm deleting a starter transition remains durable.
 
-Verify each file on **both** engines before keeping it:
+Keep the old checkouts and databases intact until both clean dev deployments are stable.
 
-```bash
-cd api
-AGENT_HQ_TEST_PG_URL="postgresql://localhost/postgres" npx jest <file> --runInBand
-npx jest <file> --runInBand
-```
+### 5. Build and deploy the exact production release
 
-### Rules that matter more than throughput
+Use a clean worktree at the release commit so excluded or concurrent dirty files cannot leak into
+the build. Before restart, take and verify a fresh production PostgreSQL dump. Apply migrations
+explicitly, verify ledger status, then deploy the API/UI and run health and functional smoke checks.
 
-- **Never weaken a test to make it pass.** Not by deleting an assertion, loosening a matcher, or
-  adding a skip. A test that cannot pass on PostgreSQL is a *finding*: report it and leave the file
-  alone. Two of this migration's most valuable results came from agents that refused to pin an
-  assertion.
-- A hand-built fixture's minimal schema has no real foreign keys; the baseline does. Rows may now
-  need a parent. **Insert the parent** — do not drop the constraint or the assertion.
-- Genuinely SQLite-only tests (PRAGMA-driven repairs, legacy pre-tenant databases) belong in a
-  `describeSqliteOnly(...)` block, keeping every assertion. They are deleted with `initSchema` at
-  Phase 5, not before.
-- The PostgreSQL template is DDL-only and truncated between tests. Anything `initSchema` seeded as a
-  side effect — notably the **default tenant** — is absent and must be seeded explicitly.
+Production already uses PostgreSQL; this is a code/deployment cutover, not permission to discard
+the frozen SQLite rollback files. Preserve those files after a successful deployment.
 
-### Known-hard files
+### 6. Rotate the shared hook token
 
-- `db/sprintFieldSchemaMigration.test.ts`, `db/tasksStatusConstraintMigration.test.ts`,
-  `db/danglingForeignKeyRepair.test.ts`, `db/startupVerifier*.test.ts`, `db/adapter/adapter.test.ts`
-  — these test `initSchema` / the SQLite adapter *itself*. They are **deleted at Phase 5**, not
-  converted.
-- `lib/openclawOAuthProfiles.test.ts` — **keeps SQLite forever.** It reads external OpenClaw
-  databases, which does not change.
-- `domains/runs/transcriptProvider.terminal.test.ts` — was converted and reverted. It passes alone
-  and fails in a full SQLite run: its CHECK-constraint assertion is order-dependent because
-  `initSchema` rebuilds tables. Convert it *after* the SQLite path is gone, or diagnose the ordering.
-
-### Exit
+Rotate `OPENCLAW_HOOKS_TOKEN` coherently across Agent HQ environments and its OpenClaw consumer,
+restart the affected processes, and smoke-test the hook. Never print the token into logs or commit
+it.
 
-All files converted or explicitly quarantined; `db/testDb.test.ts` green (it lints for false-green
-conversions); both engines green.
+### 7. Commit and push
 
----
+Review staged paths carefully because unrelated concurrent feature edits have shared this
+worktree. Commit only the verified release contents, confirm the commit is on `main`, and push that
+commit to `origin/main` after production checks pass.
 
-## Phase 3 — SQL portability sweep
+## Operational cautions
 
-Rewrite application SQL into PostgreSQL dialect so the translator becomes redundant. Counts are
-non-test, excluding `db/adapter/` and `db/schema.ts`:
-
-| Construct | Sites |
-|---|---:|
-| `datetime('now'` | 285 |
-| `PRAGMA` | 39 |
-| `INSERT OR IGNORE` | 30 |
-| `sqlite_master` | 18 |
-| `julianday` | 7 |
-| `json_set` | 5 |
-| `GROUP_CONCAT` | 3 |
-| `strftime` | 2 |
-| `json_extract` | 2 |
-| raw `.prepare(` outside the adapter | 325 |
-
-Five non-test files still hold the raw driver: `lib/openclawOAuthProfiles.ts` (stays),
-`lib/tenantContext.ts`, `lib/timestamps.ts`, `db/schema.ts` (deleted at Phase 5),
-`db/startupVerifier.ts`.
-
-Two that cannot be mechanically rewritten:
-
-- **`json_extract`** in `domains/tasks/readModel.ts:413,416` binds a `'$.a.b'` path as a
-  *parameter*. PostgreSQL's equivalent takes bare key names, so **the caller must change**, not just
-  the SQL.
-- **`julianday`** — all 7 are in `routes/telemetry.ts`. The translator approximates it with a
-  constant epoch offset; rewriting is better than trusting that.
-
-Wire `findIncompatibilities()` from `db/adapter/dialect.ts` into a lint first — it detects the nine
-constructs the translator refuses to translate and **currently has no caller on any execution path**,
-so those reach PostgreSQL verbatim and fail at runtime. Cheap, and it ratchets.
-
-**Exit:** that lint reads zero; no `.prepare(` outside `SqliteAdapter.ts` and
-`openclawOAuthProfiles.ts`; both engines green.
-
----
-
-## Phase 3b — fold the baseline into migration 00
-
-`db/pg-baseline/` is *generated from a SQLite snapshot* by `scripts/pg/generate-baseline-schema.mjs`,
-which requires `better-sqlite3` and a `.db` path. Its header says "regenerate from the snapshot
-instead" — an instruction that becomes impossible once SQLite is gone.
-
-Concatenate `01-tables.sql`, `02-indexes.sql`, `03-foreign-keys.sql` into
-`db/pg-migrations/00-baseline.sql`, preserving statement order. This also settles the competing
-`schema_migrations` definitions: the baseline currently declares the ledger itself, *without*
-`IF NOT EXISTS`, which is why the runner must create it only *after* the migration that may have
-declared it. One definition, owned by the runner.
-
-Existing ledger rows key on filename, so folding changes checksums — re-record them once, on
-production and both dev databases.
-
-**Exit:** `db:install` builds from `db/pg-migrations` alone; inventory still matches production;
-`db/pg-baseline/` is gone and nothing references it. Future regeneration is `pg_dump --schema-only`.
-
----
-
-## Phase 4 remainder — deployment surface
-
-**This was attempted and reverted.** Its adversarial reviewers found 43 blocker/wrong findings. The
-work is real, but redo it with verification rather than reuse the reverted draft. Actual errors it
-contained, as a checklist of what to get right:
-
-- `SCHEMA_MIGRATION_REQUIRED` **does not occur on PostgreSQL.** The boot gate raises
-  `MigrationPendingError` / `MigrationDriftError`. Several docs asserted the wrong code.
-- `schema_migrations` has **no `version` column**. It keys on `id`.
-- `docker/.env.agents.example` does not exist.
-- The `agent-hq-data` volume no longer exists if compose is rewritten; docs referenced it anyway.
-- `docker-compose.yml` declares **no `build:` section**, so "docker compose build" instructions fail.
-- `cp .env.example .env && cd api && npm run db:install` does not work from a clean checkout —
-  `db:install` runs `dist/`, so it needs a build first.
-
-Two **genuine findings** from that attempt, worth keeping:
-
-1. The container `WORKDIR` must be `/app/api`, and the image must `COPY db/`.
-   `pg/migrationDirs.ts` resolves the repo root four levels up from its compiled location; with
-   `dist` at `/app/dist` that lands at `/`, so the image looks for `/db/pg-baseline`.
-2. **The image must carry `db/` even though it never migrates** — otherwise `loadMigrations` finds
-   nothing and the boot gate passes vacuously. (The vacuous-pass itself is already fixed in code.)
-
-Also in scope: `docs/SELF_HOSTING.md`, `docs/BACKUP_RESTORE.md`, `docs/ARCHITECTURE_OVERVIEW.md`,
-`docs/INFRASTRUCTURE.md`, `docs/cli-onboarding.md`, `README.md:373`, `cli/README.md:23`, and a
-`.env.example` (which does not exist).
-
-### Moving the dev processes
-
-The databases are ready and current. `ecosystem.dev.config.js` reads **only**
-`AGENT_HQ_DEV_DATABASE_URL`, deliberately with no fallback to a plain `DATABASE_URL` — a fallback
-resolves to `postgresql://localhost/agent_hq_prod` from this checkout, which would attach a dev API
-to production. Both dev `.env` files already set the dev-scoped key.
-
-Remaining: the dev checkouts at `~/agent-hq-dev` and `~/agent-hq-dev-2` are **separate git
-checkouts at older commits**. They must pull this commit before `ecosystem.dev.config.js` knows the
-key exists. Then `pm2 restart agent-hq-dev-api --update-env` and confirm `DATABASE_URL` is set.
-
----
-
-## Phase 5 — removal
-
-Only after a stabilization window with both dev instances on PostgreSQL.
-
-Delete `db/schema.ts` (6,396 lines), `adapter/dialect.ts` (843 → ~130; keep `toPositionalParams`,
-which is self-contained), `adapter/SqliteAdapter.ts`, `foreignKeyGuard.ts`, the SQLite branches of
-`client.ts` / `startupVerifier.ts` / `testDb.ts`, and `getRawDb()`. Drop `Dialect` and every
-`db.dialect ===` branch. Retire `AGENT_HQ_DB_PATH` and `DATABASE_PATH`.
-
-Delete the 12 SQLite-coupled scripts in `scripts/pg/` — but **only after** Phase 2, since several
-are codemods that phase needs. Keep `db/pg-migrations/` and `pg/migrationRunner.ts` permanently.
-
-**`better-sqlite3` stays in `dependencies`.** `lib/openclawOAuthProfiles.ts` reads external OpenClaw
-databases. Add a lint that it is imported nowhere else.
-
----
-
-## Still open
-
-- **Rotate `OPENCLAW_HOOKS_TOKEN`.** Both dev `.env` files carry production's live value. Needs
-  coordinating with whatever consumes it.
-- **Audit the other 15 `Number.isFinite(Number(x))` sites** (trap 5).
-- **Look for more poisoned-transaction `try/catch` duplicate detectors** (trap 4).
-- Retention for the ~18.5 GB of SQLite files now that a verified PostgreSQL restore exists.
-- Whether self-hosting ships a PostgreSQL container or requires an external database.
-- Stabilization window length, and who calls the abort.
-
-## A note on running this with agents
-
-The two workflow runs behind this state used ~5.2M subagent tokens and were both cut off by session
-limits. If you fan out again:
-
-- Run **one session at a time**. Two sessions share the budget.
-- Batch conservatively and **stop the workflow before the limit hits** rather than after — a clean
-  stop leaves whole files, a cut-off leaves half-edited ones.
-- After any interruption, test every touched file individually on both engines before keeping it.
-  `git diff --name-only` versus the workflow's reported list finds the casualties.
+- Never edit an applied migration to make the ledger green; run the release that owns the recorded
+  migration bytes.
+- Never start the API as a migration mechanism. A boot failure is an instruction to run the
+  explicit command or use the correct release.
+- Never use `docker compose down -v` during a routine restart; it removes database, workspace, and
+  contract volumes.
+- Never delete the old SQLite files or PostgreSQL dumps during this turn.
+- Never "fix" a PostgreSQL test by weakening an assertion, skipping it, or substituting a SQLite
+  fixture.
+- Never allow an ordinary routing read/write to call a starter installer.
+
+## Release exit criteria
+
+The migration is complete only when all of the following are true and have fresh evidence from the
+final release tree:
+
+- API lint, PostgreSQL tests, and build pass.
+- UI verification/build and CLI tests pass.
+- Both clean dev deployments use their own PostgreSQL databases and pass data/behavior checks.
+- Migration status is current and read-only boot succeeds in dev and production.
+- Starter configuration remains operator-owned after install.
+- Production backup, migration, deploy, health, and functional smoke checks pass.
+- The shared hook token has been rotated without exposing it.
+- All backups remain available.
+- The verified commit is pushed to `origin/main`.

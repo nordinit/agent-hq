@@ -11,11 +11,6 @@
 // WHY THIS IS SERVER-SIDE AND USES THE REAL WRITE PATH
 // A client-side simulation — re-running the pure builder over the row set with the change
 // applied — is tempting because buildWorkflowGraph is pure. It cannot work here:
-//   * Routing writes fire seedSprintTaskPolicy as a side effect (transitions.ts, rules.ts,
-//     requirements.ts). On an unseeded workflow that bulk-inserts the whole status/transition/
-//     requirement set, so the first gesture can materialise dozens of rows. A simulation
-//     reports one row written; reality writes thirty. That surprise is exactly what a preview
-//     exists to prevent.
 //   * Validation, scope resolution and duplicate detection live in the domain layer and would
 //     have to be duplicated, which is the drift the graph endpoint was built to avoid.
 // So the mutation runs for real inside a transaction that never commits.

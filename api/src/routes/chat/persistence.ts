@@ -210,8 +210,7 @@ export async function persistUserChatMessage(ctx: SessionContext, message: strin
     const tenant = await tenantInsertColumns(db, 'chat_messages', ctx.tenantId);
     const msgId = `oc-chat-user-${contextRowScope(ctx)}-${Date.now()}`;
     await db.run(`
-      INSERT OR IGNORE INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
-      VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, 'user', ?, ?, 'text', '{}')
-    `, msgId, ...tenant.values, ctx.agentId, ctx.instanceId, ...durable.values, ctx.sessionKey, message, now);
+      INSERT INTO chat_messages (id, ${tenant.columnSql}agent_id, instance_id, ${durable.insertColumnSql}session_key, role, content, timestamp, event_type, event_meta)
+      VALUES (?, ${tenant.valueSql}?, ?, ${durable.valueSql}?, 'user', ?, ?, 'text', '{}') ON CONFLICT DO NOTHING`, msgId, ...tenant.values, ctx.agentId, ctx.instanceId, ...durable.values, ctx.sessionKey, message, now);
   } catch { /* non-critical */ }
 }

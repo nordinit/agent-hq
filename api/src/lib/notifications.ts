@@ -49,24 +49,6 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   },
 };
 
-export async function ensureNotificationTables(db: Db = getDb()): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS notification_records (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id     INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-      type          TEXT NOT NULL,
-      title         TEXT NOT NULL,
-      body          TEXT NOT NULL DEFAULT '',
-      source        TEXT,
-      outlet        TEXT,
-      metadata_json TEXT NOT NULL DEFAULT '{}',
-      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_notification_records_tenant_created
-      ON notification_records(tenant_id, created_at DESC, id DESC);
-  `);
-}
-
 function normalizePreferences(raw: unknown): NotificationPreferences {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return DEFAULT_NOTIFICATION_PREFERENCES;
   const record = raw as Record<string, unknown>;
@@ -118,14 +100,13 @@ export async function saveNotificationPreferences(input: Partial<NotificationPre
   });
   await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+    VALUES (?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
   `, preferenceKey(tenantId), JSON.stringify(next));
   return next;
 }
 
 export async function createNotificationRecord(db: Db, input: NotificationRecordInput): Promise<NotificationRecord> {
-  await ensureNotificationTables(db);
   const result = await db.run(`
     INSERT INTO notification_records (tenant_id, type, title, body, source, outlet, metadata_json)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -152,7 +133,6 @@ export async function listNotificationRecordsPage(
   tenantId: number,
   options: { limit?: number; cursor?: string | null } = {},
 ): Promise<NotificationPage> {
-  await ensureNotificationTables(db);
   const limit = options.limit ?? 50;
   const safeLimit = Math.max(1, Math.min(200, Number.isFinite(limit) ? Math.floor(limit) : 50));
   const parsedCursor = parseNotificationCursor(options.cursor);
@@ -163,17 +143,17 @@ export async function listNotificationRecordsPage(
       FROM notification_records
       WHERE tenant_id = ?
         AND (
-          datetime(created_at) < datetime(?)
-          OR (datetime(created_at) = datetime(?) AND id < ?)
+          created_at < ?
+          OR (created_at = ? AND id < ?)
         )
-      ORDER BY datetime(created_at) DESC, id DESC
+      ORDER BY created_at DESC, id DESC
       LIMIT ?
     `, tenantId, parsedCursor.createdAt, parsedCursor.createdAt, parsedCursor.id, pageSize) as NotificationRecord[]
     : await db.all(`
       SELECT *
       FROM notification_records
       WHERE tenant_id = ?
-      ORDER BY datetime(created_at) DESC, id DESC
+      ORDER BY created_at DESC, id DESC
       LIMIT ?
     `, tenantId, pageSize) as NotificationRecord[];
 
@@ -191,7 +171,6 @@ export async function listNotificationRecords(db: Db, tenantId: number, limit = 
 }
 
 export async function unreadNotificationCount(db: Db, tenantId: number): Promise<number> {
-  await ensureNotificationTables(db);
   const row = await db.get(`
     SELECT COUNT(*) AS n
     FROM notification_records

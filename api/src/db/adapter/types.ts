@@ -1,31 +1,16 @@
 /**
- * The database access interface Agent HQ code depends on, instead of better-sqlite3.
+ * The asynchronous PostgreSQL access contract used by application code.
  *
- * WHY THIS EXISTS
- * ---------------
- * better-sqlite3 is synchronous — `db.prepare(sql).get(id)` returns a row. Every Node
- * PostgreSQL driver is asynchronous and returns a Promise, and Node cannot synchronously
- * await one. So the engine swap is not a driver substitution: the SHAPE of every call
- * site changes, and `async` propagates up the call graph to the route handlers.
- *
- * Depending on this interface rather than on better-sqlite3 buys three things:
- *
- *   1. The 711 `Database.Database` signatures stop naming a concrete engine, so the
- *      implementation can be swapped without touching application code.
- *   2. `withTransaction` is async-correct by construction. better-sqlite3's
- *      `db.transaction(fn)` requires a SYNCHRONOUS callback and throws
- *      "Transaction function cannot return a promise" at RUNTIME if given an async one —
- *      a failure TypeScript cannot catch, waiting at all 83 existing call sites.
- *   3. The codebase can be converted to async while still running on SQLite, so the
- *      existing test suite validates the refactor with no PostgreSQL involved. Any
- *      failure after the implementation is swapped is then unambiguously engine-specific.
+ * Keeping the driver behind this small interface makes transaction ownership explicit:
+ * `withTransaction` supplies the connection-bound handle every statement must use, while
+ * ordinary callers do not depend on node-postgres result objects or pool internals.
  *
  * PARAMETER STYLE
  * ---------------
  * Callers always write positional `?`, matching the existing 4,030 call sites. The
  * PostgreSQL adapter rewrites those to `$1..$n`. Named and object-style binding are
- * deliberately unsupported: the codebase uses neither, and allowing them would mean
- * maintaining two binding models across both engines.
+ * deliberately unsupported: the codebase uses neither, and one binding convention keeps
+ * application SQL consistent.
  */
 
 /**
@@ -33,8 +18,8 @@
  *
  * Deliberately `unknown` rather than a union of the types a driver can serialise. The
  * union looks safer but is not: callers throughout Agent HQ build parameter lists as
- * `unknown[]` from parsed JSON, request bodies and dynamic column maps, and better-sqlite3
- * accepted them. Narrowing here would not catch a single real bug — the value's runtime
+ * `unknown[]` from parsed JSON, request bodies and dynamic column maps. Narrowing here would
+ * not catch a single real bug — the value's runtime
  * type is not known at the call site either way — it would just force ~120 casts that
  * assert rather than verify, and casts are exactly where genuine type errors hide.
  *
@@ -50,20 +35,14 @@ export interface RunResult {
    * Primary key of the row an INSERT created, or null when the statement was not a
    * single-row insert into a table with a generated key.
    *
-   * SQLite exposes this for free as lastInsertRowid. PostgreSQL has no equivalent —
-   * the value only comes back via RETURNING — so the PostgreSQL adapter appends a
+   * The value comes back via RETURNING, so the PostgreSQL adapter appends a
    * RETURNING clause to inserts that lack one. See PostgresAdapter for the details and
    * the cases where it deliberately does not.
    */
   lastInsertId: number | null;
 }
 
-/** Engine identity, for the few places that legitimately need to branch. */
-export type Dialect = 'sqlite' | 'postgres';
-
 export interface Db {
-  readonly dialect: Dialect;
-
   /** First row, or undefined when the query matched nothing. */
   get<T = Record<string, unknown>>(sql: string, ...params: SqlParam[]): Promise<T | undefined>;
 
@@ -80,9 +59,7 @@ export interface Db {
   value<T = unknown>(sql: string, ...params: SqlParam[]): Promise<T | undefined>;
 
   /**
-   * Runs one or more statements with no parameters, for DDL and migrations.
-   * Parameters are unsupported here on purpose: multi-statement parameter binding
-   * behaves differently across the two engines, and every such site is DDL.
+   * Runs one or more statements with no parameters, for migrations.
    */
   exec(sql: string): Promise<void>;
 

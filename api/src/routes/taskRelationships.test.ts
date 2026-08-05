@@ -1,9 +1,7 @@
 import express from 'express';
 import type { Server } from 'http';
 import { getDb } from '../db/client';
-import { describeSqliteOnly, setupTestDb, teardownTestDb } from '../db/testDb';
-import { initSchema } from '../db/schema';
-import { getDefaultTenantId } from '../lib/tenantContext';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import tasksRouter from './tasks';
 import sprintsRouter from './sprints';
 
@@ -16,23 +14,33 @@ interface Fixture {
   otherTaskId: number;
 }
 
-/**
- * The three tasks these tests relate to each other, plus the workflow they belong to.
- *
- * Two things here are not obvious.
- *
- * getDefaultTenantId() is called for its side effect, not its return value: the fixture template
- * carries DDL only, so the starter workflow definitions arrive with the tenant bootstrap, and
- * they are what supplies the 'generic' workflow type and its seeded blocked_by relationship type
- * that most of these tests read. Leaving it to the first request would work, but then the tests
- * that delete or inspect those rows would be racing their own setup.
- *
- * Ids are captured rather than assigned. That same bootstrap provisions a Default Project, so
- * claiming projects id 1 — as this file used to — now collides with it.
- */
+/** The three tasks these tests relate to each other, plus their installed tenant workflow. */
 async function seedFixture(): Promise<Fixture> {
   const db = getDb();
-  const tenantId = await getDefaultTenantId(db);
+  const tenantId = Number((await db.run(`
+    INSERT INTO tenants (name, slug, is_default)
+    VALUES ('Agent HQ', 'agent-hq', 1)
+  `)).lastInsertId);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)
+  `, String(tenantId), String(tenantId));
+  await db.run(`
+    INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
+    VALUES (?, 'generic', 'Generic', '', 1)
+  `, tenantId);
+  await db.run(`
+    INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
+    VALUES (?, 'generic', 'backend', 1)
+  `, tenantId);
+  await db.run(`
+    INSERT INTO sprint_type_relationship_types (
+      tenant_id, sprint_type_key, key, label, inverse_label, category,
+      affects_dispatch_eligibility, direction_semantics, active_statuses_json,
+      resolved_statuses_json, is_system, metadata_json
+    ) VALUES (?, 'generic', 'blocked_by', 'Blocked by', 'Blocks', 'dependency',
+      1, 'target_blocks_source', '["todo","ready","in_progress","review"]', '["done"]', 1, '{}')
+  `, tenantId);
 
   const project = await db.run(
     `INSERT INTO projects (tenant_id, name, description, context_md) VALUES (?, 'Agent HQ', '', '')`,
@@ -296,57 +304,5 @@ describe('task relationships API', () => {
     } finally {
       await stopTestServer(server);
     }
-  });
-});
-
-/**
- * SQLite-only on purpose, and not a conversion that was given up on.
- *
- * What is under test is ensureTaskRelationshipModel() in db/schema.ts — a better-sqlite3
- * migration that reads PRAGMA table_info and runs against the raw driver. initSchema() builds
- * SQLite whatever DATABASE_URL says, so running this block on PostgreSQL would not exercise the
- * PostgreSQL build at all; it would quietly assert against a second, SQLite database while the
- * fixture's own guard was satisfied. There is no PostgreSQL counterpart to point it at either:
- * db/pg-baseline is the already-migrated shape, so the backfill has no run to make there.
- *
- * It stays here rather than moving to a SQLite-only file because it is the compatibility half of
- * the same behaviour the API tests above cover, and the two are worth reading together.
- */
-describeSqliteOnly('legacy relationship backfill', () => {
-  let fixture: Fixture;
-
-  beforeEach(async () => {
-    await setupTestDb();
-    fixture = await seedFixture();
-  });
-
-  afterEach(async () => {
-    await teardownTestDb();
-  });
-
-  it('backfills legacy blockers and defects into idempotent relationship rows', async () => {
-    const { sourceTaskId, targetTaskId, otherTaskId } = fixture;
-    await getDb().run(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (?, ?)`, targetTaskId, sourceTaskId);
-    await getDb().run(`UPDATE tasks SET origin_task_id = ?, defect_type = 'historic-custom-defect' WHERE id = ?`, otherTaskId, sourceTaskId);
-
-    await initSchema();
-    await initSchema();
-
-    // getDb() again after initSchema: it reopens the connection, so a handle captured earlier
-    // wraps a closed one.
-    const blockers = await getDb().all(`
-      SELECT source_task_id, target_task_id, relationship_type_key, metadata_json, created_by
-      FROM task_relationships
-      WHERE source_task_id = ? AND target_task_id = ? AND relationship_type_key = 'blocked_by'
-    `, sourceTaskId, targetTaskId);
-    expect(blockers).toEqual([{ source_task_id: sourceTaskId, target_task_id: targetTaskId, relationship_type_key: 'blocked_by', metadata_json: '{}', created_by: 'legacy-task_dependencies' }]);
-
-    const defects = await getDb().all(`
-      SELECT source_task_id, target_task_id, relationship_type_key, metadata_json, created_by
-      FROM task_relationships
-      WHERE source_task_id = ? AND target_task_id = ? AND relationship_type_key = 'defect_of'
-    `, sourceTaskId, otherTaskId) as Array<{ metadata_json: string }>;
-    expect(defects).toHaveLength(1);
-    expect(JSON.parse(defects[0].metadata_json)).toEqual({ legacy_defect_type: 'historic-custom-defect' });
   });
 });

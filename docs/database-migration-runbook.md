@@ -1,72 +1,65 @@
-<!--
-RECOVERED DOCUMENT — PROVENANCE
+# Database migration runbook
 
-Source: git blob b3d3c00ce2f70571d58636b9450c09a9a2c01929
-Commit: 494509b5a131347e41964768ae0491f76570c8f2^ — i.e. the last revision of this file before
-        494509b ("Prepare repository for public release under nord-initiatives", Cinder, 2026-06-11)
-        deleted it as part of stripping ops runbooks from the public repo.
+PostgreSQL migration files under `db/pg-migrations/` are the sole schema authority.
+API startup is read-only with respect to schema and configuration.
 
-This content PREDATES the 2026-06-11 public re-root. `main` was re-rooted at b2c3705 ("Initial public
-release"), so 494509b is NOT an ancestor of HEAD and this file is absent from the working tree, from
-HEAD, and from a fresh clone. It survived only as an unreachable object in this worktree's object
-store and would be destroyed by a routine `git gc`.
+## Build first
 
-CONTENTS DESCRIBE THE PRE-MIGRATION STATE — SQLite, `better-sqlite3`, `AGENT_HQ_DB_PATH` pointing at
-a single `.db` file, and `PRAGMA integrity_check` as the post-migrate verification. The non-mutating
-startup contract it documents is still the governing rule and survives the Postgres migration
-unchanged: the API verifies the `schema_migrations` ledger and refuses to serve if the schema is
-missing or stale, and normal boot must never create, alter, rebuild, repair, backfill or seed. Only
-the engine-specific mechanics below (PRAGMA checks, file paths, install command internals) are
-superseded by the Postgres work.
--->
-
-# Agent HQ database migration runbook
-
-Agent HQ API startup is intentionally non-mutating. The `agent-hq-api` process verifies that the database was already installed or migrated and refuses to serve if the schema migration ledger is missing or stale. Normal API boot must not create tables, alter tables, rebuild tables, repair schema, backfill data, or seed starter records.
-
-## Fresh install / bootstrap
-
-Build the API first, then run the explicit install command against the target database:
+Database commands execute compiled code:
 
 ```bash
 cd api
+npm ci
 npm run build
-AGENT_HQ_DB_PATH=/path/to/agent-hq.db npm run db:install
-npm run db:migrate:status
 ```
 
-`db:install` is an alias for the explicit migration command. It initializes a fresh database, applies the current schema/data migrations, records the `schema_migrations` ledger, verifies SQLite integrity, and exits. It is the only supported path for fresh schema bootstrap.
-
-## Upgrade / deploy sequence
-
-Run migrations before restarting PM2 or any API process:
+## Fresh install
 
 ```bash
-cd api
-npm run build
-AGENT_HQ_DB_PATH=/path/to/agent-hq.db npm run db:migrate
-AGENT_HQ_DB_PATH=/path/to/agent-hq.db npm run db:migrate:status
-pm2 restart agent-hq-api --update-env
+DATABASE_URL=postgresql://user:password@host:5432/agent_hq npm run db:install
 ```
 
-For the checked-in production PM2 config, the default production database is `/Users/nordini/.agent-hq/agent-hq.db`, so the production restart path is:
+`db:install` applies all migrations. It creates starter configuration only when the
+database has no tenant; rerunning it against an installed database leaves all
+operator-owned workflow configuration unchanged.
+
+## Upgrade
 
 ```bash
-cd /path/to/agent-hq/api
-npm run build
-AGENT_HQ_DB_PATH=/Users/nordini/.agent-hq/agent-hq.db npm run db:migrate
-AGENT_HQ_DB_PATH=/Users/nordini/.agent-hq/agent-hq.db npm run db:migrate:status
-pm2 restart agent-hq-api --update-env
+DATABASE_URL=postgresql://user:password@host:5432/agent_hq npm run db:migrate:status
+DATABASE_URL=postgresql://user:password@host:5432/agent_hq npm run db:migrate
+DATABASE_URL=postgresql://user:password@host:5432/agent_hq npm run db:migrate:status
 ```
 
-For the checked-in dev PM2 config, use the environment-specific database path shown in `ecosystem.dev.config.js` before restarting `agent-hq-dev-api`.
+`db:migrate` applies schema migrations only. It never re-seeds routing rules,
+transitions, requirements, statuses, or other configuration.
 
-## Startup failure mode
+Each migration is checksummed and recorded by `id` in `schema_migrations`.
+Applied files are immutable; change the schema with a new numbered file.
 
-If the API is started against an old or uninstalled database, it exits before listening with a `SCHEMA_MIGRATION_REQUIRED` error and a command hint:
+## Baseline-00 adoption
 
-```text
-Run the explicit database migration/install command before starting the API: cd api && npm run db:migrate.
-```
+Databases created before the baseline fold record `01-tables.sql`,
+`02-indexes.sql`, and `03-foreign-keys.sql`. The explicit migration command verifies
+their exact known checksums and records `00-baseline.sql` without replaying its DDL.
+Partial or mismatched legacy ledgers fail closed. Startup only reports the pending
+baseline and never performs adoption.
 
-That failure is expected. Do not work around it by reintroducing schema creation, ALTER TABLE statements, table rebuilds, backfills, repair, or seed execution in `api/src/index.ts` or other normal boot paths.
+## Deployment order
+
+1. Take and validate a `pg_dump --format=custom` backup.
+2. Build and test the release against PostgreSQL 17.
+3. Stop or drain writers when the release requires a maintenance window.
+4. Run `db:migrate` once from the new release.
+5. Require a clean `db:migrate:status` result.
+6. Start/restart the API and verify `/health` plus a reversible read/write smoke test.
+
+The API refuses to listen when migrations are absent, pending, or drifted. Relevant
+error codes are `MIGRATION_PENDING` and `MIGRATION_DRIFT`; there is no SQLite
+`SCHEMA_MIGRATION_REQUIRED` path.
+
+## Docker
+
+Compose runs `agent-hq-migrate` as a one-shot service after PostgreSQL is healthy.
+The API depends on that service completing successfully and performs verification,
+not migration, on its own boot.

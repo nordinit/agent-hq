@@ -14,9 +14,7 @@ import {
 let tempDir: string;
 
 beforeEach(async () => {
-  // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on SQLite
-  // and on PostgreSQL. tempDir is still needed for AGENT_HQ_PROJECT_UPLOADS_DIR, which is
-  // filesystem state unrelated to the database.
+  // tempDir isolates uploaded files; setupTestDb() owns the PostgreSQL fixture state.
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'project-portability-'));
   process.env.AGENT_HQ_PROJECT_UPLOADS_DIR = path.join(tempDir, 'uploads');
   await setupTestDb();
@@ -30,10 +28,7 @@ afterEach(async () => {
 
 async function seedPortableProject(): Promise<number> {
   const db = getDb();
-  // Every fixture row below is scoped to tenant 1 and the PostgreSQL schema has a real
-  // projects.tenant_id -> tenants.id foreign key. On SQLite initSchema() seeds the default tenant;
-  // the PostgreSQL template carries DDL only and is truncated between tests, so the row has to be
-  // created explicitly. ON CONFLICT DO NOTHING keeps it idempotent across both engines.
+  // Every fixture row below is scoped to tenant 1, so create that foreign-key parent explicitly.
   await db.run(`
     INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default', 'default', 1)
     ON CONFLICT DO NOTHING

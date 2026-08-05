@@ -9,12 +9,11 @@ import path from 'path';
  * ran a migration. `db:migrate:status` — a command whose entire purpose is to report without
  * touching anything — applied migrations as a side effect of asking what was applied.
  *
- * The two directories are separate only until Phase 3b folds the baseline into
- * `00-baseline.sql`; see docs/postgres-only-migration-spec.md.
+ * The baseline is migration 00, so there is exactly one schema authority and one directory to
+ * ship in every deployment. The array shape is retained for the migration runner's existing API.
  */
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 
 export const POSTGRES_MIGRATION_DIRS = [
-  path.join(REPO_ROOT, 'db/pg-baseline'),
   path.join(REPO_ROOT, 'db/pg-migrations'),
 ];

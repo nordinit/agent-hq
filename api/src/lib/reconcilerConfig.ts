@@ -30,7 +30,7 @@ export async function setNeedsAttentionEligibleStatuses(db: Db, statuses: unknow
   const normalized = normalizeStatuses(statuses);
   await db.run(`
     INSERT INTO app_settings (key, value, updated_at)
-    VALUES (?, ?, datetime('now'))
+    VALUES (?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
   `, NEEDS_ATTENTION_ELIGIBLE_STATUSES_SETTING_KEY, JSON.stringify(normalized));
   return normalized;

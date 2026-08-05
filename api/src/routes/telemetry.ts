@@ -86,10 +86,10 @@ router.get('/overview', async (req: Request, res: Response) => {
     // Outcome metrics summary
     const totalWithOutcome = (await db.get(`SELECT COUNT(*) as n FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { n: number }).n;
 
-    const firstPassRate = (await db.get(`SELECT ROUND(AVG(first_pass_qa) * 100.0, 1) as pct FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { pct: number | null }).pct ?? 0;
+    const firstPassRate = (await db.get(`SELECT round((AVG(first_pass_qa) * 100.0)::numeric, 1) as pct FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { pct: number | null }).pct ?? 0;
 
     const avgCycleTime = (await db.get(
-      `SELECT ROUND(AVG(cycle_time_hours), 2) as avg_h FROM task_outcome_metrics tom ${omWhere} AND cycle_time_hours IS NOT NULL`
+      `SELECT round((AVG(cycle_time_hours))::numeric, 2) as avg_h FROM task_outcome_metrics tom ${omWhere} AND cycle_time_hours IS NOT NULL`
         .replace('WHERE', omConditions.length ? 'WHERE' : 'WHERE')
         .replace(/ AND cycle_time_hours/, omConditions.length ? ' AND cycle_time_hours' : ' WHERE cycle_time_hours'),
       ...omParams
@@ -99,7 +99,7 @@ router.get('/overview', async (req: Request, res: Response) => {
     const cycleParams = [...omParams];
     const cycleConditions = [...omConditions, 'tom.cycle_time_hours IS NOT NULL'];
     const cycleWhere = `WHERE ${cycleConditions.join(' AND ')}`;
-    const avgCycleTimeH = (await db.get(`SELECT ROUND(AVG(tom.cycle_time_hours), 2) as avg_h FROM task_outcome_metrics tom ${cycleWhere}`, ...cycleParams) as { avg_h: number | null }).avg_h ?? null;
+    const avgCycleTimeH = (await db.get(`SELECT round((AVG(tom.cycle_time_hours))::numeric, 2) as avg_h FROM task_outcome_metrics tom ${cycleWhere}`, ...cycleParams) as { avg_h: number | null }).avg_h ?? null;
 
     // Quality breakdown
     const byQuality = await db.all(`SELECT outcome_quality, COUNT(*) as count FROM task_outcome_metrics tom ${omWhere} GROUP BY outcome_quality ORDER BY count DESC`, ...omParams) as { outcome_quality: string; count: number }[];
@@ -128,7 +128,7 @@ router.get('/overview', async (req: Request, res: Response) => {
     const needsSplit = (await db.get(`SELECT COUNT(*) as n FROM task_creation_events tce ${ceWhere ? ceWhere + ' AND' : 'WHERE'} tce.needs_split = 1`, ...ceParams) as { n: number }).n;
 
     // Avg reopened/rerouted counts
-    const avgReopened = (await db.get(`SELECT ROUND(AVG(reopened_count), 2) as avg_r FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { avg_r: number | null }).avg_r ?? 0;
+    const avgReopened = (await db.get(`SELECT round((AVG(reopened_count))::numeric, 2) as avg_r FROM task_outcome_metrics tom ${omWhere}`, ...omParams) as { avg_r: number | null }).avg_r ?? 0;
 
     res.json({
       total_created: totalCreated,
@@ -684,11 +684,11 @@ router.get('/sessions', async (req: Request, res: Response) => {
       SELECT
         COUNT(*) AS total_sessions,
         SUM(message_count) AS total_messages,
-        ROUND(AVG(message_count), 1) AS avg_messages_per_session,
+        round((AVG(message_count))::numeric, 1) AS avg_messages_per_session,
         SUM(token_input)  AS total_token_input,
         SUM(token_output) AS total_token_output,
-        ROUND(AVG(token_input),  0) AS avg_token_input,
-        ROUND(AVG(token_output), 0) AS avg_token_output,
+        round((AVG(token_input))::numeric, 0) AS avg_token_input,
+        round((AVG(token_output))::numeric, 0) AS avg_token_output,
         COUNT(DISTINCT s.agent_id) AS unique_agents,
         COUNT(DISTINCT s.task_id)  AS unique_tasks
       FROM sessions s
@@ -722,7 +722,7 @@ router.get('/sessions', async (req: Request, res: Response) => {
         SUM(s.message_count) AS total_messages,
         SUM(s.token_input)   AS total_token_input,
         SUM(s.token_output)  AS total_token_output,
-        ROUND(AVG(s.message_count), 1) AS avg_messages
+        round((AVG(s.message_count))::numeric, 1) AS avg_messages
       FROM sessions s
       LEFT JOIN agents a ON a.id = s.agent_id
       ${where}
@@ -773,7 +773,7 @@ router.get('/pipeline-health', async (req: Request, res: Response) => {
     const totalDispatched = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.dispatched_at >= ? AND t.dispatched_at <= ?`, ...params, startDate, endDate) as { n: number }).n;
     const failedInPeriod = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status = 'failed' AND t.updated_at >= ? AND t.updated_at <= ?`, ...params, startDate, endDate) as { n: number }).n;
     const failureRate = totalDispatched > 0 ? Math.round((failedInPeriod / totalDispatched) * 1000) / 10 : 0;
-    const staleCount = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status IN ('in_progress','review','qa_pass','ready_to_merge') AND t.updated_at < datetime('now', '-2 hours')`, ...params) as { n: number }).n;
+    const staleCount = (await db.get(`SELECT COUNT(*) as n FROM tasks t ${w} AND t.status IN ('in_progress','review','qa_pass','ready_to_merge') AND t.updated_at < to_char((now() AT TIME ZONE 'utc' - interval '2 hour'), 'YYYY-MM-DD HH24:MI:SS')`, ...params) as { n: number }).n;
 
     let manualInterventions = 0;
     try {
@@ -811,7 +811,8 @@ router.get('/bottlenecks', async (req: Request, res: Response) => {
     try {
       const ACTIVE = ['todo','ready','in_progress','review','qa_pass','ready_to_merge','deployed'];
       const durations = await db.all(`
-        SELECT te.from_status AS status, ROUND((julianday(te.created_at) - julianday(prev.created_at)) * 24 * 60, 1) AS dur
+        SELECT te.from_status AS status,
+               round((EXTRACT(EPOCH FROM (te.created_at::timestamp - prev.created_at::timestamp)) / 60.0)::numeric, 1) AS dur
         FROM task_events te
         JOIN task_events prev ON prev.task_id = te.task_id AND prev.to_status = te.from_status
           AND prev.id = (SELECT MAX(p2.id) FROM task_events p2 WHERE p2.task_id = te.task_id AND p2.to_status = te.from_status AND p2.id < te.id)
@@ -829,17 +830,19 @@ router.get('/bottlenecks', async (req: Request, res: Response) => {
 
     const agingBuckets = await db.all(`
       SELECT t.status,
-        CASE WHEN (julianday('now') - julianday(t.updated_at)) * 24 < 1 THEN '<1h'
-             WHEN (julianday('now') - julianday(t.updated_at)) * 24 < 4 THEN '1-4h'
-             WHEN (julianday('now') - julianday(t.updated_at)) * 24 < 12 THEN '4-12h'
-             WHEN (julianday('now') - julianday(t.updated_at)) * 24 < 48 THEN '12-48h'
+        CASE WHEN EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'utc') - t.updated_at::timestamp)) / 3600.0 < 1 THEN '<1h'
+             WHEN EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'utc') - t.updated_at::timestamp)) / 3600.0 < 4 THEN '1-4h'
+             WHEN EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'utc') - t.updated_at::timestamp)) / 3600.0 < 12 THEN '4-12h'
+             WHEN EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'utc') - t.updated_at::timestamp)) / 3600.0 < 48 THEN '12-48h'
              ELSE '48h+' END AS bucket, COUNT(*) as count
       FROM tasks t ${w} AND t.status NOT IN ('done','cancelled','failed')
       GROUP BY t.status, bucket ORDER BY t.status, count DESC
     `, ...params) as Array<{ status: string; bucket: string; count: number }>;
 
     const topStuck = await db.all(`
-      SELECT t.id, t.title, t.status, t.priority, ROUND((julianday('now') - julianday(t.updated_at)) * 24, 1) AS hours_stuck, a.name AS agent_name
+      SELECT t.id, t.title, t.status, t.priority,
+             round((EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'utc') - t.updated_at::timestamp)) / 3600.0)::numeric, 1) AS hours_stuck,
+             a.name AS agent_name
       FROM tasks t LEFT JOIN agents a ON a.id = t.agent_id
       ${w} AND t.status IN ('in_progress','review','qa_pass','ready_to_merge','stalled','blocked')
       ORDER BY hours_stuck DESC LIMIT 10
@@ -904,8 +907,8 @@ router.get('/failures', async (req: Request, res: Response) => {
       GROUP BY COALESCE(outcome, 'unknown')
       ORDER BY count DESC
     `, ...p);
-    const byAgent = await db.all(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id ${w} AND t.agent_id IS NOT NULL GROUP BY t.agent_id, a.name ORDER BY fail_pct DESC LIMIT 20`, ...p);
-    const byTaskType = await db.all(`SELECT COALESCE(t.task_type,'unknown') as task_type, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t ${w} GROUP BY t.task_type ORDER BY fail_pct DESC`, ...p);
+    const byAgent = await db.all(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, round((SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as fail_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id ${w} AND t.agent_id IS NOT NULL GROUP BY t.agent_id, a.name ORDER BY fail_pct DESC LIMIT 20`, ...p);
+    const byTaskType = await db.all(`SELECT COALESCE(t.task_type,'unknown') as task_type, COUNT(*) as total, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, round((SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as fail_pct FROM tasks t ${w} GROUP BY t.task_type ORDER BY fail_pct DESC`, ...p);
     const topFailing = await db.all(`
       SELECT
         t.id,
@@ -956,14 +959,12 @@ router.get('/integrity', async (req: Request, res: Response) => {
     const anomalyCounts = INTEGRITY_ANOMALY_TYPES.map(entry => ({ ...entry, count: countsByType.find(r => r.anomaly_type === entry.type)?.count ?? 0 }));
 
     let trend: Array<{ date: string; count: number }> = [];
-    try { trend = await db.all(`SELECT substr(ie.created_at,1,10) as date, COUNT(*) as count FROM integrity_events ie WHERE ${[...c, "ie.created_at >= datetime('now','-30 days')"].join(' AND ')} GROUP BY date ORDER BY date ASC`, ...p) as Array<{ date: string; count: number }>; } catch { /* non-fatal */ }
+    try { trend = await db.all(`SELECT substr(ie.created_at,1,10) as date, COUNT(*) as count FROM integrity_events ie WHERE ${[...c, "ie.created_at >= to_char((now() AT TIME ZONE 'utc' - interval '30 day'), 'YYYY-MM-DD HH24:MI:SS')"].join(' AND ')} GROUP BY date ORDER BY date ASC`, ...p) as Array<{ date: string; count: number }>; } catch { /* non-fatal */ }
 
     const byAgent2 = await db.all(`SELECT ie.agent_id, a.name as agent_name, COUNT(*) as count FROM integrity_events ie LEFT JOIN agents a ON a.id=ie.agent_id ${w} AND ie.agent_id IS NOT NULL GROUP BY ie.agent_id, a.name ORDER BY count DESC LIMIT 20`, ...p);
-    // GROUP_CONCAT(DISTINCT x) cannot take an explicit delimiter, so the distinct anomaly types
-    // are pre-aggregated in a CTE and concatenated with an explicit ',' separator. That keeps the
-    // delimiter identical to SQLite's implicit default and makes the Postgres port a mechanical
-    // GROUP_CONCAT -> string_agg rename. The filtered rows are materialised once so the bound
-    // parameters are unchanged.
+    // Pre-aggregate distinct anomaly types, then use PostgreSQL's ordered string_agg so the
+    // comma-delimited response is deterministic. The filtered rows are materialised once so the
+    // bound parameters are unchanged.
     const affected = await db.all(`
       WITH filtered AS (
         SELECT ie.id, ie.task_id, ie.anomaly_type
@@ -971,7 +972,7 @@ router.get('/integrity', async (req: Request, res: Response) => {
         ${w}
       ),
       distinct_types AS (
-        SELECT task_id, GROUP_CONCAT(anomaly_type, ',') AS anomaly_types
+        SELECT task_id, string_agg(anomaly_type, ',' ORDER BY anomaly_type) AS anomaly_types
         FROM (SELECT DISTINCT task_id, anomaly_type FROM filtered) d
         GROUP BY task_id
       )
@@ -1007,7 +1008,7 @@ router.post('/integrity-events', async (req: Request, res: Response) => {
 router.put('/integrity-events/:id/resolve', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    await db.run(`UPDATE integrity_events SET resolved = 1, resolved_at = datetime('now') WHERE id = ?`, Number(req.params.id));
+    await db.run(`UPDATE integrity_events SET resolved = 1, resolved_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?`, Number(req.params.id));
     const row = await db.get(`SELECT * FROM integrity_events WHERE id = ?`, Number(req.params.id));
     if (!row) return res.status(404).json({ error: 'Integrity event not found' });
     res.json(row);
@@ -1027,8 +1028,8 @@ router.get('/routing', async (req: Request, res: Response) => {
     if (task_type)  { c.push('t.task_type = ?');  p.push(task_type); }
     const w = `WHERE ${c.join(' AND ')} AND t.routing_reason IS NOT NULL`;
 
-    const routingGroups = await db.all(`SELECT t.routing_reason, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as success, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, SUM(CASE WHEN t.status IN ('stalled','blocked') THEN 1 ELSE 0 END) as stalled, ROUND(SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct, ROUND(SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct FROM tasks t ${w} GROUP BY t.routing_reason ORDER BY dispatched DESC LIMIT 50`, ...p);
-    const byAgent3 = await db.all(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, ROUND(SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id WHERE ${c.join(' AND ')} GROUP BY t.agent_id, a.name ORDER BY dispatched DESC LIMIT 20`, ...p);
+    const routingGroups = await db.all(`SELECT t.routing_reason, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as success, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, SUM(CASE WHEN t.status IN ('stalled','blocked') THEN 1 ELSE 0 END) as stalled, round((SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as success_pct, round((SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as fail_pct FROM tasks t ${w} GROUP BY t.routing_reason ORDER BY dispatched DESC LIMIT 50`, ...p);
+    const byAgent3 = await db.all(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, round((SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as success_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id WHERE ${c.join(' AND ')} GROUP BY t.agent_id, a.name ORDER BY dispatched DESC LIMIT 20`, ...p);
 
     const sprintRuleFilters: string[] = [];
     const sprintRuleParams: unknown[] = [];
@@ -1084,13 +1085,14 @@ router.get('/templates', async (req: Request, res: Response) => {
         COUNT(*) as total_runs, SUM(CASE WHEN ji.status='done' THEN 1 ELSE 0 END) as success,
         SUM(CASE WHEN ji.status='failed' THEN 1 ELSE 0 END) as failed,
         SUM(CASE WHEN ji.status='cancelled' THEN 1 ELSE 0 END) as cancelled,
-        ROUND(SUM(CASE WHEN ji.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as success_pct,
-        ROUND(SUM(CASE WHEN ji.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as fail_pct,
-        ROUND(AVG(CASE WHEN ji.completed_at IS NOT NULL AND ji.started_at IS NOT NULL THEN (julianday(ji.completed_at)-julianday(ji.started_at))*24*60 END),1) as avg_cycle_min,
+        round((SUM(CASE WHEN ji.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as success_pct,
+        round((SUM(CASE WHEN ji.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as fail_pct,
+        round((AVG(CASE WHEN ji.completed_at IS NOT NULL AND ji.started_at IS NOT NULL
+          THEN EXTRACT(EPOCH FROM (ji.completed_at::timestamp - ji.started_at::timestamp)) / 60.0 END))::numeric, 1) as avg_cycle_min,
         SUM(COALESCE(ji.token_input,0)+COALESCE(ji.token_output,0)) as total_tokens,
-        ROUND(AVG(COALESCE(ji.token_input,0)+COALESCE(ji.token_output,0)),0) as avg_tokens,
+        round((AVG(COALESCE(ji.token_input,0)+COALESCE(ji.token_output,0)))::numeric, 0) as avg_tokens,
         SUM(CASE WHEN ji.last_meaningful_output_at IS NOT NULL THEN 1 ELSE 0 END) as meaningful_output_count,
-        ROUND(SUM(CASE WHEN ji.last_meaningful_output_at IS NOT NULL THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as meaningful_output_rate_pct
+        round((SUM(CASE WHEN ji.last_meaningful_output_at IS NOT NULL THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as meaningful_output_rate_pct
       FROM job_instances ji JOIN tasks t ON t.id=ji.task_id LEFT JOIN agents a ON a.id=ji.agent_id
       ${w} GROUP BY ji.agent_id, a.name, a.job_title, a.job_instructions_updated_at, a.instructions_version ORDER BY total_runs DESC LIMIT 30
     `, ...p);

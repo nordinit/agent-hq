@@ -72,9 +72,9 @@ export async function setCanonicalChatSessionKey(agentId: number, sessionKey: st
   const db = getDb();
   await db.run(`
     INSERT INTO canonical_chat_sessions (agent_id, channel, session_key, created_at, updated_at)
-    VALUES (?, ?, ?, datetime('now'), datetime('now'))
+    VALUES (?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(agent_id, channel)
-    DO UPDATE SET session_key = excluded.session_key, updated_at = datetime('now')
+    DO UPDATE SET session_key = excluded.session_key, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
   `, agentId, channel, sessionKey);
   return sessionKey;
 }
@@ -116,9 +116,9 @@ export async function listChatSessions(
   const jobInstanceColumns = await sharedTableColumns(db, 'job_instances');
   const hasJobInstanceDurableRunId = jobInstanceColumns.includes('durable_run_id');
   const canonicalFilters = [
-    '(? IS NULL OR s.agent_id = ?)',
-    '(? IS NULL OR s.instance_id = ?)',
-    '(? IS NULL OR s.project_id = ?)',
+    '(?::text IS NULL OR s.agent_id = ?)',
+    '(?::text IS NULL OR s.instance_id = ?)',
+    '(?::text IS NULL OR s.project_id = ?)',
   ];
   const canonicalTenant = tenantId ? await sessionTenantScope(db, 's', tenantId) : { sql: '1 = 1', params: [] };
 

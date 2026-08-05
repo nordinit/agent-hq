@@ -27,12 +27,7 @@ async function stopTestServer(server: Server): Promise<void> {
   });
 }
 
-/**
- * The Atlas agent this file authenticates as is normally a seeding side effect of initSchema(),
- * which only runs on SQLite — the PostgreSQL fixture template is DDL-only and truncated between
- * tests. Reuse the seeded row when it exists and insert it explicitly when it does not, so the
- * fixture states its own dependency on both engines instead of relying on seeding.
- */
+/** Establishes the Atlas identity that this file authenticates explicitly. */
 async function ensureAtlasAgent(tenantId: number): Promise<number> {
   const db = getDb();
   const existing = await db.get(`
@@ -111,9 +106,16 @@ async function seedCustomStatusWorkflow(): Promise<{ projectId: number; sprintId
 
 describe('Agent HQ MCP API identity propagation', () => {
   beforeEach(async () => {
-    // setupTestDb() selects the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
-    // SQLite and on PostgreSQL.
-    await setupTestDb();
+    const db = await setupTestDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+    await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+    await db.run(`INSERT INTO sprint_types (tenant_id, key, name) VALUES (1, 'dev', 'Development'), (1, 'generic', 'Generic')`);
+    await db.run(`
+      INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, stage_order, is_default_entry)
+      VALUES
+        (1, 'dev', 'todo', 'To Do', 0, 1),
+        (1, 'dev', 'ready', 'Ready', 1, 0)
+    `);
   });
 
   afterEach(async () => {

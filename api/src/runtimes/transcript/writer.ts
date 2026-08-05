@@ -102,9 +102,8 @@ export class RuntimeTranscriptWriter {
   /**
    * Probe which optional columns exist.
    *
-   * Every existing writer does this rather than hard-coding the PostgreSQL
-   * column list, and so must this one: SQLite dev/test databases are migrated in
-   * place by try/catch ALTERs and genuinely lack some of these columns.
+   * Keep optional-column probing for narrow compatibility fixtures and imported historical
+   * rows. The production PostgreSQL schema itself is owned by numbered migrations.
    */
   private async resolveOptionalColumns(): Promise<{
     durableRunId: boolean;

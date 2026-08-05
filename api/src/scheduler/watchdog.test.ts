@@ -1,12 +1,11 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import Database from 'better-sqlite3';
 import { runWatchdogPass, runWorktreePrunePass } from './watchdog';
 import { pruneOrphanedWorktrees } from '../services/worktreeManager';
 import { setActiveTenantId } from '../lib/tenantContext';
 import { type Db } from "../db/adapter/types";
-import { SqliteAdapter } from "../db/adapter/SqliteAdapter";
 
 jest.mock('../integrations/telegram', () => ({
   notifyTelegram: jest.fn(),
@@ -21,130 +20,14 @@ jest.mock('../services/worktreeManager', () => {
 });
 
 async function createDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
-  await db.exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
-      project_id INTEGER,
-      name TEXT,
-      job_title TEXT,
-      runtime_type TEXT,
-      session_key TEXT,
-      openclaw_agent_id TEXT,
-      timeout_seconds INTEGER,
-      startup_grace_seconds INTEGER,
-      heartbeat_stale_seconds INTEGER,
-      workspace_path TEXT,
-      repo_path TEXT,
-      repo_url TEXT,
-      repo_access_mode TEXT,
-      os_user TEXT
-    );
-
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
-      name TEXT,
-      repo_path TEXT,
-      repo_url TEXT,
-      repo_access_mode TEXT
-    );
-
-    CREATE TABLE tasks (
-      id INTEGER PRIMARY KEY,
-      tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
-      title TEXT,
-      status TEXT,
-      task_type TEXT,
-      sprint_id INTEGER,
-      active_instance_id INTEGER,
-      updated_at TEXT
-    );
-
-    CREATE TABLE job_instances (
-      id INTEGER PRIMARY KEY,
-      agent_id INTEGER,
-      task_id INTEGER,
-      status TEXT NOT NULL,
-      created_at TEXT,
-      dispatched_at TEXT,
-      started_at TEXT,
-      session_key TEXT,
-      task_outcome TEXT,
-      lifecycle_outcome_posted_at TEXT,
-      completed_at TEXT,
-      error TEXT,
-      runtime_ended_at TEXT,
-      runtime_end_success INTEGER,
-      runtime_end_error TEXT,
-      runtime_end_source TEXT,
-      token_input INTEGER,
-      token_output INTEGER,
-      token_total INTEGER,
-      response TEXT,
-      worktree_path TEXT
-    );
-
-    CREATE TABLE instance_artifacts (
-      instance_id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      started_at TEXT,
-      last_agent_heartbeat_at TEXT,
-      last_meaningful_output_at TEXT,
-      updated_at TEXT
-    );
-
-    CREATE TABLE chat_messages (
-      id TEXT PRIMARY KEY,
-      agent_id INTEGER,
-      instance_id INTEGER,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      timestamp TEXT NOT NULL,
-      session_key TEXT NOT NULL DEFAULT '',
-      event_type TEXT NOT NULL DEFAULT 'text',
-      event_meta TEXT NOT NULL DEFAULT '{}'
-    );
-
-    CREATE TABLE logs (
-      id INTEGER PRIMARY KEY,
-      instance_id INTEGER,
-      agent_id INTEGER,
-      level TEXT,
-      message TEXT
-    );
-
-    CREATE TABLE task_history (
-      id INTEGER PRIMARY KEY,
-      task_id INTEGER,
-      changed_by TEXT,
-      field TEXT,
-      old_value TEXT,
-      new_value TEXT
-    );
-
-    CREATE TABLE tenants (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0, 1)),
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    INSERT INTO tenants (id, name, slug, is_default)
-    VALUES (1, 'Default Tenant', 'default', 1);
+  const db = await setupTestDb();
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+  await db.run(`
     INSERT INTO app_settings (key, value)
-    VALUES ('active_tenant_id', '1'), ('default_tenant_id', '1');
+    VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
   `);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Test')`);
+  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (1, 1, 1, 'Test workflow', 'generic')`);
   return db;
 }
 
@@ -175,11 +58,18 @@ async function seedRunningInstance(db: Db, params: {
       1800, 600
     )
   `);
-  await db.run(`INSERT INTO tasks (id, tenant_id, title, active_instance_id) VALUES (?, 1, 'Task', ?)`, taskId, instanceId);
   await db.run(`
-    INSERT INTO job_instances (id, agent_id, task_id, status, created_at, dispatched_at, started_at, session_key)
-    VALUES (?, 94, ?, 'running', ?, ?, ?, ?)
-  `, instanceId, taskId, createdAt, dispatchedAt, startedAt, `run:${instanceId}:${durableRunId}`);
+    INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title)
+    VALUES (?, 1, 1, 1, 'Task')
+  `, taskId);
+  await db.run(`
+    INSERT INTO job_instances (
+      id, agent_id, task_id, status, created_at, dispatched_at, started_at, session_key,
+      lifecycle_outcome_posted_at
+    )
+    VALUES (?, 94, ?, 'running', ?, ?, ?, ?, ?)
+  `, instanceId, taskId, createdAt, dispatchedAt, startedAt, `run:${instanceId}:${durableRunId}`, createdAt);
+  await db.run(`UPDATE tasks SET active_instance_id = ? WHERE id = ?`, instanceId, taskId);
   await db.run(`
     INSERT INTO instance_artifacts (instance_id, task_id, started_at)
     VALUES (?, ?, ?)
@@ -231,7 +121,7 @@ describe('watchdog transcript activity', () => {
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
     fs.rmSync(openclawHome, { recursive: true, force: true });
     if (previousOpenClawHome === undefined) {
       delete process.env.OPENCLAW_HOME;
@@ -622,7 +512,7 @@ describe('watchdog worktree pruning notifications', () => {
   });
 
   afterEach(async () => {
-    await db.close();
+    await teardownTestDb();
   });
 
   it('records prune notifications in the pruned agent tenant instead of the active tenant', async () => {
@@ -634,9 +524,9 @@ describe('watchdog worktree pruning notifications', () => {
     `);
     await db.run(`
       INSERT INTO agents (
-        id, tenant_id, project_id, name, workspace_path, repo_path, repo_access_mode
+        id, tenant_id, project_id, name, session_key, workspace_path, repo_path, repo_access_mode
       )
-      VALUES (94, 2, 200, 'Cinder', '/workspace/cinder', '/repo/from-agent', 'worktree')
+      VALUES (94, 2, 200, 'Cinder', 'agent:cinder:main', '/workspace/cinder', '/repo/from-agent', 'worktree')
     `);
     jest.mocked(pruneOrphanedWorktrees).mockResolvedValue({
       pruned: ['/workspace/cinder/task-776'],

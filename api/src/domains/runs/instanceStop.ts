@@ -83,7 +83,7 @@ export async function applyStopBehavior(
         SET status = ?,
             active_instance_id = NULL,
             agent_id = NULL,
-            updated_at = datetime('now')
+            updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
       `, taskStatusAfter, taskId);
       if (taskStatusBefore && taskStatusAfter && taskStatusAfter !== taskStatusBefore) {

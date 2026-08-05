@@ -290,7 +290,7 @@ export async function handleOpenClawRuntimeEnd(
 
     await db.run(`
         UPDATE job_instances
-        SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+        SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
         WHERE id = ?
       `, JSON.stringify(normalizedEvent), instanceId);
 

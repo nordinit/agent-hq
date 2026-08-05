@@ -130,10 +130,10 @@ async function syncSpawnedDefectMetric(db: Db, originTaskId: number | null | und
   const row = await db.get('SELECT COUNT(*) as count FROM tasks WHERE origin_task_id = ?', originTaskId) as { count: number };
   await db.run(`
     INSERT INTO task_outcome_metrics (task_id, spawned_defects, updated_at)
-    VALUES (?, ?, datetime('now'))
+    VALUES (?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     ON CONFLICT(task_id) DO UPDATE SET
       spawned_defects = excluded.spawned_defects,
-      updated_at = datetime('now')
+      updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
   `, originTaskId, row.count);
 }
 
@@ -316,7 +316,7 @@ export async function createTaskRecord(
   if (origin_task_id != null) {
     const existingMetrics = await db.get('SELECT id FROM task_outcome_metrics WHERE task_id = ?', origin_task_id) as { id: number } | undefined;
     if (existingMetrics) {
-      await db.run('UPDATE task_outcome_metrics SET spawned_defects = spawned_defects + 1, updated_at = datetime(\'now\') WHERE task_id = ?', origin_task_id);
+      await db.run('UPDATE task_outcome_metrics SET spawned_defects = spawned_defects + 1, updated_at = to_char(now() AT TIME ZONE \'utc\', \'YYYY-MM-DD HH24:MI:SS\') WHERE task_id = ?', origin_task_id);
     } else {
       await db.run('INSERT INTO task_outcome_metrics (task_id, spawned_defects) VALUES (?, 1)', origin_task_id);
     }
@@ -509,7 +509,7 @@ export async function updateTaskRecord(
       project_id = ?, assigned_agent_id = ?, sprint_id = ?, recurring = ?,
       branch_url = ?, task_type = ?, story_points = ?,
       origin_task_id = ?, defect_type = ?, custom_fields_json = ?,
-      updated_at = datetime('now')
+      updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, updated.title, updated.description, updated.status, updated.priority, updated.project_id, updated.assigned_agent_id, updated.sprint_id, updated.recurring, updated.branch_url, updated.task_type, updated.story_points, updated.origin_task_id, updated.defect_type, updated.custom_fields_json, taskId);
 
@@ -578,7 +578,7 @@ export async function cancelTaskRecord(db: Db, taskId: number, changedBy: string
   const existing = await requireExistingTaskRow(db, taskId);
   const oldStatus = String(existing.status);
 
-  await db.run('UPDATE tasks SET status = \'cancelled\', updated_at = datetime(\'now\') WHERE id = ?', taskId);
+  await db.run('UPDATE tasks SET status = \'cancelled\', updated_at = to_char(now() AT TIME ZONE \'utc\', \'YYYY-MM-DD HH24:MI:SS\') WHERE id = ?', taskId);
   await cleanupTaskExecutionLinkageForStatus(db, taskId, 'cancelled');
   await logHistory(taskId, changedBy, 'status', oldStatus, 'cancelled');
   await addTaskNote(taskId, changedBy, 'Task cancelled by user.');
@@ -605,7 +605,7 @@ export async function reopenTaskRecord(db: Db, taskId: number, changedBy: string
     SET status = ?,
         previous_status = NULL,
         failure_detail = NULL,
-        updated_at = datetime('now')
+        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `, restoreStatus, taskId);
 
@@ -638,7 +638,7 @@ export async function pauseTaskRecord(db: Db, taskId: number, changedBy: string,
   }
 
   await db.run(`
-    UPDATE tasks SET paused_at = datetime('now'), pause_reason = ?, updated_at = datetime('now') WHERE id = ?
+    UPDATE tasks SET paused_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), pause_reason = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
   `, pauseReason, taskId);
 
   await logHistory(taskId, changedBy, 'paused_at', null, new Date().toISOString());
@@ -654,7 +654,7 @@ export async function unpauseTaskRecord(db: Db, taskId: number, changedBy: strin
   }
 
   await db.run(`
-    UPDATE tasks SET paused_at = NULL, pause_reason = NULL, updated_at = datetime('now') WHERE id = ?
+    UPDATE tasks SET paused_at = NULL, pause_reason = NULL, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?
   `, taskId);
 
   await logHistory(taskId, changedBy, 'paused_at', existing.paused_at as string, null);

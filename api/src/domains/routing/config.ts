@@ -100,7 +100,7 @@ export async function updateAgentRoutingConfig(
     throw error;
   }
 
-  sets.push("last_active = datetime('now')");
+  sets.push("last_active = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')");
   values.push(agent.id);
   await db.run(`UPDATE agents SET ${sets.join(', ')} WHERE id = ?`, ...values);
 

@@ -53,4 +53,17 @@ describe('resolveDefaultGatewayUrl', () => {
       expect(resolveDefaultGatewayUrl('ws')).toBe('ws://127.0.0.1:18888');
     });
   });
+
+  it('resolves the shared upload root dynamically', () => {
+    const first = path.join(os.tmpdir(), 'agent-hq-uploads-first');
+    const second = path.join(os.tmpdir(), 'agent-hq-uploads-second');
+
+    jest.isolateModules(() => {
+      const { resolveUploadsRoot } = require('./config') as typeof import('./config');
+      process.env.AGENT_HQ_UPLOADS_DIR = first;
+      expect(resolveUploadsRoot()).toBe(path.resolve(first));
+      process.env.AGENT_HQ_UPLOADS_DIR = second;
+      expect(resolveUploadsRoot()).toBe(path.resolve(second));
+    });
+  });
 });

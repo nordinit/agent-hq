@@ -45,35 +45,9 @@ jest.mock('../domains/runs/openclawSessionState', () => ({
 /**
  * Lifecycle evidence lives in `tasks.custom_fields_json`; the dedicated
  * review/qa/deploy columns were dropped from the schema. The runtime therefore
- * probes `PRAGMA table_info(tasks)` before building its task lookup, so the
- * fake db has to answer that probe with the real column set.
+ * checks PostgreSQL's information schema before building its task lookup.
  */
-/** The tables this fixture models. Anything else must read as absent. */
 const MOCKED_TABLES = new Set(['tasks', 'job_instances', 'chat_messages']);
-
-const TASKS_COLUMNS = [
-  'id',
-  'tenant_id',
-  'title',
-  'description',
-  'status',
-  'priority',
-  'project_id',
-  'sprint_id',
-  'agent_id',
-  'assigned_agent_id',
-  'created_at',
-  'updated_at',
-  'dispatched_at',
-  'active_instance_id',
-  'task_type',
-  'story_points',
-  'recurring_series_id',
-  'scheduled_for',
-  'schedule_run_id',
-  'generated_from',
-  'custom_fields_json',
-].map((name) => ({ name }));
 
 const TASK_EVIDENCE_CUSTOM_FIELDS = {
   review_branch: 'cinder-backend/task-403-prevent-outcome-less-run-completions-fro',
@@ -175,7 +149,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
       [
         `
         UPDATE job_instances
-        SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+        SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
         WHERE id = ?
       `,
         {
@@ -183,25 +157,20 @@ describe('OpenClawRuntime terminal failure handling', () => {
         },
       ],
       [
-        `PRAGMA table_info(tasks)`,
+        `SELECT 1 AS found FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = ? AND column_name = ? LIMIT 1`,
         {
-          all: jest.fn().mockReturnValue(TASKS_COLUMNS),
+          get: jest.fn((table: string, column: string) => (
+            table === 'tasks' && column === 'custom_fields_json' ? { found: 1 } : undefined
+          )),
         },
       ],
       [
-        // Schema introspection is now centralised in db/introspection.ts, so this probe
-        // arrives in one canonical spelling instead of the several that used to be scattered
-        // across ~40 local reimplementations. Behaviour is unchanged; only the SQL text this
-        // SQL-keyed mock has to recognise is.
-        //
-        // It must answer PER TABLE, not unconditionally. Returning a row for everything makes
-        // the runtime believe optional tables exist and walk into branches this fixture does
-        // not model — which is a fake failure, not a real one. Only the tables this mock
-        // actually answers for are reported as present.
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
+        `SELECT 1 AS found FROM information_schema.tables
+          WHERE table_schema = current_schema() AND table_name = ? LIMIT 1`,
         {
           get: jest.fn((table: string) => (
-            MOCKED_TABLES.has(table) ? { name: table } : undefined
+            MOCKED_TABLES.has(table) ? { found: 1 } : undefined
           )),
         },
       ],
@@ -238,9 +207,8 @@ describe('OpenClawRuntime terminal failure handling', () => {
 
     statements = new Map(statementEntries.map(([sql, stmt]) => [normalizeSql(sql), stmt])) as typeof statements;
 
-    // The mock now presents the Db ADAPTER shape — db.get(sql, ...) / db.all(sql, ...) —
-    // rather than better-sqlite3's prepare(sql).get(). The statements map stays the source
-    // of truth for what each query returns; only the calling convention changed.
+    // The mock presents the PostgreSQL Db shape — db.get(sql, ...) / db.all(sql, ...).
+    // The statements map stays the source of truth for what each query returns.
     const lookup = (sql: string) => {
       const stmt = statements.get(normalizeSql(sql));
       if (!stmt) throw new Error(`Unexpected SQL: ${sql}`);
@@ -248,7 +216,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
     };
 
     db = {
-      dialect: 'sqlite',
+      dialect: 'postgres',
       inTransaction: false,
       get: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).get?.(...params)),
       all: jest.fn(async (sql: string, ...params: unknown[]) => lookup(sql).all?.(...params) ?? []),
@@ -462,7 +430,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
     }));
     const responseUpdate = statements.get(normalizeSql(`
         UPDATE job_instances
-        SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+        SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
         WHERE id = ?
       `)) as unknown as { run: jest.Mock };
     expect(JSON.parse(responseUpdate.run.mock.calls[0][0])).toMatchObject({

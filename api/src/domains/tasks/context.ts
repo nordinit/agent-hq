@@ -303,7 +303,7 @@ function buildSinceClause(column: string, value: string | undefined, params: unk
   const normalized = safeIsoOrNull(value);
   if (!normalized) return '';
   params.push(normalized);
-  return ` AND datetime(${column}) >= datetime(?)`;
+  return ` AND ${column} >= ?`;
 }
 
 async function loadNotes(taskId: number, options: NormalizedTaskContextOptions): Promise<RecordLike[]> {
@@ -363,7 +363,7 @@ async function loadRuns(taskId: number, options: NormalizedTaskContextOptions): 
   if (options.sinceTimestamp) {
     const normalized = safeIsoOrNull(options.sinceTimestamp);
     if (normalized) {
-      query += ` AND datetime(COALESCE(ji.runtime_completed_at, ji.completed_at, ji.started_at, ji.dispatched_at, ji.created_at)) >= datetime(?)`;
+      query += ` AND COALESCE(ji.runtime_completed_at, ji.completed_at, ji.started_at, ji.dispatched_at, ji.created_at) >= ?`;
       params.push(normalized);
     }
   }

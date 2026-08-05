@@ -2,12 +2,7 @@ import type { Db } from './types';
 import { TransactionClosedError } from './types';
 
 /**
- * The Db contract, written once and executed against every implementation.
- *
- * The adapter only earns its keep if both engines behave identically, so asserting that
- * has to be a single shared suite rather than two suites that can drift. Anywhere the
- * engines genuinely cannot agree, the difference belongs here as an explicit, documented
- * assertion rather than as a silent gap in coverage.
+ * The PostgreSQL Db contract.
  *
  * `setup` returns a Db whose schema is:
  *   parents  (id pk, name not null)
@@ -57,24 +52,20 @@ export function runDbContractTests(harness: ContractHarness): void {
     });
 
     it('returns a mixed-case column alias under the case it was written in', async () => {
-      // The regression that motivated this assertion, and the reason it belongs in the SHARED
-      // contract rather than in the PostgreSQL-only suite: PostgreSQL folds unquoted identifiers
-      // to lower case, so `AS instanceId` came back as `instanceid`, `row.instanceId` read
+      // PostgreSQL folds unquoted identifiers to lower case, so `AS instanceId`
+      // comes back as `instanceid`, `row.instanceId` reads
       // undefined, and Number(undefined) was NaN. That silently turned every id in an MCP
       // authorization scope set into NaN and denied every agent lifecycle callbacks on its own
       // run. SQLite preserves the case, so the same code was correct there — which is exactly why
-      // a SQLite-only suite could not catch it, and why this must run on both engines.
-      //
-      // The alias is deliberately left unquoted here: translateToPostgres() is responsible for
-      // quoting it, so writing `AS "parentName"` would assert nothing.
+      // the source query must quote application-facing camel-case aliases.
       await db.run(`INSERT INTO parents (name) VALUES (?)`, 'alpha');
 
-      const row = await db.get<{ parentName?: string }>(`SELECT name AS parentName FROM parents WHERE id = ?`, 1);
+      const row = await db.get<{ parentName?: string }>(`SELECT name AS "parentName" FROM parents WHERE id = ?`, 1);
       expect(row?.parentName).toBe('alpha');
       expect(Object.keys(row ?? {})).toEqual(['parentName']);
 
       // A value read through the alias must survive Number() the way an id has to.
-      const idRow = await db.get<{ parentId?: number }>(`SELECT id AS parentId FROM parents WHERE id = ?`, 1);
+      const idRow = await db.get<{ parentId?: number }>(`SELECT id AS "parentId" FROM parents WHERE id = ?`, 1);
       expect(Number(idRow?.parentId)).toBe(1);
       expect(Number.isNaN(Number(idRow?.parentId))).toBe(false);
     });
@@ -178,11 +169,6 @@ export function runDbContractTests(harness: ContractHarness): void {
     });
 
     it('enforces foreign keys and cascades deletes', async () => {
-      // SQLite's foreign_keys pragma is per-connection and silently degrades cascade to a
-      // no-op when off, so confirm it here rather than misreporting that as a cascade bug.
-      if (db.dialect === 'sqlite') {
-        expect(Number(await db.value(`PRAGMA foreign_keys`))).toBe(1);
-      }
       const parent = await db.run(`INSERT INTO parents (name) VALUES (?)`, 'p');
       await db.run(`INSERT INTO children (parent_id, label) VALUES (?, ?)`, parent.lastInsertId, 'c');
 
@@ -193,17 +179,9 @@ export function runDbContractTests(harness: ContractHarness): void {
         rejected = true;
       }
       if (!rejected) {
-        // Capture why rather than just asserting: a violating insert that succeeds means
-        // either enforcement is off or the constraint is not on the table, and those need
-        // different fixes.
-        const pragma = db.dialect === 'sqlite' ? await db.value(`PRAGMA foreign_keys`) : 'n/a';
-        const ddl = db.dialect === 'sqlite'
-          ? await db.value(`SELECT sql FROM sqlite_master WHERE name = 'children'`)
-          : 'n/a';
         const parents = await db.all(`SELECT id FROM parents ORDER BY id`);
         throw new Error(
-          `violating INSERT succeeded. foreign_keys=${String(pragma)} ` +
-          `parents=${JSON.stringify(parents)} ddl=${String(ddl)}`
+          `violating INSERT succeeded. parents=${JSON.stringify(parents)}`
         );
       }
       await db.run(`DELETE FROM parents WHERE id = ?`, 1);

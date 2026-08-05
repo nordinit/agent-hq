@@ -14,28 +14,30 @@ import {
 import { DEFAULT_TENANT_NAME, DEFAULT_TENANT_SLUG } from '../lib/tenantContext';
 import setupRouter from './setup';
 
-/**
- * The default tenant, spelled out rather than inherited from a seeding side effect.
- *
- * On SQLite setupTestDb() runs initSchema(), which seeds one; the PostgreSQL fixture carries DDL
- * only and truncates between tests, so there is none. Both engines need the row to exist before an
- * agent can reference it (agents.tenant_id is a real foreign key on PostgreSQL), hence the
- * find-or-insert.
- */
+/** The explicitly installed tenant required by the Atlas fixture's foreign key. */
 async function ensureDefaultTenantId(db: Db): Promise<number> {
   const existing = await db.get(
     `SELECT id FROM tenants WHERE slug = ? LIMIT 1`,
     DEFAULT_TENANT_SLUG,
   ) as { id: number } | undefined;
-  if (existing) return Number(existing.id);
+  let tenantId = existing ? Number(existing.id) : null;
 
-  const inserted = await db.run(
-    `INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 1)`,
-    DEFAULT_TENANT_NAME,
-    DEFAULT_TENANT_SLUG,
-  );
-  if (inserted.lastInsertId == null) throw new Error('tenant fixture insert returned no id');
-  return inserted.lastInsertId;
+  if (tenantId == null) {
+    const inserted = await db.run(
+      `INSERT INTO tenants (name, slug, is_default) VALUES (?, ?, 1)`,
+      DEFAULT_TENANT_NAME,
+      DEFAULT_TENANT_SLUG,
+    );
+    if (inserted.lastInsertId == null) throw new Error('tenant fixture insert returned no id');
+    tenantId = inserted.lastInsertId;
+  }
+
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `, String(tenantId), String(tenantId));
+  return tenantId;
 }
 
 /**
@@ -43,8 +45,7 @@ async function ensureDefaultTenantId(db: Db): Promise<number> {
  *
  * The first test's subject is that /onboarding/skip leaves an already-present Atlas alone
  * (atlas_created === false, still exactly one row), so that row is a precondition of the test, not
- * something it may assume initSchema() left behind. Idempotent because on SQLite initSchema() has
- * already seeded it; on PostgreSQL it has not.
+ * something it may assume the schema fixture installed.
  */
 async function seedAtlasAgent(db: Db): Promise<void> {
   const tenantId = await ensureDefaultTenantId(db);
@@ -81,8 +82,6 @@ async function stopServer(server: Server): Promise<void> {
 }
 
 describe('POST /api/v1/setup/onboarding/skip', () => {
-  // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
-  // SQLite and on PostgreSQL.
   beforeEach(async () => {
     const db = await setupTestDb();
     await seedAtlasAgent(db);

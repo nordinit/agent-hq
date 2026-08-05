@@ -1,38 +1,21 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import { createNotificationRecord } from '../lib/notifications';
 import settingsRouter from './settings';
 
 let tempDir: string;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-notifications-'));
-  process.env.AGENT_HQ_DB_PATH = path.join(tempDir, 'agent-hq-test.db');
   const db = getDb();
-  await db.exec(`
-    CREATE TABLE app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE tenants (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      is_default INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    INSERT INTO tenants (id, name, slug, is_default)
-    VALUES (1, 'Default Tenant', 'default', 1), (5, 'Tenant 5', 'tenant-5', 0);
-  `);
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1), (5, 'Tenant Five', 'tenant-five', 0)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
 }
 
 async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
@@ -58,17 +41,16 @@ async function stopTestServer(server: Server): Promise<void> {
 async function setActiveTenantIdForTest(tenantId: number): Promise<void> {
   await getDb().run(`
     INSERT INTO app_settings (key, value, updated_at)
-    VALUES ('active_tenant_id', ?, datetime('now'))
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+    VALUES ('active_tenant_id', ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
   `, String(tenantId));
 }
 
 describe('settings notification preferences', () => {
   beforeEach(async () => await resetDb());
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

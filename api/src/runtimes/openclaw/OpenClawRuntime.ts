@@ -523,9 +523,8 @@ export class OpenClawRuntime implements AgentRuntime {
 
       const now = nowTimestamp();
       await db.run(`
-        INSERT OR IGNORE INTO chat_messages (id, agent_id, instance_id, ${identityColumnSql}role, content, timestamp, event_type, event_meta)
-        VALUES (?, ?, ?, ${identityValueSql}'user', ?, ?, 'text', '{}')
-      `, `oc-user-${params.instanceId}`, agentId, params.instanceId, ...identityValues, promptContent, now);
+        INSERT INTO chat_messages (id, agent_id, instance_id, ${identityColumnSql}role, content, timestamp, event_type, event_meta)
+        VALUES (?, ?, ?, ${identityValueSql}'user', ?, ?, 'text', '{}') ON CONFLICT DO NOTHING`, `oc-user-${params.instanceId}`, agentId, params.instanceId, ...identityValues, promptContent, now);
       return agentId;
     } catch (err) {
       console.warn(

@@ -1,88 +1,47 @@
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import modelRoutingRouter from './model-routing';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
 import { ensureTenantSchema } from '../lib/tenantContext';
 
 let tempDir: string;
 let dbPath: string;
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   fs.rmSync(tempDir, { recursive: true, force: true });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-routing-'));
   dbPath = path.join(tempDir, 'agent-hq-test.db');
-  process.env.AGENT_HQ_DB_PATH = dbPath;
 
   const db = getDb();
-  await db.exec(`
-    CREATE TABLE projects (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE sprints (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER,
-      name TEXT NOT NULL,
-      sprint_type TEXT,
-      status TEXT NOT NULL DEFAULT 'active'
-    );
-
-    CREATE TABLE sprint_types (
-      key TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      is_system INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE story_point_model_routing (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER,
-      sprint_id INTEGER,
-      sprint_type TEXT,
-      max_points INTEGER NOT NULL,
-      provider TEXT,
-      model TEXT NOT NULL,
-      fallback_model TEXT,
-      max_turns INTEGER,
-      max_budget_usd REAL,
-      thinking_level TEXT,
-      fast_mode INTEGER,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      label TEXT,
-      updated_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE provider_config (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT UNIQUE NOT NULL,
-      display_name TEXT NOT NULL,
-      status TEXT NOT NULL,
-      config TEXT NOT NULL DEFAULT '{}',
-      last_validated_at TEXT,
-      validation_error TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    INSERT INTO provider_config (slug, display_name, status)
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
+  await db.run(`
+    INSERT INTO provider_config (tenant_id, slug, display_name, status)
     VALUES
-      ('anthropic', 'Anthropic', 'connected'),
-      ('openai', 'OpenAI', 'connected'),
-      ('openai-codex', 'OpenAI Codex (OAuth)', 'connected'),
-      ('minimax', 'MiniMax', 'connected');
-
-    INSERT INTO projects (id, name) VALUES (1, 'Agent HQ'), (2, 'Other');
-    INSERT INTO sprint_types (key, name) VALUES ('dev', 'Development'), ('generic', 'Generic');
-    INSERT INTO sprints (id, project_id, name, sprint_type) VALUES (10, 1, 'Enhancements', 'dev'), (11, 1, 'Bugs', 'dev'), (20, 2, 'Other Sprint', 'generic');
+      (1, 'anthropic', 'Anthropic', 'connected'),
+      (1, 'openai', 'OpenAI', 'connected'),
+      (1, 'openai-codex', 'OpenAI Codex (OAuth)', 'connected'),
+      (1, 'minimax', 'MiniMax', 'connected')
+  `);
+  await db.run(`
+    INSERT INTO projects (id, tenant_id, name)
+    VALUES (1, 1, 'Agent HQ'), (2, 1, 'Other')
+  `);
+  await db.run(`
+    INSERT INTO sprint_types (tenant_id, key, name)
+    VALUES (1, 'dev', 'Development'), (1, 'generic', 'Generic')
+  `);
+  await db.run(`
+    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+    VALUES
+      (10, 1, 1, 'Enhancements', 'dev'),
+      (11, 1, 1, 'Bugs', 'dev'),
+      (20, 1, 2, 'Other Sprint', 'generic')
   `);
 }
 
@@ -113,9 +72,8 @@ describe('model-routing aliases', () => {
     await resetDb();
   });
 
-  afterEach(() => {
-    closeDb();
-    delete process.env.AGENT_HQ_DB_PATH;
+  afterEach(async () => {
+    await teardownTestDb();
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -139,8 +97,8 @@ describe('model-routing aliases', () => {
   it('lists serialized story point aliases for existing rules', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, fallback_model, thinking_level, fast_mode, label)
-      VALUES (1, NULL, 3, 'anthropic', 'claude-sonnet-4-5', NULL, 'low', 0, 'small')
+      INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, max_points, provider, model, fallback_model, thinking_level, fast_mode, label)
+      VALUES (1, 1, NULL, 3, 'anthropic', 'claude-sonnet-4-5', NULL, 'low', 0, 'small')
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -517,8 +475,8 @@ describe('model-routing aliases', () => {
   it('preserves nullable fields when updating only the provider', async () => {
     const db = getDb();
     const inserted = await db.run(`
-      INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, fallback_model, thinking_level, label)
-      VALUES (1, NULL, 4, 'openai', 'openai/gpt-5.5', 'openai/gpt-5.4', 'high', 'Medium - OpenAI GPT-5.5')
+      INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, max_points, provider, model, fallback_model, thinking_level, label)
+      VALUES (1, 1, NULL, 4, 'openai', 'openai/gpt-5.5', 'openai/gpt-5.4', 'high', 'Medium - OpenAI GPT-5.5')
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -544,10 +502,11 @@ describe('model-routing aliases', () => {
   it('blocks cross-tenant by-id reads, updates, deletes, and foreign scopes', async () => {
     const db = getDb();
     const defaultTenantId = await ensureTenantSchema(db);
-    const betaTenantId = Number((await db.run(`
-      INSERT INTO tenants (name, slug, is_default)
-      VALUES ('Beta Tenant', 'beta-tenant', 0)
-    `)).lastInsertId);
+    const betaTenantId = 2;
+    await db.run(`
+      INSERT INTO tenants (id, name, slug, is_default)
+      VALUES (2, 'Beta Tenant', 'beta-tenant', 0)
+    `);
     await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
     await db.run(`UPDATE sprints SET tenant_id = ? WHERE id = 20`, betaTenantId);
     const inserted = await db.run(`

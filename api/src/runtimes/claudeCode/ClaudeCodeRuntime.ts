@@ -496,7 +496,7 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       await db.run(
         `
         UPDATE job_instances
-        SET response = json_set(COALESCE(response, '{}'), '$.runtimeEnd', json(?))
+        SET response = jsonb_set((COALESCE(response, '{}'))::jsonb, '{runtimeEnd}', (?)::jsonb)
         WHERE id = ?
       `,
         JSON.stringify(event),
@@ -594,8 +594,8 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       )) as { agent_id?: number; tenant_id?: number | null } | undefined;
       return { agentId: row?.agent_id ?? null, tenantId: row?.tenant_id ?? null };
     } catch {
-      // Older SQLite test databases may lack tenant_id; the agent id alone is
-      // enough to run, so degrade rather than fail the dispatch.
+      // Narrow compatibility fallback for minimal runtime fixtures. A migrated production
+      // PostgreSQL database always has tenant_id and is verified before dispatch starts.
       try {
         const row = (await db.get(
           'SELECT agent_id FROM job_instances WHERE id = ?',

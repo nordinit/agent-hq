@@ -3,57 +3,18 @@ import type { Server } from 'http';
 import toolsRouter, { agentToolsRouter } from './tools';
 import skillsRouter from './skills';
 import agentsRouter from './agents';
-import { closeDb, getDb } from '../db/client';
-import { ensureToolRegistryTables } from '../db/schema';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { fetchAgentTools } from '../runtimes/toolInjection';
 
 async function resetDb(): Promise<void> {
-  closeDb();
+  await setupTestDb();
   const db = getDb();
   await db.exec(`
-    CREATE TABLE app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE tenants (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      is_default INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
     INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Tenant A', 'tenant-a', 1);
     INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Tenant B', 'tenant-b', 0);
     INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1');
     INSERT INTO app_settings (key, value) VALUES ('active_tenant_id', '1');
-
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      skill_names TEXT,
-      workspace_path TEXT,
-      runtime_type TEXT,
-      hooks_url TEXT,
-      openclaw_agent_id TEXT
-    );
-  `);
-  ensureToolRegistryTables();
-  await db.exec(`
-    CREATE TABLE skills (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tenant_id INTEGER NOT NULL DEFAULT 1,
-      name TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      content TEXT NOT NULL DEFAULT '',
-      source TEXT NOT NULL DEFAULT 'atlas' CHECK(source IN ('atlas','workspace','system')),
-      fs_path TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(tenant_id, name)
-    );
   `);
 }
 
@@ -85,29 +46,20 @@ async function stopTestServer(server: Server): Promise<void> {
 
 describe('tenant-owned skills and tools capability inventory', () => {
   beforeEach(resetDb);
-  afterEach(closeDb);
+  afterEach(teardownTestDb);
 
   it('allows duplicate tool slugs across tenants while preserving per-tenant uniqueness', async () => {
     const db = getDb();
     await db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Search', 'repo_search', 'bash', 'echo a')`);
     await expect(db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (2, 'B Search', 'repo_search', 'bash', 'echo b')`)).resolves.toBeDefined();
-    // Asserted via the rejection VALUE, not .rejects.toThrow().
-    //
-    // better-sqlite3 is a native addon: a SqliteError raised from the SECOND test file
-    // loaded in a jest worker fails `instanceof Error`, because the addon keeps the
-    // SqliteError constructor registered by the FIRST module-registry load. jest's toThrow
-    // only inspects the rejection when it classifies it as an Error, so otherwise it reports
-    // "Received function did not throw" — even though the promise DID reject with exactly
-    // the right message. That makes toThrow order-dependent here: whichever file runs second
-    // fails. Matching on the message is realm-independent and asserts the same thing.
     await expect(
       db.run(`INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body) VALUES (1, 'A Duplicate', 'repo_search', 'bash', 'echo dup')`)
-    ).rejects.toMatchObject({ message: expect.stringContaining('UNIQUE constraint failed') });
+    ).rejects.toMatchObject({ code: '23505' });
   });
 
   it('does not materialize stale cross-tenant tool assignments', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO agents (id, tenant_id, name, openclaw_agent_id) VALUES (10, 1, 'Agent A', 'agent-a')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id) VALUES (10, 1, 'Agent A', 'agent:agent-a:main', 'agent-a')`);
     await db.run(`INSERT INTO tools (id, tenant_id, name, slug, implementation_type, implementation_body) VALUES (20, 1, 'Tenant A Tool', 'tenant_tool', 'bash', 'echo a')`);
     await db.run(`INSERT INTO tools (id, tenant_id, name, slug, implementation_type, implementation_body) VALUES (21, 2, 'Tenant B Tool', 'tenant_tool', 'bash', 'echo b')`);
     await db.run(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (10, 20)`);
@@ -120,8 +72,8 @@ describe('tenant-owned skills and tools capability inventory', () => {
 
   it('keeps tool list/read/assign/materialized behavior scoped to the active tenant', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO agents (id, tenant_id, name, openclaw_agent_id) VALUES (10, 1, 'Agent A', 'agent-a')`);
-    await db.run(`INSERT INTO agents (id, tenant_id, name, openclaw_agent_id) VALUES (11, 2, 'Agent B', 'agent-b')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id) VALUES (10, 1, 'Agent A', 'agent:agent-a:main', 'agent-a')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id) VALUES (11, 2, 'Agent B', 'agent:agent-b:main', 'agent-b')`);
 
     const { server, baseUrl } = await startTestServer();
     try {
@@ -251,8 +203,8 @@ describe('tenant-owned skills and tools capability inventory', () => {
 
   it('keeps agent skill assignment scoped to tenant-local skill records', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO agents (id, tenant_id, name, skill_names, openclaw_agent_id) VALUES (10, 1, 'Agent A', '[]', 'agent-a')`);
-    await db.run(`INSERT INTO agents (id, tenant_id, name, skill_names, openclaw_agent_id) VALUES (11, 2, 'Agent B', '[]', 'agent-b')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, skill_names, openclaw_agent_id) VALUES (10, 1, 'Agent A', 'agent:agent-a:main', '[]', 'agent-a')`);
+    await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, skill_names, openclaw_agent_id) VALUES (11, 2, 'Agent B', 'agent:agent-b:main', '[]', 'agent-b')`);
     await db.run(`INSERT INTO skills (id, tenant_id, name, description, content) VALUES (100, 1, 'shared-name', 'Tenant A skill', '# A')`);
     await db.run(`INSERT INTO skills (id, tenant_id, name, description, content) VALUES (200, 2, 'shared-name', 'Tenant B skill', '# B')`);
     await db.run(`INSERT INTO skills (id, tenant_id, name, description, content) VALUES (201, 2, 'tenant-b-only', 'Tenant B only', '# B only')`);

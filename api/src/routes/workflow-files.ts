@@ -5,13 +5,13 @@ import fs from 'fs';
 import { getDb } from '../db/client';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { nowTimestamp } from '../lib/timestamps';
+import { resolveUploadsRoot } from '../config';
 
 const router = Router({ mergeParams: true });
 
-const REPO_ROOT = path.resolve(__dirname, '../../..');
 function getUploadsBase(): string {
   return process.env.AGENT_HQ_WORKFLOW_UPLOADS_DIR
-    ?? path.join(REPO_ROOT, 'uploads', 'workflows');
+    ?? path.join(resolveUploadsRoot(), 'workflows');
 }
 
 const storage = multer.diskStorage({

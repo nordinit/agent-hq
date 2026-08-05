@@ -1,5 +1,4 @@
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 function parseEnvFile(filePath) {
@@ -27,7 +26,6 @@ function parseEnvFile(filePath) {
 const repoRoot = __dirname;
 const rootEnv = parseEnvFile(path.join(repoRoot, '.env'));
 const env = { ...rootEnv, ...process.env };
-const dataDir = env.AGENT_HQ_DATA_DIR || path.join(os.homedir(), '.agent-hq');
 const apiPort = env.PORT || env.AGENT_HQ_API_PORT || '3501';
 const uiPort = env.UI_PORT || env.AGENT_HQ_UI_PORT || '3500';
 const nodeBin = [
@@ -47,14 +45,6 @@ module.exports = {
       env: {
         NODE_ENV: env.NODE_ENV || 'production',
         PORT: apiPort,
-        AGENT_HQ_DB_PATH: env.AGENT_HQ_DB_PATH || path.join(dataDir, 'agent-hq.db'),
-        // Selects the database engine. db/client.ts chooses PostgreSQL purely on this being
-        // present, so setting it in .env cuts over and commenting it out reverts — which is why
-        // AGENT_HQ_DB_PATH above is deliberately left set either way: it keeps the SQLite file
-        // one line away from being live again, with no config surgery under pressure.
-        //
-        // Nothing is inherited here: pm2 only forwards the keys named in this block, so a
-        // DATABASE_URL sitting in the environment or in .env has no effect until it is listed.
         DATABASE_URL: env.DATABASE_URL,
         OPENCLAW_GATEWAY_URL: env.OPENCLAW_GATEWAY_URL,
         OPENCLAW_GATEWAY_TOKEN: env.OPENCLAW_GATEWAY_TOKEN,
@@ -62,6 +52,7 @@ module.exports = {
         OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,
         OPENCLAW_BIN: env.OPENCLAW_BIN,
         WORKSPACE_ROOT: env.WORKSPACE_ROOT,
+        AGENT_HQ_UPLOADS_DIR: env.AGENT_HQ_UPLOADS_DIR || path.join(repoRoot, 'uploads'),
         TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID: env.TELEGRAM_CHAT_ID,
         NODE_TLS_REJECT_UNAUTHORIZED: env.NODE_TLS_REJECT_UNAUTHORIZED,

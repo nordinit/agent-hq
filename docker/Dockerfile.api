@@ -1,79 +1,30 @@
-###############################################################################
-# Dockerfile.api — Production image for the Agent HQ API
-#
-# Stack: Node.js 20 LTS (Alpine), TypeScript compiled to dist/
-# Data:  SQLite database at /data/agent-hq.db (mount a volume here)
-# Port:  3501 (default; override via PORT env var)
-#
-# ── Build ─────────────────────────────────────────────────────────────────────
-#   docker build -f docker/Dockerfile.api -t agent-hq-api .
-#
-# ── Run ───────────────────────────────────────────────────────────────────────
-#   docker run -p 3501:3501 \
-#     -v agent-hq-data:/data \
-#     -e NODE_ENV=production \
-#     agent-hq-api
-#
-# ── Environment variables (all optional — defaults shown) ─────────────────────
-#   PORT                 Port the API listens on           (default: 3501)
-#   AGENT_HQ_DB_PATH     Full path to the SQLite DB file   (default: /data/agent-hq.db)
-#   AGENT_HQ_DATA_DIR    Directory for the DB if DB_PATH   (default: /data)
-#                        is not set (client.ts fallback)
-#   NODE_ENV             production | development           (default: production)
-###############################################################################
-
-# ── Stage 1: build ────────────────────────────────────────────────────────────
+# Alternate production API Dockerfile. Build context is the repository root.
 FROM node:20-alpine AS builder
 
-WORKDIR /build
-
-# Install dependencies first (layer-cached until package files change)
+WORKDIR /build/api
 COPY api/package.json api/package-lock.json ./
-RUN npm ci --ignore-scripts
-
-# Copy source and compile TypeScript → dist/
+RUN npm ci
 COPY api/tsconfig.json ./
-COPY api/src ./src
+COPY api/src/ ./src/
 RUN npm run build
 
-# Prune dev dependencies so only production deps go into the final image
-RUN npm ci --omit=dev --ignore-scripts
-
-# ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM node:20-alpine AS runtime
 
-# Create a non-root user for the API process
 RUN addgroup -S agenthq && adduser -S agenthq -G agenthq
+WORKDIR /app/api
 
-WORKDIR /app
+COPY api/package.json api/package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=builder --chown=agenthq:agenthq /build/api/dist ./dist
+COPY --chown=agenthq:agenthq db/ /app/db/
+COPY --chown=agenthq:agenthq agent-contracts/ /app/agent-contracts/
+COPY --chown=agenthq:agenthq skills/create-agent/SKILL.md /app/skills/create-agent/SKILL.md
+RUN mkdir -p /app/workspaces /app/uploads \
+    && chown agenthq:agenthq /app/workspaces /app/uploads
 
-# Copy compiled output + production node_modules from builder
-COPY --from=builder /build/dist ./dist
-COPY --from=builder /build/node_modules ./node_modules
-COPY --from=builder /build/package.json ./
-COPY skills/create-agent/SKILL.md ./skills/create-agent/SKILL.md
-
-# Create the data directory and hand ownership to the runtime user.
-# This is the recommended mount point for the SQLite volume.
-RUN mkdir -p /data && chown agenthq:agenthq /data
-
-# Declare /data as a volume so Docker (and compose) knows it should be
-# persisted externally. An explicit -v or named volume at runtime will
-# shadow this, which is the expected production usage.
-VOLUME ["/data"]
-
-# Wire default environment
 ENV NODE_ENV=production \
-    PORT=3501 \
-    AGENT_HQ_DB_PATH=/data/agent-hq.db \
-    AGENT_HQ_DATA_DIR=/data
+    PORT=3501
 
 EXPOSE 3501
-
 USER agenthq
-
-# Install or migrate the database, then start the compiled API.
-# API startup is deliberately non-mutating — it verifies the schema ledger and
-# refuses to serve a missing or stale database, so the container bootstraps the
-# schema itself before launch (idempotent; a no-op when already up to date).
-CMD ["sh", "-c", "node dist/db/migrate.js && node dist/index.js"]
+CMD ["node", "dist/index.js"]

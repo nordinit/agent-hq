@@ -16,7 +16,7 @@ flowchart TB
       Watchdog["Watchdog<br/>stale-run recovery"]
     end
 
-    DB[("SQLite<br/>tasks · agents · instances · transcripts")]
+    DB[("PostgreSQL 17<br/>tasks · agents · instances · transcripts")]
 
     subgraph Runtimes["Agent runtimes"]
       OpenClaw["OpenClaw<br/>local hooks + chat"]
@@ -43,7 +43,7 @@ flowchart TB
 - `Reconciler`: periodically finds tasks that are eligible to move forward and hands them to the dispatcher.
 - `Dispatcher`: resolves the correct agent from routing rules, creates job instances, materializes runtime context, and launches the run.
 - `Watchdog`: monitors stale or orphaned runs and applies recovery behavior.
-- `SQLite`: the durable system of record for projects, tasks, agents, instances, routing, artifacts, and transcripts.
+- `PostgreSQL`: the durable system of record for projects, tasks, agents, instances, routing, artifacts, and transcripts. Numbered migrations are the only schema authority.
 
 ## Runtime model
 
@@ -74,7 +74,7 @@ sequenceDiagram
     participant Reconciler
     participant Dispatcher
     participant Runtime as Agent runtime
-    participant DB as SQLite
+    participant DB as PostgreSQL
 
     User->>UI: Create task or move task to ready
     UI->>API: Persist task change

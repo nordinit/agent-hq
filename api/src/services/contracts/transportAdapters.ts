@@ -117,7 +117,7 @@ export interface ContractPlaceholderDefinition {
 export const CONTRACT_PLACEHOLDER_DEFINITIONS: ContractPlaceholderDefinition[] = [
   { key: 'baseUrl', description: 'Agent HQ base URL retained for transport metadata; lifecycle writes should use Agent HQ MCP tools.' },
   { key: 'instanceId', description: 'Current dispatched run instance ID for MCP lifecycle writes and run-specific tracing.' },
-  { key: 'durableRunId', description: 'Immutable run identifier that remains unique across SQLite backup restores and should be used for chat/log correlation.' },
+  { key: 'durableRunId', description: 'Immutable run identifier that remains unique across database restores and should be used for chat/log correlation.' },
   { key: 'taskId', description: 'Current task ID, used when posting outcomes or attaching review, QA, or deploy evidence.' },
   { key: 'sessionKey', description: 'OpenClaw session key for this run, useful when a contract needs to reference or resume the active session.' },
   { key: 'agentSlug', description: 'Canonical slug of the assigned agent, typically used in changed_by fields and machine-authored records.' },

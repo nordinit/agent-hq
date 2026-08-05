@@ -7,15 +7,18 @@ import { saveRuntimeConnectionConfig } from '../lib/runtimeOnboarding';
 import setupRouter from './setup';
 import sprintsRouter from './sprints';
 
-/**
- * The tenant every row this file seeds by hand belongs to.
- *
- * getDefaultTenantId() is what bootstraps it: setupTestDb() hands back an EMPTY database, so on
- * PostgreSQL there is no tenants row until something creates one, and every table seeded here
- * (provider_config, sprint_type_task_types, task_field_schemas) has a real foreign key to it.
- * The routes reach the same code through resolveTenantIdFromRequest(), so this only moves the
- * bootstrap earlier — it does not seed anything a request would not have seeded itself.
- */
+async function seedInstalledTenant(): Promise<void> {
+  const db = getDb();
+  const tenantId = Number((await db.run(`
+    INSERT INTO tenants (name, slug, is_default)
+    VALUES ('Agent HQ', 'agent-hq', 1)
+  `)).lastInsertId);
+  await db.run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)
+  `, String(tenantId), String(tenantId));
+}
+
 async function tenantId(): Promise<number> {
   return await getDefaultTenantId(getDb());
 }
@@ -51,7 +54,10 @@ async function seedCompatibility(): Promise<void> {
 }
 
 describe('starter template setup API', () => {
-  beforeEach(async () => { await setupTestDb(); });
+  beforeEach(async () => {
+    await setupTestDb();
+    await seedInstalledTenant();
+  });
   afterEach(async () => { await teardownTestDb(); });
 
   it('lists only MVP starter templates', async () => {

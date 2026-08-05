@@ -20,8 +20,7 @@ const AGENT_ID = 7;
  * tasks.sprint_id is NOT NULL and foreign-keyed to sprints, so a task cannot be seeded without
  * one, and sprints in turn needs a project and a tenant.
  *
- * Ids are deliberately far from 1: on SQLite the fixture builds the schema with initSchema, which
- * seeds its own default tenant and project, and low explicit ids would collide with them.
+ * Fixed high ids keep the fixture isolated from the domain ids used by its assertions.
  */
 async function seedTenantScope(db: Db): Promise<void> {
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, 'Semantic Handoff', 'semantic-handoff', 0)`, TENANT_ID);
@@ -39,7 +38,7 @@ async function seedTenantScope(db: Db): Promise<void> {
 async function insertTask(db: Db, taskId: number, status: string): Promise<void> {
   await db.run(`
     INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id, updated_at)
-    VALUES (?, ?, ?, ?, 'Task', ?, ?, NULL, datetime('now'))
+    VALUES (?, ?, ?, ?, 'Task', ?, ?, NULL, CURRENT_TIMESTAMP)
   `, taskId, TENANT_ID, PROJECT_ID, SPRINT_ID, status, AGENT_ID);
 }
 
@@ -66,7 +65,7 @@ async function seedTaskAndInstance(db: Db, options?: {
 
   await db.run(`
     INSERT INTO job_instances (id, task_id, agent_id, status, session_key, runtime_ended_at, started_at)
-    VALUES (?, ?, ?, ?, NULL, ?, datetime('now'))
+    VALUES (?, ?, ?, ?, NULL, ?, CURRENT_TIMESTAMP)
   `, instanceId, instanceTaskId, AGENT_ID, options?.instanceStatus ?? 'running', options?.runtimeEndedAt ?? null);
 
   // tasks.active_instance_id and job_instances.task_id reference each other, so the link is made
@@ -80,8 +79,6 @@ describe('closeActiveInstanceAfterSemanticHandoff', () => {
   let db: Db;
 
   beforeEach(async () => {
-    // setupTestDb() picks the engine from AGENT_HQ_TEST_PG_URL, so this file runs unchanged on
-    // SQLite and on PostgreSQL, against the real schema either way.
     db = await setupTestDb();
     await seedTenantScope(db);
   });

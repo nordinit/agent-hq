@@ -43,9 +43,9 @@ describe('getDashboardTokenUsageLast24h', () => {
     await db.run(`
       INSERT INTO job_instances (agent_id, created_at, token_input, token_output, token_total)
       VALUES
-        (?, datetime('now', '-23 hours'), 10, 15, NULL),
-        (?, datetime('now', '-24 hours', '-1 minute'), 100, 200, NULL),
-        (?, datetime('now', '-2 hours'), 1, 2, 50)
+        (?, to_char(now() AT TIME ZONE 'utc' - interval '23 hours', 'YYYY-MM-DD HH24:MI:SS'), 10, 15, NULL),
+        (?, to_char(now() AT TIME ZONE 'utc' - interval '24 hours 1 minute', 'YYYY-MM-DD HH24:MI:SS'), 100, 200, NULL),
+        (?, to_char(now() AT TIME ZONE 'utc' - interval '2 hours', 'YYYY-MM-DD HH24:MI:SS'), 1, 2, 50)
     `, agentId, agentId, agentId);
 
     expect(await getDashboardTokenUsageLast24h(db)).toBe(75);
@@ -57,9 +57,9 @@ describe('getDashboardTokenUsageLast24h', () => {
         agent_id, created_at, completed_at, runtime_ended_at, token_input, token_output, token_total
       )
       VALUES
-        (?, datetime('now', '-25 hours'), datetime('now', '-1 hour'), datetime('now', '-1 hour'), 20, 30, NULL),
-        (?, datetime('now', '-25 hours'), datetime('now', '-25 hours'), datetime('now', '-25 hours'), 100, 200, NULL),
-        (?, datetime('now', '-26 hours'), NULL, datetime('now', '-2 hours'), NULL, NULL, 75)
+        (?, to_char(now() AT TIME ZONE 'utc' - interval '25 hours', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc' - interval '1 hour', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc' - interval '1 hour', 'YYYY-MM-DD HH24:MI:SS'), 20, 30, NULL),
+        (?, to_char(now() AT TIME ZONE 'utc' - interval '25 hours', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc' - interval '25 hours', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc' - interval '25 hours', 'YYYY-MM-DD HH24:MI:SS'), 100, 200, NULL),
+        (?, to_char(now() AT TIME ZONE 'utc' - interval '26 hours', 'YYYY-MM-DD HH24:MI:SS'), NULL, to_char(now() AT TIME ZONE 'utc' - interval '2 hours', 'YYYY-MM-DD HH24:MI:SS'), NULL, NULL, 75)
     `, agentId, agentId, agentId);
 
     expect(await getDashboardTokenUsageLast24h(db)).toBe(125);
@@ -76,10 +76,10 @@ describe('getDashboardTokenUsageLast24h', () => {
     await db.run(`
       INSERT INTO job_instances (task_id, agent_id, created_at, token_input, token_output, token_total)
       VALUES
-        (?, ?, datetime('now', '-1 hour'), 5, 5, NULL),
-        (?, ?, datetime('now', '-1 hour'), 100, 100, NULL),
-        (NULL, ?, datetime('now', '-1 hour'), 7, 8, NULL),
-        (NULL, ?, datetime('now', '-1 hour'), 200, 200, NULL)
+        (?, ?, to_char(now() AT TIME ZONE 'utc' - interval '1 hour', 'YYYY-MM-DD HH24:MI:SS'), 5, 5, NULL),
+        (?, ?, to_char(now() AT TIME ZONE 'utc' - interval '1 hour', 'YYYY-MM-DD HH24:MI:SS'), 100, 100, NULL),
+        (NULL, ?, to_char(now() AT TIME ZONE 'utc' - interval '1 hour', 'YYYY-MM-DD HH24:MI:SS'), 7, 8, NULL),
+        (NULL, ?, to_char(now() AT TIME ZONE 'utc' - interval '1 hour', 'YYYY-MM-DD HH24:MI:SS'), 200, 200, NULL)
     `,
       // The task owns the scope when there is one, so an out-of-scope agent on an in-scope task
       // still counts — and an in-scope agent on an out-of-scope task does not.

@@ -1,31 +1,16 @@
 import fs from 'fs';
 import path from 'path';
-import { describe, expect, it } from '@jest/globals';
 
-/**
- * Structural guard on what "converted to dual-engine" is allowed to mean.
- *
- * The trap this exists to close: running the suite with AGENT_HQ_TEST_PG_URL set and seeing it green
- * is NOT evidence that anything executed against PostgreSQL. A file that still calls initSchema(),
- * or still sets AGENT_HQ_DB_PATH itself, builds SQLite whatever that variable says — and then
- * passes. Two conversion attempts were abandoned after exactly this was spotted, both reporting
- * "postgres: passed" while never having reached PostgreSQL.
- *
- * A runtime assertion cannot catch it, because such a file never routes its database work through
- * setupTestDb() in the first place. So the criterion has to be structural: if a file opts into the
- * dual-engine helper, that helper must be the ONLY thing deciding its engine.
- */
 const TEST_ROOT = path.join(__dirname, '..');
+const SQLITE_EXCEPTION = path.join(TEST_ROOT, 'lib', 'openclawOAuthProfiles.test.ts');
+const SQLITE_LINT_FIXTURE = path.join(TEST_ROOT, 'tooling', 'sqlPortabilityLint.test.ts');
+const POSTGRES_DDL_FIXTURES = new Set([
+  path.join(TEST_ROOT, 'db', 'adapter', 'adapter.postgres.test.ts'),
+  path.join(TEST_ROOT, 'db', 'pg', 'migrationVerification.test.ts'),
+]);
 
-/**
- * Strips comments before matching.
- *
- * Without this the guard fires on prose. These conversions are heavily commented precisely
- * BECAUSE of the initSchema seeding difference, so phrases like "on SQLite initSchema() seeds a
- * default tenant" appear all over them — and a naive search reported six clean files as offenders.
- */
-function code(src: string): string {
-  return src
+function code(source: string): string {
+  return source
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .split('\n')
     .map((line) => line.replace(/\/\/.*$/, ''))
@@ -40,53 +25,38 @@ function testFilesUnder(dir: string): string[] {
   });
 }
 
-describe('dual-engine test conversion', () => {
-  const converted = testFilesUnder(TEST_ROOT)
-    .map((file) => ({ file, src: fs.readFileSync(file, 'utf8') }))
-    .filter(({ src }) => src.includes('setupTestDb'))
-    // This file talks ABOUT the helper rather than using it.
-    .filter(({ file }) => path.basename(file) !== 'testDb.test.ts');
+describe('PostgreSQL-only test suite', () => {
+  const tests = testFilesUnder(TEST_ROOT)
+    .filter((file) => path.basename(file) !== 'testDb.test.ts')
+    .map((file) => ({ file, body: code(fs.readFileSync(file, 'utf8')) }));
 
-  it('has at least one converted file, so this guard cannot pass vacuously', () => {
-    expect(converted.length).toBeGreaterThan(0);
-  });
-
-  it('lets setupTestDb be the only thing that chooses the engine', () => {
-    const offenders = converted
-      .filter(({ src }) => {
-        const body = code(src);
-        // An initSchema() call guarded by usingPostgres() is legitimate: the SQLite branch may
-        // still want the seeding, so long as the PostgreSQL branch does something else.
-        //
-        // describeSqliteOnly counts as that guard, because it IS that guard —
-        // `usingPostgres() ? describe.skip : describe`, exported from testDb.ts for exactly this
-        // case. A conversion that correctly quarantines its PRAGMA-driven legacy tests in a
-        // describeSqliteOnly block was being reported as an offender for using the helper
-        // provided for the purpose, which trains people to work around the lint rather than heed it.
-        //
-        // This check is FILE-level, not statement-level, which is a real limitation: a file
-        // containing a describeSqliteOnly block anywhere is trusted about initSchema and
-        // AGENT_HQ_DB_PATH everywhere. Making it precise means parsing, and a lint nobody can
-        // read is worse than a coarse one. It catches the case it was written for — a file
-        // converted in name only — and the hard invariant in setupTestDb() catches the rest at
-        // runtime, by throwing when a PostgreSQL run gets any other dialect.
-        const guarded = /usingPostgres\s*\(/.test(body) || /describeSqliteOnly\s*\(/.test(body);
-        const unguardedInitSchema = /\binitSchema\s*\(/.test(body) && !guarded;
-        const unguardedDbPath = /AGENT_HQ_DB_PATH\s*=/.test(body) && !guarded;
-        return unguardedInitSchema || unguardedDbPath;
-      })
+  it('has no Agent HQ SQLite bootstrap or adapter usage', () => {
+    const offenders = tests
+      .filter(({ file, body }) => ![SQLITE_EXCEPTION, SQLITE_LINT_FIXTURE].includes(file) && (
+        /\binitSchema\s*\(/.test(body)
+        || /AGENT_HQ_DB_PATH\s*=/.test(body)
+        || /\bSqliteAdapter\b/.test(body)
+        || /from\s+['"]better-sqlite3['"]/.test(body)
+        || /\bnew\s+Database\s*\(/.test(body)
+      ))
       .map(({ file }) => path.relative(TEST_ROOT, file));
 
-    // Either of those pins the file to SQLite, so a PostgreSQL run of it proves nothing.
     expect(offenders).toEqual([]);
   });
 
-  it('does not let a converted file set DATABASE_URL for itself', () => {
-    // setupTestDb owns DATABASE_URL: it points it at the per-worker database and clears it in
-    // teardown so the next file in the worker is unaffected. A file setting it by hand would
-    // escape that lifecycle and leak an engine choice into unrelated tests.
-    const offenders = converted
-      .filter(({ src }) => /process\.env\.DATABASE_URL\s*=/.test(code(src)))
+  it('keeps the external OpenClaw SQLite reader covered as the sole exception', () => {
+    const externalReader = tests.find(({ file }) => file === SQLITE_EXCEPTION);
+    expect(externalReader?.body).toMatch(/from\s+['"]better-sqlite3['"]/);
+    expect(externalReader?.body).toMatch(/\bnew\s+Database\s*\(/);
+  });
+
+  it('does not replace the migrated schema with hand-built per-suite DDL', () => {
+    const offenders = tests
+      .filter(({ file, body }) => (
+        !POSTGRES_DDL_FIXTURES.has(file)
+        && ![SQLITE_EXCEPTION, SQLITE_LINT_FIXTURE].includes(file)
+        && /\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX)\b/i.test(body)
+      ))
       .map(({ file }) => path.relative(TEST_ROOT, file));
 
     expect(offenders).toEqual([]);

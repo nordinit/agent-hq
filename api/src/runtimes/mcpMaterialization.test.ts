@@ -1,7 +1,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { closeDb, getDb } from '../db/client';
+import { getDb } from '../db/client';
+import { setupTestDb, teardownTestDb } from '../db/testDb';
 import {
   ensureOpenClawMcpWorkspaceBundleEnabled,
   materializeAgentMcpConfig,
@@ -14,80 +15,40 @@ import {
 const ORIGINAL_OPENCLAW_CONFIG_PATH = process.env.OPENCLAW_CONFIG_PATH;
 const ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
 
-function resetDb(): void {
-  closeDb();
-}
-
 function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+let registryFixtureReady = false;
+
 async function createRegistryTables(): Promise<void> {
-  await getDb().exec(`
-    CREATE TABLE agents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT '',
-      session_key TEXT NOT NULL DEFAULT '',
-      openclaw_agent_id TEXT,
-      runtime_type TEXT,
-      workspace_path TEXT
-    );
-    CREATE TABLE tools (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      description TEXT NOT NULL DEFAULT '',
-      implementation_type TEXT NOT NULL DEFAULT 'bash',
-      implementation_body TEXT NOT NULL DEFAULT '',
-      input_schema TEXT NOT NULL DEFAULT '{}',
-      permissions TEXT NOT NULL DEFAULT 'read_only',
-      tags TEXT NOT NULL DEFAULT '[]',
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE agent_tool_assignments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      agent_id INTEGER NOT NULL,
-      tool_id INTEGER NOT NULL,
-      overrides TEXT NOT NULL DEFAULT '{}',
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE mcp_servers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL UNIQUE,
-      command TEXT NOT NULL,
-      args TEXT NOT NULL DEFAULT '[]',
-      env TEXT NOT NULL DEFAULT '{}',
-      cwd TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE agent_mcp_assignments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      agent_id INTEGER NOT NULL,
-      mcp_server_id INTEGER NOT NULL,
-      overrides TEXT NOT NULL DEFAULT '{}',
-      enabled INTEGER NOT NULL DEFAULT 1
-    );
+  if (registryFixtureReady) return;
+  await setupTestDb();
+  registryFixtureReady = true;
+  await getDb().run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+  await getDb().run(`
+    INSERT INTO app_settings (key, value)
+    VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
   `);
 }
 
 describe('materializeAgentMcpConfig', () => {
   beforeEach(() => {
-    resetDb();
+    registryFixtureReady = false;
     process.env.OPENCLAW_CONFIG_PATH = path.join(makeTempDir('agent-hq-openclaw-config-'), 'openclaw.json');
     process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = '1';
   });
-  afterEach(() => {
+  afterEach(async () => {
     if (ORIGINAL_OPENCLAW_CONFIG_PATH === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
     else process.env.OPENCLAW_CONFIG_PATH = ORIGINAL_OPENCLAW_CONFIG_PATH;
     if (ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH === undefined) delete process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
     else process.env.AGENT_HQ_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH = ORIGINAL_DISABLE_OPENCLAW_PLUGIN_REGISTRY_REFRESH;
-    resetDb();
+    if (registryFixtureReady) await teardownTestDb();
   });
 
   it('does not materialize assigned capability tools as an OpenClaw MCP bridge', async () => {
     await createRegistryTables();
-    await getDb().run(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Agent', 'agent:test-1:main')`);
     await getDb().run(`INSERT INTO tools (id, name, slug, implementation_type, implementation_body) VALUES (10, 'Tool', 'custom_tool', 'bash', 'echo ok')`);
     await getDb().run(`INSERT INTO agent_tool_assignments (agent_id, tool_id) VALUES (1, 10)`);
     const workingDirectory = makeTempDir('agent-hq-mcp-tools-');
@@ -111,9 +72,9 @@ describe('materializeAgentMcpConfig', () => {
 
   it('materializes explicitly assigned MCP servers into workspace bundle files and Codex-scoped OpenClaw config', async () => {
     await createRegistryTables();
-    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id) VALUES (1, 'Agent', 'agent:cinder-backend:main', 'cinder-backend')`);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (31, 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', '["--config","config/environments.json"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id) VALUES (1, 1, 'Agent', 'agent:cinder-backend:main', 'cinder-backend')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (31, 1, 'Lease Manager', 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', '["--config","config/environments.json"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 31)`);
     const workingDirectory = makeTempDir('agent-hq-mcp-servers-');
@@ -222,11 +183,14 @@ describe('materializeAgentMcpConfig', () => {
       { id: 103, name: 'Sales Ops', assignmentId: 79888, tools: crmToolsByRole.salesOps },
       { id: 104, name: 'Development QA', assignmentId: 79889, tools: crmToolsByRole.developmentQa },
     ];
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (40, 1, 'Agency CRM', 'agency-crm', 'node', '["crm-mcp.js"]')`);
     const effectiveToolsByRole = new Map<string, string[]>();
 
     for (const agent of agents) {
-      await getDb().run(`INSERT INTO agents (id, name) VALUES (?, ?)`, agent.id, agent.name);
+      await getDb().run(`
+        INSERT INTO agents (id, tenant_id, name, session_key)
+        VALUES (?, 1, ?, ?)
+      `, agent.id, agent.name, `agent:test-${agent.id}:main`);
       await getDb().run(`
         INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id, overrides)
         VALUES (?, ?, 40, ?)
@@ -275,8 +239,11 @@ describe('materializeAgentMcpConfig', () => {
 
   it('fails closed for non-Agent-HQ MCP assignments with missing or malformed tool allowlists', async () => {
     await createRegistryTables();
-    await getDb().run(`INSERT INTO agents (id, name) VALUES (1, 'Missing'), (2, 'Malformed')`);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]')`);
+    await getDb().run(`
+      INSERT INTO agents (id, tenant_id, name, session_key)
+      VALUES (1, 1, 'Missing', 'agent:missing:main'), (2, 1, 'Malformed', 'agent:malformed:main')
+    `);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (40, 1, 'Agency CRM', 'agency-crm', 'node', '["crm-mcp.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (1, 40, '{}')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides) VALUES (2, 40, '{"allowed_tools":"crm_search_leads"}')`);
 
@@ -304,9 +271,9 @@ describe('materializeAgentMcpConfig', () => {
 
   it('does not materialize disabled MCP assignments or disabled MCP servers', async () => {
     await createRegistryTables();
-    await getDb().run(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args, enabled) VALUES (40, 'agency-crm', 'node', '["crm-mcp.js"]', 1)`);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args, enabled) VALUES (41, 'disabled-crm', 'node', '["crm-mcp.js"]', 0)`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Agent', 'agent:test-1:main')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args, enabled) VALUES (40, 1, 'Agency CRM', 'agency-crm', 'node', '["crm-mcp.js"]', 1)`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args, enabled) VALUES (41, 1, 'Disabled CRM', 'disabled-crm', 'node', '["crm-mcp.js"]', 0)`);
     await getDb().run(`
       INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id, overrides, enabled)
       VALUES
@@ -328,8 +295,8 @@ describe('materializeAgentMcpConfig', () => {
 
   it('reuses an existing valid materialized Agent HQ MCP key for the same agent', async () => {
     await createRegistryTables();
-    await getDb().run(`INSERT INTO agents (id, name) VALUES (1, 'Agent')`);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Agent', 'agent:agent:main')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
     const workingDirectory = makeTempDir('agent-hq-mcp-reuse-');
 
@@ -366,8 +333,8 @@ describe('materializeAgentMcpConfig', () => {
     const workspaceDirectory = makeTempDir('agent-hq-openclaw-workspace-');
     const taskWorktreeDirectory = path.join(workspaceDirectory, 'task-449');
     fs.mkdirSync(taskWorktreeDirectory, { recursive: true });
-    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Agent', 'agent:cinder-backend:main', 'cinder-backend', 'openclaw', ?)`, workspaceDirectory);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', '["--config","config/environments.json"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 1, 'Agent', 'agent:cinder-backend:main', 'cinder-backend', 'openclaw', ?)`, workspaceDirectory);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Lease Manager', 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', '["--config","config/environments.json"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
     const result = await syncAssignedMcpForAgent({
@@ -394,8 +361,8 @@ describe('materializeAgentMcpConfig', () => {
   it('refreshes the OpenClaw plugin registry once after successful OpenClaw MCP sync', async () => {
     await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-openclaw-refresh-');
-    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?)`, workspaceDirectory);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type, workspace_path) VALUES (1, 1, 'Agent', 'agent:test-1:main', 'openclaw', ?)`, workspaceDirectory);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
@@ -423,7 +390,12 @@ describe('materializeAgentMcpConfig', () => {
   it('does not refresh the OpenClaw plugin registry for failed or no-op syncs', async () => {
     await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-openclaw-noop-');
-    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?), (2, 'No Workspace', 'openclaw', NULL)`, workspaceDirectory);
+    await getDb().run(`
+      INSERT INTO agents (id, tenant_id, name, session_key, runtime_type, workspace_path)
+      VALUES
+        (1, 1, 'Agent', 'agent:test-1:main', 'openclaw', ?),
+        (2, 1, 'No Workspace', 'agent:test-2:main', 'openclaw', '')
+    `, workspaceDirectory);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
       command: 'openclaw',
@@ -462,7 +434,7 @@ describe('materializeAgentMcpConfig', () => {
         },
       },
     }), 'utf8');
-    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?)`, workspaceDirectory);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type, workspace_path) VALUES (1, 1, 'Agent', 'agent:test-1:main', 'openclaw', ?)`, workspaceDirectory);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
       command: 'openclaw',
@@ -490,8 +462,8 @@ describe('materializeAgentMcpConfig', () => {
   it('surfaces OpenClaw plugin registry refresh failures as sync failures with actionable context', async () => {
     await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-openclaw-refresh-fail-');
-    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Agent', 'openclaw', ?)`, workspaceDirectory);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type, workspace_path) VALUES (1, 1, 'Agent', 'agent:test-1:main', 'openclaw', ?)`, workspaceDirectory);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: false,
@@ -520,8 +492,13 @@ describe('materializeAgentMcpConfig', () => {
     await createRegistryTables();
     const firstWorkspace = makeTempDir('agent-hq-openclaw-batch-one-');
     const secondWorkspace = makeTempDir('agent-hq-openclaw-batch-two-');
-    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'One', 'openclaw', ?), (2, 'Two', 'openclaw', ?)`, firstWorkspace, secondWorkspace);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`
+      INSERT INTO agents (id, tenant_id, name, session_key, runtime_type, workspace_path)
+      VALUES
+        (1, 1, 'One', 'agent:one:main', 'openclaw', ?),
+        (2, 1, 'Two', 'agent:two:main', 'openclaw', ?)
+    `, firstWorkspace, secondWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (2, 30)`);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
@@ -545,9 +522,9 @@ describe('materializeAgentMcpConfig', () => {
     await createRegistryTables();
     const firstWorkspace = makeTempDir('agent-hq-mcp-agent-one-');
     const secondWorkspace = makeTempDir('agent-hq-mcp-agent-two-');
-    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Cinder', 'agent:cinder-backend:main', 'cinder-backend', 'openclaw', ?)`, firstWorkspace);
-    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (2, 'Beacon', 'agent:beacon-pm:main', 'beacon-pm', 'openclaw', ?)`, secondWorkspace);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 1, 'Cinder', 'agent:cinder-backend:main', 'cinder-backend', 'openclaw', ?)`, firstWorkspace);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (2, 1, 'Beacon', 'agent:beacon-pm:main', 'beacon-pm', 'openclaw', ?)`, secondWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (2, 30)`);
 
     const first = await syncAssignedMcpForAgent({
@@ -591,16 +568,16 @@ describe('materializeAgentMcpConfig', () => {
       { id: 96, name: 'Talon', slug: 'talon-qa' },
       { id: 97, name: 'Anchor', slug: 'anchor-devops' },
     ];
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (31, 'dev-environment-lease-manager', 'dev-env-lease-mcp', '["--stdio"]')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (31, 1, 'Lease Manager', 'dev-environment-lease-manager', 'dev-env-lease-mcp', '["--stdio"]')`);
 
     const workspaces = new Map<number, string>();
     for (const agent of agents) {
       const workspace = makeTempDir(`agent-hq-${agent.slug}-`);
       workspaces.set(agent.id, workspace);
       await getDb().run(`
-        INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-        VALUES (?, ?, ?, ?, 'openclaw', ?)
+        INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
+        VALUES (?, 1, ?, ?, ?, 'openclaw', ?)
       `, agent.id, agent.name, `agent:${agent.slug}:main`, agent.slug, workspace);
       await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (?, 30), (?, 31)`, agent.id, agent.id);
     }
@@ -677,8 +654,8 @@ describe('materializeAgentMcpConfig', () => {
     await createRegistryTables();
     const workspaceDirectory = makeTempDir('agent-hq-hermes-workspace-');
     const hermesProfileDirectory = makeTempDir('agent-hq-hermes-profile-');
-    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'Hermes Agent', 'hermes', ?)`, workspaceDirectory);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type, workspace_path) VALUES (1, 1, 'Hermes Agent', 'agent:hermes:main', 'hermes', ?)`, workspaceDirectory);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
     const result = await syncAssignedMcpForAgent({
@@ -714,8 +691,8 @@ describe('materializeAgentMcpConfig', () => {
       },
     }), 'utf8');
     const hermesHome = makeTempDir('agent-hq-hermes-cleanup-');
-    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'hermes', ?)`, hermesHome);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path) VALUES (1, 1, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'hermes', ?)`, hermesHome);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
     const result = await syncAssignedMcpForAgent({
@@ -748,9 +725,9 @@ describe('materializeAgentMcpConfig', () => {
       '  - agent-hq__agent-1',
       '',
     ].join('\n'), 'utf8');
-    await getDb().run("INSERT INTO agents (id, name, runtime_type) VALUES (1, 'Hermes Agent', 'hermes')");
-    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '[\"server.js\"]')");
-    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args) VALUES (31, 'dev-environment-lease-manager', 'dev-env-lease-mcp', '[\"--stdio\"]')");
+    await getDb().run("INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (1, 1, 'Hermes Agent', 'agent:hermes:main', 'hermes')");
+    await getDb().run("INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '[\"server.js\"]')");
+    await getDb().run("INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (31, 1, 'Lease Manager', 'dev-environment-lease-manager', 'dev-env-lease-mcp', '[\"--stdio\"]')");
     await getDb().run("INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (1, 31)");
 
     const result = await materializeHermesMcpConfig({
@@ -782,11 +759,11 @@ describe('materializeAgentMcpConfig', () => {
     const hermesHome = makeTempDir('agent-hq-hermes-relcmd-');
     const leaseDir = makeTempDir('agent-hq-lease-mgr-');
     const absoluteArg = path.join(leaseDir, 'already-absolute.json');
-    await getDb().run("INSERT INTO agents (id, name, runtime_type) VALUES (1, 'Hermes Agent', 'hermes')");
+    await getDb().run("INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (1, 1, 'Hermes Agent', 'agent:hermes:main', 'hermes')");
     // Relative path-style command (would fail with ENOENT in Hermes) plus a cwd...
-    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args, cwd) VALUES (31, 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', ?, ?)", JSON.stringify(['--config', 'config/environments.json', '--stdio', 'bare-value', absoluteArg]), leaseDir);
+    await getDb().run("INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args, cwd) VALUES (31, 1, 'Lease Manager', 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', ?, ?)", JSON.stringify(['--config', 'config/environments.json', '--stdio', 'bare-value', absoluteArg]), leaseDir);
     // ...and a bare PATH-resolved command which must be left untouched.
-    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '[\"server.js\"]')");
+    await getDb().run("INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '[\"server.js\"]')");
     await getDb().run("INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30), (1, 31)");
 
     await materializeHermesMcpConfig({ db: getDb(), agentId: 1, hermesHome });
@@ -807,8 +784,8 @@ describe('materializeAgentMcpConfig', () => {
   it('rewrites the Agent HQ MCP node binary, entrypoint, and cwd to the running process', async () => {
     await createRegistryTables();
     const hermesHome = makeTempDir('agent-hq-hermes-portable-');
-    await getDb().run("INSERT INTO agents (id, name, runtime_type) VALUES (1, 'Hermes Agent', 'hermes')");
-    await getDb().run("INSERT INTO mcp_servers (id, slug, command, args, cwd) VALUES (30, 'agent-hq', '/fake/host/bin/node', '[\"/fake/host/agent-hq/api/dist/mcp/server.js\"]', '/fake/host/agent-hq/api')");
+    await getDb().run("INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (1, 1, 'Hermes Agent', 'agent:hermes:main', 'hermes')");
+    await getDb().run("INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args, cwd) VALUES (30, 1, 'Agent HQ', 'agent-hq', '/fake/host/bin/node', '[\"/fake/host/agent-hq/api/dist/mcp/server.js\"]', '/fake/host/agent-hq/api')");
     await getDb().run("INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)");
 
     await materializeHermesMcpConfig({ db: getDb(), agentId: 1, hermesHome });
@@ -894,9 +871,9 @@ describe('materializeAgentMcpConfig', () => {
         ],
       },
     }), 'utf8');
-    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-       VALUES (1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`, staleWorkspace);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
+       VALUES (1, 1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`, staleWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
     const result = await syncAssignedMcpForAgent({
@@ -942,9 +919,9 @@ describe('materializeAgentMcpConfig', () => {
         },
       },
     }), 'utf8');
-    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-       VALUES (99974444, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'openclaw', ?)`, storedWorkspace);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
+       VALUES (99974444, 1, 'Harlow', 'agent:agency-tooling-pm:main', 'agency-tooling-pm', 'openclaw', ?)`, storedWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (99974444, 30)`);
     const refreshOpenClawPluginRegistry = jest.fn(() => ({
       ok: true,
@@ -997,9 +974,9 @@ describe('materializeAgentMcpConfig', () => {
         list: [{ id: 'lumen-frontend', workspace: openClawWorkspace }],
       },
     }), 'utf8');
-    await getDb().run(`INSERT INTO agents (id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
-       VALUES (1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`, openClawWorkspace);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type, workspace_path)
+       VALUES (1, 1, 'Lumen', 'agent:pool-client:lumen-frontend:frontend-engineer:main', 'ecopool-frontend', 'openclaw', ?)`, openClawWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
     const result = await syncAssignedMcpForAgent({
@@ -1015,8 +992,13 @@ describe('materializeAgentMcpConfig', () => {
   it('fails closed instead of materializing an OpenClaw bundle into a workspace shared by another agent', async () => {
     await createRegistryTables();
     const sharedWorkspace = makeTempDir('agent-hq-openclaw-shared-');
-    await getDb().run(`INSERT INTO agents (id, name, runtime_type, workspace_path) VALUES (1, 'One', 'openclaw', ?), (2, 'Two', 'openclaw', ?)`, sharedWorkspace, sharedWorkspace);
-    await getDb().run(`INSERT INTO mcp_servers (id, slug, command, args) VALUES (30, 'agent-hq', 'node', '["server.js"]')`);
+    await getDb().run(`
+      INSERT INTO agents (id, tenant_id, name, session_key, runtime_type, workspace_path)
+      VALUES
+        (1, 1, 'One', 'agent:one:main', 'openclaw', ?),
+        (2, 1, 'Two', 'agent:two:main', 'openclaw', ?)
+    `, sharedWorkspace, sharedWorkspace);
+    await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node', '["server.js"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
 
     const result = await syncAssignedMcpForAgent({

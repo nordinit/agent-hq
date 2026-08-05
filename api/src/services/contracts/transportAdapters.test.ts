@@ -1,9 +1,8 @@
+import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import Database from 'better-sqlite3';
 import { type Db } from "../../db/adapter/types";
-import { SqliteAdapter } from "../../db/adapter/SqliteAdapter";
 
 let buildContractInstructions: typeof import('./transportAdapters').buildContractInstructions;
 let buildCompletionContractInstructions: typeof import('./transportAdapters').buildCompletionContractInstructions;
@@ -60,41 +59,22 @@ afterEach(async () => {
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   for (const dir of extraTempDirs) fs.rmSync(dir, { recursive: true, force: true });
   extraTempDirs = [];
-  for (const db of extraDbs) await db.close();
+  for (const db of extraDbs) await teardownTestDb();
   extraDbs = [];
 });
 
 async function createGateDb(): Promise<Db> {
-  const dbRaw = new Database(':memory:');
-    const db = new SqliteAdapter(dbRaw);
+  const db = await setupTestDb();
   // Gate rows only exist inside a workflow scope — the global `transition_requirements` table
   // this used to write to was dropped by migration 15 — so the fixture needs a workflow to
   // hang them on.
-  await db.exec(`
-    CREATE TABLE sprints (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER,
-      sprint_type TEXT
-    );
-    CREATE TABLE sprint_task_transition_requirements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sprint_id INTEGER,
-      project_id INTEGER,
-      sprint_type TEXT,
-      task_type TEXT,
-      outcome TEXT NOT NULL,
-      field_name TEXT NOT NULL,
-      requirement_type TEXT NOT NULL,
-      match_field TEXT,
-      severity TEXT NOT NULL DEFAULT 'block',
-      message TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    INSERT INTO sprints (id, project_id, sprint_type) VALUES (1, 1, 'generic');
+  await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
+  await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
+  await db.run(`
+    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
+    VALUES (1, 1, 1, 'Generic workflow', 'generic', 'active')
   `);
+
   extraDbs.push(db);
   return db;
 }
@@ -188,8 +168,8 @@ describe('dispatch contract template renderer', () => {
     const db = await createGateDb();
     await db.run(`
       INSERT INTO sprint_task_transition_requirements
-        (sprint_id, project_id, sprint_type, outcome, field_name, requirement_type, severity, message)
-      VALUES (1, 1, 'generic', 'qa_pass', 'qa_verified_commit', 'required', 'block', 'qa_pass requires qa_verified_commit')
+        (tenant_id, sprint_id, project_id, sprint_type, outcome, field_name, requirement_type, severity, message)
+      VALUES (1, 1, 1, 'generic', 'qa_pass', 'qa_verified_commit', 'required', 'block', 'qa_pass requires qa_verified_commit')
     `);
 
     const contract = await buildContractInstructions(buildContext({
