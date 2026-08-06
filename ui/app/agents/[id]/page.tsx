@@ -14,6 +14,7 @@ import {
   Wrench, Plus, Search, ChevronDown, ChevronRight, Server, Shield,
 } from 'lucide-react';
 import Link from 'next/link';
+import { AgentTeamsCard } from '@/components/AgentTeamsCard';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { DEFAULT_CLAUDE_ALLOWED_TOOLS, claudeRuntimeConfigToJson, serializeClaudeRuntimeConfig } from '@/lib/claudeRuntimeConfig';
@@ -1296,6 +1297,8 @@ export default function AgentDetailPage() {
             </div>
           )}
         </Card>
+
+        <AgentTeamsCard agentId={id} />
 
         {/* Section 2: Job & Execution */}
         <Card className="border-amber-500/20">

@@ -17,6 +17,7 @@ import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn } from '../lib/durableRunIdentity';
 import { insertRuntimeLog } from '../lib/runtimeTenantScope';
 import { resolveSprintTaskRoutingAssignment } from '../domains/routing/policy/statuses';
+import { resolveTeamContextForDispatch } from '../domains/teams/context';
 import { runRecurringTaskSchedulerTick, type RecurringTaskSchedulerSummary } from './recurringTaskScheduler';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
 import { type Db } from "../db/adapter/types";
@@ -434,11 +435,17 @@ export async function reconcileReviewQaRouting(
                   currentInstanceId: instanceId,
                 }));
 
+      const teamContext = await resolveTeamContextForDispatch(db, {
+        agentId: agent.id,
+        sprintId: task.sprint_id ?? null,
+      });
+
       // Build message via shared helper + append lifecycle contract
       let message = buildDispatchMessage({
         jobInstructions,
         skillName: agent.skill_name,
         sprintGoal: sprint?.goal || null,
+        teamContext: teamContext?.section ?? null,
         taskNotesSection,
       });
 

@@ -1302,6 +1302,8 @@ export interface Sprint {
   repo_path: string | null;
   repo_url: string | null;
   repo_access_mode: 'worktree' | 'clone' | null;
+  /** Team that owns this workflow; drives team context injection and routing templates. */
+  team_id?: number | null;
   created_at: string;
   task_count?: number;
   tasks_done?: number;
@@ -1868,4 +1870,149 @@ export interface RoutingPreview {
   /** Measured per-table row deltas — larger than the operation count when policy seeding fires. */
   rows_written: Array<{ table: string; delta: number }>;
   affects_workflows: { total: number; scope: 'workflow' | 'workflow_type' };
+}
+
+// ── Teams ────────────────────────────────────────────────────────────────────
+
+export interface Team {
+  id: number;
+  tenant_id: number;
+  name: string;
+  slug: string;
+  description: string;
+  /** Injected into every member's prompt. */
+  goal: string;
+  /** Shared working agreements, injected into every member's prompt. */
+  charter: string;
+  project_id: number | null;
+  /** JSON array string, mirroring agents.skill_names. */
+  skill_names: string;
+  /** Bumped on any change to the rendered context block. */
+  context_version: number;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  /** Present on list responses only. */
+  member_count?: number;
+  workflow_count?: number;
+}
+
+export interface TeamMember {
+  id: number;
+  team_id: number;
+  agent_id: number;
+  member_role: string;
+  responsibilities: string;
+  is_lead: number;
+  /** Tiebreak when an agent belongs to several teams; at most one per agent. */
+  is_primary: number;
+  sort_order: number;
+  enabled: number;
+  agent_name?: string;
+  agent_enabled?: number;
+}
+
+export interface TeamToolAssignment {
+  assignment_id: number;
+  team_id: number;
+  tool_id: number;
+  overrides: string;
+  assignment_enabled: number;
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+}
+
+export interface TeamMcpAssignment {
+  assignment_id: number;
+  team_id: number;
+  mcp_server_id: number;
+  overrides: string;
+  assignment_enabled: number;
+  id: number;
+  name: string;
+  slug: string;
+}
+
+export interface TeamRoutingRule {
+  id: number;
+  tenant_id: number;
+  team_id: number;
+  workflow_type: string | null;
+  task_type: string | null;
+  status: string;
+  agent_id: number | null;
+  /** Alternative to agent_id: resolved to whichever member holds the role at apply time. */
+  member_role: string;
+  priority: number;
+  enabled: number;
+  agent_name?: string | null;
+}
+
+export interface TeamContextPreview {
+  teamId: number;
+  teamName: string;
+  contextVersion: number;
+  /** The exact block the prompt will carry; '' when it would be omitted. */
+  section: string;
+  injected: boolean;
+}
+
+export interface AgentTeamMembership {
+  team_id: number;
+  name: string;
+  slug: string;
+  goal: string;
+  member_role: string;
+  responsibilities: string;
+  is_lead: number;
+  is_primary: number;
+  enabled: number;
+}
+
+export interface EffectiveCapabilityRef {
+  id: number;
+  name?: string;
+  slug: string;
+  source: 'agent' | 'team';
+  source_team_id: number | null;
+  source_team_name: string | null;
+}
+
+export interface AgentEffectiveCapabilities {
+  agent_id: number;
+  /** Team that would speak for a dispatch with no workflow context; null when ambiguous. */
+  dispatch_team_id: number | null;
+  tools: EffectiveCapabilityRef[];
+  mcp_servers: EffectiveCapabilityRef[];
+  skill_names: string[];
+}
+
+export type TeamRoutingPlanAction = 'create' | 'update' | 'unchanged' | 'conflict' | 'skip';
+
+export interface TeamRoutingPlanEntry {
+  action: TeamRoutingPlanAction;
+  team_rule_id: number;
+  status: string;
+  task_type: string | null;
+  agent_id: number | null;
+  agent_name: string | null;
+  member_role: string | null;
+  priority: number;
+  existing_rule_id: number | null;
+  reason: string;
+}
+
+export interface TeamRoutingPlan {
+  workflow_id: number;
+  workflow_type: string | null;
+  team_id: number;
+  team_name: string;
+  entries: TeamRoutingPlanEntry[];
+  orphaned: Array<{ rule_id: number; status: string; task_type: string | null; reason: string }>;
+  summary: Record<TeamRoutingPlanAction, number>;
+  applied: boolean;
+  batch_id: string;
 }

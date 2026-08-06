@@ -2,6 +2,7 @@ import { execFileSync, execSync } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
+import { fetchEffectiveAgentToolRows } from '../domains/teams/effectiveCapabilities';
 import { type Db } from "../db/adapter/types";
 
 const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
@@ -29,37 +30,51 @@ export interface AgentToolRecord {
 // ── DB fetch ─────────────────────────────────────────────────────────────────
 
 /**
- * fetchAgentTools — query the DB for all enabled tools assigned to an agent.
- * Returns only tools where both the tool and the assignment are enabled.
+ * fetchAgentTools — every enabled tool an agent can run.
+ *
+ * The effective set is the union of the agent's own assignments and those of every team it
+ * belongs to, with agent-level rows winning; see domains/teams/effectiveCapabilities.ts for the
+ * precedence rule. Returns only tools where the tool itself and the winning assignment are both
+ * enabled.
  */
 export async function fetchAgentTools(db: Db, agentId: number): Promise<AgentToolRecord[]> {
-  const rows = await db.all(`
-    SELECT ata.id as assignment_id, ata.overrides, ata.enabled as assignment_enabled,
-           a.tenant_id as agent_tenant_id,
-           t.*
-    FROM agent_tool_assignments ata
-    JOIN agents a ON a.id = ata.agent_id
-    JOIN tools t ON t.id = ata.tool_id AND t.tenant_id = a.tenant_id
-    WHERE ata.agent_id = ?
-      AND ata.enabled = 1
-      AND t.enabled = 1
-    ORDER BY t.name ASC
-  `, agentId) as AgentToolRecord[];
+  const rows = await fetchEffectiveAgentToolRows(db, agentId) as unknown as AgentToolRecord[];
 
   try {
+    // Evidence only — both paths are already excluded by the effective query's tenant joins.
+    // Teams are counted here too because they are a second route into `tools`, and a grant
+    // silently dropped for tenant reasons should still be visible in the log.
     const stale = await db.get(`
-      SELECT COUNT(*) AS count
-      FROM agent_tool_assignments ata
-      JOIN agents a ON a.id = ata.agent_id
-      JOIN tools t ON t.id = ata.tool_id
-      WHERE ata.agent_id = ?
-        AND ata.enabled = 1
-        AND t.enabled = 1
-        AND t.tenant_id <> a.tenant_id
-    `, agentId) as { count?: number } | undefined;
-    const count = Number(stale?.count ?? 0);
-    if (count > 0) {
-      console.warn(`[toolInjection] Suppressed ${count} cross-tenant tool assignment(s) for agent #${agentId}`);
+      SELECT
+        (SELECT COUNT(*)
+           FROM agent_tool_assignments ata
+           JOIN agents a ON a.id = ata.agent_id
+           JOIN tools t ON t.id = ata.tool_id
+          WHERE ata.agent_id = ?
+            AND ata.enabled = 1
+            AND t.enabled = 1
+            AND t.tenant_id <> a.tenant_id) AS agent_count,
+        (SELECT COUNT(*)
+           FROM team_members tm
+           JOIN teams te ON te.id = tm.team_id
+           JOIN agents a ON a.id = tm.agent_id
+           JOIN team_tool_assignments tta ON tta.team_id = te.id
+           JOIN tools t ON t.id = tta.tool_id
+          WHERE tm.agent_id = ?
+            AND tm.enabled = 1
+            AND te.enabled = 1
+            AND te.deleted_at IS NULL
+            AND tta.enabled = 1
+            AND t.enabled = 1
+            AND (t.tenant_id <> a.tenant_id OR te.tenant_id <> a.tenant_id)) AS team_count
+    `, agentId, agentId) as { agent_count?: number; team_count?: number } | undefined;
+    const agentCount = Number(stale?.agent_count ?? 0);
+    const teamCount = Number(stale?.team_count ?? 0);
+    if (agentCount > 0) {
+      console.warn(`[toolInjection] Suppressed ${agentCount} cross-tenant tool assignment(s) for agent #${agentId}`);
+    }
+    if (teamCount > 0) {
+      console.warn(`[toolInjection] Suppressed ${teamCount} cross-tenant team tool assignment(s) for agent #${agentId}`);
     }
   } catch { /* best-effort stale assignment evidence only */ }
 

@@ -1361,6 +1361,109 @@ export class AgentHqApiClient {
     return this.request<unknown>('DELETE', `/api/v1/skills/${encodeURIComponent(name)}`);
   }
 
+  // ── Teams ──────────────────────────────────────────────────────────────────
+
+  listTeams() {
+    return this.request<unknown[]>('GET', '/api/v1/teams');
+  }
+
+  getTeam(id: number) {
+    return this.request<unknown>('GET', `/api/v1/teams/${id}`);
+  }
+
+  createTeam(data: Record<string, unknown>) {
+    return this.request<unknown>('POST', '/api/v1/teams', data);
+  }
+
+  updateTeam(id: number, data: Record<string, unknown>) {
+    return this.request<unknown>('PATCH', `/api/v1/teams/${id}`, data);
+  }
+
+  deleteTeam(id: number) {
+    return this.request<unknown>('DELETE', `/api/v1/teams/${id}`);
+  }
+
+  listTeamMembers(teamId: number) {
+    return this.request<unknown[]>('GET', `/api/v1/teams/${teamId}/members`);
+  }
+
+  addTeamMember(teamId: number, data: Record<string, unknown>) {
+    return this.request<unknown>('POST', `/api/v1/teams/${teamId}/members`, data);
+  }
+
+  updateTeamMember(teamId: number, agentId: number, data: Record<string, unknown>) {
+    return this.request<unknown>('PATCH', `/api/v1/teams/${teamId}/members/${agentId}`, data);
+  }
+
+  removeTeamMember(teamId: number, agentId: number) {
+    return this.request<unknown>('DELETE', `/api/v1/teams/${teamId}/members/${agentId}`);
+  }
+
+  listTeamTools(teamId: number) {
+    return this.request<unknown[]>('GET', `/api/v1/teams/${teamId}/tools`);
+  }
+
+  assignToolToTeam(teamId: number, toolId: number, overrides?: Record<string, unknown>, enabled?: boolean) {
+    return this.request<unknown>('POST', `/api/v1/teams/${teamId}/tools`, {
+      tool_id: toolId,
+      ...(overrides ? { overrides } : {}),
+      ...(enabled !== undefined ? { enabled } : {}),
+    });
+  }
+
+  removeToolFromTeam(teamId: number, toolId: number) {
+    return this.request<unknown>('DELETE', `/api/v1/teams/${teamId}/tools/${toolId}`);
+  }
+
+  listTeamMcpServers(teamId: number) {
+    return this.request<unknown[]>('GET', `/api/v1/teams/${teamId}/mcp-servers`);
+  }
+
+  assignMcpServerToTeam(teamId: number, mcpServerId: number, overrides?: Record<string, unknown>, enabled?: boolean) {
+    return this.request<unknown>('POST', `/api/v1/teams/${teamId}/mcp-servers`, {
+      mcp_server_id: mcpServerId,
+      ...(overrides ? { overrides } : {}),
+      ...(enabled !== undefined ? { enabled } : {}),
+    });
+  }
+
+  removeMcpServerFromTeam(teamId: number, mcpServerId: number) {
+    return this.request<unknown>('DELETE', `/api/v1/teams/${teamId}/mcp-servers/${mcpServerId}`);
+  }
+
+  listTeamRoutingRules(teamId: number) {
+    return this.request<unknown[]>('GET', `/api/v1/teams/${teamId}/routing-rules`);
+  }
+
+  createTeamRoutingRule(teamId: number, data: Record<string, unknown>) {
+    return this.request<unknown>('POST', `/api/v1/teams/${teamId}/routing-rules`, data);
+  }
+
+  deleteTeamRoutingRule(teamId: number, ruleId: number) {
+    return this.request<unknown>('DELETE', `/api/v1/teams/${teamId}/routing-rules/${ruleId}`);
+  }
+
+  previewTeamContext(teamId: number, agentId: number) {
+    return this.request<unknown>('GET', `/api/v1/teams/${teamId}/context-preview?agent_id=${agentId}`);
+  }
+
+  listAgentTeams(agentId: number) {
+    return this.request<unknown[]>('GET', `/api/v1/agents/${agentId}/teams`);
+  }
+
+  getAgentEffectiveCapabilities(agentId: number) {
+    return this.request<unknown>('GET', `/api/v1/agents/${agentId}/effective-capabilities`);
+  }
+
+  setWorkflowTeam(workflowId: number, teamId: number | null) {
+    return this.request<unknown>('PUT', `/api/v1/workflows/${workflowId}/team`, { team_id: teamId });
+  }
+
+  applyWorkflowTeamRouting(workflowId: number, dryRun?: boolean) {
+    const query = dryRun ? '?dry_run=1' : '';
+    return this.request<unknown>('POST', `/api/v1/workflows/${workflowId}/team/apply-routing${query}`, {});
+  }
+
   listMcpServers() {
     return this.request<unknown[]>('GET', '/api/v1/mcp-servers');
   }

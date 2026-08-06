@@ -6,6 +6,7 @@ import type {
 } from '../runtimes/runtimeBoundary';
 import { canonicalRuntimeJson } from '../runtimes/runtimeBoundary';
 import { columnExists } from '../db/introspection';
+import { fetchEffectiveAgentMcpRows, resolveEffectiveSkillNames } from '../domains/teams/effectiveCapabilities';
 import {
   runtimeBoundaryDigest,
   sanitizeRuntimeConfigForRevision,
@@ -112,21 +113,12 @@ async function loadMcpAssignments(
     if (failClosed && !enforceTenantScope) {
       throw new Error('tenant-scoped agents and MCP server columns are required');
     }
-    rows = await db.all<McpAssignmentRow>(`
-      SELECT ama.id AS assignment_id,
-             s.id AS server_id,
-             s.slug,
-             s.updated_at AS server_updated_at,
-             ama.overrides
-      FROM agent_mcp_assignments ama
-      JOIN mcp_servers s ON s.id = ama.mcp_server_id
-      ${enforceTenantScope ? 'JOIN agents a ON a.id = ama.agent_id AND a.tenant_id = s.tenant_id' : ''}
-      WHERE ama.agent_id = ?
-        ${enforceTenantScope ? 'AND a.tenant_id = ?' : ''}
-        AND ama.enabled = 1
-        AND s.enabled = 1
-      ORDER BY s.slug ASC
-    `, agentId, ...(enforceTenantScope ? [tenantId] : []));
+    // The EFFECTIVE set — the agent's own assignments plus every team it belongs to — because
+    // materialization uses that same resolver. If the boundary counted only direct assignments,
+    // assertRuntimeBoundaryAssignmentsCurrent would see a materialized team server that the
+    // boundary never claimed and refuse to launch. Tenant scoping lives in the resolver's join
+    // conditions, which are unconditional there.
+    rows = (await fetchEffectiveAgentMcpRows(db, agentId)) as unknown as McpAssignmentRow[];
   } catch (error) {
     if (failClosed) {
       throw new Error(
@@ -165,11 +157,10 @@ async function resolveSkillNames(
 ): Promise<string[]> {
   if (suppliedSkillNames) return parseRuntimeBoundarySkillNames(suppliedSkillNames);
   try {
-    const row = await db.get<{ skill_names?: unknown }>(
-      'SELECT skill_names FROM agents WHERE id = ?',
-      agentId,
-    );
-    return parseRuntimeBoundarySkillNames(row?.skill_names);
+    // Effective set: the agent's own skill_names plus those of every team it belongs to. The
+    // boundary is what skill materialization reads back, so a team skill omitted here would
+    // never reach the workspace.
+    return parseRuntimeBoundarySkillNames(await resolveEffectiveSkillNames(db, agentId));
   } catch (error) {
     if (failClosed) {
       throw new Error(

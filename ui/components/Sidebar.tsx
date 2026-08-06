@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Bot,
   BookOpen,
+  Users,
   Zap,
   Menu,
   FolderOpen,
@@ -30,6 +31,7 @@ import { Button } from '@/components/ui/button';
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/agents', label: 'Agents', icon: Bot },
+  { href: '/teams', label: 'Teams', icon: Users },
   { href: '/tasks', label: 'Tasks', icon: ClipboardList },
   { href: '/tasks/recurring', label: 'Recurring Tasks', icon: CalendarClock },
   { href: '/projects', label: 'Projects', icon: FolderOpen },

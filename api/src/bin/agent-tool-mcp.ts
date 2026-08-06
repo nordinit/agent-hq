@@ -35,6 +35,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { getDb } from '../db/client';
+import { fetchEffectiveAgentToolRows } from '../domains/teams/effectiveCapabilities';
 import { type Db } from '../db/adapter/types';
 import { sanitizedRuntimeProcessEnv } from '../runtimes/environment';
 
@@ -129,41 +130,56 @@ function trimmedString(value: unknown): string | undefined {
 // ── DB fetch ─────────────────────────────────────────────────────────────────
 
 /**
- * All enabled tools assigned to an agent, tenant-scoped.
+ * All enabled tools an agent can run, tenant-scoped: its own assignments plus
+ * those of every team it belongs to.
  *
- * The `t.tenant_id = a.tenant_id` join condition is the tenant boundary: an
- * assignment row that points at another tenant's tool yields nothing rather
- * than executing it. The follow-up count exists only to make such rows visible
- * in the log instead of vanishing silently.
+ * Resolution is shared with the dispatcher via domains/teams — NOT copied, as
+ * the execution helpers below are. That module imports only a type from
+ * db/adapter, so it does not reintroduce the runtime/SDK import edge this file
+ * exists to avoid, and sharing it is what keeps the set this server exposes
+ * identical to the set the dispatcher materialized. A copy that drifted would
+ * mean an agent seeing tools it was never granted.
+ *
+ * Tenant scoping lives in that resolver's join conditions: an assignment
+ * pointing at another tenant's tool yields nothing rather than executing it.
+ * The counts below exist only to make such rows visible in the log instead of
+ * vanishing silently.
  */
 export async function fetchAgentTools(db: Db, agentId: number): Promise<AgentToolRecord[]> {
-  const rows = await db.all(`
-    SELECT ata.id as assignment_id, ata.overrides, ata.enabled as assignment_enabled,
-           a.tenant_id as agent_tenant_id,
-           t.*
-    FROM agent_tool_assignments ata
-    JOIN agents a ON a.id = ata.agent_id
-    JOIN tools t ON t.id = ata.tool_id AND t.tenant_id = a.tenant_id
-    WHERE ata.agent_id = ?
-      AND ata.enabled = 1
-      AND t.enabled = 1
-    ORDER BY t.name ASC
-  `, agentId) as AgentToolRecord[];
+  const rows = await fetchEffectiveAgentToolRows(db, agentId) as unknown as AgentToolRecord[];
 
   try {
     const stale = await db.get(`
-      SELECT COUNT(*) AS count
-      FROM agent_tool_assignments ata
-      JOIN agents a ON a.id = ata.agent_id
-      JOIN tools t ON t.id = ata.tool_id
-      WHERE ata.agent_id = ?
-        AND ata.enabled = 1
-        AND t.enabled = 1
-        AND t.tenant_id <> a.tenant_id
-    `, agentId) as { count?: number } | undefined;
-    const count = Number(stale?.count ?? 0);
-    if (count > 0) {
-      console.error(`[agent-tool-mcp] Suppressed ${count} cross-tenant tool assignment(s) for agent #${agentId}`);
+      SELECT
+        (SELECT COUNT(*)
+           FROM agent_tool_assignments ata
+           JOIN agents a ON a.id = ata.agent_id
+           JOIN tools t ON t.id = ata.tool_id
+          WHERE ata.agent_id = ?
+            AND ata.enabled = 1
+            AND t.enabled = 1
+            AND t.tenant_id <> a.tenant_id) AS agent_count,
+        (SELECT COUNT(*)
+           FROM team_members tm
+           JOIN teams te ON te.id = tm.team_id
+           JOIN agents a ON a.id = tm.agent_id
+           JOIN team_tool_assignments tta ON tta.team_id = te.id
+           JOIN tools t ON t.id = tta.tool_id
+          WHERE tm.agent_id = ?
+            AND tm.enabled = 1
+            AND te.enabled = 1
+            AND te.deleted_at IS NULL
+            AND tta.enabled = 1
+            AND t.enabled = 1
+            AND (t.tenant_id <> a.tenant_id OR te.tenant_id <> a.tenant_id)) AS team_count
+    `, agentId, agentId) as { agent_count?: number; team_count?: number } | undefined;
+    const agentCount = Number(stale?.agent_count ?? 0);
+    const teamCount = Number(stale?.team_count ?? 0);
+    if (agentCount > 0) {
+      console.error(`[agent-tool-mcp] Suppressed ${agentCount} cross-tenant tool assignment(s) for agent #${agentId}`);
+    }
+    if (teamCount > 0) {
+      console.error(`[agent-tool-mcp] Suppressed ${teamCount} cross-tenant team tool assignment(s) for agent #${agentId}`);
     }
   } catch { /* best-effort stale assignment evidence only */ }
 

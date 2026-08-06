@@ -64,6 +64,7 @@ import {
   getDispatchTaskNotesContext,
 } from './dispatch/prompt';
 import { type Db } from "../db/adapter/types";
+import { resolveTeamContextForDispatch } from '../domains/teams/context';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 /**
@@ -2076,6 +2077,13 @@ export async function dispatchTaskToJob(
     repoDependencySetup = cloneResult.dependencySetup ?? [];
   }
 
+  // Resolved before the instance row exists so its provenance can be recorded on the payload:
+  // a transcript is only explainable if it says which team definition it ran under.
+  const teamContext = await resolveTeamContextForDispatch(db, {
+    agentId: job.agent_id,
+    sprintId: task.sprint_id ?? null,
+  });
+
   const instancePayload = {
     mode: 'runtime-dispatch',
     transport: 'ws.send',
@@ -2086,6 +2094,8 @@ export async function dispatchTaskToJob(
           repoWorkspacePath,
     repoBranch,
     repoDependencySetup,
+    teamId: teamContext?.teamId ?? null,
+    teamContextVersion: teamContext?.contextVersion ?? null,
   };
 
   const supportsDurableRunId = await durableTableHasColumn(db, 'job_instances', 'durable_run_id');
@@ -2108,7 +2118,9 @@ export async function dispatchTaskToJob(
           agentId: job.agent_id,
           currentInstanceId: instanceId,
         }));
-  const baseMessage = [buildTaskMessage(job, task), taskNotesSection].filter(Boolean).join('\n\n');
+  const baseMessage = [buildTaskMessage(job, task, teamContext?.section), taskNotesSection]
+    .filter(Boolean)
+    .join('\n\n');
 
   const nextTaskStatus = deriveDispatchTaskStatus(task.status);
   const hasFirstDispatchedAt = await tableHasColumn(db, 'tasks', 'first_dispatched_at');
@@ -2382,6 +2394,8 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
  */
 export function buildDispatchMessage(params: {
   sprintGoal?: string | null;
+  /** Rendered team block; see domains/teams/context.ts for how the team is resolved. */
+  teamContext?: string | null;
   projectName?: string | null;
   projectContext?: string | null;
   jobInstructions?: string;
@@ -2392,6 +2406,11 @@ export function buildDispatchMessage(params: {
   let message = '';
   if (params.sprintGoal) {
     message += `[Workflow Goal: ${params.sprintGoal}]\n\n`;
+  }
+  // After the workflow goal, before project context: the goal says what the work is for, the
+  // team block says who is doing it, and both frame everything that follows.
+  if (params.teamContext) {
+    message += `${params.teamContext}\n\n`;
   }
   if (params.projectName && params.projectContext) {
     message += `--- Project Context: ${params.projectName} ---\n${params.projectContext}\n--- End Project Context ---\n\n`;

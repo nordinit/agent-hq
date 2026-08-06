@@ -44,6 +44,7 @@ import os from 'os';
 import path from 'path';
 import { type Db } from '../../db/adapter/types';
 import { fetchAssignedMcpServers, resolveMcpServerRuntimePaths } from '../mcpMaterialization';
+import { fetchEffectiveAgentToolRows } from '../../domains/teams/effectiveCapabilities';
 import { mcpToolName } from './streamJson';
 import {
   AGENT_HQ_MCP_SLUG,
@@ -397,23 +398,16 @@ function stripAgentHqBookkeeping(server: Record<string, unknown>): Record<string
 /**
  * Does this agent have any enabled registry tools?
  *
- * Mirrors the join in toolInjection.fetchAgentTools (including the tenant-scoping
- * condition) so the shim is only materialized when it would actually serve
- * something. Database inspection errors are fatal: silently returning false
- * would make an assigned capability disappear from the launched runtime.
+ * Counts the EFFECTIVE set — the agent's own assignments plus those of every team it belongs
+ * to — because a team-granted tool is just as much an assigned registry capability as a direct
+ * one. Asking only about direct assignments would let a team-only grant slip past the boundary
+ * check below and launch unrecorded, which is exactly the fail-open this module exists to stop.
+ *
+ * Database inspection errors are fatal: silently returning false would make an assigned
+ * capability disappear from the launched runtime.
  */
 async function agentHasRegistryTools(db: Db, agentId: number): Promise<boolean> {
-  const row = (await db.get(
-    `SELECT COUNT(*) AS count
-     FROM agent_tool_assignments ata
-     JOIN agents a ON a.id = ata.agent_id
-     JOIN tools t ON t.id = ata.tool_id AND t.tenant_id = a.tenant_id
-     WHERE ata.agent_id = ?
-       AND ata.enabled = 1
-       AND t.enabled = 1`,
-    agentId,
-  )) as { count?: number } | undefined;
-  return Number(row?.count ?? 0) > 0;
+  return (await fetchEffectiveAgentToolRows(db, agentId)).length > 0;
 }
 
 async function assertNoUnboundedRegistryTools(db: Db, agentId: number): Promise<void> {

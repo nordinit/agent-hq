@@ -21,6 +21,7 @@ import { getApiBase } from '@/lib/api';
 import { TaskDetailPanel } from '@/features/tasks/TaskDetailPanel';
 import { useTaskStatuses } from '@/lib/useTaskStatuses';
 import ProjectFiles from '@/components/ProjectFiles';
+import { WorkflowTeamCard } from '@/components/WorkflowTeamCard';
 
 type Tab = 'overview' | 'tasks' | 'files' | 'metrics';
 
@@ -61,6 +62,8 @@ function OverviewTab({ sprint, metrics }: { sprint: Sprint; metrics: SprintMetri
 
   return (
     <div className="space-y-6">
+      <WorkflowTeamCard workflowId={sprint.id} teamId={sprint.team_id ?? null} />
+
       {/* Progress */}
       <Card>
         <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-3">Task Progress</h3>

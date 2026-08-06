@@ -1,3 +1,4 @@
+import type { Request } from 'express';
 import { diffFields, type AuditChanges } from '../../lib/projectAudit';
 import { type Db } from "../../db/adapter/types";
 
@@ -91,6 +92,30 @@ const ACTOR_KIND_KEY = '_audit_actor_kind';
 
 export function attachAuditActor<T extends Record<string, unknown>>(input: T, actor: RoutingAuditActor): T {
   return { ...input, [ACTOR_KEY]: actor.actor, [ACTOR_KIND_KEY]: actor.actorKind };
+}
+
+/**
+ * Who is making this change, as honestly as the system can say.
+ *
+ * There is no user table and no session: an MCP key carries an agent slug, and a browser
+ * request carries nothing. projectAudit's extractActor falls back to the literal 'api', which
+ * would make every human canvas edit indistinguishable from every other. Recording
+ * `anonymous_ui` instead is less satisfying and more true — and it is the signal that would
+ * justify adding real identity later.
+ *
+ * Lives here rather than in a route module because more than one router audits routing
+ * configuration now, and two copies of an identity policy is one copy too many.
+ */
+export function requestAuditActor(req: Request): RoutingAuditActor {
+  const mcpActor = (req as Request & { mcpIdentity?: { auditActor?: string } }).mcpIdentity?.auditActor;
+  if (typeof mcpActor === 'string' && mcpActor.trim()) {
+    return { actor: mcpActor.trim(), actorKind: 'agent' };
+  }
+  const header = req.header('x-actor');
+  if (typeof header === 'string' && header.trim()) {
+    return { actor: header.trim(), actorKind: 'user' };
+  }
+  return { actor: 'anonymous_ui', actorKind: 'unknown' };
 }
 
 export function readAuditActor(input: Record<string, unknown>): RoutingAuditActor {

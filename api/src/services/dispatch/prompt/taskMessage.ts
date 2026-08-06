@@ -1,3 +1,8 @@
+/**
+ * teamContext, when present, leads the message: who the agent is and who it works with frames
+ * how it should read its own instructions and the task, so it has to arrive before both.
+ * Resolving it is a database question — see domains/teams/context.ts.
+ */
 export function buildTaskMessage(
   job: { job_instructions: string; title: string },
   task: {
@@ -8,6 +13,7 @@ export function buildTaskMessage(
     status: string;
     sprint_name: string | null;
   },
+  teamContext?: string | null,
 ): string {
   const taskBlock = [
     `## Assigned Task`,
@@ -17,5 +23,7 @@ export function buildTaskMessage(
     task.description,
   ].join('\n');
 
-  return `${job.job_instructions}\n\n${taskBlock}`;
+  return [teamContext?.trim() || null, job.job_instructions, taskBlock]
+    .filter((section): section is string => Boolean(section))
+    .join('\n\n');
 }

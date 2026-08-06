@@ -36,6 +36,11 @@ import settingsRouter from './routes/settings';
 import tenantsRouter from './routes/tenants';
 import toolsRouter, { agentToolsRouter } from './routes/tools';
 import mcpServersRouter, { agentMcpServersRouter } from './routes/mcp-servers';
+import teamsRouter, {
+  agentEffectiveCapabilitiesRouter,
+  agentTeamsRouter,
+  workflowTeamRouter,
+} from './routes/teams';
 import providersRouter from './routes/providers';
 import providerConnectionsRouter from './routes/provider-connections';
 import githubIdentitiesRouter from './routes/github-identities';
@@ -478,6 +483,13 @@ app.use('/api/v1/tools', toolsRouter);
 app.use('/api/v1/agents/:id/tools', agentToolsRouter);
 app.use('/api/v1/mcp-servers', mcpServersRouter);
 app.use('/api/v1/agents/:id/mcp-servers', agentMcpServersRouter);
+app.use('/api/v1/teams', teamsRouter);
+app.use('/api/v1/agents/:id/teams', agentTeamsRouter);
+app.use('/api/v1/agents/:id/effective-capabilities', agentEffectiveCapabilitiesRouter);
+// Team ownership hangs off the workflow, not the team: "which team runs this workflow" is a
+// property of the workflow. Mounted under both vocabularies like the workflow router itself.
+app.use('/api/v1/workflows/:workflowId/team', workflowTeamRouter);
+app.use('/api/v1/sprints/:workflowId/team', workflowTeamRouter);
 app.use('/api/v1/providers', providersRouter);
 app.use('/api/v1/provider-connections', providerConnectionsRouter);
 app.use('/api/v1/github-identities', githubIdentitiesRouter);

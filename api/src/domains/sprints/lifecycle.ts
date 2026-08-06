@@ -3,6 +3,7 @@ import { buildDispatchMessage, dispatchInstance } from '../runs';
 import { buildCompletionContractInstructions } from '../../services/contracts';
 import { createDurableRunId, tableHasColumn } from '../../lib/durableRunIdentity';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
+import { resolveTeamContextForDispatch } from '../teams/context';
 import { type Db } from "../../db/adapter/types";
 
 export type SprintStatus = 'planning' | 'planned' | 'active' | 'paused' | 'complete' | 'closed';
@@ -103,9 +104,15 @@ export async function completeSprint(sprintId: number): Promise<void> {
         `, job.tenant_id, job.id);
     const instanceId = instanceResult.lastInsertId as number;
 
+    const teamContext = await resolveTeamContextForDispatch(db, {
+      agentId: job.id as number,
+      sprintId: sprint.id as number,
+    });
+
     let message = buildDispatchMessage({
       jobInstructions,
       sprintGoal: sprint.goal || null,
+      teamContext: teamContext?.section ?? null,
       summaryRequest: `The sprint "${sprint.name}" has ended. Please summarize: (1) what tasks you completed this sprint, (2) what tasks remain unfinished, and (3) any current blockers. Keep it concise.`,
     });
     message += `\n\n${buildCompletionContractInstructions({ instanceId })}`;

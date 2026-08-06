@@ -11,6 +11,7 @@ import { routingClient } from './routing';
 import { runtimesClient } from './runtimes';
 import { runsClient } from './runs';
 import { tasksClient } from './tasks';
+import { teamsClient } from './teams';
 import { workflowsClient } from './workflows';
 
 export const api = {
@@ -25,4 +26,5 @@ export const api = {
   ...tasksClient,
   ...routingClient,
   ...runtimesClient,
+  ...teamsClient,
 };

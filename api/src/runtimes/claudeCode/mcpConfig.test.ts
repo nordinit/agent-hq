@@ -558,8 +558,14 @@ describe('resolveClaudeCodeAgentStateDir', () => {
 describe('registry-tool boundary enforcement', () => {
   function dbWithToolCount(count: number): Db {
     const db = createMockDb() as unknown as Record<string, jest.Mock>;
-    db.get = jest.fn(async (sql: string) =>
-      sql.includes('agent_tool_assignments') ? { count } : undefined,
+    const toolRows = Array.from({ length: count }, (_unused, index) => ({
+      id: index + 1,
+      name: `tool-${index + 1}`,
+      enabled: 1,
+      assignment_enabled: 1,
+    }));
+    db.all = jest.fn(async (sql: string) =>
+      sql.includes('team_tool_assignments') ? [] : (sql.includes('agent_tool_assignments') ? toolRows : []),
     );
     return db as unknown as Db;
   }
@@ -591,9 +597,30 @@ describe('registry-tool boundary enforcement', () => {
     expect(fs.readdirSync(agentStateDir())).toEqual([]);
   });
 
+  it('fails closed on a tool granted only through a team', async () => {
+    // A team grant is an assigned registry capability too. If the boundary check only counted
+    // direct assignments, a team-only grant would launch unrecorded — the exact fail-open this
+    // module exists to prevent.
+    const db = createMockDb() as unknown as Record<string, jest.Mock>;
+    db.all = jest.fn(async (sql: string) =>
+      sql.includes('team_tool_assignments')
+        ? [{ id: 1, name: 'team-tool', enabled: 1, assignment_enabled: 1 }]
+        : [],
+    );
+    await expect(materializeClaudeCodeMcpConfig({
+      db: db as unknown as Db,
+      tenantId: TENANT_ID,
+      agentId: AGENT_ID,
+      instanceId: 7,
+      runKey: 'registry-team-grant',
+      protectedInstanceIds: new Set(),
+    })).rejects.toThrow(/absent from RuntimeBoundaryV1/);
+    expect(fetchAssignedMcpServersMock).not.toHaveBeenCalled();
+  });
+
   it('treats registry-assignment inspection errors as fatal', async () => {
     const db = createMockDb() as unknown as Record<string, jest.Mock>;
-    db.get = jest.fn(async () => { throw new Error('registry query failed'); });
+    db.all = jest.fn(async () => { throw new Error('registry query failed'); });
     await expect(materializeClaudeCodeMcpConfig({
       db: db as unknown as Db,
       tenantId: TENANT_ID,

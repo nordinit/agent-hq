@@ -10,6 +10,7 @@ import { registerResourcesTools } from './domains/resources';
 import { registerRoutingTools } from './domains/routing';
 import { registerSkillsTools } from './domains/skills';
 import { registerTaskDefinitionsTools } from './domains/task-definitions';
+import { registerTeamsTools } from './domains/teams';
 import { registerTasksTools } from './domains/tasks';
 import { registerToolRegistryTools } from './domains/tool-registry';
 import { registerWorkflowsTools } from './domains/workflows';
@@ -26,6 +27,7 @@ export function registerAgentHqMcpDomains(context: McpDomainContext) {
   registerToolRegistryTools(context);
   registerSkillsTools(context);
   registerMcpServersTools(context);
+  registerTeamsTools(context);
   registerRoutingTools(context);
   registerTaskDefinitionsTools(context);
   registerResourcesTools(context);

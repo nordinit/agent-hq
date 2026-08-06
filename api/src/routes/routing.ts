@@ -19,7 +19,7 @@ import { columnExists as sharedColumnExists } from "../db/introspection";
 import {
   attachAuditActor,
   auditedRoutingWrite,
-  type RoutingAuditActor,
+  requestAuditActor,
   listRoutingAudit,
 } from '../domains/routing/audit';
 import {
@@ -159,27 +159,6 @@ async function dryRunConfigWrite<T>(
 
 function mergeWorkflowAliasInputs(query: unknown, body?: unknown): Record<string, unknown> {
   return { ...normalizeWorkflowAliases(query), ...normalizeWorkflowAliases(body) };
-}
-
-/**
- * Who is making this change, as honestly as the system can say.
- *
- * There is no user table and no session: an MCP key carries an agent slug, and a browser
- * request carries nothing. projectAudit's extractActor falls back to the literal 'api', which
- * would make every human canvas edit indistinguishable from every other. Recording
- * `anonymous_ui` instead is less satisfying and more true — and it is the signal that would
- * justify adding real identity later.
- */
-function requestAuditActor(req: Request): RoutingAuditActor {
-  const mcpActor = (req as Request & { mcpIdentity?: { auditActor?: string } }).mcpIdentity?.auditActor;
-  if (typeof mcpActor === 'string' && mcpActor.trim()) {
-    return { actor: mcpActor.trim(), actorKind: 'agent' };
-  }
-  const header = req.header('x-actor');
-  if (typeof header === 'string' && header.trim()) {
-    return { actor: header.trim(), actorKind: 'user' };
-  }
-  return { actor: 'anonymous_ui', actorKind: 'unknown' };
 }
 
 async function withRequestTenant<T extends Record<string, unknown>>(req: Request, input: T): Promise<T & { tenant_id: number }> {

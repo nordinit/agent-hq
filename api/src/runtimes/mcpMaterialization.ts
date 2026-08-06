@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { ensureMaterializedMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 import { parseAgentSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
+import { fetchEffectiveAgentMcpRows, findAgentIdsWithEffectiveMcpServer } from '../domains/teams/effectiveCapabilities';
 import { type Db } from "../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
@@ -658,17 +659,10 @@ export async function fetchAssignedMcpServers(
   agentId: number,
   existingServers: Record<string, Record<string, unknown>> = {},
 ): Promise<Record<string, Record<string, unknown>>> {
-  const enforceTenantScope = await tableHasColumn(db, 'agents', 'tenant_id') && await tableHasColumn(db, 'mcp_servers', 'tenant_id');
-  const rows = await db.all(`
-    SELECT ama.id as assignment_id, s.slug, s.command, s.args, s.env, s.cwd, ama.overrides
-    FROM agent_mcp_assignments ama
-    JOIN mcp_servers s ON s.id = ama.mcp_server_id
-    ${enforceTenantScope ? 'JOIN agents a ON a.id = ama.agent_id AND a.tenant_id = s.tenant_id' : ''}
-    WHERE ama.agent_id = ?
-      AND ama.enabled = 1
-      AND s.enabled = 1
-    ORDER BY s.slug ASC
-  `, agentId) as AgentMcpRow[];
+  // Union of the agent's own assignments and its teams'; see
+  // domains/teams/effectiveCapabilities.ts. Tenant scoping is unconditional there rather than
+  // probed per call: the migration gate guarantees both tenant_id columns exist.
+  const rows = await fetchEffectiveAgentMcpRows(db, agentId) as unknown as AgentMcpRow[];
 
   let sharedAgentApiKey: string | null = null;
   const resolveAgentApiKey = async (existingApiKey: string | null, name: string): Promise<string> => {
@@ -1621,12 +1615,10 @@ export async function syncAssignedMcpForServer(params: {
   materializeOpenClawGlobalConfig?: boolean;
   refreshOpenClawPluginRegistry?: OpenClawPluginRegistryRefreshFn;
 }): Promise<AgentMcpSyncResult[]> {
-  const agentIds = await params.db.all(`
-    SELECT DISTINCT agent_id
-    FROM agent_mcp_assignments
-    WHERE mcp_server_id = ?
-    ORDER BY agent_id ASC
-  `, params.mcpServerId) as Array<{ agent_id: number }>;
+  // Reaches agents granted this server through a team as well as directly, or a team-wide MCP
+  // change would leave every member's materialized config stale until its next dispatch.
+  const agentIds = (await findAgentIdsWithEffectiveMcpServer(params.db, params.mcpServerId))
+    .map((agent_id) => ({ agent_id }));
 
   // Sequential on purpose: each sync writes agent config files and may mint API keys.
   const results: AgentMcpSyncResult[] = [];
