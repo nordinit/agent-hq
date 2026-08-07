@@ -183,7 +183,7 @@ describe('watchdog transcript activity', () => {
 
   it('reconciles a persisted runtimeEnd failure generically', async () => {
     await seedRunningInstance(db, { instanceId: 88, taskId: 808, startedAt: '2026-05-13T10:00:00.000Z' });
-    await db.run(`UPDATE agents SET runtime_type = 'veri', name = 'Veri' WHERE id = 94`);
+    await db.run(`UPDATE agents SET runtime_type = 'codex', name = 'Codex' WHERE id = 94`);
     await db.run(`
       UPDATE job_instances
       SET response = ?
@@ -191,12 +191,12 @@ describe('watchdog transcript activity', () => {
     `, JSON.stringify({
             runtimeEnd: {
               type: 'runEnded',
-              source: 'veri',
+              source: 'codex',
               sessionKey: 'run:88',
               success: false,
               endedAt: '2026-05-13T10:05:00.000Z',
               reason: 'error',
-              error: 'veri execution failed',
+              error: 'codex execution failed',
             },
           }));
 
@@ -219,8 +219,8 @@ describe('watchdog transcript activity', () => {
     expect(row.completed_at).toBe('2026-05-13 10:05:00.000');
     expect(row.runtime_ended_at).toBe('2026-05-13 10:05:00.000');
     expect(row.runtime_end_success).toBe(0);
-    expect(row.runtime_end_source).toBe('veri');
-    expect(row.runtime_end_error).toBe('veri execution failed');
+    expect(row.runtime_end_source).toBe('codex');
+    expect(row.runtime_end_error).toBe('codex execution failed');
     expect(row.error).toBeNull();
   });
 

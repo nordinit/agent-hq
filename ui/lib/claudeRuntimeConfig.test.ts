@@ -13,6 +13,8 @@ test('Claude runtime UI defaults match the API productive allowlist', () => {
     'Glob',
     'Grep',
     'Read',
+    'WebFetch',
+    'WebSearch',
     'Write',
   ]);
 });

@@ -784,7 +784,7 @@ export class RemoteTranscriptProvider implements TranscriptProvider {
    */
   private async fetchRemoteTranscript(instanceId: number): Promise<TranscriptResult> {
     const url = `${this.config.transcriptApiUrl}/instances/${instanceId}/transcript`;
-    const apiKey = this.config.apiKey || process.env.VERI_API_KEY || '';
+    const apiKey = this.config.apiKey || '';
 
     const resp = await fetch(url, {
       headers: {
@@ -830,7 +830,6 @@ export class RemoteTranscriptProvider implements TranscriptProvider {
  *
  * Provider selection:
  *   - runtime_type='claude-code' → ClaudeCodeTranscriptProvider
- *   - runtime_type='veri'        → RemoteTranscriptProvider
  *   - runtime_type='hermes'      → RemoteTranscriptProvider (chat_messages-backed)
  *   - runtime_type='codex'       → RemoteTranscriptProvider (chat_messages-backed)
  *   - runtime_type='openclaw'    → OpenClawTranscriptProvider (default)
@@ -860,7 +859,6 @@ export async function resolveTranscriptProviderByAgent(agentId: number): Promise
     case 'claude-code':
       return new ClaudeCodeTranscriptProvider();
 
-    case 'veri':
     case 'codex':
     case 'hermes': {
       const config = parseRuntimeConfig(agent);

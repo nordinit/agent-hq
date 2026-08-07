@@ -231,7 +231,6 @@ router.get('/:id/session-key', async (req: Request, res: Response) => {
 // The provider is resolved based on the agent's runtime_type:
 //   - openclaw  → local chat_messages or gateway
 //   - claude-code → .claude/projects JSONL files (fallback: chat_messages)
-//   - veri      → chat_messages populated by CustomAgentRuntime (fallback: remote API)
 router.get('/:id/transcript', async (req: Request, res: Response) => {
   try {
     const id = Number(req.params.id);

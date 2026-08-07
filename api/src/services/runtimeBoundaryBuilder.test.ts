@@ -124,6 +124,8 @@ describe('buildRuntimeBoundaryV1', () => {
       'Glob',
       'Grep',
       'Read',
+      'WebFetch',
+      'WebSearch',
       'Write',
     ]);
     expect(omitted.tools.builtIn).toEqual(argvBuiltIns);

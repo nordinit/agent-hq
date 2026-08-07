@@ -7,7 +7,7 @@ import type { ClaudeCodeRuntimeConfig } from '../../runtimes/claudeCode/types';
 import { validateCodexRuntimeConfig } from '../../runtimes/codex/config';
 import type { CodexRuntimeConfig } from '../../runtimes/codex/types';
 
-export const SUPPORTED_AGENT_RUNTIME_TYPES = ['openclaw', 'claude-code', 'codex', 'webhook', 'veri', 'hermes'] as const;
+export const SUPPORTED_AGENT_RUNTIME_TYPES = ['openclaw', 'claude-code', 'codex', 'webhook', 'hermes'] as const;
 
 export type AgentRuntimeType = (typeof SUPPORTED_AGENT_RUNTIME_TYPES)[number];
 

@@ -79,3 +79,21 @@ test('Codex OAuth is available to Codex without becoming an OpenClaw-only provid
   assert.equal(isProviderSupportedByRuntime('anthropic', 'codex'), false);
   assert.equal(isProviderSupportedByRuntime('minimax', 'codex'), false);
 });
+
+test('Claude Code accepts anthropic only', () => {
+  assert.equal(isProviderSupportedByRuntime('anthropic', 'claude-code'), true);
+  // Every non-Anthropic provider is rejected by the runtime's auth adapter, so the
+  // form must not offer one — this is the bug that left Ollama as the sole option
+  // when the only Anthropic credential was an OpenClaw-owned runtime connection.
+  assert.equal(isProviderSupportedByRuntime('ollama', 'claude-code'), false);
+  assert.equal(isProviderSupportedByRuntime('openai', 'claude-code'), false);
+  assert.equal(isProviderSupportedByRuntime('openai-codex', 'claude-code'), false);
+  assert.equal(isProviderSupportedByRuntime('minimax', 'claude-code'), false);
+});
+
+test('OpenClaw keeps its broad provider surface', () => {
+  assert.equal(isProviderSupportedByRuntime('anthropic', 'openclaw'), true);
+  assert.equal(isProviderSupportedByRuntime('ollama', 'openclaw'), true);
+  assert.equal(isProviderSupportedByRuntime('minimax', 'openclaw'), true);
+  assert.equal(isProviderSupportedByRuntime('openai-codex', 'openclaw'), true);
+});

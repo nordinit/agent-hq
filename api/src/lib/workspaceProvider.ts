@@ -324,120 +324,6 @@ interface RemoteConfig {
 // Minimal Response type shim for native fetch
 type FetchResponse = { ok: boolean; status: number; json: () => Promise<unknown>; text: () => Promise<string> };
 
-export class RemoteWorkspaceProvider implements WorkspaceProvider {
-  readonly root: string;
-  readonly isRemote = true;
-  private readonly workspaceBase: string;
-  private readonly apiKey: string;
-
-  constructor(config: RemoteConfig) {
-    this.workspaceBase = config.baseUrl;
-    this.apiKey = config.apiKey;
-    this.root = config.baseUrl;
-  }
-
-  private async fetchJson(urlPath: string, init?: RequestInit): Promise<unknown> {
-    const url = `${this.workspaceBase}${urlPath}`;
-    let res: FetchResponse;
-    try {
-      res = await fetch(url, {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          ...(init?.headers as Record<string, string> ?? {}),
-        },
-        signal: AbortSignal.timeout(10_000),
-      }) as unknown as FetchResponse;
-    } catch (err) {
-      throw new RemoteUnavailableError(`Remote workspace unreachable: ${String(err)}`);
-    }
-    if (res.status === 404) {
-      throw new FileNotFoundError(`File not found on remote workspace`);
-    }
-    if (!res.ok) {
-      throw new RemoteUnavailableError(`Remote workspace returned ${res.status}`);
-    }
-    return res.json();
-  }
-
-  async readDocs(filenames: string[]): Promise<DocResult[]> {
-    // Read docs individually via the file read endpoint
-    const results: DocResult[] = [];
-    for (const filename of filenames) {
-      try {
-        const data = await this.fetchJson(`/files/${filename}`) as Record<string, unknown>;
-        results.push({
-          filename,
-          content: (data.content as string) ?? null,
-          exists: data.content != null,
-        });
-      } catch {
-        results.push({ filename, content: null, exists: false });
-      }
-    }
-    return results;
-  }
-
-  async tree(_depth?: number): Promise<{ root: string; children: TreeNode[] }> {
-    const data = await this.fetchJson('/files');
-    return normalizeRemoteTreeResponse(data);
-  }
-
-  async readFile(relPath: string): Promise<FileReadResult> {
-    const data = await this.fetchJson(`/files/${relPath}`) as Record<string, unknown>;
-    return {
-      path: (data.path as string) ?? relPath,
-      size: data.size as number | undefined,
-      modified: data.modified as string | undefined,
-      content: (data.content as string) ?? null,
-      binary: data.content === null || data.content === undefined,
-    };
-  }
-
-  async writeFile(relPath: string, content: string): Promise<FileWriteResult> {
-    const data = await this.fetchJson(`/files/${relPath}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    }) as Record<string, unknown>;
-    return {
-      ok: true,
-      path: (data.path as string) ?? relPath,
-      size: data.size as number | undefined,
-      modified: data.modified as string | undefined,
-    };
-  }
-
-  async deleteFile(relPath: string): Promise<{ ok: boolean; path: string }> {
-    await this.fetchJson(`/files/${relPath}`, { method: 'DELETE' });
-    return { ok: true, path: relPath };
-  }
-
-  async mkdir(relPath: string): Promise<{ ok: boolean; path: string; note?: string }> {
-    // Remote workspaces manage their own directories
-    return { ok: true, path: relPath, note: 'Remote workspace: directory creation not required' };
-  }
-
-  async rename(oldPath: string, newPath: string): Promise<{ ok: boolean; oldPath: string; newPath: string }> {
-    // No native rename on remote — emulate via read + write + delete
-    const data = await this.readFile(oldPath);
-    const content = data.content ?? '';
-    await this.writeFile(newPath, content);
-    await this.deleteFile(oldPath);
-    return { ok: true, oldPath, newPath };
-  }
-
-  async rawFile(relPath: string): Promise<RawFileResult> {
-    const data = await this.fetchJson(`/files/${relPath}`) as Record<string, unknown>;
-    const content = data.content as string | null | undefined;
-    if (content == null) {
-      throw new FileNotFoundError('File content not available (binary or missing)');
-    }
-    const ext = path.extname(relPath).toLowerCase().slice(1);
-    const mime = MIME_TYPES[ext] ?? 'text/plain; charset=utf-8';
-    return { mime, buffer: content };
-  }
-}
 
 // ── Remote tree normalization ─────────────────────────────────────────────────
 
@@ -590,16 +476,6 @@ type WorkspaceProviderOptions = {
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
- * Derive the remote workspace base URL from runtime_config.
- * runtime_config.baseUrl is typically https://host/veri/api/v1 — strip the
- * /veri/api/v1 suffix to get the host, then append /veri/api/workspace.
- */
-function getRemoteWorkspaceBase(config: RemoteRuntimeConfig): string {
-  const rawBase = config.baseUrl ?? process.env.VERI_BASE_URL ?? '';
-  const hostRoot = rawBase.replace(/\/veri\/api\/v1\/?$/, '');
-  return `${hostRoot}/veri/api/workspace`;
-}
-
 function parseRuntimeConfig(agent: AgentRow): RemoteRuntimeConfig {
   if (!agent.runtime_config) return {};
   try {
@@ -615,7 +491,6 @@ function parseRuntimeConfig(agent: AgentRow): RemoteRuntimeConfig {
  * is specified or the agent record is not found.
  *
  * Provider selection:
- *   - runtime_type='veri' → RemoteWorkspaceProvider (API-backed)
  *   - openclaw_agent_id set → LocalWorkspaceProvider (standard OpenClaw workspace path)
  *   - workspace_path set → LocalWorkspaceProvider
  *   - fallback → LocalWorkspaceProvider with DEFAULT_WORKSPACE_ROOT
@@ -661,15 +536,6 @@ export async function resolveWorkspaceProvider(agentId?: string | number, option
 
     if (tenantId !== null && Number(agent.tenant_id) !== tenantId) {
       throw new FileNotFoundError(`Agent not found in tenant: ${agentId}`);
-    }
-
-    // Remote agent (e.g. Custom)
-    if (agent.runtime_type === 'veri') {
-      const config = parseRuntimeConfig(agent);
-      return new RemoteWorkspaceProvider({
-        baseUrl: getRemoteWorkspaceBase(config),
-        apiKey: config.apiKey ?? process.env.VERI_API_KEY ?? '',
-      });
     }
 
     // Local with explicit workspace_path

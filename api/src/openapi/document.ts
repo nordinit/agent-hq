@@ -2503,7 +2503,7 @@ export const openApiDocument: OpenApiDocument = {
           workspace_path: { type: 'string', nullable: true },
           runtime_type: {
             type: 'string',
-            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook', 'veri'],
+            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook'],
             nullable: true,
           },
           runtime_config: { type: 'object', nullable: true, additionalProperties: true },
@@ -2525,7 +2525,7 @@ export const openApiDocument: OpenApiDocument = {
           workspace_path: { type: 'string' },
           runtime_type: {
             type: 'string',
-            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook', 'veri'],
+            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook'],
           },
           runtime_config: { type: 'object', additionalProperties: true },
           project_id: { type: 'integer' },
@@ -2545,7 +2545,7 @@ export const openApiDocument: OpenApiDocument = {
           agent_id: { type: 'integer', minimum: 1 },
           runtime_type: {
             type: 'string',
-            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook', 'veri'],
+            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook'],
           },
           runtime_config: { type: 'object', nullable: true, additionalProperties: true },
           workspace_path: { type: 'string', nullable: true },
@@ -2570,7 +2570,7 @@ export const openApiDocument: OpenApiDocument = {
           ok: { type: 'boolean' },
           runtime_type: {
             type: 'string',
-            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook', 'veri'],
+            enum: ['openclaw', 'claude-code', 'codex', 'hermes', 'webhook'],
           },
           agent_id: { type: 'integer', nullable: true },
           checked_at: { type: 'string', format: 'date-time' },

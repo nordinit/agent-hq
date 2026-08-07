@@ -167,13 +167,20 @@ export function validateClaudeCodeRuntimeConfig(
     }
   }
 
-  const effectiveAllowedTools = config.allowedTools ?? DEFAULT_CLAUDE_ALLOWED_TOOLS;
-  const allowedToolNames = new Set(effectiveAllowedTools.map((name) => name.toLowerCase()));
-  const overlap = config.disallowedTools?.find(
-    (name) => allowedToolNames.has(name.toLowerCase()),
-  );
-  if (overlap) {
-    return `runtime_config.allowedTools and runtime_config.disallowedTools overlap on ${JSON.stringify(overlap)}`;
+  // Only an EXPLICIT allowedTools can contradict disallowedTools. Comparing against
+  // the implicit default would turn "deny WebSearch, take the defaults otherwise"
+  // into a 400 — and because PUT /agents/:id re-validates the STORED config, every
+  // later unrelated edit of such an agent would fail too. Growing the default list
+  // must never retroactively invalidate an existing agent. A default-vs-denied
+  // collision is not ambiguous: normalization below subtracts the denials.
+  if (config.allowedTools !== undefined) {
+    const allowedToolNames = new Set(config.allowedTools.map((name) => name.toLowerCase()));
+    const overlap = config.disallowedTools?.find(
+      (name) => allowedToolNames.has(name.toLowerCase()),
+    );
+    if (overlap) {
+      return `runtime_config.allowedTools and runtime_config.disallowedTools overlap on ${JSON.stringify(overlap)}`;
+    }
   }
 
   const extraArgs = config.extraArgs;
@@ -228,15 +235,21 @@ export function normalizeClaudeCodeRuntimeConfig(
   const validationError = validateClaudeCodeRuntimeConfig(config);
   if (validationError) throw new Error(validationError);
 
+  const disallowedTools = copyStrings(config?.disallowedTools);
+  const deniedToolNames = new Set(disallowedTools.map((name) => name.toLowerCase()));
+
   return {
     workingDirectory: trimmedOrNull(config?.workingDirectory),
     claudeBin: trimmedOrNull(config?.claudeBin) ?? DEFAULT_CLAUDE_BIN,
     model: trimmedOrNull(config?.model),
     effort: config?.effort ?? null,
+    // An explicit list is taken verbatim (validation already proved it does not
+    // contradict the denials). The implicit default instead yields to them, so a
+    // denied tool never lands in `--tools` and `--disallowedTools` at once.
     allowedTools: config?.allowedTools === undefined
-      ? [...DEFAULT_CLAUDE_ALLOWED_TOOLS]
+      ? DEFAULT_CLAUDE_ALLOWED_TOOLS.filter((name) => !deniedToolNames.has(name.toLowerCase()))
       : copyStrings(config.allowedTools),
-    disallowedTools: copyStrings(config?.disallowedTools),
+    disallowedTools,
     maxTurns: config?.maxTurns ?? null,
     maxBudgetUsd: config?.maxBudgetUsd ?? null,
     permissionMode: config?.permissionMode ?? 'allowlist',

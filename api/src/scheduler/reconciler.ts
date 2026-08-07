@@ -126,7 +126,7 @@ interface AgentRow {
   hooks_url: string | null;
   /** Remote Gateway Auth Header. */
   hooks_auth_header: string | null;
-  /** Agent runtime type (openclaw, veri, claude-code, etc.). */
+  /** Agent runtime type (openclaw, claude-code, etc.). */
   runtime_type: string | null;
   /** Agent runtime config JSON. */
   runtime_config: unknown;

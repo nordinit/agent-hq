@@ -34,13 +34,30 @@ export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
 export const CLAUDE_PERMISSION_MODES = ['bypass', 'allowlist'] as const;
 export type ClaudePermissionMode = (typeof CLAUDE_PERMISSION_MODES)[number];
 
-/** Productive local default without the unrestricted bypass-permissions flag. */
+/**
+ * Productive local default without the unrestricted bypass-permissions flag.
+ *
+ * `--tools` is the EXCLUSIVE availability boundary, so anything absent here does
+ * not exist for the agent — there is no prompt-to-approve fallback in a headless
+ * run. WebFetch/WebSearch are included because research-shaped tasks are ordinary
+ * agent work and were previously impossible without editing every agent by hand.
+ *
+ * Verified against Claude Code 2.1.224 by reading the `system/init` event's
+ * `tools` array: every name below resolves. Note that unknown tool names are
+ * SILENTLY DROPPED by the CLI (`TodoWrite`, `BashOutput`, `KillShell`,
+ * `SlashCommand` and `Skill` all vanish without error), so never add a name here
+ * without confirming it appears in that array first. Note also that `Glob` and
+ * `Grep` are real but are NOT part of the CLI's own `--tools default` set, which
+ * is precisely why this list is explicit rather than delegated to `default`.
+ */
 export const DEFAULT_CLAUDE_ALLOWED_TOOLS = [
   'Bash',
   'Edit',
   'Glob',
   'Grep',
   'Read',
+  'WebFetch',
+  'WebSearch',
   'Write',
 ] as const;
 

@@ -28,7 +28,6 @@ import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization
 import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { getDb } from '../db/client';
 import { nowTimestamp, timestampFromEpochMs } from '../lib/timestamps';
-import { getAgentHqBaseUrl } from '../lib/agentHqBaseUrl';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn as durableTableHasColumn } from '../lib/durableRunIdentity';
 import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from '../lib/runtimeTenantScope';
@@ -1508,15 +1507,11 @@ async function fireAgentRun(
   //   2. job_template.model
   //   3. agent.model
   //   4. gateway default (null → omit from payload)
-  //
-  // Custom agents manage their own model selection — skip resolution so
-  // CustomAgentRuntime falls through to its DEFAULT_VERI_MODEL.
-  const isCustomRuntime = job.runtime_type === 'veri';
   const preferredProvider = job.preferred_provider ?? null;
-  const spModel = isCustomRuntime ? null : await resolveModelFromStoryPoints(db, storyPoints ?? null, preferredProvider, modelScope);
-  const model = isCustomRuntime ? null : (spModel?.model || job.model || job.agent_model || null);
-  const thinking = isCustomRuntime ? null : (spModel?.thinking_level ?? null);
-  const fastMode = isCustomRuntime ? null : (spModel?.fast_mode ?? null);
+  const spModel = await resolveModelFromStoryPoints(db, storyPoints ?? null, preferredProvider, modelScope);
+  const model = spModel?.model || job.model || job.agent_model || null;
+  const thinking = spModel?.thinking_level ?? null;
+  const fastMode = spModel?.fast_mode ?? null;
   if (spModel) {
     console.log(
       `[dispatcher] Story points=${storyPoints} preferred_provider=${preferredProvider ?? 'null'} → model=${spModel.model} thinking=${spModel.thinking_level ?? 'default'} fastMode=${spModel.fast_mode ?? 'default'} (rule: ${spModel.label ?? 'unnamed'})`
@@ -2181,11 +2176,6 @@ export async function dispatchTaskToJob(
           });
   }
 
-  // Remote agents (Custom) need the external Tailscale URL; local agents use localhost.
-  const callbackBaseUrl = job.runtime_type === 'veri'
-    ? getAgentHqBaseUrl()
-    : undefined; // undefined → default Agent HQ base URL / localhost
-
   // ── GitHub identity injection (task #613) ────────────────────────────────
   // Resolve and inject per-agent GitHub credentials so routed agents can
   // operate under distinct GitHub identities for PR open/approve/merge.
@@ -2226,7 +2216,8 @@ export async function dispatchTaskToJob(
 
   const fullMessage = await appendInstanceInstructions(
       [baseMessage, pathContextSection].filter(Boolean).join('\n\n'), instanceId, durableRunId, task.id, task.status, agentSlug, sessionKey,
-      callbackBaseUrl, task.task_type, task.sprint_id, task.sprint_type, transportMode,
+      // undefined → default Agent HQ base URL / localhost
+      undefined, task.task_type, task.sprint_id, task.sprint_type, transportMode,
     ) + ghIdentityContext;
 
   fireAgentRun(

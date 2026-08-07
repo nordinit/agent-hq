@@ -34,7 +34,7 @@ export function resolveInstanceAbortTransport(
 }
 
 function fallbackRunId(runtimeType: string, instanceId: number): string {
-  return runtimeType === 'veri' ? `veri-${instanceId}` : `${runtimeType}:${instanceId}`;
+  return `${runtimeType}:${instanceId}`;
 }
 
 function resolveInstanceSessionKey(instance: Record<string, unknown>): string | null {

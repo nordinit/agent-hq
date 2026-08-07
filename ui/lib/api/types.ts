@@ -52,7 +52,7 @@ export interface HermesRuntimeConfig {
 }
 
 export type AgentRuntimeConfig = ClaudeCodeRuntimeConfig | CodexRuntimeConfig | HermesRuntimeConfig | Record<string, unknown>;
-export type AgentRuntimeType = 'openclaw' | 'claude-code' | 'codex' | 'hermes' | 'webhook' | 'veri';
+export type AgentRuntimeType = 'openclaw' | 'claude-code' | 'codex' | 'hermes' | 'webhook';
 
 export type RuntimeDiagnosticStatus = 'pass' | 'warn' | 'fail' | 'skipped';
 

@@ -137,6 +137,45 @@ export const WORKSPACE_ROOT: string =
   process.env.WORKSPACE_ROOT ??
   path.join(HOME, '.openclaw', 'workspace');
 
+/**
+ * Parent directory for workspaces belonging to runtimes Agent HQ owns itself
+ * (claude-code, codex, hermes) rather than to OpenClaw.
+ *
+ * These must NOT live under `~/.openclaw`: that tree is OpenClaw's, is scanned by
+ * its agent registry, and its per-agent auth profiles are synced there. A
+ * claude-code agent has no OpenClaw identity, so a workspace under that root is
+ * both misleading and liable to be picked up by OpenClaw tooling.
+ *
+ * `AGENT_HQ_DATA_DIR` is the same override the Codex runtime-state root honours
+ * (api/src/runtimes/codex/profile.ts), so one env var relocates all Agent HQ data.
+ *
+ * Kept as a function, like resolveUploadsRoot() below, so tests and one-shot
+ * commands can set an isolated root after module loading.
+ */
+export function resolveAgentHqWorkspaceParent(): string {
+  const explicit = process.env.AGENT_HQ_WORKSPACE_PARENT?.trim();
+  if (explicit) return path.resolve(explicit);
+  const dataRoot = process.env.AGENT_HQ_DATA_DIR?.trim();
+  return dataRoot
+    ? path.join(path.resolve(dataRoot), 'workspaces')
+    : path.join(HOME, '.agent-hq', 'workspaces');
+}
+
+/**
+ * Default workspace for an Agent HQ-owned runtime agent: one directory per agent
+ * slug under the Agent HQ workspace parent.
+ *
+ * This is only ever a FALLBACK cwd. A workflow's repo checkout or task worktree
+ * always outranks it at dispatch (see resolveDispatchPathContext in
+ * services/dispatcher.ts); it exists so an agent with no repo assigned still has a
+ * stable, writable place to run instead of failing to launch.
+ */
+export function buildAgentHqWorkspacePath(agentSlug: string): string {
+  const slug = agentSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (!slug) throw new Error('buildAgentHqWorkspacePath requires a non-empty agent slug');
+  return path.join(resolveAgentHqWorkspaceParent(), slug);
+}
+
 // ── Persistent uploads ────────────────────────────────────────────────────
 
 /**
@@ -149,12 +188,3 @@ export function resolveUploadsRoot(): string {
   );
 }
 
-// ── Custom runtime LLM fleet integration ──────────────────────────────────
-// Credentials are supplied via environment or other Agent HQ-managed secret/config surfaces.
-// Used by CustomAgentRuntime (Mode 2) and available for model routing (Mode 1).
-
-export const VERI_BASE_URL: string =
-  process.env.VERI_BASE_URL ?? '';
-
-export const VERI_API_KEY: string =
-  process.env.VERI_API_KEY ?? '';

@@ -17,7 +17,7 @@ import Link from 'next/link';
 import { AgentTeamsCard } from '@/components/AgentTeamsCard';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { DEFAULT_CLAUDE_ALLOWED_TOOLS, claudeRuntimeConfigToJson, serializeClaudeRuntimeConfig } from '@/lib/claudeRuntimeConfig';
+import { DEFAULT_CLAUDE_ALLOWED_TOOLS, claudeRuntimeConfigToJson, defaultClaudeWorkspaceHint, serializeClaudeRuntimeConfig } from '@/lib/claudeRuntimeConfig';
 import {
   getAgentModelLabel,
   getAgentModelOptionsForProvider,
@@ -39,7 +39,6 @@ const RUNTIME_TYPE_OPTIONS: Array<{ value: AgentRuntimeType; label: string }> = 
   { value: 'codex', label: 'Codex' },
   { value: 'hermes', label: 'Hermes' },
   { value: 'webhook', label: 'Webhook' },
-  { value: 'veri', label: 'Custom (Agent Runtime)' },
 ];
 
 interface EditFormState {
@@ -963,13 +962,16 @@ export default function AgentDetailPage() {
               {!editForm.raw_json_expanded && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <label className="block md:col-span-2">
-                    <span className="text-slate-400 text-xs mb-1 block">Working Directory <span className="text-slate-600">(optional workflow fallback)</span></span>
+                    <span className="text-slate-400 text-xs mb-1 block">Working Directory <span className="text-slate-600">(optional — leave blank)</span></span>
                     <input
                       className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500 font-mono"
                       value={(editForm.runtime_config as ClaudeCodeRuntimeConfig).workingDirectory}
                       onChange={e => setF({ runtime_config: { ...(editForm.runtime_config as ClaudeCodeRuntimeConfig), workingDirectory: e.target.value } })}
-                      placeholder=".openclaw/workspace-<agent-slug>"
+                      placeholder={editForm.workspace_path || defaultClaudeWorkspaceHint(editForm.name)}
                     />
+                    <p className="text-slate-500 text-xs mt-1.5">
+                      Left blank, the agent falls back to its workspace above. A workflow&apos;s repo or task worktree takes precedence over both.
+                    </p>
                   </label>
                   <label className="block">
                     <span className="text-slate-400 text-xs mb-1 block">Model</span>

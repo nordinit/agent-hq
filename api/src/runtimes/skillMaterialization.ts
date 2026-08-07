@@ -28,8 +28,7 @@
  *   codex        → CodexSkillAdapter      — copies into workspace `.agents/skills/`
  *   hermes       → HermesSkillAdapter     — copies concrete skill artifacts into the
  *                                            Hermes profile/workspace contract
- *   veri         → PromptInjectionSkillAdapter — embeds skill names in prompt metadata
- *   webhook      → PromptInjectionSkillAdapter — same
+ *   webhook      → PromptInjectionSkillAdapter — embeds skill names in prompt metadata
  *   (default)    → NoopSkillAdapter       — no-op for unknown/future runtimes
  *
  * # Source-of-truth guarantee
@@ -839,8 +838,6 @@ export function getSkillMaterializationAdapter(
       return new CodexSkillAdapter();
     case 'hermes':
       return new HermesSkillAdapter();
-    case 'veri':
-      return new PromptInjectionSkillAdapter('veri');
     case 'webhook':
       return new PromptInjectionSkillAdapter('webhook');
     default:

@@ -8,7 +8,7 @@ describe('resolveInstanceAbortTransport', () => {
     },
   );
 
-  it.each(['claude-code', 'hermes', 'webhook', 'veri', 'future-managed-runtime'])(
+  it.each(['claude-code', 'hermes', 'webhook', 'future-managed-runtime'])(
     'routes explicit runtime %p through its AgentRuntime.abort implementation',
     (runtimeType) => {
       expect(resolveInstanceAbortTransport(runtimeType)).toBe('runtime');

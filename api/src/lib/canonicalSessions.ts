@@ -118,7 +118,6 @@ function mapInstanceStatus(status: string | null | undefined): CanonicalSessionS
 function inferRuntime(sessionKey: string | null, runtimeType: string | null): string {
   if (sessionKey?.startsWith('claude-code:')) return 'claude-code';
   if (sessionKey?.startsWith('cron:')) return 'cron';
-  if (runtimeType === 'veri') return 'veri';
   if (runtimeType === 'hermes') return 'hermes';
   if (runtimeType === 'webhook') return 'webhook';
   if (runtimeType === 'claude-code') return 'claude-code';

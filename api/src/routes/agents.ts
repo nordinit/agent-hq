@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { getDb } from '../db/client';
 import { generateClaudeMd, OPENCLAW_SKILLS_PATH } from '../services/dispatcher';
-import { OPENCLAW_CONFIG_PATH } from '../config';
+import { OPENCLAW_CONFIG_PATH, buildAgentHqWorkspacePath } from '../config';
 import { ATLAS_SYSTEM_ROLE } from '../lib/atlasAgent';
 import {
   normalizeRepoConfig,
@@ -426,10 +426,20 @@ async function syncStoredProviderAuthProfiles(agentDirPath: string): Promise<str
   return await syncAvailableOAuthProfilesToAuthFile(agentDirPath);
 }
 
+/**
+ * Runtimes that spawn a local process and therefore need a cwd. `webhook` is
+ * excluded: it calls out to a remote endpoint and never chdirs.
+ */
+const RUNTIMES_WITH_DEFAULT_WORKSPACE = new Set(['openclaw', 'claude-code', 'codex', 'hermes']);
+
 function buildDefaultWorkspacePath(slug: string): string {
-  return path.join(os.homedir(), '.openclaw', `workspace-${slug}`);
+  return buildAgentHqWorkspacePath(slug);
 }
 
+/**
+ * OpenClaw's per-agent CONFIG dir (auth profiles, agent registration) — distinct
+ * from the workspace and genuinely owned by OpenClaw, so it stays under ~/.openclaw.
+ */
 function buildDefaultAgentDirPath(slug: string): string {
   return path.join(os.homedir(), '.openclaw', 'agents', slug, 'agent');
 }
@@ -1470,11 +1480,34 @@ router.post('/', async (req: Request, res: Response) => {
               });
     let resolvedWorkspacePath = workspace_path ?? '';
 
+    // Every local-process runtime resolves its cwd as
+    // activeRepoRoot -> runtime_config.workingDirectory -> workspaceRoot, and throws
+    // when all three are null. The create form only exposes a workspace field for
+    // OpenClaw, so agents on the other drivers were saved with workspace_path='' and
+    // could not dispatch without a workflow repo. Give each one a stable home under
+    // Agent HQ's own data root; a workflow repo or task worktree still outranks it.
+    if (RUNTIMES_WITH_DEFAULT_WORKSPACE.has(effectiveRuntimeTypeCreate) && !resolvedWorkspacePath.trim()) {
+      resolvedWorkspacePath = buildAgentHqWorkspacePath(name);
+      try {
+        fs.mkdirSync(resolvedWorkspacePath, { recursive: true });
+      } catch (mkdirErr) {
+        // Non-fatal: record the path so dispatch is coherent, and let the run
+        // surface a real filesystem error rather than failing agent creation.
+        console.warn(
+          `[agents] could not pre-create ${effectiveRuntimeTypeCreate} workspace ${resolvedWorkspacePath}:`,
+          mkdirErr instanceof Error ? mkdirErr.message : String(mkdirErr),
+        );
+      }
+    }
+
     if (provision_openclaw && effectiveRuntimeTypeCreate === 'openclaw') {
       // Derive a clean agent ID from the name (lowercase, hyphens)
       const agentId = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      const homedir = process.env.HOME ?? os.homedir();
-      resolvedWorkspacePath = workspace_path || path.join(homedir, '.openclaw', `workspace-${agentId}`);
+      // The workspace default above already produced an Agent HQ-owned path; pass it
+      // to `openclaw agents add --workspace` so OpenClaw's own registry agrees with
+      // agents.workspace_path. They must match or MCP bundles materialize into the
+      // wrong directory (see mcpMaterialization.ts).
+      resolvedWorkspacePath = resolvedWorkspacePath.trim() || buildAgentHqWorkspacePath(name);
       // Create workspace dir first
       fs.mkdirSync(resolvedWorkspacePath, { recursive: true });
       try {

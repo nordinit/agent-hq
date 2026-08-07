@@ -258,13 +258,6 @@ export function defaultRuntimeExecutionTarget(runtimeType: string): RuntimeExecu
         trustLevel: 'workspace',
         capabilities: ['inspect', 'live-redirect', 'network', 'resume', 'workspace-write'],
       };
-    case 'veri':
-      return {
-        id: 'managed:veri',
-        kind: 'managed',
-        trustLevel: 'untrusted',
-        capabilities: ['inspect', 'network', 'signals'],
-      };
     case 'webhook':
       return {
         id: 'managed:webhook',

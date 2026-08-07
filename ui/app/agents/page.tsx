@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Bot, Plus, Pencil, Trash2, X, Check, FolderOpen, ChevronDown, Zap, CheckCircle, AlertCircle, Loader2, ChevronRight, Power } from 'lucide-react';
 import Link from 'next/link';
 import { AgentDeleteNotice, buildAgentDeleteNotice, type AgentDeleteNoticeData } from '@/components/AgentDeleteNotice';
-import { DEFAULT_CLAUDE_ALLOWED_TOOLS, claudeRuntimeConfigToJson, serializeClaudeRuntimeConfig } from '@/lib/claudeRuntimeConfig';
+import { DEFAULT_CLAUDE_ALLOWED_TOOLS, claudeRuntimeConfigToJson, defaultClaudeWorkspaceHint, serializeClaudeRuntimeConfig } from '@/lib/claudeRuntimeConfig';
 import {
   getAgentModelLabel,
   getAgentModelOptionsForProvider,
@@ -31,7 +31,6 @@ const RUNTIME_TYPE_OPTIONS: Array<{ value: AgentRuntimeType; label: string }> = 
   { value: 'codex', label: 'Codex' },
   { value: 'hermes', label: 'Hermes' },
   { value: 'webhook', label: 'Webhook' },
-  { value: 'veri', label: 'Custom (Agent Runtime)' },
 ];
 
 interface FormState {
@@ -214,12 +213,6 @@ function runtimeBadge(agent: Agent) {
       return (
         <span className="inline-flex items-center text-xs font-medium text-sky-300 bg-sky-900/30 border border-sky-500/30 px-1.5 py-0.5 rounded-full whitespace-nowrap">
           Codex
-        </span>
-      );
-    case 'veri':
-      return (
-        <span className="inline-flex items-center text-xs font-medium text-blue-300 bg-blue-900/30 border border-blue-500/30 px-1.5 py-0.5 rounded-full whitespace-nowrap">
-          Custom
         </span>
       );
     case 'hermes':
@@ -939,14 +932,17 @@ export default function AgentsPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <label className="block md:col-span-2">
                         <span className="text-slate-400 text-xs mb-1 block">
-                          Working Directory <span className="text-slate-600">(optional workflow fallback)</span>
+                          Working Directory <span className="text-slate-600">(optional — leave blank)</span>
                         </span>
                         <input
                           className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
                           value={claudeRuntimeConfig.workingDirectory}
                           onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeClaudeRuntimeConfig(f.runtime_config), workingDirectory: e.target.value } }))}
-                          placeholder=".openclaw/workspace-<agent-slug>"
+                          placeholder={defaultClaudeWorkspaceHint(form.name)}
                         />
+                        <p className="text-slate-500 text-xs mt-1.5">
+                          Left blank, the agent gets its own workspace under Agent HQ&apos;s data root. A workflow&apos;s repo or task worktree always takes precedence over both.
+                        </p>
                       </label>
 
                       <label className="block">

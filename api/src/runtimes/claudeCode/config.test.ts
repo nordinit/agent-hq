@@ -195,15 +195,34 @@ describe('claude-code runtime config validation', () => {
     );
   });
 
-  it('rejects overlap between effective allowed and disallowed built-in tools', () => {
+  it('rejects overlap only between EXPLICIT allowed and disallowed built-in tools', () => {
     expect(validateClaudeCodeRuntimeConfig({
       allowedTools: ['Bash', 'Read'],
       disallowedTools: ['read'],
     })).toBe('runtime_config.allowedTools and runtime_config.disallowedTools overlap on "read"');
-    // Omitted allowedTools means the hardened default list, not an empty set.
-    expect(validateClaudeCodeRuntimeConfig({ disallowedTools: ['Bash'] })).toContain('overlap');
     expect(validateClaudeCodeRuntimeConfig({ allowedTools: [], disallowedTools: ['Bash'] }))
       .toBeNull();
+  });
+
+  it('lets a denial narrow the implicit default instead of 400-ing', () => {
+    // Denying a tool the operator never explicitly allowed is intent, not a
+    // contradiction. Validating it against the default list would mean that GROWING
+    // that list retroactively invalidates stored configs — and PUT /agents/:id
+    // re-validates the stored config on every unrelated edit, so such an agent could
+    // never be saved again. This is exactly what adding WebFetch/WebSearch would have
+    // done to any agent carrying disallowedTools: ['WebSearch'].
+    expect(validateClaudeCodeRuntimeConfig({ disallowedTools: ['Bash'] })).toBeNull();
+    expect(validateClaudeCodeRuntimeConfig({ disallowedTools: ['WebSearch'] })).toBeNull();
+
+    // Normalization resolves it: the denial is subtracted from the default so no
+    // tool can reach both --tools and --disallowedTools in the same argv.
+    const normalized = normalizeClaudeCodeRuntimeConfig({ disallowedTools: ['WebSearch'] });
+    expect(normalized.allowedTools).toEqual(['Bash', 'Edit', 'Glob', 'Grep', 'Read', 'WebFetch', 'Write']);
+    expect(normalized.disallowedTools).toEqual(['WebSearch']);
+
+    // An EXPLICIT list is still taken verbatim — validation already proved it clean.
+    expect(normalizeClaudeCodeRuntimeConfig({ allowedTools: ['Bash'], disallowedTools: ['Read'] }).allowedTools)
+      .toEqual(['Bash']);
   });
 
   it.each([
@@ -351,7 +370,7 @@ describe('claude-code runtime config normalization', () => {
       claudeBin: 'claude',
       model: null,
       effort: null,
-      allowedTools: ['Bash', 'Edit', 'Glob', 'Grep', 'Read', 'Write'],
+      allowedTools: ['Bash', 'Edit', 'Glob', 'Grep', 'Read', 'WebFetch', 'WebSearch', 'Write'],
       disallowedTools: [],
       maxTurns: null,
       maxBudgetUsd: null,

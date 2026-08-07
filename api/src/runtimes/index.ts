@@ -80,8 +80,6 @@ export { HermesRuntime, validateHermesRuntimeConfig } from './hermes';
 export type { HermesRuntimeConfig } from './hermes';
 export { WebhookRuntime } from './WebhookRuntime';
 export type { WebhookRuntimeConfig } from './WebhookRuntime';
-export { CustomAgentRuntime } from './CustomAgentRuntime';
-export type { CustomAgentRuntimeConfig } from './CustomAgentRuntime';
 
 
 import type { AgentRuntime } from './types';
@@ -90,7 +88,6 @@ import { ClaudeCodeRuntime } from './claudeCode';
 import { CodexRuntime } from './codex';
 import { HermesRuntime } from './hermes';
 import { WebhookRuntime, type WebhookRuntimeConfig } from './WebhookRuntime';
-import { CustomAgentRuntime, type CustomAgentRuntimeConfig } from './CustomAgentRuntime';
 
 /**
  * resolveRuntime — factory that maps runtime_type → AgentRuntime implementation.
@@ -134,8 +131,6 @@ export function resolveRuntime(agent: {
       }
       return new WebhookRuntime(config as unknown as WebhookRuntimeConfig);
     }
-    case 'veri':
-      return new CustomAgentRuntime(config as unknown as CustomAgentRuntimeConfig);
     case 'openclaw':
       return new OpenClawRuntime();
     default:

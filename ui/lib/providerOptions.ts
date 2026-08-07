@@ -140,5 +140,9 @@ export function isProviderSupportedByRuntime(
   // `codex` is the runtime driver; `openai-codex` remains the provider/auth slug.
   if (provider === 'openai-codex') return runtimeType === 'openclaw' || runtimeType === 'codex';
   if (runtimeType === 'codex') return false;
+  // The Claude Code CLI only ever authenticates against Anthropic. Its adapter
+  // rejects any other provider at dispatch (api/src/runtimes/claudeCode/auth.ts),
+  // so offering one here produces a selection the runtime can never honour.
+  if (runtimeType === 'claude-code') return provider === 'anthropic';
   return true;
 }
