@@ -227,7 +227,19 @@ export default function ChatWidget() {
   const [transport, setTransport] = useState<ChatTransport>('openclaw-gateway');
   const runtimeInstanceIdsRef = useRef<number[]>([]);
   const runtimeSessionFloorRef = useRef<number | null>(null);
+  // Readiness for a runtime agent. There is no socket to watch, so this is a real
+  // probe of the driver: CLI present, version in range, workspace writable, and
+  // `claude auth status` actually passing — the things that would otherwise fail
+  // at dispatch. A stored provider-connection row cannot tell us any of that.
+  const [runtimeReady, setRuntimeReady] = useState<{ ok: boolean; message: string } | null>(null);
+
+
   const [connected, setConnected] = useState(false);
+  const chatReady = transport === 'runtime' ? runtimeReady?.ok === true : connected;
+  const chatStatusLabel = transport === 'runtime'
+    ? (runtimeReady?.message ?? 'Checking runtime…')
+    : (connected ? 'Connected' : 'Connecting…');
+
 
   const [showNewChatConfirm, setShowNewChatConfirm] = useState(false);
 
@@ -392,11 +404,11 @@ export default function ChatWidget() {
   useEffect(() => {
     emitAtlasWidgetState({
       open,
-      connected,
+      connected: chatReady,
       activeTab,
       hasSessionKey: !!sessionKey,
     });
-  }, [connected, open, sessionKey]);
+  }, [chatReady, open, sessionKey]);
 
   // Auto-scroll helpers
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
@@ -643,6 +655,34 @@ export default function ChatWidget() {
       }
     };
   }, [connectWs, clearResponseWatchdog]);
+
+  // ── Runtime driver readiness (replaces the socket's connected flag) ──────────
+  useEffect(() => {
+    if (transport !== 'runtime' || !open || agentId == null) return;
+
+    let stopped = false;
+    const probe = () => {
+      api.diagnoseRuntimeDriver({ agent_id: agentId })
+        .then(result => {
+          if (stopped) return;
+          const failed = result.checks.find(check => check.status === 'fail');
+          setRuntimeReady({
+            ok: result.ok,
+            message: result.ok
+              ? 'Connected'
+              : failed?.message ?? 'Runtime unavailable',
+          });
+        })
+        .catch(() => {
+          if (!stopped) setRuntimeReady({ ok: false, message: 'Could not reach the runtime' });
+        });
+    };
+
+    probe();
+    const interval = setInterval(probe, 120_000);
+    return () => { stopped = true; clearInterval(interval); };
+  }, [transport, open, agentId]);
+
 
   // ── Live transcript polling for structured rows (tool calls/results/thoughts) ──
   useEffect(() => {
@@ -943,7 +983,7 @@ export default function ChatWidget() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-white">Atlas</p>
                   <p className="text-[10px] text-slate-500">
-                    {connected ? 'Connected' : 'Connecting…'}
+                    {chatStatusLabel}
                   </p>
                 </div>
               </>
@@ -1177,7 +1217,7 @@ export default function ChatWidget() {
                     disabled={
                       (!inputText.trim() && pendingAttachments.filter(a => a.uploadedId && !a.error).length === 0)
                       || sending
-                      || !connected
+                      || !chatReady
                       || pendingAttachments.some(a => a.uploading)
                     }
                     className="shrink-0 w-9 h-9 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center hover:bg-amber-500/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
