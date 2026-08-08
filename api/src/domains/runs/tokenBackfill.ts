@@ -180,16 +180,27 @@ export async function fetchHookSessionTokensAsync(): Promise<TokenMap> {
  * Backfill token data for recently completed instances that have no token data.
  * Returns the count of rows updated.
  */
+/**
+ * Only OpenClaw runs can be backfilled from here.
+ *
+ * The token source is OpenClaw's own sessions.list, so a claude-code, codex or
+ * hermes run can never match — without this filter those rows stayed candidates
+ * on every tick forever, re-fetched and re-scanned to no effect. Those runtimes
+ * persist their own usage at run end (see ClaudeCodeRuntime), so a row that
+ * still has no tokens has none to record, not tokens waiting to be found.
+ */
 async function getBackfillCandidates(db: Db): Promise<Array<{ id: number; session_key: string | null }>> {
   return await db.all(`
-    SELECT id, session_key
-    FROM job_instances
-    WHERE token_input IS NULL
-      AND token_output IS NULL
-      AND token_total IS NULL
-      AND status IN ('done', 'failed')
-      AND created_at >= to_char((now() AT TIME ZONE 'utc' - interval '14 day'), 'YYYY-MM-DD HH24:MI:SS')
-    ORDER BY created_at DESC, id DESC
+    SELECT ji.id, ji.session_key
+    FROM job_instances ji
+    LEFT JOIN agents a ON a.id = ji.agent_id
+    WHERE ji.token_input IS NULL
+      AND ji.token_output IS NULL
+      AND ji.token_total IS NULL
+      AND ji.status IN ('done', 'failed')
+      AND (a.runtime_type IS NULL OR a.runtime_type = '' OR a.runtime_type = 'openclaw')
+      AND ji.created_at >= to_char((now() AT TIME ZONE 'utc' - interval '14 day'), 'YYYY-MM-DD HH24:MI:SS')
+    ORDER BY ji.created_at DESC, ji.id DESC
     LIMIT 500
   `) as Array<{ id: number; session_key: string | null }>;
 }

@@ -1,4 +1,5 @@
 import { abortChatRunBySessionKey } from '../../runtimes/OpenClawRuntime';
+import { abortInstanceExecutionTransport, resolveInstanceAbortTransport } from './stopInstanceExecution';
 import { destroyAgentContext } from '../../services/browserPool';
 import { recordRunCheckIn } from './observability';
 import { isTerminalInstanceOutcome } from '../../lib/outcomeCatalog';
@@ -183,7 +184,8 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
   let instance: Record<string, unknown> | undefined;
   try {
     instance = await db.get(`
-      SELECT ji.*, a.session_key AS agent_session_key, a.repo_path AS agent_repo_path, a.repo_access_mode AS agent_repo_access_mode
+      SELECT ji.*, a.session_key AS agent_session_key, a.repo_path AS agent_repo_path, a.repo_access_mode AS agent_repo_access_mode,
+             a.runtime_type, a.runtime_config
       FROM job_instances ji
       LEFT JOIN agents a ON a.id = ji.agent_id
       WHERE ji.id = ?
@@ -290,11 +292,39 @@ export async function closeInstance(opts: CloseInstanceOptions): Promise<CloseIn
   }
 
   // ── 4. Terminate agent session (async, fire-and-forget) ───────────────────
+  // Routed by the agent's runtime, not assumed to be OpenClaw. Sending a
+  // claude-code/codex/hermes session key to the gateway aborts nothing and
+  // reports success, which is the same silent mismatch the send and stop paths
+  // already guard against.
   const instanceSessionKey = instance.session_key as string | null;
-  if (instanceSessionKey) {
+  const closeTenantId = Number(instance.tenant_id);
+  const closeReason = `terminal outcome: ${outcome ?? finalStatus}`;
+  const closeTransport = resolveInstanceAbortTransport(instance.runtime_type);
+  const closeInstance = instance;
+
+  if (closeTransport === 'runtime') {
+    if (Number.isInteger(closeTenantId) && closeTenantId > 0) {
+      setImmediate(() => {
+        void abortInstanceExecutionTransport(db, closeInstance, {
+          instanceId,
+          tenantId: closeTenantId,
+          reason: closeReason,
+        }).then(attempt => {
+          const result = attempt.result;
+          if (result?.attempted && !result.ok && result.status !== 'already_gone') {
+            console.warn(`[instanceClose] Runtime abort non-fatal for instance ${instanceId} (status=${result.status}): ${result.error ?? 'unknown'}`);
+          } else {
+            console.log(`[instanceClose] Runtime abort for instance ${instanceId}: ${result?.status ?? 'not-attempted'}`);
+          }
+        }).catch((err: unknown) => {
+          console.warn(`[instanceClose] Runtime abort threw for instance ${instanceId} (non-fatal):`, err instanceof Error ? err.message : err);
+        });
+      });
+    }
+  } else if (instanceSessionKey) {
     setImmediate(() => {
       try {
-        const result = abortChatRunBySessionKey(instanceSessionKey, `terminal outcome: ${outcome ?? finalStatus}`);
+        const result = abortChatRunBySessionKey(instanceSessionKey, closeReason);
         if (!result.ok && result.status !== 'already_gone') {
           console.warn(`[instanceClose] Session abort non-fatal for instance ${instanceId} (status=${result.status}): ${result.error ?? 'unknown'}`);
         } else {

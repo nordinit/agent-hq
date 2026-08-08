@@ -13,7 +13,7 @@ import { columnExists, tableExists } from '../../db/introspection';
 
 type InstanceAbortStatus = 'succeeded' | 'already_gone' | 'timed_out' | 'failed';
 
-interface InstanceAbortResult {
+export interface InstanceAbortResult {
   attempted: boolean;
   ok: boolean;
   status: InstanceAbortStatus;
@@ -89,6 +89,120 @@ async function stopPersistedLocalProcess(
       : 'failed',
     error: result.error,
   };
+}
+
+export interface InstanceAbortAttempt {
+  transport: 'openclaw-gateway' | 'runtime';
+  runtimeType: string;
+  sessionKey: string | null;
+  result: InstanceAbortResult | null;
+}
+
+/**
+ * Ask whatever owns the running agent to stop, using that agent's transport.
+ *
+ * Every caller that ends a run early has to make this same choice, and getting
+ * it wrong is silent: OpenClaw's chat.abort accepts a claude-code session key,
+ * finds nothing, and reports success while the CLI keeps running. Extracted so
+ * the manual-stop route and the watchdog share one implementation rather than
+ * each growing their own half of it.
+ *
+ * `instance` must carry ji.* plus the agent's runtime_type/runtime_config and,
+ * for the gateway path, a session key. Failure to abort is reported, never
+ * thrown — the caller's own bookkeeping is authoritative either way.
+ */
+export async function abortInstanceExecutionTransport(
+  db: Db,
+  instance: Record<string, unknown>,
+  options: { instanceId: number; tenantId: number; reason: string },
+): Promise<InstanceAbortAttempt> {
+  const { instanceId, tenantId, reason } = options;
+  const sessionKey = resolveInstanceSessionKey(instance);
+  const runtimeType = typeof instance.runtime_type === 'string' && instance.runtime_type.trim()
+    ? instance.runtime_type.trim()
+    : 'openclaw';
+  const transport = resolveInstanceAbortTransport(runtimeType);
+  let result: InstanceAbortResult | null = null;
+
+  try {
+    await interruptRuntimeExecution(db, { instanceId, tenantId, reason });
+  } catch (executionStateError) {
+    // Runtime stop must still be attempted if execution-state observability is
+    // temporarily unavailable; the caller's authoritative stop records the error.
+    console.warn(
+      `[instances] could not mark runtime execution interrupting for instance ${instanceId}:`,
+      executionStateError instanceof Error ? executionStateError.message : String(executionStateError),
+    );
+  }
+
+  if (transport === 'openclaw-gateway' && sessionKey) {
+    result = await Promise.resolve(abortChatRunBySessionKey(sessionKey, reason));
+  } else if (transport === 'runtime') {
+    const storedRunId = typeof instance.run_id === 'string' ? instance.run_id.trim() : '';
+    const runId = storedRunId || fallbackRunId(runtimeType, instanceId);
+    try {
+      const runtime = resolveRuntime({
+        runtime_type: runtimeType,
+        runtime_config: instance.runtime_config ?? null,
+      });
+      const runtimeResult = await runtime.abort(runId, sessionKey ?? '');
+      if (!runtimeResult) {
+        result = {
+          attempted: true,
+          ok: false,
+          status: 'failed',
+          error: `${runtimeType} runtime did not return abort confirmation`,
+        };
+      } else if (runtimeResult.status === 'signalled') {
+        result = {
+          attempted: runtimeResult.attempted,
+          ok: runtimeResult.ok && runtimeResult.confirmed,
+          status: runtimeResult.ok && runtimeResult.confirmed ? 'succeeded' : 'failed',
+          error: runtimeResult.error,
+        };
+      } else if (runtimeResult.status === 'already_gone') {
+        result = {
+          attempted: runtimeResult.attempted,
+          ok: runtimeResult.ok && runtimeResult.confirmed,
+          status: runtimeResult.ok && runtimeResult.confirmed ? 'already_gone' : 'failed',
+          error: runtimeResult.error,
+        };
+      } else {
+        // In particular, a fresh API process has no in-memory supervisor handle.
+        // That is unknown runtime state, not proof the underlying CLI is gone.
+        result = {
+          attempted: runtimeResult.attempted,
+          ok: false,
+          status: 'failed',
+          error: runtimeResult.error ?? `${runtimeType} abort target was not found`,
+        };
+      }
+
+      // A signal accepted by the in-memory supervisor is not yet proof that
+      // the complete process group exited. Confirm through the identity-bound
+      // durable handle; this also covers API restart and another replica.
+      if (!result.ok) {
+        const durableAbort = await stopPersistedLocalProcess(
+          db,
+          instanceId,
+          tenantId,
+          instance.runtime_config,
+        );
+        if (durableAbort) result = durableAbort;
+      }
+    } catch (runtimeAbortErr) {
+      const error = runtimeAbortErr instanceof Error
+        ? runtimeAbortErr.message
+        : String(runtimeAbortErr);
+      result = { attempted: true, ok: false, status: 'failed', error };
+      console.warn(
+        `[instances] ${runtimeType} runtime abort failed for instance ${instanceId} (non-fatal):`,
+        error,
+      );
+    }
+  }
+
+  return { transport, runtimeType, sessionKey, result };
 }
 
 function removeQueuedCronJob(instance: Record<string, unknown>, env: NodeJS.ProcessEnv): { removed: boolean; jobId?: string | null; error?: string } {
@@ -184,92 +298,13 @@ export async function stopInstanceExecution(
     OPENCLAW_SUPPRESS_NOTES: '1',
   };
 
-  const sessionKey = resolveInstanceSessionKey(instance);
   const stopReason = `Agent HQ manual stop for instance ${id} (${behavior})`;
-
-  const agentRuntimeType = typeof instance.runtime_type === 'string' && instance.runtime_type.trim()
-    ? instance.runtime_type.trim()
-    : 'openclaw';
-  const abortTransport = resolveInstanceAbortTransport(agentRuntimeType);
-  let abortResult: InstanceAbortResult | null = null;
-
-  try {
-    await interruptRuntimeExecution(db, { instanceId: id, tenantId, reason: stopReason });
-  } catch (executionStateError) {
-    // Runtime stop must still be attempted if execution-state observability is
-    // temporarily unavailable; the authoritative stop below records the error.
-    console.warn(
-      `[instances] could not mark runtime execution interrupting for instance ${id}:`,
-      executionStateError instanceof Error ? executionStateError.message : String(executionStateError),
-    );
-  }
-
-  if (abortTransport === 'openclaw-gateway' && sessionKey) {
-    abortResult = await Promise.resolve(abortChatRunBySessionKey(sessionKey, stopReason));
-  } else if (abortTransport === 'runtime') {
-    const storedRunId = typeof instance.run_id === 'string' ? instance.run_id.trim() : '';
-    const runId = storedRunId || fallbackRunId(agentRuntimeType, id);
-    try {
-      const runtime = resolveRuntime({
-        runtime_type: agentRuntimeType,
-        runtime_config: instance.runtime_config ?? null,
-      });
-      const runtimeResult = await runtime.abort(runId, sessionKey ?? '');
-      if (!runtimeResult) {
-        abortResult = {
-          attempted: true,
-          ok: false,
-          status: 'failed',
-          error: `${agentRuntimeType} runtime did not return abort confirmation`,
-        };
-      } else if (runtimeResult.status === 'signalled') {
-        abortResult = {
-          attempted: runtimeResult.attempted,
-          ok: runtimeResult.ok && runtimeResult.confirmed,
-          status: runtimeResult.ok && runtimeResult.confirmed ? 'succeeded' : 'failed',
-          error: runtimeResult.error,
-        };
-      } else if (runtimeResult.status === 'already_gone') {
-        abortResult = {
-          attempted: runtimeResult.attempted,
-          ok: runtimeResult.ok && runtimeResult.confirmed,
-          status: runtimeResult.ok && runtimeResult.confirmed ? 'already_gone' : 'failed',
-          error: runtimeResult.error,
-        };
-      } else {
-        // In particular, a fresh API process has no in-memory supervisor handle.
-        // That is unknown runtime state, not proof the underlying CLI is gone.
-        abortResult = {
-          attempted: runtimeResult.attempted,
-          ok: false,
-          status: 'failed',
-          error: runtimeResult.error ?? `${agentRuntimeType} abort target was not found`,
-        };
-      }
-
-      // A signal accepted by the in-memory supervisor is not yet proof that
-      // the complete process group exited. Confirm through the identity-bound
-      // durable handle; this also covers API restart and another replica.
-      if (!abortResult.ok) {
-        const durableAbort = await stopPersistedLocalProcess(
-          db,
-          id,
-          tenantId,
-          instance.runtime_config,
-        );
-        if (durableAbort) abortResult = durableAbort;
-      }
-    } catch (runtimeAbortErr) {
-      const error = runtimeAbortErr instanceof Error
-        ? runtimeAbortErr.message
-        : String(runtimeAbortErr);
-      abortResult = { attempted: true, ok: false, status: 'failed', error };
-      console.warn(
-        `[instances] ${agentRuntimeType} runtime abort failed for instance ${id} (non-fatal):`,
-        error,
-      );
-    }
-  }
+  const abortAttempt = await abortInstanceExecutionTransport(db, instance, {
+    instanceId: id,
+    tenantId,
+    reason: stopReason,
+  });
+  const { transport: abortTransport, sessionKey, result: abortResult } = abortAttempt;
 
   if (abortResult?.attempted) {
     await db.run(`

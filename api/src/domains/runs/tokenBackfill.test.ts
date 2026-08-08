@@ -76,4 +76,26 @@ describe('backfillInstanceTokens', () => {
       token_total: 59349,
     });
   });
+
+  it('ignores runs owned by a runtime OpenClaw cannot report on', async () => {
+    const db = getDb();
+    await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
+    await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1')`);
+    const agent = await db.run(
+      `INSERT INTO agents (tenant_id, name, session_key, runtime_type)
+       VALUES (1, 'Atlas', 'atlas', 'claude-code')`,
+    );
+    await db.run(
+      `INSERT INTO job_instances (id, tenant_id, agent_id, status, created_at, session_key)
+       VALUES (?, 1, ?, 'done', to_char(now() AT TIME ZONE 'utc' - interval '5 minutes', 'YYYY-MM-DD HH24:MI:SS'), 'run:99974450:d6252a6b-6160-4f62-b288-4ad972449e65')`,
+      INSTANCE_ID,
+      Number(agent.lastInsertId),
+    );
+
+    // A claude-code run can never appear in OpenClaw's sessions.list, so it used
+    // to stay a candidate on every tick forever. With no candidates left there
+    // is nothing to fetch for, and the gateway is not called at all.
+    expect(await backfillInstanceTokens(getDb())).toBe(0);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
 });

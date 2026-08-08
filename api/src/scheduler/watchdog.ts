@@ -11,6 +11,8 @@ import { scheduleEndedActiveInstanceLinkageCleanup } from '../lib/taskLifecycle'
 import { pruneOrphanedWorktrees, resolveWorktreeBasePath } from '../services/worktreeManager';
 import type { RepoAccessMode } from '../services/repoWorkspaceManager';
 import { evaluateOpenClawInstanceSessionState, type OpenClawInstanceSessionStateResult } from '../domains/runs/openclawSessionState';
+import { evaluateRuntimeInstanceLiveness } from '../domains/runs/runtimeSessionState';
+import { abortInstanceExecutionTransport, resolveInstanceAbortTransport } from '../domains/runs/stopInstanceExecution';
 import { taskTableHasColumn } from '../domains/tasks/ownership';
 import { normalizeTokenUsage } from '../domains/runs/tokenUsage';
 import { createNotificationRecord } from '../lib/notifications';
@@ -43,6 +45,10 @@ interface WatchdogRow {
   runtime_ended_at: string | null;
   response: string | null;
   runtime_type: string | null;
+  runtime_config: string | null;
+  agent_session_key: string | null;
+  tenant_id: number | null;
+  run_id: string | null;
   repo_path: string | null;
   artifact_started_at: string | null;
   last_agent_heartbeat_at: string | null;
@@ -62,8 +68,9 @@ const WATCHDOG_ROW_SELECT = `
   SELECT ji.id, ji.agent_id, ji.status, ji.dispatched_at, ji.created_at,
          ji.started_at, ji.task_id, ji.session_key, ji.worktree_path,
          ji.lifecycle_outcome_posted_at, ji.task_outcome, ji.runtime_ended_at,
-         ji.response,
-         a.timeout_seconds, a.repo_path, a.runtime_type,
+         ji.response, ji.tenant_id, ji.run_id,
+         a.timeout_seconds, a.repo_path, a.runtime_type, a.runtime_config,
+         a.session_key AS agent_session_key,
          a.startup_grace_seconds, a.heartbeat_stale_seconds,
          ia.started_at AS artifact_started_at,
          ia.last_agent_heartbeat_at,
@@ -705,6 +712,93 @@ async function reconcileTerminalOpenClawSession(
   return true;
 }
 
+/**
+ * Stop the run, then record the auto-failure.
+ *
+ * Marking the row failed was never the same thing as stopping the work. The
+ * watchdog used to only do the former and relied on ClaudeCodeRuntime happening
+ * to enforce the same timeout_seconds internally — two independent timers
+ * agreeing by coincidence. Edit an agent's timeout, or hit a startup-grace or
+ * heartbeat override, and they diverge: the row reads failed while the CLI keeps
+ * working. Asking the runtime to abort first makes the row's claim true.
+ */
+async function abortStuckInstanceExecution(db: Db, inst: WatchdogRow, reason: string): Promise<void> {
+  const tenantId = Number(inst.tenant_id);
+  if (!Number.isInteger(tenantId) || tenantId <= 0) return;
+
+  try {
+    const attempt = await abortInstanceExecutionTransport(db, inst as unknown as Record<string, unknown>, {
+      instanceId: inst.id,
+      tenantId,
+      reason,
+    });
+    if (attempt.result?.attempted && !attempt.result.ok && attempt.result.status !== 'already_gone') {
+      console.warn(
+        `[watchdog] Abort for instance #${inst.id} via ${attempt.transport} did not confirm` +
+        ` (status=${attempt.result.status}): ${attempt.result.error ?? 'unknown'}`,
+      );
+    }
+  } catch (err) {
+    // Never let a failed abort block the bookkeeping below; an unstopped run
+    // recorded as failed is bad, but a stuck run recorded as running is worse.
+    console.warn(
+      `[watchdog] Abort threw for instance #${inst.id} (non-fatal):`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+async function failStuckInstance(
+  db: Db,
+  currentInst: WatchdogRow,
+  decision: WatchdogDecision,
+  decisionReason: string,
+  now: Date,
+): Promise<void> {
+  const elapsedMin = Math.floor(decision.elapsedMs / 60000);
+
+  await abortStuckInstanceExecution(db, currentInst, `Watchdog: ${decisionReason}`);
+
+  const completedAt = timestampFromDate(now) ?? nowTimestamp();
+  await db.run(`
+    UPDATE job_instances
+    SET status = 'failed',
+        error  = ?,
+        completed_at = ?,
+        runtime_ended_at = COALESCE(runtime_ended_at, ?),
+        runtime_end_success = COALESCE(runtime_end_success, 0),
+        runtime_end_error = COALESCE(runtime_end_error, ?),
+        runtime_end_source = COALESCE(runtime_end_source, 'watchdog')
+    WHERE id = ? AND status IN ('running', 'dispatched', 'queued')
+  `, `Watchdog: ${decisionReason}`, completedAt, completedAt, `Watchdog: ${decisionReason}`, currentInst.id);
+
+  if (currentInst.task_id) {
+    const cleared = await db.run(`
+      UPDATE tasks
+      SET active_instance_id = NULL,
+          ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
+          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+      WHERE id = ? AND active_instance_id = ?
+    `, currentInst.task_id, currentInst.id);
+    if (cleared.changes > 0) {
+      await writeTaskHistory(db, currentInst.task_id, 'watchdog', 'active_instance_id', String(currentInst.id), null);
+    }
+  }
+
+  await insertRuntimeLog(db, {
+          instanceId: currentInst.id,
+          agentId: currentInst.agent_id,
+          taskId: currentInst.task_id,
+          level: 'warn',
+          message: `Watchdog: instance #${currentInst.id} was auto-failed from "${currentInst.status}" after ${elapsedMin}m — ${decisionReason} (task_id=${currentInst.task_id ?? 'none'})`,
+        });
+
+  const actorLabel = formatActorLabel(currentInst);
+  console.log(`[watchdog] Auto-failed instance #${currentInst.id} (${elapsedMin}m elapsed, task=${currentInst.task_id ?? 'none'}) — ${decisionReason}`);
+  await recordWatchdogStaleNotification(db, currentInst, { actorLabel, elapsedMin, reason: decisionReason });
+  await notifyTelegram(`⏰ Watchdog: ${actorLabel} auto-failed after ${elapsedMin}m (instance #${currentInst.id}${currentInst.task_id ? `, task #${currentInst.task_id}` : ''}) — ${decisionReason}`);
+}
+
 export async function runWatchdogPass(db: Db, now = new Date()): Promise<void> {
   const stuck = await db.all(`
     ${WATCHDOG_ROW_SELECT}
@@ -718,6 +812,31 @@ export async function runWatchdogPass(db: Db, now = new Date()): Promise<void> {
     let decision = evaluateWatchdogDecision(currentInst, now);
     if (!decision.shouldFail || !decision.reason) continue;
     let decisionReason = decision.reason;
+
+    // A run owned by a runtime driver leaves no OpenClaw session file, so the
+    // probe below would report "no activity" for an agent that is visibly
+    // working and the reprieve could never fire. Read its canonical transcript
+    // instead — the same evidence, in the place every runtime writes it.
+    if (resolveInstanceAbortTransport(inst.runtime_type) === 'runtime') {
+      try {
+        const liveness = await evaluateRuntimeInstanceLiveness(db, inst.id, { now });
+        if (liveness.active) {
+          console.info(
+            `[watchdog] Deferring stale decision for instance #${inst.id};` +
+            ` ${inst.runtime_type} runtime wrote transcript activity` +
+            ` ${Math.floor((liveness.quietForMs ?? 0) / 1000)}s ago`,
+          );
+          continue;
+        }
+      } catch (err) {
+        console.warn(
+          `[watchdog] Failed to read runtime transcript liveness for instance #${inst.id}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+      await failStuckInstance(db, currentInst, decision, decisionReason, now);
+      continue;
+    }
 
     try {
       const rawSession = await evaluateOpenClawInstanceSessionState(db, inst.id, { now });
@@ -765,45 +884,7 @@ export async function runWatchdogPass(db: Db, now = new Date()): Promise<void> {
       );
     }
 
-    const elapsedMin = Math.floor(decision.elapsedMs / 60000);
-    const completedAt = timestampFromDate(now) ?? nowTimestamp();
-    await db.run(`
-      UPDATE job_instances
-      SET status = 'failed',
-          error  = ?,
-          completed_at = ?,
-          runtime_ended_at = COALESCE(runtime_ended_at, ?),
-          runtime_end_success = COALESCE(runtime_end_success, 0),
-          runtime_end_error = COALESCE(runtime_end_error, ?),
-          runtime_end_source = COALESCE(runtime_end_source, 'watchdog')
-      WHERE id = ? AND status IN ('running', 'dispatched', 'queued')
-    `, `Watchdog: ${decisionReason}`, completedAt, completedAt, `Watchdog: ${decisionReason}`, currentInst.id);
-
-    if (currentInst.task_id) {
-      const cleared = await db.run(`
-        UPDATE tasks
-        SET active_instance_id = NULL,
-            ${await taskTableHasColumn(db, 'agent_id') ? 'agent_id = NULL,' : ''}
-            updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-        WHERE id = ? AND active_instance_id = ?
-      `, currentInst.task_id, currentInst.id);
-      if (cleared.changes > 0) {
-        await writeTaskHistory(db, currentInst.task_id, 'watchdog', 'active_instance_id', String(currentInst.id), null);
-      }
-    }
-
-    await insertRuntimeLog(db, {
-            instanceId: currentInst.id,
-            agentId: currentInst.agent_id,
-            taskId: currentInst.task_id,
-            level: 'warn',
-            message: `Watchdog: instance #${currentInst.id} was auto-failed from "${currentInst.status}" after ${elapsedMin}m — ${decisionReason} (task_id=${currentInst.task_id ?? 'none'})`,
-          });
-
-    const actorLabel = formatActorLabel(currentInst);
-    console.log(`[watchdog] Auto-failed instance #${currentInst.id} (${elapsedMin}m elapsed, task=${currentInst.task_id ?? 'none'}) — ${decisionReason}`);
-    await recordWatchdogStaleNotification(db, currentInst, { actorLabel, elapsedMin, reason: decisionReason });
-    await notifyTelegram(`⏰ Watchdog: ${actorLabel} auto-failed after ${elapsedMin}m (instance #${currentInst.id}${currentInst.task_id ? `, task #${currentInst.task_id}` : ''}) — ${decisionReason}`);
+    await failStuckInstance(db, currentInst, decision, decisionReason, now);
   }
 }
 
