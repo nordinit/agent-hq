@@ -587,6 +587,9 @@ export default function ChatWidget() {
   // ── Connect WebSocket with auto-reconnect ──
   const connectWs = useCallback(() => {
     if (!chatConfig || !sessionKey) return;
+    // A runtime-backed agent has no gateway session. Opening one anyway produced
+    // a stream of gateway errors for an agent OpenClaw does not know about.
+    if (transport === 'runtime') return;
 
     // Clean up existing
     if (wsRef.current) {
@@ -622,7 +625,7 @@ export default function ChatWidget() {
       console.log('[chat-widget] WebSocket closed, reconnecting in 3s…');
       reconnectTimerRef.current = setTimeout(connectWs, 3000);
     };
-  }, [chatConfig, sessionKey, handleWsMessage, clearPendingResponse]);
+  }, [chatConfig, sessionKey, transport, handleWsMessage, clearPendingResponse]);
 
   useEffect(() => {
     connectWs();
@@ -751,8 +754,12 @@ export default function ChatWidget() {
     const uploadedAttachments = pendingAttachments.filter(a => a.uploadedId && !a.error);
     const stillUploading = pendingAttachments.some(a => a.uploading);
     if ((!hasText && uploadedAttachments.length === 0) || !sessionKey || sending || streaming || stillUploading) return;
+    // Only an OpenClaw conversation needs the gateway socket. Requiring it for
+    // every agent meant a runtime-backed send never left the browser: the socket
+    // cannot open for an agent OpenClaw does not have, so the send bailed with
+    // "Reconnecting…" instead of taking the HTTP path that does work.
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (transport !== 'runtime' && (!ws || ws.readyState !== WebSocket.OPEN)) {
       setSendError('Reconnecting…');
       connectWs();
       return;
@@ -807,6 +814,7 @@ export default function ChatWidget() {
       return;
     }
 
+    if (!ws) return;
     ws.send(JSON.stringify({
       id: generateId(),
       type: 'chat.send',

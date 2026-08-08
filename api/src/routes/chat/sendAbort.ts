@@ -58,14 +58,21 @@ async function loadChatInstance(instanceId: number): Promise<ChatInstanceRow | u
 async function dispatchRuntimeChatTurn(
   instance: ChatInstanceRow,
   message: string,
+  reuseInstanceId: number | null,
 ): Promise<{ ok: true; instanceId: number } | { ok: false; error: string }> {
-  const started = await startChatRunInstance({
-    instanceId: null,
-    durableRunId: null,
-    agentId: instance.agent_id,
-    sessionKey: instance.session_key,
-    tenantId: instance.tenant_id,
-  });
+  // The agent-scoped route already opened the turn's instance; opening another
+  // here split each send in two, leaving the user's message on one instance and
+  // the reply on the next. A task instance is different — it is not a chat turn,
+  // so that path still opens a dedicated one.
+  const started = reuseInstanceId != null
+    ? { instanceId: reuseInstanceId }
+    : await startChatRunInstance({
+      instanceId: null,
+      durableRunId: null,
+      agentId: instance.agent_id,
+      sessionKey: instance.session_key,
+      tenantId: instance.tenant_id,
+    });
 
   if (!started) {
     return { ok: false, error: 'Could not open a chat run for this agent' };
@@ -97,7 +104,12 @@ async function dispatchRuntimeChatTurn(
  * Shared delivery for both send routes: persist the user's message against the
  * chat instance, then hand it to whichever transport the agent's runtime uses.
  */
-async function sendToInstance(req: Request, res: Response, instanceId: number): Promise<Response | void> {
+async function sendToInstance(
+  req: Request,
+  res: Response,
+  instanceId: number,
+  reuseInstanceForRuntime = false,
+): Promise<Response | void> {
     const body = req.body as { message?: string; attachment_ids?: number[] };
     const message = body.message?.trim() ?? '';
     const attachmentIds: number[] = Array.isArray(body.attachment_ids) ? body.attachment_ids : [];
@@ -136,7 +148,11 @@ async function sendToInstance(req: Request, res: Response, instanceId: number): 
       // Transport is a property of the agent's runtime, not of chat. OpenClaw
       // owns a live gateway session; every other runtime is dispatched per turn.
       if (resolveInstanceAbortTransport(inst.runtime_type) === 'runtime') {
-        const dispatched = await dispatchRuntimeChatTurn(inst, fullMessage);
+        const dispatched = await dispatchRuntimeChatTurn(
+          inst,
+          fullMessage,
+          reuseInstanceForRuntime ? instanceId : null,
+        );
         if (!dispatched.ok) {
           return res.status(502).json({ ok: false, error: dispatched.error });
         }
@@ -225,7 +241,7 @@ export function registerSendAbortRoutes(router: Router): void {
       }
 
       req.params.id = String(instanceId);
-      return sendToInstance(req, res, instanceId);
+      return sendToInstance(req, res, instanceId, true);
     } catch (err) {
       res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }
