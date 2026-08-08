@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { timeAgo } from '@/lib/date';
 import { findAtlasAgent } from '@/lib/atlas';
 import { parseCanonicalMessages, parseGatewayHistoryMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
-import { loadRuntimeChatTranscript, resolveChatTransport, sendRuntimeChatMessage } from '@/lib/runtimeChat';
+import { abortRuntimeChatTurn, loadRuntimeChatTranscript, resolveChatTransport, sendRuntimeChatMessage } from '@/lib/runtimeChat';
 import { buildChatListItems, type ChatListItem } from '@/lib/chatListItems';
 import {
   buildFallbackInstanceFromChatSession,
@@ -153,6 +153,7 @@ function ChatPageInner() {
   }, [agents, projectAgentIds, selectedProjectId]);
 
   const runtimeInstanceIdsRef = useRef<number[]>([]);
+  const runtimeSessionFloorRef = useRef<number | null>(null);
   const selectedAgent = useMemo(
     () => filteredAgents.find(agent => agent.id === selectedAgentId)
       ?? agents.find(agent => agent.id === selectedAgentId && agent.id === deepLinkAgentIdRef.current)
@@ -699,7 +700,7 @@ function ChatPageInner() {
     let stopped = false;
     const poll = () => {
       if (stopped) return;
-      loadRuntimeChatTranscript(selectedAgentId, runtimeInstanceIdsRef.current)
+      loadRuntimeChatTranscript(selectedAgentId, runtimeInstanceIdsRef.current, runtimeSessionFloorRef.current)
         .then(parsed => {
           if (stopped || parsed.length === 0) return;
           setMessages(prev => reconcileChatMessageSnapshot(prev, parsed));
@@ -927,8 +928,11 @@ function ChatPageInner() {
     streamBufRef.current = '';
     scrollPendingRef.current = false;
 
-    // Only open a WebSocket for direct-chat sessions (no job run instance selected)
-    if (activeSessionKey && chatConfig && !useCanonical) {
+    // Only open a WebSocket for direct-chat sessions (no job run instance
+    // selected) on a gateway-backed agent. A runtime agent has no gateway
+    // session, so connecting produced errors for an agent OpenClaw lacks.
+    const gatewayChat = resolveChatTransport(selectedAgent?.runtime_type) !== 'runtime';
+    if (activeSessionKey && chatConfig && !useCanonical && gatewayChat) {
       connectWs(activeSessionKey, chatConfig);
     } else if (wsRef.current) {
       wsRef.current.close();
@@ -942,7 +946,7 @@ function ChatPageInner() {
         wsRef.current = null;
       }
     };
-  }, [activeSessionKey, chatConfig, connectWs, clearResponseWatchdog]);
+  }, [activeSessionKey, chatConfig, connectWs, clearResponseWatchdog, selectedAgent?.runtime_type]);
 
   // ── Attachment state ──
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
@@ -1036,9 +1040,11 @@ function ChatPageInner() {
       return;
     }
 
-    // Fallback: Direct Chat via WebSocket (attachments appended to text)
+    // Fallback: Direct Chat. Only a gateway conversation needs the socket — a
+    // runtime agent is dispatched over HTTP further down.
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !activeSessionKey) {
+    const usesRuntime = resolveChatTransport(selectedAgent?.runtime_type) === 'runtime';
+    if (!usesRuntime && (!ws || ws.readyState !== WebSocket.OPEN || !activeSessionKey)) {
       setSendError('WebSocket not connected');
       setSending(false);
       return;
@@ -1072,6 +1078,7 @@ function ChatPageInner() {
       return;
     }
 
+    if (!ws) return;
     ws.send(JSON.stringify({
       id: generateId(),
       type: 'chat.send',
@@ -1086,6 +1093,13 @@ function ChatPageInner() {
     if (useCanonical && selectedInstanceId) {
       fetch(`/api/v1/chat/instances/${selectedInstanceId}/abort`, { method: 'POST' })
         .catch(err => console.warn('[chat] Abort failed:', err));
+      clearPendingResponse();
+      return;
+    }
+
+    if (resolveChatTransport(selectedAgent?.runtime_type) === 'runtime') {
+      const latest = runtimeInstanceIdsRef.current[runtimeInstanceIdsRef.current.length - 1];
+      if (latest != null) void abortRuntimeChatTurn(latest);
       clearPendingResponse();
       return;
     }
@@ -1108,7 +1122,8 @@ function ChatPageInner() {
       return;
     }
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    const runtimeChat = resolveChatTransport(selectedAgent?.runtime_type) === 'runtime';
+    if (!runtimeChat && (!ws || ws.readyState !== WebSocket.OPEN)) {
       setSendError('WebSocket not connected');
       return;
     }
@@ -1118,6 +1133,22 @@ function ChatPageInner() {
     });
     clearPendingResponse();
     setSendError(null);
+
+    if (runtimeChat) {
+      runtimeInstanceIdsRef.current = [];
+      setMessages([]);
+      if (selectedAgentId != null) {
+        void api.getChatSessions(selectedAgentId, 1)
+          .then(sessions => {
+            const newest = sessions[0]?.instance_id;
+            if (typeof newest === 'number') runtimeSessionFloorRef.current = newest;
+          })
+          .catch(() => { /* floor unchanged */ });
+      }
+      return;
+    }
+
+    if (!ws) return;
     ws.send(JSON.stringify({
       id: generateId(),
       type: 'chat.new',

@@ -21,6 +21,17 @@ export function resolveChatTransport(runtimeType: string | null | undefined): Ch
 /** Turns to keep on screen. Each runtime turn is its own instance. */
 const RUNTIME_CHAT_TURN_WINDOW = 12;
 
+/** Stop a runtime turn. The gateway's chat.abort cannot reach a runtime run. */
+export async function abortRuntimeChatTurn(instanceId: number): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/v1/chat/instances/${instanceId}/abort`, { method: 'POST' });
+    const data = await res.json() as { ok?: boolean };
+    return res.ok && data.ok === true;
+  } catch {
+    return false;
+  }
+}
+
 export interface RuntimeChatSendResult {
   instanceId: number | null;
   error: string | null;
@@ -66,12 +77,20 @@ export async function sendRuntimeChatMessage(
 export async function loadRuntimeChatTranscript(
   agentId: number,
   extraInstanceIds: readonly number[] = [],
+  afterInstanceId: number | null = null,
 ): Promise<ChatMessage[]> {
   const sessions = await api.getChatSessions(agentId, RUNTIME_CHAT_TURN_WINDOW).catch(() => []);
   const instanceIds = Array.from(new Set([
     ...sessions.map(session => session.instance_id).filter((id): id is number => typeof id === 'number'),
     ...extraInstanceIds,
-  ])).slice(-RUNTIME_CHAT_TURN_WINDOW);
+  ]))
+    // "New chat" on a runtime agent cannot rotate a session key the way an
+    // OpenClaw chat does, because each turn's rows carry the run's own key. The
+    // floor is the boundary instead: only turns opened after it belong to the
+    // current conversation.
+    .filter(id => afterInstanceId == null || id > afterInstanceId)
+    .sort((left, right) => left - right)
+    .slice(-RUNTIME_CHAT_TURN_WINDOW);
 
   if (instanceIds.length === 0) return [];
 

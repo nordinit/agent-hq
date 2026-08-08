@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { api, ChatMessage, ChatConfig, ChatSession } from '@/lib/api';
 import { findAtlasAgent } from '@/lib/atlas';
-import { loadRuntimeChatTranscript, resolveChatTransport, sendRuntimeChatMessage, type ChatTransport } from '@/lib/runtimeChat';
+import { abortRuntimeChatTurn, loadRuntimeChatTranscript, resolveChatTransport, sendRuntimeChatMessage, type ChatTransport } from '@/lib/runtimeChat';
 import { buildTranscriptRows, mergeChatMessages, parseGatewayHistoryMessages, parseStoredChatMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
 import {
   ATLAS_WIDGET_COMMAND_EVENT,
@@ -223,6 +223,7 @@ export default function ChatWidget() {
   const [agentId, setAgentId] = useState<number | null>(null);
   const [transport, setTransport] = useState<ChatTransport>('openclaw-gateway');
   const runtimeInstanceIdsRef = useRef<number[]>([]);
+  const runtimeSessionFloorRef = useRef<number | null>(null);
   const [connected, setConnected] = useState(false);
 
   const [showNewChatConfirm, setShowNewChatConfirm] = useState(false);
@@ -653,7 +654,7 @@ export default function ChatWidget() {
       // run's session key, so it is assembled from recent instances rather than
       // fetched by the chat session key an OpenClaw conversation shares.
       const load = transport === 'runtime' && agentId != null
-        ? loadRuntimeChatTranscript(agentId, runtimeInstanceIdsRef.current)
+        ? loadRuntimeChatTranscript(agentId, runtimeInstanceIdsRef.current, runtimeSessionFloorRef.current)
         : api.getChatSessionMessages(null, activeSessionKey, 500).then(parseStoredChatMessages);
 
       load
@@ -826,6 +827,12 @@ export default function ChatWidget() {
   };
 
   const handleAbort = () => {
+    if (transport === 'runtime') {
+      const latest = runtimeInstanceIdsRef.current[runtimeInstanceIdsRef.current.length - 1];
+      if (latest != null) void abortRuntimeChatTurn(latest);
+      clearPendingResponse();
+      return;
+    }
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || !sessionKey) return;
     ws.send(JSON.stringify({ id: generateId(), type: 'chat.abort', sessionKey }));
@@ -849,7 +856,8 @@ export default function ChatWidget() {
 
   const startNewSession = () => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !sessionKey) {
+    const needsGateway = transport !== 'runtime';
+    if (needsGateway && (!ws || ws.readyState !== WebSocket.OPEN || !sessionKey)) {
       setSendError('WebSocket not connected');
       setShowNewChatConfirm(false);
       return;
@@ -863,6 +871,25 @@ export default function ChatWidget() {
     setViewingSessionId(undefined);
     setViewingMessages(null);
     clearPendingResponse();
+
+    if (transport === 'runtime') {
+      // Nothing to ask the gateway for. Clear the transcript and set the floor to
+      // the newest turn that exists, so the conversation starts after it.
+      runtimeInstanceIdsRef.current = [];
+      setMessages([]);
+      setSendError(null);
+      if (agentId != null) {
+        void api.getChatSessions(agentId, 1)
+          .then(sessions => {
+            const newest = sessions[0]?.instance_id;
+            if (typeof newest === 'number') runtimeSessionFloorRef.current = newest;
+          })
+          .catch(() => { /* floor stays where it was; worst case older turns reappear */ });
+      }
+      return;
+    }
+
+    if (!ws) return;
     ws.send(JSON.stringify({ id: generateId(), type: 'chat.new', sessionKey, channel: 'web' }));
   };
 
