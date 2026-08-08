@@ -56,6 +56,7 @@ function boundary(): RuntimeBoundaryV1 {
       mcpServers: [],
       requiredLifecycleTools: [],
       skills: [],
+      registryTools: [],
     },
     auth: { provider: null, providerConnectionId: null, credentialRefs: [] },
     evidence: { required: false, requirements: [] },

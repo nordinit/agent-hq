@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState, useRef, useCallback, Suspense, type React
 import { useSearchParams } from 'next/navigation';
 import { timeAgo } from '@/lib/date';
 import { findAtlasAgent } from '@/lib/atlas';
-import { parseCanonicalMessages, parseGatewayHistoryMessages } from '@/lib/chatMessages';
+import { parseCanonicalMessages, parseGatewayHistoryMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
+import { loadRuntimeChatTranscript, resolveChatTransport, sendRuntimeChatMessage } from '@/lib/runtimeChat';
 import { buildChatListItems, type ChatListItem } from '@/lib/chatListItems';
 import {
   buildFallbackInstanceFromChatSession,
@@ -151,6 +152,7 @@ function ChatPageInner() {
     return agents.filter(agent => agent.project_id === selectedProjectId || projectAgentIds.has(agent.id));
   }, [agents, projectAgentIds, selectedProjectId]);
 
+  const runtimeInstanceIdsRef = useRef<number[]>([]);
   const selectedAgent = useMemo(
     () => filteredAgents.find(agent => agent.id === selectedAgentId)
       ?? agents.find(agent => agent.id === selectedAgentId && agent.id === deepLinkAgentIdRef.current)
@@ -684,6 +686,33 @@ function ChatPageInner() {
   }, [useCanonical, selectedInstanceId]);
 
   // ── Live polling for in-progress instances via canonical sessions ──
+
+  // ── Runtime-backed agent chat: poll the canonical transcript ───────────────
+  //
+  // The socket only carries OpenClaw conversations. A runtime agent's turns are
+  // dispatched over HTTP and its transcript is written by the runtime, so the
+  // page reads it back the same way the widget does.
+  useEffect(() => {
+    if (resolveChatTransport(selectedAgent?.runtime_type) !== 'runtime') return;
+    if (selectedAgentId == null || selectedInstanceId) return;
+
+    let stopped = false;
+    const poll = () => {
+      if (stopped) return;
+      loadRuntimeChatTranscript(selectedAgentId, runtimeInstanceIdsRef.current)
+        .then(parsed => {
+          if (stopped || parsed.length === 0) return;
+          setMessages(prev => reconcileChatMessageSnapshot(prev, parsed));
+        })
+        .catch(err => console.warn('[chat] Runtime transcript poll failed:', err));
+    };
+
+    poll();
+    const interval = setInterval(poll, 3000);
+    return () => { stopped = true; clearInterval(interval); };
+  }, [selectedAgent?.runtime_type, selectedAgentId, selectedInstanceId]);
+
+
   useEffect(() => {
     if (!instanceIsRunning || !selectedInstanceId) return;
 
@@ -1021,6 +1050,28 @@ function ChatPageInner() {
 
     pendingResponseRef.current = true;
     armResponseWatchdog();
+
+    if (resolveChatTransport(selectedAgent?.runtime_type) === 'runtime' && selectedAgentId != null) {
+      // One-shot runtime: dispatch a turn over HTTP; the reply lands on the
+      // canonical poll. No socket frame, and no token-by-token streaming.
+      void sendRuntimeChatMessage(
+        selectedAgentId,
+        wsMessage,
+        readyAttachments.map(a => a.uploadedId!).filter(Boolean),
+      ).then(result => {
+        if (result.error) {
+          setSendError(result.error);
+          clearPendingResponse();
+          return;
+        }
+        if (result.instanceId != null) {
+          runtimeInstanceIdsRef.current = [...runtimeInstanceIdsRef.current, result.instanceId].slice(-12);
+        }
+        setSending(false);
+      });
+      return;
+    }
+
     ws.send(JSON.stringify({
       id: generateId(),
       type: 'chat.send',

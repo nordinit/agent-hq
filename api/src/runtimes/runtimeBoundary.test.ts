@@ -57,6 +57,7 @@ function boundary(): RuntimeBoundaryV1 {
       }],
       requiredLifecycleTools: ['agent_hq_post_task_outcome', 'agent_hq_check_in'],
       skills: [{ name: 'agent-hq', revision: '12' }],
+      registryTools: [],
     },
     auth: {
       provider: 'anthropic',

@@ -43,7 +43,7 @@ function boundary(): RuntimeBoundaryV1 {
       trustLevel: 'workspace',
       capabilities: ['signals', 'workspace-write'],
     },
-    tools: { builtIn: ['shell'], mcpServers: [], requiredLifecycleTools: [], skills: [] },
+    tools: { builtIn: ['shell'], mcpServers: [], requiredLifecycleTools: [], skills: [], registryTools: [] },
     auth: { provider: 'openai-codex', providerConnectionId: 9, credentialRefs: [] },
     evidence: { required: false, requirements: [] },
     callback: { identity: 'run:7' },

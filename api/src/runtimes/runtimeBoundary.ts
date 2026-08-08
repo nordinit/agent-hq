@@ -94,6 +94,22 @@ export interface RuntimeSkillAssignmentV1 {
   revision: string | null;
 }
 
+/**
+ * A registry tool (`tools` + `agent_tool_assignments`) granted to this run.
+ *
+ * Recorded by slug plus a `definitionFingerprint` over the tool's executable
+ * definition — implementation, input schema and permissions. The slug alone
+ * would let a tool's body be rewritten between dispatch and resume without
+ * changing the boundary hash, which is exactly the unrecorded-capability drift
+ * this contract exists to prevent. The body itself is deliberately not stored:
+ * it can contain operator secrets, and the boundary is a durable audit record.
+ */
+export interface RuntimeRegistryToolAssignmentV1 {
+  slug: string;
+  permissions: string;
+  definitionFingerprint: string;
+}
+
 export interface RuntimeCredentialReferenceV1 {
   kind: 'provider-connection' | 'environment' | 'operator-profile' | 'managed-identity';
   reference: string;
@@ -126,6 +142,7 @@ export interface RuntimeBoundaryV1 {
     mcpServers: RuntimeMcpAssignmentV1[];
     requiredLifecycleTools: string[];
     skills: RuntimeSkillAssignmentV1[];
+    registryTools: RuntimeRegistryToolAssignmentV1[];
   };
   auth: {
     provider: string | null;
@@ -357,6 +374,22 @@ function validateTools(value: unknown, issues: RuntimeContractValidationIssue[])
       nullableString(skillRecord.revision, `tools.skills[${index}].revision`, issues);
     });
   }
+
+  if (!Array.isArray(item.registryTools)) {
+    issues.push({ path: 'tools.registryTools', message: 'must be an array' });
+  } else {
+    item.registryTools.forEach((tool, index) => {
+      const toolRecord = record(tool, `tools.registryTools[${index}]`, issues);
+      if (!toolRecord) return;
+      nonEmptyString(toolRecord.slug, `tools.registryTools[${index}].slug`, issues);
+      nonEmptyString(toolRecord.permissions, `tools.registryTools[${index}].permissions`, issues);
+      nonEmptyString(
+        toolRecord.definitionFingerprint,
+        `tools.registryTools[${index}].definitionFingerprint`,
+        issues,
+      );
+    });
+  }
 }
 
 function validateAuth(value: unknown, issues: RuntimeContractValidationIssue[]): void {
@@ -489,6 +522,8 @@ function boundaryFingerprintMaterial(boundary: RuntimeBoundaryV1): unknown {
         .sort((a, b) => `${a.name}:${a.configFingerprint}`.localeCompare(`${b.name}:${b.configFingerprint}`)),
       skills: [...boundary.tools.skills]
         .sort((a, b) => `${a.name}:${a.revision ?? ''}`.localeCompare(`${b.name}:${b.revision ?? ''}`)),
+      registryTools: [...boundary.tools.registryTools]
+        .sort((a, b) => a.slug.localeCompare(b.slug)),
     },
     auth: {
       ...boundary.auth,

@@ -410,11 +410,53 @@ async function agentHasRegistryTools(db: Db, agentId: number): Promise<boolean> 
   return (await fetchEffectiveAgentToolRows(db, agentId)).length > 0;
 }
 
-async function assertNoUnboundedRegistryTools(db: Db, agentId: number): Promise<void> {
-  if (!(await agentHasRegistryTools(db, agentId))) return;
-  throw new Error(
-    'Claude Code has assigned registry tools that are absent from RuntimeBoundaryV1; refusing to launch an unrecorded MCP capability.',
-  );
+/** Server name for the synthesized registry-tool bridge, scoped like every other. */
+export const REGISTRY_TOOL_MCP_SLUG = 'agent-hq-tools';
+
+/**
+ * Path to the built per-agent registry-tool MCP server.
+ *
+ * Resolved from this module's own location so it follows the compiled tree
+ * rather than the process working directory, which for a dispatched run is the
+ * agent's repo, not the API install.
+ */
+function resolveRegistryToolServerEntrypoint(): string {
+  return path.resolve(__dirname, '..', '..', 'bin', 'agent-tool-mcp.js');
+}
+
+/**
+ * Expose the agent's registry tools to Claude Code as an MCP server.
+ *
+ * Registry tools are not a Claude Code concept: the CLI has built-ins and MCP,
+ * and nothing else. `bin/agent-tool-mcp.ts` already serves exactly one agent's
+ * assigned tools over stdio, so the bridge is to run it as a server rather than
+ * to invent a second execution path. That also keeps the grant inside the
+ * contract the boundary can express — `tools.mcpServers` plus the
+ * `tools.registryTools` the boundary now records — instead of being a capability
+ * with nowhere to be written down, which is what this used to refuse to launch.
+ *
+ * The tool slugs become the server's `toolFilter.include`, so the same
+ * fail-closed allowlist translation that governs every other server governs
+ * these too.
+ */
+async function synthesizeRegistryToolServer(
+  db: Db,
+  agentId: number,
+  workingDirectory: string | null,
+): Promise<Record<string, unknown> | null> {
+  const rows = (await fetchEffectiveAgentToolRows(db, agentId)) as unknown as Array<{ slug?: unknown }>;
+  const slugs = Array.from(new Set(
+    rows.map((row) => String(row.slug ?? '').trim()).filter((slug) => slug.length > 0),
+  )).sort((left, right) => left.localeCompare(right));
+
+  if (slugs.length === 0) return null;
+
+  return {
+    command: process.execPath,
+    args: [resolveRegistryToolServerEntrypoint(), '--agent-id', String(agentId)],
+    ...(workingDirectory ? { cwd: workingDirectory } : {}),
+    toolFilter: { include: slugs },
+  };
 }
 
 export async function materializeClaudeCodeMcpConfig(params: {
@@ -426,6 +468,8 @@ export async function materializeClaudeCodeMcpConfig(params: {
   runKey: string;
   /** Null means durable state could not be inspected, so stale cleanup is skipped. */
   protectedInstanceIds: ReadonlySet<number> | null;
+  /** Run cwd handed to the registry-tool bridge so tools execute where the agent works. */
+  workingDirectory?: string | null;
 }): Promise<ClaudeMcpMaterialization> {
   const stateDir = resolveClaudeCodeAgentStateDir(params.tenantId, params.agentId);
   const configPath = resolveClaudeCodeMcpRunConfigPath({
@@ -450,9 +494,14 @@ export async function materializeClaudeCodeMcpConfig(params: {
       }
     }
 
-    // Check the separate registry assignment system before fetching MCP servers,
-    // which may mint a reusable API key as a side effect.
-    await assertNoUnboundedRegistryTools(params.db, params.agentId);
+    // The registry assignment system is separate from MCP assignments; bridge it
+    // before fetching MCP servers, which may mint a reusable API key as a side
+    // effect.
+    const registryToolServer = await synthesizeRegistryToolServer(
+      params.db,
+      params.agentId,
+      params.workingDirectory ?? null,
+    );
 
     const apiKey = readCredentialSnapshot({
       snapshotPath,
@@ -463,6 +512,10 @@ export async function materializeClaudeCodeMcpConfig(params: {
     const servers = resolveMcpServerRuntimePaths(
       await fetchAssignedMcpServers(params.db, params.agentId, previousServers),
     );
+
+    if (registryToolServer) {
+      servers[`${REGISTRY_TOOL_MCP_SLUG}__agent-${params.agentId}`] = registryToolServer;
+    }
 
     const reusableApiKey = reusableApiKeyFromServers(servers);
     if (reusableApiKey) {

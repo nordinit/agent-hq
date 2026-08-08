@@ -256,7 +256,7 @@ function runtimeBoundary() {
       id: 'local-api-process', kind: 'local-process', trustLevel: 'workspace',
       capabilities: ['inspect', 'signals', 'resume', 'workspace-write'],
     },
-    tools: { builtIn: [], mcpServers: [], requiredLifecycleTools: [], skills: [] },
+    tools: { builtIn: [], mcpServers: [], requiredLifecycleTools: [], skills: [], registryTools: [] },
     auth: { provider: 'openai-codex', providerConnectionId: null, credentialRefs: [] },
     evidence: { required: false, requirements: [] },
     callback: { identity: 'agent:cinder:main' },

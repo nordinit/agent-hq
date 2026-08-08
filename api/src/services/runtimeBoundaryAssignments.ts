@@ -2,11 +2,12 @@ import type { Db } from '../db/adapter/types';
 import type {
   RuntimeBoundaryV1,
   RuntimeMcpAssignmentV1,
+  RuntimeRegistryToolAssignmentV1,
   RuntimeSkillAssignmentV1,
 } from '../runtimes/runtimeBoundary';
 import { canonicalRuntimeJson } from '../runtimes/runtimeBoundary';
 import { columnExists } from '../db/introspection';
-import { fetchEffectiveAgentMcpRows, resolveEffectiveSkillNames } from '../domains/teams/effectiveCapabilities';
+import { fetchEffectiveAgentMcpRows, fetchEffectiveAgentToolRows, resolveEffectiveSkillNames } from '../domains/teams/effectiveCapabilities';
 import {
   runtimeBoundaryDigest,
   sanitizeRuntimeConfigForRevision,
@@ -38,9 +39,58 @@ interface SkillRevisionRow {
   updated_at: string | null;
 }
 
+/** Must match the server name synthesized in runtimes/claudeCode/mcpConfig.ts. */
+export const REGISTRY_TOOL_MCP_SERVER_SLUG = 'agent-hq-tools';
+
 export interface LoadedRuntimeBoundaryAssignments {
   mcpServers: RuntimeMcpAssignmentV1[];
   skills: RuntimeSkillAssignmentV1[];
+  registryTools: RuntimeRegistryToolAssignmentV1[];
+}
+
+interface RegistryToolRow {
+  slug?: unknown;
+  permissions?: unknown;
+  implementation_type?: unknown;
+  implementation_body?: unknown;
+  input_schema?: unknown;
+}
+
+/**
+ * Registry tools granted to the agent, reduced to auditable facts.
+ *
+ * The implementation body is hashed rather than stored: it is the executable
+ * definition, it can carry operator secrets, and the boundary is a durable
+ * record. Hashing still makes an edited tool a different boundary, which is the
+ * property that lets a resume be trusted.
+ */
+async function loadRegistryTools(
+  db: Db,
+  agentId: number,
+  failClosed: boolean,
+): Promise<RuntimeRegistryToolAssignmentV1[]> {
+  let rows: RegistryToolRow[];
+  try {
+    rows = (await fetchEffectiveAgentToolRows(db, agentId)) as unknown as RegistryToolRow[];
+  } catch (err) {
+    // A swallowed registry error must never read as "this agent has no tools" on
+    // a hardened runtime — that is precisely an unrecorded-capability grant.
+    if (failClosed) throw err;
+    return [];
+  }
+
+  return rows
+    .map((row) => ({
+      slug: String(row.slug ?? '').trim(),
+      permissions: String(row.permissions ?? '').trim() || 'read_only',
+      definitionFingerprint: runtimeBoundaryDigest('runtime-registry-tool-v1', {
+        implementationType: String(row.implementation_type ?? ''),
+        implementationBody: String(row.implementation_body ?? ''),
+        inputSchema: String(row.input_schema ?? ''),
+      }),
+    }))
+    .filter((tool) => tool.slug.length > 0)
+    .sort((left, right) => left.slug.localeCompare(right.slug));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -219,7 +269,7 @@ export async function loadRuntimeBoundaryAssignments(params: {
 }): Promise<LoadedRuntimeBoundaryAssignments> {
   const requiredLifecycleTools = Array.from(new Set(params.requiredLifecycleTools ?? []))
     .sort((left, right) => left.localeCompare(right));
-  const [mcpServers, skills] = await Promise.all([
+  const [mcpServers, skills, registryTools] = await Promise.all([
     loadMcpAssignments(
       params.db,
       params.tenantId,
@@ -234,8 +284,26 @@ export async function loadRuntimeBoundaryAssignments(params: {
       params.skillNames,
       params.failClosed === true,
     ),
+    loadRegistryTools(params.db, params.agentId, params.failClosed === true),
   ]);
-  return { mcpServers, skills };
+
+  // Registry tools reach a runtime as an MCP server, so the boundary has to
+  // record that server too — `registryTools` says which capabilities were
+  // granted, `mcpServers` says how they are carried. Without this entry the
+  // materialized server set is "extra" relative to the boundary and the
+  // pre-spawn assignment check correctly refuses the launch.
+  const withRegistryBridge = registryTools.length > 0
+    ? [
+        ...mcpServers,
+        {
+          name: `${REGISTRY_TOOL_MCP_SERVER_SLUG}__agent-${params.agentId}`,
+          configFingerprint: runtimeBoundaryDigest('runtime-registry-tool-bridge-v1', registryTools),
+          requiredToolNames: [] as string[],
+        },
+      ].sort((left, right) => left.name.localeCompare(right.name))
+    : mcpServers;
+
+  return { mcpServers: withRegistryBridge, skills, registryTools };
 }
 
 function sortedServerNames(values: readonly string[]): string[] {

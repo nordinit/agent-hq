@@ -6,6 +6,7 @@ import {
   type RuntimeBoundaryV1,
   type RuntimeExecutionTargetV1,
   type RuntimeMcpAssignmentV1,
+  type RuntimeRegistryToolAssignmentV1,
   type RuntimeSkillAssignmentV1,
 } from '../runtimes/runtimeBoundary';
 import { normalizeClaudeCodeRuntimeConfig } from '../runtimes/claudeCode/config';
@@ -52,6 +53,7 @@ export interface BuildRuntimeBoundaryV1Input {
   executionTarget?: RuntimeExecutionTargetV1 | null;
   mcpServers?: RuntimeMcpAssignmentV1[];
   skills?: RuntimeSkillAssignmentV1[];
+  registryTools?: RuntimeRegistryToolAssignmentV1[];
   requiredLifecycleTools?: string[];
   provider?: string | null;
   providerConnectionId?: number | null;
@@ -410,6 +412,8 @@ export function buildRuntimeBoundaryV1(params: BuildRuntimeBoundaryV1Input): Run
       requiredLifecycleTools,
       skills: [...(params.skills ?? [])]
         .sort((left, right) => left.name.localeCompare(right.name)),
+      registryTools: [...(params.registryTools ?? [])]
+        .sort((left, right) => left.slug.localeCompare(right.slug)),
     },
     auth: {
       provider: nonEmptyString(params.provider),

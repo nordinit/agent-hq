@@ -24,7 +24,7 @@ function boundary(): RuntimeBoundaryV1 {
       id: 'local:codex', kind: 'local-process', trustLevel: 'workspace',
       capabilities: ['inspect', 'resume', 'signals', 'workspace-write'],
     },
-    tools: { builtIn: [], mcpServers: [], requiredLifecycleTools: [], skills: [] },
+    tools: { builtIn: [], mcpServers: [], requiredLifecycleTools: [], skills: [], registryTools: [] },
     auth: { provider: 'openai-codex', providerConnectionId: 9, credentialRefs: [] },
     evidence: { required: false, requirements: [] },
     callback: { identity: 'run:7' },

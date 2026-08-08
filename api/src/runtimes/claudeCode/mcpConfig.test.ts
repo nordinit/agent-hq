@@ -561,6 +561,8 @@ describe('registry-tool boundary enforcement', () => {
     const toolRows = Array.from({ length: count }, (_unused, index) => ({
       id: index + 1,
       name: `tool-${index + 1}`,
+      slug: `tool_${index + 1}`,
+      permissions: 'read_only',
       enabled: 1,
       assignment_enabled: 1,
     }));
@@ -583,39 +585,64 @@ describe('registry-tool boundary enforcement', () => {
     expect(result.serverNames).toEqual([]);
   });
 
-  it('fails closed before MCP fetch when registry tools exist outside the boundary', async () => {
-    const db = dbWithToolCount(2);
-    await expect(materializeClaudeCodeMcpConfig({
-      db,
+  it('bridges registry tools into a scoped MCP server instead of refusing to launch', async () => {
+    // Registry tools used to be a hard launch refusal: Claude Code has built-ins
+    // and MCP and nothing else, so an assigned registry tool was a capability the
+    // boundary could not express. It is now served by the per-agent registry-tool
+    // MCP server, which puts the grant back inside a contract the boundary can
+    // record and fingerprint.
+    fetchAssignedMcpServersMock.mockResolvedValue({});
+    const result = await materializeClaudeCodeMcpConfig({
+      db: dbWithToolCount(2),
       tenantId: TENANT_ID,
       agentId: AGENT_ID,
       instanceId: 7,
-      runKey: 'registry-postgres',
+      runKey: 'registry-bridge',
       protectedInstanceIds: new Set(),
-    })).rejects.toThrow(/absent from RuntimeBoundaryV1/);
-    expect(fetchAssignedMcpServersMock).not.toHaveBeenCalled();
-    expect(fs.readdirSync(agentStateDir())).toEqual([]);
+      workingDirectory: '/tmp/agent-workspace',
+    });
+
+    const bridgeName = `agent-hq-tools__agent-${AGENT_ID}`;
+    expect(result.serverNames).toContain(bridgeName);
+
+    const written = JSON.parse(fs.readFileSync(result.configPath as string, 'utf8')) as {
+      mcpServers: Record<string, { command: string; args: string[]; cwd?: string }>;
+    };
+    const bridge = written.mcpServers[bridgeName];
+    expect(bridge.args).toEqual(
+      expect.arrayContaining([expect.stringContaining('agent-tool-mcp.js'), '--agent-id', String(AGENT_ID)]),
+    );
+    expect(bridge.cwd).toBe('/tmp/agent-workspace');
+
+    // Each tool is allowlisted by slug through the same fail-closed translation
+    // every other server goes through — no wildcard grant.
+    expect(result.allowedToolNames).toEqual(
+      expect.arrayContaining([`mcp__${bridgeName}__tool_1`, `mcp__${bridgeName}__tool_2`]),
+    );
   });
 
-  it('fails closed on a tool granted only through a team', async () => {
-    // A team grant is an assigned registry capability too. If the boundary check only counted
-    // direct assignments, a team-only grant would launch unrecorded — the exact fail-open this
-    // module exists to prevent.
+  it('bridges a tool granted only through a team', async () => {
+    // A team grant is an assigned registry capability too. Counting only direct
+    // assignments would drop a team-only tool from the bridge, silently removing
+    // a capability the agent is entitled to.
     const db = createMockDb() as unknown as Record<string, jest.Mock>;
     db.all = jest.fn(async (sql: string) =>
       sql.includes('team_tool_assignments')
-        ? [{ id: 1, name: 'team-tool', enabled: 1, assignment_enabled: 1 }]
+        ? [{ id: 1, name: 'team-tool', slug: 'team_tool', permissions: 'read_only', enabled: 1, assignment_enabled: 1 }]
         : [],
     );
-    await expect(materializeClaudeCodeMcpConfig({
+
+    fetchAssignedMcpServersMock.mockResolvedValue({});
+    const result = await materializeClaudeCodeMcpConfig({
       db: db as unknown as Db,
       tenantId: TENANT_ID,
       agentId: AGENT_ID,
       instanceId: 7,
       runKey: 'registry-team-grant',
       protectedInstanceIds: new Set(),
-    })).rejects.toThrow(/absent from RuntimeBoundaryV1/);
-    expect(fetchAssignedMcpServersMock).not.toHaveBeenCalled();
+    });
+
+    expect(result.serverNames).toContain(`agent-hq-tools__agent-${AGENT_ID}`);
   });
 
   it('treats registry-assignment inspection errors as fatal', async () => {

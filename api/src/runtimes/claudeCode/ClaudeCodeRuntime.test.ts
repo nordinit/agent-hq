@@ -225,6 +225,7 @@ function runtimeBoundary(
       mcpServers: tools.mcpServers ?? [],
       requiredLifecycleTools: tools.requiredLifecycleTools ?? [],
       skills: [],
+      registryTools: [],
     },
     auth: { provider: 'anthropic', providerConnectionId: null, credentialRefs: [] },
     evidence: { required: false, requirements: [] },

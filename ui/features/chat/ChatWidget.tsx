@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { api, ChatMessage, ChatConfig, ChatSession } from '@/lib/api';
 import { findAtlasAgent } from '@/lib/atlas';
+import { loadRuntimeChatTranscript, resolveChatTransport, sendRuntimeChatMessage, type ChatTransport } from '@/lib/runtimeChat';
 import { buildTranscriptRows, mergeChatMessages, parseGatewayHistoryMessages, parseStoredChatMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
 import {
   ATLAS_WIDGET_COMMAND_EVENT,
@@ -220,6 +221,8 @@ export default function ChatWidget() {
   const [chatConfig, setChatConfig] = useState<ChatConfig | null>(null);
   const [sessionKey, setSessionKey] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<number | null>(null);
+  const [transport, setTransport] = useState<ChatTransport>('openclaw-gateway');
+  const runtimeInstanceIdsRef = useRef<number[]>([]);
   const [connected, setConnected] = useState(false);
 
   const [showNewChatConfirm, setShowNewChatConfirm] = useState(false);
@@ -437,6 +440,7 @@ export default function ChatWidget() {
         if (!target?.session_key) return;
 
         setAgentId(target.id);
+        setTransport(resolveChatTransport(target.runtime_type));
 
         try {
           const canonical = await api.getCanonicalChatSession(target.id, 'web');
@@ -642,10 +646,16 @@ export default function ChatWidget() {
 
     const poll = () => {
       if (stopped) return;
-      api.getChatSessionMessages(null, activeSessionKey, 500)
-        .then(rows => {
+      // A runtime conversation spans one instance per turn and its rows carry the
+      // run's session key, so it is assembled from recent instances rather than
+      // fetched by the chat session key an OpenClaw conversation shares.
+      const load = transport === 'runtime' && agentId != null
+        ? loadRuntimeChatTranscript(agentId, runtimeInstanceIdsRef.current)
+        : api.getChatSessionMessages(null, activeSessionKey, 500).then(parseStoredChatMessages);
+
+      load
+        .then(parsed => {
           if (stopped || activeSessionKey !== sessionKey) return;
-          const parsed = parseStoredChatMessages(rows);
           if (parsed.length === 0) return;
 
           setMessages(prev => {
@@ -774,6 +784,28 @@ export default function ChatWidget() {
     armResponseWatchdog();
     userScrolledUpRef.current = false;
     scrollToBottom('smooth');
+
+    if (transport === 'runtime') {
+      // One-shot runtime: the send dispatches a turn and the reply arrives on the
+      // canonical poll below. There is no socket frame and no token streaming.
+      if (agentId == null) {
+        setSendError('No agent selected');
+        clearPendingResponse();
+        return;
+      }
+      void sendRuntimeChatMessage(agentId, text, attachmentIds).then(result => {
+        if (result.error) {
+          setSendError(result.error);
+          clearPendingResponse();
+          return;
+        }
+        if (result.instanceId != null) {
+          runtimeInstanceIdsRef.current = [...runtimeInstanceIdsRef.current, result.instanceId].slice(-12);
+        }
+        setSending(false);
+      });
+      return;
+    }
 
     ws.send(JSON.stringify({
       id: generateId(),
