@@ -260,7 +260,7 @@ export interface JobInstance {
   stale_at?: string | null;
   /** Task workflow outcome — distinct from execution status and configured by sprint workflow metadata. */
   task_outcome?: string | null;
-  /** Model that was selected / used for this run (e.g. anthropic/claude-sonnet-4-6) */
+  /** Model that was selected / used for this run (e.g. anthropic/claude-opus-5) */
   effective_model?: string | null;
   /** Fast mode selected for this run: 1 true, 0 false, null uses runtime default. */
   effective_fast_mode?: number | boolean | null;

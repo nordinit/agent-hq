@@ -24,9 +24,16 @@ export const MINIMAX_AGENT_MODELS: AgentModelOption[] = [
 ];
 
 export const PROVIDER_MODEL_SOURCES: Record<ProviderSlug, ModelSource> = {
+  // Current generation first — these are suggestions, not a whitelist, so any
+  // provider-supported identifier still works. Keep 4.6 entries for agents that
+  // were pinned to them before the 5 family shipped.
   anthropic: {
     type: 'static',
     models: [
+      { value: 'anthropic/claude-opus-5', label: 'Claude Opus 5' },
+      { value: 'anthropic/claude-sonnet-5', label: 'Claude Sonnet 5' },
+      { value: 'anthropic/claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+      { value: 'anthropic/claude-opus-4-8', label: 'Claude Opus 4.8' },
       { value: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
       { value: 'anthropic/claude-opus-4-6', label: 'Claude Opus 4.6' },
     ],
@@ -44,7 +51,8 @@ export const PROVIDER_MODEL_SOURCES: Record<ProviderSlug, ModelSource> = {
     models: [
       { value: 'openrouter/auto', label: 'OpenRouter Auto' },
       { value: 'openai/gpt-5.5', label: 'GPT-5.5 via OpenRouter' },
-      { value: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6 via OpenRouter' },
+      { value: 'anthropic/claude-opus-5', label: 'Claude Opus 5 via OpenRouter' },
+      { value: 'anthropic/claude-sonnet-5', label: 'Claude Sonnet 5 via OpenRouter' },
     ],
   },
   ollama: { type: 'freeform' },

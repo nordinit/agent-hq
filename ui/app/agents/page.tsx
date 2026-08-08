@@ -951,13 +951,16 @@ export default function AgentsPage() {
                           className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500 font-mono"
                           value={claudeRuntimeConfig.model ?? ''}
                           onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeClaudeRuntimeConfig(f.runtime_config), model: e.target.value } }))}
-                          placeholder="claude-sonnet-4-6"
+                          placeholder="claude-opus-5"
                           list="cc-model-suggestions"
                         />
+                        {/* Bare CLI model names — `claude --model` does not take the
+                            `anthropic/` prefix the provider model list uses. */}
                         <datalist id="cc-model-suggestions">
-                          <option value="claude-sonnet-4-6" />
-                          <option value="claude-opus-4-6" />
+                          <option value="claude-opus-5" />
+                          <option value="claude-sonnet-5" />
                           <option value="claude-haiku-4-5" />
+                          <option value="claude-opus-4-8" />
                         </datalist>
                       </label>
 
@@ -1304,7 +1307,7 @@ export default function AgentsPage() {
                           className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-fuchsia-500 font-mono"
                           value={hermesRuntimeConfig.model ?? ''}
                           onChange={e => setForm(f => ({ ...f, runtime_config: { ...normalizeHermesRuntimeConfig(f.runtime_config), model: e.target.value || null } }))}
-                          placeholder="claude-sonnet-4-6"
+                          placeholder="claude-opus-5"
                         />
                       </label>
                       <label className="block">

@@ -979,7 +979,7 @@ export default function AgentDetailPage() {
                       className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500 font-mono"
                       value={(editForm.runtime_config as ClaudeCodeRuntimeConfig).model ?? ''}
                       onChange={e => setF({ runtime_config: { ...(editForm.runtime_config as ClaudeCodeRuntimeConfig), model: e.target.value } })}
-                      placeholder="claude-sonnet-4-6"
+                      placeholder="claude-opus-5"
                     />
                   </label>
                   <label className="block">
@@ -1231,7 +1231,7 @@ export default function AgentDetailPage() {
                       className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-fuchsia-500 font-mono"
                       value={(editForm.runtime_config as HermesRuntimeConfig).model ?? ''}
                       onChange={e => setF({ runtime_config: { ...(editForm.runtime_config as HermesRuntimeConfig), model: e.target.value || null } })}
-                      placeholder="claude-sonnet-4-6"
+                      placeholder="claude-opus-5"
                     />
                   </label>
                   <label className="block">
