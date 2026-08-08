@@ -386,6 +386,17 @@ export const ErrorBubble = memo(function ErrorBubble({ msg }: { msg: ChatMessage
   );
 });
 
+// ─── Run-end marker — quiet bookkeeping line inside a tool group ─────────────
+export const TurnEndLine = memo(function TurnEndLine({ msg }: { msg: ChatMessage }) {
+  return (
+    <div className="flex items-center gap-2 py-1 text-[11px] text-slate-500">
+      <Terminal className="w-3 h-3 shrink-0 text-slate-600" />
+      <span className="truncate">{msg.content}</span>
+      <span className="ml-auto"><EventTimestamp msg={msg} /></span>
+    </div>
+  );
+});
+
 // ─── Tool group — collapsed run of tool events, expandable to each call ──────
 export const ToolGroupBubble = memo(function ToolGroupBubble({
   events,

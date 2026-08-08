@@ -6,6 +6,7 @@ const CHAT_EVENT_TYPES = new Set<ChatEventType>([
   'tool_call',
   'tool_result',
   'turn_start',
+  'turn_end',
   'system',
   'error',
 ]);
@@ -62,10 +63,12 @@ function eventTypeRank(eventType: ChatEventType): number {
       return 3;
     case 'text':
       return 4;
-    case 'system':
+    case 'turn_end':
       return 5;
-    case 'error':
+    case 'system':
       return 6;
+    case 'error':
+      return 7;
     default:
       return 99;
   }
@@ -273,15 +276,35 @@ export function parseGatewayHistoryMessages(rows: Array<Record<string, unknown>>
 
 const TOOL_EVENT_TYPES = new Set<ChatEventType>(['tool_call', 'tool_result']);
 
+/** Run bookkeeping that belongs with a turn's tool group, not in the transcript. */
+const TURN_END_EVENT_TYPES = new Set<ChatEventType>(['turn_end']);
+
+function isGroupableEvent(message: ChatMessage): boolean {
+  const eventType = message.event_type ?? 'text';
+  return TOOL_EVENT_TYPES.has(eventType) || TURN_END_EVENT_TYPES.has(eventType);
+}
+
+function holdsOnlyTurnEnd(row: TranscriptRow): boolean {
+  return row.kind === 'tools'
+    && row.events.every(event => TURN_END_EVENT_TYPES.has(event.event_type ?? 'text'));
+}
+
 /** A rendered transcript row: either one message, or a run of tool events. */
 export type TranscriptRow =
   | { kind: 'message'; key: string; message: ChatMessage }
   | { kind: 'tools'; key: string; events: ChatMessage[] };
 
-/** Tool uses in a group — a call and its result are one use, not two. */
+/**
+ * Tool uses in a group — a call and its result are one use, not two.
+ *
+ * A group holding only run-end markers counts zero, so a turn that used no tools
+ * still collapses its bookkeeping behind a "0 tool uses" row rather than leaving
+ * a bare "Runtime runEnded" line in the transcript.
+ */
 export function countToolUses(events: ChatMessage[]): number {
   const calls = events.filter(event => event.event_type === 'tool_call').length;
-  return calls > 0 ? calls : events.length;
+  if (calls > 0) return calls;
+  return events.filter(event => event.event_type === 'tool_result').length;
 }
 
 /**
@@ -308,7 +331,7 @@ export function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
   };
 
   for (const message of messages) {
-    if (TOOL_EVENT_TYPES.has(message.event_type ?? 'text')) {
+    if (isGroupableEvent(message)) {
       pendingTools.push(message);
       continue;
     }
@@ -316,6 +339,32 @@ export function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
     rows.push({ kind: 'message', key: message.id, message });
   }
   flushTools();
+
+  // A turn's run-end marker is emitted after the reply, so it lands in a group of
+  // its own behind the message. Pull it back onto the turn it closes: into that
+  // turn's tool group when there is one, otherwise ahead of the reply as an empty
+  // group, which renders as "0 tool uses".
+  // `settled` stops a relocated group from being reconsidered on the next
+  // iteration — without it the group walks backwards past every earlier message
+  // instead of stopping in front of the reply it belongs to.
+  const settled = new Set<TranscriptRow>();
+  for (let index = rows.length - 1; index > 0; index -= 1) {
+    const row = rows[index];
+    if (settled.has(row) || !holdsOnlyTurnEnd(row) || row.kind !== 'tools') continue;
+
+    const previous = rows[index - 1];
+    if (previous.kind !== 'message') continue;
+
+    const beforeMessage = rows[index - 2];
+    if (beforeMessage && beforeMessage.kind === 'tools') {
+      beforeMessage.events = [...beforeMessage.events, ...row.events];
+      rows.splice(index, 1);
+      continue;
+    }
+    rows.splice(index, 1);
+    rows.splice(index - 1, 0, row);
+    settled.add(row);
+  }
 
   return rows;
 }

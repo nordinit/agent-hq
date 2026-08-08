@@ -202,3 +202,53 @@ describe('transcript tool grouping', () => {
     assert.deepEqual(sorted.map(m => m.id), ['t1', 'a1']);
   });
 });
+
+describe('run-end markers fold into the tool group', () => {
+  const msg = (over: Partial<ChatMessage> & { id: string }): ChatMessage => ({
+    role: 'assistant',
+    content: '',
+    timestamp: '2026-08-08T06:00:00.000Z',
+    event_type: 'text',
+    ...over,
+  });
+
+  it('merges the run-end marker into the turn it closes', () => {
+    const rows = buildTranscriptRows([
+      msg({ id: 'u1', role: 'user', content: 'hi', event_type: 'text' }),
+      msg({ id: 't1', event_type: 'tool_call', content: 'bash' }),
+      msg({ id: 't2', event_type: 'tool_result', content: 'ok' }),
+      msg({ id: 'a1', content: 'done' }),
+      msg({ id: 'e1', role: 'system', event_type: 'turn_end', content: 'Runtime runEnded (completed)' }),
+    ]);
+
+    assert.deepEqual(rows.map(r => r.kind), ['message', 'tools', 'message']);
+    const tools = rows[1];
+    assert.equal(tools.kind === 'tools' && tools.events.length, 3);
+    assert.equal(tools.kind === 'tools' && countToolUses(tools.events), 1);
+  });
+
+  it('collapses a tool-less turn to a 0 tool uses group ahead of the reply', () => {
+    const rows = buildTranscriptRows([
+      msg({ id: 'u1', role: 'user', content: 'hi', event_type: 'text' }),
+      msg({ id: 'a1', content: 'Hi! What can I help you with?' }),
+      msg({ id: 'e1', role: 'system', event_type: 'turn_end', content: 'Runtime runEnded (completed)' }),
+    ]);
+
+    assert.deepEqual(rows.map(r => r.kind), ['message', 'tools', 'message']);
+    const tools = rows[1];
+    assert.equal(tools.kind === 'tools' && countToolUses(tools.events), 0);
+    assert.equal(rows[2].kind === 'message' && rows[2].message.id, 'a1');
+  });
+
+  it('keeps turn_end as its own event type rather than a text bubble', () => {
+    const parsed = parseStoredChatMessages([{
+      id: 'e1',
+      role: 'system',
+      content: 'Runtime runEnded (completed)',
+      timestamp: '2026-08-08T06:00:00.000Z',
+      event_type: 'turn_end',
+      event_meta: '{}',
+    }]);
+    assert.equal(parsed[0].event_type, 'turn_end');
+  });
+});

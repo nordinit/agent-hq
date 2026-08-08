@@ -16,7 +16,8 @@ import remarkGfm from 'remark-gfm';
 import { Bot, Send, X, Loader2, Square, MessageCircle, Settings, SquarePen, History, ArrowLeft, Minimize2, Maximize2 } from 'lucide-react';
 import TelegramSettings from '@/components/TelegramSettings';
 import { formatTime } from '@/lib/date';
-import { ThoughtBubble, ToolCallBubble, ToolGroupBubble, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
+import { ThoughtBubble, ToolCallBubble, ToolGroupBubble,
+  TurnEndLine, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
 import {
   PendingAttachment,
   validateFile,
@@ -116,6 +117,8 @@ const WidgetEventMessage = memo(function WidgetEventMessage({ msg }: { msg: Chat
       return <ToolResultBubble msg={msg} />;
     case 'turn_start':
       return <TurnStartDivider msg={msg} />;
+    case 'turn_end':
+      return <TurnEndLine msg={msg} />;
     case 'error':
       return <ErrorBubble msg={msg} />;
     case 'text':

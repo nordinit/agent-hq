@@ -1073,7 +1073,7 @@ export interface TaskHistory {
   created_at: string;
 }
 
-export type ChatEventType = 'text' | 'thought' | 'tool_call' | 'tool_result' | 'turn_start' | 'system' | 'error';
+export type ChatEventType = 'text' | 'thought' | 'tool_call' | 'tool_result' | 'turn_start' | 'turn_end' | 'system' | 'error';
 
 export interface ChatMessage {
   id: string;

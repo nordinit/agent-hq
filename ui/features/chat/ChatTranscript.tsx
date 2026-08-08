@@ -7,7 +7,8 @@ import { Bot, ChevronLeft, Loader2, MessageSquare, Mic, Send, Square } from 'luc
 import { Button } from '@/components/ui/button';
 import { formatTime } from '@/lib/date';
 import { ChatMessage } from '@/lib/api';
-import { ThoughtBubble, ToolCallBubble, ToolGroupBubble, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
+import { ThoughtBubble, ToolCallBubble, ToolGroupBubble,
+  TurnEndLine, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
 import { buildTranscriptRows } from '@/lib/chatMessages';
 import {
   PendingAttachment,
@@ -74,6 +75,8 @@ const EventMessage = memo(function EventMessage({ msg }: { msg: ChatMessage }) {
       return <ToolResultBubble msg={msg} />;
     case 'turn_start':
       return <TurnStartDivider msg={msg} />;
+    case 'turn_end':
+      return <TurnEndLine msg={msg} />;
     case 'error':
       return <ErrorBubble msg={msg} />;
     case 'text':
