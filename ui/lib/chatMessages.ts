@@ -80,8 +80,18 @@ export function sortChatMessages(messages: ChatMessage[]): ChatMessage[] {
   return [...messages].sort(compareChatMessages);
 }
 
+/**
+ * Absent meta and empty meta must produce the same string.
+ *
+ * Optimistic rows are built in the composer without a `meta` field, while every
+ * row read back from the API goes through `parseEventMeta`, which always returns
+ * an object (`{}` when the column held no metadata). Treating those two as
+ * different made their fingerprints differ, so `mergeChatMessages` never
+ * recognised the persisted row as the same message and the sender saw their own
+ * message twice.
+ */
 function stableMetaString(meta: Record<string, unknown> | undefined): string {
-  if (!meta) return '';
+  if (!meta || Object.keys(meta).length === 0) return '';
   try {
     return JSON.stringify(stableValue(meta));
   } catch {

@@ -70,6 +70,38 @@ describe('chat message transcript helpers', () => {
     assert.equal(merged[0].content, 'new');
   });
 
+  it('replaces an optimistic user bubble whose meta is absent with the persisted row', () => {
+    // The composer builds its optimistic bubble without a `meta` field, while every
+    // row that comes back from the API is normalized through parseEventMeta and so
+    // always carries `meta: {}`. Absent and empty meta must fingerprint identically,
+    // or the optimistic bubble survives alongside the persisted row and the user
+    // sees their own message twice.
+    const optimistic: ChatMessage[] = [
+      {
+        id: 'user-1786159172430',
+        role: 'user',
+        content: 'hi',
+        timestamp: '2026-08-08T03:19:32.000Z',
+      },
+    ];
+
+    const persisted = parseStoredChatMessages([
+      {
+        id: 'oc-chat-user-chat-8a1a7849-1786159172430',
+        role: 'user',
+        content: 'hi',
+        timestamp: '2026-08-08T03:19:32.000Z',
+        event_type: 'text',
+        event_meta: '{}',
+      },
+    ]);
+
+    const merged = mergeChatMessages(optimistic, persisted);
+
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].id, 'oc-chat-user-chat-8a1a7849-1786159172430');
+  });
+
   it('replaces optimistic and rolling rows with persisted final transcript rows', () => {
     const existing: ChatMessage[] = [
       {

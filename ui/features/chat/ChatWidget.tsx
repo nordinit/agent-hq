@@ -554,7 +554,23 @@ export default function ChatWidget() {
     } else if (type === 'error') {
       pendingResponseRef.current = false;
       clearResponseWatchdog();
-      setSendError((data.message as string) || 'Gateway error');
+      // Gateway errors are part of the conversation — a failed tool call is
+      // something the agent did, at a point in time, and it belongs in the
+      // transcript next to the call that failed. Routing them to `sendError`
+      // put them in the composer banner instead, which is reserved for "your
+      // message did not get sent" and only clears on the next send or
+      // reconnect, so an agent-side failure stayed pinned long after the run
+      // it came from had finished.
+      const gatewayError = (data.message as string) || 'Gateway error';
+      setMessages(prev => mergeChatMessages(prev, [{
+        id: `gateway-error-${Date.now()}`,
+        role: 'assistant',
+        content: gatewayError,
+        timestamp: new Date().toISOString(),
+        event_type: 'error',
+      }]));
+      if (!openRef.current) setUnreadCount(prev => prev + 1);
+      if (!userScrolledUpRef.current) scrollToBottom('smooth');
       setSending(false);
       streamBufRef.current = '';
       setStreamContent(null);
