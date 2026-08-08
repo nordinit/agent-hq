@@ -704,6 +704,16 @@ export default function ChatWidget() {
           if (stopped || activeSessionKey !== sessionKey) return;
           if (parsed.length === 0) return;
 
+          // A runtime turn has no completion frame — the gateway's `done` is what
+          // disarms the stall watchdog for an OpenClaw chat. Landing the reply in
+          // the transcript is the equivalent signal here; without it the watchdog
+          // stayed armed after a perfectly good reply and fired twenty minutes
+          // later claiming the agent never responded.
+          if (transport === 'runtime' && pendingResponseRef.current) {
+            const last = parsed[parsed.length - 1];
+            if (last && last.role !== 'user') clearPendingResponse();
+          }
+
           setMessages(prev => {
             const merged = reconcileChatMessageSnapshot(prev, parsed);
             if (merged !== prev && !userScrolledUpRef.current) {

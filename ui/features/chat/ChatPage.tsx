@@ -702,6 +702,12 @@ function ChatPageInner() {
       loadRuntimeChatTranscript(selectedAgentId)
         .then(parsed => {
           if (stopped || parsed.length === 0) return;
+          // Same as the widget: the persisted reply is what tells us the turn
+          // finished, since a runtime turn sends no completion frame.
+          if (pendingResponseRef.current) {
+            const last = parsed[parsed.length - 1];
+            if (last && last.role !== 'user') clearPendingResponse();
+          }
           setMessages(prev => reconcileChatMessageSnapshot(prev, parsed));
         })
         .catch(err => console.warn('[chat] Runtime transcript poll failed:', err));
