@@ -2,6 +2,7 @@
 
 import { memo, useState } from 'react';
 import { ChatMessage } from '@/lib/api';
+import { countToolUses } from '@/lib/chatMessages';
 import { formatTime } from '@/lib/date';
 import { Brain, Wrench, Terminal, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react';
 
@@ -380,6 +381,52 @@ export const ErrorBubble = memo(function ErrorBubble({ msg }: { msg: ChatMessage
           <span className="ml-auto"><EventTimestamp msg={msg} /></span>
         </div>
         <p className="whitespace-pre-wrap break-words text-red-300/80">{msg.content}</p>
+      </div>
+    </div>
+  );
+});
+
+// ─── Tool group — collapsed run of tool events, expandable to each call ──────
+export const ToolGroupBubble = memo(function ToolGroupBubble({
+  events,
+  renderEvent,
+}: {
+  events: ChatMessage[];
+  renderEvent: (event: ChatMessage) => React.ReactNode;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const uses = countToolUses(events);
+  const failed = events.some(event => event.event_type === 'tool_result' && describeToolResult(event).isError);
+
+  return (
+    <div className="flex justify-start mb-2">
+      <div className="max-w-[80%] w-full">
+        <button
+          onClick={() => setExpanded(prev => !prev)}
+          aria-expanded={expanded}
+          className="flex w-full items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-800/40 px-3 py-2 text-xs transition-colors hover:bg-slate-700/30"
+        >
+          <Wrench className={`w-3.5 h-3.5 shrink-0 ${failed ? 'text-red-400' : 'text-blue-400'}`} />
+          <span className="text-slate-300 font-medium">
+            {uses} tool {uses === 1 ? 'use' : 'uses'}
+          </span>
+          {failed && <span className="text-[10px] font-medium text-red-400">contains a failure</span>}
+          <span className="ml-auto text-[10px] text-slate-500">
+            {expanded ? 'Hide' : 'Show'}
+          </span>
+          {expanded ? (
+            <ChevronDown className="w-3 h-3 text-slate-600 shrink-0" />
+          ) : (
+            <ChevronRight className="w-3 h-3 text-slate-600 shrink-0" />
+          )}
+        </button>
+        {expanded && (
+          <div className="mt-2 border-l-2 border-slate-700/40 pl-3">
+            {events.map(event => (
+              <div key={event.id}>{renderEvent(event)}</div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

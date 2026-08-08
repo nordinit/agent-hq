@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { api, ChatMessage, ChatConfig, ChatSession } from '@/lib/api';
 import { findAtlasAgent } from '@/lib/atlas';
-import { mergeChatMessages, parseGatewayHistoryMessages, parseStoredChatMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
+import { buildTranscriptRows, mergeChatMessages, parseGatewayHistoryMessages, parseStoredChatMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
 import {
   ATLAS_WIDGET_COMMAND_EVENT,
   consumePendingAtlasWidgetCommand,
@@ -15,7 +15,7 @@ import remarkGfm from 'remark-gfm';
 import { Bot, Send, X, Loader2, Square, MessageCircle, Settings, SquarePen, History, ArrowLeft, Minimize2, Maximize2 } from 'lucide-react';
 import TelegramSettings from '@/components/TelegramSettings';
 import { formatTime } from '@/lib/date';
-import { ThoughtBubble, ToolCallBubble, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
+import { ThoughtBubble, ToolCallBubble, ToolGroupBubble, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
 import {
   PendingAttachment,
   validateFile,
@@ -1001,8 +1001,16 @@ export default function ChatWidget() {
                         Past session — read only
                       </p>
                     </div>
-                    {displayMessages.map((msg, i) => (
-                      <WidgetEventMessage key={msg.id || `hm-${i}`} msg={msg} />
+                    {buildTranscriptRows(displayMessages).map(row => (
+                      row.kind === 'tools'
+                        ? (
+                          <ToolGroupBubble
+                            key={row.key}
+                            events={row.events}
+                            renderEvent={event => <WidgetEventMessage msg={event} />}
+                          />
+                        )
+                        : <WidgetEventMessage key={row.key} msg={row.message} />
                     ))}
                     <div ref={messagesEndRef} />
                   </>
@@ -1014,8 +1022,16 @@ export default function ChatWidget() {
                 </div>
               ) : (
                 <>
-                  {messages.map(msg => (
-                    <WidgetEventMessage key={msg.id} msg={msg} />
+                  {buildTranscriptRows(messages).map(row => (
+                    row.kind === 'tools'
+                      ? (
+                        <ToolGroupBubble
+                          key={row.key}
+                          events={row.events}
+                          renderEvent={event => <WidgetEventMessage msg={event} />}
+                        />
+                      )
+                      : <WidgetEventMessage key={row.key} msg={row.message} />
                   ))}
                   {chatStreamActive && streamContent !== null && (
                     <WidgetStreamBubble content={streamContent} />

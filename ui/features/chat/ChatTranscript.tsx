@@ -7,7 +7,8 @@ import { Bot, ChevronLeft, Loader2, MessageSquare, Mic, Send, Square } from 'luc
 import { Button } from '@/components/ui/button';
 import { formatTime } from '@/lib/date';
 import { ChatMessage } from '@/lib/api';
-import { ThoughtBubble, ToolCallBubble, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
+import { ThoughtBubble, ToolCallBubble, ToolGroupBubble, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
+import { buildTranscriptRows } from '@/lib/chatMessages';
 import {
   PendingAttachment,
   AttachmentUploadButton,
@@ -230,8 +231,16 @@ export function ChatPanel({
               </div>
             )}
 
-            {messages.map(msg => (
-              <EventMessage key={msg.id} msg={msg} />
+            {buildTranscriptRows(messages).map(row => (
+              row.kind === 'tools'
+                ? (
+                  <ToolGroupBubble
+                    key={row.key}
+                    events={row.events}
+                    renderEvent={event => <EventMessage msg={event} />}
+                  />
+                )
+                : <EventMessage key={row.key} msg={row.message} />
             ))}
 
             {streamContent !== null && (

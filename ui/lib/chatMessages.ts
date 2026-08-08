@@ -43,17 +43,24 @@ function toTimestampMs(timestamp: string): number {
   return Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY;
 }
 
+/**
+ * Tie-break order for rows sharing a timestamp, in the order the work happened:
+ * the agent thinks, uses tools, then replies. `text` deliberately ranks after
+ * the tool events — several ingestion paths stamp a whole turn with one
+ * timestamp, and ranking the reply first put it above the tool calls that
+ * produced it.
+ */
 function eventTypeRank(eventType: ChatEventType): number {
   switch (eventType) {
     case 'turn_start':
       return 0;
     case 'thought':
       return 1;
-    case 'text':
-      return 2;
     case 'tool_call':
-      return 3;
+      return 2;
     case 'tool_result':
+      return 3;
+    case 'text':
       return 4;
     case 'system':
       return 5;
@@ -260,4 +267,55 @@ export function parseGatewayHistoryMessages(rows: Array<Record<string, unknown>>
   }, []);
 
   return sortChatMessages(messages);
+}
+
+// ── Transcript grouping ──────────────────────────────────────────────────────
+
+const TOOL_EVENT_TYPES = new Set<ChatEventType>(['tool_call', 'tool_result']);
+
+/** A rendered transcript row: either one message, or a run of tool events. */
+export type TranscriptRow =
+  | { kind: 'message'; key: string; message: ChatMessage }
+  | { kind: 'tools'; key: string; events: ChatMessage[] };
+
+/** Tool uses in a group — a call and its result are one use, not two. */
+export function countToolUses(events: ChatMessage[]): number {
+  const calls = events.filter(event => event.event_type === 'tool_call').length;
+  return calls > 0 ? calls : events.length;
+}
+
+/**
+ * Collapse each run of tool events into a single row placed BEFORE the message
+ * that follows it.
+ *
+ * Two things make this necessary. Ordering: transcript rows are sorted by
+ * timestamp, and the JSONL backfill writes a turn's tool events after the
+ * assistant text they preceded, so the raw order shows the agent speaking and
+ * then apparently using tools. Volume: a turn can spend a dozen tool calls
+ * before producing one sentence, which buries the reply.
+ *
+ * A run that ends the transcript (no message after it) stays where it is — the
+ * agent is mid-turn and those calls have not led to a reply yet.
+ */
+export function buildTranscriptRows(messages: ChatMessage[]): TranscriptRow[] {
+  const rows: TranscriptRow[] = [];
+  let pendingTools: ChatMessage[] = [];
+
+  const flushTools = () => {
+    if (pendingTools.length === 0) return;
+    rows.push({ kind: 'tools', key: `tools-${pendingTools[0].id}`, events: pendingTools });
+    pendingTools = [];
+  };
+
+  for (const message of messages) {
+    if (TOOL_EVENT_TYPES.has(message.event_type ?? 'text')) {
+      pendingTools.push(message);
+      continue;
+    }
+    flushTools();
+    rows.push({ kind: 'message', key: message.id, message });
+  }
+  flushTools();
+
+  return rows;
 }
