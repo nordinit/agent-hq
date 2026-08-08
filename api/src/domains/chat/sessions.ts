@@ -393,3 +393,75 @@ export async function listChatSessionMessages(
     LIMIT ? OFFSET ?
   `, ...params);
 }
+
+/**
+ * When the agent's current chat conversation began.
+ *
+ * A runtime turn rewrites its instance's session_key to the run's own id, so a
+ * conversation cannot be identified by key the way an OpenClaw chat can. The
+ * canonical chat session row is the durable anchor instead: rotating the key on
+ * "new chat" bumps `updated_at`, and every turn opened after that timestamp
+ * belongs to the current conversation. Null means no rotation has happened, so
+ * the whole history is one conversation.
+ */
+export async function getChatSessionStartedAt(agentId: number, channel = 'web'): Promise<string | null> {
+  const db = getDb();
+  const row = await db.get(`
+    SELECT updated_at, created_at
+    FROM canonical_chat_sessions
+    WHERE agent_id = ? AND channel = ?
+    LIMIT 1
+  `, agentId, channel) as { updated_at?: string | null; created_at?: string | null } | undefined;
+  const value = row?.updated_at ?? row?.created_at ?? null;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Messages for a runtime-backed agent's current conversation.
+ *
+ * Assembled from the chat instances opened since the conversation started, since
+ * each turn is its own instance and carries the run's session key rather than the
+ * chat's.
+ */
+export async function listRuntimeChatMessages(
+  db: Db,
+  agentId: number,
+  options: { since?: string | null; limit?: number; tenantId?: number },
+): Promise<unknown[]> {
+  const limit = Math.min(options.limit ?? 500, 1000);
+  const since = options.since ?? null;
+  const tenantScope = options.tenantId
+    ? await chatMessageTenantScope(db, 'chat_messages', options.tenantId)
+    : { sql: '1 = 1', params: [] as unknown[] };
+
+  // Built conditionally rather than `? IS NULL OR created_at >= ?`: a bare null
+  // parameter has no inferable type in PostgreSQL and the query fails outright.
+  const instanceParams: unknown[] = [agentId];
+  let sinceClause = '';
+  if (since) {
+    sinceClause = 'AND created_at >= ?';
+    instanceParams.push(since);
+  }
+
+  const instances = await db.all(`
+    SELECT id
+    FROM job_instances
+    WHERE agent_id = ?
+      AND run_stage = 'chat'
+      ${sinceClause}
+    ORDER BY id DESC
+    LIMIT 40
+  `, ...instanceParams) as Array<{ id: number }>;
+
+  if (instances.length === 0) return [];
+  const ids = instances.map(row => row.id);
+
+  return await db.all(`
+    SELECT id, agent_id, instance_id, durable_run_id, session_key, role, content, timestamp, event_type, event_meta
+    FROM chat_messages
+    WHERE instance_id IN (${ids.map(() => '?').join(', ')})
+      AND ${tenantScope.sql}
+    ORDER BY timestamp ASC, id ASC
+    LIMIT ?
+  `, ...ids, ...tenantScope.params, limit);
+}

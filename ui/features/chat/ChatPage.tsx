@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { timeAgo } from '@/lib/date';
 import { findAtlasAgent } from '@/lib/atlas';
 import { parseCanonicalMessages, parseGatewayHistoryMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
-import { abortRuntimeChatTurn, loadRuntimeChatTranscript, resolveChatTransport, sendRuntimeChatMessage } from '@/lib/runtimeChat';
+import { abortRuntimeChatTurn, loadRuntimeChatTranscript, resolveChatTransport, rotateRuntimeChatSession, sendRuntimeChatMessage } from '@/lib/runtimeChat';
 import { buildChatListItems, type ChatListItem } from '@/lib/chatListItems';
 import {
   buildFallbackInstanceFromChatSession,
@@ -153,7 +153,6 @@ function ChatPageInner() {
   }, [agents, projectAgentIds, selectedProjectId]);
 
   const runtimeInstanceIdsRef = useRef<number[]>([]);
-  const runtimeSessionFloorRef = useRef<number | null>(null);
   const selectedAgent = useMemo(
     () => filteredAgents.find(agent => agent.id === selectedAgentId)
       ?? agents.find(agent => agent.id === selectedAgentId && agent.id === deepLinkAgentIdRef.current)
@@ -700,7 +699,7 @@ function ChatPageInner() {
     let stopped = false;
     const poll = () => {
       if (stopped) return;
-      loadRuntimeChatTranscript(selectedAgentId, runtimeInstanceIdsRef.current, runtimeSessionFloorRef.current)
+      loadRuntimeChatTranscript(selectedAgentId)
         .then(parsed => {
           if (stopped || parsed.length === 0) return;
           setMessages(prev => reconcileChatMessageSnapshot(prev, parsed));
@@ -1137,14 +1136,7 @@ function ChatPageInner() {
     if (runtimeChat) {
       runtimeInstanceIdsRef.current = [];
       setMessages([]);
-      if (selectedAgentId != null) {
-        void api.getChatSessions(selectedAgentId, 1)
-          .then(sessions => {
-            const newest = sessions[0]?.instance_id;
-            if (typeof newest === 'number') runtimeSessionFloorRef.current = newest;
-          })
-          .catch(() => { /* floor unchanged */ });
-      }
+      if (selectedAgentId != null) void rotateRuntimeChatSession(selectedAgentId);
       return;
     }
 

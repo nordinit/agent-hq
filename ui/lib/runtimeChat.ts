@@ -1,5 +1,5 @@
-import { api, type ChatMessage } from '@/lib/api';
-import { mergeChatMessages, parseStoredChatMessages, sortChatMessages } from '@/lib/chatMessages';
+import type { ChatMessage } from '@/lib/api';
+import { parseStoredChatMessages, sortChatMessages } from '@/lib/chatMessages';
 
 /**
  * Transport a chat surface must use to reach an agent.
@@ -17,9 +17,6 @@ export function resolveChatTransport(runtimeType: string | null | undefined): Ch
     ? 'runtime'
     : 'openclaw-gateway';
 }
-
-/** Turns to keep on screen. Each runtime turn is its own instance. */
-const RUNTIME_CHAT_TURN_WINDOW = 12;
 
 /** Stop a runtime turn. The gateway's chat.abort cannot reach a runtime run. */
 export async function abortRuntimeChatTurn(instanceId: number): Promise<boolean> {
@@ -66,42 +63,30 @@ export async function sendRuntimeChatMessage(
 }
 
 /**
- * Read a runtime-backed conversation.
+ * Read the agent's current runtime conversation.
  *
- * A runtime turn writes its transcript under the run's own session key, not the
- * chat session key, so the conversation cannot be fetched by key the way an
- * OpenClaw chat can — it is assembled from the recent chat instances instead.
- * `mergeChatMessages` dedupes across them, so overlapping fetches are harmless
- * and a reload rebuilds the thread without any client-side bookkeeping.
+ * Scoping is the server's job: a runtime turn rewrites its instance's session key
+ * to the run's own id, so the thread cannot be fetched by key, and a boundary
+ * kept in the browser is lost on refresh — which showed every earlier
+ * conversation again after "new chat".
  */
-export async function loadRuntimeChatTranscript(
-  agentId: number,
-  extraInstanceIds: readonly number[] = [],
-  afterInstanceId: number | null = null,
-): Promise<ChatMessage[]> {
-  const sessions = await api.getChatSessions(agentId, RUNTIME_CHAT_TURN_WINDOW).catch(() => []);
-  const instanceIds = Array.from(new Set([
-    ...sessions.map(session => session.instance_id).filter((id): id is number => typeof id === 'number'),
-    ...extraInstanceIds,
-  ]))
-    // "New chat" on a runtime agent cannot rotate a session key the way an
-    // OpenClaw chat does, because each turn's rows carry the run's own key. The
-    // floor is the boundary instead: only turns opened after it belong to the
-    // current conversation.
-    .filter(id => afterInstanceId == null || id > afterInstanceId)
-    .sort((left, right) => left - right)
-    .slice(-RUNTIME_CHAT_TURN_WINDOW);
+export async function loadRuntimeChatTranscript(agentId: number): Promise<ChatMessage[]> {
+  const res = await fetch(`/api/v1/chat/agents/${agentId}/runtime-transcript?limit=500`);
+  if (!res.ok) return [];
+  const data = await res.json() as { messages?: Array<Record<string, unknown>> };
+  return sortChatMessages(parseStoredChatMessages(data.messages ?? []));
+}
 
-  if (instanceIds.length === 0) return [];
-
-  const perInstance = await Promise.all(instanceIds.map(id =>
-    api.getChatSessionMessages(id, '', 200)
-      .then(rows => parseStoredChatMessages(rows))
-      .catch(() => [] as ChatMessage[]),
-  ));
-
-  return sortChatMessages(perInstance.reduce<ChatMessage[]>(
-    (acc, rows) => mergeChatMessages(acc, rows),
-    [],
-  ));
+/** Begin a new conversation by moving the server-side boundary forward. */
+export async function rotateRuntimeChatSession(agentId: number): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/v1/chat/agents/${agentId}/chat-session/rotate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: 'web' }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }

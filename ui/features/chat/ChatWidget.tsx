@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { api, ChatMessage, ChatConfig, ChatSession } from '@/lib/api';
 import { findAtlasAgent } from '@/lib/atlas';
-import { abortRuntimeChatTurn, loadRuntimeChatTranscript, resolveChatTransport, sendRuntimeChatMessage, type ChatTransport } from '@/lib/runtimeChat';
+import { abortRuntimeChatTurn, loadRuntimeChatTranscript, resolveChatTransport, rotateRuntimeChatSession, sendRuntimeChatMessage, type ChatTransport } from '@/lib/runtimeChat';
 import { buildTranscriptRows, mergeChatMessages, parseGatewayHistoryMessages, parseStoredChatMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
 import {
   ATLAS_WIDGET_COMMAND_EVENT,
@@ -226,7 +226,6 @@ export default function ChatWidget() {
   const [agentId, setAgentId] = useState<number | null>(null);
   const [transport, setTransport] = useState<ChatTransport>('openclaw-gateway');
   const runtimeInstanceIdsRef = useRef<number[]>([]);
-  const runtimeSessionFloorRef = useRef<number | null>(null);
   // Readiness for a runtime agent. There is no socket to watch, so this is a real
   // probe of the driver: CLI present, version in range, workspace writable, and
   // `claude auth status` actually passing — the things that would otherwise fail
@@ -697,7 +696,7 @@ export default function ChatWidget() {
       // run's session key, so it is assembled from recent instances rather than
       // fetched by the chat session key an OpenClaw conversation shares.
       const load = transport === 'runtime' && agentId != null
-        ? loadRuntimeChatTranscript(agentId, runtimeInstanceIdsRef.current, runtimeSessionFloorRef.current)
+        ? loadRuntimeChatTranscript(agentId)
         : api.getChatSessionMessages(null, activeSessionKey, 500).then(parseStoredChatMessages);
 
       load
@@ -916,19 +915,12 @@ export default function ChatWidget() {
     clearPendingResponse();
 
     if (transport === 'runtime') {
-      // Nothing to ask the gateway for. Clear the transcript and set the floor to
-      // the newest turn that exists, so the conversation starts after it.
+      // Nothing to ask the gateway for. Rotating the canonical chat session moves
+      // the server-side boundary, so the empty thread survives a refresh.
       runtimeInstanceIdsRef.current = [];
       setMessages([]);
       setSendError(null);
-      if (agentId != null) {
-        void api.getChatSessions(agentId, 1)
-          .then(sessions => {
-            const newest = sessions[0]?.instance_id;
-            if (typeof newest === 'number') runtimeSessionFloorRef.current = newest;
-          })
-          .catch(() => { /* floor stays where it was; worst case older turns reappear */ });
-      }
+      if (agentId != null) void rotateRuntimeChatSession(agentId);
       return;
     }
 
