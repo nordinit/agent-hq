@@ -279,7 +279,7 @@ function SeriesModal({
                   <option value="custom">Custom expression</option>
                 </select>
               </div>
-              <div className={form.schedule_kind === 'minutes' ? '' : 'hidden sm:block'}>
+              <div className={form.schedule_kind === 'minutes' ? '' : 'hidden'}>
                 <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Interval *</label>
                 <input
                   type="number"
@@ -294,13 +294,13 @@ function SeriesModal({
                 <ErrorText message={validation.minute_interval} />
                 {form.schedule_kind === 'minutes' && <p className="mt-1 text-[11px] text-slate-500">Supported range: {MINUTE_INTERVAL_MIN}-{MINUTE_INTERVAL_MAX} minutes.</p>}
               </div>
-              <div className={form.schedule_kind === 'weekly' ? '' : 'hidden sm:block'}>
+              <div className={form.schedule_kind === 'weekly' ? '' : 'hidden'}>
                 <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Day</label>
                 <select className={fieldClass()} value={form.weekday} onChange={e => onChange({ ...form, weekday: e.target.value })} disabled={form.schedule_kind !== 'weekly'}>
                   {WEEKDAYS.map(day => <option key={day} value={day}>{day[0].toUpperCase() + day.slice(1)}</option>)}
                 </select>
               </div>
-              <div className={form.schedule_kind === 'daily' || form.schedule_kind === 'weekly' ? '' : 'hidden sm:block'}>
+              <div className={form.schedule_kind === 'daily' || form.schedule_kind === 'weekly' ? '' : 'hidden'}>
                 <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Time *</label>
                 <input type="time" className={fieldClass(Boolean(validation.schedule_time))} value={form.schedule_time} onChange={e => onChange({ ...form, schedule_time: e.target.value })} />
                 <ErrorText message={validation.schedule_time} />

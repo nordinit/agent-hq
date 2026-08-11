@@ -138,7 +138,30 @@ export const CONTRACT_PLACEHOLDER_DEFINITIONS: ContractPlaceholderDefinition[] =
   { key: 'transportMode', description: 'Dispatch transport mode, such as local or remote-direct, which affects how the agent reaches Agent HQ.' },
 ];
 
-export async function buildContractInstructions(ctx: TransportContext): Promise<string> {
+/**
+ * The rendered contract plus the provenance behind it.
+ *
+ * Which template rendered, and whether it was the workflow type's own or an inherited fallback,
+ * is not recoverable from the rendered text — so the context viewer asks for it here rather than
+ * guessing from the prose.
+ */
+export interface RenderedContractInstructions {
+  text: string;
+  /** Normalized workflow-type key the template was looked up under. */
+  templateKey: string;
+  /** Absolute path on disk, or `builtin:<name>` for a fallback template. */
+  templatePath: string;
+  /** Set when the requested key had no template and a broader one was used. */
+  inheritedFrom: string | null;
+  /** How the workflow itself resolved — config-backed, compatibility routing, etc. */
+  workflowSource: string;
+  suggestedOutcome: string;
+  validOutcomes: string[];
+}
+
+export async function buildContractInstructionsDetailed(
+  ctx: TransportContext,
+): Promise<RenderedContractInstructions> {
   const workflow = await resolveWorkflow({
       taskStatus: ctx.taskStatus,
       taskType: ctx.taskType,
@@ -147,7 +170,19 @@ export async function buildContractInstructions(ctx: TransportContext): Promise<
       db: ctx.db,
     });
   const template = readSprintTypeContractTemplate(ctx.sprintType);
-  return renderLoadedContractTemplate(template, await buildTemplateValues(ctx, workflow));
+  return {
+    text: renderLoadedContractTemplate(template, await buildTemplateValues(ctx, workflow)),
+    templateKey: normalizeContractTemplateKey(ctx.sprintType),
+    templatePath: template.path,
+    inheritedFrom: template.inheritedFrom,
+    workflowSource: workflow.source,
+    suggestedOutcome: workflow.suggestedOutcome,
+    validOutcomes: workflow.outcomeHelp.map((entry) => entry.outcome),
+  };
+}
+
+export async function buildContractInstructions(ctx: TransportContext): Promise<string> {
+  return (await buildContractInstructionsDetailed(ctx)).text;
 }
 
 export function buildCompletionContractInstructions(ctx: CompletionContractContext): string {

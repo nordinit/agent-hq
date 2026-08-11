@@ -149,6 +149,8 @@ Use this when the current task status is `review`, or when the valid outcomes in
 ### Critical QA rule
 Do not pass work that you could not actually verify.
 
+Keep lifecycle writes separate from the system under test. When QA targets an Agent HQ Dev environment, that environment is the thing being tested — record notes, evidence, and outcomes against your own Agent HQ MCP lifecycle tools, never against the Dev instance's API, and leave the task in `review` until you post an outcome.
+
 Before testing or posting `qa_pass`, use the Dev Environment Lease Manager MCP tool `dev_env_validate_qa` and confirm the lease id, task id, review environment, and commit match the recorded review evidence. Validate against the active Dev lease/queue evidence and recorded review environment on the task, not the QA agent's own worktree HEAD.
 
 Choose the product URL and code checkout from the lease-selected environment, not from habit. `agent-hq-dev` uses UI/API ports 3510/3511 and `~/agent-hq-dev`; `agent-hq-dev-2` uses UI/API ports 3520/3521 and `~/agent-hq-dev-2`.

@@ -13,6 +13,7 @@ import {
   putReviewEvidence,
 } from '../domains/tasks/release';
 import { buildTaskContext, type TaskContextMode, type TaskContextOptions } from '../domains/tasks/context';
+import { getTaskContextIndex } from '../domains/runs/contextView';
 import { traceTaskHistory } from '../domains/routing/trace';
 import { resolveTaskFieldSchema, TaskCustomFieldValidationError } from '../domains/tasks/fields';
 import {
@@ -390,6 +391,30 @@ router.get('/:id/context', async (req: Request, res: Response) => {
     const ctx = await buildTaskContext(taskId, modeRaw as TaskContextMode, options);
     if (!ctx) return res.status(404).json({ error: 'Task not found' });
     return res.json(ctx);
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── GET /api/v1/tasks/:id/dispatch-context ──────────────────────────────────
+
+/**
+ * Which runs of this task have captured context, newest first.
+ *
+ * Distinct from /:id/context above, which is the agent-facing task context bundle assembled for
+ * MCP consumers. This one is the operator-facing index of what Agent HQ *sent*, and it feeds the
+ * run picker in the context viewer.
+ */
+router.get('/:id/dispatch-context', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const taskId = Number(req.params.id);
+    if (!Number.isFinite(taskId)) return res.status(400).json({ error: 'Invalid task id' });
+    const task = await db.get(`SELECT id FROM tasks WHERE id = ? AND tenant_id = ?`, taskId, tenantId);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    return res.json(await getTaskContextIndex(db, { taskId, tenantId }));
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }

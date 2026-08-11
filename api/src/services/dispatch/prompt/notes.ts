@@ -1,4 +1,5 @@
 import { type Db } from "../../../db/adapter/types";
+import { type ContextSegmentDraft } from './contextBundle';
 
 export interface DispatchTaskNoteRow {
   created_at: string;
@@ -98,4 +99,43 @@ export function buildDispatchTaskNotesSection(context: DispatchTaskNotesContext)
   );
 
   return lines.join('\n');
+}
+
+/**
+ * The notes section as a bundle segment, carrying what the cap left out.
+ *
+ * The truncation numbers are the reason this segment matters most in the viewer: notes are the
+ * only unbounded input to a dispatch, so "notes grew and pushed something else out" is the
+ * failure this makes visible at a glance instead of by transcript archaeology.
+ */
+export function buildDispatchTaskNotesSegmentDraft(
+  context: DispatchTaskNotesContext,
+  taskId: number,
+): ContextSegmentDraft {
+  const droppedCount = context.totalNotes - context.includedNotes.length;
+  return {
+    kind: 'task_notes',
+    label: context.firstRun ? 'Task Notes' : 'Task Notes Since Last Run',
+    text: buildDispatchTaskNotesSection(context),
+    source: {
+      type: 'task_notes',
+      label: `Task #${taskId} notes`,
+      id: taskId,
+      href: `/tasks?task=${taskId}`,
+      detail: {
+        first_run: context.firstRun,
+        cutoff: context.cutoff ?? 'none',
+        notes_included: context.includedNotes.length,
+        notes_total: context.totalNotes,
+      },
+    },
+    omission: context.truncated
+      ? {
+        reason: `Capped at ${DISPATCH_TASK_NOTES_CHAR_CAP.toLocaleString('en-US')} characters; oldest ${droppedCount} note(s) dropped, most recent kept`,
+        includedCount: context.includedNotes.length,
+        totalCount: context.totalNotes,
+      }
+      : null,
+    notInjectedReason: 'This task has no notes yet',
+  };
 }

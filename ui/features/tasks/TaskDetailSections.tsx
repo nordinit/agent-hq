@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Cpu, Download, Paperclip, Upload } from 'lucide-react';
+import { Cpu, Download, Layers, Paperclip, Upload } from 'lucide-react';
 import { api, Task, TaskAttachment, TaskHistory, TaskNote, JobInstance, CustomFieldDefinition } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/date';
 import { getRunLifecycle, getTaskOutcomeLabel } from '@/lib/runLifecycle';
@@ -10,6 +10,7 @@ import { getTaskStatusMaps } from '@/lib/taskStatuses';
 import { getFailureActor, getFailureRecoveryLabel, getFailureSourceLabel, getFailureSummary, getFailureTone, isFailureBlocked } from '@/lib/taskFailure';
 import { formatFailureOutcomeBadgeLabel, getTaskOutcomeBadgeClass, TaskOutcomeMetaMap } from '@/lib/taskOutcomeMeta';
 import { shortModelName } from './modelRouting';
+import { ContextViewer } from './ContextViewer';
 
 const { dots: FALLBACK_STATUS_DOT } = getTaskStatusMaps();
 
@@ -314,6 +315,10 @@ export function RelatedRunsSection({
   const [instances, setInstances] = useState<JobInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<number | null>(null);
+  // Which runs have a stored context bundle. Fetched up front so the Context action only appears
+  // where it will actually resolve — a dead button here reads as a broken feature.
+  const [capturedRuns, setCapturedRuns] = useState<Set<number>>(new Set());
+  const [contextInstanceId, setContextInstanceId] = useState<number | null>(null);
 
   useEffect(() => {
     api.getTaskInstances(taskId)
@@ -322,11 +327,20 @@ export function RelatedRunsSection({
       .finally(() => setLoading(false));
   }, [taskId]);
 
+  useEffect(() => {
+    api.getTaskDispatchContext(taskId)
+      .then(index => setCapturedRuns(new Set(index.runs.map(run => run.instanceId))))
+      .catch(() => {});
+  }, [taskId]);
+
   if (loading) return <p className="text-xs text-slate-500 italic">Loading…</p>;
   if (instances.length === 0) return <p className="text-xs text-slate-600 italic">No runs yet.</p>;
 
   return (
     <div className="space-y-2">
+      {contextInstanceId !== null && (
+        <ContextViewer instanceId={contextInstanceId} onClose={() => setContextInstanceId(null)} />
+      )}
       {instances.map((inst) => {
         const lifecycle = getRunLifecycle(inst, { nonFailureOutcomes });
         const taskOutcome = lifecycle.taskOutcome;
@@ -357,6 +371,18 @@ export function RelatedRunsSection({
               <span className="text-xs text-slate-500 shrink-0 hidden sm:block">
                 {formatDateTime(inst.dispatched_at ?? inst.created_at)}
               </span>
+              {/* Everything Agent HQ sent this run, section by section. */}
+              {capturedRuns.has(inst.id) && (
+                <button
+                  type="button"
+                  onClick={e => { e.stopPropagation(); setContextInstanceId(inst.id); }}
+                  className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-amber-300 shrink-0"
+                  title="View the context Agent HQ delivered to this run"
+                >
+                  <Layers className="w-3 h-3" />
+                  Context
+                </button>
+              )}
               {/* Link to chat session for this run */}
               <Link
                 href={`/chat?agentId=${inst.agent_id}&instanceId=${inst.id}`}

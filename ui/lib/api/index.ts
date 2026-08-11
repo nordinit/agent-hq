@@ -1,7 +1,9 @@
 export { apiFetch, getApiBase } from './http';
 export * from './types';
+export * from './dispatchContext';
 
 import { agentsClient } from './agents';
+import { dispatchContextClient } from './dispatchContext';
 import { chatClient } from './chat';
 import { filesClient } from './files';
 import { observabilityClient } from './observability';
@@ -27,4 +29,5 @@ export const api = {
   ...routingClient,
   ...runtimesClient,
   ...teamsClient,
+  ...dispatchContextClient,
 };

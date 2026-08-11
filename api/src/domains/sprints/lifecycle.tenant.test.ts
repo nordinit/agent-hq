@@ -2,7 +2,24 @@ import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { getDb } from '../../db/client';
 
 jest.mock('../runs', () => ({
-  buildDispatchMessage: jest.fn(() => 'Sprint summary request'),
+  // Returns a bundle, not a string: every dispatch path now assembles through the one context
+  // builder so the run is explainable in the viewer.
+  buildDispatchContextBundle: jest.fn(() => ({
+    version: 1,
+    promptText: 'Sprint summary request',
+    segments: [{
+      kind: 'summary_request',
+      label: 'Summary Request',
+      start: 0,
+      end: 'Sprint summary request'.length,
+      chars: 'Sprint summary request'.length,
+      injected: true,
+      source: { type: 'summary_request', label: 'Workflow summary request' },
+      omission: null,
+    }],
+    totalChars: 'Sprint summary request'.length,
+  })),
+  loadDispatchScopeContext: jest.fn(async () => ({ workflow: null, project: null })),
   dispatchInstance: jest.fn(async () => undefined),
 }));
 

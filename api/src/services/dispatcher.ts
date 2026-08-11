@@ -19,7 +19,6 @@ import {
   resolveGitHubIdentity,
   injectGitHubCredentials,
   cleanupGitHubCredentials,
-  buildGitHubIdentityContext,
 } from '../lib/githubIdentity';
 import {
   resolveTransportMode,
@@ -47,21 +46,35 @@ export { resolveModelFromStoryPoints, type ResolvedStoryPointModel } from './dis
 import { resolveModelFromStoryPoints } from './dispatch/routing/modelRouting';
 export {
   appendInstanceInstructions,
+  buildDispatchContextBundle,
+  buildDispatchContextDrafts,
   buildDispatchTaskNotesSection,
   buildInstanceCallbackContract,
-  buildTaskMessage,
+  buildWorkspaceContextSection,
+  DISPATCH_CONTEXT_ORDER,
+  extractWorkingDirectoryFromRuntimeConfig,
   formatDispatchTaskNote,
   getDispatchTaskNotesContext,
+  renderContextBundle,
+  resolveDispatchPathContext,
+  type ContextBundle,
+  type ContextSegment,
+  type ContextSegmentDraft,
+  type DispatchContextInput,
+  type DispatchPathContext,
   type DispatchTaskNoteRow,
   type DispatchTaskNotesContext,
   type InstanceCallbackContractInput,
 } from './dispatch/prompt';
 import {
-  appendInstanceInstructions,
-  buildDispatchTaskNotesSection,
-  buildTaskMessage,
+  buildDispatchContextBundle,
+  buildInstanceCallbackContractSegmentDraft,
+  extractWorkingDirectoryFromRuntimeConfig,
   getDispatchTaskNotesContext,
+  resolveDispatchPathContext,
+  type ContextBundle,
 } from './dispatch/prompt';
+import { persistDispatchContextBundle } from './dispatch/contextBundleStore';
 import { type Db } from "../db/adapter/types";
 import { resolveTeamContextForDispatch } from '../domains/teams/context';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
@@ -167,58 +180,6 @@ function gatewayFetch(hookPath: string, init: RequestInit): Promise<Response> {
 }
 // ── End container routing config ─────────────────────────────────────────────
 
-function normalizePathOrNull(value: string | null | undefined): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return path.resolve(trimmed);
-}
-
-function resolveDispatchPathContext(params: {
-  worktreePath?: string | null;
-  runtimeConfigWorkingDirectory?: string | null;
-  workspacePath?: string | null;
-}): {
-  activeRepoRoot: string | null;
-  workspaceContainerRoot: string | null;
-  worktreeRoot: string | null;
-  runtimeConfigWorkingDirectory: string | null;
-  pathMode: 'worktree' | 'runtime-config' | 'workspace';
-  repoRootSource: 'worktree' | 'runtime-config' | 'workspace' | 'none';
-  workspaceContainerSource: 'workspace' | 'active-repo-root' | 'none';
-} {
-  const worktreeRoot = normalizePathOrNull(params.worktreePath);
-  const runtimeConfigWorkingDirectory = normalizePathOrNull(params.runtimeConfigWorkingDirectory);
-  const workspacePath = normalizePathOrNull(params.workspacePath);
-  const activeRepoRoot = worktreeRoot ?? runtimeConfigWorkingDirectory ?? workspacePath;
-  const workspaceContainerRoot = workspacePath ?? activeRepoRoot;
-  const pathMode: 'worktree' | 'runtime-config' | 'workspace' = worktreeRoot
-    ? 'worktree'
-    : runtimeConfigWorkingDirectory
-      ? 'runtime-config'
-      : 'workspace';
-  const repoRootSource: 'worktree' | 'runtime-config' | 'workspace' | 'none' = worktreeRoot
-    ? 'worktree'
-    : runtimeConfigWorkingDirectory
-      ? 'runtime-config'
-      : workspacePath
-        ? 'workspace'
-        : 'none';
-  const workspaceContainerSource: 'workspace' | 'active-repo-root' | 'none' = workspacePath
-    ? 'workspace'
-    : activeRepoRoot
-      ? 'active-repo-root'
-      : 'none';
-  return {
-    activeRepoRoot,
-    workspaceContainerRoot,
-    worktreeRoot,
-    runtimeConfigWorkingDirectory,
-    pathMode,
-    repoRootSource,
-    workspaceContainerSource,
-  };
-}
 
 /**
  * hooksFetch — send a /hooks/agent request to the correct OpenClaw instance.
@@ -276,6 +237,8 @@ interface JobRow {
   openclaw_agent_id?: string | null;
   /** JSON array of skill names assigned to this job — used by generateClaudeMd(). */
   skill_names?: string | null;
+  /** Single skill this agent is asked to run, rendered as the prompt's skill request. */
+  skill_name?: string | null;
   /** Preferred AI provider for model routing (e.g. 'anthropic', 'openai'). */
   preferred_provider?: string | null;
   /** Runtime-owned provider connection selected for this agent. */
@@ -817,21 +780,6 @@ async function annotateRelationshipDispatchBlocks(db: Db, blockedByTaskId: Map<n
   }
 }
 
-function extractWorkingDirectoryFromRuntimeConfig(runtimeConfig: unknown): string | null {
-  if (typeof runtimeConfig === 'string') {
-    try {
-      const parsed = JSON.parse(runtimeConfig) as Record<string, unknown>;
-      return typeof parsed.workingDirectory === 'string' ? parsed.workingDirectory : null;
-    } catch {
-      return null;
-    }
-  }
-  if (runtimeConfig && typeof runtimeConfig === 'object') {
-    const parsed = runtimeConfig as Record<string, unknown>;
-    return typeof parsed.workingDirectory === 'string' ? parsed.workingDirectory : null;
-  }
-  return null;
-}
 
 function buildDispatchRuntimeConfig(
   runtimeConfig: unknown,
@@ -1091,7 +1039,7 @@ async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<Rou
       SELECT rr.*,
              a.id as agent_id,
              a.job_instructions, a.enabled, a.timeout_seconds, a.model,
-             a.skill_names,
+             a.skill_names, a.skill_name,
              a.session_key as agent_session_key, a.name as agent_name, a.model as agent_model,
              a.openclaw_agent_id, a.runtime_type, a.runtime_config, a.hooks_url as agent_hooks_url,
              a.hooks_auth_header as agent_hooks_auth_header,
@@ -2109,14 +2057,15 @@ export async function dispatchTaskToJob(
   const instanceId = instanceResult.lastInsertId as number;
   const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
   const sessionKey = buildSessionKey(instanceId, durableRunId);
-  const taskNotesSection = buildDispatchTaskNotesSection(await getDispatchTaskNotesContext(db, {
+  const taskNotesContext = await getDispatchTaskNotesContext(db, {
           taskId: task.id,
           agentId: job.agent_id,
           currentInstanceId: instanceId,
-        }));
-  const baseMessage = [buildTaskMessage(job, task, teamContext?.section), taskNotesSection]
-    .filter(Boolean)
-    .join('\n\n');
+        });
+  const scope = await loadDispatchScopeContext(db, {
+    projectId: task.project_id ?? null,
+    workflowId: task.sprint_id ?? null,
+  });
 
   const nextTaskStatus = deriveDispatchTaskStatus(task.status);
   const hasFirstDispatchedAt = await tableHasColumn(db, 'tasks', 'first_dispatched_at');
@@ -2192,22 +2141,6 @@ export async function dispatchTaskToJob(
   if (ghIdentity && ghIdentityEffectiveWorkDir) {
     injectGitHubCredentials(ghIdentityEffectiveWorkDir, ghIdentity.identity);
   }
-  const pathContextSection = [
-    '## Active Workspace Context',
-    `- **Path mode:** ${dispatchPathContext.pathMode}`,
-    `- **Active repo root:** ${dispatchPathContext.activeRepoRoot ?? 'unknown'}`,
-    `- **Workspace container root:** ${dispatchPathContext.workspaceContainerRoot ?? 'unknown'}`,
-    `- **Task worktree:** ${dispatchPathContext.worktreeRoot ?? 'none'}`,
-    '',
-    'Use the active repo root as the authoritative cwd for repo files, git commands, and task implementation work.',
-    'Start all file inspection, searches, edits, and git commands from the active repo root first.',
-    'Do not begin by probing the workspace container root for repo files when the active repo root differs.',
-    'Do not treat the workspace container root as the repo root when a task worktree or other active repo root is present.',
-    'Treat the workspace container root as a broader container boundary only, not the repo root, when these differ.',
-    '',
-  ].join('\n');
-  const ghIdentityContext = buildGitHubIdentityContext(ghIdentity, ghIdentityEffectiveWorkDir ?? '');
-
   // Resolve transport mode from agent runtime type and config (task #632)
   const transportMode = resolveTransportMode({
     runtimeType: job.runtime_type,
@@ -2215,11 +2148,48 @@ export async function dispatchTaskToJob(
     hooksUrl: job.agent_hooks_url,
   });
 
-  const fullMessage = await appendInstanceInstructions(
-      [baseMessage, pathContextSection].filter(Boolean).join('\n\n'), instanceId, durableRunId, task.id, task.status, agentSlug, sessionKey,
-      // undefined → default Agent HQ base URL / localhost
-      undefined, task.task_type, task.sprint_id, task.sprint_type, transportMode,
-    ) + ghIdentityContext;
+  const contextBundle = buildDispatchContextBundle({
+    workflow: { id: task.sprint_id ?? null, name: task.sprint_name ?? scope.workflow?.name ?? null, goal: scope.workflow?.goal ?? null },
+    team: teamContext,
+    project: scope.project,
+    job: { agentId: job.agent_id, title: job.title, instructions: job.job_instructions },
+    task: {
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      status: task.status,
+      workflowName: task.sprint_name ?? null,
+    },
+    skillName: job.skill_name ?? null,
+    taskNotes: { context: taskNotesContext, taskId: task.id },
+    workspace: dispatchPathContext,
+    contract: await buildInstanceCallbackContractSegmentDraft({
+      instanceId,
+      durableRunId,
+      taskId: task.id,
+      taskStatus: task.status,
+      taskType: task.task_type,
+      sprintId: task.sprint_id,
+      sprintType: task.sprint_type,
+      agentSlug,
+      sessionKey,
+      // baseUrl omitted → default Agent HQ base URL / localhost
+      transportMode,
+    }),
+    githubIdentity: { resolved: ghIdentity, workingDirectory: ghIdentityEffectiveWorkDir },
+  });
+  const fullMessage = contextBundle.promptText;
+
+  // Recorded before the run starts so a dispatch that dies on launch is still explainable.
+  await persistDispatchContextBundle(db, {
+    tenantId: task.tenant_id ?? job.tenant_id ?? null,
+    instanceId,
+    durableRunId,
+    taskId: task.id,
+    agentId: job.agent_id,
+    bundle: contextBundle,
+  });
 
   fireAgentRun(
     db,
@@ -2332,6 +2302,7 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
           agent_hooks_auth_header: rule.agent_hooks_auth_header ?? null,
           workspace_path: rule.workspace_path ?? null,
           skill_names: rule.skill_names ?? null,
+          skill_name: rule.skill_name ?? null,
           preferred_provider: rule.preferred_provider ?? null,
           repo_path: resolvedRepo.repo_path,
           repo_url: resolvedRepo.repo_url,
@@ -2373,53 +2344,47 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
 
 // ── Unified dispatch helpers (task #64) ────────────────────────────────────
 //
-// buildDispatchMessage() assembles the prompt text from discrete fields.
+// Prompt assembly lives in dispatch/prompt/dispatchContext.ts — one builder for every path.
 // dispatchInstance() wraps resolveRuntime() + runtime.dispatch() with all
 // the DB lifecycle writes that callers previously duplicated.
 
+export interface DispatchScopeContext {
+  workflow: { id: number | null; name: string | null; goal: string | null } | null;
+  project: { id: number | null; name: string | null; context: string | null } | null;
+}
+
 /**
- * buildDispatchMessage — assemble an agent dispatch message from component parts.
+ * The workflow goal and project prose a dispatch sits inside.
  *
- * Pure function, no side effects. Callers (scheduler, reconciler, workflow/sprint summaries)
- * pass the relevant fields; the function concatenates them in the canonical
- * order that agents expect.
+ * Read separately from the candidate query rather than joined into it: the candidate query runs
+ * for every eligible task on every scheduler tick, and these two columns are only needed for the
+ * one task that actually wins routing. Both lookups are by primary key.
  */
-export function buildDispatchMessage(params: {
-  sprintGoal?: string | null;
-  /** Rendered team block; see domains/teams/context.ts for how the team is resolved. */
-  teamContext?: string | null;
-  projectName?: string | null;
-  projectContext?: string | null;
-  jobInstructions?: string;
-  skillName?: string | null;
-  summaryRequest?: string | null;
-  taskNotesSection?: string | null;
-}): string {
-  let message = '';
-  if (params.sprintGoal) {
-    message += `[Workflow Goal: ${params.sprintGoal}]\n\n`;
-  }
-  // After the workflow goal, before project context: the goal says what the work is for, the
-  // team block says who is doing it, and both frame everything that follows.
-  if (params.teamContext) {
-    message += `${params.teamContext}\n\n`;
-  }
-  if (params.projectName && params.projectContext) {
-    message += `--- Project Context: ${params.projectName} ---\n${params.projectContext}\n--- End Project Context ---\n\n`;
-  }
-  if (params.jobInstructions) {
-    message += params.jobInstructions + '\n\n';
-  }
-  if (params.skillName) {
-    message += `Run skill: ${params.skillName}\n\n`;
-  }
-  if (params.taskNotesSection) {
-    message += params.taskNotesSection + '\n\n';
-  }
-  if (params.summaryRequest) {
-    message += params.summaryRequest + '\n\n';
-  }
-  return message.trimEnd();
+export async function loadDispatchScopeContext(
+  db: Db,
+  params: { projectId?: number | null; workflowId?: number | null },
+): Promise<DispatchScopeContext> {
+  const [workflowRow, projectRow] = await Promise.all([
+    params.workflowId
+      ? db.get<{ id: number; name: string | null; goal: string | null }>(
+        `SELECT id, name, goal FROM sprints WHERE id = ?`, params.workflowId,
+      )
+      : Promise.resolve(undefined),
+    params.projectId
+      ? db.get<{ id: number; name: string | null; context_md: string | null }>(
+        `SELECT id, name, context_md FROM projects WHERE id = ?`, params.projectId,
+      )
+      : Promise.resolve(undefined),
+  ]);
+
+  return {
+    workflow: workflowRow
+      ? { id: Number(workflowRow.id), name: workflowRow.name ?? null, goal: workflowRow.goal ?? null }
+      : null,
+    project: projectRow
+      ? { id: Number(projectRow.id), name: projectRow.name ?? null, context: projectRow.context_md ?? null }
+      : null,
+  };
 }
 
 export interface DispatchInstanceParams {
@@ -2432,6 +2397,14 @@ export interface DispatchInstanceParams {
   openclawAgentId?: string | null;
   /** Pre-built message (caller assembles via buildDispatchMessage + contract). */
   message: string;
+  /**
+   * Segment index for `message`, when the caller assembled it through the bundle. Supplied, the
+   * run becomes explainable in the context viewer; omitted, the dispatch behaves exactly as
+   * before and simply has no stored context.
+   */
+  contextBundle?: ContextBundle | null;
+  /** Task this dispatch belongs to, when it belongs to one. Scopes the stored bundle. */
+  taskId?: number | null;
   model?: string | null;
   preferredProvider?: string | null;
   providerConnectionId?: number | null;
@@ -2508,6 +2481,16 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
   const effectiveModel = spModel?.model || params.model || null;
   const effectiveThinking = spModel?.thinking_level ?? null;
   const effectiveFastMode = spModel?.fast_mode ?? null;
+  if (params.contextBundle) {
+    await persistDispatchContextBundle(db, {
+      tenantId,
+      instanceId: params.instanceId,
+      durableRunId,
+      taskId: params.taskId ?? null,
+      agentId: params.agentId,
+      bundle: params.contextBundle,
+    });
+  }
   if (spModel) {
     console.log(
       `[dispatchInstance] Story points=${params.storyPoints} → model=${spModel.model} thinking=${spModel.thinking_level ?? 'default'} fastMode=${spModel.fast_mode ?? 'default'} (rule: ${spModel.label ?? 'unnamed'})`

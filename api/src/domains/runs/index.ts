@@ -18,7 +18,6 @@ export {
   DISPATCH_FAILURE_BACKOFF_SECONDS,
   DISPATCHABLE_ROUTED_STATUSES,
   getNonDispatchableTaskStatusPredicate,
-  buildTaskMessage,
   getDispatchTaskNotesContext,
   buildDispatchTaskNotesSection,
   buildInstanceCallbackContract,
@@ -29,10 +28,14 @@ export {
   syncSkillDirs,
   dispatchTaskToJob,
   runDispatcher,
-  buildDispatchMessage,
+  buildDispatchContextBundle,
+  buildDispatchContextDrafts,
+  loadDispatchScopeContext,
   dispatchInstance,
 } from '../../services/dispatcher';
 export type {
   DispatchResult,
   DispatchInstanceParams,
+  DispatchContextInput,
+  DispatchScopeContext,
 } from '../../services/dispatcher';

@@ -1,8 +1,11 @@
 import { getDb } from '../../../db/client';
 import {
   buildContractInstructions,
+  buildContractInstructionsDetailed,
+  type RenderedContractInstructions,
   type TransportContext,
 } from '../../contracts';
+import { type ContextSegmentDraft } from './contextBundle';
 
 export interface InstanceCallbackContractInput {
   instanceId: number;
@@ -62,6 +65,55 @@ export async function buildInstanceCallbackContract({
   };
 
   return await buildContractInstructions(ctx);
+}
+
+/** The same contract build, kept as a bundle segment so the viewer can name the template used. */
+export async function buildInstanceCallbackContractSegmentDraft(
+  input: InstanceCallbackContractInput,
+): Promise<ContextSegmentDraft> {
+  const ctx: TransportContext = {
+    instanceId: input.instanceId,
+    durableRunId: input.durableRunId,
+    taskId: input.taskId,
+    taskStatus: input.taskStatus,
+    taskType: input.taskType,
+    sprintId: input.sprintId,
+    sprintType: input.sprintType,
+    agentSlug: input.agentSlug,
+    sessionKey: input.sessionKey,
+    baseUrl: input.baseUrl,
+    transportMode: input.transportMode ?? 'local',
+    db: getDb(),
+  };
+  const contract: RenderedContractInstructions = await buildContractInstructionsDetailed(ctx);
+
+  return {
+    kind: 'callback_contract',
+    label: 'Callback Contract',
+    text: contract.text,
+    source: {
+      type: 'contract_template',
+      label: contract.inheritedFrom
+        ? `${contract.templateKey} (inherited from ${contract.inheritedFrom})`
+        : contract.templateKey,
+      href: '/settings?tab=contracts',
+      detail: {
+        template_key: contract.templateKey,
+        template_path: contract.templatePath,
+        inherited_from: contract.inheritedFrom,
+        workflow_source: contract.workflowSource,
+        suggested_outcome: contract.suggestedOutcome,
+        valid_outcomes: contract.validOutcomes.join(', '),
+        transport_mode: ctx.transportMode,
+        task_status: input.taskStatus,
+      },
+    },
+    omission: contract.inheritedFrom
+      ? {
+        reason: `No contract template for workflow type "${contract.templateKey}"; fell back to "${contract.inheritedFrom}"`,
+      }
+      : null,
+  };
 }
 
 export async function appendInstanceInstructions(

@@ -1,10 +1,16 @@
 import { getDb } from '../db/client';
 import {
   runDispatcher, type DispatchResult,
-  buildDispatchMessage, buildDispatchTaskNotesSection,
+  buildDispatchContextBundle, loadDispatchScopeContext,
   dispatchInstance, getDispatchTaskNotesContext, type DispatchInstanceParams,
   getNonDispatchableTaskStatusPredicate,
 } from '../domains/runs';
+import {
+  buildInstanceCallbackContractSegmentDraft,
+  extractWorkingDirectoryFromRuntimeConfig,
+  resolveDispatchPathContext,
+} from '../services/dispatch/prompt';
+import { injectGitHubCredentials, resolveGitHubIdentity } from '../lib/githubIdentity';
 import { attachInstanceToTask } from '../domains/runs/observability';
 import { cleanupImpossibleTaskLifecycleStates, cleanupTaskExecutionLinkageForStatus } from '../lib/taskLifecycle';
 import { runEligibilityPass, type EligibilityResult } from '../services/eligibility';
@@ -134,6 +140,8 @@ interface AgentRow {
   job_title: string;
   job_instructions: string;
   skill_name: string | null;
+  /** Agent workspace directory — the authoritative repo root when no worktree exists. */
+  workspace_path: string | null;
   timeout_seconds: number;
   sprint_id: number | null;
   enabled: number;
@@ -247,29 +255,6 @@ async function hasTaskLiveInstance(db: Db, taskId: number): Promise<boolean> {
   return Boolean(row);
 }
 
-function buildQaTaskContext(task: TaskRow): string {
-  return [
-    `## Review Task #${task.id}: ${task.title}`,
-    '',
-    task.description || '(no description provided)',
-    '',
-    `This task is already in Agent HQ review. Do not move it to in_progress or done via the generic task update endpoint.`,
-    `Keep the task in review while you test it.`,
-    `Use the Agent HQ Task Contract Base URL for lifecycle writes such as task notes, QA evidence, check-ins, and outcomes.`,
-    `Do not send lifecycle writes to the dev API under test unless the contract Base URL explicitly points there.`,
-    '',
-    `PASS workflow:`,
-    `1. Record QA evidence with PUT /api/v1/tasks/${task.id}/qa-evidence`,
-    `2. Then POST /api/v1/tasks/${task.id}/outcome with {"outcome":"qa_pass","changed_by":"agency-qa","instance_id":<instance id>}`,
-    '',
-    `FAIL workflow:`,
-    `1. Post a clear task note with repro + expected vs actual`,
-    `2. Then POST /api/v1/tasks/${task.id}/outcome with {"outcome":"qa_fail","changed_by":"agency-qa","instance_id":<instance id>}`,
-    '',
-    `Never use {"status":"done"} or {"status":"in_progress"} for QA pass/fail. The outcome endpoint owns release-pipeline transitions.`,
-  ].join('\n');
-}
-
 async function resolveRoutedTaskAgentId(db: Db, task: TaskRow): Promise<number | null> {
   if (!task.task_type) return null;
   try {
@@ -349,6 +334,29 @@ async function getReconcilerProjectIds(db: Db): Promise<number[]> {
   return rows.map(row => row.project_id);
 }
 
+/**
+ * Re-dispatch tasks sitting in `review` to whichever agent the routing rules name.
+ *
+ * NOT a QA-specific path, despite the name. It fires on the literal status `review` for any
+ * workflow, and plenty of workflows have no QA concept at all — a review status might mean human
+ * approval, a security pass, or a design check.
+ *
+ * That is why this used to be wrong. It prepended a hardcoded procedure to the agent's
+ * instructions that named `qa_pass`/`qa_fail` outcomes, a `changed_by` of "agency-qa", and direct
+ * `PUT /qa-evidence` and `POST /outcome` HTTP calls. All three were assumptions:
+ *
+ *   - the outcomes are workflow-configured (resolveWorkflow reads them from sprint type config;
+ *     qa_pass/qa_fail are only the compatibility fallback), so a workflow using `approved` /
+ *     `changes_requested` was told to post an outcome it did not accept;
+ *   - the HTTP instructions contradicted the contract template rendered into the same prompt,
+ *     which says to use the MCP lifecycle tools and never call the endpoints directly;
+ *   - "agency-qa" is one deployment's actor slug.
+ *
+ * Everything it carried is already rendered correctly and per-workflow by the contract template —
+ * see the QA section of agent-contracts/dev.md, which is scoped to "status is review, or valid
+ * outcomes include qa_pass/qa_fail" rather than assumed for everyone. So this path now assembles
+ * exactly like every other dispatch.
+ */
 export async function reconcileReviewQaRouting(
   deps: DispatchDeps = { dispatchInstance },
   db: Db = getDb(),
@@ -411,9 +419,10 @@ export async function reconcileReviewQaRouting(
       ? await db.get('SELECT * FROM sprints WHERE id = ?', task.sprint_id) as SprintRow | undefined
       : undefined;
 
-    const jobInstructions = agent.job_instructions
-      ? `${buildQaTaskContext(task)}\n\n---\n\n${agent.job_instructions}`
-      : buildQaTaskContext(task);
+    // The agent's own instructions, exactly as the routed dispatch path uses them. This path used
+    // to prepend a hardcoded QA procedure; see the note on reconcileReviewQaRouting for why that
+    // could not be correct for every workflow.
+    const jobInstructions = agent.job_instructions;
 
     const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
     const instanceResult = supportsDurableRunId
@@ -429,49 +438,80 @@ export async function reconcileReviewQaRouting(
     await attachInstanceToTask(db, instanceId, task.id);
 
     try {
-      const taskNotesSection = buildDispatchTaskNotesSection(await getDispatchTaskNotesContext(db, {
+      const taskNotesContext = await getDispatchTaskNotesContext(db, {
                   taskId: task.id,
                   agentId: agent.id,
                   currentInstanceId: instanceId,
-                }));
+                });
 
       const teamContext = await resolveTeamContextForDispatch(db, {
         agentId: agent.id,
         sprintId: task.sprint_id ?? null,
       });
 
-      // Build message via shared helper + append lifecycle contract
-      let message = buildDispatchMessage({
-        jobInstructions,
-        skillName: agent.skill_name,
-        sprintGoal: sprint?.goal || null,
-        teamContext: teamContext?.section ?? null,
-        taskNotesSection,
-      });
-
-      // Append task lifecycle contract
       const agentSlug = resolveRuntimeAgentSlug(agent)
         ?? agent.session_key.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
       const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
       const runSessionKey = buildHookSessionKey(instanceId, durableRunId);
-      const contract = await buildContractInstructions({
-              instanceId,
-              durableRunId,
-              taskId: task.id,
-              taskStatus: task.status,
-              taskType: task.task_type ?? null,
-              sprintId: task.sprint_id ?? null,
-              sprintType: sprint?.sprint_type ?? null,
-              agentSlug,
-              sessionKey: runSessionKey,
-              transportMode: resolveTransportMode({
-                runtimeType: agent.runtime_type,
-                runtimeConfig: agent.runtime_config,
-                hooksUrl: agent.hooks_url,
-              }),
-              db,
-            });
-      message += `\n\n${contract}`;
+
+      // This path never creates a worktree — dispatchInstance reads whatever the payload already
+      // carries — so the authoritative root is the agent's runtime working directory or its
+      // workspace. Resolving it here is what lets a QA retry carry the same workspace block a
+      // first dispatch does, instead of leaving the agent to guess.
+      const pathContext = resolveDispatchPathContext({
+        worktreePath: null,
+        runtimeConfigWorkingDirectory: extractWorkingDirectoryFromRuntimeConfig(agent.runtime_config),
+        workspacePath: agent.workspace_path ?? null,
+      });
+      const ghIdentity = await resolveGitHubIdentity(db, agent.id);
+      if (ghIdentity && pathContext.activeRepoRoot) {
+        injectGitHubCredentials(pathContext.activeRepoRoot, ghIdentity.identity);
+      }
+
+      const scope = await loadDispatchScopeContext(db, {
+        projectId: task.project_id ?? null,
+        workflowId: task.sprint_id ?? null,
+      });
+
+      const contextBundle = buildDispatchContextBundle({
+        workflow: {
+          id: task.sprint_id ?? null,
+          name: sprint?.name ?? scope.workflow?.name ?? null,
+          goal: sprint?.goal ?? scope.workflow?.goal ?? null,
+        },
+        team: teamContext,
+        project: scope.project,
+        job: { agentId: agent.id, title: agentLabel, instructions: jobInstructions },
+        task: {
+          id: task.id,
+          title: task.title,
+          description: task.description ?? '',
+          priority: task.priority ?? 'medium',
+          status: task.status,
+          workflowName: sprint?.name ?? null,
+        },
+        skillName: agent.skill_name,
+        taskNotes: { context: taskNotesContext, taskId: task.id },
+        workspace: pathContext,
+        contract: await buildInstanceCallbackContractSegmentDraft({
+          instanceId,
+          durableRunId,
+          taskId: task.id,
+          taskStatus: task.status,
+          taskType: task.task_type ?? null,
+          sprintId: task.sprint_id ?? null,
+          sprintType: sprint?.sprint_type ?? null,
+          agentSlug,
+          sessionKey: runSessionKey,
+          transportMode: resolveTransportMode({
+            runtimeType: agent.runtime_type,
+            runtimeConfig: agent.runtime_config,
+            hooksUrl: agent.hooks_url,
+          }),
+        }),
+        githubIdentity: { resolved: ghIdentity, workingDirectory: pathContext.activeRepoRoot },
+      });
+      const message = contextBundle.promptText;
 
       const effectiveModel = agent.model ?? null;
 
@@ -494,6 +534,8 @@ export async function reconcileReviewQaRouting(
           storyPoints: task.story_points ?? null,
           projectId: task.project_id ?? null,
           sprintId: task.sprint_id ?? null,
+          taskId: task.id,
+          contextBundle,
         }),
         RECONCILER_OPERATION_TIMEOUT_MS,
         `QA dispatch task #${task.id} project=${task.project_id ?? 'none'} agent=${agent.id} instance=${instanceId}`,

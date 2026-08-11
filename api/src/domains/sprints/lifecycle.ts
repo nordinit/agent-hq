@@ -1,5 +1,5 @@
 import { getDb } from '../../db/client';
-import { buildDispatchMessage, dispatchInstance } from '../runs';
+import { buildDispatchContextBundle, dispatchInstance, loadDispatchScopeContext } from '../runs';
 import { buildCompletionContractInstructions } from '../../services/contracts';
 import { createDurableRunId, tableHasColumn } from '../../lib/durableRunIdentity';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
@@ -109,13 +109,30 @@ export async function completeSprint(sprintId: number): Promise<void> {
       sprintId: sprint.id as number,
     });
 
-    let message = buildDispatchMessage({
-      jobInstructions,
-      sprintGoal: sprint.goal || null,
-      teamContext: teamContext?.section ?? null,
-      summaryRequest: `The sprint "${sprint.name}" has ended. Please summarize: (1) what tasks you completed this sprint, (2) what tasks remain unfinished, and (3) any current blockers. Keep it concise.`,
+    const scope = await loadDispatchScopeContext(db, {
+      projectId: sprint.project_id,
+      workflowId: sprint.id,
     });
-    message += `\n\n${buildCompletionContractInstructions({ instanceId })}`;
+    const contextBundle = buildDispatchContextBundle({
+      workflow: { id: sprint.id, name: sprint.name, goal: sprint.goal || null },
+      team: teamContext,
+      project: scope.project,
+      job: {
+        agentId: job.id as number,
+        title: (job.job_title as string | null) ?? null,
+        instructions: jobInstructions,
+      },
+      // No task, notes, workspace, or GitHub identity: a workflow summary is not task work and
+      // does not run against a repo. Those sections render as not-injected with a reason.
+      summaryRequest: `The sprint "${sprint.name}" has ended. Please summarize: (1) what tasks you completed this sprint, (2) what tasks remain unfinished, and (3) any current blockers. Keep it concise.`,
+      contract: {
+        kind: 'callback_contract',
+        label: 'Completion Contract',
+        text: buildCompletionContractInstructions({ instanceId }),
+        source: { type: 'contract_template', label: 'completion' },
+      },
+    });
+    const message = contextBundle.promptText;
 
     dispatchInstance({
       instanceId,
@@ -124,6 +141,7 @@ export async function completeSprint(sprintId: number): Promise<void> {
       sessionKey,
       openclawAgentId: (job.openclaw_agent_id as string | null | undefined) ?? null,
       message,
+      contextBundle,
       model: sprintSummaryModel,
       preferredProvider: (job.preferred_provider as string | null | undefined) ?? null,
       providerConnectionId: (job.provider_connection_id as number | null | undefined) ?? null,

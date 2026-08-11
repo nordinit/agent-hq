@@ -9,6 +9,7 @@ import { ensureCanonicalSessionForInstance } from '../lib/canonicalSessions';
 import { columnExists, tableExists } from '../db/introspection';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { mapRuntimeExecutionRow, redactRuntimeMetadata } from '../domains/runtimes/runtimeView';
+import { getInstanceContextView } from '../domains/runs/contextView';
 
 import { requireNumericId } from '../lib/routeParams';
 
@@ -173,6 +174,28 @@ router.get('/:id/runtime', async (req: Request, res: Response) => {
       execution,
       fallback,
     });
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// GET /api/v1/instances/:id/context
+//
+// Everything Agent HQ delivered to this run: the assembled prompt with its segment index and
+// per-segment provenance, the runtime boundary that carried the tools/skills/model policy
+// alongside it, and the diff against the previous run of the same task.
+//
+// Pass ?diff=0 to skip the diff when only the prompt is wanted.
+router.get('/:id/context', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const id = Number(req.params.id);
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const includeDiff = !['0', 'false', 'no'].includes(String(req.query.diff ?? '').toLowerCase());
+
+    const view = await getInstanceContextView(db, { instanceId: id, tenantId, includeDiff });
+    if (!view) return res.status(404).json({ error: 'Instance not found.' });
+    return res.json(view);
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
