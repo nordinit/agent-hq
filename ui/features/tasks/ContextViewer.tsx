@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
-  AlertTriangle, Check, Copy, Download, FileText, GitCompare, Layers, Loader2, X,
+  AlertTriangle, Check, Copy, Download, FileText, GitCompare, Layers, ListTree, Loader2, X,
 } from 'lucide-react';
 import {
   api,
@@ -31,8 +31,8 @@ function SourceChip({ source }: { source: ContextSegment['source'] }) {
   const label = describeSource(source);
   const body = (
     <span className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800/70 px-1.5 py-0.5 text-[10px] text-slate-300">
-      <span className="text-slate-500 uppercase tracking-wide">{source.type.replace(/_/g, ' ')}</span>
-      <span className="truncate max-w-[16rem]">{label}</span>
+      <span className="shrink-0 text-slate-500 uppercase tracking-wide">{source.type.replace(/_/g, ' ')}</span>
+      <span className="truncate max-w-[9rem] sm:max-w-[16rem]">{label}</span>
     </span>
   );
   if (!source.href) return body;
@@ -175,12 +175,12 @@ function PromptPane({
               isActive ? 'ring-1 ring-amber-500/40 bg-slate-900' : 'hover:bg-slate-900'
             }`}
           >
-            <header className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-3 py-1.5">
+            <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-800 px-2.5 py-1.5 sm:px-3">
               <span className={`text-[11px] font-semibold uppercase tracking-wide ${accent.text}`}>{segment.label}</span>
               <span className="text-[10px] text-slate-500">
                 {formatChars(segment.chars)} chars · {formatTokens(segment.chars)}
               </span>
-              <span className="ml-auto"><SourceChip source={segment.source} /></span>
+              <span className="sm:ml-auto"><SourceChip source={segment.source} /></span>
             </header>
 
             {segment.omission && (
@@ -190,7 +190,7 @@ function PromptPane({
               </p>
             )}
 
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-300">
+            <pre className="overflow-x-auto whitespace-pre-wrap break-words px-2.5 py-2 font-mono text-[11px] leading-relaxed text-slate-300 sm:px-3">
               {region.text}
             </pre>
 
@@ -211,8 +211,10 @@ function PromptPane({
 function RuntimeRow({ label, value }: { label: string; value: React.ReactNode }) {
   if (value === null || value === undefined || value === '') return null;
   return (
-    <div className="flex gap-2 py-1 text-xs border-b border-slate-800/60 last:border-0">
-      <span className="w-44 shrink-0 text-slate-500">{label}</span>
+    // Stacked on phones: a fixed 11rem label column would leave a path or model id a sliver of
+    // width to wrap in.
+    <div className="flex flex-col gap-0.5 border-b border-slate-800/60 py-1.5 text-xs last:border-0 sm:flex-row sm:gap-2 sm:py-1">
+      <span className="text-slate-500 sm:w-44 sm:shrink-0">{label}</span>
       <span className="min-w-0 flex-1 break-words text-slate-200">{value}</span>
     </div>
   );
@@ -353,7 +355,7 @@ function DiffPane({ view }: { view: InstanceContextView }) {
 
       {changed.map(segment => (
         <section key={`${segment.kind}-${segment.label}`} className="rounded-lg border border-slate-800 bg-slate-900/60">
-          <header className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-3 py-2">
+          <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-800 px-2.5 py-2 sm:px-3">
             <span className={`rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase ${CHANGE_BADGE[segment.change]}`}>
               {segment.change}
             </span>
@@ -374,7 +376,7 @@ function DiffPane({ view }: { view: InstanceContextView }) {
                 source changed
               </span>
             )}
-            <span className="ml-auto"><SourceChip source={segment.source} /></span>
+            <span className="sm:ml-auto"><SourceChip source={segment.source} /></span>
           </header>
 
           {segment.sourceChanged && segment.previousSource && (
@@ -447,6 +449,8 @@ export function ContextViewer({
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewerTab>('prompt');
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  /** Mobile-only: the outline is a drawer below lg, closed until asked for. */
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const promptPaneRef = useRef<HTMLDivElement>(null);
 
@@ -464,10 +468,15 @@ export function ContextViewer({
   }, [currentInstanceId]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    // Escape backs out one layer at a time: the drawer first, the viewer only once it is closed.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (outlineOpen) setOutlineOpen(false);
+      else onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, outlineOpen]);
 
   const handleCopy = useCallback(async () => {
     if (!view?.prompt) return;
@@ -499,20 +508,24 @@ export function ContextViewer({
     if (!segment.injected) return;
     const position = prompt?.segments.indexOf(segment) ?? -1;
     if (position >= 0) setActiveKey(`${segment.kind}-${position}`);
-    document
-      .getElementById(segmentAnchorId(segment.kind, injectedIndex))
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Close first so the drawer is out of the way before the scroll lands behind it.
+    setOutlineOpen(false);
+    requestAnimationFrame(() => {
+      document
+        .getElementById(segmentAnchorId(segment.kind, injectedIndex))
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }, [prompt]);
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-slate-950/95 backdrop-blur-sm">
       {/* Header */}
-      <header className="shrink-0 border-b border-slate-800 bg-slate-900/80 px-4 py-3">
-        <div className="flex items-start gap-3">
+      <header className="shrink-0 border-b border-slate-800 bg-slate-900/80 px-3 py-2.5 sm:px-4 sm:py-3">
+        <div className="flex items-start gap-2 sm:gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
-              <Layers className="h-4 w-4 text-amber-400" />
-              Context delivered to {view?.run.agentName ?? 'agent'}
+            <h2 className="flex flex-wrap items-center gap-x-2 text-sm font-semibold text-white">
+              <Layers className="h-4 w-4 shrink-0 text-amber-400" />
+              <span className="truncate">Context delivered to {view?.run.agentName ?? 'agent'}</span>
               <span className="font-mono text-xs text-slate-400">run #{currentInstanceId}</span>
             </h2>
             {view && (
@@ -523,12 +536,14 @@ export function ContextViewer({
             )}
           </div>
 
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+            {/* The run picker is the widest control here, so on phones it drops to the meta row
+                below rather than squeezing the title. */}
             {view && view.runs.length > 1 && (
               <select
                 value={currentInstanceId}
                 onChange={e => setCurrentInstanceId(Number(e.target.value))}
-                className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 focus:border-amber-400 focus:outline-none"
+                className="hidden rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 focus:border-amber-400 focus:outline-none sm:block"
                 title="Switch run"
               >
                 {view.runs.map((run, i) => (
@@ -542,21 +557,21 @@ export function ContextViewer({
               type="button"
               onClick={handleCopy}
               disabled={!prompt}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-300 transition-colors hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-40"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1.5 text-xs text-slate-300 transition-colors hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-40 sm:py-1"
               title="Copy the raw prompt"
             >
               {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-              {copied ? 'Copied' : 'Copy'}
+              <span className="hidden sm:inline">{copied ? 'Copied' : 'Copy'}</span>
             </button>
             <button
               type="button"
               onClick={handleDownload}
               disabled={!view}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-300 transition-colors hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-40"
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1.5 text-xs text-slate-300 transition-colors hover:border-amber-500/40 hover:text-amber-300 disabled:opacity-40 sm:py-1"
               title="Download the bundle as JSON"
             >
               <Download className="h-3 w-3" />
-              JSON
+              <span className="hidden sm:inline">JSON</span>
             </button>
             <button
               type="button"
@@ -570,20 +585,39 @@ export function ContextViewer({
         </div>
 
         {/* Size read-out + tabs */}
-        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5 sm:gap-2">
+          {/* Only reachable below lg, and only meaningful on the prompt tab. */}
+          {tab === 'prompt' && view?.captured && (
+            <button
+              type="button"
+              onClick={() => setOutlineOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-amber-500/40 hover:text-amber-300 lg:hidden"
+              title="Jump to a section"
+            >
+              <ListTree className="h-3.5 w-3.5" />
+              Sections
+            </button>
+          )}
+
           {(['prompt', 'runtime', 'diff'] as ViewerTab[]).map(id => (
             <button
               key={id}
               type="button"
               onClick={() => setTab(id)}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors sm:py-1 ${
                 tab === id ? 'bg-amber-500/15 text-amber-300' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
               }`}
             >
               {id === 'prompt' && <FileText className="h-3 w-3" />}
               {id === 'runtime' && <Layers className="h-3 w-3" />}
               {id === 'diff' && <GitCompare className="h-3 w-3" />}
-              {id === 'prompt' ? 'Prompt' : id === 'runtime' ? 'Runtime context' : 'Diff vs previous'}
+              {/* Full labels only where they fit; the icon carries the meaning on phones. */}
+              <span className="sm:hidden">
+                {id === 'prompt' ? 'Prompt' : id === 'runtime' ? 'Runtime' : 'Diff'}
+              </span>
+              <span className="hidden sm:inline">
+                {id === 'prompt' ? 'Prompt' : id === 'runtime' ? 'Runtime context' : 'Diff vs previous'}
+              </span>
               {id === 'diff' && view?.diff && view.diff.totals.changedSegments > 0 && (
                 <span className="rounded-full bg-amber-500/20 px-1.5 text-[10px] text-amber-200">
                   {view.diff.totals.changedSegments}
@@ -593,10 +627,11 @@ export function ContextViewer({
           ))}
 
           {prompt && (
-            <p className="ml-auto flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+            <p className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500 sm:ml-auto sm:w-auto">
               <span className="text-slate-300">{formatChars(prompt.promptChars)} chars</span>
               <span>{formatTokens(prompt.promptChars)}</span>
-              <span className="font-mono truncate max-w-[14rem]" title={prompt.promptFingerprint}>
+              {/* 71 characters of hex earns its space only on a wide screen. */}
+              <span className="hidden max-w-[14rem] truncate font-mono lg:inline" title={prompt.promptFingerprint}>
                 {prompt.promptFingerprint}
               </span>
               {prompt.redacted && (
@@ -605,6 +640,24 @@ export function ContextViewer({
                 </span>
               )}
             </p>
+          )}
+
+          {/* Run picker, phone placement: full width on its own line where it can show a label. */}
+          {view && view.runs.length > 1 && (
+            <label className="flex w-full items-center gap-2 text-[11px] text-slate-500 sm:hidden">
+              <span className="shrink-0">Run</span>
+              <select
+                value={currentInstanceId}
+                onChange={e => setCurrentInstanceId(Number(e.target.value))}
+                className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-slate-200 focus:border-amber-400 focus:outline-none"
+              >
+                {view.runs.map((run, i) => (
+                  <option key={run.instanceId} value={run.instanceId}>
+                    #{run.instanceId}{i === 0 ? ' (latest)' : ''} · {formatChars(run.promptChars)} chars
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
         </div>
       </header>
@@ -631,7 +684,10 @@ export function ContextViewer({
           </div>
         ) : tab === 'prompt' ? (
           <div className="flex h-full min-h-0">
-            <aside className="w-72 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-900/40 p-3">
+            {/* Wide screens keep both panes visible. Below lg the outline is a drawer instead:
+                a fixed 18rem rail on a 390px phone leaves the prompt about 100px to wrap in,
+                which makes the thing the viewer exists to show unreadable. */}
+            <aside className="hidden w-72 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-900/40 p-3 lg:block">
               <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                 Sections in prompt order
               </p>
@@ -644,7 +700,44 @@ export function ContextViewer({
                 />
               )}
             </aside>
-            <div ref={promptPaneRef} className="min-w-0 flex-1 overflow-y-auto p-4">
+
+            {outlineOpen && (
+              <div className="fixed inset-0 z-20 flex lg:hidden">
+                <button
+                  type="button"
+                  aria-label="Close sections"
+                  className="absolute inset-0 bg-black/70"
+                  onClick={() => setOutlineOpen(false)}
+                />
+                <aside className="relative z-10 flex w-[85%] max-w-xs flex-col border-r border-slate-800 bg-slate-900 shadow-2xl">
+                  <div className="flex items-center gap-2 border-b border-slate-800 px-3 py-2.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                      Sections in prompt order
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setOutlineOpen(false)}
+                      className="ml-auto rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
+                      aria-label="Close sections"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                    {prompt && (
+                      <SegmentOutline
+                        segments={prompt.segments}
+                        totalChars={prompt.promptChars}
+                        activeKey={activeKey}
+                        onSelect={outlineSelect}
+                      />
+                    )}
+                  </div>
+                </aside>
+              </div>
+            )}
+
+            <div ref={promptPaneRef} className="min-w-0 flex-1 overflow-y-auto p-2.5 sm:p-4">
               {prompt && (
                 <PromptPane
                   promptText={prompt.promptText}
@@ -656,7 +749,7 @@ export function ContextViewer({
             </div>
           </div>
         ) : (
-          <div className="h-full overflow-y-auto p-4">
+          <div className="h-full overflow-y-auto p-2.5 sm:p-4">
             <div className="mx-auto max-w-4xl">
               {tab === 'runtime' ? <RuntimePane runtime={view.runtime} /> : <DiffPane view={view} />}
             </div>
