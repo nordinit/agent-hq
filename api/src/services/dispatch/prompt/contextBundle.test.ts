@@ -91,7 +91,7 @@ describe('renderContextBundle joins sections', () => {
 
   it('clamps offsets when trimEnd removes trailing whitespace', () => {
     const bundle = renderContextBundle(
-      [draft('job_instructions', 'A'), draft('summary_request', 'B\n\n')],
+      [draft('job_instructions', 'A'), draft('task_notes', 'B\n\n')],
       { trimEnd: true },
     );
     expect(bundle.promptText).toBe('A\n\nB');
@@ -104,7 +104,7 @@ describe('renderContextBundle joins sections', () => {
 
   it('marks a section not-injected when trimEnd consumes all of it', () => {
     const bundle = renderContextBundle(
-      [draft('job_instructions', 'A'), draft('summary_request', '\n\n')],
+      [draft('job_instructions', 'A'), draft('task_notes', '\n\n')],
       { trimEnd: true },
     );
     expect(bundle.promptText).toBe('A');

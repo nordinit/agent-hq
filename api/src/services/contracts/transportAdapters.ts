@@ -4,7 +4,6 @@ import {
   normalizeContractTemplateKey,
   readSprintTypeContractTemplate,
   renderLoadedContractTemplate,
-  renderNamedContractTemplate,
 } from './templateStore';
 import {
   PIPELINE_STAGES,
@@ -29,11 +28,6 @@ export interface TransportContext {
   baseUrl?: string;
   transportMode: TransportMode;
   db?: Db | null;
-}
-
-export interface CompletionContractContext {
-  instanceId: number;
-  baseUrl?: string;
 }
 
 function getPromptOutcomeHelp(workflow: ResolvedWorkflow): Array<{ outcome: string; description: string }> {
@@ -185,12 +179,6 @@ export async function buildContractInstructions(ctx: TransportContext): Promise<
   return (await buildContractInstructionsDetailed(ctx)).text;
 }
 
-export function buildCompletionContractInstructions(ctx: CompletionContractContext): string {
-  return renderNamedContractTemplate('completion', {
-    baseUrl: ctx.baseUrl ?? getAgentHqBaseUrl(),
-    instanceId: ctx.instanceId,
-  });
-}
 export function resolveTransportMode(params: {
   runtimeType?: string | null;
   runtimeConfig?: unknown;

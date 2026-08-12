@@ -68,13 +68,12 @@ const FULL_TASK_DISPATCH: DispatchContextInput = {
   },
 };
 
-/** A workflow summary dispatch: no task, no repo, no notes. */
-const WORKFLOW_SUMMARY_DISPATCH: DispatchContextInput = {
+/** A non-task dispatch: no task, no repo, no notes. */
+const NON_TASK_DISPATCH: DispatchContextInput = {
   workflow: { id: 42, name: 'Runtime Refactor', goal: 'Ship the refactor.' },
   team: { section: TEAM_SECTION, teamId: 7, teamName: 'Delivery Squad', contextVersion: 3 },
   project: { id: 86, name: 'Agent HQ', context: 'Monorepo with api/ and ui/.' },
   job: { agentId: 9, title: 'Backend Engineer', instructions: 'Do the backend work.' },
-  summaryRequest: 'The sprint has ended. Please summarize.',
   contract: {
     kind: 'callback_contract',
     label: 'Completion Contract',
@@ -85,7 +84,7 @@ const WORKFLOW_SUMMARY_DISPATCH: DispatchContextInput = {
 
 describe('canonical section order', () => {
   it('is the same list for every dispatch path', () => {
-    for (const input of [FULL_TASK_DISPATCH, WORKFLOW_SUMMARY_DISPATCH, {}]) {
+    for (const input of [FULL_TASK_DISPATCH, NON_TASK_DISPATCH, {}]) {
       expect(buildDispatchContextDrafts(input).map(d => d.kind)).toEqual([...DISPATCH_CONTEXT_ORDER]);
     }
   });
@@ -99,7 +98,6 @@ describe('canonical section order', () => {
       'job_instructions',
       'task',
       'task_notes',
-      'summary_request',
       'workspace_path',
       'callback_contract',
       'github_identity',
@@ -136,12 +134,11 @@ describe('unification closes the divergence between the two old builders', () =>
     // Before unification these three were emitted only by the task builder, so a QA retry of a
     // task carried no Assigned Task block, no workspace paths and no GitHub identity.
     const qaRetry: DispatchContextInput = {
-      ...WORKFLOW_SUMMARY_DISPATCH,
+      ...NON_TASK_DISPATCH,
       task: FULL_TASK_DISPATCH.task,
       taskNotes: FULL_TASK_DISPATCH.taskNotes,
       workspace: FULL_TASK_DISPATCH.workspace,
       githubIdentity: FULL_TASK_DISPATCH.githubIdentity,
-      summaryRequest: null,
     };
     const bundle = buildDispatchContextBundle(qaRetry);
     const byKind = new Map(bundle.segments.map(s => [s.kind, s]));
@@ -156,8 +153,8 @@ describe('unification closes the divergence between the two old builders', () =>
 });
 
 describe('sections a dispatch genuinely lacks say so', () => {
-  it('explains every absent section on a workflow summary', () => {
-    const bundle = buildDispatchContextBundle(WORKFLOW_SUMMARY_DISPATCH);
+  it('explains every absent section on a non-task dispatch', () => {
+    const bundle = buildDispatchContextBundle(NON_TASK_DISPATCH);
     const absent = bundle.segments.filter(s => !s.injected);
 
     expect(absent.map(s => s.kind)).toEqual(['task', 'task_notes', 'workspace_path', 'github_identity']);

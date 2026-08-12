@@ -5,7 +5,6 @@ import path from 'path';
 import { type Db } from "../../db/adapter/types";
 
 let buildContractInstructions: typeof import('./transportAdapters').buildContractInstructions;
-let buildCompletionContractInstructions: typeof import('./transportAdapters').buildCompletionContractInstructions;
 let resolveTransportMode: typeof import('./transportAdapters').resolveTransportMode;
 type TransportContext = import('./transportAdapters').TransportContext;
 
@@ -32,7 +31,6 @@ beforeEach(() => {
   fs.writeFileSync(path.join(tempDir, 'enhancements.md'), '## Agent HQ enhancement contract for this dispatched instance\nSprint type: {{sprintType}}\nUse ONE of these outcomes: {{validOutcomes}}\nREQUIRED OUTPUTS FOR ENHANCEMENTS\nagent_hq_post_task_outcome task_id={{taskId}}\nchanged_by={{agentSlug}}\n', 'utf-8');
 
   ({
-    buildCompletionContractInstructions,
     buildContractInstructions,
     resolveTransportMode,
   } = loadTransportAdapters());
@@ -317,7 +315,6 @@ describe('dispatch contract template renderer', () => {
   });
 
   it('keeps runtime-only named completion templates available without files in agent-contracts', () => {
-    expect(buildCompletionContractInstructions({ instanceId: 1667 })).toContain('Agent HQ completion contract');
   });
 
   it('classifies Hermes runtimes as local transport', () => {

@@ -91,7 +91,6 @@ export const SEGMENT_ACCENTS: Record<ContextSegmentKind, { border: string; text:
   job_instructions: { border: 'border-l-amber-500', text: 'text-amber-300', dot: 'bg-amber-500' },
   task: { border: 'border-l-emerald-500', text: 'text-emerald-300', dot: 'bg-emerald-500' },
   task_notes: { border: 'border-l-orange-500', text: 'text-orange-300', dot: 'bg-orange-500' },
-  summary_request: { border: 'border-l-pink-500', text: 'text-pink-300', dot: 'bg-pink-500' },
   workspace_path: { border: 'border-l-teal-500', text: 'text-teal-300', dot: 'bg-teal-500' },
   callback_contract: { border: 'border-l-rose-500', text: 'text-rose-300', dot: 'bg-rose-500' },
   github_identity: { border: 'border-l-slate-400', text: 'text-slate-300', dot: 'bg-slate-400' },

@@ -21,7 +21,6 @@ export {
   buildContractInstructions,
   buildContractInstructionsDetailed,
   type RenderedContractInstructions,
-  buildCompletionContractInstructions,
   CONTRACT_PLACEHOLDER_DEFINITIONS,
   getAvailableContractPlaceholders,
   type ContractPlaceholderDefinition,

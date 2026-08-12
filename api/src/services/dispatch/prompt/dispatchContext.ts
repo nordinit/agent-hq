@@ -23,7 +23,6 @@
  *   how this agent works   → job instructions
  *   what to do             → task
  *   what has happened      → task notes
- *   what to produce        → summary request
  *   where on disk          → workspace paths
  *   how to report back     → callback contract
  *   who to commit as       → GitHub identity
@@ -47,7 +46,6 @@ export const DISPATCH_CONTEXT_ORDER: readonly ContextSegmentKind[] = [
   'job_instructions',
   'task',
   'task_notes',
-  'summary_request',
   'workspace_path',
   'callback_contract',
   'github_identity',
@@ -96,7 +94,6 @@ export interface DispatchContextInput {
   job?: DispatchJobContext | null;
   task?: DispatchTaskContext | null;
   taskNotes?: { context: DispatchTaskNotesContext; taskId: number } | null;
-  summaryRequest?: string | null;
   workspace?: DispatchPathContext | null;
   /**
    * Pre-rendered contract segment. Built by the caller because rendering it needs the database
@@ -228,17 +225,6 @@ function notesDraft(input: DispatchContextInput): ContextSegmentDraft {
   };
 }
 
-function summaryDraft(input: DispatchContextInput): ContextSegmentDraft {
-  const summaryRequest = input.summaryRequest?.trim() ?? '';
-  return {
-    kind: 'summary_request',
-    label: 'Summary Request',
-    text: summaryRequest,
-    source: { type: 'summary_request', label: summaryRequest ? 'Workflow summary request' : 'None' },
-    notInjectedReason: 'This dispatch does not ask for a summary',
-  };
-}
-
 function contractDraft(input: DispatchContextInput): ContextSegmentDraft {
   return input.contract ?? {
     kind: 'callback_contract',
@@ -258,7 +244,6 @@ export function buildDispatchContextDrafts(input: DispatchContextInput): Context
     jobDraft(input),
     taskDraft(input),
     notesDraft(input),
-    summaryDraft(input),
     buildWorkspaceContextSegmentDraft(input.workspace ?? null),
     contractDraft(input),
     buildGitHubIdentitySegmentDraft(

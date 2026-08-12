@@ -40,7 +40,6 @@ export type ContextSegmentKind =
   | 'job_instructions'
   | 'task'
   | 'task_notes'
-  | 'summary_request'
   | 'workspace_path'
   | 'callback_contract'
   | 'github_identity';

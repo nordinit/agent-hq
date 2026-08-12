@@ -1,9 +1,5 @@
 import { getDb } from '../../db/client';
-import { buildDispatchContextBundle, dispatchInstance, loadDispatchScopeContext } from '../runs';
-import { buildCompletionContractInstructions } from '../../services/contracts';
-import { createDurableRunId, tableHasColumn } from '../../lib/durableRunIdentity';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
-import { resolveTeamContextForDispatch } from '../teams/context';
 import { type Db } from "../../db/adapter/types";
 
 export type SprintStatus = 'planning' | 'planned' | 'active' | 'paused' | 'complete' | 'closed';
@@ -78,81 +74,6 @@ export async function completeSprint(sprintId: number): Promise<void> {
 
   console.log(`[sprints] Sprint ${sprintId} "${sprint.name}" completed. ${paused.changes} job(s) paused.`);
 
-  const sprintJobs = await db.all(`
-    SELECT a.*, a.model as agent_model
-    FROM agents a
-    WHERE a.sprint_id = ?
-  `, sprintId) as Array<Record<string, unknown>>;
-
-  for (const job of sprintJobs) {
-    const sprintSummaryModel = (job.agent_model ?? null) as string | null;
-    const jobInstructions = typeof job.job_instructions === 'string' ? job.job_instructions : '';
-    const sessionKey = typeof job.session_key === 'string' ? job.session_key : '';
-    console.log(
-      `[sprints] Sprint summary model resolution — agent="${job.name}"`
-      + ` agent.model=${job.agent_model ?? 'null'}`
-      + ` effective=${sprintSummaryModel ?? 'gateway-default'}`,
-    );
-
-    const supportsDurableRunId = await tableHasColumn(db, 'job_instances', 'durable_run_id');
-    const instanceResult = supportsDurableRunId
-      ? await db.run(`
-          INSERT INTO job_instances (tenant_id, agent_id, status, durable_run_id) VALUES (?, ?, 'queued', ?)
-        `, job.tenant_id, job.id, createDurableRunId())
-      : await db.run(`
-          INSERT INTO job_instances (tenant_id, agent_id, status) VALUES (?, ?, 'queued')
-        `, job.tenant_id, job.id);
-    const instanceId = instanceResult.lastInsertId as number;
-
-    const teamContext = await resolveTeamContextForDispatch(db, {
-      agentId: job.id as number,
-      sprintId: sprint.id as number,
-    });
-
-    const scope = await loadDispatchScopeContext(db, {
-      projectId: sprint.project_id,
-      workflowId: sprint.id,
-    });
-    const contextBundle = buildDispatchContextBundle({
-      workflow: { id: sprint.id, name: sprint.name, goal: sprint.goal || null },
-      team: teamContext,
-      project: scope.project,
-      job: {
-        agentId: job.id as number,
-        title: (job.job_title as string | null) ?? null,
-        instructions: jobInstructions,
-      },
-      // No task, notes, workspace, or GitHub identity: a workflow summary is not task work and
-      // does not run against a repo. Those sections render as not-injected with a reason.
-      summaryRequest: `The sprint "${sprint.name}" has ended. Please summarize: (1) what tasks you completed this sprint, (2) what tasks remain unfinished, and (3) any current blockers. Keep it concise.`,
-      contract: {
-        kind: 'callback_contract',
-        label: 'Completion Contract',
-        text: buildCompletionContractInstructions({ instanceId }),
-        source: { type: 'contract_template', label: 'completion' },
-      },
-    });
-    const message = contextBundle.promptText;
-
-    dispatchInstance({
-      instanceId,
-      agentId: job.id as number,
-      jobTitle: `Sprint Review: ${sprint.name}`,
-      sessionKey,
-      openclawAgentId: (job.openclaw_agent_id as string | null | undefined) ?? null,
-      message,
-      contextBundle,
-      model: sprintSummaryModel,
-      preferredProvider: (job.preferred_provider as string | null | undefined) ?? null,
-      providerConnectionId: (job.provider_connection_id as number | null | undefined) ?? null,
-      hooksUrl: (job.hooks_url as string | null | undefined) ?? null,
-      hooksAuthHeader: (job.hooks_auth_header as string | null | undefined) ?? null,
-      runtimeType: (job.runtime_type as string | null | undefined) ?? null,
-      runtimeConfig: (job.runtime_config as Record<string, unknown> | null | undefined) ?? null,
-    }).catch((err: Error) => {
-      console.error(`[sprints] Failed to dispatch summary for job ${job.id}:`, err.message);
-    });
-  }
 }
 
 export async function checkSprintCompletion(): Promise<void> {
