@@ -67,10 +67,25 @@ export async function buildInstanceCallbackContract({
   return await buildContractInstructions(ctx);
 }
 
-/** The same contract build, kept as a bundle segment so the viewer can name the template used. */
-export async function buildInstanceCallbackContractSegmentDraft(
+export interface CallbackContractSegments {
+  /** Stable procedure. Placed high in the prompt, above everything that changes per run. */
+  procedure: ContextSegmentDraft;
+  /** Instance ids, session key and paste-ready lifecycle calls. Placed last. */
+  runIdentifiers: ContextSegmentDraft;
+}
+
+/**
+ * The contract as two bundle segments.
+ *
+ * A contract is ~3.5KB of which only a handful of lines — the ids and the examples embedding them
+ * — differ between dispatches. Emitting one block forced the whole thing below every volatile
+ * section; emitting two lets the procedure sit with the other stable context and leaves only the
+ * ids trailing. Templates without the split marker put everything in runIdentifiers, so their
+ * bytes and position are unchanged.
+ */
+export async function buildInstanceCallbackContractSegmentDrafts(
   input: InstanceCallbackContractInput,
-): Promise<ContextSegmentDraft> {
+): Promise<CallbackContractSegments> {
   const ctx: TransportContext = {
     instanceId: input.instanceId,
     durableRunId: input.durableRunId,
@@ -87,32 +102,52 @@ export async function buildInstanceCallbackContractSegmentDraft(
   };
   const contract: RenderedContractInstructions = await buildContractInstructionsDetailed(ctx);
 
-  return {
-    kind: 'callback_contract',
-    label: 'Callback Contract',
-    text: contract.text,
-    source: {
-      type: 'contract_template',
-      label: contract.inheritedFrom
-        ? `${contract.templateKey} (inherited from ${contract.inheritedFrom})`
-        : contract.templateKey,
-      href: '/settings?tab=contracts',
-      detail: {
-        template_key: contract.templateKey,
-        template_path: contract.templatePath,
-        inherited_from: contract.inheritedFrom,
-        workflow_source: contract.workflowSource,
-        suggested_outcome: contract.suggestedOutcome,
-        valid_outcomes: contract.validOutcomes.join(', '),
-        transport_mode: ctx.transportMode,
-        task_status: input.taskStatus,
-      },
+  const source = {
+    type: 'contract_template',
+    label: contract.inheritedFrom
+      ? `${contract.templateKey} (inherited from ${contract.inheritedFrom})`
+      : contract.templateKey,
+    href: '/settings?tab=contracts',
+    detail: {
+      template_key: contract.templateKey,
+      template_path: contract.templatePath,
+      inherited_from: contract.inheritedFrom,
+      workflow_source: contract.workflowSource,
+      suggested_outcome: contract.suggestedOutcome,
+      valid_outcomes: contract.validOutcomes.join(', '),
+      transport_mode: ctx.transportMode,
+      task_status: input.taskStatus,
     },
-    omission: contract.inheritedFrom
-      ? {
-        reason: `No contract template for workflow type "${contract.templateKey}"; fell back to "${contract.inheritedFrom}"`,
-      }
-      : null,
+  } as const;
+
+  return {
+    procedure: {
+      kind: 'callback_contract',
+      label: 'Callback Contract',
+      text: contract.procedure,
+      source: { ...source },
+      omission: contract.inheritedFrom
+        ? {
+          reason: `No contract template for workflow type "${contract.templateKey}"; fell back to "${contract.inheritedFrom}"`,
+        }
+        : null,
+      notInjectedReason: 'This contract template is entirely run identifiers',
+    },
+    runIdentifiers: {
+      kind: 'run_identifiers',
+      label: 'Run Identifiers',
+      text: contract.runIdentifiers,
+      source: {
+        ...source,
+        detail: {
+          instance_id: input.instanceId,
+          durable_run_id: input.durableRunId ?? 'none',
+          session_key: input.sessionKey,
+          task_id: input.taskId,
+        },
+      },
+      notInjectedReason: 'This contract template declares no run-identifier split',
+    },
   };
 }
 

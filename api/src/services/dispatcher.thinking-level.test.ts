@@ -51,14 +51,14 @@ jest.mock('../lib/githubIdentity', () => ({
   resolveGitHubIdentity: jest.fn(() => null),
   injectGitHubCredentials: jest.fn(),
   cleanupGitHubCredentials: jest.fn(),
-  buildGitHubIdentityContext: jest.fn(() => ''),
+  buildGitHubCredentialEnv: jest.fn(() => ({})),
 }));
 
 const mockedGitHubIdentity = jest.requireMock('../lib/githubIdentity') as {
   resolveGitHubIdentity: jest.Mock;
   injectGitHubCredentials: jest.Mock;
   cleanupGitHubCredentials: jest.Mock;
-  buildGitHubIdentityContext: jest.Mock;
+  buildGitHubCredentialEnv: jest.Mock;
 };
 
 jest.mock('../lib/agentHqBaseUrl', () => ({
@@ -424,11 +424,12 @@ describe('runDispatcher thinking-level routing', () => {
       '/Users/test/workspaces/task-375',
       expect.objectContaining({ githubUser: 'cinder-agent' }),
     );
-    expect(mockedGitHubIdentity.buildGitHubIdentityContext).toHaveBeenCalledWith(
+    // The credential env is built from the identity alone — it is process environment for the
+    // whole run, not something scoped to a directory the agent has to read from.
+    expect(mockedGitHubIdentity.buildGitHubCredentialEnv).toHaveBeenCalledWith(
       expect.objectContaining({
         identity: expect.objectContaining({ githubUser: 'cinder-agent' }),
       }),
-      '/Users/test/workspaces/task-375',
     );
 
     const dispatchedMessage = dispatchMock.mock.calls[0]?.[0]?.message as string;

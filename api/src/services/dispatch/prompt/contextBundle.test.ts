@@ -58,12 +58,13 @@ describe('renderContextBundle joins sections', () => {
   });
 
   it('honours a per-section separator override', () => {
-    // The GitHub identity block carries its own leading newline and was concatenated with none.
+    // No shipped section uses this today, but the renderer still supports a caller that needs to
+    // concatenate without a paragraph break.
     const bundle = renderContextBundle([
-      draft('callback_contract', 'CONTRACT'),
-      draft('github_identity', '\n## GitHub Identity\n', { separator: '' }),
+      draft('task', 'TASK'),
+      draft('callback_contract', '\nCONTRACT', { separator: '' }),
     ]);
-    expect(bundle.promptText).toBe('CONTRACT\n## GitHub Identity\n');
+    expect(bundle.promptText).toBe('TASK\nCONTRACT');
   });
 
   it('makes every injected segment an exact slice of the prompt', () => {
@@ -129,12 +130,12 @@ describe('appendContextSegment extends a finished bundle', () => {
   });
 
   it('records an empty append as a not-injected segment', () => {
-    const extended = appendContextSegment(base, draft('github_identity', '', {
-      notInjectedReason: 'No GitHub identity is assigned to this agent',
+    const extended = appendContextSegment(base, draft('task_notes', '', {
+      notInjectedReason: 'This task has no notes yet',
     }));
     expect(extended.promptText).toBe(base.promptText);
     expect(extended.segments[2].injected).toBe(false);
-    expect(extended.segments[2].omission?.reason).toMatch(/No GitHub identity/);
+    expect(extended.segments[2].omission?.reason).toMatch(/no notes yet/);
   });
 });
 

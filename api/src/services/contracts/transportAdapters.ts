@@ -4,6 +4,7 @@ import {
   normalizeContractTemplateKey,
   readSprintTypeContractTemplate,
   renderLoadedContractTemplate,
+  splitRenderedContract,
 } from './templateStore';
 import {
   PIPELINE_STAGES,
@@ -140,7 +141,12 @@ export const CONTRACT_PLACEHOLDER_DEFINITIONS: ContractPlaceholderDefinition[] =
  * guessing from the prose.
  */
 export interface RenderedContractInstructions {
+  /** Full rendered contract, both halves joined. */
   text: string;
+  /** Stable procedure half — safe to place high in the prompt. */
+  procedure: string;
+  /** Per-run identifiers half, or '' when the template declares no split. */
+  runIdentifiers: string;
   /** Normalized workflow-type key the template was looked up under. */
   templateKey: string;
   /** Absolute path on disk, or `builtin:<name>` for a fallback template. */
@@ -164,8 +170,12 @@ export async function buildContractInstructionsDetailed(
       db: ctx.db,
     });
   const template = readSprintTypeContractTemplate(ctx.sprintType);
+  const rendered = renderLoadedContractTemplate(template, await buildTemplateValues(ctx, workflow));
+  const split = splitRenderedContract(rendered);
   return {
-    text: renderLoadedContractTemplate(template, await buildTemplateValues(ctx, workflow)),
+    text: rendered,
+    procedure: split.procedure,
+    runIdentifiers: split.runIdentifiers,
     templateKey: normalizeContractTemplateKey(ctx.sprintType),
     templatePath: template.path,
     inheritedFrom: template.inheritedFrom,

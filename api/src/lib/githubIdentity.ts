@@ -23,6 +23,35 @@ export interface ResolvedGitHubIdentity {
   dedicated: boolean;
 }
 
+/**
+ * The identity as process environment, injected into the dispatched runtime.
+ *
+ * WHY THIS EXISTS
+ * The commit author was already enforced — configureWorktreeGitIdentity() writes
+ * `git config --worktree user.name/user.email`, so a commit carries the right author whether the
+ * agent cooperates or not. The token was not: it lived only in two files on disk, and the sole
+ * thing making an agent push as itself was a prompt block asking it to `source` one of them.
+ * An agent that skipped that step still pushed successfully — as whatever ambient credential the
+ * host had. Putting the token in the environment closes that gap, because `gh` and git read
+ * GH_TOKEN/GITHUB_TOKEN without being asked.
+ *
+ * Runtime adapters spread `runtimeConfig.env` into the child process and place their own values
+ * last, so this cannot override adapter-owned settings. The runtime boundary sanitizer redacts
+ * env values whose key matches /token/i, so the durable record stores names, never secrets.
+ */
+export function buildGitHubCredentialEnv(resolved: ResolvedGitHubIdentity | null): Record<string, string> {
+  if (!resolved) return {};
+  const { identity } = resolved;
+  return {
+    GH_TOKEN: identity.token,
+    GITHUB_TOKEN: identity.token,
+    GIT_AUTHOR_NAME: identity.git_author_name,
+    GIT_AUTHOR_EMAIL: identity.git_author_email,
+    GIT_COMMITTER_NAME: identity.git_author_name,
+    GIT_COMMITTER_EMAIL: identity.git_author_email,
+  };
+}
+
 // ── Credential file names ────────────────────────────────────────────────────
 
 /** File written to workspace root containing the GH_TOKEN for this run. */
@@ -148,9 +177,10 @@ export async function resolveGitHubIdentity(
  *   .atlas-gh-identity.env — shell-sourceable env vars for git + gh CLI
  *   .git/config            — worktree-local user.name and user.email when cwd is a git worktree
  *
- * The agent's dispatch instructions tell them to:
- *   export GH_TOKEN=$(cat .atlas-gh-token)
- * or the OpenClaw hooks dispatch can inject it as an env var.
+ * The token also reaches the run as process environment via buildGitHubCredentialEnv(), which is
+ * what actually enforces it. These files remain as a secondary path for shells and subprocesses
+ * that do not inherit the runtime env, and the worktree git config is what makes the commit
+ * author unskippable.
  *
  * Returns true if files were written successfully.
  */
@@ -209,55 +239,4 @@ export function cleanupGitHubCredentials(workingDirectory: string): void {
       // Best-effort cleanup
     }
   }
-}
-
-// ── Dispatch message context ─────────────────────────────────────────────────
-
-/**
- * buildGitHubIdentityContext — generate a context block for the agent's dispatch
- * message that tells them which GitHub identity to use.
- *
- * This block is appended to the dispatch message so the agent knows:
- *   - Which GitHub account they are operating as
- *   - Where to find the credential files
- *   - How to configure git + gh CLI for this identity
- *
- * Returns an empty string if no identity is resolved.
- */
-export function buildGitHubIdentityContext(
-  resolved: ResolvedGitHubIdentity | null,
-  workingDirectory: string,
-): string {
-  if (!resolved) return '';
-
-  const { identity, dedicated } = resolved;
-  const identityNote = dedicated
-    ? `You have a dedicated GitHub identity for this workflow role.`
-    : `You are using a shared GitHub identity (no dedicated identity assigned).`;
-
-  return [
-    ``,
-    `## GitHub Identity`,
-    identityNote,
-    `- **GitHub user:** ${identity.github_username}`,
-    `- **Git author:** ${identity.git_author_name} <${identity.git_author_email}>`,
-    `- **Workflow role:** ${identity.lane}`,
-    ``,
-    `### Credential setup`,
-    `Agent HQ has already configured this worktree's local git author as ${identity.git_author_name} <${identity.git_author_email}>.`,
-    `Before running any \`git commit\`, \`git merge\`, \`git cherry-pick\`, \`gh\`, or \`git push\` commands, source your GitHub credentials:`,
-    '```bash',
-    `source "${path.join(workingDirectory, GH_IDENTITY_FILE)}"`,
-    '```',
-    `This sets GH_TOKEN, GITHUB_TOKEN, GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, and GIT_COMMITTER_EMAIL.`,
-    `Before creating commits, verify identity with \`git config user.name\`, \`git config user.email\`, \`git var GIT_AUTHOR_IDENT\`, and \`git var GIT_COMMITTER_IDENT\`.`,
-    ``,
-    `Alternatively, read the token directly:`,
-    '```bash',
-    `export GH_TOKEN=$(cat "${path.join(workingDirectory, GH_TOKEN_FILE)}")`,
-    '```',
-    ``,
-    `**Important:** Always use this identity for git commits and GitHub API calls during this run.`,
-    ``,
-  ].join('\n');
 }

@@ -6,7 +6,7 @@ import {
   getNonDispatchableTaskStatusPredicate,
 } from '../domains/runs';
 import {
-  buildInstanceCallbackContractSegmentDraft,
+  buildInstanceCallbackContractSegmentDrafts,
   extractWorkingDirectoryFromRuntimeConfig,
   resolveDispatchPathContext,
 } from '../services/dispatch/prompt';
@@ -491,7 +491,7 @@ export async function reconcileReviewQaRouting(
         },
         taskNotes: { context: taskNotesContext, taskId: task.id },
         workspace: pathContext,
-        contract: await buildInstanceCallbackContractSegmentDraft({
+        contract: await buildInstanceCallbackContractSegmentDrafts({
           instanceId,
           durableRunId,
           taskId: task.id,
@@ -507,7 +507,6 @@ export async function reconcileReviewQaRouting(
             hooksUrl: agent.hooks_url,
           }),
         }),
-        githubIdentity: { resolved: ghIdentity, workingDirectory: pathContext.activeRepoRoot },
       });
       const message = contextBundle.promptText;
 

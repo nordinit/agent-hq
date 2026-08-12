@@ -9,10 +9,7 @@ You are working inside the Agent HQ task lifecycle on operational, infrastructur
 ## Current Run Context
 
 - Base URL: `{{baseUrl}}`
-- Instance ID: `{{instanceId}}`
-- Durable run ID: `{{durableRunId}}`
 - Task ID: `{{taskId}}`
-- Session key: `{{sessionKey}}`
 - Agent slug: `{{agentSlug}}`
 - Workflow type: `{{sprintType}}` (machine-readable legacy field: `sprint_type`)
 - Workflow source: `{{workflowSource}}`
@@ -50,13 +47,13 @@ Configured gate fields for {{evidenceOutcomes}} come from workflow gate requirem
 
 When your run begins:
 
-`agent_hq_start_task_run({"instance_id":{{instanceId}},"session_key":"{{sessionKey}}"})`
+`agent_hq_start_task_run({"instance_id":<instance_id>,"session_key":"<session_key>"})`
 
 ### Progress
 
 Send check-ins during meaningful progress:
 
-`agent_hq_check_in_task_run({"instance_id":{{instanceId}},"stage":"progress","summary":"<truthful progress summary>","session_key":"{{sessionKey}}","meaningful_output":true})`
+`agent_hq_check_in_task_run({"instance_id":<instance_id>,"stage":"progress","summary":"<truthful progress summary>","session_key":"<session_key>","meaningful_output":true})`
 
 ### Task Notes
 
@@ -68,7 +65,7 @@ For durable handoff context:
 
 Post one valid outcome for the task's current status:
 
-`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful outcome summary>","instance_id":{{instanceId}}})`
+`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful outcome summary>","instance_id":<instance_id>})`
 
 ## Outcome Rules
 
@@ -83,3 +80,25 @@ Do not treat an operation as done just because a command ran. Verification matte
 ## Final Instruction
 
 Truth over momentum. The lifecycle outcome write is part of the work; do not end the run with only a narrative handoff.
+
+<!-- AGENT_HQ_RUN_IDENTIFIERS -->
+
+## Run Identifiers
+
+These are the values for this run. Substitute them wherever the contract above shows
+`<instance_id>`, `<durable_run_id>` or `<session_key>`.
+
+- Base URL: `{{baseUrl}}`
+- Instance ID: `{{instanceId}}`
+- Durable run ID: `{{durableRunId}}`
+- Session key: `{{sessionKey}}`
+- Task ID: `{{taskId}}`
+- Agent slug: `{{agentSlug}}`
+
+Ready to paste:
+
+`agent_hq_start_task_run({{"instance_id":{{instanceId}},"session_key":"{{sessionKey}}"}})`
+
+`agent_hq_check_in_task_run({{"instance_id":{{instanceId}},"stage":"progress","summary":"<truthful progress summary>","session_key":"{{sessionKey}}","meaningful_output":true}})`
+
+`agent_hq_post_task_outcome({{"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful handoff summary>","instance_id":{{instanceId}}}})`

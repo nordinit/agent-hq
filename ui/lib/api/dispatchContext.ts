@@ -18,7 +18,7 @@ export type ContextSegmentKind =
   | 'task_notes'
   | 'workspace_path'
   | 'callback_contract'
-  | 'github_identity';
+  | 'run_identifiers';
 
 export interface ContextSegmentSource {
   type: string;

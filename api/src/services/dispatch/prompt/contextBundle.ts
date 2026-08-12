@@ -42,7 +42,7 @@ export type ContextSegmentKind =
   | 'task_notes'
   | 'workspace_path'
   | 'callback_contract'
-  | 'github_identity';
+  | 'run_identifiers';
 
 /**
  * Where a segment came from, in a shape the UI can render without a per-kind branch: a type, a

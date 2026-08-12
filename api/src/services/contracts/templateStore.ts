@@ -89,6 +89,41 @@ export function readNamedContractTemplate(templateName: string): LoadedContractT
   return { content: fs.readFileSync(templatePath, 'utf-8'), path: templatePath, inheritedFrom: null };
 }
 
+/**
+ * Marker splitting a contract into its stable half and its per-run half.
+ *
+ * Everything before it is identical for every dispatch of a workflow type; everything after it
+ * carries instance ids, session keys and the ready-to-paste lifecycle calls that embed them.
+ * Emitting them as one block put ~3.5KB of unchanging procedure behind values that change every
+ * single run, which is exactly the wrong side of a cache prefix.
+ *
+ * A template without the marker is not split — the whole thing stays a single trailing section,
+ * which is what every template did before this existed.
+ */
+export const CONTRACT_RUN_IDENTIFIERS_MARKER = '<!-- AGENT_HQ_RUN_IDENTIFIERS -->';
+
+export interface SplitContractTemplate {
+  /** Stable procedure. Empty only if a template consists solely of run identifiers. */
+  procedure: string;
+  /** Per-run identifiers and examples, or '' when the template declares no split. */
+  runIdentifiers: string;
+}
+
+/**
+ * Split rendered contract text on the marker.
+ *
+ * Splits after rendering, not before, so a template author can put placeholders on either side
+ * and the marker's position is the only thing that decides which half they land in.
+ */
+export function splitRenderedContract(rendered: string): SplitContractTemplate {
+  const index = rendered.indexOf(CONTRACT_RUN_IDENTIFIERS_MARKER);
+  if (index < 0) return { procedure: rendered, runIdentifiers: '' };
+  return {
+    procedure: rendered.slice(0, index).trimEnd(),
+    runIdentifiers: rendered.slice(index + CONTRACT_RUN_IDENTIFIERS_MARKER.length).trim(),
+  };
+}
+
 export function renderLoadedContractTemplate(template: LoadedContractTemplate, values: ContractTemplateValues): string {
   return renderTemplate(template.content, values);
 }

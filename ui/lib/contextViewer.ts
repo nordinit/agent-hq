@@ -93,7 +93,7 @@ export const SEGMENT_ACCENTS: Record<ContextSegmentKind, { border: string; text:
   task_notes: { border: 'border-l-orange-500', text: 'text-orange-300', dot: 'bg-orange-500' },
   workspace_path: { border: 'border-l-teal-500', text: 'text-teal-300', dot: 'bg-teal-500' },
   callback_contract: { border: 'border-l-rose-500', text: 'text-rose-300', dot: 'bg-rose-500' },
-  github_identity: { border: 'border-l-slate-400', text: 'text-slate-300', dot: 'bg-slate-400' },
+  run_identifiers: { border: 'border-l-slate-400', text: 'text-slate-300', dot: 'bg-slate-400' },
 };
 
 const FALLBACK_ACCENT = { border: 'border-l-slate-600', text: 'text-slate-300', dot: 'bg-slate-600' };

@@ -24,7 +24,7 @@ jest.mock('../lib/githubIdentity', () => ({
   resolveGitHubIdentity: jest.fn(() => null),
   injectGitHubCredentials: jest.fn(),
   cleanupGitHubCredentials: jest.fn(),
-  buildGitHubIdentityContext: jest.fn(() => ''),
+  buildGitHubCredentialEnv: jest.fn(() => ({})),
 }));
 
 async function setupDb(): Promise<Db> {

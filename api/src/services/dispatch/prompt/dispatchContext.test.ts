@@ -51,20 +51,18 @@ const FULL_TASK_DISPATCH: DispatchContextInput = {
     workspaceContainerSource: 'workspace',
   },
   contract: {
-    kind: 'callback_contract',
-    label: 'Callback Contract',
-    text: '## Agent HQ Task Contract\nReport outcomes through MCP.',
-    source: { type: 'contract_template', label: 'generic' },
-  },
-  githubIdentity: {
-    resolved: {
-      identity: {
-        id: 4, tenant_id: 1, github_username: 'nova-bot', token: 'secret',
-        git_author_name: 'Nova', git_author_email: 'nova@example.com', lane: 'backend', enabled: 1,
-      },
-      dedicated: true,
+    procedure: {
+      kind: 'callback_contract',
+      label: 'Callback Contract',
+      text: '## Agent HQ Task Contract\nReport outcomes through MCP.',
+      source: { type: 'contract_template', label: 'generic' },
     },
-    workingDirectory: '/Users/dev/workspaces/task-814',
+    runIdentifiers: {
+      kind: 'run_identifiers',
+      label: 'Run Identifiers',
+      text: '- Instance ID: `99977435`\n- Session key: `run:99977435:abc`',
+      source: { type: 'contract_template', label: 'generic' },
+    },
   },
 };
 
@@ -75,10 +73,19 @@ const NON_TASK_DISPATCH: DispatchContextInput = {
   project: { id: 86, name: 'Agent HQ', context: 'Monorepo with api/ and ui/.' },
   job: { agentId: 9, title: 'Backend Engineer', instructions: 'Do the backend work.' },
   contract: {
-    kind: 'callback_contract',
-    label: 'Completion Contract',
-    text: '## Completion contract',
-    source: { type: 'contract_template', label: 'completion' },
+    procedure: {
+      kind: 'callback_contract',
+      label: 'Callback Contract',
+      text: '## Completion contract',
+      source: { type: 'contract_template', label: 'generic' },
+    },
+    runIdentifiers: {
+      kind: 'run_identifiers',
+      label: 'Run Identifiers',
+      text: '',
+      source: { type: 'contract_template', label: 'generic' },
+      notInjectedReason: 'This contract template declares no run-identifier split',
+    },
   },
 };
 
@@ -89,18 +96,20 @@ describe('canonical section order', () => {
     }
   });
 
-  it('leads with purpose and identity, and trails with the mechanical sections', () => {
-    // Pinned literally: the order is the contract with every agent, not an implementation detail.
+  it('runs stable sections first and per-dispatch sections last', () => {
+    // Pinned literally. This order is a cache contract as much as a reading order: a runtime
+    // reuses an exact prompt prefix, so the first section that differs from the previous dispatch
+    // invalidates every section after it. Only the last two change on every run.
     expect([...DISPATCH_CONTEXT_ORDER]).toEqual([
+      'project_context',
       'workflow_goal',
       'team',
-      'project_context',
       'job_instructions',
-      'task',
-      'task_notes',
-      'workspace_path',
       'callback_contract',
-      'github_identity',
+      'task',
+      'workspace_path',
+      'task_notes',
+      'run_identifiers',
     ]);
   });
 
@@ -111,8 +120,8 @@ describe('canonical section order', () => {
       expect(injected[i].start).toBeGreaterThanOrEqual(injected[i - 1].end);
     }
     expect(injected.map(s => s.kind)).toEqual([
-      'workflow_goal', 'team', 'project_context', 'job_instructions', 'task',
-      'task_notes', 'workspace_path', 'callback_contract', 'github_identity',
+      'project_context', 'workflow_goal', 'team', 'job_instructions', 'callback_contract',
+      'task', 'workspace_path', 'task_notes', 'run_identifiers',
     ]);
   });
 });
@@ -130,15 +139,14 @@ describe('unification closes the divergence between the two old builders', () =>
       .toBe('--- Project Context: Agent HQ ---\nMonorepo with api/ and ui/.\n--- End Project Context ---');
   });
 
-  it('gives a workflow-shaped dispatch the task, workspace and identity sections when it has them', () => {
-    // Before unification these three were emitted only by the task builder, so a QA retry of a
-    // task carried no Assigned Task block, no workspace paths and no GitHub identity.
+  it('gives a workflow-shaped dispatch the task and workspace sections when it has them', () => {
+    // Before unification these were emitted only by the task builder, so a QA retry of a task
+    // carried no Assigned Task block and no workspace paths.
     const qaRetry: DispatchContextInput = {
       ...NON_TASK_DISPATCH,
       task: FULL_TASK_DISPATCH.task,
       taskNotes: FULL_TASK_DISPATCH.taskNotes,
       workspace: FULL_TASK_DISPATCH.workspace,
-      githubIdentity: FULL_TASK_DISPATCH.githubIdentity,
     };
     const bundle = buildDispatchContextBundle(qaRetry);
     const byKind = new Map(bundle.segments.map(s => [s.kind, s]));
@@ -147,8 +155,6 @@ describe('unification closes the divergence between the two old builders', () =>
     expect(segmentText(bundle, byKind.get('task')!)).toContain('## Assigned Task');
     expect(byKind.get('workspace_path')!.injected).toBe(true);
     expect(segmentText(bundle, byKind.get('workspace_path')!)).toContain('## Active Workspace Context');
-    expect(byKind.get('github_identity')!.injected).toBe(true);
-    expect(segmentText(bundle, byKind.get('github_identity')!)).toContain('nova-bot');
   });
 });
 
@@ -157,7 +163,7 @@ describe('sections a dispatch genuinely lacks say so', () => {
     const bundle = buildDispatchContextBundle(NON_TASK_DISPATCH);
     const absent = bundle.segments.filter(s => !s.injected);
 
-    expect(absent.map(s => s.kind)).toEqual(['task', 'task_notes', 'workspace_path', 'github_identity']);
+    expect(absent.map(s => s.kind)).toEqual(['task', 'workspace_path', 'task_notes', 'run_identifiers']);
     for (const segment of absent) {
       expect(segment.omission?.reason).toBeTruthy();
       expect(segment.chars).toBe(0);

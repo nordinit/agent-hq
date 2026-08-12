@@ -11,10 +11,7 @@ You are working inside the Agent HQ task lifecycle. Your job is not just to do t
 ## Current run context
 
 - Base URL: `{{baseUrl}}`
-- Instance ID: `{{instanceId}}`
-- Durable run ID: `{{durableRunId}}`
 - Task ID: `{{taskId}}`
-- Session key: `{{sessionKey}}`
 - Agent slug: `{{agentSlug}}`
 - Workflow type: `{{sprintType}}` (machine-readable legacy field: `sprint_type`)
 - Workflow source: `{{workflowSource}}`
@@ -72,7 +69,7 @@ Configured gate fields for {{evidenceOutcomes}} come from workflow gate requirem
 When your run begins, call the required start-run lifecycle tool for the instance.
 
 MCP tool:
-`agent_hq_start_task_run({"instance_id":{{instanceId}},"session_key":"{{sessionKey}}"})`
+`agent_hq_start_task_run({"instance_id":<instance_id>,"session_key":"<session_key>"})`
 
 ### Progress
 Send check-ins during meaningful progress so the run does not look dead:
@@ -82,7 +79,7 @@ Send check-ins during meaningful progress so the run does not look dead:
 - before/after major verification steps
 
 MCP tool:
-`agent_hq_check_in_task_run({"instance_id":{{instanceId}},"stage":"progress","summary":"<truthful progress summary>","session_key":"{{sessionKey}}","meaningful_output":true})`
+`agent_hq_check_in_task_run({"instance_id":<instance_id>,"stage":"progress","summary":"<truthful progress summary>","session_key":"<session_key>","meaningful_output":true})`
 
 ### Task notes
 When you need to leave a durable handoff note on the task itself, prefer the MCP task-note tool instead of hand-built JSON.
@@ -130,7 +127,7 @@ Post `blocked` or `failed` instead with a short explanation of what is missing.
 `agent_hq_record_review_evidence({"task_id":{{taskId}},"review_branch":"<feature-branch>","review_commit":"<sha>","review_url":"<non-production-review-url>","summary":"<optional review handoff notes>"})`
 
 ### Example implementation outcome command
-`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful handoff summary>","instance_id":{{instanceId}}})`
+`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful handoff summary>","instance_id":<instance_id>})`
 
 ### Canonical implementation sequence
 1. finish the implementation
@@ -165,7 +162,7 @@ If the artifact, branch, commit, environment, or evidence is not testable, post 
 `agent_hq_record_qa_evidence({"task_id":{{taskId}},"qa_verified_commit":"<sha>","qa_tested_url":"<tested-url>","notes":"<optional QA notes>"})`
 
 ### Example QA outcome command
-`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful QA summary>","instance_id":{{instanceId}}})`
+`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful QA summary>","instance_id":<instance_id>})`
 
 ---
 
@@ -241,10 +238,10 @@ Post the final `live_verified` outcome only after lease release and branch clean
 `agent_hq_record_live_verification({"task_id":{{taskId}},"live_verified_by":"{{agentSlug}}","live_verified_at":"<ISO timestamp>","summary":"<what was verified live>"})`
 
 ### Example deployment outcome command
-`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"deployed_live","summary":"<truthful deploy summary>","instance_id":{{instanceId}}})`
+`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"deployed_live","summary":"<truthful deploy summary>","instance_id":<instance_id>})`
 
 ### Example live verification outcome command
-`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"live_verified","summary":"<truthful live verification summary>","instance_id":{{instanceId}},"live_verified_by":"{{agentSlug}}","live_verified_at":"<ISO timestamp>"})`
+`agent_hq_post_task_outcome({"task_id":{{taskId}},"outcome":"live_verified","summary":"<truthful live verification summary>","instance_id":<instance_id>,"live_verified_by":"{{agentSlug}}","live_verified_at":"<ISO timestamp>"})`
 
 ---
 
@@ -277,7 +274,7 @@ Examples of evidence integrity failures:
 
 ## Check-in example
 
-`agent_hq_check_in_task_run({"instance_id":{{instanceId}},"stage":"progress","summary":"<truthful progress summary>","session_key":"{{sessionKey}}","meaningful_output":true})`
+`agent_hq_check_in_task_run({"instance_id":<instance_id>,"stage":"progress","summary":"<truthful progress summary>","session_key":"<session_key>","meaningful_output":true})`
 
 ---
 
@@ -335,3 +332,25 @@ Posting the evidence/outcome is part of completing the task.
 Truth over momentum.
 
 A slower truthful workflow transition is better than a fast false one.
+
+<!-- AGENT_HQ_RUN_IDENTIFIERS -->
+
+## Run Identifiers
+
+These are the values for this run. Substitute them wherever the contract above shows
+`<instance_id>`, `<durable_run_id>` or `<session_key>`.
+
+- Base URL: `{{baseUrl}}`
+- Instance ID: `{{instanceId}}`
+- Durable run ID: `{{durableRunId}}`
+- Session key: `{{sessionKey}}`
+- Task ID: `{{taskId}}`
+- Agent slug: `{{agentSlug}}`
+
+Ready to paste:
+
+`agent_hq_start_task_run({{"instance_id":{{instanceId}},"session_key":"{{sessionKey}}"}})`
+
+`agent_hq_check_in_task_run({{"instance_id":{{instanceId}},"stage":"progress","summary":"<truthful progress summary>","session_key":"{{sessionKey}}","meaningful_output":true}})`
+
+`agent_hq_post_task_outcome({{"task_id":{{taskId}},"outcome":"{{suggestedOutcome}}","summary":"<truthful handoff summary>","instance_id":{{instanceId}}}})`
