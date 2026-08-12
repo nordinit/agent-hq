@@ -40,7 +40,6 @@ const FULL_TASK_DISPATCH: DispatchContextInput = {
     status: 'ready',
     workflowName: 'Runtime Refactor',
   },
-  skillName: 'code-review',
   taskNotes: { context: NOTES, taskId: 814 },
   workspace: {
     activeRepoRoot: '/Users/dev/workspaces/task-814',
@@ -99,7 +98,6 @@ describe('canonical section order', () => {
       'project_context',
       'job_instructions',
       'task',
-      'skill_request',
       'task_notes',
       'summary_request',
       'workspace_path',
@@ -116,14 +114,14 @@ describe('canonical section order', () => {
     }
     expect(injected.map(s => s.kind)).toEqual([
       'workflow_goal', 'team', 'project_context', 'job_instructions', 'task',
-      'skill_request', 'task_notes', 'workspace_path', 'callback_contract', 'github_identity',
+      'task_notes', 'workspace_path', 'callback_contract', 'github_identity',
     ]);
   });
 });
 
 describe('unification closes the divergence between the two old builders', () => {
-  it('gives a routed task dispatch the workflow goal, project context and skill request it never had', () => {
-    // Before unification these three were emitted only by the workflow/QA builder.
+  it('gives a routed task dispatch the workflow goal and project context it never had', () => {
+    // Before unification these two were emitted only by the workflow/QA builder.
     const bundle = buildDispatchContextBundle(FULL_TASK_DISPATCH);
     const byKind = new Map(bundle.segments.map(s => [s.kind, s]));
 
@@ -132,7 +130,6 @@ describe('unification closes the divergence between the two old builders', () =>
     expect(byKind.get('project_context')!.injected).toBe(true);
     expect(segmentText(bundle, byKind.get('project_context')!))
       .toBe('--- Project Context: Agent HQ ---\nMonorepo with api/ and ui/.\n--- End Project Context ---');
-    expect(segmentText(bundle, byKind.get('skill_request')!)).toBe('Run skill: code-review');
   });
 
   it('gives a workflow-shaped dispatch the task, workspace and identity sections when it has them', () => {
@@ -163,7 +160,7 @@ describe('sections a dispatch genuinely lacks say so', () => {
     const bundle = buildDispatchContextBundle(WORKFLOW_SUMMARY_DISPATCH);
     const absent = bundle.segments.filter(s => !s.injected);
 
-    expect(absent.map(s => s.kind)).toEqual(['task', 'skill_request', 'task_notes', 'workspace_path', 'github_identity']);
+    expect(absent.map(s => s.kind)).toEqual(['task', 'task_notes', 'workspace_path', 'github_identity']);
     for (const segment of absent) {
       expect(segment.omission?.reason).toBeTruthy();
       expect(segment.chars).toBe(0);

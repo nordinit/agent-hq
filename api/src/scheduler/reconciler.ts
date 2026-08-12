@@ -139,7 +139,6 @@ interface AgentRow {
   /* ── Legacy job-template label, kept for old scheduled/log rows only. ── */
   job_title: string;
   job_instructions: string;
-  skill_name: string | null;
   /** Agent workspace directory — the authoritative repo root when no worktree exists. */
   workspace_path: string | null;
   timeout_seconds: number;
@@ -490,7 +489,6 @@ export async function reconcileReviewQaRouting(
           status: task.status,
           workflowName: sprint?.name ?? null,
         },
-        skillName: agent.skill_name,
         taskNotes: { context: taskNotesContext, taskId: task.id },
         workspace: pathContext,
         contract: await buildInstanceCallbackContractSegmentDraft({

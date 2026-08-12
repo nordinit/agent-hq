@@ -237,8 +237,6 @@ interface JobRow {
   openclaw_agent_id?: string | null;
   /** JSON array of skill names assigned to this job — used by generateClaudeMd(). */
   skill_names?: string | null;
-  /** Single skill this agent is asked to run, rendered as the prompt's skill request. */
-  skill_name?: string | null;
   /** Preferred AI provider for model routing (e.g. 'anthropic', 'openai'). */
   preferred_provider?: string | null;
   /** Runtime-owned provider connection selected for this agent. */
@@ -1039,7 +1037,7 @@ async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<Rou
       SELECT rr.*,
              a.id as agent_id,
              a.job_instructions, a.enabled, a.timeout_seconds, a.model,
-             a.skill_names, a.skill_name,
+             a.skill_names,
              a.session_key as agent_session_key, a.name as agent_name, a.model as agent_model,
              a.openclaw_agent_id, a.runtime_type, a.runtime_config, a.hooks_url as agent_hooks_url,
              a.hooks_auth_header as agent_hooks_auth_header,
@@ -2161,7 +2159,6 @@ export async function dispatchTaskToJob(
       status: task.status,
       workflowName: task.sprint_name ?? null,
     },
-    skillName: job.skill_name ?? null,
     taskNotes: { context: taskNotesContext, taskId: task.id },
     workspace: dispatchPathContext,
     contract: await buildInstanceCallbackContractSegmentDraft({
@@ -2302,7 +2299,6 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
           agent_hooks_auth_header: rule.agent_hooks_auth_header ?? null,
           workspace_path: rule.workspace_path ?? null,
           skill_names: rule.skill_names ?? null,
-          skill_name: rule.skill_name ?? null,
           preferred_provider: rule.preferred_provider ?? null,
           repo_path: resolvedRepo.repo_path,
           repo_url: resolvedRepo.repo_url,

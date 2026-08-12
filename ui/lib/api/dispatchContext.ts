@@ -15,7 +15,6 @@ export type ContextSegmentKind =
   | 'project_context'
   | 'job_instructions'
   | 'task'
-  | 'skill_request'
   | 'task_notes'
   | 'summary_request'
   | 'workspace_path'

@@ -21,7 +21,7 @@
  *   who is doing it        → team
  *   where it lives         → project context
  *   how this agent works   → job instructions
- *   what to do             → task, skill
+ *   what to do             → task
  *   what has happened      → task notes
  *   what to produce        → summary request
  *   where on disk          → workspace paths
@@ -46,7 +46,6 @@ export const DISPATCH_CONTEXT_ORDER: readonly ContextSegmentKind[] = [
   'project_context',
   'job_instructions',
   'task',
-  'skill_request',
   'task_notes',
   'summary_request',
   'workspace_path',
@@ -96,7 +95,6 @@ export interface DispatchContextInput {
   project?: DispatchProjectContext | null;
   job?: DispatchJobContext | null;
   task?: DispatchTaskContext | null;
-  skillName?: string | null;
   taskNotes?: { context: DispatchTaskNotesContext; taskId: number } | null;
   summaryRequest?: string | null;
   workspace?: DispatchPathContext | null;
@@ -217,21 +215,6 @@ function taskDraft(input: DispatchContextInput): ContextSegmentDraft {
   };
 }
 
-function skillDraft(input: DispatchContextInput): ContextSegmentDraft {
-  const skillName = input.skillName?.trim() ?? '';
-  return {
-    kind: 'skill_request',
-    label: 'Skill Request',
-    text: skillName ? `Run skill: ${skillName}` : '',
-    source: {
-      type: 'skill',
-      label: skillName || 'No skill requested',
-      href: skillName ? `/skills?skill=${encodeURIComponent(skillName)}` : null,
-    },
-    notInjectedReason: 'No skill is configured for this agent',
-  };
-}
-
 function notesDraft(input: DispatchContextInput): ContextSegmentDraft {
   if (input.taskNotes) {
     return buildDispatchTaskNotesSegmentDraft(input.taskNotes.context, input.taskNotes.taskId);
@@ -274,7 +257,6 @@ export function buildDispatchContextDrafts(input: DispatchContextInput): Context
     projectDraft(input),
     jobDraft(input),
     taskDraft(input),
-    skillDraft(input),
     notesDraft(input),
     summaryDraft(input),
     buildWorkspaceContextSegmentDraft(input.workspace ?? null),

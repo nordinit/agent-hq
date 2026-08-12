@@ -90,7 +90,6 @@ export const SEGMENT_ACCENTS: Record<ContextSegmentKind, { border: string; text:
   project_context: { border: 'border-l-cyan-500', text: 'text-cyan-300', dot: 'bg-cyan-500' },
   job_instructions: { border: 'border-l-amber-500', text: 'text-amber-300', dot: 'bg-amber-500' },
   task: { border: 'border-l-emerald-500', text: 'text-emerald-300', dot: 'bg-emerald-500' },
-  skill_request: { border: 'border-l-lime-500', text: 'text-lime-300', dot: 'bg-lime-500' },
   task_notes: { border: 'border-l-orange-500', text: 'text-orange-300', dot: 'bg-orange-500' },
   summary_request: { border: 'border-l-pink-500', text: 'text-pink-300', dot: 'bg-pink-500' },
   workspace_path: { border: 'border-l-teal-500', text: 'text-teal-300', dot: 'bg-teal-500' },
