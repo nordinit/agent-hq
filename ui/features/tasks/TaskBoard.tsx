@@ -28,7 +28,7 @@ import {
   TaskCard,
 } from '@/features/tasks/TaskBoardComponents';
 import { api, type TaskRelationshipTypeConfig } from '@/lib/api';
-import { getDefaultVisibleTaskColumns, getTaskBoardColumns } from '@/lib/taskStatuses';
+import { getDefaultVisibleTaskColumns, getTaskBoardColumns, unionBoardColumns } from '@/lib/taskStatuses';
 import { useTaskStatuses } from '@/lib/useTaskStatuses';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
 
@@ -589,10 +589,15 @@ export function TaskBoard({
     });
   };
 
-  const columnCounts = useMemo(
-    () => Object.fromEntries(orderedColumns.map(c => [c.key, effectiveTasks.filter(t => t.status === c.key).length])),
-    [orderedColumns, effectiveTasks]
-  ) as Record<string, number>;
+  // Counted straight off the tasks rather than off one scope's column list: a status defined by
+  // only one workflow type still needs its chip badge on mobile.
+  const columnCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const task of effectiveTasks) {
+      counts[task.status] = (counts[task.status] ?? 0) + 1;
+    }
+    return counts;
+  }, [effectiveTasks]);
 
   // Apply optimistic moves to section task lists.
   // Sections with zero loaded tasks are kept — they may have tasks outside the current page.
@@ -627,13 +632,40 @@ export function TaskBoard({
     [activeColumns, filterVisibleColumns],
   );
 
+  /**
+   * Mobile shows one column at a time and no section headers, so its chip row has to span every
+   * workflow type on the board rather than one of them.
+   *
+   * Desktop renders each section against its own catalogue, so a status defined by only one
+   * workflow type still appears under that workflow. Mobile flattens the board and used to read
+   * columns from `activeColumns` — the *first* catalogue alone. Any status the first type did not
+   * define was unreachable: no chip to tap, and the sync effect below actively reset the
+   * selection away from it. A project mixing workflow types would silently lose whichever
+   * statuses the winning type happened not to share, and which type won was arbitrary.
+   *
+   * Ordering is first-seen across catalogues: the shared pipeline keeps the order the leading
+   * type defines, and statuses unique to later types follow. There is no cross-type ordering
+   * authority to appeal to, so stable and predictable beats clever.
+   */
+  const mobileColumns = useMemo(() => {
+    const union = unionBoardColumns(
+      columnCatalogs.map(catalog => activeColumnsByScope[catalog.scopeKey] ?? []),
+    );
+    return union.length > 0 ? union : activeColumns;
+  }, [activeColumns, activeColumnsByScope, columnCatalogs]);
+
+  const visibleMobileColumns = useMemo(
+    () => filterVisibleColumns(mobileColumns),
+    [filterVisibleColumns, mobileColumns],
+  );
+
   // Keep mobile selected column in sync when it becomes empty during filtering.
   useEffect(() => {
-    if (visibleColumns.length === 0) return;
-    if (!visibleColumns.some(c => c.key === mobileCol)) {
-      setMobileCol(visibleColumns[0].key);
+    if (visibleMobileColumns.length === 0) return;
+    if (!visibleMobileColumns.some(c => c.key === mobileCol)) {
+      setMobileCol(visibleMobileColumns[0].key);
     }
-  }, [visibleColumns, mobileCol]);
+  }, [visibleMobileColumns, mobileCol]);
 
   const desktopSections = effectiveSections;
 
@@ -714,7 +746,7 @@ export function TaskBoard({
 
       <div className="md:hidden mb-4 flex flex-col">
         <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none flex-shrink-0 min-h-[44px] items-center">
-          {visibleColumns.map(col => (
+          {visibleMobileColumns.map(col => (
             <button
               key={col.key}
               onClick={() => setMobileCol(col.key)}
@@ -738,12 +770,12 @@ export function TaskBoard({
 
         <div className="mt-3 mb-2">
           <h2 className="text-base font-semibold text-white">
-            {visibleColumns.find(c => c.key === mobileCol)?.label ?? mobileCol}
+            {visibleMobileColumns.find(c => c.key === mobileCol)?.label ?? mobileCol}
           </h2>
         </div>
 
-        {visibleColumns.find(c => c.key === mobileCol) && renderColumn(
-          visibleColumns.find(c => c.key === mobileCol)!,
+        {visibleMobileColumns.find(c => c.key === mobileCol) && renderColumn(
+          visibleMobileColumns.find(c => c.key === mobileCol)!,
           effectiveTasks.filter(t => t.status === mobileCol),
           false,
         )}

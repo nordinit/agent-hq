@@ -75,3 +75,29 @@ export const TASK_STATUS_BADGES: Record<string, string> = {};
 export const TASK_STATUS_DOTS: Record<string, string> = {};
 export const TASK_BOARD_COLUMNS: Array<{ key: string; label: string; color: string }> = [];
 export const DEFAULT_VISIBLE_TASK_COLUMNS: string[] = [];
+
+/**
+ * Every status column on the board, across all workflow types in view.
+ *
+ * The mobile board shows one column at a time with no section headers, so its column list has to
+ * span every workflow type present. Desktop renders each section against its own catalogue, which
+ * is why a status defined by a single workflow type still appears there — mobile has no such
+ * per-section escape hatch and previously read one catalogue only, making any status the leading
+ * type did not define completely unreachable.
+ *
+ * Ordering is first-seen: the shared pipeline keeps the order the leading type defines, and
+ * statuses unique to later types follow in their own order. There is no cross-type ordering
+ * authority, so the rule is stable and predictable rather than clever.
+ */
+export function unionBoardColumns<T extends { key: string }>(columnsByScope: T[][]): T[] {
+  const seen = new Set<string>();
+  const union: T[] = [];
+  for (const columns of columnsByScope) {
+    for (const column of columns) {
+      if (seen.has(column.key)) continue;
+      seen.add(column.key);
+      union.push(column);
+    }
+  }
+  return union;
+}
