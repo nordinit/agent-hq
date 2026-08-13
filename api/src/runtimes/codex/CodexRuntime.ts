@@ -19,7 +19,7 @@ import {
   resolveRequiredMcpPreflightServerNames,
 } from '../claudeCode/mcpPreflight';
 import { RuntimeTranscriptWriter } from '../transcript/writer';
-import { buildRuntimeChildEnv } from '../environment';
+import { buildAgentRuntimeEnv, buildRunIdentityEnv } from '../environment';
 import { resolveAllowedRuntimeExecutable } from '../executablePolicy';
 import { guardLocalRuntimeDispatchContext } from '../dispatchContextGuard';
 import { probeAllowedRuntimeCliVersion } from '../runtimeCliVersion';
@@ -953,16 +953,11 @@ export class CodexRuntime implements AgentRuntime {
   ): NodeJS.ProcessEnv {
     // Adapter-owned values are last so runtime_config.env cannot escape the
     // managed CODEX_HOME or forge Agent HQ run identity.
-    return buildRuntimeChildEnv({
-      ...config.env,
-      CODEX_HOME: codexHome,
-      AGENT_HQ_INSTANCE_ID: params.instanceId != null ? String(params.instanceId) : '',
-      AGENT_HQ_DURABLE_RUN_ID: params.durableRunId ?? '',
-      AGENT_HQ_TASK_ID: params.taskId != null ? String(params.taskId) : '',
-      AGENT_HQ_SESSION_KEY: params.sessionKey,
-      AGENT_HQ_AGENT_SLUG: params.agentSlug,
-      AGENT_HQ_WORKSPACE_ROOT: params.workspaceRoot ?? cwd,
-      AGENT_HQ_ACTIVE_REPO_ROOT: params.activeRepoRoot ?? cwd,
+    return buildAgentRuntimeEnv({
+      agentConfig: config.env,
+      injectedSecrets: params.secretEnv,
+      runIdentity: buildRunIdentityEnv(params, cwd),
+      adapterOwned: { CODEX_HOME: codexHome },
     });
   }
 }

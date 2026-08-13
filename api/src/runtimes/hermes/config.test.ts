@@ -87,6 +87,35 @@ describe("Hermes runtime config", () => {
     ).toBe("runtime_config.env.AGENT_HQ must be a string");
   });
 
+  it.each([
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "OPENAI_API_KEY",
+    "PATH",
+    "LD_PRELOAD",
+    "AGENT_HQ_SESSION_KEY",
+    "HERMES_HOME",
+    "HERMES_FAST_MODE",
+  ])("rejects protected or credential env key %s", (key) => {
+    expect(
+      validateHermesRuntimeConfig({
+        profile: "agent-hq-cinder",
+        env: { [key]: "value" },
+      }),
+    ).toBe(
+      `runtime_config.env may not set protected or credential variable ${JSON.stringify(key)}`,
+    );
+  });
+
+  it("allows Hermes tuning variables the adapter does not own", () => {
+    expect(
+      validateHermesRuntimeConfig({
+        profile: "agent-hq-cinder",
+        env: { HERMES_LOG_LEVEL: "debug" },
+      }),
+    ).toBeNull();
+  });
+
   it("normalizes defaults and trimmed optional values without mutating inputs", () => {
     const config: HermesRuntimeConfig = {
       hermesBin: " /usr/local/bin/hermes ",
@@ -99,7 +128,7 @@ describe("Hermes runtime config", () => {
       ignoreUserConfig: true,
       ignoreRules: true,
       extraArgs: ["--debug"],
-      env: { AGENT_HQ_RUNTIME: "hermes" },
+      env: { HQ_EXAMPLE_FLAG: "on" },
       heartbeatIntervalMs: 5,
       killGraceMs: 10,
     };
@@ -119,7 +148,7 @@ describe("Hermes runtime config", () => {
       ignoreUserConfig: true,
       ignoreRules: true,
       extraArgs: ["--debug"],
-      env: { AGENT_HQ_RUNTIME: "hermes" },
+      env: { HQ_EXAMPLE_FLAG: "on" },
       heartbeatIntervalMs: 5,
       killGraceMs: 10,
     });

@@ -780,15 +780,17 @@ async function annotateRelationshipDispatchBlocks(db: Db, blockedByTaskId: Map<n
 }
 
 
+/**
+ * Assemble the runtime config a dispatch hands to the adapter.
+ *
+ * This carries declarative configuration only. Credentials for a run travel as
+ * DispatchParams.secretEnv instead: merging them in here put a token inside a
+ * field whose own validator rejects credentials, so every claude-code and codex
+ * dispatch threw before it could spawn.
+ */
 function buildDispatchRuntimeConfig(
   runtimeConfig: unknown,
   overrides: Record<string, unknown>,
-  /**
-   * Env merged into `config.env` rather than replacing it. The top-level spread below is shallow,
-   * so passing env through `overrides` would silently drop whatever the agent already had
-   * configured — which for a credential overlay would be a quiet, hard-to-trace breakage.
-   */
-  options: { envOverlay?: Record<string, string> } = {},
 ): Record<string, unknown> {
   const baseConfig = typeof runtimeConfig === 'string'
     ? (() => {
@@ -802,20 +804,10 @@ function buildDispatchRuntimeConfig(
         ? runtimeConfig as Record<string, unknown>
         : {});
 
-  const merged: Record<string, unknown> = {
+  return {
     ...baseConfig,
     ...overrides,
   };
-
-  const envOverlay = options.envOverlay ?? {};
-  if (Object.keys(envOverlay).length > 0) {
-    const baseEnv = merged.env && typeof merged.env === 'object' && !Array.isArray(merged.env)
-      ? merged.env as Record<string, unknown>
-      : {};
-    merged.env = { ...baseEnv, ...envOverlay };
-  }
-
-  return merged;
 }
 
 /**
@@ -1703,9 +1695,11 @@ async function fireAgentRun(
     if (activeRepoRoot) {
       runtimeConfigOverride.workingDirectory = activeRepoRoot;
     }
-    const dispatchRuntimeConfig = buildDispatchRuntimeConfig(job.runtime_config, runtimeConfigOverride, {
-      envOverlay: buildGitHubCredentialEnv(await resolveGitHubIdentity(db, job.agent_id)),
-    });
+    const dispatchRuntimeConfig = buildDispatchRuntimeConfig(job.runtime_config, runtimeConfigOverride);
+    // Handed to the adapter as secretEnv, never merged into runtime_config: the
+    // credential guard on stored config stays strict, and the boundary revision
+    // and operator views never see a token to redact.
+    const dispatchSecretEnv = buildGitHubCredentialEnv(await resolveGitHubIdentity(db, job.agent_id));
     const providerDispatch = await resolveRuntimeProviderDispatchSelection({
           db,
           tenantId,
@@ -1788,6 +1782,7 @@ async function fireAgentRun(
         runtimeConfigWorkingDirectory,
       },
       runtimeConfig: providerDispatch.runtimeConfig,
+      secretEnv: dispatchSecretEnv,
       runtimeBoundary,
       openClawMcpReadiness,
       hooksUrl: job.agent_hooks_url ?? null,
@@ -2572,9 +2567,8 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
       : {};
     // Same credential enforcement as the routed path: the token reaches the agent as environment
     // rather than as a file it has to be told to read.
-    const dispatchRuntimeConfig = buildDispatchRuntimeConfig(baseRuntimeConfig, runtimeConfigOverride, {
-      envOverlay: buildGitHubCredentialEnv(await resolveGitHubIdentity(db, params.agentId)),
-    });
+    const dispatchRuntimeConfig = buildDispatchRuntimeConfig(baseRuntimeConfig, runtimeConfigOverride);
+    const dispatchSecretEnv = buildGitHubCredentialEnv(await resolveGitHubIdentity(db, params.agentId));
     const runtimeType = params.runtimeType ?? 'openclaw';
     const providerDispatch = await resolveRuntimeProviderDispatchSelection({
           db,
@@ -2681,6 +2675,7 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
       workspaceRoot: repoWorkspacePath,
       activeRepoRoot: repoWorkspacePath,
       runtimeConfig: providerDispatch.runtimeConfig,
+      secretEnv: dispatchSecretEnv,
       runtimeBoundary,
       hooksUrl: params.hooksUrl,
       hooksAuthHeader: params.hooksAuthHeader,

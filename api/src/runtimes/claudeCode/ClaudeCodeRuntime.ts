@@ -62,7 +62,7 @@ import { classifyClaudeRun } from './errors';
 import { ClaudeStreamAccumulator, NdjsonDecoder, mcpToolName } from './streamJson';
 import { decodeClaudeStreamEvent, promptTranscriptEvent } from './transcript';
 import { RuntimeTranscriptWriter } from '../transcript/writer';
-import { buildRuntimeChildEnv } from '../environment';
+import { buildAgentRuntimeEnv, buildRunIdentityEnv } from '../environment';
 import { resolveAllowedRuntimeExecutable } from '../executablePolicy';
 import { guardLocalRuntimeDispatchContext } from '../dispatchContextGuard';
 import { probeAllowedRuntimeCliVersion } from '../runtimeCliVersion';
@@ -980,24 +980,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     cwd: string,
     claudeConfigHome: string,
   ): NodeJS.ProcessEnv {
-    const agentHqEnv: Record<string, string> = {
-      AGENT_HQ_INSTANCE_ID: params.instanceId != null ? String(params.instanceId) : '',
-      AGENT_HQ_DURABLE_RUN_ID: params.durableRunId ?? '',
-      AGENT_HQ_TASK_ID: params.taskId != null ? String(params.taskId) : '',
-      AGENT_HQ_SESSION_KEY: params.sessionKey,
-      AGENT_HQ_AGENT_SLUG: params.agentSlug,
-      AGENT_HQ_WORKSPACE_ROOT: params.workspaceRoot ?? cwd,
-      AGENT_HQ_ACTIVE_REPO_ROOT: params.activeRepoRoot ?? cwd,
-    };
-
-    // Always pin the exact home validated for the selected opaque provider
-    // reference; never let ambient process state retarget the launch.
-    agentHqEnv.CLAUDE_CONFIG_DIR = claudeConfigHome;
-
-    return buildRuntimeChildEnv({
-      ...config.env,
-      // Adapter-owned identity and config-home values are authoritative.
-      ...agentHqEnv,
+    return buildAgentRuntimeEnv({
+      agentConfig: config.env,
+      injectedSecrets: params.secretEnv,
+      runIdentity: buildRunIdentityEnv(params, cwd),
+      // Always pin the exact home validated for the selected opaque provider
+      // reference; never let ambient process state retarget the launch.
+      adapterOwned: { CLAUDE_CONFIG_DIR: claudeConfigHome },
     });
   }
 }

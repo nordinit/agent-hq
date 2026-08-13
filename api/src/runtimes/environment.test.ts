@@ -1,4 +1,6 @@
 import {
+  buildAgentRuntimeEnv,
+  buildRunIdentityEnv,
   buildRuntimeChildEnv,
   isProtectedRuntimeConfigEnvKey,
   sanitizedRuntimeProcessEnv,
@@ -58,5 +60,65 @@ describe('runtime child environment boundary', () => {
     'SSLKEYLOGFILE',
   ])('does not let runtime_config redirect TLS trust or key logging via %s', (key) => {
     expect(isProtectedRuntimeConfigEnvKey(key)).toBe(true);
+  });
+});
+
+describe('agent runtime environment layering', () => {
+  const ambient = { PATH: '/usr/bin', DATABASE_URL: 'postgres://secret' } as NodeJS.ProcessEnv;
+
+  const identity = buildRunIdentityEnv(
+    {
+      instanceId: 42,
+      durableRunId: 'run-abc',
+      taskId: 7,
+      sessionKey: 'hook:session',
+      agentSlug: 'atlas',
+      workspaceRoot: null,
+      activeRepoRoot: '/repo',
+    },
+    '/cwd',
+  );
+
+  it('drops ambient API secrets while keeping allowlisted host state', () => {
+    const env = buildAgentRuntimeEnv({ runIdentity: identity }, ambient);
+    expect(env.PATH).toBe('/usr/bin');
+    expect(env.DATABASE_URL).toBeUndefined();
+  });
+
+  it('falls back to cwd only for the roots the run did not resolve', () => {
+    expect(identity.AGENT_HQ_WORKSPACE_ROOT).toBe('/cwd');
+    expect(identity.AGENT_HQ_ACTIVE_REPO_ROOT).toBe('/repo');
+    expect(identity.AGENT_HQ_INSTANCE_ID).toBe('42');
+  });
+
+  it('lets injected secrets outrank agent config but never the run identity', () => {
+    const env = buildAgentRuntimeEnv({
+      agentConfig: { GH_TOKEN: 'from-config', AGENT_HQ_AGENT_SLUG: 'forged' },
+      injectedSecrets: { GH_TOKEN: 'from-dispatch' },
+      runIdentity: identity,
+    }, ambient);
+
+    expect(env.GH_TOKEN).toBe('from-dispatch');
+    expect(env.AGENT_HQ_AGENT_SLUG).toBe('atlas');
+  });
+
+  it('keeps adapter-owned launch settings authoritative over every other layer', () => {
+    const env = buildAgentRuntimeEnv({
+      agentConfig: { CLAUDE_CONFIG_DIR: '/attacker-home' },
+      injectedSecrets: { CLAUDE_CONFIG_DIR: '/also-not-this' },
+      runIdentity: identity,
+      adapterOwned: { CLAUDE_CONFIG_DIR: '/validated-home' },
+    }, ambient);
+
+    expect(env.CLAUDE_CONFIG_DIR).toBe('/validated-home');
+  });
+
+  it('passes agent config through when nothing above it collides', () => {
+    const env = buildAgentRuntimeEnv({
+      agentConfig: { FEATURE_FLAG: 'enabled' },
+      runIdentity: identity,
+    }, ambient);
+
+    expect(env.FEATURE_FLAG).toBe('enabled');
   });
 });

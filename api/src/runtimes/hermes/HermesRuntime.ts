@@ -31,6 +31,7 @@ import {
   type HermesRuntimeConfig,
   type NormalizedHermesRuntimeConfig,
 } from "./config";
+import { buildAgentRuntimeEnv, buildRunIdentityEnv } from "../environment";
 import {
   parseHermesInstanceIdFromRunId,
   waitForHermesChildProcess,
@@ -291,25 +292,22 @@ export class HermesRuntime implements AgentRuntime {
     await this.persistUserPrompt(db, params.instanceId ?? null, prompt);
 
     const command = this.buildCommandArgs(mergedConfig, hermesPrompt);
-    const env = {
-      ...process.env,
-      ...toStringEnv({
-        AGENT_HQ_INSTANCE_ID:
-          params.instanceId != null ? String(params.instanceId) : "",
-        AGENT_HQ_DURABLE_RUN_ID: params.durableRunId ?? "",
-        AGENT_HQ_TASK_ID: params.taskId != null ? String(params.taskId) : "",
-        AGENT_HQ_SESSION_KEY: params.sessionKey,
-        AGENT_HQ_AGENT_SLUG: params.agentSlug,
-        AGENT_HQ_WORKSPACE_ROOT: params.workspaceRoot ?? cwd,
-        AGENT_HQ_ACTIVE_REPO_ROOT: params.activeRepoRoot ?? cwd,
+    // Ambient host state reaches the child through the same allowlist the other
+    // local adapters use, and adapter-owned values sit last: runtime_config.env
+    // previously spread last here, so an agent record could overwrite its own
+    // run identity and retarget HERMES_HOME.
+    const env = buildAgentRuntimeEnv({
+      agentConfig: mergedConfig.env,
+      injectedSecrets: params.secretEnv,
+      runIdentity: buildRunIdentityEnv(params, cwd),
+      adapterOwned: toStringEnv({
         AGENT_HQ_FAST_MODE:
           mergedConfig.fastMode == null ? "" : String(mergedConfig.fastMode),
         HERMES_FAST_MODE:
           mergedConfig.fastMode == null ? "" : String(mergedConfig.fastMode),
         HERMES_HOME: hermesProfileHome,
       }),
-      ...mergedConfig.env,
-    };
+    });
 
     const child = spawn(mergedConfig.hermesBin, command, {
       cwd,

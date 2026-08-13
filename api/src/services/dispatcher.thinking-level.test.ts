@@ -51,7 +51,7 @@ jest.mock('../lib/githubIdentity', () => ({
   resolveGitHubIdentity: jest.fn(() => null),
   injectGitHubCredentials: jest.fn(),
   cleanupGitHubCredentials: jest.fn(),
-  buildGitHubCredentialEnv: jest.fn(() => ({})),
+  buildGitHubCredentialEnv: jest.fn(() => ({ GH_TOKEN: 'ghp-test-token' })),
 }));
 
 const mockedGitHubIdentity = jest.requireMock('../lib/githubIdentity') as {
@@ -431,6 +431,11 @@ describe('runDispatcher thinking-level routing', () => {
         identity: expect.objectContaining({ githubUser: 'cinder-agent' }),
       }),
     );
+    // ...and it reaches the adapter as secretEnv, never inside runtime_config. Merging it into
+    // runtime_config.env put a token in a field whose own validator rejects credentials, which
+    // made every claude-code and codex dispatch throw before it could spawn.
+    expect(runtimeParams?.secretEnv).toEqual({ GH_TOKEN: 'ghp-test-token' });
+    expect((runtimeParams?.runtimeConfig as { env?: unknown })?.env).toBeUndefined();
 
     const dispatchedMessage = dispatchMock.mock.calls[0]?.[0]?.message as string;
     expect(dispatchedMessage).toContain('## Active Workspace Context');

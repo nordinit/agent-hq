@@ -48,6 +48,18 @@ export interface DispatchParams extends RuntimeEventCallbacks {
   repoBranch?: string | null;
   /** Runtime-specific config override assembled by dispatcher. */
   runtimeConfig?: unknown;
+  /**
+   * Credentials resolved at dispatch, for this run only.
+   *
+   * Deliberately separate from runtimeConfig: these values are layered straight
+   * into the spawned process environment and are never stored on the agent
+   * record, hashed into the boundary revision, or shown in an operator view.
+   * Only their key names reach durable state, via the launch spec's envKeys.
+   *
+   * Runtimes that dispatch to an already-running process rather than spawning
+   * one — OpenClaw over the gateway websocket — cannot deliver these at all.
+   */
+  secretEnv?: Record<string, string> | null;
   /** Versioned, secret-free driver boundary persisted for recovery/resume. */
   runtimeBoundary?: RuntimeBoundaryV1 | null;
   /**

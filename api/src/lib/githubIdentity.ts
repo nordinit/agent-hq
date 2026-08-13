@@ -35,9 +35,14 @@ export interface ResolvedGitHubIdentity {
  * host had. Putting the token in the environment closes that gap, because `gh` and git read
  * GH_TOKEN/GITHUB_TOKEN without being asked.
  *
- * Runtime adapters spread `runtimeConfig.env` into the child process and place their own values
- * last, so this cannot override adapter-owned settings. The runtime boundary sanitizer redacts
- * env values whose key matches /token/i, so the durable record stores names, never secrets.
+ * This travels as DispatchParams.secretEnv, not inside runtime_config: adapters layer it into the
+ * child process environment beneath their own values, so it cannot override adapter-owned
+ * settings, and nothing persists it. Only the key names reach durable state, through the launch
+ * spec's envKeys.
+ *
+ * OpenClaw agents never receive this. That runtime dispatches over the gateway websocket to a
+ * daemon Agent HQ did not spawn, so there is no child environment to inject into — see
+ * docs/github-identity-runtime-support.md.
  */
 export function buildGitHubCredentialEnv(resolved: ResolvedGitHubIdentity | null): Record<string, string> {
   if (!resolved) return {};

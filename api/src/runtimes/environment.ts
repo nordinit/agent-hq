@@ -117,3 +117,95 @@ export function buildRuntimeChildEnv(
 ): NodeJS.ProcessEnv {
   return { ...sanitizedRuntimeProcessEnv(source), ...overrides };
 }
+
+/**
+ * The subset of dispatch params that identifies a run to the agent process.
+ *
+ * Declared structurally rather than importing DispatchParams so this module
+ * stays a leaf: every runtime adapter imports it, and none of them should have
+ * to pull the dispatch type graph in to build an environment.
+ */
+export interface RuntimeRunIdentity {
+  instanceId?: number | null;
+  durableRunId?: string | null;
+  taskId?: number | null;
+  sessionKey: string;
+  agentSlug: string;
+  workspaceRoot?: string | null;
+  activeRepoRoot?: string | null;
+}
+
+/**
+ * The AGENT_HQ_* run identity handed to every locally spawned agent process.
+ *
+ * Built here rather than per adapter so a new run-identity variable is one edit
+ * that every runtime picks up, instead of an edit per adapter plus whichever
+ * one the author forgot.
+ */
+export function buildRunIdentityEnv(
+  params: RuntimeRunIdentity,
+  cwd: string,
+): Record<string, string> {
+  return {
+    AGENT_HQ_INSTANCE_ID: params.instanceId != null ? String(params.instanceId) : '',
+    AGENT_HQ_DURABLE_RUN_ID: params.durableRunId ?? '',
+    AGENT_HQ_TASK_ID: params.taskId != null ? String(params.taskId) : '',
+    AGENT_HQ_SESSION_KEY: params.sessionKey,
+    AGENT_HQ_AGENT_SLUG: params.agentSlug,
+    AGENT_HQ_WORKSPACE_ROOT: params.workspaceRoot ?? cwd,
+    AGENT_HQ_ACTIVE_REPO_ROOT: params.activeRepoRoot ?? cwd,
+  };
+}
+
+/**
+ * Named layers composing the environment of a locally spawned agent process.
+ *
+ * Each layer has a different origin and a different trust level, and naming
+ * them is the point: precedence used to be re-derived by hand in every adapter
+ * from the order of object spreads, which is how one adapter ended up letting
+ * agent config overwrite its own run identity.
+ */
+export interface AgentRuntimeEnvLayers {
+  /** Operator-declared runtime_config.env. Validated, and never secrets. */
+  agentConfig?: Record<string, string> | null;
+  /**
+   * Credentials resolved at dispatch for this run only.
+   *
+   * These never enter runtime_config, so the credential guard that keeps
+   * secrets out of stored config needs no exception for them.
+   */
+  injectedSecrets?: Record<string, string> | null;
+  /** AGENT_HQ_* truth about this run, from buildRunIdentityEnv(). */
+  runIdentity?: Record<string, string> | null;
+  /** Adapter-owned launch settings, e.g. CLAUDE_CONFIG_DIR / CODEX_HOME. */
+  adapterOwned?: Record<string, string> | null;
+}
+
+/**
+ * Compose the environment for a locally spawned agent process.
+ *
+ * Precedence, lowest to highest:
+ *   1. ambient  — the allowlisted host environment; everything the API process
+ *      holds beyond that list is dropped rather than handed to a model-driven shell
+ *   2. agentConfig — what the agent record declares
+ *   3. injectedSecrets — outranks agent config so a stored config cannot shadow
+ *      the credential the platform resolved for this run
+ *   4. runIdentity — must not be forgeable by anything above it
+ *   5. adapterOwned — last, so the validated launch home can never be retargeted
+ *
+ * Runtimes that do not spawn a child process (OpenClaw dispatches over the
+ * gateway websocket to an already-running daemon) have no use for this: there
+ * is no process being created whose environment Agent HQ controls.
+ */
+export function buildAgentRuntimeEnv(
+  layers: AgentRuntimeEnvLayers,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...sanitizedRuntimeProcessEnv(source),
+    ...(layers.agentConfig ?? {}),
+    ...(layers.injectedSecrets ?? {}),
+    ...(layers.runIdentity ?? {}),
+    ...(layers.adapterOwned ?? {}),
+  };
+}

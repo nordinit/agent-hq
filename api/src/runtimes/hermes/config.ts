@@ -1,3 +1,5 @@
+import { isProtectedRuntimeConfigEnvKey } from "../environment";
+
 export interface HermesRuntimeConfig {
   hermesBin?: string;
   profile?: string;
@@ -133,6 +135,25 @@ export function validateHermesRuntimeConfig(
     for (const [key, value] of Object.entries(config.env)) {
       if (typeof value !== "string") {
         return `runtime_config.env.${key} must be a string`;
+      }
+    }
+    // Matches the Claude Code and Codex validators. Hermes previously accepted
+    // any key here, so the guard everyone assumed was universal held on two of
+    // the three local runtimes. Credentials for a run arrive as
+    // DispatchParams.secretEnv, which never touches stored config.
+    //
+    // Only the values buildEnv() owns are reserved, not the whole HERMES_
+    // namespace: tuning variables like HERMES_LOG_LEVEL are a legitimate thing
+    // for an agent record to set.
+    const ADAPTER_OWNED = new Set(['HERMES_HOME', 'HERMES_FAST_MODE']);
+    for (const key of Object.keys(config.env)) {
+      const normalized = key.trim().toUpperCase();
+      if (
+        ADAPTER_OWNED.has(normalized) ||
+        normalized.startsWith("AGENT_HQ_") ||
+        isProtectedRuntimeConfigEnvKey(normalized)
+      ) {
+        return `runtime_config.env may not set protected or credential variable ${JSON.stringify(key)}`;
       }
     }
   }
