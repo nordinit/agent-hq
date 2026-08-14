@@ -107,6 +107,10 @@ function ChatPageInner() {
   const [streamContent, setStreamContent] = useState<string | null>(null); // null = not streaming
   const [historyTotal, setHistoryTotal] = useState(0); // total msgs available in session
   const [activity, setActivity] = useState<RunActivity | null>(null); // live turn state for the typing indicator
+  // Instance dispatched by the turn just sent from this page. Distinct from
+  // selectedInstanceId, which tracks the run picker and stays null while a live
+  // turn is in flight.
+  const [activeRuntimeInstanceId, setActiveRuntimeInstanceId] = useState<number | null>(null);
 
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -250,6 +254,9 @@ function ChatPageInner() {
     setDeepLinkedInstance(null);
     setMessages([]);
     setStreamContent(null);
+    // Switching agents mid-turn must not leave the previous run's indicator
+    // reporting into this conversation.
+    setActiveRuntimeInstanceId(null);
     setSendError(null);
     setMobileAgentChosen(true);
     setMobileView('chat');
@@ -722,30 +729,48 @@ function ChatPageInner() {
 
   // ── Typing indicator: what the open turn is doing right now ────────────────
   //
+  // Watches whichever run is live: the turn just sent from this page, or a
+  // running instance picked in the run selector. The run's own reported state
+  // ends the poll, not the arrival of the first assistant message — an agent
+  // that has started thinking is still mid-turn with its tool calls ahead of it.
+  //
   // Faster than the transcript poll because it drives an animation rather than
   // content, and cheap enough to justify it: one small row per tick. It stops
-  // entirely when no run is live, so an idle page issues no requests.
+  // entirely once the turn ends, so an idle page issues no requests.
+  const activityInstanceId = activeRuntimeInstanceId
+    ?? (instanceIsRunning ? selectedInstanceId : null);
+
   useEffect(() => {
-    if (!instanceIsRunning || !selectedInstanceId) {
+    if (activityInstanceId == null) {
       setActivity(null);
       return;
     }
 
-    const instanceId = selectedInstanceId;
     let stopped = false;
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const stop = () => { stopped = true; if (interval) clearInterval(interval); };
 
     const pollActivity = () => {
       if (stopped) return;
-      api.getInstanceActivity(instanceId)
-        .then(next => { if (!stopped) setActivity(next); })
+      api.getInstanceActivity(activityInstanceId)
+        .then(next => {
+          if (stopped) return;
+          setActivity(next);
+          if (next.state === 'done' || next.state === 'idle') {
+            stop();
+            // Release the live-turn handle so a later run-picker selection can
+            // drive the indicator instead of this finished turn.
+            setActiveRuntimeInstanceId(current => (current === activityInstanceId ? null : current));
+          }
+        })
         // A failed tick must not strand a stale "Thinking…" on screen forever.
         .catch(() => { if (!stopped) setActivity(null); });
     };
 
     pollActivity();
-    const interval = setInterval(pollActivity, 1000);
-    return () => { stopped = true; clearInterval(interval); };
-  }, [instanceIsRunning, selectedInstanceId]);
+    interval = setInterval(pollActivity, 1000);
+    return stop;
+  }, [activityInstanceId]);
 
   useEffect(() => {
     if (!instanceIsRunning || !selectedInstanceId) return;
@@ -1105,6 +1130,10 @@ function ChatPageInner() {
         }
         if (result.instanceId != null) {
           runtimeInstanceIdsRef.current = [...runtimeInstanceIdsRef.current, result.instanceId].slice(-12);
+          // Drives the typing indicator. A live turn does not select a run in
+          // the run picker, so without this there is no instance id in state and
+          // the indicator never engages for the case it exists to cover.
+          setActiveRuntimeInstanceId(result.instanceId);
         }
         setSending(false);
       });

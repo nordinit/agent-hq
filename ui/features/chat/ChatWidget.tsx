@@ -284,30 +284,47 @@ export default function ChatWidget() {
     streamBufRef.current = '';
     setStreamContent(null);
     setSending(false);
-    // The turn is over however it ended, so stop polling and drop the indicator.
-    setActiveInstanceId(null);
-    setActivity(null);
+    // Deliberately does NOT clear the activity indicator. This fires as soon as
+    // the first assistant row lands — a thought, usually — because that is what
+    // disarms the stall watchdog. The turn is still running at that point, so
+    // tearing the indicator down here made it vanish the moment the agent
+    // started thinking. The run's own reported state ends it instead.
     if (message) {
       setSendError(message);
     }
   }, [clearResponseWatchdog]);
 
   // Typing indicator for the open turn. Mirrors ChatPage so the widget and the
-  // full page report the same thing; runs only while a turn is actually open.
+  // full page report the same thing.
+  //
+  // The run decides when this ends, not the arrival of the first assistant
+  // message: an agent that has started thinking is still mid-turn, and usually
+  // has all its tool calls ahead of it.
   useEffect(() => {
-    if (activeInstanceId == null) return;
+    if (activeInstanceId == null) {
+      setActivity(null);
+      return;
+    }
 
     let stopped = false;
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const stop = () => { stopped = true; if (interval) clearInterval(interval); };
+
     const pollActivity = () => {
       if (stopped) return;
       api.getInstanceActivity(activeInstanceId)
-        .then(next => { if (!stopped) setActivity(next); })
+        .then(next => {
+          if (stopped) return;
+          setActivity(next);
+          if (next.state === 'done' || next.state === 'idle') stop();
+        })
+        // A failed tick must not strand a stale label on screen forever.
         .catch(() => { if (!stopped) setActivity(null); });
     };
 
     pollActivity();
-    const interval = setInterval(pollActivity, 1000);
-    return () => { stopped = true; clearInterval(interval); };
+    interval = setInterval(pollActivity, 1000);
+    return stop;
   }, [activeInstanceId]);
 
   const armResponseWatchdog = useCallback(() => {
@@ -955,6 +972,8 @@ export default function ChatWidget() {
       // Nothing to ask the gateway for. Rotating the canonical chat session moves
       // the server-side boundary, so the empty thread survives a refresh.
       runtimeInstanceIdsRef.current = [];
+      // Starting a fresh thread abandons the previous turn's indicator with it.
+      setActiveInstanceId(null);
       setMessages([]);
       setSendError(null);
       if (agentId != null) void rotateRuntimeChatSession(agentId);

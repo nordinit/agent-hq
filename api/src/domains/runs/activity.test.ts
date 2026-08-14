@@ -114,6 +114,23 @@ describe('getInstanceActivity', () => {
     });
   });
 
+  it('keeps an outstanding tool call working through a long silence', async () => {
+    // A tool writes one row when issued and the next when it returns, so a slow
+    // command produces no rows for minutes while being the busiest part of a run.
+    await seedInstance(8, 'running');
+    await seedEvent(8, 'tool_call', '{"tool_name":"Bash"}', '2026-08-12 22:59:00');
+    expect(await getInstanceActivity(db, 8, NOW)).toMatchObject({
+      state: 'working',
+      label: 'Using Bash',
+    });
+  });
+
+  it('still stalls a tool call that has been outstanding far too long', async () => {
+    await seedInstance(9, 'running');
+    await seedEvent(9, 'tool_call', '{"tool_name":"Bash"}', '2026-08-12 22:55:00');
+    expect(await getInstanceActivity(db, 9, NOW)).toMatchObject({ state: 'stalled' });
+  });
+
   it('treats a terminal instance status as authoritative over a fresh event', async () => {
     // Hermes ingests on a poll, so a row can land after the run has ended.
     await seedInstance(5, 'done');

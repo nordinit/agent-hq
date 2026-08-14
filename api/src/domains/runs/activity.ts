@@ -33,6 +33,16 @@ const TERMINAL_STATUSES = new Set(['done', 'failed', 'cancelled', 'aborted']);
  */
 const ACTIVITY_FRESH_MS = 15_000;
 
+/**
+ * The same allowance while a tool call is outstanding.
+ *
+ * A tool writes one row when it is issued and the next when it returns, so a
+ * long build, test run, or search legitimately produces no transcript rows for
+ * minutes. Judging that window by ACTIVITY_FRESH_MS reports the busiest part of
+ * a run as stalled.
+ */
+const TOOL_CALL_FRESH_MS = 180_000;
+
 export type RunActivityState =
   | 'idle'
   | 'starting'
@@ -239,6 +249,9 @@ function resolveState(args: {
   }
 
   const ageMs = now.getTime() - lastEventDate.getTime();
-  if (ageMs > ACTIVITY_FRESH_MS) return 'stalled';
+  // An outstanding tool call is the agent waiting on something slow, which is
+  // work rather than silence, so it gets the longer allowance.
+  const freshMs = eventType === 'tool_call' ? TOOL_CALL_FRESH_MS : ACTIVITY_FRESH_MS;
+  if (ageMs > freshMs) return 'stalled';
   return 'working';
 }
