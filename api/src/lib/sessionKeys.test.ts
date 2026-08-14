@@ -2,12 +2,41 @@ import {
   OPENCLAW_LEGACY_HOOK_PREFIX,
   buildGatewayRunSessionKey,
   buildRunSessionKey,
+  normalizeAgentRoleLabel,
   parseAgentSessionKey,
   parseRunSessionKey,
   toGatewaySessionKey,
 } from './sessionKeys';
 
 describe('sessionKeys', () => {
+  describe('normalizeAgentRoleLabel', () => {
+    it('keeps the role the operator entered', () => {
+      // Each of these was previously rewritten to a canonical label: "sales" and
+      // "pm" matched word patterns, and the long one was clipped to its first
+      // clause and title-cased.
+      expect(normalizeAgentRoleLabel('Sales Manager')).toBe('Sales Manager');
+      expect(normalizeAgentRoleLabel('PM')).toBe('PM');
+      expect(normalizeAgentRoleLabel('QA')).toBe('QA');
+      expect(normalizeAgentRoleLabel('Head of Sales Operations — EMEA, contract'))
+        .toBe('Head of Sales Operations — EMEA, contract');
+    });
+
+    it('preserves the operator’s own casing', () => {
+      expect(normalizeAgentRoleLabel('iOS engineer')).toBe('iOS engineer');
+    });
+
+    it('trims surrounding and repeated whitespace', () => {
+      expect(normalizeAgentRoleLabel('  Sales   Manager  ')).toBe('Sales Manager');
+    });
+
+    it('falls back only when nothing was entered', () => {
+      expect(normalizeAgentRoleLabel('')).toBe('Agent');
+      expect(normalizeAgentRoleLabel('   ')).toBe('Agent');
+      expect(normalizeAgentRoleLabel(null)).toBe('Agent');
+      expect(normalizeAgentRoleLabel(undefined, 'Unassigned')).toBe('Unassigned');
+    });
+  });
+
   describe('buildRunSessionKey', () => {
     it('uses the canonical run format for new dispatched sessions', () => {
       expect(buildRunSessionKey(1928)).toBe('run:1928');

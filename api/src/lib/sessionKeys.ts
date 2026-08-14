@@ -32,47 +32,23 @@ function normalized(value: string | null | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
-function toTitleCase(value: string): string {
-  return value
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ');
-}
-
+/**
+ * The role label exactly as the operator entered it.
+ *
+ * This used to map the entry onto a fixed canonical list: anything matching
+ * /\bsales\b/ became "Business Development", a "pm" anywhere became "Project
+ * Manager", and a longer label was clipped to its first clause, title-cased and
+ * truncated to four words. So "Sales Manager" was stored as "Business
+ * Development" and returned 200 — an edit that reads as silently ignored, and a
+ * role the operator cannot express no matter how they type it.
+ *
+ * The label belongs to whoever creates the agent. Only the empty case has a
+ * default, and only surrounding and repeated whitespace is touched.
+ */
 export function normalizeAgentRoleLabel(value: string | null | undefined, fallback = 'Agent'): string {
   const trimmed = normalized(value);
   if (!trimmed) return fallback;
-
-  const compact = trimmed.replace(/\s+/g, ' ').trim();
-  const lower = compact.toLowerCase();
-
-  const rolePatterns: Array<[RegExp, string]> = [
-    [/\b(project manager|program manager|product manager|pm)\b/, 'Project Manager'],
-    [/\b(devops|release engineer|release owner|site reliability|sre)\b/, 'DevOps Engineer'],
-    [/\b(qa|quality assurance|test automation|tos validation|validation)\b/, 'QA Engineer'],
-    [/\b(full[- ]?stack)\b/, 'Fullstack Engineer'],
-    [/\b(frontend|front-end|ui engineer|react|next\.js)\b/, 'Frontend Engineer'],
-    [/\b(backend|back-end|api|service|airflow|data pipeline)\b/, 'Backend Engineer'],
-    [/\b(business central)\b/, 'Implementation Specialist'],
-    [/\b(performance marketing|meta ads|google ads|ads manager)\b/, 'Performance Marketer'],
-    [/\b(business development|sales|lead generation|proposals|bids)\b/, 'Business Development'],
-    [/\b(trader|operator-analyst|strategy correctness|risk-control)\b/, 'Trading Operator'],
-    [/\b(assistant)\b/, 'General Assistant'],
-  ];
-
-  for (const [pattern, label] of rolePatterns) {
-    if (pattern.test(lower)) return label;
-  }
-
-  const firstClause = compact.split(/[—–:;,]/)[0]?.trim() ?? compact;
-  const words = firstClause.split(/\s+/).filter(Boolean);
-  if (words.length <= 5 && firstClause.length <= 48) {
-    return toTitleCase(firstClause);
-  }
-
-  const shortened = words.slice(0, 4).join(' ').trim();
-  return shortened ? toTitleCase(shortened) : fallback;
+  return trimmed.replace(/\s+/g, ' ');
 }
 
 export function slugifySessionKeyPart(value: string | null | undefined, fallback = 'unknown'): string {
