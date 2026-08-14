@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
-import { api, ChatMessage, ChatConfig, ChatSession } from '@/lib/api';
+import { api, ChatMessage, ChatConfig, ChatSession, type RunActivity } from '@/lib/api';
+import { AgentActivityIndicator } from '@/features/chat/AgentActivityIndicator';
 import { findAtlasAgent } from '@/lib/atlas';
 import { abortRuntimeChatTurn, loadRuntimeChatTranscript, resolveChatTransport, rotateRuntimeChatSession, sendRuntimeChatMessage, type ChatTransport } from '@/lib/runtimeChat';
 import { buildTranscriptRows, mergeChatMessages, parseGatewayHistoryMessages, parseStoredChatMessages, reconcileChatMessageSnapshot } from '@/lib/chatMessages';
@@ -226,6 +227,10 @@ export default function ChatWidget() {
   const [agentId, setAgentId] = useState<number | null>(null);
   const [transport, setTransport] = useState<ChatTransport>('openclaw-gateway');
   const runtimeInstanceIdsRef = useRef<number[]>([]);
+  // Instance whose turn is currently open, and what it is doing. Set when a
+  // runtime send returns an id, cleared by clearPendingResponse().
+  const [activeInstanceId, setActiveInstanceId] = useState<number | null>(null);
+  const [activity, setActivity] = useState<RunActivity | null>(null);
   // Readiness for a runtime agent. There is no socket to watch, so this is a real
   // probe of the driver: CLI present, version in range, workspace writable, and
   // `claude auth status` actually passing — the things that would otherwise fail
@@ -279,10 +284,31 @@ export default function ChatWidget() {
     streamBufRef.current = '';
     setStreamContent(null);
     setSending(false);
+    // The turn is over however it ended, so stop polling and drop the indicator.
+    setActiveInstanceId(null);
+    setActivity(null);
     if (message) {
       setSendError(message);
     }
   }, [clearResponseWatchdog]);
+
+  // Typing indicator for the open turn. Mirrors ChatPage so the widget and the
+  // full page report the same thing; runs only while a turn is actually open.
+  useEffect(() => {
+    if (activeInstanceId == null) return;
+
+    let stopped = false;
+    const pollActivity = () => {
+      if (stopped) return;
+      api.getInstanceActivity(activeInstanceId)
+        .then(next => { if (!stopped) setActivity(next); })
+        .catch(() => { if (!stopped) setActivity(null); });
+    };
+
+    pollActivity();
+    const interval = setInterval(pollActivity, 1000);
+    return () => { stopped = true; clearInterval(interval); };
+  }, [activeInstanceId]);
 
   const armResponseWatchdog = useCallback(() => {
     clearResponseWatchdog();
@@ -861,6 +887,7 @@ export default function ChatWidget() {
         }
         if (result.instanceId != null) {
           runtimeInstanceIdsRef.current = [...runtimeInstanceIdsRef.current, result.instanceId].slice(-12);
+          setActiveInstanceId(result.instanceId);
         }
         setSending(false);
       });
@@ -1148,6 +1175,7 @@ export default function ChatWidget() {
                   {chatStreamActive && streamContent !== null && (
                     <WidgetStreamBubble content={streamContent} />
                   )}
+                  {streamContent === null && <AgentActivityIndicator activity={activity} />}
                   <div ref={messagesEndRef} />
                 </>
               )}

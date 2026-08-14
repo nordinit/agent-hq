@@ -17,7 +17,7 @@ import {
 } from '@/lib/chatDeepLinkSelection';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
 
-import { api, Agent, CanonicalSession, ChatMessage, ChatConfig, ChatSession, JobInstance, Project } from '@/lib/api';
+import { api, Agent, CanonicalSession, ChatMessage, ChatConfig, ChatSession, JobInstance, Project, type RunActivity } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { getRunLifecycle, getRunStatusLabel } from '@/lib/runLifecycle';
@@ -106,6 +106,7 @@ function ChatPageInner() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamContent, setStreamContent] = useState<string | null>(null); // null = not streaming
   const [historyTotal, setHistoryTotal] = useState(0); // total msgs available in session
+  const [activity, setActivity] = useState<RunActivity | null>(null); // live turn state for the typing indicator
 
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
@@ -719,6 +720,33 @@ function ChatPageInner() {
   }, [selectedAgent?.runtime_type, selectedAgentId, selectedInstanceId]);
 
 
+  // ── Typing indicator: what the open turn is doing right now ────────────────
+  //
+  // Faster than the transcript poll because it drives an animation rather than
+  // content, and cheap enough to justify it: one small row per tick. It stops
+  // entirely when no run is live, so an idle page issues no requests.
+  useEffect(() => {
+    if (!instanceIsRunning || !selectedInstanceId) {
+      setActivity(null);
+      return;
+    }
+
+    const instanceId = selectedInstanceId;
+    let stopped = false;
+
+    const pollActivity = () => {
+      if (stopped) return;
+      api.getInstanceActivity(instanceId)
+        .then(next => { if (!stopped) setActivity(next); })
+        // A failed tick must not strand a stale "Thinking…" on screen forever.
+        .catch(() => { if (!stopped) setActivity(null); });
+    };
+
+    pollActivity();
+    const interval = setInterval(pollActivity, 1000);
+    return () => { stopped = true; clearInterval(interval); };
+  }, [instanceIsRunning, selectedInstanceId]);
+
   useEffect(() => {
     if (!instanceIsRunning || !selectedInstanceId) return;
 
@@ -1286,6 +1314,7 @@ function ChatPageInner() {
           <ChatPanel
             messages={messages}
             streamContent={streamContent}
+            activity={activity}
             messagesEndRef={messagesEndRef}
             inputText={inputText}
             setInputText={setInputText}
@@ -1700,6 +1729,7 @@ function ChatPageInner() {
         <ChatPanel
           messages={messages}
           streamContent={streamContent}
+          activity={activity}
           messagesEndRef={messagesEndRef}
           inputText={inputText}
           setInputText={setInputText}

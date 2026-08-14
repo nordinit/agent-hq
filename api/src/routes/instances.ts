@@ -10,6 +10,7 @@ import { columnExists, tableExists } from '../db/introspection';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { mapRuntimeExecutionRow, redactRuntimeMetadata } from '../domains/runtimes/runtimeView';
 import { getInstanceContextView } from '../domains/runs/contextView';
+import { getInstanceActivity } from '../domains/runs/activity';
 
 import { requireNumericId } from '../lib/routeParams';
 
@@ -246,6 +247,21 @@ router.get('/:id/session-key', async (req: Request, res: Response) => {
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// GET /api/v1/instances/:id/activity
+// Whether a turn is open on this run and what it is doing, for the chat typing
+// indicator. Deliberately small and cheap: clients poll it on a short interval
+// while a run is live, and it reads one indexed row per source table.
+router.get('/:id/activity', async (req: Request, res: Response) => {
+  try {
+    const activity = await getInstanceActivity(getDb(), Number(req.params.id));
+    if (!activity) return res.status(404).json({ error: 'Instance not found' });
+    return res.json(activity);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({ error: message });
   }
 });
 

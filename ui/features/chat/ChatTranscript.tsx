@@ -6,7 +6,8 @@ import remarkGfm from 'remark-gfm';
 import { Bot, ChevronLeft, Loader2, MessageSquare, Mic, Send, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatTime } from '@/lib/date';
-import { ChatMessage } from '@/lib/api';
+import { ChatMessage, type RunActivity } from '@/lib/api';
+import { AgentActivityIndicator, isActivityVisible } from '@/features/chat/AgentActivityIndicator';
 import { ThoughtBubble, ToolCallBubble, ToolGroupBubble,
   TurnEndLine, ToolResultBubble, TurnStartDivider, ErrorBubble } from '@/components/chat/EventBubbles';
 import { buildTranscriptRows } from '@/lib/chatMessages';
@@ -112,6 +113,8 @@ const StreamingBubble = memo(function StreamingBubble({ content }: { content: st
 export interface ChatPanelProps {
   messages: ChatMessage[];
   streamContent: string | null;
+  /** Live turn state driving the typing indicator. Null when nothing is running. */
+  activity?: RunActivity | null;
   messagesEndRef: React.RefObject<HTMLDivElement>;
   inputText: string;
   setInputText: (v: string) => void;
@@ -142,6 +145,7 @@ export interface ChatPanelProps {
 export function ChatPanel({
   messages,
   streamContent,
+  activity = null,
   messagesEndRef,
   inputText,
   setInputText,
@@ -215,7 +219,10 @@ export function ChatPanel({
             }} />
             <p className="max-w-sm text-xs text-slate-600">Session import failed. The run may still be starting, but Agent HQ could not prepare the transcript view.</p>
           </div>
-        ) : messages.length === 0 && !streaming ? (
+        ) : messages.length === 0 && !streaming && !isActivityVisible(activity) ? (
+          // "No transcript yet" is only true when nothing is running. A run
+          // between spawn and its first row belongs to the indicator instead,
+          // which is the window it exists to cover.
           <div className="flex flex-col items-center justify-center h-full gap-2 text-center">
             <Bot className="w-10 h-10 text-slate-700" />
             <p className="text-slate-500 text-sm">No transcript yet</p>
@@ -249,6 +256,10 @@ export function ChatPanel({
             {streamContent !== null && (
               <StreamingBubble content={streamContent} />
             )}
+
+            {/* Suppressed while streaming: StreamingBubble already carries its
+                own live cursor, and two indicators read as two turns. */}
+            {streamContent === null && <AgentActivityIndicator activity={activity} />}
 
             <div ref={messagesEndRef} />
           </>

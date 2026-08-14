@@ -214,6 +214,22 @@ export interface AgentMcpToolAllowlistPolicy {
   servers: AgentMcpServerToolAllowlist[];
 }
 
+/** Live state of one run, from GET /api/v1/instances/:id/activity. */
+export type RunActivityState = 'idle' | 'starting' | 'working' | 'stalled' | 'done';
+
+export interface RunActivity {
+  instance_id: number;
+  state: RunActivityState;
+  /** Latest transcript event type, or null before the first row. */
+  activity: string | null;
+  /** Present-tense status line, already normalized across runtimes. */
+  label: string;
+  /** Optional specifier, e.g. the tool name. */
+  detail: string | null;
+  last_event_at: string | null;
+  stage: string | null;
+}
+
 export interface JobInstance {
   id: number;
   template_id: number;

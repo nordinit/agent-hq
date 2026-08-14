@@ -1,6 +1,6 @@
 import { apiFetch } from './http';
 import { buildChatSessionsPath, buildInstancesPath } from '../apiQuery';
-import type { JobInstance } from './types';
+import type { JobInstance, RunActivity } from './types';
 
 export const runsClient = {
 // Task Instances
@@ -40,4 +40,8 @@ getAgentInstances: (agentId: number, params?: { projectId?: number | null; limit
   })),
 getCanonicalChatSession: (agentId: number, channel = 'web') =>
   apiFetch<{ sessionKey: string | null; channel: string; agentId: number }>(`/api/v1/chat/canonical-session/${agentId}?channel=${encodeURIComponent(channel)}`),
+// Whether a turn is open on this run and what it is doing. Polled on a short
+// interval while a run is live to drive the chat typing indicator.
+getInstanceActivity: (id: number) =>
+  apiFetch<RunActivity>(`/api/v1/instances/${id}/activity`),
 };
