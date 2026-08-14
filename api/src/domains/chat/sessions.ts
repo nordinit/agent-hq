@@ -456,12 +456,20 @@ export async function listRuntimeChatMessages(
   if (instances.length === 0) return [];
   const ids = instances.map(row => row.id);
 
+  // The limit has to bite from the far end: a long conversation outgrows it, and
+  // dropping the oldest rows costs scrollback while dropping the newest freezes the
+  // transcript on a stale row, so every later turn — including the user's own just-sent
+  // message — silently never appears. Selected newest-first, then flipped back into
+  // reading order.
   return await db.all(`
-    SELECT id, agent_id, instance_id, durable_run_id, session_key, role, content, timestamp, event_type, event_meta
-    FROM chat_messages
-    WHERE instance_id IN (${ids.map(() => '?').join(', ')})
-      AND ${tenantScope.sql}
+    SELECT * FROM (
+      SELECT id, agent_id, instance_id, durable_run_id, session_key, role, content, timestamp, event_type, event_meta
+      FROM chat_messages
+      WHERE instance_id IN (${ids.map(() => '?').join(', ')})
+        AND ${tenantScope.sql}
+      ORDER BY timestamp DESC, id DESC
+      LIMIT ?
+    ) recent
     ORDER BY timestamp ASC, id ASC
-    LIMIT ?
   `, ...ids, ...tenantScope.params, limit);
 }
