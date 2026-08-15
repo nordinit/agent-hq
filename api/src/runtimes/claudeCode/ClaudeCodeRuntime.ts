@@ -58,6 +58,7 @@ import {
 import { normalizeClaudeCodeRuntimeConfig } from './config';
 import { prepareClaudeCodeAuthProfiles, resolveEffectiveClaudeConfigHome } from './auth';
 import { buildClaudeArgs } from './args';
+import { resolveResumableSessionId } from './resume';
 import { classifyClaudeRun } from './errors';
 import { ClaudeStreamAccumulator, NdjsonDecoder, mcpToolName } from './streamJson';
 import { decodeClaudeStreamEvent, promptTranscriptEvent } from './transcript';
@@ -179,10 +180,29 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       });
     }
 
+    // Resolved before the session id, because where a resumable session would
+    // have been recorded depends on it.
+    const claudeConfigHome = resolveEffectiveClaudeConfigHome({
+      config,
+      providerConnectionId: params.providerConnectionId,
+    });
+
+    // Only a chat turn asks to continue a previous session; a task dispatch never
+    // sets this and so always mints a fresh one. An id that cannot be resumed —
+    // transcript cleaned up, or recorded against a different working directory —
+    // degrades to a fresh session instead of failing the run.
+    const resumeSessionId = resolveResumableSessionId({
+      requested: params.resumeSessionId,
+      cwd,
+      claudeConfigHome,
+    });
+
     // Mint the session id up front so session_key is truthful before the process
     // exists. The CLI honours --session-id exactly, so the on-disk transcript at
-    // ~/.claude/projects/<slug>/<uuid>.jsonl is locatable from this moment on.
-    const sessionId = randomUUID();
+    // <config home>/projects/<slug>/<uuid>.jsonl is locatable from this moment on.
+    // A resumed turn keeps the earlier id, which is what keeps one conversation
+    // in one transcript file across turns.
+    const sessionId = resumeSessionId ?? randomUUID();
     if (db && instanceId != null) {
       await db.run(
         'UPDATE job_instances SET session_key = ? WHERE id = ?',
@@ -219,16 +239,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
       args = buildClaudeArgs({
         config,
         sessionId,
+        resume: resumeSessionId != null,
         model: params.model ?? null,
         mcpConfigPath: mcp.configPath,
         mcpAllowedToolNames: [...mcp.allowedToolNames, ...requiredMcpToolNames],
         addDirs: [],
       });
 
-      const claudeConfigHome = resolveEffectiveClaudeConfigHome({
-        config,
-        providerConnectionId: params.providerConnectionId,
-      });
       childEnv = this.buildEnv(params, config, cwd, claudeConfigHome);
       if (dispatchContext.mode === 'production') {
         await assertRuntimeBoundaryAssignmentsCurrent({

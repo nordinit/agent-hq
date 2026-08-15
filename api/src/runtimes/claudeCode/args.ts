@@ -83,7 +83,9 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
   const { config } = input;
   const args: string[] = [...BASE_CLAUDE_ARGS];
 
-  args.push('--session-id', input.sessionId);
+  // `--resume` continues an existing conversation; `--session-id` opens a new one
+  // under a chosen id. Exactly one applies, never both.
+  args.push(input.resume ? '--resume' : '--session-id', input.sessionId);
 
   const builtInTools = dedupe(compact(config.allowedTools));
 

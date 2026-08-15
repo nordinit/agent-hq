@@ -29,6 +29,15 @@ export interface DispatchParams extends RuntimeEventCallbacks {
   instanceId?: number;
   /** Durable Agent HQ run ID, stable across SQLite restore/autoincrement reuse. */
   durableRunId?: string | null;
+  /**
+   * Continue this runtime session rather than opening a new one.
+   *
+   * Set only by the chat send path, where consecutive turns are one conversation
+   * and each turn is otherwise a cold process that has never seen the last. Task
+   * dispatches leave it unset and always get a fresh session. The runtime decides
+   * whether the id is still resumable and silently starts fresh when it is not.
+   */
+  resumeSessionId?: string | null;
   /** Task ID — forwarded to runtimes that expose it to agents via env vars. */
   taskId?: number | null;
   /**

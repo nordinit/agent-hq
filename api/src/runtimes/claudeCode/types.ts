@@ -142,8 +142,17 @@ export interface NormalizedClaudeCodeRuntimeConfig {
  */
 export interface ClaudeArgsInput {
   config: NormalizedClaudeCodeRuntimeConfig;
-  /** Pre-minted session UUID passed as `--session-id`. */
+  /**
+   * The session UUID this run operates under: freshly minted and passed as
+   * `--session-id`, or an existing one being continued via `--resume`.
+   */
   sessionId: string;
+  /**
+   * Continue `sessionId` instead of opening it. The two flags are mutually
+   * exclusive — `--session-id` names a NEW session, so passing it alongside
+   * `--resume` would ask the CLI to both create and continue the same id.
+   */
+  resume?: boolean;
   /** Per-dispatch model override; outranks config.model. */
   model?: string | null;
   /** Path to the run-scoped mcp-config.json, when MCP servers were materialized. */

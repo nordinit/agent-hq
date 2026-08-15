@@ -2431,6 +2431,12 @@ export interface DispatchInstanceParams {
   repoBranch?: string | null;
   /** Explicit scheduler-selected target for remote/ssh/sandbox backends. */
   executionTarget?: RuntimeExecutionTargetV1 | null;
+  /**
+   * Runtime session to continue instead of opening a new one. Chat turns only —
+   * a task dispatch is its own conversation and must not inherit another run's
+   * history.
+   */
+  resumeSessionId?: string | null;
 }
 
 /**
@@ -2666,6 +2672,7 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
       fastMode: effectiveFastMode,
       instanceId: params.instanceId,
       durableRunId,
+      resumeSessionId: params.resumeSessionId ?? null,
       taskId: null,
       db,
       repoAccessMode,

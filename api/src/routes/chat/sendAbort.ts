@@ -8,6 +8,7 @@ import { resolveTenantIdFromRequest } from '../../lib/tenantContext';
 import { dispatchInstance } from '../../services/dispatcher';
 import { startChatRunInstance } from './persistence';
 import { getCanonicalChatSessionKey, buildDerivedDirectSessionKey } from '../../domains/chat/sessions';
+import { getChatSessionStartedAt, getResumableChatSessionId } from '../../domains/chat/sessions';
 import { resolveAgentRowById } from '../../domains/chat/sessions';
 import { nowTimestamp } from '../../lib/timestamps';
 
@@ -54,6 +55,13 @@ async function loadChatInstance(instanceId: number): Promise<ChatInstanceRow | u
  * still-running chat instance for the session and opens a fresh one, which is
  * exactly the turn boundary we need, and the runtime's own transcript writer
  * persists the reply and tool events against that instance.
+ *
+ * A new run per turn is the right unit of work, but it used to mean a new
+ * conversation as well: each turn spawned a cold process holding nothing but the
+ * message just typed, so "continue" or a reference to something agreed a minute
+ * earlier landed on an agent that had never seen it. The turn therefore carries
+ * the previous turn's runtime session forward, which is a property of chat and
+ * only chat — a dispatched task is its own conversation and never resumes one.
  */
 async function dispatchRuntimeChatTurn(
   instance: ChatInstanceRow,
@@ -78,11 +86,20 @@ async function dispatchRuntimeChatTurn(
     return { ok: false, error: 'Could not open a chat run for this agent' };
   }
 
+  // Resolved after the turn's instance exists so it can be excluded: its own
+  // session key is rewritten by the runtime during dispatch, and picking it up
+  // here would ask the run to resume the session it is about to create.
+  const resumeSessionId = await getResumableChatSessionId(getDb(), instance.agent_id, {
+    since: await getChatSessionStartedAt(instance.agent_id),
+    excludeInstanceId: started.instanceId,
+  });
+
   try {
     await dispatchInstance({
       instanceId: started.instanceId,
       agentId: instance.agent_id,
       sessionKey: instance.session_key,
+      resumeSessionId,
       jobTitle: instance.job_title || instance.agent_name || 'Agent',
       message,
       timeoutSeconds: instance.timeout_seconds ?? 900,

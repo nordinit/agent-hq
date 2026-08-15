@@ -7,6 +7,7 @@ import {
 import { chatMessageTenantScope, sessionTenantScope } from '../../lib/runtimeTenantScope';
 import { type Db } from "../../db/adapter/types";
 import { tableColumns as sharedTableColumns } from "../../db/introspection";
+import { CLAUDE_CODE_SESSION_KEY_PREFIX } from "../../runtimes/claudeCode/types";
 
 function sessionSlug(sessionKey: string | null | undefined): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
@@ -414,6 +415,50 @@ export async function getChatSessionStartedAt(agentId: number, channel = 'web'):
   `, agentId, channel) as { updated_at?: string | null; created_at?: string | null } | undefined;
   const value = row?.updated_at ?? row?.created_at ?? null;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * The runtime session the agent's last chat turn ran under, so the next turn can
+ * continue it instead of starting cold.
+ *
+ * Scoped to the current conversation by the same `since` anchor the transcript
+ * uses, which is what makes "new chat" mean a new conversation to the agent and
+ * not just to the reader: rotating the canonical key moves the anchor past every
+ * earlier turn, so none of them is offered as resumable.
+ *
+ * Only claude-code records a resumable id in its session key. Other runtimes
+ * either hold a live session of their own (OpenClaw) or have no equivalent, and
+ * simply yield null here.
+ */
+export async function getResumableChatSessionId(
+  db: Db,
+  agentId: number,
+  options: { since?: string | null; excludeInstanceId?: number | null },
+): Promise<string | null> {
+  const filters = ["agent_id = ?", "run_stage = 'chat'", 'session_key LIKE ?'];
+  const params: unknown[] = [agentId, `${CLAUDE_CODE_SESSION_KEY_PREFIX}%`];
+
+  if (options.since) {
+    filters.push('created_at >= ?');
+    params.push(options.since);
+  }
+  if (typeof options.excludeInstanceId === 'number') {
+    filters.push('id <> ?');
+    params.push(options.excludeInstanceId);
+  }
+
+  const row = await db.get(`
+    SELECT session_key
+    FROM job_instances
+    WHERE ${filters.join(' AND ')}
+    ORDER BY id DESC
+    LIMIT 1
+  `, ...params) as { session_key?: string | null } | undefined;
+
+  const sessionKey = typeof row?.session_key === 'string' ? row.session_key.trim() : '';
+  if (!sessionKey.startsWith(CLAUDE_CODE_SESSION_KEY_PREFIX)) return null;
+  const sessionId = sessionKey.slice(CLAUDE_CODE_SESSION_KEY_PREFIX.length).trim();
+  return sessionId || null;
 }
 
 /**

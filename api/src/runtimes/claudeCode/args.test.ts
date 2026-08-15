@@ -489,3 +489,24 @@ describe('buildClaudeArgs — full argv ordering', () => {
     ]);
   });
 });
+
+describe('buildClaudeArgs — resuming a session', () => {
+  it('continues an existing session instead of opening a new one', () => {
+    // `--session-id` and `--resume` are mutually exclusive: the first names a new
+    // session, the second continues one that already exists. A resumed turn must
+    // therefore REPLACE the flag, not add to it.
+    expect(buildClaudeArgs(input({ resume: true }))).toEqual([
+      ...BASE_CLAUDE_ARGS,
+      '--resume',
+      SESSION_ID,
+      '--dangerously-skip-permissions',
+      '--tools',
+      '',
+    ]);
+  });
+
+  it('opens a new session when not resuming', () => {
+    expect(buildClaudeArgs(input({ resume: false }))).toEqual(BYPASS_HEAD);
+    expect(buildClaudeArgs(input())).toEqual(BYPASS_HEAD);
+  });
+});
