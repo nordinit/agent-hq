@@ -60,10 +60,12 @@ describe('routing graph MCP tools', () => {
     ]));
   });
 
-  it('exposes atlas_ aliases alongside the agent_hq_ names', async () => {
+  it('publishes each graph tool under exactly one name', async () => {
+    // Tools carry no aliases: one operation, one name. A second name would double the
+    // definition every client loads for no capability it did not already have.
     const catalog = await loadCatalog();
     const graph = catalog.tools.find((tool) => tool.canonical_name === 'agent_hq_get_routing_graph');
-    expect(graph?.aliases).toEqual(expect.arrayContaining(['atlas_get_routing_graph']));
+    expect(graph?.aliases).toEqual([]);
   });
 
   it('requires a workflow type on the graph tools, since a graph is always type-scoped', async () => {
@@ -147,7 +149,7 @@ describe('routing config edit MCP tools', () => {
     return getMcpCatalog();
   };
 
-  it('publishes the preview and audit tools with atlas aliases', async () => {
+  it('publishes the preview and audit tools under one name each', async () => {
     const catalog = await loadCatalog();
     const names = catalog.tools.map((tool) => tool.canonical_name);
     expect(names).toEqual(expect.arrayContaining([
@@ -155,7 +157,7 @@ describe('routing config edit MCP tools', () => {
       'agent_hq_get_routing_audit',
     ]));
     const preview = catalog.tools.find((tool) => tool.canonical_name === 'agent_hq_preview_routing_change');
-    expect(preview?.aliases ?? []).toEqual(expect.arrayContaining(['atlas_preview_routing_change']));
+    expect(preview?.aliases ?? []).toEqual([]);
   });
 
   it('requires at least one operation on the preview', async () => {

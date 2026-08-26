@@ -6,23 +6,15 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   const taskTypeSchema = z.string().min(1);
 
   registerTool(
-    ['agent_hq_list_jobs', 'atlas_list_jobs'],
-    'List agents (formerly jobs). Optionally filter by project.',
+    ['agent_hq_list_agents'],
+    'List registered agents in Agent HQ. Optionally filter by project.',
     { project_id: z.number().int().positive().optional().describe('Filter by project ID') },
     ({ project_id }) => wrap(() => api.listAgents(project_id ? { project_id } : undefined))(),
     { domain: 'agents', rest_paths: ['/api/v1/agents'] },
   );
   
   registerTool(
-    ['agent_hq_list_agents', 'atlas_list_agents'],
-    'List registered agents in Agent HQ.',
-    {},
-    () => wrap(() => api.listAgents())(),
-    { domain: 'agents', rest_paths: ['/api/v1/agents'] },
-  );
-  
-  registerTool(
-    ['agent_hq_get_agent', 'atlas_get_agent'],
+    ['agent_hq_get_agent'],
     'Get a single agent by ID.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.getAgent(agent_id))(),
@@ -30,7 +22,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_agent', 'atlas_create_agent'],
+    ['agent_hq_create_agent'],
     'Create a new agent. Repository settings are workflow-owned and must be configured on workflows, not agents.',
     {
       name: z.string().min(1).describe('Agent name'),
@@ -54,7 +46,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_provision_full_agent', 'atlas_provision_full_agent'],
+    ['agent_hq_provision_full_agent'],
     'Atomically create and fully provision an OpenClaw agent, including workspace docs, OpenClaw registration, routing, and optional capability assignments. Repository settings are workflow-owned and must be configured on workflows.',
     {
       name: z.string().min(1).describe('Agent name'),
@@ -96,7 +88,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_agent', 'atlas_update_agent'],
+    ['agent_hq_update_agent'],
     'Update an agent. Repository settings are workflow-owned, and repo_path/repo_url/repo_access_mode patches are rejected by the Agent HQ API.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
@@ -107,7 +99,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_agent', 'atlas_delete_agent'],
+    ['agent_hq_delete_agent'],
     'Delete an agent by ID.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.deleteAgent(agent_id))(),
@@ -115,7 +107,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_agent_mcp_capability_policy', 'atlas_get_agent_mcp_capability_policy'],
+    ['agent_hq_get_agent_mcp_capability_policy'],
     'Read the effective MCP capability policy snapshot for an agent. Scoped MCP keys require MCP capability policy read access and can only read agents in their assigned project.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.getAgentMcpCapabilityPolicy(agent_id))(),
@@ -123,7 +115,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_create_agent_mcp_capability_policy', 'atlas_create_agent_mcp_capability_policy'],
+    ['agent_hq_create_agent_mcp_capability_policy'],
     'Create an explicit MCP capability policy for another agent in the caller agent\'s assigned project. Scoped MCP keys can only set safe non-admin capability keys and cannot edit their own policy.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
@@ -134,7 +126,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_update_agent_mcp_capability_policy', 'atlas_update_agent_mcp_capability_policy'],
+    ['agent_hq_update_agent_mcp_capability_policy'],
     'Replace an explicit MCP capability policy for another agent in the caller agent\'s assigned project. Scoped MCP keys can only set safe non-admin capability keys and cannot edit their own policy.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
@@ -145,7 +137,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_delete_agent_mcp_capability_policy', 'atlas_delete_agent_mcp_capability_policy'],
+    ['agent_hq_delete_agent_mcp_capability_policy'],
     'Delete an explicit MCP capability policy and return the target agent to defaults. Scoped MCP keys require MCP capability policy write access, can only reset other agents in their assigned project, and cannot edit their own policy.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.deleteAgentMcpCapabilityPolicy(agent_id))(),
@@ -153,7 +145,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_agent_docs', 'atlas_get_agent_docs'],
+    ['agent_hq_get_agent_docs'],
     'Read the docs bundle for an agent workspace.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.getAgentDocs(agent_id))(),
@@ -161,7 +153,7 @@ export function registerAgentsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_sync_agent_mcp', 'atlas_sync_agent_mcp'],
+    ['agent_hq_sync_agent_mcp'],
     'Force re-materialization of the effective OpenClaw MCP config for an agent workspace.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),

@@ -1,21 +1,25 @@
 # Agent HQ MCP Server
 
-Connect Agent HQ to ChatGPT desktop, Claude desktop, or any MCP-compatible client over stdio.
+Connect Agent HQ to ChatGPT desktop, Claude desktop, or any MCP-compatible client — locally over stdio, or remotely over Streamable HTTP.
 
 ---
 
 ## Overview
 
-The Agent HQ MCP server is a thin adapter between MCP clients and the local Agent HQ API.
-
-Architecture:
+The Agent HQ MCP server is a thin adapter between MCP clients and the Agent HQ API. It is served over two transports that share one tool surface:
 
 ```text
-MCP client (ChatGPT / Claude / other)
+Local client (Claude Desktop / ChatGPT desktop / CLI)
   -> stdio
-Agent HQ MCP server
+Agent HQ MCP server (api/src/mcp/server.ts)
   -> HTTP localhost
 Agent HQ API
+
+Remote client (Claude connector / ChatGPT custom connector)
+  -> HTTPS
+Agent HQ API /mcp  (api/src/mcp/httpServer.ts)
+  -> in-process HTTP
+Agent HQ API /api/v1
 ```
 
 Design goals:
@@ -25,12 +29,10 @@ Design goals:
 - keep the server stateless by routing all operations through the existing API
 - use Agent HQ naming throughout
 
-v1 assumptions:
-- local stdio transport only
-- single-user local install
-- no remote transport
-- no direct database access from the MCP server
-- every MCP server process has an Agent HQ API key bound to one Agent HQ agent identity
+Assumptions:
+- every MCP server process or request carries an Agent HQ API key bound to one Agent HQ agent identity
+- no direct database access from the MCP server; every tool call goes through the REST API and its capability policy
+- the stdio transport serves one local client; the HTTP transport serves any number of remote ones, authenticated per request
 
 ---
 
@@ -55,7 +57,7 @@ Once connected, you can ask things like:
 |---|---|---|---|
 | Projects | Yes | Yes | Full CRUD via typed MCP tools |
 | Project Files | Yes | Yes | Use for reusable project-wide reference material |
-| Workflows / Boards | Yes | Yes | Full CRUD via workflow tools; sprint-named tools remain legacy aliases |
+| Workflows / Boards | Yes | Yes | Full CRUD via workflow tools |
 | Workflow Files | Yes | Yes | Use for specs and artifacts owned by one workflow |
 | Tasks | Yes | Yes | Create, update, move status, delete |
 | Recurring Task Series | Yes | Yes | Create and manage scheduled task automation |
@@ -68,7 +70,7 @@ Once connected, you can ask things like:
 | Assignment Rules | Yes | Yes | Workflow task-to-agent assignment rules CRUD |
 | Routing Transitions | Yes | Yes | Canonical workflow/model-selection routing object CRUD |
 | Model Routing | Yes | Yes | Story-point model-routing CRUD |
-| Workflow Types | Yes | Yes | First-class workflow definition surface; workflow type tools remain legacy aliases |
+| Workflow Types | Yes | Yes | First-class workflow definition surface |
 | Workflow Templates | Yes | Yes | First-class workflow definition surface |
 | Task Field Schemas | Yes | Yes | First-class task-definition surface |
 
@@ -83,7 +85,9 @@ Once connected, you can ask things like:
 
 ## Tool Surface
 
-Primary tool names use the `agent_hq_*` namespace. New docs and client configs should use `agent_hq_*` only.
+Every tool answers to exactly one name in the `agent_hq_*` namespace.
+
+Tools used to carry aliases — the `atlas_*` names from before the product was renamed, plus `sprint`/`workflow` and `routing_rule`/`assignment_rule` spellings. 192 tools were registered under 434 names, and since every name is a full tool definition, that more than doubled what a client loaded to reach the same capability. Each tool now has one name, chosen for fit rather than for history: collections read as `list_`, single records as `get_`, workflow over sprint, assignment rule over routing rule.
 
 ### Read tools
 
@@ -100,8 +104,6 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 | `agent_hq_get_workflow_file` | Read workflow-file metadata |
 | `agent_hq_list_workflow_file_versions` | List version history for a workflow file |
 | `agent_hq_download_workflow_file` | Download workflow-file content as base64 and optional text |
-| `agent_hq_list_sprints` | Legacy alias for listing workflows |
-| `agent_hq_get_sprint` | Legacy alias for workflow detail |
 | `agent_hq_list_tasks` | List tasks with filters |
 | `agent_hq_search_project_tasks` | Search only the authenticated agent's assigned project for bounded exact-match task dedupe |
 | `agent_hq_get_task` | Get full task detail |
@@ -118,7 +120,6 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 | `agent_hq_list_workflow_type_outcomes` | List lifecycle outcome keys configured for a workflow type |
 | `agent_hq_list_workflow_type_relationship_types` | Alias for listing relationship types configured for a workflow type |
 | `agent_hq_list_workflow_type_field_schemas` | Alias for listing custom task field schemas configured for a workflow type |
-| `agent_hq_list_jobs` | List jobs |
 | `agent_hq_list_agents` | List registered agents |
 
 ### Write tools
@@ -137,9 +138,6 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 | `agent_hq_upload_workflow_file` | Upload a file scoped to one workflow |
 | `agent_hq_replace_workflow_file` | Replace a workflow file in place while preserving its canonical file ID and version history |
 | `agent_hq_delete_workflow_file` | Delete a workflow-scoped file |
-| `agent_hq_create_sprint` | Legacy alias for workflow creation |
-| `agent_hq_update_sprint` | Legacy alias for workflow updates |
-| `agent_hq_delete_sprint` | Legacy alias for workflow deletion |
 | `agent_hq_create_task` | Create a new task |
 | `agent_hq_update_task` | Update writable task fields |
 | `agent_hq_delete_task` | Delete a task |
@@ -165,25 +163,25 @@ Primary tool names use the `agent_hq_*` namespace. New docs and client configs s
 | `agent_hq_create_assignment_rule` | Create a workflow assignment rule |
 | `agent_hq_update_assignment_rule` | Update a workflow assignment rule |
 | `agent_hq_delete_assignment_rule` | Delete a workflow assignment rule |
-| `agent_hq_create_routing_rule` | Compatibility alias: create a workflow assignment rule |
-| `agent_hq_update_routing_rule` | Compatibility alias: update a workflow assignment rule |
-| `agent_hq_delete_routing_rule` | Compatibility alias: delete a workflow assignment rule |
+| `agent_hq_create_assignment_rule` | Compatibility alias: create a workflow assignment rule |
+| `agent_hq_update_assignment_rule` | Compatibility alias: update a workflow assignment rule |
+| `agent_hq_delete_assignment_rule` | Compatibility alias: delete a workflow assignment rule |
 | `agent_hq_create_routing_transition` | Create a canonical routing transition |
 | `agent_hq_update_routing_transition` | Update a canonical routing transition |
 | `agent_hq_delete_routing_transition` | Delete a canonical routing transition |
 | `agent_hq_create_model_routing_rule` | Create a story-point model-routing rule |
 | `agent_hq_update_model_routing_rule` | Update a story-point model-routing rule |
 | `agent_hq_delete_model_routing_rule` | Delete a story-point model-routing rule |
-| `agent_hq_list_sprint_type_task_types` | List allowed task types for a workflow type using the legacy sprint_type key |
-| `agent_hq_update_sprint_type_task_types` | Replace allowed task types for a workflow type using the legacy sprint_type key |
-| `agent_hq_create_sprint_type` | Create a workflow type using the legacy workflow type route |
-| `agent_hq_update_sprint_type` | Update a workflow type using the legacy workflow type route |
-| `agent_hq_delete_sprint_type` | Delete a workflow type using the legacy workflow type route |
-| `agent_hq_list_task_field_schemas` | List task field schemas for a workflow type |
-| `agent_hq_get_task_field_schema` | Get a task field schema |
-| `agent_hq_create_task_field_schema` | Create a task field schema |
-| `agent_hq_update_task_field_schema` | Update a task field schema |
-| `agent_hq_delete_task_field_schema` | Delete a task field schema |
+| `agent_hq_list_workflow_type_task_types` | List allowed task types for a workflow type using the legacy sprint_type key |
+| `agent_hq_update_workflow_type_task_types` | Replace allowed task types for a workflow type using the legacy sprint_type key |
+| `agent_hq_create_workflow_type` | Create a workflow type using the legacy workflow type route |
+| `agent_hq_update_workflow_type` | Update a workflow type using the legacy workflow type route |
+| `agent_hq_delete_workflow_type` | Delete a workflow type using the legacy workflow type route |
+| `agent_hq_list_workflow_type_field_schemas` | List task field schemas for a workflow type |
+| `agent_hq_get_workflow_type_field_schema` | Get a task field schema |
+| `agent_hq_create_workflow_type_field_schema` | Create a task field schema |
+| `agent_hq_update_workflow_type_field_schema` | Update a task field schema |
+| `agent_hq_delete_workflow_type_field_schema` | Delete a task field schema |
 | `agent_hq_list_agent_skills` | List skill assignments for an agent |
 | `agent_hq_assign_skill_to_agent` | Assign a skill to an agent |
 | `agent_hq_remove_skill_from_agent` | Remove a skill from an agent |
@@ -274,7 +272,7 @@ Use this recipe before creating, updating, linking, or moving tasks in configura
 1. Resolve tenant and task context from the MCP identity and the current task or project. Tenant-bound keys should omit `tenant_id`; only super-admin keys can pass it.
 2. Resolve workflow context with `agent_hq_get_task`, `agent_hq_get_task_context`, `agent_hq_get_workflow`, or `agent_hq_list_workflows`. Treat `sprint_id` as the current compatibility field for workflow IDs when a tool schema exposes only `sprint_id`.
 3. Call `agent_hq_get_workflow_metadata` with the resolved `sprint_id`, and include `task_type` when the write depends on task-type-specific fields.
-4. Resolve custom field schemas from the metadata response or with `agent_hq_list_workflow_type_field_schemas` / `agent_hq_get_task_field_schema`. Submit only accepted `custom_fields` keys and types.
+4. Resolve custom field schemas from the metadata response or with `agent_hq_list_workflow_type_field_schemas` / `agent_hq_get_workflow_type_field_schema`. Submit only accepted `custom_fields` keys and types.
 5. Resolve relationship types with `agent_hq_get_task_relationship_types` for task-specific linking, or `agent_hq_list_workflow_type_relationship_types` when configuring a workflow type. Use relationship keys and dispatch semantics from the response.
 6. Resolve transition requirements with `agent_hq_list_transition_requirement_fields` and the outcome metadata. Check required gate/evidence payload keys before posting an outcome.
 7. Use `dry_run: true` on supported writes to preview validation and transition behavior. Supported preview surfaces include `agent_hq_create_task`, `agent_hq_update_task`, `agent_hq_move_task`, `agent_hq_post_task_outcome`, routing rules, routing transitions, transition requirements, and workflow/external event mappings.
@@ -685,6 +683,168 @@ In ChatGPT Desktop settings, add an MCP integration with:
 
 ---
 
+## Remote Transport (Streamable HTTP)
+
+The API serves the same tool surface over MCP's Streamable HTTP transport at `/mcp`, so remote clients — Claude connectors, ChatGPT custom connectors, anything speaking Streamable HTTP — can reach an Agent HQ install published at an HTTPS URL. No separate process: the transport is mounted inside the API (`api/src/mcp/httpServer.ts`) and is enabled by default.
+
+```text
+POST https://<your-agent-hq-host>/mcp
+Authorization: Bearer ahq_mcp_...
+Accept: application/json, text/event-stream
+```
+
+Properties worth knowing before pointing a connector at it:
+
+- **The transport authenticates; it does not authorize.** Every tool call still travels through `/api/v1` carrying the caller's own MCP key, so `authorizeMcpApiRequestIfPresent` and the agent's capability policy apply exactly as they do for a local stdio client. A key that cannot move a task over stdio cannot move it from a phone.
+- **Servers are built per request** (stateless transport, no session id). Remote connectors reconnect freely, and per-request construction keeps one client's identity from outliving its request.
+- **Keys are read from `Authorization: Bearer` or `x-api-key` directly.** Unlike `/api/v1`, this route does not require the `x-agent-hq-mcp-client` marker header — remote connectors send a plain bearer token and nothing else.
+- **Rate limiting is per key**, defaulting to 120 requests/minute.
+
+Publishing the endpoint (TLS, a public hostname, tunnel or reverse proxy) is deployment work outside this document. Both major clients connect from the vendor's cloud rather than from your device, so `localhost` and VPN-only hosts are unreachable to them.
+
+### Tool profiles
+
+The full catalog registers ~186 tools. That is the right surface for a local client driving the whole product and the wrong one for a remote connector, which loads every tool definition into the conversation before the user has asked for anything.
+
+A profile is a named allow-list of exposed tool names (`api/src/mcp/toolProfiles.ts`):
+
+| Profile | Names exposed | Use |
+|---|---|---|
+| `full` | all ~186 | stdio server default; unchanged behaviour |
+| `mobile` | 24 | HTTP transport default: board reads, task writes, recurring task series |
+
+The `mobile` profile deliberately omits the configuration surfaces (agents, skills, routing, workflow definitions, teams, tools, MCP servers), file upload/download, and the dispatch-scoped lifecycle writes — evidence, outcomes, run check-ins — which only mean something for an agent that owns a dispatched run.
+
+A profile narrows what a client can *see*. It is not an authorization boundary; the capability policy is.
+
+### Scoped identity
+
+Give a remote client its own agent identity rather than reusing Atlas's. A connector's key lives outside the machine, in the vendor's connector config, which makes it the key most likely to leak and the one least worth granting broadly. A separate identity is separately revocable, appears on its own in the audit trail, and — unlike anything named Atlas, which `isTrustedMcpIdentity` resolves to trusted-admin defaults — starts from the scoped-runtime policy.
+
+```bash
+cd api
+npx tsx src/bin/provision-remote-mcp-identity.ts --project-id <id>
+```
+
+The script is idempotent. It creates (or updates) an agent named `Claude Mobile`, writes the capability policy paired with the tool profile, and issues an MCP key, printing it once. Re-run with `--rotate-key` to replace a key and revoke the old ones — Agent HQ stores only hashes, so a lost key cannot be printed again.
+
+The identity is created enabled because `resolveMcpApiIdentityForKey` refuses a key mapped to a disabled agent; a disabled identity is one whose connector can never authenticate. Nothing dispatches to it regardless — automatic assignment runs through assignment rules, and none names this agent. Keep it out of assignment rules and teams and it stays a credential rather than a worker.
+
+The policy the `mobile` profile pairs with:
+
+| Capability | Grants |
+|---|---|
+| `discovery.read_catalog` | catalog/health discovery |
+| `projects.read_project_board` | the tenant project list, plus task/workflow/metadata collections scoped to the assigned project |
+| `projects.read_active_project` | project detail |
+| `sprints.read_active_sprint` | workflow detail |
+| `workflow_definitions.read_project_scope` | workflow type configuration reads |
+| `tasks.read_project_context` | task detail, notes, history, relationships |
+| `tasks.manage_project_tasks` | create/update/delete tasks and relationships in the assigned project |
+| `tasks.write_project_notes` | notes on any task in the assigned project |
+| `tasks.search_project_tasks` | bounded exact-match dedupe search |
+| `recurring_task_series.*` | read and manage scheduled task automation in the assigned project |
+
+Absent by design: every `admin.*` key, and `tasks.write_active_lifecycle` — a connector should not report evidence or an outcome for a run it is not executing.
+
+Two capabilities were added for this shape of client. `projects.read_project_board` covers the collection reads a board view needs; every other read capability resolves to a single record or to the agent's own dispatched task, which is right for a runtime agent and leaves a remote client unable to answer "what is on my board" without an admin key. Each collection that can name a project must name the assigned one. `tasks.write_project_notes` lets an identity comment on work it is not executing, and stops at notes.
+
+### OAuth for connectors
+
+Claude and ChatGPT offer two auth modes for a custom connector: OAuth, or none. Neither has a
+field for a static bearer token, so a published `/mcp` needs an authorization server. Agent HQ
+runs one in-process, built on the MCP SDK's `mcpAuthRouter`.
+
+Turn it on by telling Agent HQ the URL it is published at:
+
+```bash
+AGENT_HQ_PUBLIC_URL=https://hq.example.com
+```
+
+Nothing else is required. The issuer has to be the URL clients actually reach — it goes into
+signed metadata and every redirect — so it is read from configuration rather than guessed from a
+Host header. With it unset, OAuth stays off and `/mcp` accepts direct MCP keys only.
+
+Then set the operator password, which is what the consent screen checks:
+
+```bash
+cd api
+npx tsx src/bin/set-operator-password.ts            # prompts, no shell history
+npx tsx src/bin/set-operator-password.ts --generate # or print a strong one
+```
+
+Endpoints, all mounted at the root:
+
+| Path | Purpose |
+|---|---|
+| `/.well-known/oauth-authorization-server` | RFC 8414 authorization server metadata |
+| `/.well-known/oauth-protected-resource/mcp` | RFC 9728 protected resource metadata |
+| `/authorize` | Authorization endpoint; redirects to the consent screen |
+| `/oauth/consent` | Consent screen — the operator password is checked here |
+| `/token` | Authorization code and refresh token grants |
+| `/register` | Dynamic client registration (RFC 7591) |
+| `/revoke` | Token revocation (RFC 7009) |
+
+The flow a connector runs: it POSTs to `/mcp` without a token, gets a 401 whose
+`WWW-Authenticate` carries `resource_metadata=…`, follows that to the protected-resource
+document, finds the authorization server, registers itself, and sends the operator to
+`/authorize`. The operator sees which client is asking, which Agent HQ identity it will act as,
+and what that identity can reach, then enters the operator password. The code comes back to the
+client, which exchanges it with its PKCE verifier for tokens.
+
+#### Design notes
+
+**The access token is an MCP API key.** There is no separate token table. An issued access token
+is a row in `mcp_api_keys` with `expires_at` and `oauth_grant_id` set, so identity resolution, the
+capability policy, and the audit actor are the same code a local stdio client goes through. What
+the connector may touch is the identity's capability policy, not anything OAuth decides — widening
+a phone's reach is a policy edit.
+
+**Public clients only.** No client secret is issued or stored. Confidential clients would require
+a secret this server can compare in the clear, and PKCE — which OAuth 2.1 requires of every client
+anyway — is what actually binds the token request to the software that started the flow.
+
+**Refresh tokens rotate, and reuse kills the family.** Each refresh issues a new token and marks
+the old one superseded, keeping its hash so a replay is recognisable. Presenting a superseded or
+revoked token revokes every grant in the rotation chain along with its access tokens: a client
+replaying a token it should have discarded is either buggy or compromised, and those are
+indistinguishable from the server's side.
+
+**One endpoint, many identities.** The connector chooses nothing; the operator does. Every agent
+provisioned as a remote MCP client (`role = 'Remote MCP client'`) is offered on the consent screen
+with its project and capability list, so Claude and ChatGPT can hit the same `/mcp` and act as
+different identities with different audit actors. A returning client pre-selects whatever it
+connected as last. The posted agent id is always validated against that eligibility list — an id
+outside it is refused rather than defaulted, because an agent like Atlas resolves to trusted-admin
+defaults and would bypass the capability policy entirely.
+
+**The operator password is not user auth.** One password, scrypt-hashed in `app_settings`, with an
+in-process lockout after five failures. It exists because Agent HQ has no login and an
+authorization endpoint that authorizes anyone who reaches it is not an authorization endpoint. If
+real user auth arrives, this is the piece it replaces.
+
+| Variable | Default | Description |
+|---|---|---|
+| `AGENT_HQ_PUBLIC_URL` | none | Public HTTPS URL of this install. Enables OAuth. |
+| `AGENT_HQ_OAUTH_ENABLED` | `1` | Set to `0` to keep OAuth off even with a public URL |
+| `AGENT_HQ_OAUTH_AGENT_SLUG` | `claude-mobile` | Identity pre-selected on the consent screen |
+| `AGENT_HQ_OAUTH_ALLOW_DCR` | `1` | Set to `0` to require pre-registered clients |
+| `AGENT_HQ_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Access token lifetime |
+
+### Smoke test
+
+```bash
+curl -sS -X POST http://127.0.0.1:3501/mcp \
+  -H "Authorization: Bearer ahq_mcp_..." \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+A valid key returns the profile's tool list. No key returns HTTP 401 with a JSON-RPC error and a `WWW-Authenticate` header.
+
+---
+
 ## Configuration
 
 The MCP server supports config via environment variables and optional local config file.
@@ -696,6 +856,17 @@ The MCP server supports config via environment variables and optional local conf
 | `AGENT_HQ_API_URL` | `http://localhost:3501` | Agent HQ API base URL |
 | `AGENT_HQ_MCP_API_KEY` | none | Required agent-bound MCP API key |
 | `MCP_RATE_LIMIT_RPM` | `60` | Max requests per minute |
+| `AGENT_HQ_MCP_TOOL_PROFILE` | `full` | stdio server tool profile |
+
+The HTTP transport is configured on the API process, not the stdio server:
+
+| Variable | Default | Description |
+|---|---|---|
+| `AGENT_HQ_MCP_HTTP_ENABLED` | `1` | Set to `0` to unmount `/mcp` |
+| `AGENT_HQ_MCP_HTTP_TOOL_PROFILE` | `mobile` | Tool profile exposed to remote clients |
+| `AGENT_HQ_MCP_HTTP_RATE_LIMIT_RPM` | `120` | Per-key request ceiling |
+| `AGENT_HQ_MCP_HTTP_ALLOWED_HOSTS` | none | Comma-separated Host allow-list; enables DNS rebinding protection |
+| `AGENT_HQ_INTERNAL_BASE_URL` | `http://127.0.0.1:<port>` | Base URL the tool handlers call back into |
 
 Example:
 
@@ -835,21 +1006,16 @@ Supported high-blast-radius writes accept `dry_run: true` for read-only preview.
 | `agent_hq_create_workflow` | POST | `/api/v1/workflows` |
 | `agent_hq_update_workflow` | PUT | `/api/v1/workflows/:id` |
 | `agent_hq_delete_workflow` | DELETE | `/api/v1/workflows/:id` |
-| `agent_hq_list_sprints` | GET | `/api/v1/sprints` legacy alias |
-| `agent_hq_get_sprint` | GET | `/api/v1/sprints/:id` legacy alias |
-| `agent_hq_create_sprint` | POST | `/api/v1/sprints` legacy alias |
-| `agent_hq_update_sprint` | PUT | `/api/v1/sprints/:id` legacy alias |
-| `agent_hq_delete_sprint` | DELETE | `/api/v1/sprints/:id` legacy alias |
 | `agent_hq_list_assignment_rules` | GET | `/api/v1/routing/assignment-rules?sprint_id=:sprintId` |
 | `agent_hq_get_assignment_rule` | GET | `/api/v1/routing/assignment-rules/:id?sprint_id=:sprintId` |
 | `agent_hq_create_assignment_rule` | POST | `/api/v1/routing/assignment-rules` |
 | `agent_hq_update_assignment_rule` | PUT | `/api/v1/routing/assignment-rules/:id` |
 | `agent_hq_delete_assignment_rule` | DELETE | `/api/v1/routing/assignment-rules/:id` |
-| `agent_hq_list_routing_rules` | GET | `/api/v1/routing/rules?sprint_id=:sprintId` compatibility alias |
-| `agent_hq_get_routing_rule` | GET | `/api/v1/routing/rules/:id?sprint_id=:sprintId` compatibility alias |
-| `agent_hq_create_routing_rule` | POST | `/api/v1/routing/rules` compatibility alias |
-| `agent_hq_update_routing_rule` | PUT | `/api/v1/routing/rules/:id` compatibility alias |
-| `agent_hq_delete_routing_rule` | DELETE | `/api/v1/routing/rules/:id` compatibility alias |
+| `agent_hq_list_assignment_rules` | GET | `/api/v1/routing/rules?sprint_id=:sprintId` compatibility alias |
+| `agent_hq_get_assignment_rule` | GET | `/api/v1/routing/rules/:id?sprint_id=:sprintId` compatibility alias |
+| `agent_hq_create_assignment_rule` | POST | `/api/v1/routing/rules` compatibility alias |
+| `agent_hq_update_assignment_rule` | PUT | `/api/v1/routing/rules/:id` compatibility alias |
+| `agent_hq_delete_assignment_rule` | DELETE | `/api/v1/routing/rules/:id` compatibility alias |
 | `agent_hq_list_routing_transitions` | GET | `/api/v1/routing/transitions` |
 | `agent_hq_get_routing_transition` | GET | `/api/v1/routing/transitions/:id` |
 | `agent_hq_create_routing_transition` | POST | `/api/v1/routing/transitions` |
@@ -860,23 +1026,22 @@ Supported high-blast-radius writes accept `dry_run: true` for read-only preview.
 | `agent_hq_create_model_routing_rule` | POST | `/api/v1/model-routing` |
 | `agent_hq_update_model_routing_rule` | PUT | `/api/v1/model-routing/:id` |
 | `agent_hq_delete_model_routing_rule` | DELETE | `/api/v1/model-routing/:id` |
-| `agent_hq_list_sprint_types` | GET | `/api/v1/sprints/types/list` |
-| `agent_hq_list_sprint_type_task_types` | GET | `/api/v1/sprints/types/:key/task-types` |
-| `agent_hq_update_sprint_type_task_types` | PUT | `/api/v1/sprints/types/:key/task-types` |
-| `agent_hq_create_sprint_type` | POST | `/api/v1/sprints/types` |
-| `agent_hq_update_sprint_type` | PUT | `/api/v1/sprints/types/:key` |
-| `agent_hq_delete_sprint_type` | DELETE | `/api/v1/sprints/types/:key` |
-| `agent_hq_list_task_field_schemas` | GET | `/api/v1/sprints/types/:key/field-schemas` |
-| `agent_hq_get_task_field_schema` | GET | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
-| `agent_hq_create_task_field_schema` | POST | `/api/v1/sprints/types/:key/field-schemas` |
-| `agent_hq_update_task_field_schema` | PUT | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
-| `agent_hq_delete_task_field_schema` | DELETE | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
+| `agent_hq_list_workflow_types` | GET | `/api/v1/sprints/types/list` |
+| `agent_hq_list_workflow_type_task_types` | GET | `/api/v1/sprints/types/:key/task-types` |
+| `agent_hq_update_workflow_type_task_types` | PUT | `/api/v1/sprints/types/:key/task-types` |
+| `agent_hq_create_workflow_type` | POST | `/api/v1/sprints/types` |
+| `agent_hq_update_workflow_type` | PUT | `/api/v1/sprints/types/:key` |
+| `agent_hq_delete_workflow_type` | DELETE | `/api/v1/sprints/types/:key` |
+| `agent_hq_list_workflow_type_field_schemas` | GET | `/api/v1/sprints/types/:key/field-schemas` |
+| `agent_hq_get_workflow_type_field_schema` | GET | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
+| `agent_hq_create_workflow_type_field_schema` | POST | `/api/v1/sprints/types/:key/field-schemas` |
+| `agent_hq_update_workflow_type_field_schema` | PUT | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
+| `agent_hq_delete_workflow_type_field_schema` | DELETE | `/api/v1/sprints/types/:key/field-schemas/:schemaId` |
 | `agent_hq_list_tasks` | GET | `/api/v1/tasks` |
 | `agent_hq_get_task` | GET | `/api/v1/tasks/:id` |
 | `agent_hq_delete_task` | DELETE | `/api/v1/tasks/:id` |
 | `agent_hq_get_task_notes` | GET | `/api/v1/tasks/:id/notes` |
 | `agent_hq_get_task_history` | GET | `/api/v1/tasks/:id/history` |
-| `agent_hq_list_jobs` | GET | `/api/v1/jobs` |
 | `agent_hq_list_agents` | GET | `/api/v1/agents` |
 | `agent_hq_create_task` | POST | `/api/v1/tasks` |
 | `agent_hq_update_task` | PUT | `/api/v1/tasks/:id` |

@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgentHqApiClient, AgentHqApiError } from './apiClient';
 import { registerCatalogTool } from './catalog';
+import { McpToolProfile, selectProfileToolNames } from './toolProfiles';
 
 export type McpToolResult = { content: Array<{ type: 'text'; text: string }> };
 export type McpToolHandler = (args: any) => Promise<McpToolResult>;
@@ -42,18 +43,39 @@ export function formatMcpToolError(err: unknown): Record<string, unknown> {
   return { ok: false, error: message };
 }
 
-export function createMcpRegistrar(server: McpServer): McpRegistrar {
+export interface McpRegistrarOptions {
+  /** Restricts which tools are exposed. Defaults to every tool. */
+  profile?: McpToolProfile | null;
+  /**
+   * Whether to describe registered tools in the process-wide MCP catalog.
+   *
+   * The catalog is a single static map served from /api/v1/mcp/catalog, and it documents the
+   * whole product rather than one client's view of it. A profile-scoped server therefore stays
+   * out of it — otherwise a narrow remote connector would rewrite the catalog for every reader,
+   * and the per-request servers behind the HTTP transport would do it on every request.
+   */
+  catalog?: boolean;
+}
+
+export function createMcpRegistrar(server: McpServer, options: McpRegistrarOptions = {}): McpRegistrar {
+  const profile = options.profile ?? null;
+  const describeInCatalog = options.catalog ?? profile == null;
+
   return {
-    registerTool(names, description, schema, handler, options) {
-      for (const name of names) {
+    registerTool(names, description, schema, handler, toolOptions) {
+      const exposed = profile ? selectProfileToolNames(profile, names) : names;
+      if (exposed.length === 0) return;
+
+      for (const name of exposed) {
         server.tool(name, description, schema, handler);
       }
+      if (!describeInCatalog) return;
       registerCatalogTool({
         names,
         description,
         schema,
-        domain: options?.domain ?? 'general',
-        rest_paths: options?.rest_paths,
+        domain: toolOptions?.domain ?? 'general',
+        rest_paths: toolOptions?.rest_paths,
       });
     },
     registerResource(names, textFactory) {

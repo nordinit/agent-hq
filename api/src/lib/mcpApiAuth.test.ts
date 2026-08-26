@@ -227,6 +227,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.post('/api/v1/tasks', (_req, res) => res.status(201).json({ ok: true }));
     app.put('/api/v1/tasks/:id', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), body: req.body }));
     app.delete('/api/v1/tasks/:id', (req, res) => res.json({ ok: true, task_id: Number(req.params.id) }));
+    app.get('/api/v1/tasks', (req, res) => res.json({ ok: true, query: req.query, tasks: [] }));
+    app.get('/api/v1/projects', (_req, res) => res.json({ ok: true, projects: [] }));
+    app.get('/api/v1/sprints', (req, res) => res.json({ ok: true, query: req.query, sprints: [] }));
+    app.get('/api/v1/workflows', (req, res) => res.json({ ok: true, query: req.query, workflows: [] }));
+    app.get('/api/v1/workflows/workflow-metadata', (req, res) => res.json({ ok: true, query: req.query }));
 
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
@@ -2140,6 +2145,151 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       code: 'malformed_json',
       error: 'Malformed JSON request body',
       path: '/api/v1/tasks/448/outcome',
+    });
+  });
+
+  describe('projects.read_project_board', () => {
+    // The collection reads a board view needs. Every other read capability resolves to a single
+    // record or to the agent's own dispatched task, which is right for a runtime agent and leaves
+    // a remote client unable to answer "what is on my board" without an admin key.
+
+    it('is off for scoped runtime agents by default', async () => {
+      const res = await fetch(`${baseUrl}/api/v1/tasks?project_id=86`, { headers: authHeaders(normalKey) });
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: { required_capability: 'projects.read_project_board' },
+      });
+    });
+
+    it('allows board collections inside the assigned project once granted', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['projects.read_project_board']);
+
+      const tasks = await fetch(`${baseUrl}/api/v1/tasks?project_id=86`, { headers: authHeaders(normalKey) });
+      expect(tasks.status).toBe(200);
+
+      const sprints = await fetch(`${baseUrl}/api/v1/sprints?project_id=86`, { headers: authHeaders(normalKey) });
+      expect(sprints.status).toBe(200);
+
+      const workflows = await fetch(`${baseUrl}/api/v1/workflows?project_id=86`, { headers: authHeaders(normalKey) });
+      expect(workflows.status).toBe(200);
+
+      // The project list is tenant-filtered downstream and carries no task content.
+      const projects = await fetch(`${baseUrl}/api/v1/projects`, { headers: authHeaders(normalKey) });
+      expect(projects.status).toBe(200);
+    });
+
+    it('refuses a board collection that names another project', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['projects.read_project_board']);
+
+      const tasks = await fetch(`${baseUrl}/api/v1/tasks?project_id=87`, { headers: authHeaders(normalKey) });
+      expect(tasks.status).toBe(403);
+      await expect(tasks.json()).resolves.toMatchObject({ code: 'mcp_scope_denied' });
+
+      const sprints = await fetch(`${baseUrl}/api/v1/sprints?project_id=99`, { headers: authHeaders(normalKey) });
+      expect(sprints.status).toBe(403);
+    });
+
+    it('refuses a board collection that names no project at all', async () => {
+      // Without this the grant would be a tenant-wide task read, which is not what it says.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['projects.read_project_board']);
+
+      const res = await fetch(`${baseUrl}/api/v1/tasks`, { headers: authHeaders(normalKey) });
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({ error: expect.stringMatching(/explicit project_id/i) });
+    });
+
+    it('scopes workflow metadata by the workflow it names', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['projects.read_project_board']);
+
+      const own = await fetch(`${baseUrl}/api/v1/sprints/workflow-metadata?sprint_id=42`, { headers: authHeaders(normalKey) });
+      expect(own.status).toBe(200);
+
+      // Workflow 44 belongs to project 87.
+      const other = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?sprint_id=44`, { headers: authHeaders(normalKey) });
+      expect(other.status).toBe(403);
+
+      // With no workflow selector the response is tenant-level workflow-type configuration.
+      const unscoped = await fetch(`${baseUrl}/api/v1/sprints/workflow-metadata?sprint_type=dev`, { headers: authHeaders(normalKey) });
+      expect(unscoped.status).toBe(200);
+    });
+
+    it('leaves full administrative access unaffected', async () => {
+      const res = await fetch(`${baseUrl}/api/v1/tasks`, { headers: authHeaders(adminKey) });
+      expect(res.status).toBe(200);
+    });
+
+    it('refuses board collections for an agent with no assigned project', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 11, ['projects.read_project_board']);
+
+      const res = await fetch(`${baseUrl}/api/v1/tasks?project_id=86`, { headers: authHeaders(noProjectKey) });
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('tasks.write_project_notes', () => {
+    it('notes any task in the assigned project without owning a run on it', async () => {
+      // Task 451 is in project 86 but dispatched to nobody, so the active-task path cannot reach it.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['tasks.write_project_notes']);
+
+      const res = await fetch(`${baseUrl}/api/v1/tasks/451/notes`, {
+        method: 'POST',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ note: 'Filed from a phone' }),
+      });
+      expect(res.status).toBe(201);
+    });
+
+    it('still refuses a note on a task outside the assigned project', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['tasks.write_project_notes']);
+
+      const res = await fetch(`${baseUrl}/api/v1/tasks/452/notes`, {
+        method: 'POST',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ note: 'Wrong project' }),
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it('keeps evidence and outcomes dispatch-scoped even alongside project note writes', async () => {
+      // The distinction this capability exists for: a note is additive and moves nothing, while an
+      // outcome drives a workflow transition and belongs to the agent executing the run. Granting
+      // both capabilities must not merge the two scopes.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+        'tasks.write_project_notes',
+        'tasks.write_active_lifecycle',
+      ]);
+
+      const note = await fetch(`${baseUrl}/api/v1/tasks/451/notes`, {
+        method: 'POST',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ note: 'ok' }),
+      });
+      expect(note.status).toBe(201);
+
+      const outcome = await fetch(`${baseUrl}/api/v1/tasks/451/outcome`, {
+        method: 'POST',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ outcome: 'completed_for_review', summary: 'not my run' }),
+      });
+      expect(outcome.status).toBe(403);
+    });
+
+    it('leaves the active-task note path intact for agents without the project note grant', async () => {
+      // Default scoped-runtime policy: note the dispatched task, nothing else.
+      const dispatched = await fetch(`${baseUrl}/api/v1/tasks/448/notes`, {
+        method: 'POST',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ note: 'progress' }),
+      });
+      expect(dispatched.status).toBe(201);
+
+      const other = await fetch(`${baseUrl}/api/v1/tasks/451/notes`, {
+        method: 'POST',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ note: 'not mine' }),
+      });
+      expect(other.status).toBe(403);
     });
   });
 });

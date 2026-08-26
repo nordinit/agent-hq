@@ -24,7 +24,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
   const { api, registerTool, wrap } = ctx;
 
   registerTool(
-    ['agent_hq_list_recurring_task_series', 'atlas_list_recurring_task_series'],
+    ['agent_hq_list_recurring_task_series'],
     'List recurring task series with optional project, workflow, enabled-state, next-run, and pagination filters.',
     {
       project_id: z.number().int().positive().optional().describe('Filter by project ID'),
@@ -41,7 +41,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_recurring_task_series', 'atlas_get_recurring_task_series'],
+    ['agent_hq_get_recurring_task_series'],
     'Get recurring task series detail, including recent generated-run history.',
     {
       series_id: seriesIdSchema,
@@ -52,7 +52,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_recurring_task_series_history', 'atlas_get_recurring_task_series_history'],
+    ['agent_hq_get_recurring_task_series_history'],
     'List generated-run history for one recurring task series.',
     {
       series_id: seriesIdSchema,
@@ -63,7 +63,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_create_recurring_task_series', 'atlas_create_recurring_task_series'],
+    ['agent_hq_create_recurring_task_series'],
     'Create a recurring task series that schedules normal Agent HQ tasks in a workflow. Supports schedule, timezone, workflow, initial task status, overlap policy, enabled state, and optional agent assignment.',
     {
       project_id: z.number().int().positive().describe('Project ID for generated tasks'),
@@ -86,7 +86,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_update_recurring_task_series', 'atlas_update_recurring_task_series'],
+    ['agent_hq_update_recurring_task_series'],
     'Update editable fields on a recurring task series, including schedule, timezone, workflow, generated-task defaults, enabled state, overlap policy, and optional agent assignment.',
     {
       series_id: seriesIdSchema,
@@ -110,7 +110,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_enable_recurring_task_series', 'atlas_enable_recurring_task_series'],
+    ['agent_hq_enable_recurring_task_series'],
     'Enable scheduling for a recurring task series.',
     {
       series_id: seriesIdSchema,
@@ -121,7 +121,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_disable_recurring_task_series', 'atlas_disable_recurring_task_series'],
+    ['agent_hq_disable_recurring_task_series'],
     'Disable scheduling for a recurring task series without deleting its configuration or history.',
     {
       series_id: seriesIdSchema,
@@ -132,7 +132,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_run_recurring_task_series_now', 'atlas_run_recurring_task_series_now'],
+    ['agent_hq_run_recurring_task_series_now'],
     'Trigger one recurring task series immediately, creating a normal task now through the recurring-task scheduler path.',
     {
       series_id: seriesIdSchema,

@@ -5,7 +5,7 @@ export function registerSkillsTools(ctx: McpDomainContext) {
   const { api, registerTool, wrap } = ctx;
 
   registerTool(
-    ['agent_hq_list_skills', 'atlas_list_skills'],
+    ['agent_hq_list_skills'],
     'List Agent HQ-managed skills.',
     {},
     () => wrap(() => api.listSkills())(),
@@ -13,7 +13,7 @@ export function registerSkillsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_skill', 'atlas_get_skill'],
+    ['agent_hq_get_skill'],
     'Get a skill by name.',
     { name: z.string().min(1).describe('Skill name') },
     ({ name }) => wrap(() => api.getSkill(name))(),
@@ -21,7 +21,7 @@ export function registerSkillsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_skill', 'atlas_create_skill'],
+    ['agent_hq_create_skill'],
     'Create a new Agent HQ-managed skill.',
     {
       name: z.string().min(1).describe('Skill name'),
@@ -33,7 +33,7 @@ export function registerSkillsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_skill', 'atlas_update_skill'],
+    ['agent_hq_update_skill'],
     'Replace a skill\'s SKILL.md content.',
     {
       name: z.string().min(1).describe('Skill name'),
@@ -44,7 +44,7 @@ export function registerSkillsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_skill', 'atlas_delete_skill'],
+    ['agent_hq_delete_skill'],
     'Delete an Agent HQ-managed skill.',
     { name: z.string().min(1).describe('Skill name') },
     ({ name }) => wrap(() => api.deleteSkill(name))(),
@@ -52,7 +52,7 @@ export function registerSkillsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_list_agent_skills', 'atlas_list_agent_skills'],
+    ['agent_hq_list_agent_skills'],
     'List skill assignments for an agent as a first-class relation.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.listAgentSkills(agent_id))(),
@@ -60,7 +60,7 @@ export function registerSkillsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_assign_skill_to_agent', 'atlas_assign_skill_to_agent'],
+    ['agent_hq_assign_skill_to_agent'],
     'Assign a skill to an agent as a first-class relation by skill id or skill name.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
@@ -72,7 +72,7 @@ export function registerSkillsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_remove_skill_from_agent', 'atlas_remove_skill_from_agent'],
+    ['agent_hq_remove_skill_from_agent'],
     'Remove a skill assignment from an agent as a first-class relation by skill id or skill name.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),

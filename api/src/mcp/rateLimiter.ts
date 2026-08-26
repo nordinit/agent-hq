@@ -19,6 +19,11 @@ export class RateLimiter {
     this.refillIntervalMs = 60_000 / requestsPerMinute;
   }
 
+  /** Configured ceiling, for error messages that tell the caller what they hit. */
+  get requestsPerMinute(): number {
+    return this.maxTokens;
+  }
+
   /** Returns true if the request is allowed, false if rate-limited. */
   allow(): boolean {
     this.refill();

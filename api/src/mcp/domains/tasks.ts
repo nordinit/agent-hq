@@ -7,7 +7,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   const taskTypeSchema = z.string().min(1);
   const customFieldsSchema = z.record(z.string(), z.unknown())
     .optional()
-    .describe('Workflow/task-type custom fields. Resolve accepted keys with agent_hq_get_workflow_metadata or agent_hq_get_task_field_schema before create/update.');
+    .describe('Workflow/task-type custom fields. Resolve accepted keys with agent_hq_get_workflow_metadata or agent_hq_get_workflow_type_field_schema before create/update.');
 
   
   const storyPointsSchema = z
@@ -26,7 +26,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
     .optional();
   
   registerTool(
-    ['agent_hq_create_task', 'atlas_create_task'],
+    ['agent_hq_create_task'],
     'Create a new task in Agent HQ in a required workflow, with optional initial workflow status, assignment, and dry-run preview. Scoped non-admin MCP callers need Project task CRUD or legacy Create Tasks capability and may only create inside their assigned project. Legacy compatibility: blockers is deprecated for one release; prefer relationship-first tools for dispatch dependencies.',
     {
       title: z.string().min(1).describe('Task title (required)'),
@@ -63,7 +63,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_task', 'atlas_update_task'],
+    ['agent_hq_update_task'],
     'Update editable fields on an existing task, including workflow movement and assignment, with optional dry-run preview. Scoped non-admin MCP callers need Project task CRUD and may only update tasks, workflows, and assignments inside their assigned project.',
     {
       task_id: z.number().int().positive().describe('Task ID (required)'),
@@ -83,7 +83,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_move_task', 'atlas_move_task'],
+    ['agent_hq_move_task'],
     'Move a task to a new status. Uses outcome semantics for gated workflow states and supports dry-run preview.',
     {
       task_id: z.number().int().positive().describe('Task ID (required)'),
@@ -107,7 +107,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_tasks', 'atlas_get_tasks', 'agent_hq_list_tasks', 'atlas_list_tasks'],
+    ['agent_hq_list_tasks'],
     'List Agent HQ tasks with optional filtering.',
     {
       project_id: z.number().int().positive().optional().describe('Filter by project ID'),
@@ -122,7 +122,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_search_project_tasks', 'atlas_search_project_tasks'],
+    ['agent_hq_search_project_tasks'],
     'Search the authenticated agent\'s assigned project for existing tasks using bounded exact-match filters for safe follow-up deduplication. The project scope is derived from the MCP agent identity; caller-supplied project IDs are not accepted. Returns minimal task summaries only and does not allow task mutation or broad listing.',
     {
       workflow_id: z.number().int().positive().optional().describe('Optional workflow/sprint ID filter. Must belong to the authenticated agent\'s assigned project to match anything.'),
@@ -141,7 +141,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_task_detail', 'atlas_get_task_detail', 'agent_hq_get_task', 'atlas_get_task'],
+    ['agent_hq_get_task'],
     'Get full task detail including blocker, sprint, and assignment context. Scoped non-admin MCP callers need active task context, read project task context, or Project task CRUD for tasks in their assigned project.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTask(task_id))(),
@@ -149,7 +149,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_task_context', 'atlas_get_task_context'],
+    ['agent_hq_get_task_context'],
     'Get the canonical task context in summary or full mode, including truthful task state, meaningful notes/events, run state, blockers, and lease context.',
     {
       task_id: z.number().int().positive().describe('Task ID'),
@@ -173,7 +173,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_task', 'atlas_delete_task'],
+    ['agent_hq_delete_task'],
     'Delete a generic task from Agent HQ. Scoped non-admin MCP callers need Project task CRUD and may only delete tasks inside their assigned project.',
     {
       task_id: z.number().int().positive().describe('Task ID'),
@@ -184,7 +184,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_task_notes', 'atlas_get_task_notes'],
+    ['agent_hq_get_task_notes'],
     'Get notes/comments for a task.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTaskNotes(task_id))(),
@@ -192,7 +192,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_task_history', 'atlas_get_task_history'],
+    ['agent_hq_get_task_history'],
     'Get task history entries for a task.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTaskHistory(task_id))(),
@@ -200,7 +200,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_task_instances', 'atlas_get_task_instances'],
+    ['agent_hq_get_task_instances'],
     'Get job instances and run state for a task. Requires active-task read scope or Read project task context for tasks in the agent assigned project.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTaskInstances(task_id))(),
@@ -208,7 +208,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_task_active_owner', 'atlas_get_task_active_owner'],
+    ['agent_hq_get_task_active_owner'],
     'Check the active-owner context for a task, including whether the authenticated MCP agent owns the active run. Requires active-task read scope or Read project task context for tasks in the agent assigned project.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTaskActiveOwner(task_id))(),
@@ -216,7 +216,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_task_relationship_types', 'atlas_get_task_relationship_types'],
+    ['agent_hq_get_task_relationship_types'],
     'Resolve relationship type keys valid for this task workflow, including labels, direction_semantics, and affects_dispatch_eligibility. Use this before creating task relationships.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTaskRelationshipTypes(task_id))(),
@@ -224,7 +224,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_list_task_relationships', 'atlas_list_task_relationships'],
+    ['agent_hq_list_task_relationships'],
     'List generic task relationships for a task. Relationship labels and dispatch-blocking semantics come from workflow configuration.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.listTaskRelationships(task_id))(),
@@ -232,7 +232,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_create_task_relationship', 'atlas_create_task_relationship'],
+    ['agent_hq_create_task_relationship'],
     'Create or update a generic task relationship using a workflow-configured relationship_type_key. Scoped non-admin MCP callers need Project task CRUD and may only link tasks inside their assigned project. Dispatch eligibility is affected only when the relationship type configuration says so.',
     {
       task_id: z.number().int().positive().describe('Source task ID'),
@@ -247,7 +247,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_delete_task_relationship', 'atlas_delete_task_relationship'],
+    ['agent_hq_delete_task_relationship'],
     'Delete a generic task relationship by relationship record ID. Scoped non-admin MCP callers need Project task CRUD and may only remove relationships whose source and target tasks are inside their assigned project.',
     {
       task_id: z.number().int().positive().describe('Source task ID for the relationship'),
@@ -258,7 +258,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_add_blocker', 'atlas_add_blocker'],
+    ['agent_hq_add_blocker'],
     'Legacy compatibility for one release: mark a task as blocked by another task only when the workflow still defines blocked_by as a dispatch-blocking relationship. Prefer agent_hq_get_task_relationship_types and agent_hq_create_task_relationship.',
     {
       task_id: z.number().int().positive().describe('The task to mark as blocked (required)'),
@@ -270,7 +270,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_remove_blocker', 'atlas_remove_blocker'],
+    ['agent_hq_remove_blocker'],
     'Legacy compatibility for one release: remove a blocked_by compatibility relationship/dependency. Prefer agent_hq_delete_task_relationship for new relationship-first callers.',
     {
       task_id: z.number().int().positive().describe('The blocked task (required)'),

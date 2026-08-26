@@ -17,7 +17,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   };
 
   registerTool(
-    ['agent_hq_list_sprint_types', 'agent_hq_list_workflow_types', 'atlas_list_sprint_types', 'atlas_list_workflow_types'],
+    ['agent_hq_list_workflow_types'],
     'List workflow types. Optional tenant_id is super-admin MCP only.',
     {
       ...tenantSelectorSchema,
@@ -28,7 +28,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_project_workflow_definition', 'agent_hq_get_workflow_definition', 'atlas_get_project_workflow_definition'],
+    ['agent_hq_get_workflow_type'],
     'Read one project-scoped workflow definition and its configurable metadata. Non-admin MCP keys must pass their assigned project_id.',
     {
       key: z.string().min(1).describe('Workflow definition key'),
@@ -40,7 +40,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_list_sprint_type_task_types', 'agent_hq_list_workflow_type_task_types', 'atlas_list_sprint_type_task_types', 'atlas_list_workflow_type_task_types'],
+    ['agent_hq_list_workflow_type_task_types'],
     'List allowed task types for a workflow type. Optional tenant_id is super-admin MCP only.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), ...tenantSelectorSchema },
     ({ sprint_type_key, ...params }) => wrap(() => api.listSprintTypeTaskTypes(sprint_type_key, params))(),
@@ -48,7 +48,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_sprint_type_task_types', 'atlas_update_sprint_type_task_types'],
+    ['agent_hq_update_workflow_type_task_types'],
     'Replace the allowed task types for a workflow type.',
     {
       sprint_type_key: z.string().min(1).describe('Workflow type key'),
@@ -59,7 +59,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_sprint_type', 'agent_hq_create_project_workflow_definition', 'atlas_create_sprint_type'],
+    ['agent_hq_create_workflow_type'],
     'Create a workflow type. Non-admin MCP keys require project_id and the workflow_definitions.manage_project_scope capability.',
     {
       key: z.string().min(1).describe('Workflow type key'),
@@ -72,7 +72,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_sprint_type', 'agent_hq_update_project_workflow_definition', 'atlas_update_sprint_type'],
+    ['agent_hq_update_workflow_type'],
     'Update a workflow type. Non-admin MCP keys require project_id matching the definition and their assigned project.',
     {
       key: z.string().min(1).describe('Workflow type key'),
@@ -85,7 +85,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_sprint_type', 'agent_hq_delete_project_workflow_definition', 'atlas_delete_sprint_type'],
+    ['agent_hq_delete_workflow_type'],
     'Delete a workflow type. Non-admin MCP keys require project_id matching the definition and their assigned project.',
     {
       key: z.string().min(1).describe('Workflow type key'),
@@ -181,7 +181,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   };
   
   registerTool(
-    ['agent_hq_list_workflow_event_mappings', 'atlas_list_workflow_event_mappings'],
+    ['agent_hq_list_workflow_event_mappings'],
     'List workflow-event mappings used to resolve runtime and external workflow events. Optional tenant_id is super-admin MCP only.',
     {
       ...tenantSelectorSchema,
@@ -195,7 +195,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_workflow_event_mapping', 'atlas_get_workflow_event_mapping'],
+    ['agent_hq_get_workflow_event_mapping'],
     'Get one workflow-event mapping. Optional tenant_id is super-admin MCP only.',
     {
       mapping_id: z.number().int().positive().describe('Workflow-event mapping ID'),
@@ -206,7 +206,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_workflow_event_mapping', 'atlas_create_workflow_event_mapping'],
+    ['agent_hq_create_workflow_event_mapping'],
     'Create a workflow-event mapping. Optional tenant_id is super-admin MCP only.',
     {
       ...workflowEventMappingSchema,
@@ -218,7 +218,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_workflow_event_mapping', 'atlas_update_workflow_event_mapping'],
+    ['agent_hq_update_workflow_event_mapping'],
     'Update a workflow-event mapping. Optional tenant_id is super-admin MCP only.',
     {
       mapping_id: z.number().int().positive().describe('Workflow-event mapping ID'),
@@ -231,7 +231,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_workflow_event_mapping', 'atlas_delete_workflow_event_mapping'],
+    ['agent_hq_delete_workflow_event_mapping'],
     'Delete a workflow-event mapping. Optional tenant_id is super-admin MCP only.',
     {
       mapping_id: z.number().int().positive().describe('Workflow-event mapping ID'),
@@ -243,7 +243,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_agent_dispatch_contract', 'atlas_get_agent_dispatch_contract'],
+    ['agent_hq_get_agent_dispatch_contract'],
     'Read the workflow-type agent dispatch contract template and placeholder catalog.',
     {
       sprint_type: z.string().min(1).optional().describe('Workflow type key'),
@@ -254,7 +254,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_agent_dispatch_contract', 'atlas_update_agent_dispatch_contract'],
+    ['agent_hq_update_agent_dispatch_contract'],
     'Update the workflow-type agent dispatch contract template.',
     {
       sprint_type: z.string().min(1).optional().describe('Workflow type key'),
@@ -266,7 +266,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_workflow_config', 'atlas_get_workflow_config'],
+    ['agent_hq_get_workflow_config'],
     'Read the Workflow Definitions configuration snapshot. Non-admin MCP keys must pass project_id for project-scoped readback.',
     {
       project_id: z.number().int().positive().optional().describe('Optional project scope for project-owned workflow definitions'),
@@ -277,7 +277,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_workflow_metadata', 'atlas_get_workflow_metadata'],
+    ['agent_hq_get_workflow_metadata'],
     'Resolve workflow metadata for a workflow, workflow type, and optional task type. Optional tenant_id is super-admin MCP only.',
     {
       ...tenantSelectorSchema,
@@ -290,7 +290,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_list_transition_requirement_fields', 'atlas_list_transition_requirement_fields'],
+    ['agent_hq_list_transition_requirement_fields'],
     'List fields available for transition requirement/gate configuration. Optional tenant_id is super-admin MCP only.',
     {
       ...tenantSelectorSchema,
@@ -303,7 +303,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_list_sprint_type_statuses', 'agent_hq_list_workflow_type_statuses', 'atlas_list_sprint_type_statuses', 'atlas_list_workflow_type_statuses'],
+    ['agent_hq_list_workflow_type_statuses'],
     'List status labels for a workflow type. Optional tenant_id is super-admin MCP only.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), ...tenantSelectorSchema },
     ({ sprint_type_key, ...params }) => wrap(() => api.listSprintTypeStatuses(sprint_type_key, params))(),
@@ -311,7 +311,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_resolved_sprint_type_statuses', 'agent_hq_get_resolved_workflow_type_statuses', 'atlas_get_resolved_sprint_type_statuses', 'atlas_get_resolved_workflow_type_statuses'],
+    ['agent_hq_get_resolved_workflow_type_statuses'],
     'Read the resolved visible status catalog for a workflow type. Optional tenant_id is super-admin MCP only.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), ...tenantSelectorSchema },
     ({ sprint_type_key, ...params }) => wrap(() => api.listSprintTypeStatuses(sprint_type_key, params))(),
@@ -319,7 +319,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_sprint_type_status', 'agent_hq_get_workflow_type_status', 'atlas_get_sprint_type_status', 'atlas_get_workflow_type_status'],
+    ['agent_hq_get_workflow_type_status'],
     'Get one status label for a workflow type. Optional tenant_id is super-admin MCP only.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), status_key: z.string().min(1).describe('Status key'), ...tenantSelectorSchema },
     ({ sprint_type_key, status_key, ...params }) => wrap(() => api.getSprintTypeStatus(sprint_type_key, status_key, params))(),
@@ -327,7 +327,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_sprint_type_status', 'atlas_create_sprint_type_status'],
+    ['agent_hq_create_workflow_type_status'],
     'Create a sprint definition status label.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), ...sprintTypeStatusSchema, name: z.string().min(1).describe('Status key'), label: z.string().min(1).describe('Visible status label') },
     ({ sprint_type_key, ...payload }) => wrap(() => api.createSprintTypeStatus(sprint_type_key, payload))(),
@@ -335,7 +335,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_sprint_type_status', 'atlas_update_sprint_type_status'],
+    ['agent_hq_update_workflow_type_status'],
     'Update a sprint definition status label.',
     { ...sprintTypeStatusSchema, sprint_type_key: z.string().min(1).describe('Workflow type key'), status_key: z.string().min(1).describe('Current status key') },
     ({ sprint_type_key, status_key, ...patch }) => wrap(() => api.updateSprintTypeStatus(sprint_type_key, status_key, patch))(),
@@ -343,7 +343,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_sprint_type_status', 'atlas_delete_sprint_type_status'],
+    ['agent_hq_delete_workflow_type_status'],
     'Delete a sprint definition status label.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), status_key: z.string().min(1).describe('Status key') },
     ({ sprint_type_key, status_key }) => wrap(() => api.deleteSprintTypeStatus(sprint_type_key, status_key))(),
@@ -351,7 +351,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_list_sprint_type_outcomes', 'agent_hq_list_workflow_type_outcomes', 'atlas_list_sprint_type_outcomes', 'atlas_list_workflow_type_outcomes'],
+    ['agent_hq_list_workflow_type_outcomes'],
     'List run outcomes for a workflow type. Optional tenant_id is super-admin MCP only.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), ...tenantSelectorSchema },
     ({ sprint_type_key, ...params }) => wrap(() => api.listSprintTypeOutcomes(sprint_type_key, params))(),
@@ -359,7 +359,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_resolved_sprint_type_outcomes', 'agent_hq_get_resolved_workflow_type_outcomes', 'atlas_get_resolved_sprint_type_outcomes', 'atlas_get_resolved_workflow_type_outcomes'],
+    ['agent_hq_get_resolved_workflow_type_outcomes'],
     'Read the resolved run outcome catalog for a workflow type. Optional tenant_id is super-admin MCP only.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), ...tenantSelectorSchema },
     ({ sprint_type_key, ...params }) => wrap(() => api.listSprintTypeOutcomes(sprint_type_key, params))(),
@@ -367,7 +367,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_sprint_type_outcome', 'agent_hq_get_workflow_type_outcome', 'atlas_get_sprint_type_outcome', 'atlas_get_workflow_type_outcome'],
+    ['agent_hq_get_workflow_type_outcome'],
     'Get one run outcome definition for a workflow type. Optional tenant_id is super-admin MCP only.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), outcome_id: z.number().int().positive().describe('Outcome definition ID'), ...tenantSelectorSchema },
     ({ sprint_type_key, outcome_id, ...params }) => wrap(() => api.getSprintTypeOutcome(sprint_type_key, outcome_id, params))(),
@@ -375,7 +375,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_sprint_type_outcome', 'atlas_create_sprint_type_outcome'],
+    ['agent_hq_create_workflow_type_outcome'],
     'Create a sprint definition run outcome.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), ...sprintTypeOutcomeSchema, outcome_key: z.string().min(1).describe('Outcome key'), label: z.string().min(1).describe('Visible outcome label') },
     ({ sprint_type_key, ...payload }) => wrap(() => api.createSprintTypeOutcome(sprint_type_key, payload))(),
@@ -383,7 +383,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_sprint_type_outcome', 'atlas_update_sprint_type_outcome'],
+    ['agent_hq_update_workflow_type_outcome'],
     'Update a sprint definition run outcome.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), outcome_id: z.number().int().positive().describe('Outcome definition ID'), ...sprintTypeOutcomeSchema },
     ({ sprint_type_key, outcome_id, ...patch }) => wrap(() => api.updateSprintTypeOutcome(sprint_type_key, outcome_id, patch))(),
@@ -391,7 +391,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_sprint_type_outcome', 'atlas_delete_sprint_type_outcome'],
+    ['agent_hq_delete_workflow_type_outcome'],
     'Delete a sprint definition run outcome.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), outcome_id: z.number().int().positive().describe('Outcome definition ID') },
     ({ sprint_type_key, outcome_id }) => wrap(() => api.deleteSprintTypeOutcome(sprint_type_key, outcome_id))(),
@@ -399,7 +399,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_list_sprint_type_relationship_types', 'agent_hq_list_workflow_type_relationship_types', 'atlas_list_sprint_type_relationship_types', 'atlas_list_workflow_type_relationship_types'],
+    ['agent_hq_list_workflow_type_relationship_types'],
     'List relationship types for a workflow type. Optional tenant_id is super-admin MCP only.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), ...tenantSelectorSchema },
     ({ sprint_type_key, ...params }) => wrap(() => api.listSprintTypeRelationshipTypes(sprint_type_key, params))(),
@@ -407,7 +407,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_sprint_type_relationship_type', 'agent_hq_get_workflow_type_relationship_type', 'atlas_get_sprint_type_relationship_type', 'atlas_get_workflow_type_relationship_type'],
+    ['agent_hq_get_workflow_type_relationship_type'],
     'Get one relationship type for a workflow type. Optional tenant_id is super-admin MCP only.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), relationship_type_id: z.number().int().positive().describe('Relationship type ID'), ...tenantSelectorSchema },
     ({ sprint_type_key, relationship_type_id, ...params }) => wrap(() => api.getSprintTypeRelationshipType(sprint_type_key, relationship_type_id, params))(),
@@ -415,7 +415,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_sprint_type_relationship_type', 'atlas_create_sprint_type_relationship_type'],
+    ['agent_hq_create_workflow_type_relationship_type'],
     'Create a sprint definition relationship type.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), ...sprintTypeRelationshipTypeSchema, key: z.string().min(1).describe('Relationship type key'), label: z.string().min(1).describe('Forward label') },
     ({ sprint_type_key, ...payload }) => wrap(() => api.createSprintTypeRelationshipType(sprint_type_key, payload))(),
@@ -423,7 +423,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_sprint_type_relationship_type', 'atlas_update_sprint_type_relationship_type'],
+    ['agent_hq_update_workflow_type_relationship_type'],
     'Update a sprint definition relationship type.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), relationship_type_id: z.number().int().positive().describe('Relationship type ID'), ...sprintTypeRelationshipTypeSchema },
     ({ sprint_type_key, relationship_type_id, ...patch }) => wrap(() => api.updateSprintTypeRelationshipType(sprint_type_key, relationship_type_id, patch))(),
@@ -431,7 +431,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_sprint_type_relationship_type', 'atlas_delete_sprint_type_relationship_type'],
+    ['agent_hq_delete_workflow_type_relationship_type'],
     'Delete a sprint definition relationship type.',
     { sprint_type_key: z.string().min(1).describe('Workflow type key'), relationship_type_id: z.number().int().positive().describe('Relationship type ID') },
     ({ sprint_type_key, relationship_type_id }) => wrap(() => api.deleteSprintTypeRelationshipType(sprint_type_key, relationship_type_id))(),
@@ -439,7 +439,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_list_task_field_schemas', 'agent_hq_list_workflow_type_field_schemas', 'atlas_list_task_field_schemas', 'atlas_list_workflow_type_field_schemas'],
+    ['agent_hq_list_workflow_type_field_schemas'],
     'List task field schemas for a workflow type. Optional tenant_id is super-admin MCP only.',
     {
       sprint_type_key: z.string().min(1).describe('Workflow type key'),
@@ -450,7 +450,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_task_field_schema', 'agent_hq_get_workflow_type_field_schema', 'atlas_get_task_field_schema', 'atlas_get_workflow_type_field_schema'],
+    ['agent_hq_get_workflow_type_field_schema'],
     'Get a task field schema for a workflow type. Optional tenant_id is super-admin MCP only.',
     {
       sprint_type_key: z.string().min(1).describe('Workflow type key'),
@@ -462,7 +462,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_task_field_schema', 'atlas_create_task_field_schema'],
+    ['agent_hq_create_workflow_type_field_schema'],
     'Create a task field schema for a workflow type. The schema document mirrors Workflow Definitions UI payloads and accepts full schema.fields[] content.',
     {
       sprint_type_key: z.string().min(1).describe('Workflow type key'),
@@ -474,7 +474,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_task_field_schema', 'atlas_update_task_field_schema'],
+    ['agent_hq_update_workflow_type_field_schema'],
     'Update a task field schema for a workflow type. Atlas can send the full schema.fields[] payload used by Workflow Definitions UI.',
     {
       sprint_type_key: z.string().min(1).describe('Workflow type key'),
@@ -487,7 +487,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_transition_requirements', 'atlas_get_transition_requirements', 'agent_hq_list_transition_requirements', 'atlas_list_transition_requirements'],
+    ['agent_hq_list_transition_requirements'],
     'List workflow gate requirements that drive review, QA, and release evidence checks. Non-admin MCP keys require transition_requirements.manage_project_scope or active workflow configuration read access and must scope reads to their assigned project. Optional tenant_id is super-admin MCP only. These are the real configurable gate rows behind outcome validation.',
     {
       ...tenantSelectorSchema,
@@ -502,7 +502,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_transition_requirement', 'atlas_create_transition_requirement'],
+    ['agent_hq_create_transition_requirement'],
     'Create a workflow gate requirement row. Non-admin MCP keys require transition_requirements.manage_project_scope and can only create requirements inside their assigned project with explicit project/workflow scope. Optional tenant_id is super-admin MCP only. Use this for truthful MCP editing of review or release evidence requirements when they are config-driven.',
     {
       ...transitionRequirementSchema.shape,
@@ -513,7 +513,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_transition_requirement', 'atlas_update_transition_requirement'],
+    ['agent_hq_update_transition_requirement'],
     'Update a workflow gate requirement row. Non-admin MCP keys require transition_requirements.manage_project_scope and can only update requirements inside their assigned project with explicit project/workflow scope. Optional tenant_id is super-admin MCP only. This edits the real configurable gate behavior used by task outcomes.',
     {
       requirement_id: z.number().int().positive().describe('Requirement ID'),
@@ -529,7 +529,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_transition_requirement', 'atlas_delete_transition_requirement'],
+    ['agent_hq_delete_transition_requirement'],
     'Delete a workflow gate requirement row. Non-admin MCP keys require transition_requirements.manage_project_scope and can only delete requirements inside their assigned project with explicit project/workflow scope. Optional tenant_id is super-admin MCP only.',
     {
       requirement_id: z.number().int().positive().describe('Requirement ID'),
@@ -544,7 +544,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_task_field_schema', 'atlas_delete_task_field_schema'],
+    ['agent_hq_delete_workflow_type_field_schema'],
     'Delete a task field schema from a workflow type.',
     {
       sprint_type_key: z.string().min(1).describe('Workflow type key'),

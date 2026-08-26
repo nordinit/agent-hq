@@ -5,7 +5,7 @@ export function registerMcpServersTools(ctx: McpDomainContext) {
   const { api, registerTool, wrap } = ctx;
 
   registerTool(
-    ['agent_hq_list_mcp_servers', 'atlas_list_mcp_servers'],
+    ['agent_hq_list_mcp_servers'],
     'List MCP servers in the Agent HQ registry.',
     {},
     () => wrap(() => api.listMcpServers())(),
@@ -13,7 +13,7 @@ export function registerMcpServersTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_mcp_server', 'atlas_get_mcp_server'],
+    ['agent_hq_get_mcp_server'],
     'Get an MCP server by ID.',
     { mcp_server_id: z.number().int().positive().describe('MCP server ID') },
     ({ mcp_server_id }) => wrap(() => api.getMcpServer(mcp_server_id))(),
@@ -21,7 +21,7 @@ export function registerMcpServersTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_mcp_server', 'atlas_create_mcp_server'],
+    ['agent_hq_create_mcp_server'],
     'Create an MCP server entry.',
     {
       name: z.string().min(1).describe('Display name'),
@@ -39,7 +39,7 @@ export function registerMcpServersTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_mcp_server', 'atlas_update_mcp_server'],
+    ['agent_hq_update_mcp_server'],
     'Update an MCP server entry.',
     {
       mcp_server_id: z.number().int().positive().describe('MCP server ID'),
@@ -50,7 +50,7 @@ export function registerMcpServersTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_mcp_server', 'atlas_delete_mcp_server'],
+    ['agent_hq_delete_mcp_server'],
     'Disable an MCP server entry.',
     { mcp_server_id: z.number().int().positive().describe('MCP server ID') },
     ({ mcp_server_id }) => wrap(() => api.deleteMcpServer(mcp_server_id))(),
@@ -58,7 +58,7 @@ export function registerMcpServersTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_list_agent_mcp_servers', 'atlas_list_agent_mcp_servers'],
+    ['agent_hq_list_agent_mcp_servers'],
     'List MCP servers assigned to an agent.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.listAgentMcpServers(agent_id))(),
@@ -66,7 +66,7 @@ export function registerMcpServersTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_assign_mcp_server_to_agent', 'atlas_assign_mcp_server_to_agent'],
+    ['agent_hq_assign_mcp_server_to_agent'],
     'Assign an MCP server to an agent.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
@@ -80,7 +80,7 @@ export function registerMcpServersTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_remove_mcp_server_from_agent', 'atlas_remove_mcp_server_from_agent'],
+    ['agent_hq_remove_mcp_server_from_agent'],
     'Remove an MCP server assignment from an agent.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),

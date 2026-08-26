@@ -15,7 +15,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   const { api, registerTool, wrap } = ctx;
 
   registerTool(
-    ['agent_hq_list_teams', 'atlas_list_teams'],
+    ['agent_hq_list_teams'],
     'List agent teams.',
     {},
     () => wrap(() => api.listTeams())(),
@@ -23,7 +23,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_team', 'atlas_get_team'],
+    ['agent_hq_get_team'],
     'Get a team by ID.',
     { team_id: z.number().int().positive().describe('Team ID') },
     ({ team_id }) => wrap(() => api.getTeam(team_id))(),
@@ -31,7 +31,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_create_team', 'atlas_create_team'],
+    ['agent_hq_create_team'],
     'Create a team. goal and charter are injected into every member\'s prompt.',
     {
       name: z.string().min(1).describe('Display name'),
@@ -48,7 +48,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_update_team', 'atlas_update_team'],
+    ['agent_hq_update_team'],
     'Update a team. Any change to goal, charter or membership bumps its context version.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -59,7 +59,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_delete_team', 'atlas_delete_team'],
+    ['agent_hq_delete_team'],
     'Soft-delete a team. Workflows and materialized routing rules keep their provenance.',
     { team_id: z.number().int().positive().describe('Team ID') },
     ({ team_id }) => wrap(() => api.deleteTeam(team_id))(),
@@ -67,7 +67,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_list_team_members', 'atlas_list_team_members'],
+    ['agent_hq_list_team_members'],
     'List the members of a team.',
     { team_id: z.number().int().positive().describe('Team ID') },
     ({ team_id }) => wrap(() => api.listTeamMembers(team_id))(),
@@ -75,7 +75,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_add_team_member', 'atlas_add_team_member'],
+    ['agent_hq_add_team_member'],
     'Add an agent to a team. An agent may belong to several teams but only one primary team.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -92,7 +92,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_update_team_member', 'atlas_update_team_member'],
+    ['agent_hq_update_team_member'],
     'Update an agent\'s role on a team.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -104,7 +104,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_remove_team_member', 'atlas_remove_team_member'],
+    ['agent_hq_remove_team_member'],
     'Remove an agent from a team.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -115,7 +115,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_list_team_tools', 'atlas_list_team_tools'],
+    ['agent_hq_list_team_tools'],
     'List registry tools granted to every member of a team.',
     { team_id: z.number().int().positive().describe('Team ID') },
     ({ team_id }) => wrap(() => api.listTeamTools(team_id))(),
@@ -123,7 +123,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_assign_tool_to_team', 'atlas_assign_tool_to_team'],
+    ['agent_hq_assign_tool_to_team'],
     'Grant a registry tool to every member of a team.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -137,7 +137,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_remove_tool_from_team', 'atlas_remove_tool_from_team'],
+    ['agent_hq_remove_tool_from_team'],
     'Revoke a team-wide registry tool grant.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -148,7 +148,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_list_team_mcp_servers', 'atlas_list_team_mcp_servers'],
+    ['agent_hq_list_team_mcp_servers'],
     'List MCP servers granted to every member of a team.',
     { team_id: z.number().int().positive().describe('Team ID') },
     ({ team_id }) => wrap(() => api.listTeamMcpServers(team_id))(),
@@ -156,7 +156,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_assign_mcp_server_to_team', 'atlas_assign_mcp_server_to_team'],
+    ['agent_hq_assign_mcp_server_to_team'],
     'Grant an MCP server to every member of a team.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -170,7 +170,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_remove_mcp_server_from_team', 'atlas_remove_mcp_server_from_team'],
+    ['agent_hq_remove_mcp_server_from_team'],
     'Revoke a team-wide MCP server grant.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -181,7 +181,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_list_team_routing_rules', 'atlas_list_team_routing_rules'],
+    ['agent_hq_list_team_routing_rules'],
     'List a team\'s default routing rules. These are templates, not live routing.',
     { team_id: z.number().int().positive().describe('Team ID') },
     ({ team_id }) => wrap(() => api.listTeamRoutingRules(team_id))(),
@@ -189,7 +189,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_create_team_routing_rule', 'atlas_create_team_routing_rule'],
+    ['agent_hq_create_team_routing_rule'],
     'Add a default routing rule to a team. Target either a member agent or a member_role; '
     + 'role targeting keeps the template portable when membership changes.',
     {
@@ -207,7 +207,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_delete_team_routing_rule', 'atlas_delete_team_routing_rule'],
+    ['agent_hq_delete_team_routing_rule'],
     'Delete a team default routing rule. Already-materialized workflow rules are left in place.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -218,7 +218,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_preview_team_context', 'atlas_preview_team_context'],
+    ['agent_hq_preview_team_context'],
     'Render the exact team context block a given member will receive in its prompt.',
     {
       team_id: z.number().int().positive().describe('Team ID'),
@@ -229,7 +229,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_list_agent_teams', 'atlas_list_agent_teams'],
+    ['agent_hq_list_agent_teams'],
     'List the teams an agent belongs to.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.listAgentTeams(agent_id))(),
@@ -237,7 +237,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_agent_effective_capabilities', 'atlas_get_agent_effective_capabilities'],
+    ['agent_hq_get_agent_effective_capabilities'],
     'The tools, MCP servers and skills an agent actually gets at dispatch, each labelled as its '
     + 'own grant or inherited from a team.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
@@ -246,7 +246,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_set_workflow_team', 'atlas_set_workflow_team'],
+    ['agent_hq_set_workflow_team'],
     'Assign a team to a workflow, or pass team_id null to clear it. Changes team context '
     + 'injection immediately; does not touch routing.',
     {
@@ -258,7 +258,7 @@ export function registerTeamsTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_apply_workflow_team_routing', 'atlas_apply_workflow_team_routing'],
+    ['agent_hq_apply_workflow_team_routing'],
     'Stamp the owning team\'s routing template onto a workflow. Defaults to a dry run — pass '
     + 'dry_run false to write. Conflicts and operator-edited rules are reported, never overwritten.',
     {

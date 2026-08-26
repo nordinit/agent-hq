@@ -12,11 +12,11 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     const catalog = getMcpCatalog();
     const byName = new Map(catalog.tools.map(tool => [tool.canonical_name, tool]));
     const expectedTools = [
-      'agent_hq_list_routing_rules',
-      'agent_hq_get_routing_rule',
-      'agent_hq_create_routing_rule',
-      'agent_hq_update_routing_rule',
-      'agent_hq_delete_routing_rule',
+      'agent_hq_list_assignment_rules',
+      'agent_hq_get_assignment_rule',
+      'agent_hq_create_assignment_rule',
+      'agent_hq_update_assignment_rule',
+      'agent_hq_delete_assignment_rule',
       'agent_hq_list_model_routing_rules',
       'agent_hq_get_model_routing_rule',
       'agent_hq_create_model_routing_rule',
@@ -52,33 +52,33 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       'agent_hq_get_task_instances',
       'agent_hq_get_task_active_owner',
       'agent_hq_list_transition_requirement_fields',
-      'agent_hq_list_sprint_type_statuses',
-      'agent_hq_get_resolved_sprint_type_statuses',
-      'agent_hq_get_sprint_type_status',
-      'agent_hq_create_sprint_type_status',
-      'agent_hq_update_sprint_type_status',
-      'agent_hq_delete_sprint_type_status',
-      'agent_hq_list_sprint_type_outcomes',
-      'agent_hq_get_resolved_sprint_type_outcomes',
-      'agent_hq_get_sprint_type_outcome',
-      'agent_hq_create_sprint_type_outcome',
-      'agent_hq_update_sprint_type_outcome',
-      'agent_hq_delete_sprint_type_outcome',
-      'agent_hq_list_sprint_type_relationship_types',
-      'agent_hq_get_sprint_type_relationship_type',
-      'agent_hq_create_sprint_type_relationship_type',
-      'agent_hq_update_sprint_type_relationship_type',
-      'agent_hq_delete_sprint_type_relationship_type',
+      'agent_hq_list_workflow_type_statuses',
+      'agent_hq_get_resolved_workflow_type_statuses',
+      'agent_hq_get_workflow_type_status',
+      'agent_hq_create_workflow_type_status',
+      'agent_hq_update_workflow_type_status',
+      'agent_hq_delete_workflow_type_status',
+      'agent_hq_list_workflow_type_outcomes',
+      'agent_hq_get_resolved_workflow_type_outcomes',
+      'agent_hq_get_workflow_type_outcome',
+      'agent_hq_create_workflow_type_outcome',
+      'agent_hq_update_workflow_type_outcome',
+      'agent_hq_delete_workflow_type_outcome',
+      'agent_hq_list_workflow_type_relationship_types',
+      'agent_hq_get_workflow_type_relationship_type',
+      'agent_hq_create_workflow_type_relationship_type',
+      'agent_hq_update_workflow_type_relationship_type',
+      'agent_hq_delete_workflow_type_relationship_type',
       'agent_hq_get_agent_mcp_capability_policy',
       'agent_hq_create_agent_mcp_capability_policy',
       'agent_hq_update_agent_mcp_capability_policy',
       'agent_hq_delete_agent_mcp_capability_policy',
-      'agent_hq_get_transition_requirements',
+      'agent_hq_list_transition_requirements',
       'agent_hq_create_transition_requirement',
       'agent_hq_update_transition_requirement',
       'agent_hq_delete_transition_requirement',
       'agent_hq_create_task',
-      'agent_hq_get_task_detail',
+      'agent_hq_get_task',
       'agent_hq_update_task',
       'agent_hq_delete_task',
       'agent_hq_list_recurring_task_series',
@@ -93,7 +93,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
 
     for (const toolName of expectedTools) {
       expect(byName.get(toolName)).toBeTruthy();
-      expect(byName.get(toolName)?.aliases.some(alias => alias.startsWith('atlas_'))).toBe(true);
+      expect(byName.get(toolName)?.aliases).toEqual([]);
       expect(byName.get(toolName)?.domain).not.toBe('advanced');
     }
 
@@ -105,14 +105,17 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(byName.get('agent_hq_upload_workflow_file')?.domain).toBe('workflow_files');
     expect(byName.get('agent_hq_replace_project_file')?.description).toContain('version-history');
     expect(byName.get('agent_hq_replace_workflow_file')?.description).toContain('version-history');
-    expect(byName.get('agent_hq_get_sprints')?.description).toContain('Legacy alias');
+    // The sprint-named board tools were removed: they shared their handlers with the
+    // workflow-named ones and their own descriptions told clients to prefer those.
+    expect(byName.get('agent_hq_get_sprints')).toBeUndefined();
+    expect(byName.get('agent_hq_get_sprint')).toBeUndefined();
     expect(byName.get('agent_hq_get_task_instances')?.rest_paths).toEqual(['/api/v1/tasks/:id/instances']);
     expect(byName.get('agent_hq_get_task_instances')?.description).toContain('Read project task context');
     expect(byName.get('agent_hq_get_task_active_owner')?.rest_paths).toEqual(['/api/v1/tasks/:id/active-owner']);
     expect(byName.get('agent_hq_get_task_active_owner')?.description).toContain('Read project task context');
     expect(byName.get('agent_hq_create_task')?.description).toContain('Project task CRUD');
     expect(byName.get('agent_hq_update_task')?.description).toContain('Project task CRUD');
-    expect(byName.get('agent_hq_get_task_detail')?.description).toContain('Project task CRUD');
+    expect(byName.get('agent_hq_get_task')?.description).toContain('Project task CRUD');
     expect(byName.get('agent_hq_delete_task')?.description).toContain('Project task CRUD');
     expect(byName.get('agent_hq_get_agent_mcp_capability_policy')?.description).toContain('MCP capability policy read access');
     expect(byName.get('agent_hq_create_recurring_task_series')?.domain).toBe('recurring_task_series');
@@ -137,20 +140,18 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(byName.get('agent_hq_create_agent_mcp_capability_policy')?.description).toContain('safe non-admin capability keys');
     expect(byName.get('agent_hq_update_agent_mcp_capability_policy')?.args.map(arg => arg.name).sort()).toEqual(['agent_id', 'enabled_capabilities']);
     expect(byName.get('agent_hq_delete_agent_mcp_capability_policy')?.rest_paths).toEqual(['/api/v1/agents/:id/mcp-permissions']);
-    expect(byName.get('agent_hq_get_transition_requirements')?.description).toContain('transition_requirements.manage_project_scope');
+    expect(byName.get('agent_hq_list_transition_requirements')?.description).toContain('transition_requirements.manage_project_scope');
     expect(byName.get('agent_hq_create_transition_requirement')?.description).toContain('assigned project');
     expect(byName.get('agent_hq_update_transition_requirement')?.description).toContain('explicit project/workflow scope');
     expect(byName.get('agent_hq_delete_transition_requirement')?.description).toContain('explicit project/workflow scope');
 
-    const assignmentRules = byName.get('agent_hq_list_routing_rules');
+    const assignmentRules = byName.get('agent_hq_list_assignment_rules');
     expect(assignmentRules?.domain).toBe('assignment_rules');
     expect(assignmentRules?.description).toContain('assignment rules');
     expect(assignmentRules?.description).toContain('routing_rules.manage_project_scope');
-    expect(assignmentRules?.aliases).toEqual(expect.arrayContaining([
-      'agent_hq_list_assignment_rules',
-      'atlas_list_assignment_rules',
-      'atlas_list_routing_rules',
-    ]));
+    // Assignment rules used to answer to four names; the routing_rule spelling was the
+    // canonical one even though the domain, the REST surface, and the docs all say assignment.
+    expect(assignmentRules?.aliases).toEqual([]);
     expect(assignmentRules?.rest_paths).toEqual(expect.arrayContaining([
       '/api/v1/routing/assignment-rules',
       '/api/v1/assignment-rules',
@@ -168,7 +169,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     const catalog = getMcpCatalog();
     const requiredScopeArgs = ['tenant_id', 'project_id', 'sprint_type', 'sprint_id', 'scope', 'status', 'task_type'];
 
-    for (const toolName of ['agent_hq_list_routing_rules', 'agent_hq_get_routing_rule', 'agent_hq_delete_routing_rule']) {
+    for (const toolName of ['agent_hq_list_assignment_rules', 'agent_hq_get_assignment_rule', 'agent_hq_delete_assignment_rule']) {
       const argNames = new Set(catalog.tools.find(tool => tool.canonical_name === toolName)?.args.map(arg => arg.name) ?? []);
       for (const argName of requiredScopeArgs) {
         expect(argNames.has(argName)).toBe(true);
@@ -179,26 +180,26 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
   it('advertises super-admin tenant selectors on routing admin config tools', () => {
     const catalog = getMcpCatalog();
     const tenantSelectableTools = [
-      'agent_hq_list_routing_rules',
-      'agent_hq_create_routing_rule',
+      'agent_hq_list_assignment_rules',
+      'agent_hq_create_assignment_rule',
       'agent_hq_list_routing_transitions',
       'agent_hq_create_routing_transition',
-      'agent_hq_get_transition_requirements',
+      'agent_hq_list_transition_requirements',
       'agent_hq_create_transition_requirement',
       'agent_hq_list_workflow_event_mappings',
       'agent_hq_create_workflow_event_mapping',
       'agent_hq_get_workflow_metadata',
       'agent_hq_list_transition_requirement_fields',
-      'agent_hq_list_sprint_types',
-      'agent_hq_list_sprint_type_task_types',
-      'agent_hq_list_sprint_type_statuses',
-      'agent_hq_get_sprint_type_status',
-      'agent_hq_list_sprint_type_outcomes',
-      'agent_hq_get_sprint_type_outcome',
-      'agent_hq_list_sprint_type_relationship_types',
-      'agent_hq_get_sprint_type_relationship_type',
-      'agent_hq_list_task_field_schemas',
-      'agent_hq_get_task_field_schema',
+      'agent_hq_list_workflow_types',
+      'agent_hq_list_workflow_type_task_types',
+      'agent_hq_list_workflow_type_statuses',
+      'agent_hq_get_workflow_type_status',
+      'agent_hq_list_workflow_type_outcomes',
+      'agent_hq_get_workflow_type_outcome',
+      'agent_hq_list_workflow_type_relationship_types',
+      'agent_hq_get_workflow_type_relationship_type',
+      'agent_hq_list_workflow_type_field_schemas',
+      'agent_hq_get_workflow_type_field_schema',
     ];
 
     for (const toolName of tenantSelectableTools) {
@@ -208,15 +209,24 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     }
   });
 
-  it('keeps workflow-named aliases for legacy sprint-type metadata read tools', () => {
+  it('publishes workflow-type metadata tools under their workflow names only', () => {
+    // These were sprint-named with workflow-named aliases. The workflow spelling is now the
+    // only spelling, so what is worth pinning is that the sprint one did not survive.
     const catalog = getMcpCatalog();
-    const byName = new Map(catalog.tools.map(tool => [tool.canonical_name, tool]));
+    const names = new Set(catalog.tools.flatMap(tool => [tool.canonical_name, ...tool.aliases]));
 
-    expect(byName.get('agent_hq_list_sprint_types')?.aliases).toContain('agent_hq_list_workflow_types');
-    expect(byName.get('agent_hq_list_sprint_type_statuses')?.aliases).toContain('agent_hq_list_workflow_type_statuses');
-    expect(byName.get('agent_hq_list_sprint_type_outcomes')?.aliases).toContain('agent_hq_list_workflow_type_outcomes');
-    expect(byName.get('agent_hq_list_sprint_type_relationship_types')?.aliases).toContain('agent_hq_list_workflow_type_relationship_types');
-    expect(byName.get('agent_hq_list_task_field_schemas')?.aliases).toContain('agent_hq_list_workflow_type_field_schemas');
+    for (const name of [
+      'agent_hq_list_workflow_types',
+      'agent_hq_list_workflow_type_statuses',
+      'agent_hq_list_workflow_type_outcomes',
+      'agent_hq_list_workflow_type_relationship_types',
+      'agent_hq_list_workflow_type_field_schemas',
+    ]) {
+      expect(names.has(name)).toBe(true);
+    }
+
+    expect([...names].filter(name => name.includes('sprint_type'))).toEqual([]);
+    expect([...names].filter(name => name.startsWith('atlas_'))).toEqual([]);
   });
 
   it('advertises the normal outcome tool with only stable runtime fields', () => {
@@ -329,7 +339,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(status?.required).toBe(false);
     expect(status?.schema).toMatchObject({ enum: ['planning', 'active', 'paused', 'complete', 'closed'] });
 
-    const routingRules = byName.get('agent_hq_list_routing_rules');
+    const routingRules = byName.get('agent_hq_list_assignment_rules');
     const tenantSelector = routingRules?.args.find(arg => arg.name === 'tenant_id');
     expect(tenantSelector?.required).toBe(false);
     expect(tenantSelector?.description).toContain('super-admin MCP keys');

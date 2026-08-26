@@ -15,8 +15,8 @@ changing Agent HQ Assignment Rules configuration on the Routing page:
 ## Naming Compatibility
 
 - The UI label is **Assignment Rules** (Routing page → Assignment Rules tab).
-- Preferred MCP tools are the `assignment_rules` variants (for example
-  `agent_hq_list_assignment_rules`); the `agent_hq_*_routing_rules` names remain as aliases.
+- MCP tools use the `assignment_rules` naming (for example `agent_hq_list_assignment_rules`).
+  Each tool has exactly one name; the `agent_hq_*_routing_rule*` spellings have been removed.
 - Preferred REST paths are `/api/v1/routing/assignment-rules` (legacy `/api/v1/routing/rules`
   still works).
 - The backing table is still `sprint_task_routing_rules` during the compatibility window, and

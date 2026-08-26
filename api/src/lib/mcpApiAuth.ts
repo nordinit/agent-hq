@@ -85,6 +85,19 @@ export function hashMcpApiKey(apiKey: string): string {
   return crypto.createHash('sha256').update(apiKey, 'utf8').digest('hex');
 }
 
+/**
+ * Timestamps are stored as 'YYYY-MM-DD HH24:MI:SS' UTC strings throughout this schema, which
+ * compare correctly lexicographically but are not what Date.parse() assumes — it reads a bare
+ * datetime as local time. Appending the zone is what keeps an expiry check from being wrong by
+ * the host's UTC offset.
+ */
+export function isMcpApiKeyExpired(expiresAt: unknown, now = Date.now()): boolean {
+  if (typeof expiresAt !== 'string' || expiresAt.trim() === '') return false;
+  const parsed = Date.parse(`${expiresAt.trim().replace(' ', 'T')}Z`);
+  if (Number.isNaN(parsed)) return false;
+  return parsed <= now;
+}
+
 export function createMcpApiKeyValue(): string {
   return `ahq_mcp_${crypto.randomBytes(32).toString('base64url')}`;
 }
@@ -234,6 +247,19 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'tasks.write_project_notes',
+    group: 'Task lifecycle',
+    label: 'Write notes on project tasks',
+    description: 'Allows adding notes to any task in the MCP agent\'s assigned project, without owning a dispatched run on it. Notes only: evidence, outcomes, and run check-ins remain scoped to the agent\'s active dispatched task under tasks.write_active_lifecycle, because those drive workflow transitions. Task CRUD is likewise unaffected — this grants no create, update, delete, or relationship access. Intended for remote/operator clients that comment on work they are not executing.',
+    endpoints: [
+      'POST /api/v1/tasks/:id/notes',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'routing_rules.manage_project_scope',
     group: 'Workflow',
     label: 'Manage project assignment rules',
@@ -292,6 +318,24 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     ],
     defaultEnabled: {
       scoped_runtime: true,
+      trusted_admin: true,
+    },
+  },
+  {
+    key: 'projects.read_project_board',
+    group: 'Context',
+    label: 'Read project board',
+    description: 'Allows the collection reads a board view needs: the tenant project list, and task, workflow, and workflow-metadata listings scoped to the MCP agent\'s assigned project. Task, workflow, and metadata reads must name the assigned project (or a workflow inside it) explicitly and are refused otherwise, so this cannot enumerate another project\'s work. Grants no writes. Intended for remote/read-first clients — a phone connector needs to list a board, which every other read capability deliberately scopes to a single record or to the agent\'s own dispatched task.',
+    endpoints: [
+      'GET /api/v1/projects',
+      'GET /api/v1/tasks',
+      'GET /api/v1/sprints',
+      'GET /api/v1/workflows',
+      'GET /api/v1/sprints/workflow-metadata',
+      'GET /api/v1/workflows/workflow-metadata',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
       trusted_admin: true,
     },
   },
@@ -953,6 +997,7 @@ export async function resolveMcpApiIdentityForKey(
   const hasDeletedAt = await hasColumn(db, 'agents', 'deleted_at');
   const hasAgentTenant = await hasColumn(db, 'agents', 'tenant_id');
   const hasAgentGlobalMcpAdmin = await hasColumn(db, 'agents', 'global_mcp_admin');
+  const hasKeyExpiry = await hasColumn(db, 'mcp_api_keys', 'expires_at');
 
   const row = await db.get(`
     SELECT
@@ -962,6 +1007,7 @@ export async function resolveMcpApiIdentityForKey(
       k.global_admin AS key_global_admin,
       k.enabled AS key_enabled,
       k.revoked_at AS revoked_at,
+      ${hasKeyExpiry ? 'k.expires_at' : 'NULL'} AS expires_at,
       a.name AS agent_name,
       ${hasAgentTenant ? 'a.tenant_id' : 'NULL'} AS agent_tenant_id,
       ${hasAgentGlobalMcpAdmin ? 'a.global_mcp_admin' : '0'} AS agent_global_mcp_admin,
@@ -982,6 +1028,12 @@ export async function resolveMcpApiIdentityForKey(
   }
   if (Number(row.key_enabled) !== 1 || row.revoked_at != null) {
     throw new McpApiAuthError('MCP API key is disabled or revoked', 403, 'mcp_api_key_disabled');
+  }
+  // OAuth access tokens are mcp_api_keys rows with an expiry. Enforced here rather than at the
+  // /mcp transport so a token cannot outlive its grant on any path that resolves a key — the
+  // REST API included. Keys issued the older way leave expires_at NULL and never expire.
+  if (isMcpApiKeyExpired(row.expires_at)) {
+    throw new McpApiAuthError('MCP API key has expired', 401, 'mcp_api_key_expired');
   }
   if (!row.agent_id || !row.agent_name) {
     throw new McpApiAuthError('MCP API key is not mapped to an agent', 403, 'mcp_api_key_unmapped');
@@ -2100,6 +2152,15 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       && taskRelationshipMutationMatch != null
       && ((method === 'POST' && taskRelationshipMutationMatch[2] == null) || (method === 'DELETE' && taskRelationshipMutationMatch[2] != null));
     const projectCrudAllowed = suffix === '' && (method === 'PUT' || method === 'DELETE');
+    // Notes are part of the lifecycle reporting stream, so they stay out of task CRUD: managing a
+    // project's tasks deliberately does not imply writing into that stream. tasks.write_project_notes
+    // is the separate, explicit grant for a client that files notes across the project without
+    // owning a dispatched run — and it stops at notes. Evidence and outcomes fall through to the
+    // dispatch-scoped path below, because those drive workflow transitions and belong to the agent
+    // executing the run.
+    const projectNoteWriteAllowed = permissionState.enabledCapabilities.has('tasks.write_project_notes')
+      && suffix === 'notes'
+      && method === 'POST';
 
     // An agent that owns the active dispatched run may persist supported custom
     // fields on that task without holding the broad project-task management
@@ -2123,6 +2184,8 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
         : 'tasks.read_active_context'
       : projectCrudAllowed || relationshipCrudAllowed
         ? 'tasks.manage_project_tasks'
+      : projectNoteWriteAllowed
+        ? 'tasks.write_project_notes'
       : writeAllowed
         ? 'tasks.write_active_lifecycle'
         : null;
@@ -2139,10 +2202,10 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       return;
     }
 
-    if ((readAllowed && (hasProjectTaskRead || hasProjectTaskCrud)) || projectCrudAllowed || relationshipCrudAllowed) {
+    if ((readAllowed && (hasProjectTaskRead || hasProjectTaskCrud)) || projectCrudAllowed || relationshipCrudAllowed || projectNoteWriteAllowed) {
       if (canonicalAgentProjectId == null) {
         return deny({
-          reason: `${identity.agentSlug} does not have an assigned project for project task ${projectCrudAllowed || relationshipCrudAllowed ? 'CRUD' : 'context reads'}.`,
+          reason: `${identity.agentSlug} does not have an assigned project for project task ${projectCrudAllowed || relationshipCrudAllowed || projectNoteWriteAllowed ? 'CRUD' : 'context reads'}.`,
           requiredCapability,
           taskId,
         });
@@ -2711,6 +2774,69 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       });
     }
 
+    return next();
+  }
+
+  // Board collection reads.
+  //
+  // Every other read capability resolves to a single record or to the agent's own dispatched
+  // task, which leaves no way to answer "what is on my board" — the first thing a remote client
+  // asks and the last thing a runtime agent needs. These are the collection endpoints, gated on
+  // their own capability and, wherever the route can name a project, required to name the
+  // assigned one. `workflow_id` has already been folded into `sprint_id` by
+  // normalizeWorkflowRequestAliases, so only the sprint spelling is read here.
+  if (method === 'GET' && (
+    requestPath === '/projects'
+    || requestPath === '/tasks'
+    || requestPath === '/sprints'
+    || requestPath === '/workflows'
+    || requestPath === '/sprints/workflow-metadata'
+    || requestPath === '/workflows/workflow-metadata'
+  )) {
+    if (!await requireCapability(
+      'projects.read_project_board',
+      `Project board reads are disabled for ${identity.agentSlug}.`,
+    )) return;
+
+    // The project list is tenant-filtered downstream and carries no task content, so the
+    // assigned-project scope adds nothing to it.
+    if (requestPath === '/projects') return next();
+
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for project board reads.`,
+        requiredCapability: 'projects.read_project_board',
+      });
+    }
+
+    if (requestPath === '/sprints/workflow-metadata' || requestPath === '/workflows/workflow-metadata') {
+      const metadataSprintId = parsePositiveInt(req.query.sprint_id);
+      // With no workflow selector the response is tenant-level workflow-type configuration —
+      // the same shape workflow_definitions.read_project_scope already exposes. With one, it
+      // must resolve inside the assigned project.
+      if (metadataSprintId == null) return next();
+      if (!await sprintBelongsToProject(db, identity, metadataSprintId, canonicalAgentProjectId)) {
+        return deny({
+          reason: `Workflow #${metadataSprintId} is outside the assigned project for ${identity.agentSlug}.`,
+          requiredCapability: 'projects.read_project_board',
+        });
+      }
+      return next();
+    }
+
+    const boardProjectId = parsePositiveInt(req.query.project_id);
+    if (boardProjectId == null) {
+      return deny({
+        reason: `Project board reads require an explicit project_id scoped to the assigned project for ${identity.agentSlug}.`,
+        requiredCapability: 'projects.read_project_board',
+      });
+    }
+    if (boardProjectId !== canonicalAgentProjectId) {
+      return deny({
+        reason: `Project board reads are limited to the assigned project for ${identity.agentSlug}.`,
+        requiredCapability: 'projects.read_project_board',
+      });
+    }
     return next();
   }
 

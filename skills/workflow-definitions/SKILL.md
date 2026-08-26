@@ -16,12 +16,12 @@ Use this whenever changing Agent HQ Workflow Definitions page configuration:
 
 ## Naming Compatibility
 
-The product surface is **Workflow Definitions**, but machine-readable keys and MCP payload
-fields still use the `sprint_*` compatibility names during the migration window:
+The product surface is **Workflow Definitions**. MCP tool names have completed the rename;
+machine-readable payload fields have not:
 
-- MCP tools are named `agent_hq_*_sprint_type*` with `agent_hq_*_workflow_type*` aliases
-  (for example `agent_hq_list_sprint_types` / `agent_hq_list_workflow_types`).
-- Payload and response fields use `sprint_type`, `sprint_id`, and similar keys.
+- MCP tools are named `agent_hq_*_workflow_type*` (for example `agent_hq_list_workflow_types`).
+  Each tool has exactly one name — the `sprint_type` spellings and the `atlas_*` names are gone.
+- Payload and response fields still use `sprint_type`, `sprint_id`, and similar keys.
 - Do not invent `workflow_type` payload keys where the tool contract says `sprint_type`.
 
 ## Core Rules

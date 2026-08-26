@@ -1,5 +1,5 @@
 /**
- * Agent HQ MCP Server — Main Entry Point
+ * Agent HQ MCP Server — stdio Entry Point
  *
  * Exposes Agent HQ projects, boards, tasks, and task management to any
  * MCP-compatible AI client via stdio transport.
@@ -7,77 +7,34 @@
  * Architecture:
  *   AI client (stdio) -> this process -> Agent HQ REST API (localhost:3501)
  *
- * Transport: stdio (v1). No network port is opened by this server.
+ * Transport: stdio. No network port is opened by this server. The same tool surface is
+ * served over Streamable HTTP by api/src/mcp/httpServer.ts, mounted at /mcp inside the API.
  * Auth: Agent-bound API key required via AGENT_HQ_MCP_API_KEY or config file.
  * Rate limit: 60 req/min by default (configurable via MCP_RATE_LIMIT_RPM).
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig } from './config';
 import { AgentHqApiClient } from './apiClient';
 import { RateLimiter } from './rateLimiter';
-import { createMcpRegistrar, formatMcpToolError, McpToolResult } from './registrar';
-import { registerAgentHqMcpDomains } from './registerDomains';
+import { createAgentHqMcpServer } from './serverFactory';
+import { resolveMcpToolProfile } from './toolProfiles';
 
 const cfg = loadConfig();
 const api = new AgentHqApiClient(cfg.apiUrl, cfg.apiKey);
 const limiter = new RateLimiter(cfg.rateLimitRpm);
+const profile = resolveMcpToolProfile(process.env.AGENT_HQ_MCP_TOOL_PROFILE);
 
 console.error(
-  `[agent-hq-mcp] Starting, API: ${cfg.apiUrl} | Rate limit: ${cfg.rateLimitRpm} req/min | Auth: ${cfg.apiKey ? 'configured' : 'missing'}`,
+  `[agent-hq-mcp] Starting, API: ${cfg.apiUrl} | Rate limit: ${cfg.rateLimitRpm} req/min | Auth: ${cfg.apiKey ? 'configured' : 'missing'} | Profile: ${profile.name}`,
 );
 
-const server = new McpServer({
-  name: 'agent-hq',
-  version: '1.0.0',
+const server = createAgentHqMcpServer({
+  api,
+  hasApiKey: Boolean(cfg.apiKey),
+  rateLimiter: limiter,
+  profile: profile.toolNames ? profile : null,
 });
-
-function wrap<T>(fn: () => Promise<T>): () => Promise<McpToolResult> {
-  return async () => {
-    if (!cfg.apiKey) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify({
-              ok: false,
-              error: 'MCP API key is required. Set AGENT_HQ_MCP_API_KEY to an Agent HQ MCP key materialized for this agent.',
-            }),
-          },
-        ],
-      };
-    }
-    if (!limiter.allow()) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify({
-              ok: false,
-              error: `Rate limit exceeded. Maximum ${cfg.rateLimitRpm} requests per minute.`,
-            }),
-          },
-        ],
-      };
-    }
-    try {
-      const result = await fn();
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({ ok: true, data: result }) }],
-      };
-    } catch (err: unknown) {
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify(formatMcpToolError(err)) }],
-      };
-    }
-  };
-}
-
-const registrar = createMcpRegistrar(server);
-const context = { api, wrap, ...registrar };
-
-registerAgentHqMcpDomains(context);
 
 async function main() {
   const transport = new StdioServerTransport();

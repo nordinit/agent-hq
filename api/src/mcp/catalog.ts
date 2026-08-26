@@ -35,19 +35,9 @@ const resources: McpCatalogResource[] = [
     description: 'Legacy/default workflow status seed reference only. Resolve tenant/workflow/task-specific task statuses with agent_hq_get_workflow_metadata.',
   },
   {
-    id: 'atlas-workflow-statuses',
-    uri: 'atlas://workflow/statuses',
-    description: 'Alias URI for the legacy/default workflow status seed reference.',
-  },
-  {
     id: 'agent-hq-workflow-task-types',
     uri: 'agent-hq://workflow/task-types',
     description: 'Legacy/default task type seed reference plus global system enums for task priority and story points. Resolve tenant/workflow task types with agent_hq_get_workflow_metadata.',
-  },
-  {
-    id: 'atlas-workflow-task-types',
-    uri: 'atlas://workflow/task-types',
-    description: 'Alias URI for legacy/default task type seeds and global system enums.',
   },
   {
     id: 'agent-hq-projects-summary',
@@ -55,19 +45,9 @@ const resources: McpCatalogResource[] = [
     description: 'Live project summary snapshot.',
   },
   {
-    id: 'atlas-projects-summary',
-    uri: 'atlas://projects/summary',
-    description: 'Alias URI for project summary snapshot.',
-  },
-  {
     id: 'agent-hq-catalog',
     uri: 'agent-hq://catalog',
     description: 'Typed MCP capability catalog for Agent HQ.',
-  },
-  {
-    id: 'atlas-catalog',
-    uri: 'atlas://catalog',
-    description: 'Alias URI for the typed MCP capability catalog.',
   },
 ];
 
@@ -126,13 +106,13 @@ export function getMcpCatalog() {
     server: {
       name: 'agent-hq',
       version: '1.0.0',
-      transport: 'stdio',
+      transports: ['stdio', 'streamable-http'],
       discoverability: {
         catalog_endpoint: '/api/v1/mcp/catalog',
         health_endpoint: '/api/v1/mcp/catalog/health',
         notes: [
           'This catalog enumerates the typed Agent HQ MCP tools and resources exposed by the bundled MCP server.',
-          'Aliases are provided for compatibility, but canonical_name is the preferred name for clients.',
+          'Every tool has exactly one name. The aliases field is retained for schema compatibility and is always empty.',
           'rest_paths are informational mappings to the backing Agent HQ API surface. Clients should prefer typed MCP tools when available.',
         ],
       },
@@ -141,15 +121,18 @@ export function getMcpCatalog() {
       'projects',
       'project_files',
       'workflows',
-      'sprints',
+      'workflow_files',
       'tasks',
+      'lifecycle',
       'recurring_task_series',
-      'routing_rules',
+      'assignment_rules',
       'routing_transitions',
+      'routing_graph',
       'model_routing',
       'external_task_events',
       'task_definitions',
       'agents',
+      'teams',
       'skills',
       'tools',
       'mcp_servers',

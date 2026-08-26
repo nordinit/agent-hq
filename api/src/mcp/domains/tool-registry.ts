@@ -5,7 +5,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
   const { api, registerTool, wrap } = ctx;
 
   registerTool(
-    ['agent_hq_list_tools', 'atlas_list_tools'],
+    ['agent_hq_list_tools'],
     'List all Agent HQ tools in the registry.',
     {},
     () => wrap(() => api.listTools())(),
@@ -13,7 +13,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_get_tool', 'atlas_get_tool'],
+    ['agent_hq_get_tool'],
     'Get a tool definition by ID.',
     { tool_id: z.number().int().positive().describe('Tool ID') },
     ({ tool_id }) => wrap(() => api.getTool(tool_id))(),
@@ -21,7 +21,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_create_tool', 'atlas_create_tool'],
+    ['agent_hq_create_tool'],
     'Create a tool in the Agent HQ registry.',
     {
       name: z.string().min(1).describe('Tool name'),
@@ -39,7 +39,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_update_tool', 'atlas_update_tool'],
+    ['agent_hq_update_tool'],
     'Update an Agent HQ tool definition.',
     {
       tool_id: z.number().int().positive().describe('Tool ID'),
@@ -50,7 +50,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_delete_tool', 'atlas_delete_tool'],
+    ['agent_hq_delete_tool'],
     'Soft-delete an Agent HQ tool.',
     { tool_id: z.number().int().positive().describe('Tool ID') },
     ({ tool_id }) => wrap(() => api.deleteTool(tool_id))(),
@@ -58,7 +58,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_test_tool', 'atlas_test_tool'],
+    ['agent_hq_test_tool'],
     'Run a tool test with sample input.',
     {
       tool_id: z.number().int().positive().describe('Tool ID'),
@@ -69,7 +69,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_list_agent_tools', 'atlas_list_agent_tools'],
+    ['agent_hq_list_agent_tools'],
     'List all tools assigned to an agent.',
     { agent_id: z.number().int().positive().describe('Agent ID') },
     ({ agent_id }) => wrap(() => api.listAgentTools(agent_id))(),
@@ -77,7 +77,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_assign_tool_to_agent', 'atlas_assign_tool_to_agent'],
+    ['agent_hq_assign_tool_to_agent'],
     'Assign a registry tool to an agent.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),
@@ -90,7 +90,7 @@ export function registerToolRegistryTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_remove_tool_from_agent', 'atlas_remove_tool_from_agent'],
+    ['agent_hq_remove_tool_from_agent'],
     'Remove a tool assignment from an agent.',
     {
       agent_id: z.number().int().positive().describe('Agent ID'),

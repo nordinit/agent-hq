@@ -5,7 +5,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   const { api, registerTool, wrap } = ctx;
 
   registerTool(
-    ['agent_hq_add_task_note', 'atlas_add_task_note'],
+    ['agent_hq_add_task_note'],
     'Add a note or comment to a task.',
     {
       task_id: z.number().int().positive().describe('Task ID (required)'),
@@ -17,7 +17,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_start_task_run', 'atlas_start_task_run'],
+    ['agent_hq_start_task_run'],
     'Mark the active dispatched Agent HQ run as started and register its session key. Preferred over hand-built HTTP JSON for lifecycle start callbacks.',
     {
       instance_id: z.number().int().positive().describe('Dispatched run instance ID'),
@@ -30,7 +30,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_check_in_task_run', 'atlas_check_in_task_run'],
+    ['agent_hq_check_in_task_run'],
     'Post a heartbeat or meaningful progress check-in for the active dispatched Agent HQ run.',
     {
       instance_id: z.number().int().positive().describe('Dispatched run instance ID'),
@@ -45,7 +45,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_report_task_blocker', 'atlas_report_task_blocker'],
+    ['agent_hq_report_task_blocker'],
     'Report that the active dispatched Agent HQ run is blocked. Preferred over hand-built HTTP JSON for blocker lifecycle writes.',
     {
       instance_id: z.number().int().positive().describe('Dispatched run instance ID'),
@@ -67,7 +67,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_record_review_evidence', 'atlas_record_review_evidence'],
+    ['agent_hq_record_review_evidence'],
     'Record review handoff evidence for a task without hand-building JSON.',
     {
       task_id: z.number().int().positive().describe('Task ID'),
@@ -81,7 +81,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_record_qa_evidence', 'atlas_record_qa_evidence'],
+    ['agent_hq_record_qa_evidence'],
     'Record QA verification evidence for a task without hand-building JSON.',
     {
       task_id: z.number().int().positive().describe('Task ID'),
@@ -94,7 +94,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_record_deploy_evidence', 'atlas_record_deploy_evidence'],
+    ['agent_hq_record_deploy_evidence'],
     'Record deploy evidence for a task without hand-building JSON.',
     {
       task_id: z.number().int().positive().describe('Task ID'),
@@ -109,7 +109,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_record_live_verification', 'atlas_record_live_verification'],
+    ['agent_hq_record_live_verification'],
     'Record live verification evidence for a task without hand-building JSON.',
     {
       task_id: z.number().int().positive().describe('Task ID'),
@@ -122,7 +122,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   );
   
   registerTool(
-    ['agent_hq_post_task_outcome', 'atlas_post_task_outcome'],
+    ['agent_hq_post_task_outcome'],
     'Post a task outcome for the active run owned by this MCP key. Put workflow-specific evidence fields in payload.',
     {
       task_id: z.number().int().positive().describe('Task ID'),

@@ -6,10 +6,7 @@ export function registerResourcesTools(ctx: McpDomainContext) {
   const { api, registerResource } = ctx;
 
   registerResource(
-    [
-      { id: 'agent-hq-workflow-statuses', uri: 'agent-hq://workflow/statuses' },
-      { id: 'atlas-workflow-statuses', uri: 'atlas://workflow/statuses' },
-    ],
+    [{ id: 'agent-hq-workflow-statuses', uri: 'agent-hq://workflow/statuses' }],
     () =>
       JSON.stringify({
         default_statuses: VALID_TASK_STATUSES,
@@ -22,10 +19,7 @@ export function registerResourcesTools(ctx: McpDomainContext) {
   );
   
   registerResource(
-    [
-      { id: 'agent-hq-workflow-task-types', uri: 'agent-hq://workflow/task-types' },
-      { id: 'atlas-workflow-task-types', uri: 'atlas://workflow/task-types' },
-    ],
+    [{ id: 'agent-hq-workflow-task-types', uri: 'agent-hq://workflow/task-types' }],
     () =>
       JSON.stringify({
         task_types_source: 'workflow_definition_config',
@@ -51,10 +45,7 @@ export function registerResourcesTools(ctx: McpDomainContext) {
   );
   
   registerResource(
-    [
-      { id: 'agent-hq-projects-summary', uri: 'agent-hq://projects/summary' },
-      { id: 'atlas-projects-summary', uri: 'atlas://projects/summary' },
-    ],
+    [{ id: 'agent-hq-projects-summary', uri: 'agent-hq://projects/summary' }],
     async () => {
       let projects: unknown[] = [];
       try {
@@ -67,10 +58,7 @@ export function registerResourcesTools(ctx: McpDomainContext) {
   );
   
   registerResource(
-    [
-      { id: 'agent-hq-catalog', uri: 'agent-hq://catalog' },
-      { id: 'atlas-catalog', uri: 'atlas://catalog' },
-    ],
+    [{ id: 'agent-hq-catalog', uri: 'agent-hq://catalog' }],
     () => JSON.stringify(getMcpCatalog()),
   );
 }

@@ -50,6 +50,8 @@ import runtimeDriversRouter from './routes/runtime-drivers';
 import { shutdownPool as shutdownBrowserPool } from './services/browserPool';
 import { getMcpCatalog } from './mcp/catalog';
 import { registerAgentHqMcpCatalog } from './mcp/registerCatalog';
+import { createMcpHttpRouter, resolveMcpHttpConfigFromEnv } from './mcp/httpServer';
+import { createMcpOAuthRouter, resolveMcpOAuthConfigFromEnv } from './mcp/oauth/router';
 import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent } from './lib/mcpApiAuth';
 import { handleJsonRequestErrors } from './lib/jsonRequestErrors';
 import openApiRouter from './openapi/router';
@@ -94,6 +96,41 @@ app.use('/api/v1', openApiRouter);
 app.get('/api/v1/mcp/catalog', (_req, res) => {
   res.json(getMcpCatalog());
 });
+
+// Streamable HTTP MCP transport. Mounted outside /api/v1 on purpose: the MCP-key middlewares
+// on that prefix authorize REST resource paths, and /mcp is a JSON-RPC envelope rather than a
+// resource. The router authenticates the key itself, and the tool calls it makes land back on
+// /api/v1 where the capability policy applies as usual.
+const mcpHttpConfig = resolveMcpHttpConfigFromEnv(process.env, PORT);
+const mcpOAuthConfig = resolveMcpOAuthConfigFromEnv(process.env);
+let mcpResourceMetadataUrl: string | undefined;
+
+// The authorization server mounts before the resource it protects so /mcp can advertise it.
+if (mcpHttpConfig.enabled && mcpOAuthConfig.enabled) {
+  try {
+    const oauth = createMcpOAuthRouter({ db: getDb(), config: mcpOAuthConfig });
+    app.use(oauth.router);
+    mcpResourceMetadataUrl = oauth.resourceMetadataUrl;
+    console.log(`[mcp-oauth] authorization server mounted at ${mcpOAuthConfig.publicUrl} (identity: ${mcpOAuthConfig.agentSlug}, DCR: ${mcpOAuthConfig.allowDynamicRegistration ? 'on' : 'off'})`);
+  } catch (err) {
+    // A misconfigured issuer should not take the API down; the endpoint stays reachable with a
+    // direct MCP key, which is how local clients and the smoke test use it anyway.
+    console.error('[mcp-oauth] not mounted:', err instanceof Error ? err.message : err);
+  }
+} else if (mcpHttpConfig.enabled && !mcpOAuthConfig.publicUrl) {
+  console.log('[mcp-oauth] disabled — set AGENT_HQ_PUBLIC_URL to the public HTTPS URL of this install to enable connector OAuth');
+}
+
+if (mcpHttpConfig.enabled) {
+  app.use('/mcp', createMcpHttpRouter({
+    apiBaseUrl: mcpHttpConfig.apiBaseUrl,
+    profileName: mcpHttpConfig.profileName,
+    rateLimitRpm: mcpHttpConfig.rateLimitRpm,
+    allowedHosts: mcpHttpConfig.allowedHosts,
+    resourceMetadataUrl: mcpResourceMetadataUrl,
+  }));
+  console.log(`[mcp-http] Streamable HTTP MCP transport mounted at /mcp (profile: ${mcpHttpConfig.profileName})`);
+}
 
 app.get('/api/v1/mcp/catalog/health', (_req, res) => {
   const catalog = getMcpCatalog();

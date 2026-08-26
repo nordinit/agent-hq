@@ -5,7 +5,7 @@ export function registerExternalTaskEventTools(ctx: McpDomainContext) {
   const { api, registerTool, wrap } = ctx;
 
   registerTool(
-    ['agent_hq_list_external_task_event_receipts', 'atlas_list_external_task_event_receipts'],
+    ['agent_hq_list_external_task_event_receipts'],
     'List external task-event receipts for tasks in the MCP agent assigned project and tenant. This is the project-scoped non-admin management surface for inspecting received workflow-event callbacks; it does not post callbacks, mutate mappings, or allow cross-project/cross-tenant access.',
     {
       task_id: z.number().int().positive().optional().describe('Optional task ID filter inside the assigned project'),
@@ -20,7 +20,7 @@ export function registerExternalTaskEventTools(ctx: McpDomainContext) {
   );
 
   registerTool(
-    ['agent_hq_get_external_task_event_receipt', 'atlas_get_external_task_event_receipt'],
+    ['agent_hq_get_external_task_event_receipt'],
     'Get one external task-event receipt by ID, limited to tasks in the MCP agent assigned project and tenant. Out-of-project or cross-tenant receipts are denied or hidden from scoped non-admin credentials.',
     {
       receipt_id: z.number().int().positive().describe('External task-event receipt ID'),
