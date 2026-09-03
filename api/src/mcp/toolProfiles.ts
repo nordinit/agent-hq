@@ -33,10 +33,11 @@ export interface McpToolProfile {
 
 /**
  * Phone-sized surface: read the board, file and update work, move a workflow through its
- * lifecycle, route tasks, run the recurring series that drive scheduled automation. Deliberately
- * excluded — the remaining configuration surfaces (agents, skills, workflow definitions, teams,
- * tools, MCP servers), file upload/download, and the dispatch-scoped lifecycle writes (evidence,
- * outcomes, run check-ins) that only mean something for an agent that owns a dispatched run.
+ * lifecycle, route tasks, manage the project's agents, run the recurring series that drive
+ * scheduled automation. Deliberately excluded — the remaining configuration surfaces (skills,
+ * workflow definitions, teams, tools, MCP servers), agent provisioning and MCP capability
+ * policies, file upload/download, and the dispatch-scoped lifecycle writes (evidence, outcomes,
+ * run check-ins) that only mean something for an agent that owns a dispatched run.
  *
  * Workflow lifecycle and task routing are in while workflow *definitions* stay out, and the line
  * between them is the point: pausing a cycle or changing who picks up a task is an operator
@@ -104,6 +105,16 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
   'agent_hq_preview_routing_change',
   'agent_hq_get_routing_audit',
 
+  // Project agents: the roster and each agent's record, including its job instructions. The
+  // provisioning, MCP-sync and capability-policy tools stay out — this edits what an agent is
+  // told to do, not what it is allowed to do or where it runs from.
+  'agent_hq_list_agents',
+  'agent_hq_get_agent',
+  'agent_hq_create_agent',
+  'agent_hq_update_agent',
+  'agent_hq_delete_agent',
+  'agent_hq_get_agent_docs',
+
   // Scheduled automation
   'agent_hq_create_recurring_task_series',
   'agent_hq_update_recurring_task_series',
@@ -139,6 +150,7 @@ const MOBILE_PROFILE_CAPABILITIES: readonly string[] = [
   'routing_rules.manage_project_scope',
   'routing_transitions.manage_project_scope',
   'transition_requirements.manage_project_scope',
+  'agents.manage_project_agents',
   'workflow.analyze_routing_graph',
   'workflow.edit_routing_config',
   'workflow_definitions.read_project_scope',

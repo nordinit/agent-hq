@@ -95,7 +95,7 @@ describe('MCP Streamable HTTP transport', () => {
       const listed = await client.listTools();
       const mobileCount = resolveMcpToolProfile('mobile').toolNames?.size ?? 0;
 
-      expect(listed.tools.length).toBeGreaterThan(mobileCount * 4);
+      expect(listed.tools.length).toBeGreaterThan(mobileCount * 3);
     } finally {
       await client.close();
     }

@@ -71,6 +71,20 @@ describe('MCP tool profiles', () => {
     expect(mobile.capabilities).not.toContain('workflow_definitions.manage_project_scope');
   });
 
+
+  it('gives the mobile profile project agent CRUD but not agent provisioning or policy edits', () => {
+    const mobile = resolveMcpToolProfile('mobile');
+    expect(mobile.toolNames).toContain('agent_hq_update_agent');
+    expect(mobile.capabilities).toContain('agents.manage_project_agents');
+
+    // Building a workspace, syncing credentials, or deciding what an agent may do over MCP are
+    // a different kind of authority from editing its job instructions.
+    expect(mobile.toolNames).not.toContain('agent_hq_provision_full_agent');
+    expect(mobile.toolNames).not.toContain('agent_hq_sync_agent_mcp');
+    expect(mobile.toolNames).not.toContain('agent_hq_update_agent_mcp_capability_policy');
+    expect(mobile.capabilities).not.toContain('mcp_capability_policies.write');
+  });
+
   it('resolves the full profile by default and rejects unknown names', () => {
     expect(resolveMcpToolProfile().name).toBe('full');
     expect(resolveMcpToolProfile('').name).toBe('full');
@@ -80,7 +94,7 @@ describe('MCP tool profiles', () => {
 
   it('selects only the profile names out of a tool name list', () => {
     const mobile = resolveMcpToolProfile('mobile');
-    expect(selectProfileToolNames(mobile, ['agent_hq_list_tasks', 'agent_hq_create_agent']))
+    expect(selectProfileToolNames(mobile, ['agent_hq_list_tasks', 'agent_hq_provision_full_agent']))
       .toEqual(['agent_hq_list_tasks']);
     expect(selectProfileToolNames(resolveMcpToolProfile('full'), ['a', 'b'])).toEqual(['a', 'b']);
   });
@@ -113,7 +127,12 @@ describe('profile-scoped registrar', () => {
     expect(new Set(mobileNames)).toEqual(mobile.toolNames);
     // Duplicate registrations would mean a name appears in two domains.
     expect(mobileNames.length).toBe(new Set(mobileNames).size);
-    expect(mobileNames.length).toBeLessThan(registeredToolNames('full').length / 4);
+    // The bound is a smell test on profile creep, not a fixed budget. It was a quarter of the
+    // full surface when the profile held board reads and task writes alone; workflow lifecycle,
+    // routing and project agent management have since roughly doubled it. Widen it only when the
+    // additions were asked for, and read a failure here as a prompt to check the profile still
+    // describes a phone rather than an admin console.
+    expect(mobileNames.length).toBeLessThan(registeredToolNames('full').length / 3);
   });
 
   it('does not let a profile-scoped server rewrite the process-wide catalog', () => {
@@ -131,7 +150,7 @@ describe('profile-scoped registrar', () => {
     const names = new Set(registeredToolNames('mobile'));
     expect(names.has('agent_hq_list_tasks')).toBe(true);
     // Administrative surfaces a remote connector has no business seeing.
-    expect(names.has('agent_hq_create_agent')).toBe(false);
+    expect(names.has('agent_hq_provision_full_agent')).toBe(false);
     expect(names.has('agent_hq_api_request')).toBe(false);
     expect(names.has('agent_hq_update_workflow_type')).toBe(false);
   });

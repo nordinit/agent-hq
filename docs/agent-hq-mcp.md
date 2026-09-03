@@ -740,6 +740,7 @@ The policy the `mobile` profile pairs with:
 | `sprints.read_active_sprint` | workflow detail |
 | `sprints.pause_active_sprint` | pause, resume, and reopen a workflow in the assigned project |
 | `sprints.complete_active_sprint` | complete or close a workflow in the assigned project |
+| `agents.manage_project_agents` | list/read/create/update/delete agents in the assigned project, including job instructions |
 | `workflow_definitions.read_project_scope` | workflow definition reads — type, task types, field schemas, statuses, outcomes, relationship types |
 | `tasks.read_project_context` | task detail, notes, history, relationships |
 | `tasks.manage_project_tasks` | create/update/delete tasks and relationships in the assigned project |
@@ -754,6 +755,18 @@ Several capabilities were added for this shape of client. `projects.read_project
 The two `sprints.*_active_sprint` writes back `agent_hq_set_workflow_status`. Both resolve scope the same way — the workflow attached to the caller's active dispatched task, or any workflow inside its assigned project — and both are off by default for scoped runtime keys, so a dispatched agent gets workflow lifecycle control only when an operator grants it. They are separate because the transitions are not equivalent: pausing is a reversible hold, while completing stamps the end date and stands the workflow's agents down, so an agent that may say "hold on" does not thereby get to say "this cycle is finished."
 
 Neither is in `SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES`, so a scoped policy editor cannot grant workflow lifecycle control to itself or another agent; that stays an administrative act.
+
+### Managing project agents over MCP
+
+`agents.manage_project_agents` covers the roster and each agent's record — job instructions, role, model, skills, workspace and routing configuration — plus its docs bundle, for agents in the assigned project.
+
+The write guard is the whole design. `resolveAgentIdentityFields` derives trust from the agent row itself: a `system_role` of `admin` or `atlas`, a `global_mcp_admin` flag, or a name or slug matching the Atlas identity all make an agent trusted, and a trusted agent resolves to the `trusted_admin` default policy under which nearly every capability — `admin.full_access` included — is enabled. A grant that let a connector write those fields would not be project-scoped at all; it would let the connector promote its own row and come back as an administrator.
+
+So any create or update carrying `system_role`, `global_mcp_admin`, `key_global_admin`, `tenant_id` or `session_key` is refused outright, as is one naming the agent `Atlas` or slugging it `atlas`. `project_id` must name the assigned project, and a create must name it explicitly. **If a new input to `resolveAgentIdentityFields` is ever added, it has to be added to `AGENT_TRUST_BEARING_FIELDS` in the same change.**
+
+Out of scope, and left to administrative keys: `/provision`, `/provision-full` and `/mcp/sync`, which build workspaces and credentials; and `/mcp-permissions` and `/mcp-tool-allowlists`, which decide what an agent may do over MCP. The line is that this capability edits what an agent is *told to do*, not what it is *allowed to do* or where it runs from.
+
+Note it does not exclude the connector's own row: an identity holding this can edit, disable or delete itself. That cannot escalate — the trust guard applies to its own row too — but it can lock the connector out until an operator restores it from the canvas.
 
 ### Editing workflow definitions over MCP
 

@@ -379,6 +379,24 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'agents.manage_project_agents',
+    group: 'Context',
+    label: 'Manage project agents',
+    description: 'Allows listing, reading, creating, updating and deleting agents inside the MCP agent\'s assigned project and tenant, including their job instructions, role, model, skills, workspace and routing configuration, and their docs bundle. Refuses any create or update that touches a field trust is derived from — system_role, global_mcp_admin, tenant_id or session_key — or that names the Atlas identity, because setting any of those turns a scoped agent into an administrative one. project_id must name the assigned project, so this cannot move an agent between projects or reach one outside it. Does not allow provisioning, workspace or MCP sync, capability-policy edits, or tool allowlists.',
+    endpoints: [
+      'GET /api/v1/agents',
+      'POST /api/v1/agents',
+      'GET /api/v1/agents/:id',
+      'PUT /api/v1/agents/:id',
+      'DELETE /api/v1/agents/:id',
+      'GET /api/v1/agents/:id/docs',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'sprints.pause_active_sprint',
     group: 'Context',
     label: 'Pause and resume workflow',
@@ -1454,6 +1472,51 @@ async function relationshipBelongsToProject(
     && parsePositiveInt(row.target_project_id) === projectId;
 }
 
+/**
+ * Fields an agent write must never carry under a project-scoped grant, because
+ * resolveAgentIdentityFields derives trust from them: `system_role` of 'admin' or the Atlas role
+ * makes an agent trusted, `global_mcp_admin` makes it a super-admin, `tenant_id` moves it between
+ * tenants, and `session_key` is how a runtime identity is matched to a row.
+ *
+ * A trusted agent resolves to the `trusted_admin` default policy, under which nearly every
+ * capability — `admin.full_access` included — is enabled. So without this guard the grant would
+ * be a complete privilege escalation rather than a project-scoped one: a connector could PUT its
+ * own row with system_role 'admin' and come back as an administrator.
+ *
+ * Deny-list rather than allow-list because the set is small, closed, and defined by exactly what
+ * resolveAgentIdentityFields reads — see agentIdentityNameIsReserved for the other half of it.
+ * Adding a new trust input there means adding it here.
+ */
+const AGENT_TRUST_BEARING_FIELDS = ['system_role', 'global_mcp_admin', 'key_global_admin', 'tenant_id', 'session_key'] as const;
+
+function agentTrustBearingFieldInPatch(body: Record<string, unknown>): string | null {
+  return AGENT_TRUST_BEARING_FIELDS.find((field) => Object.prototype.hasOwnProperty.call(body, field)) ?? null;
+}
+
+/**
+ * The other half of the trust guard. resolveAgentIdentityFields also treats an agent as trusted
+ * when its slug is the Atlas slug or its name is the Atlas name, so a rename is an escalation
+ * path that never mentions a role at all.
+ */
+function agentIdentityNameIsReserved(body: Record<string, unknown>): boolean {
+  const name = typeof body.name === 'string' ? body.name.trim().toLowerCase() : null;
+  const slug = typeof body.slug === 'string' ? body.slug.trim().toLowerCase() : null;
+  return name === ATLAS_AGENT_NAME.toLowerCase() || slug === ATLAS_AGENT_SLUG.toLowerCase();
+}
+
+async function agentBelongsToProject(db: Db, identity: McpApiIdentity, agentId: number, projectId: number): Promise<boolean> {
+  if (!await hasTable(db, 'agents')) return false;
+  const hasAgentTenant = await hasColumn(db, 'agents', 'tenant_id');
+  const row = await db.get(`
+    SELECT project_id
+    FROM agents
+    WHERE id = ?
+      ${hasAgentTenant ? 'AND tenant_id = ?' : ''}
+    LIMIT 1
+  `, agentId, ...(hasAgentTenant ? [identity.tenantId] : [])) as { project_id: number | null } | undefined;
+  return parsePositiveInt(row?.project_id) === projectId;
+}
+
 async function sprintBelongsToProject(db: Db, identity: McpApiIdentity, sprintId: number, projectId: number): Promise<boolean> {
   if (!await hasTable(db, 'sprints')) return false;
   const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
@@ -2119,6 +2182,82 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       });
     }
     return next();
+  }
+
+  // Agent CRUD inside the assigned project: the roster, each agent's record — job instructions,
+  // role, model, skills, workspace and routing config — and its docs bundle.
+  //
+  // Deliberately not here: /provision, /provision-full and /mcp/sync, which build workspaces and
+  // credentials; /mcp-permissions and /mcp-tool-allowlists, which decide what an agent may do
+  // over MCP and have their own capability below. This grant edits what an agent is told to do,
+  // not what it is allowed to do.
+  const agentDocsMatch = requestPath.match(/^\/agents\/(\d+)\/docs$/);
+  const agentRecordMatch = requestPath.match(/^\/agents\/(\d+)$/);
+  const agentCollection = requestPath === '/agents' && (method === 'GET' || method === 'POST');
+  if (agentCollection
+    || (agentRecordMatch && ['GET', 'PUT', 'DELETE'].includes(method))
+    || (agentDocsMatch && method === 'GET')) {
+    const requiredCapability: AgentMcpCapabilityKey = 'agents.manage_project_agents';
+    if (!await requireCapability(
+      requiredCapability,
+      `Project agent management is disabled for ${identity.agentSlug}.`,
+    )) return;
+
+    if (canonicalAgentProjectId == null) {
+      return deny({
+        reason: `${identity.agentSlug} does not have an assigned project for agent management.`,
+        requiredCapability,
+      });
+    }
+
+    if (method === 'POST' || method === 'PUT') {
+      const body = requestBodyRecord(req.body);
+
+      const trustField = agentTrustBearingFieldInPatch(body);
+      if (trustField) {
+        return deny({
+          reason: `Normal Agent HQ MCP keys cannot set "${trustField}" on an agent: trust is derived from it, so writing it would grant administrative access rather than manage a project agent.`,
+          requiredCapability,
+        });
+      }
+      if (agentIdentityNameIsReserved(body)) {
+        return deny({
+          reason: `Normal Agent HQ MCP keys cannot name an agent after the Atlas identity: an agent carrying that name or slug resolves as trusted.`,
+          requiredCapability,
+        });
+      }
+
+      const requestedProjectId = parsePositiveInt(body.project_id);
+      if (method === 'POST' && requestedProjectId == null) {
+        return deny({
+          reason: `Creating an agent requires project_id naming the assigned project for ${identity.agentSlug}.`,
+          requiredCapability,
+        });
+      }
+      if (requestedProjectId != null && requestedProjectId !== canonicalAgentProjectId) {
+        return deny({
+          reason: `Normal Agent HQ MCP keys can only place an agent in their assigned project.`,
+          requiredCapability,
+        });
+      }
+    }
+
+    if (agentCollection) {
+      if (method === 'POST') return next();
+      const listProjectId = parsePositiveInt(req.query.project_id);
+      if (listProjectId === canonicalAgentProjectId) return next();
+      return deny({
+        reason: `Agent listing requires project_id scoped to the assigned project for ${identity.agentSlug}.`,
+        requiredCapability,
+      });
+    }
+
+    const targetAgentId = Number((agentRecordMatch ?? agentDocsMatch)![1]);
+    if (await agentBelongsToProject(db, identity, targetAgentId, canonicalAgentProjectId)) return next();
+    return deny({
+      reason: `Normal Agent HQ MCP keys can only manage agents inside their assigned project.`,
+      requiredCapability,
+    });
   }
 
   const agentMcpPolicyMatch = requestPath.match(/^\/agents\/(\d+)\/mcp-permissions$/);

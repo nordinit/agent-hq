@@ -156,6 +156,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.post('/api/v1/projects', (req, res) => res.status(201).json({ ok: true, body: req.body }));
     app.get('/api/v1/projects/:id', (req, res) => res.json({ ok: true, project_id: Number(req.params.id) }));
     app.delete('/api/v1/projects/:id', (req, res) => res.json({ ok: true, project_id: Number(req.params.id) }));
+    app.get('/api/v1/agents', (req, res) => res.json({ ok: true, query: req.query }));
+    app.post('/api/v1/agents', (req, res) => res.status(201).json({ ok: true, body: req.body }));
+    app.get('/api/v1/agents/:id', (req, res) => res.json({ ok: true, agent_id: Number(req.params.id) }));
+    app.put('/api/v1/agents/:id', (req, res) => res.json({ ok: true, agent_id: Number(req.params.id), body: req.body }));
+    app.delete('/api/v1/agents/:id', (req, res) => res.json({ ok: true, agent_id: Number(req.params.id) }));
+    app.get('/api/v1/agents/:id/docs', (req, res) => res.json({ ok: true, agent_id: Number(req.params.id) }));
     app.post('/api/v1/mcp-servers', (_req, res) => res.status(201).json({ ok: true }));
     app.use('/api/v1/projects/:id/files', projectFilesRouter);
     app.get('/api/v1/sprints/workflow-metadata', async (req, res) => res.json({
@@ -529,6 +535,111 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         code: 'mcp_scope_denied',
         details: { required_capability: PAUSE },
       });
+    });
+  });
+
+
+  describe('project agent management', () => {
+    const MANAGE = 'agents.manage_project_agents';
+
+    const put = (id: number, body: Record<string, unknown>, key = normalKey) => fetch(`${baseUrl}/api/v1/agents/${id}`, {
+      method: 'PUT', headers: authHeaders(key), body: JSON.stringify(body),
+    });
+
+    it('is withheld from a scoped runtime key by default', async () => {
+      const res = await fetch(`${baseUrl}/api/v1/agents?project_id=86`, { headers: authHeaders(normalKey) });
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({ details: { required_capability: MANAGE } });
+    });
+
+    it('manages agents inside the assigned project', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+
+      await expect(fetch(`${baseUrl}/api/v1/agents?project_id=86`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(200);
+      // Agent 9 (QA) is in project 86, the assigned one.
+      await expect(fetch(`${baseUrl}/api/v1/agents/9`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(200);
+      await expect(fetch(`${baseUrl}/api/v1/agents/9/docs`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(200);
+      await expect(put(9, { job_instructions: 'Review every backend PR against the workflow gates.' }).then(r => r.status)).resolves.toBe(200);
+      await expect(fetch(`${baseUrl}/api/v1/agents/9`, { method: 'DELETE', headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(200);
+
+      const created = await fetch(`${baseUrl}/api/v1/agents`, {
+        method: 'POST', headers: authHeaders(normalKey),
+        body: JSON.stringify({ name: 'Reviewer', project_id: 86, job_instructions: 'Review work.' }),
+      });
+      expect(created.status).toBe(201);
+    });
+
+    it('refuses every field agent trust is derived from', async () => {
+      // Each of these would turn a scoped agent into a trusted_admin one, under which nearly
+      // every capability including admin.full_access is enabled. Without this guard the grant
+      // would be a total privilege escalation: the connector could promote its own row.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+
+      for (const body of [
+        { system_role: 'admin' },
+        { system_role: 'atlas' },
+        { global_mcp_admin: 1 },
+        { key_global_admin: 1 },
+        { tenant_id: 2 },
+        { session_key: 'agent:atlas-admin:main' },
+        { job_instructions: 'fine', system_role: 'admin' },
+      ]) {
+        const res = await put(9, body);
+        expect({ body, status: res.status }).toEqual({ body, status: 403 });
+        await expect(res.json()).resolves.toMatchObject({ details: { required_capability: MANAGE } });
+      }
+    });
+
+    it('refuses to name an agent after the Atlas identity', async () => {
+      // resolveAgentIdentityFields treats the Atlas name or slug as trusted, so a rename is an
+      // escalation that never mentions a role.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+
+      for (const body of [{ name: 'Atlas' }, { name: 'atlas' }, { slug: 'atlas' }]) {
+        const res = await put(9, body);
+        expect({ body, status: res.status }).toEqual({ body, status: 403 });
+      }
+      // A different name is ordinary.
+      await expect(put(9, { name: 'Atlas Copco Reviewer' }).then(r => r.status)).resolves.toBe(200);
+    });
+
+    it('cannot reach or move an agent outside the assigned project', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+
+      // Agent 10 is tenant 2 / project 99.
+      await expect(fetch(`${baseUrl}/api/v1/agents/10`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(403);
+      // Agent 11 has no project at all.
+      await expect(fetch(`${baseUrl}/api/v1/agents/11`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(403);
+      // Reassigning an in-project agent out of it.
+      await expect(put(9, { project_id: 87 }).then(r => r.status)).resolves.toBe(403);
+      // Listing another project's roster.
+      await expect(fetch(`${baseUrl}/api/v1/agents?project_id=87`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(403);
+      // Creating into another project, and creating without naming one.
+      const intoOther = await fetch(`${baseUrl}/api/v1/agents`, {
+        method: 'POST', headers: authHeaders(normalKey), body: JSON.stringify({ name: 'X', project_id: 87 }),
+      });
+      expect(intoOther.status).toBe(403);
+      const unscoped = await fetch(`${baseUrl}/api/v1/agents`, {
+        method: 'POST', headers: authHeaders(normalKey), body: JSON.stringify({ name: 'X' }),
+      });
+      expect(unscoped.status).toBe(403);
+    });
+
+    it('does not open provisioning or capability-policy routes', async () => {
+      // The grant edits what an agent is told to do, not what it may do or where it runs.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+
+      const policy = await fetch(`${baseUrl}/api/v1/agents/9/mcp-permissions`, { headers: authHeaders(normalKey) });
+      expect(policy.status).toBe(403);
+      const body = await policy.json() as { details?: { required_capability?: string } };
+      // Whichever of the policy keys it asks for, it must not be satisfied by this grant.
+      expect(body.details?.required_capability).toMatch(/^mcp_capability_policies\./);
+    });
+
+    it('refuses a key with no assigned project', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 11, [MANAGE]);
+      const res = await fetch(`${baseUrl}/api/v1/agents?project_id=86`, { headers: authHeaders(noProjectKey) });
+      expect(res.status).toBe(403);
     });
   });
 
