@@ -1,5 +1,5 @@
 import { setupTestDb, teardownTestDb } from '../db/testDb';
-import { assertAtlasDirectStatusGate, canonicalOutcomeRoute, evaluateTaskIntegrity } from './taskRelease';
+import { assertAtlasDirectStatusGate, canonicalOutcomeRoute, evaluateTaskIntegrity, requireReleaseGate } from './taskRelease';
 import { type Db } from "../db/adapter/types";
 
 describe('taskRelease configurable outcome routing', () => {
@@ -89,16 +89,23 @@ describe('taskRelease configurable outcome routing', () => {
     }
   });
 
-  it('still surfaces the QA and deploy checks the workflow does configure', async () => {
-    // Removing the review check must not quiet the checks that ask the configured workflow.
+  it('leaves evidence enforcement to the configured transition gate', async () => {
+    // The integrity read no longer decides anything; requireReleaseGate does, per outcome and
+    // task type, and it is the only place an evidence rule is written down.
     await db.run(`
-      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
-      VALUES (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO sprint_task_transition_requirements
+        (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+      VALUES (?, 10, 1, 'enhancements', NULL, 'qa_pass', 'qa_verified_commit', 'required', NULL, 'block', 'qa_pass requires qa_verified_commit', 1, 10)
     `, tenantId);
 
-    const deployed = await evaluateTaskIntegrity({ status: 'deployed', sprint_id: 10, task_type: 'backend' }, db);
-    expect(deployed.integrity_state).toBe('missing_deploy_evidence');
-    expect(deployed.integrity_warnings).toContain('Task is deployed but missing deploy commit/target/timestamp evidence.');
+    const task = { id: 42, status: 'review', sprint_id: 10, task_type: 'backend' } as never;
+
+    const blocked = await requireReleaseGate(db, task, 'qa_pass', 'backend');
+    expect(blocked.errors).toContain('qa_pass requires qa_verified_commit');
+
+    // An outcome the workflow does not gate stays ungated.
+    const ungated = await requireReleaseGate(db, task, 'qa_fail', 'backend');
+    expect(ungated).toEqual({ errors: [], warnings: [] });
   });
 
   it('does not mark configuration-style done tasks legacy/unverified when deploy evidence is not part of the workflow', async () => {
@@ -142,7 +149,10 @@ describe('taskRelease configurable outcome routing', () => {
     expect(result.is_legacy_unverified_done).toBe(false);
   });
 
-  it('keeps missing deploy/live warnings for done tasks in deploy-verification workflows', async () => {
+  it('does not judge a done task on deploy or live evidence, even in a deploy-verification workflow', async () => {
+    // This used to report invalid_done_state and label the task "Done (legacy, unverified)".
+    // Whether done owes deploy and live evidence is the workflow's call, expressed as a gate on
+    // the transition into done, not a verdict passed on every task that already got there.
     await db.run(`
       INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
       VALUES (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -154,10 +164,20 @@ describe('taskRelease configurable outcome routing', () => {
           task_type: 'backend',
         }, db);
 
-    expect(result.integrity_state).toBe('invalid_done_state');
-    expect(result.integrity_warnings).toContain('Done task is missing deploy evidence.');
-    expect(result.integrity_warnings).toContain('Done task is missing live verification evidence.');
-    expect(result.release_state_label).toBe('Done (legacy, unverified)');
-    expect(result.is_legacy_unverified_done).toBe(true);
+    expect(result.integrity_state).toBe('clean');
+    expect(result.integrity_warnings).toEqual([]);
+    expect(result.is_legacy_unverified_done).toBe(false);
+    expect(result.release_state_label).toBeNull();
+  });
+
+  it('still restates the task status as a release badge', async () => {
+    // The badge survives because it describes where the task is, rather than ruling on it.
+    const review = await evaluateTaskIntegrity({ status: 'review', sprint_id: 10, task_type: 'design' }, db);
+    expect(review.release_state_badge).toBe('review build');
+    expect(review.integrity_warnings).toEqual([]);
+
+    const deployed = await evaluateTaskIntegrity({ status: 'deployed', sprint_id: 10, task_type: 'backend' }, db);
+    expect(deployed.release_state_badge).toBe('live deployed');
+    expect(deployed.integrity_warnings).toEqual([]);
   });
 });

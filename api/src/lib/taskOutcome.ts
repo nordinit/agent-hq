@@ -722,14 +722,11 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
   const iInstanceId = input.instanceId ?? finalTaskState.active_instance_id;
   const iAgentId = finalTaskState.agent_id;
 
-  if (nextStatus === 'review' && !finalTaskState.review_branch && !finalTaskState.review_commit) {
-    await emitIntegrityEvent(db, {
-            taskId: input.taskId, anomalyType: 'missing_review_evidence',
-            detail: `Task moved to review (outcome: ${effectiveOutcome}) with no review_branch or review_commit`,
-            instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-          });
-  }
-
+  // Reaching review with no branch or commit is no longer recorded as an anomaly. It assumed
+  // every task was development work; a design, PM, or configuration task arrives at review with
+  // nothing to cite, and counting that as a defect made the integrity feed a measure of task
+  // type rather than of anything wrong. A workflow that wants the evidence requires it in
+  // sprint_task_transition_requirements, where requireReleaseGate blocks the transition outright.
   if (effectiveOutcome === 'qa_pass' && !finalTaskState.qa_verified_commit) {
     await emitIntegrityEvent(db, {
             taskId: input.taskId, anomalyType: 'missing_qa_evidence',

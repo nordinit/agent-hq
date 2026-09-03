@@ -33,14 +33,15 @@ export interface McpToolProfile {
 
 /**
  * Phone-sized surface: read the board, file and update work, move a workflow through its
- * lifecycle, run the recurring series that drive scheduled automation. Deliberately excluded —
- * configuration surfaces (agents, skills, routing, workflow definitions, teams, tools, MCP
- * servers), file upload/download, and the dispatch-scoped lifecycle writes (evidence, outcomes,
- * run check-ins) that only mean something for an agent that owns a dispatched run.
+ * lifecycle, route tasks, run the recurring series that drive scheduled automation. Deliberately
+ * excluded — the remaining configuration surfaces (agents, skills, workflow definitions, teams,
+ * tools, MCP servers), file upload/download, and the dispatch-scoped lifecycle writes (evidence,
+ * outcomes, run check-ins) that only mean something for an agent that owns a dispatched run.
  *
- * Workflow lifecycle is in while workflow *definitions* stay out, and the line between them is
- * the point: pausing a cycle from a phone is an operator deciding when work runs, whereas
- * defining a workflow type is design work that wants the canvas.
+ * Workflow lifecycle and task routing are in while workflow *definitions* stay out, and the line
+ * between them is the point: pausing a cycle or changing who picks up a task is an operator
+ * deciding how work runs today, whereas defining a workflow type — its statuses, outcomes and
+ * relationship types — is design work that wants the canvas.
  *
  * Names here are the tools' own names — since every tool answers to exactly one name, a profile
  * entry that no longer resolves is a typo, which the profile tests catch.
@@ -74,6 +75,28 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
   // already set up between its statuses, it does not define or reshape one.
   'agent_hq_set_workflow_status',
 
+  // Task routing: which agent picks up a task, what a status moves to on an outcome, and what
+  // evidence a transition demands. All three resolve to the assigned project through
+  // canonicalAgentProjectId rather than a dispatched task, so they work for a client that owns
+  // no run. Deliberately not here: agent_hq_preview_routing_change and the graph/trace tools,
+  // whose policy branches still scope to a dispatched task and would deny this profile every
+  // time — see the note on MOBILE_PROFILE_CAPABILITIES.
+  'agent_hq_list_assignment_rules',
+  'agent_hq_get_assignment_rule',
+  'agent_hq_create_assignment_rule',
+  'agent_hq_update_assignment_rule',
+  'agent_hq_delete_assignment_rule',
+  'agent_hq_list_routing_transitions',
+  'agent_hq_get_routing_transition',
+  'agent_hq_create_routing_transition',
+  'agent_hq_update_routing_transition',
+  'agent_hq_delete_routing_transition',
+  'agent_hq_list_transition_requirements',
+  'agent_hq_list_transition_requirement_fields',
+  'agent_hq_create_transition_requirement',
+  'agent_hq_update_transition_requirement',
+  'agent_hq_delete_transition_requirement',
+
   // Scheduled automation
   'agent_hq_create_recurring_task_series',
   'agent_hq_update_recurring_task_series',
@@ -88,9 +111,18 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
  * no dispatched task, `tasks.write_project_notes` lets it comment on work it is not executing,
  * and the two `sprints.*_active_sprint` writes let it work the lifecycle controls of a workflow
  * it is not running — all of which resolve through the assigned project rather than a dispatched
- * task. The rest are existing project-scoped grants. Notably absent: every admin key, both
- * cross-tenant grants, and `tasks.write_active_lifecycle` — a connector should not be able to
- * report evidence or an outcome for a run it is not executing.
+ * task. The three routing grants do the same for assignment rules, transitions and gates. The
+ * rest are existing project-scoped grants. Notably absent: every admin key, both cross-tenant
+ * grants, and `tasks.write_active_lifecycle` — a connector should not be able to report evidence
+ * or an outcome for a run it is not executing.
+ *
+ * Also absent, and worth knowing before adding it: `workflow.edit_routing_config`, which backs
+ * POST /routing/preview. Preview is the only place that shows a routing edit dropping gates it
+ * looks like it is adding to — gate resolution replaces rather than accumulates across task
+ * types — so it is the natural companion to the routing writes above. Granting it here would do
+ * nothing today: the preview and graph branches still scope to a dispatched task's project, and
+ * this profile owns no dispatched task, so every call would 403. Widening those two branches to
+ * the assigned project, the way the workflow lifecycle branch does, has to come first.
  */
 const MOBILE_PROFILE_CAPABILITIES: readonly string[] = [
   'discovery.read_catalog',
@@ -99,6 +131,9 @@ const MOBILE_PROFILE_CAPABILITIES: readonly string[] = [
   'sprints.read_active_sprint',
   'sprints.pause_active_sprint',
   'sprints.complete_active_sprint',
+  'routing_rules.manage_project_scope',
+  'routing_transitions.manage_project_scope',
+  'transition_requirements.manage_project_scope',
   'workflow_definitions.read_project_scope',
   'tasks.read_project_context',
   'tasks.manage_project_tasks',

@@ -48,22 +48,16 @@ export interface TaskReleaseRecord extends Partial<TaskReleaseEvidence> {
   custom_fields_json?: string | null;
 }
 
-export function hasImplementationEvidence(task: Partial<TaskReleaseEvidence>): boolean {
-  return Boolean(task.review_branch && task.review_commit);
-}
-
-export function hasQaEvidence(task: Partial<TaskReleaseEvidence>): boolean {
-  return Boolean(task.qa_verified_commit && task.review_commit && task.qa_verified_commit === task.review_commit);
-}
-
-export function hasDeployEvidence(task: Partial<TaskReleaseEvidence>): boolean {
-  return Boolean((task.merged_commit || task.deployed_commit) && task.deploy_target && task.deployed_at);
-}
-
-export function hasLiveVerification(task: Partial<TaskReleaseEvidence>): boolean {
-  return Boolean(task.deployed_commit && task.live_verified_by && task.live_verified_at);
-}
-
+// The hasImplementationEvidence / hasQaEvidence / hasDeployEvidence / hasLiveVerification
+// predicates lived here. Each one encoded a fixed opinion about which columns constitute
+// "evidence" for a stage, and each was consulted on read to decide whether a task looked wrong.
+// Which fields a transition requires — and whether a missing one blocks or merely warns — is
+// workflow configuration, held in sprint_task_transition_requirements and evaluated by
+// requireReleaseGate. Reintroducing a predicate here would put a second, unconfigurable answer
+// beside it.
+//
+// isMainlineBranch and isProductionLikeUrl below are kept because validateEvidenceField still
+// uses them — but only against fields a workflow actually asked for, never on every task.
 function isMainlineBranch(branch: string | null | undefined): boolean {
   const normalized = String(branch ?? '').trim().toLowerCase();
   return normalized === 'main' || normalized === 'master' || normalized === 'origin/main' || normalized === 'origin/master';
@@ -142,99 +136,31 @@ async function loadTransitionRequirements(
   }));
 }
 
-async function statusRequiresQaEvidence(
-  db: Db | undefined,
-  task: ({ status?: string | null; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null } & Partial<TaskReleaseEvidence>),
-): Promise<boolean> {
-  const status = task.status ?? null;
-  if (status !== 'ready_to_merge') return false;
-  if (!db) return false;
-
-  try {
-    const reqs = await loadTransitionRequirements(db, 'qa_pass', task.sprint_id ?? null, task.task_type);
-    return reqs.some(req => req.severity !== 'warn' && parseFieldExpression(req.field_name).includes('qa_verified_commit'));
-  } catch {
-    return false;
-  }
-}
-
-async function doneStatusRequiresDeployLiveEvidence(
-  db: Db | undefined,
-  task: { task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null },
-): Promise<boolean> {
-  if (!db) return true;
-
-  try {
-    const sprintType = task.sprint_type ?? (await resolveSprintTypeForSprintId(db, task.sprint_id ?? null));
-    const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
-    const sprintTransitions = (await listSprintTaskTransitions(db, task.sprint_id ?? null))
-      .filter(transition => transition.enabled !== 0)
-      .filter(transition => transition.task_type == null || transition.task_type === workflow.taskType);
-
-    const doneTransitions = sprintTransitions.filter(transition => transition.to_status === 'done');
-    const taskTypeDoneTransitions = workflow.taskType
-      ? doneTransitions.filter(transition => transition.task_type === workflow.taskType)
-      : [];
-    const completionContractTransitions = taskTypeDoneTransitions.length > 0
-      ? taskTypeDoneTransitions
-      : doneTransitions.filter(transition => transition.task_type == null);
-
-    return completionContractTransitions
-      .some(transition => transition.outcome === 'live_verified' && transition.to_status === 'done');
-  } catch {
-    return true;
-  }
-}
-
+// `_db` is unused now that nothing here consults the workflow, but the parameter and the async
+// signature stay: three call sites pass a handle, and any future warning surfaced here has to be
+// read out of the workflow configuration rather than assumed, which will need both back.
 export async function evaluateTaskIntegrity(
   task: { status?: string | null; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null } & Partial<TaskReleaseEvidence>,
-  db?: Db,
+  _db?: Db,
 ): Promise<IntegrityEvaluation> {
-  const warnings: string[] = [];
   const status = task.status ?? null;
-  const qaOk = hasQaEvidence(task);
-  const deployOk = hasDeployEvidence(task);
-  const liveOk = hasLiveVerification(task);
-  const requiresQaEvidence = await statusRequiresQaEvidence(db, task);
-  const requiresDoneDeployLiveEvidence = status === 'done' && await doneStatusRequiresDeployLiveEvidence(db, task);
 
-  let integrityState: IntegrityState = 'clean';
-
-  // Reaching review with no branch or commit is deliberately not flagged here. It dates from a
-  // board where every task was development work; a design, PM, or configuration task reaches
-  // review with nothing to cite and was warned at for it. Workflows that do want the evidence
-  // say so through sprint_task_transition_requirements, which gates the transition rather than
-  // annotating the task afterwards — the same way the QA and deploy checks below ask the
-  // configured workflow instead of assuming one.
-  if (requiresQaEvidence && !qaOk) {
-    integrityState = 'missing_qa_evidence';
-    warnings.push(`Task is ${status} but missing QA verification evidence.`);
-  } else if (status === 'deployed' && !deployOk) {
-    integrityState = 'missing_deploy_evidence';
-    warnings.push('Task is deployed but missing deploy commit/target/timestamp evidence.');
-  } else if (status === 'deployed' && !liveOk) {
-    integrityState = 'missing_live_verification';
-    warnings.push('Task is deployed, awaiting live verification.');
-  } else if (status === 'done' && requiresDoneDeployLiveEvidence && (!deployOk || !liveOk)) {
-    integrityState = 'invalid_done_state';
-    if (!deployOk) warnings.push('Done task is missing deploy evidence.');
-    if (!liveOk) warnings.push('Done task is missing live verification evidence.');
-  }
-
-  if (status === 'ready_to_merge' && !deployOk) {
-    warnings.push('Ready to merge after QA pass, but deploy evidence has not been recorded yet.');
-  }
-
-  if ((status === 'review' || status === 'ready_to_merge') && isMainlineBranch(task.review_branch)) {
-    warnings.push('Review evidence references main/master. Agent HQ implementation work should use a feature branch/worktree, not main.');
-  }
-  if ((status === 'review' || status === 'ready_to_merge') && isProductionLikeUrl(task.review_url)) {
-    warnings.push('Review evidence points at a production-like URL. Use Dev evidence for implementation handoff and keep production for deployed/live verification.');
-  }
-  if (status === 'ready_to_merge' && isProductionLikeUrl(task.qa_tested_url)) {
-    warnings.push('QA evidence points at a production-like URL. For Agent HQ internal tasks, use the Dev environment for QA proof and keep production for live verification.');
-  }
-
+  // No evidence check lives here any more, and none should come back.
+  //
+  // Every check this function used to run was a guess about the workflow: that a task in review
+  // owed a branch and a commit, that anything deployed owed a deploy target, that a done task
+  // that had not been live-verified was "legacy, unverified". Those were true of the board this
+  // started on, where every task was development work. They are not true of a design, PM, or
+  // configuration task, which reached the same statuses with nothing to cite and got labelled
+  // defective for it.
+  //
+  // A workflow that does want evidence says so in sprint_task_transition_requirements, and
+  // requireReleaseGate below enforces it at the moment of the transition — blocking on
+  // severity 'block' and warning on 'warn', per outcome and task type. That is the single place
+  // an evidence rule is expressed, so a rule can be turned off by editing the workflow rather
+  // than by editing this file.
+  //
+  // The badge below is a plain restatement of the task's status, not a judgment about it.
   let release_state_badge: IntegrityEvaluation['release_state_badge'] = null;
   let release_state_label: string | null = null;
 
@@ -247,17 +173,14 @@ export async function evaluateTaskIntegrity(
   } else if (status === 'deployed') {
     release_state_badge = 'live deployed';
     release_state_label = 'Deployed to live';
-  } else if (status === 'done') {
-    release_state_badge = requiresDoneDeployLiveEvidence ? (liveOk ? 'live verified' : 'live deployed') : null;
-    release_state_label = requiresDoneDeployLiveEvidence ? (liveOk ? 'Live verified' : 'Done (legacy, unverified)') : null;
   }
 
   return {
-    integrity_state: integrityState,
-    integrity_warnings: warnings,
+    integrity_state: 'clean',
+    integrity_warnings: [],
     release_state_badge,
     release_state_label,
-    is_legacy_unverified_done: status === 'done' && requiresDoneDeployLiveEvidence && (!deployOk || !liveOk),
+    is_legacy_unverified_done: false,
   };
 }
 
