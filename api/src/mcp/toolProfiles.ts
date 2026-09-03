@@ -76,11 +76,13 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
   'agent_hq_set_workflow_status',
 
   // Task routing: which agent picks up a task, what a status moves to on an outcome, and what
-  // evidence a transition demands. All three resolve to the assigned project through
-  // canonicalAgentProjectId rather than a dispatched task, so they work for a client that owns
-  // no run. Deliberately not here: agent_hq_preview_routing_change and the graph/trace tools,
-  // whose policy branches still scope to a dispatched task and would deny this profile every
-  // time — see the note on MOBILE_PROFILE_CAPABILITIES.
+  // evidence a transition demands. All of it resolves to the assigned project rather than a
+  // dispatched task, so it works for a client that owns no run.
+  //
+  // Preview and the graph are here on purpose rather than as extras. A routing edit made from a
+  // phone gets no canvas to check it against, and POST /routing/preview is the one call that
+  // runs the change in a transaction that never commits and reports the lint findings it
+  // introduces or resolves.
   'agent_hq_list_assignment_rules',
   'agent_hq_get_assignment_rule',
   'agent_hq_create_assignment_rule',
@@ -96,6 +98,11 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
   'agent_hq_create_transition_requirement',
   'agent_hq_update_transition_requirement',
   'agent_hq_delete_transition_requirement',
+  'agent_hq_get_routing_graph',
+  'agent_hq_analyze_routing_graph',
+  'agent_hq_trace_routing',
+  'agent_hq_preview_routing_change',
+  'agent_hq_get_routing_audit',
 
   // Scheduled automation
   'agent_hq_create_recurring_task_series',
@@ -116,13 +123,11 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
  * grants, and `tasks.write_active_lifecycle` — a connector should not be able to report evidence
  * or an outcome for a run it is not executing.
  *
- * Also absent, and worth knowing before adding it: `workflow.edit_routing_config`, which backs
- * POST /routing/preview. Preview is the only place that shows a routing edit dropping gates it
- * looks like it is adding to — gate resolution replaces rather than accumulates across task
- * types — so it is the natural companion to the routing writes above. Granting it here would do
- * nothing today: the preview and graph branches still scope to a dispatched task's project, and
- * this profile owns no dispatched task, so every call would 403. Widening those two branches to
- * the assigned project, the way the workflow lifecycle branch does, has to come first.
+ * `workflow.analyze_routing_graph` and `workflow.edit_routing_config` are here for the graph and
+ * for POST /routing/preview, the dry run that reports what a routing edit would touch before it
+ * lands. Neither grants a write on its own — preview applies the mutation inside a transaction
+ * that never commits — so they cost nothing to hold and make the routing writes above legible
+ * from a device with no canvas.
  */
 const MOBILE_PROFILE_CAPABILITIES: readonly string[] = [
   'discovery.read_catalog',
@@ -134,6 +139,8 @@ const MOBILE_PROFILE_CAPABILITIES: readonly string[] = [
   'routing_rules.manage_project_scope',
   'routing_transitions.manage_project_scope',
   'transition_requirements.manage_project_scope',
+  'workflow.analyze_routing_graph',
+  'workflow.edit_routing_config',
   'workflow_definitions.read_project_scope',
   'tasks.read_project_context',
   'tasks.manage_project_tasks',

@@ -1,8 +1,9 @@
 // Gate requirement drafts.
 //
-// Gate resolution REPLACES rather than accumulates, and the one surprise left in it is the
-// task-type dimension: a task-type gate substitutes the entire all-types set for that type
-// rather than adding to it. The graph raises `gate_task_type_replaces_default` for that.
+// Gate resolution accumulates. A task-type gate adds to the all-types set for that type; it
+// replaces a single all-types gate only when it names the same field and requirement type,
+// which is what an override draft below produces. It used to substitute the entire set, so
+// adding one narrow gate silently dropped every default for that outcome and task type.
 //
 // There used to be a second, worse surprise here. A global `transition_requirements` table
 // applied whenever a workflow's own set for an outcome was empty, so declaring the FIRST gate

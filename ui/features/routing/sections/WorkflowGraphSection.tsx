@@ -54,7 +54,6 @@ const LINT_LABELS: Record<string, string> = {
   no_entry_point: 'No entry point',
   scope_not_configured: 'Scope not configured',
   event_to_unknown_status: 'Event targets unknown status',
-  gate_task_type_replaces_default: 'Task-type gates replace defaults',
 };
 
 const SEVERITY_STYLES: Record<string, { chip: string; dot: string }> = {

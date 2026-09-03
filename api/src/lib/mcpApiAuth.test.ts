@@ -192,6 +192,9 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.post('/api/v1/routing/transition-requirements', (req, res) => res.status(201).json({ ok: true, body: req.body }));
     app.put('/api/v1/routing/transition-requirements/:id', (req, res) => res.json({ ok: true, requirement_id: Number(req.params.id), body: req.body }));
     app.delete('/api/v1/routing/transition-requirements/:id', (req, res) => res.json({ ok: true, requirement_id: Number(req.params.id), query: req.query }));
+    app.get('/api/v1/routing/graph', (req, res) => res.json({ ok: true, query: req.query }));
+    app.get('/api/v1/routing/trace', (req, res) => res.json({ ok: true, query: req.query }));
+    app.post('/api/v1/routing/trace', (req, res) => res.json({ ok: true, body: req.body }));
     app.post('/api/v1/routing/preview', (req, res) => res.json({ ok: true, body: req.body }));
     app.get('/api/v1/routing/audit', (req, res) => res.json({ ok: true, query: req.query }));
     app.get('/api/v1/sprints/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
@@ -1845,6 +1848,76 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       code: 'mcp_scope_denied',
       details: { required_capability: 'routing_rules.manage_project_scope' },
     });
+  });
+
+
+  it('lets a key with no dispatched run reach the routing graph for its assigned project', async () => {
+    // scopedProjectIds/scopedSprintIds are built from queued, dispatched or running work, so they
+    // are empty whenever the agent is between runs. Before the assigned-project tier this denied
+    // an agent the graph for the very project it routes through, and denied a board-scoped client
+    // — which never owns a dispatched task — every time.
+    await getDb().run(`UPDATE tasks SET active_instance_id = NULL WHERE id = 448`);
+    await getDb().run(`UPDATE job_instances SET status = 'done' WHERE agent_id = 7`);
+
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'workflow.analyze_routing_graph',
+      'workflow.edit_routing_config',
+    ]);
+
+    const byProject = await fetch(`${baseUrl}/api/v1/routing/graph?project_id=86`, { headers: authHeaders(normalKey) });
+    expect(byProject.status).toBe(200);
+
+    // Named by workflow rather than project: resolves through the workflow's owning project.
+    const byWorkflow = await fetch(`${baseUrl}/api/v1/routing/graph?workflow_id=42`, { headers: authHeaders(normalKey) });
+    expect(byWorkflow.status).toBe(200);
+
+    const preview = await fetch(`${baseUrl}/api/v1/routing/preview`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 86, sprint_type: 'dev', operations: [] }),
+    });
+    expect(preview.status).toBe(200);
+
+    const audit = await fetch(`${baseUrl}/api/v1/routing/audit?project_id=86`, { headers: authHeaders(normalKey) });
+    expect(audit.status).toBe(200);
+  });
+
+  it('still confines graph and preview to the assigned project when there is no dispatched run', async () => {
+    await getDb().run(`UPDATE tasks SET active_instance_id = NULL WHERE id = 448`);
+    await getDb().run(`UPDATE job_instances SET status = 'done' WHERE agent_id = 7`);
+
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, [
+      'workflow.analyze_routing_graph',
+      'workflow.edit_routing_config',
+    ]);
+
+    // Project 87 and workflow 44 are the same tenant, a different project.
+    const otherProject = await fetch(`${baseUrl}/api/v1/routing/graph?project_id=87`, { headers: authHeaders(normalKey) });
+    expect(otherProject.status).toBe(403);
+    await expect(otherProject.json()).resolves.toMatchObject({
+      details: { required_capability: 'workflow.analyze_routing_graph' },
+    });
+
+    const otherWorkflow = await fetch(`${baseUrl}/api/v1/routing/graph?workflow_id=44`, { headers: authHeaders(normalKey) });
+    expect(otherWorkflow.status).toBe(403);
+
+    const otherPreview = await fetch(`${baseUrl}/api/v1/routing/preview`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({ project_id: 87, sprint_type: 'dev', operations: [] }),
+    });
+    expect(otherPreview.status).toBe(403);
+
+    // Naming nothing at all stays a denial: the branch has no scope to check.
+    const unscoped = await fetch(`${baseUrl}/api/v1/routing/graph`, { headers: authHeaders(normalKey) });
+    expect(unscoped.status).toBe(403);
+  });
+
+  it('refuses graph analysis to a key with neither a dispatched run nor an assigned project', async () => {
+    await replaceAgentMcpPermissionPolicy(getDb(), 11, ['workflow.analyze_routing_graph']);
+
+    const res = await fetch(`${baseUrl}/api/v1/routing/graph?project_id=86`, { headers: authHeaders(noProjectKey) });
+    expect(res.status).toBe(403);
   });
 
   it('gates routing preview and audit on workflow.edit_routing_config', async () => {

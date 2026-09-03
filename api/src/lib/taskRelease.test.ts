@@ -170,6 +170,50 @@ describe('taskRelease configurable outcome routing', () => {
     expect(result.release_state_label).toBeNull();
   });
 
+  it('accumulates task-type gates on top of the all-types defaults', async () => {
+    // A task-type row used to REPLACE the whole all-types set for that outcome, so adding one
+    // narrow gate silently switched off every default. It now adds to them.
+    await db.run(`
+      INSERT INTO sprint_task_transition_requirements
+        (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+      VALUES
+        (?, 10, 1, 'enhancements', NULL,      'qa_pass', 'review_commit',      'required', NULL, 'block', 'default: review_commit', 1, 10),
+        (?, 10, 1, 'enhancements', 'backend', 'qa_pass', 'qa_verified_commit', 'required', NULL, 'block', 'backend: qa_verified_commit', 1, 20)
+    `, tenantId, tenantId);
+
+    const task = { id: 42, status: 'review', sprint_id: 10, task_type: 'backend' } as never;
+
+    const backend = await requireReleaseGate(db, task, 'qa_pass', 'backend');
+    expect(backend.errors).toEqual(expect.arrayContaining([
+      'default: review_commit',
+      'backend: qa_verified_commit',
+    ]));
+
+    // A type with no rows of its own still sees the defaults, as before.
+    const design = await requireReleaseGate(db, task, 'qa_pass', 'design');
+    expect(design.errors).toEqual(['default: review_commit']);
+  });
+
+  it('lets a task-type gate override the single all-types gate it names', async () => {
+    // Overriding one field is still possible — it just no longer takes the rest of the set with
+    // it. Here backend softens review_commit to a warning while the other default still blocks.
+    await db.run(`
+      INSERT INTO sprint_task_transition_requirements
+        (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+      VALUES
+        (?, 10, 1, 'enhancements', NULL,      'qa_pass', 'review_commit', 'required', NULL, 'block', 'default: review_commit', 1, 10),
+        (?, 10, 1, 'enhancements', NULL,      'qa_pass', 'qa_tested_url', 'required', NULL, 'block', 'default: qa_tested_url', 1, 10),
+        (?, 10, 1, 'enhancements', 'backend', 'qa_pass', 'review_commit', 'required', NULL, 'warn',  'backend: review_commit is advisory', 1, 20)
+    `, tenantId, tenantId, tenantId);
+
+    const task = { id: 42, status: 'review', sprint_id: 10, task_type: 'backend' } as never;
+    const result = await requireReleaseGate(db, task, 'qa_pass', 'backend');
+
+    expect(result.warnings).toEqual(['backend: review_commit is advisory']);
+    expect(result.errors).toEqual(['default: qa_tested_url']);
+    expect(result.errors).not.toContain('default: review_commit');
+  });
+
   it('still restates the task status as a release badge', async () => {
     // The badge survives because it describes where the task is, rather than ruling on it.
     const review = await evaluateTaskIntegrity({ status: 'review', sprint_id: 10, task_type: 'design' }, db);

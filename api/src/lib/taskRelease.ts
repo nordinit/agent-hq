@@ -199,8 +199,8 @@ export interface ReleaseGateResult {
  * There is no step 3. A global table used to sit there as a fallback; migration 15 moved it
  * to the dev workflow default and dropped it.
  *
- * When task-type-specific requirements exist for an outcome, they REPLACE
- * the defaults for that outcome (they are overrides, not additions).
+ * The two accumulate. A task-type requirement adds to the defaults for that outcome; it
+ * overrides one only when it names the same field and requirement type.
  *
  * Returns {errors, warnings} instead of throwing, so callers can handle
  * warnings vs blocking errors.

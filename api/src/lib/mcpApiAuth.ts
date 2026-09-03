@@ -2807,9 +2807,24 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     });
   }
 
-  // Routing graph and hypothetical traces. Read-only analysis of configuration, but a
-  // graph spans a whole project and workflow type rather than one task, so it is gated
-  // on its own capability and still confined to the key's scoped project/workflow.
+  // Routing graph, traces, preview and audit all name a project or a workflow and are confined
+  // to it. Scope resolves in two tiers, as it does for workflow lifecycle: the dispatched task's
+  // project or workflow first, then the assigned project.
+  //
+  // The second tier is not a widening. Both branches below already told the caller they were
+  // "scoped to their assigned project", but only ever checked the dispatch-derived sets, which
+  // getScopedTaskContexts builds from tasks the agent has queued, dispatched or running. Those
+  // are empty between runs, so an agent could analyze the graph it routes through only while
+  // mid-run, and a board-scoped client — which owns no dispatched task at all — never could.
+  const routingScopeInScope = async (projectId: number | null, sprintId: number | null): Promise<boolean> => {
+    if (projectId != null && scopedProjectIds.has(projectId)) return true;
+    if (sprintId != null && scopedSprintIds.has(sprintId)) return true;
+    if (canonicalAgentProjectId == null) return false;
+    if (projectId != null && projectId === canonicalAgentProjectId) return true;
+    if (sprintId != null) return await sprintBelongsToProject(db, identity, sprintId, canonicalAgentProjectId);
+    return false;
+  };
+
   if ((requestPath === '/routing/graph' || requestPath === '/routing/trace')
     && (method === 'GET' || (method === 'POST' && requestPath === '/routing/trace'))) {
     if (!await requireCapability(
@@ -2818,8 +2833,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     )) return;
     const graphSprintId = parsePositiveInt(req.query.sprint_id ?? req.query.workflow_id);
     const graphProjectId = parsePositiveInt(req.query.project_id);
-    if (graphProjectId != null && scopedProjectIds.has(graphProjectId)) return next();
-    if (graphSprintId != null && scopedSprintIds.has(graphSprintId)) return next();
+    if (await routingScopeInScope(graphProjectId, graphSprintId)) return next();
     return deny({
       reason: `Normal Agent HQ MCP keys can only analyze routing graphs scoped to their assigned project or the active task's workflow.`,
       requiredCapability: 'workflow.analyze_routing_graph',
@@ -2840,8 +2854,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     const previewSprintId = parsePositiveInt(
       body.sprint_id ?? body.workflow_id ?? req.query.sprint_id ?? req.query.workflow_id,
     );
-    if (previewProjectId != null && scopedProjectIds.has(previewProjectId)) return next();
-    if (previewSprintId != null && scopedSprintIds.has(previewSprintId)) return next();
+    if (await routingScopeInScope(previewProjectId, previewSprintId)) return next();
     return deny({
       reason: `Normal Agent HQ MCP keys can only preview or audit routing changes inside their assigned project or the active task's workflow.`,
       requiredCapability: 'workflow.edit_routing_config',

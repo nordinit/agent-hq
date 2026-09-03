@@ -273,23 +273,38 @@ export async function loadSprintTaskTransitionRequirements(
       `, ...(specificTaskType == null ? [sprintId, outcome] : [sprintId, specificTaskType, outcome])) as SprintTaskTransitionRequirementRow[];
     };
 
-    if (taskType) {
-      const typeRows = await loadRows(taskType);
-      if (typeRows.length > 0) return dedupeSprintTaskTransitionRequirementRows(typeRows);
-    }
-
-    const defaultRows = await loadRows(null);
-    if (defaultRows.length > 0) return dedupeSprintTaskTransitionRequirementRows(defaultRows);
+    // Gates ACCUMULATE across the task-type dimension: a task-type row adds to the all-types
+    // set rather than substituting for it.
+    //
+    // This used to be an early return — if any row existed for the task type, the task_type IS
+    // NULL rows were never loaded. Adding one narrow gate for one task type therefore switched
+    // off every default gate for that outcome for that type, silently, which is the opposite of
+    // what inserting a requirement looks like it does.
+    //
+    // Task-type rows are collected first so that dedupe keeps them: a task-type row naming the
+    // same field and requirement type as an all-types row is still an override, it just now
+    // overrides that one row instead of the whole set.
+    const rows: SprintTaskTransitionRequirementRow[] = [];
+    if (taskType) rows.push(...await loadRows(taskType));
+    rows.push(...await loadRows(null));
+    return dedupeSprintTaskTransitionRequirementRows(rows);
   }
 
   return [];
 }
 
+/**
+ * First row wins per (outcome, field, requirement type, match field). task_type is deliberately
+ * NOT part of the key: the caller hands this the task-type rows ahead of the all-types rows, so
+ * leaving it out is what makes a task-type row override the matching all-types row while rows
+ * naming different fields accumulate. It was in the key back when each call passed a single
+ * task type's rows, where it was constant and so had no effect.
+ */
 function dedupeSprintTaskTransitionRequirementRows(rows: SprintTaskTransitionRequirementRow[]): SprintTaskTransitionRequirementRow[] {
   const seen = new Set<string>();
   const result: SprintTaskTransitionRequirementRow[] = [];
   for (const row of rows) {
-    const key = [row.task_type ?? '', row.outcome, row.field_name, row.requirement_type, row.match_field ?? ''].join('\u0000');
+    const key = [row.outcome, row.field_name, row.requirement_type, row.match_field ?? ''].join('\u0000');
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(row);

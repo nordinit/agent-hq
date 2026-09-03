@@ -762,7 +762,9 @@ test('an outcome whose only gates are task-type scoped is ungated for other type
   expect(graph.edges[0].gates).toEqual([]);
 });
 
-test('task-type gates replacing the all-types set is reported', () => {
+test('an outcome carrying both all-types and task-type gates is not a finding', () => {
+  // It used to raise gate_task_type_replaces_default, because the task-type set replaced the
+  // all-types one. Gates accumulate now, so this is the ordinary additive case.
   const graph = build({
     statuses: [status('review'), status('done')],
     transitions: [transition(1, 'review', 'done', 'qa_pass')],
@@ -771,30 +773,8 @@ test('task-type gates replacing the all-types set is reported', () => {
       requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' }),
     ],
   });
-  const finding = graph.lint.find(f => f.code === 'gate_task_type_replaces_default');
-  expect(finding).toBeDefined();
-  expect(finding?.message).toMatch(/qa/);
-});
-
-test('task-type gates alone are not reported as replacing anything', () => {
-  const graph = build({
-    statuses: [status('review'), status('done')],
-    transitions: [transition(1, 'review', 'done', 'qa_pass')],
-    requirements: [requirement(1, 'qa_pass', { task_type: 'qa' })],
-  });
   expect(codes(graph).includes('gate_task_type_replaces_default')).toBe(false);
-});
-
-test('a disabled row does not count toward the task-type replacement warning', () => {
-  const graph = build({
-    statuses: [status('review'), status('done')],
-    transitions: [transition(1, 'review', 'done', 'qa_pass')],
-    requirements: [
-      requirement(1, 'qa_pass', { task_type: null }),
-      requirement(2, 'qa_pass', { task_type: 'qa', enabled: false }),
-    ],
-  });
-  expect(codes(graph).includes('gate_task_type_replaces_default')).toBe(false);
+  expect(graph.lint.filter(f => f.outcome === 'qa_pass' && f.severity === 'error')).toEqual([]);
 });
 
 test('outcome-scoped findings carry their outcome so the preview diff can tell them apart', () => {
@@ -829,7 +809,7 @@ test('an unused-gate finding is anchored to its outcome too', () => {
 // anything, never loads the task_type IS NULL rows. A task-type gate therefore SUBSTITUTES the
 // whole set for that type rather than adding a requirement on top of the all-types ones.
 
-test('a task-type gate replaces the all-types set rather than adding to it', () => {
+test('a task-type gate adds to the all-types set rather than replacing it', () => {
   const graph = build({
     statuses: [status('review'), status('done')],
     transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'qa' })],
@@ -838,7 +818,21 @@ test('a task-type gate replaces the all-types set rather than adding to it', () 
       requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit' }),
     ],
   });
-  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['qa_commit']);
+  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['qa_commit', 'pr_url']);
+});
+
+test('a task-type gate on the same field overrides just that one all-types gate', () => {
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'qa' })],
+    requirements: [
+      requirement(1, 'qa_pass', { task_type: null, field_name: 'pr_url', severity: 'block' }),
+      requirement(2, 'qa_pass', { task_type: null, field_name: 'sign_off' }),
+      requirement(3, 'qa_pass', { task_type: 'qa', field_name: 'pr_url', severity: 'warn' }),
+    ],
+  });
+  // pr_url resolves to the task-type row; sign_off still applies.
+  expect(graph.edges[0].gates.map(g => `${g.field_name}:${g.severity}`)).toEqual(['pr_url:warn', 'sign_off:block']);
 });
 
 test('a task type with no gates of its own inherits the all-types set', () => {
@@ -892,7 +886,7 @@ test('the task-type lens resolves gates for an otherwise all-types edge', () => 
     agents: [],
     eventMappings: [],
   });
-  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['qa_commit']);
+  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['qa_commit', 'pr_url']);
 });
 
 test('a task type whose only gates are disabled falls back to the all-types set', () => {
@@ -924,7 +918,7 @@ test('a superseded default is still listed, but only the override actually gates
   expect(graph.edges[0].gates.filter(g => g.effective_for_sprint).map(g => g.severity)).toEqual(['warn']);
 });
 
-test('a task-type set that is entirely superseded falls back to the all-types set', () => {
+test('a superseded task-type gate does not override the all-types gate it names', () => {
   const graph = build({
     statuses: [status('review'), status('done')],
     transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'qa' })],
@@ -933,6 +927,8 @@ test('a task-type set that is entirely superseded falls back to the all-types se
       requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit', effective_for_sprint: false }),
     ],
   });
-  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['pr_url']);
+  // The superseded row is still listed so the operator can see what an override replaced, but it
+  // gates nothing, so it cannot claim a field away from the all-types set.
+  expect(graph.edges[0].gates.map(g => g.field_name)).toEqual(['qa_commit', 'pr_url']);
 });
 

@@ -384,22 +384,32 @@ export function buildWorkflowGraph(input: {
   /**
    * Resolve a workflow's gates for one outcome and task type.
    *
-   * The resolver REPLACES rather than accumulates: `loadRows(taskType)` is tried first and, if
-   * it returns anything, the task_type IS NULL rows never load. So a task-type gate does not add
-   * a requirement on top of the all-types ones — it substitutes the entire set for that type.
+   * Gates ACCUMULATE across the task-type dimension: a task-type gate adds to the all-types set.
+   * The one exception is a task-type gate naming the same field and requirement type as an
+   * all-types gate, which overrides that single row — that is how a type softens or retargets an
+   * individual gate without switching off the rest.
    *
-   * A null taskType means "no particular type in view", which is the all-types set. It is not
-   * the union: no single task ever sees the union, so showing it would describe nothing real.
+   * Mirrors loadSprintTaskTransitionRequirements, which is authoritative; keep them in step. It
+   * keys on match_field too, which this input does not carry, so two 'match' gates on one field
+   * differing only by match_field collapse here and would not at enforcement time. That shows a
+   * gate as overridden that in fact still runs, which is the safe direction to be wrong in.
+   *
+   * A null taskType means "no particular type in view", which is the all-types set alone.
    */
   const resolveWorkflowGates = (outcome: string, taskType: string | null): GraphRequirementInput[] => {
     const candidates = gatesByOutcome.get(outcome) ?? [];
-    if (taskType != null) {
-      // `some(gateRuns)`, not `length`: a set whose rows are all superseded gates nothing, so
-      // it must not shadow the all-types set the way a live one would.
-      const typed = candidates.filter((requirement) => requirement.task_type === taskType);
-      if (typed.some(gateRuns)) return typed;
-    }
-    return candidates.filter((requirement) => requirement.task_type == null);
+    const allTypes = candidates.filter((requirement) => requirement.task_type == null);
+    if (taskType == null) return allTypes;
+
+    const typed = candidates.filter((requirement) => requirement.task_type === taskType);
+    // Superseded rows do not override anything, so only live ones claim a key.
+    const overridden = new Set(
+      typed.filter(gateRuns).map((requirement) => `${requirement.field_name} ${requirement.requirement_type}`),
+    );
+    return [
+      ...typed,
+      ...allTypes.filter((requirement) => !overridden.has(`${requirement.field_name} ${requirement.requirement_type}`)),
+    ];
   };
 
   /** Task types whose gate set for an outcome differs from the all-types set. */
@@ -658,27 +668,10 @@ export function buildWorkflowGraph(input: {
     });
   }
 
-  // Task-type gates REPLACE the all-types gates for that type rather than adding to them, so
-  // an outcome carrying both means the all-types rows silently do not apply to that task type.
-  const gateTypesByOutcome = new Map<string, Set<string | null>>();
-  for (const requirement of requirements) {
-    if (!requirement.enabled) continue;
-    const seen = gateTypesByOutcome.get(requirement.outcome) ?? new Set<string | null>();
-    seen.add(requirement.task_type);
-    gateTypesByOutcome.set(requirement.outcome, seen);
-  }
-  for (const [outcome, types] of [...gateTypesByOutcome].sort(([a], [b]) => a.localeCompare(b))) {
-    const named = [...types].filter((type): type is string => type != null);
-    if (named.length === 0 || !types.has(null)) continue;
-    lint.push({
-      code: 'gate_task_type_replaces_default',
-      severity: 'warn',
-      outcome,
-      message: `Outcome "${outcome}" has gates for both all task types and ${named.sort().join(', ')}. `
-        + `For ${named.length === 1 ? 'that task type' : 'those task types'} the all-types gates do not apply — `
-        + 'the more specific set replaces them rather than adding to them.',
-    });
-  }
+  // The gate_task_type_replaces_default finding lived here. It warned that an outcome carrying
+  // both all-types and task-type gates silently dropped the all-types ones for that type. Gates
+  // accumulate now, so an outcome carrying both is the ordinary additive case and there is
+  // nothing to report.
 
   // Attach the per-element codes collected above.
   for (const node of nodes) node.lint = nodeLint.get(node.id) ?? [];
