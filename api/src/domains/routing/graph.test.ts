@@ -40,6 +40,7 @@ function requirement(id: number, outcome: string, over: Partial<GraphRequirement
     task_type: null,
     field_name: 'pr_url',
     requirement_type: 'required',
+    match_field: null,
     severity: 'block',
     message: '',
     enabled: true,
@@ -833,6 +834,23 @@ test('a task-type gate on the same field overrides just that one all-types gate'
   });
   // pr_url resolves to the task-type row; sign_off still applies.
   expect(graph.edges[0].gates.map(g => `${g.field_name}:${g.severity}`)).toEqual(['pr_url:warn', 'sign_off:block']);
+});
+
+test('two gates on one field differing only by match_field are not confused for each other', () => {
+  // match_field is the rule's second operand, so these are different rules on the same field.
+  // Keying overrides without it let the backend row hide BOTH all-types rows, and the canvas
+  // showed one gate where two still ran.
+  const graph = build({
+    statuses: [status('review'), status('done')],
+    transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'backend' })],
+    requirements: [
+      requirement(1, 'qa_pass', { task_type: null, field_name: 'qa_verified_commit', requirement_type: 'match', match_field: 'review_commit' }),
+      requirement(2, 'qa_pass', { task_type: null, field_name: 'qa_verified_commit', requirement_type: 'match', match_field: 'deployed_commit' }),
+      requirement(3, 'qa_pass', { task_type: 'backend', field_name: 'qa_verified_commit', requirement_type: 'match', match_field: 'review_commit', severity: 'warn' }),
+    ],
+  });
+  // #3 overrides #1 only. #2 is a different rule and still runs.
+  expect(graph.edges[0].gates.map(g => `${g.requirement_id}:${g.severity}`)).toEqual(['3:warn', '2:block']);
 });
 
 test('a task type with no gates of its own inherits the all-types set', () => {

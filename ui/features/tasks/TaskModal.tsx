@@ -8,6 +8,7 @@ import { getTaskStatusMaps } from '@/lib/taskStatuses';
 import { shouldClearInvalidTaskType, useTaskTypes } from '@/lib/taskTypes';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
 import type { ModalForm, Project, Sprint, Task } from '@/features/tasks/useTasksPageState';
+import { AutoGrowTextarea } from '@/components/AutoGrowTextarea';
 
 export interface RelatedTaskCreateContext {
   sourceTaskId: number;
@@ -369,7 +370,7 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
 
           <div>
             <label className="text-xs font-medium text-slate-400 uppercase tracking-wide block mb-1">Description</label>
-            <textarea className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 resize-none h-24" value={form.description ?? ''} onChange={e => set('description', e.target.value)} placeholder="Optional details…" />
+            <AutoGrowTextarea className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400" value={form.description ?? ''} onChange={value => set('description', value)} placeholder="Optional details…" />
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

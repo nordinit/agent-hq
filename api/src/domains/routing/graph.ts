@@ -68,6 +68,13 @@ export type GraphRequirementInput = GraphScopeAnnotation & {
   task_type: string | null;
   field_name: string;
   requirement_type: string;
+  /**
+   * Second operand of the rule, and part of its identity: for 'match' it is the field the value
+   * must equal, for 'from_status' the status the task must come from. Two rows sharing a field
+   * and requirement type but differing here are different rules, so this has to be in the
+   * override key or one silently hides the other.
+   */
+  match_field: string | null;
   severity: string;
   message: string;
   enabled: boolean;
@@ -221,9 +228,9 @@ export type GraphEdge = {
   /**
    * Task types with their own gate set for this outcome, when `gates` shows the all-types set.
    *
-   * Gate resolution substitutes rather than adds, so for these task types the gates listed above
-   * do not apply at all — a different set does. Empty when the edge already resolved to a
-   * specific task type.
+   * These task types add gates of their own on top of the ones listed above, and may override an
+   * individual one by naming the same field, requirement type and match field. Empty when the
+   * edge already resolved to a specific task type.
    */
   gate_task_type_overrides: string[];
   /** Outcome-kind event mappings that can fire this transition without an agent. */
@@ -389,10 +396,10 @@ export function buildWorkflowGraph(input: {
    * all-types gate, which overrides that single row — that is how a type softens or retargets an
    * individual gate without switching off the rest.
    *
-   * Mirrors loadSprintTaskTransitionRequirements, which is authoritative; keep them in step. It
-   * keys on match_field too, which this input does not carry, so two 'match' gates on one field
-   * differing only by match_field collapse here and would not at enforcement time. That shows a
-   * gate as overridden that in fact still runs, which is the safe direction to be wrong in.
+   * Mirrors loadSprintTaskTransitionRequirements, which is authoritative; keep them in step. Both
+   * key on (field, requirement type, match field) — match_field included because it is the second
+   * operand of a 'match' or 'from_status' rule, so leaving it out let one gate hide another that
+   * still ran.
    *
    * A null taskType means "no particular type in view", which is the all-types set alone.
    */
@@ -403,12 +410,12 @@ export function buildWorkflowGraph(input: {
 
     const typed = candidates.filter((requirement) => requirement.task_type === taskType);
     // Superseded rows do not override anything, so only live ones claim a key.
-    const overridden = new Set(
-      typed.filter(gateRuns).map((requirement) => `${requirement.field_name} ${requirement.requirement_type}`),
-    );
+    const overrideKey = (requirement: GraphRequirementInput): string =>
+      [requirement.field_name, requirement.requirement_type, requirement.match_field ?? ''].join('\u0000');
+    const overridden = new Set(typed.filter(gateRuns).map(overrideKey));
     return [
       ...typed,
-      ...allTypes.filter((requirement) => !overridden.has(`${requirement.field_name} ${requirement.requirement_type}`)),
+      ...allTypes.filter((requirement) => !overridden.has(overrideKey(requirement))),
     ];
   };
 
@@ -831,6 +838,7 @@ export async function getWorkflowGraph(
       task_type: asNullableString(row.task_type),
       field_name: String(row.field_name ?? ''),
       requirement_type: String(row.requirement_type ?? 'required'),
+      match_field: asNullableString(row.match_field),
       severity: String(row.severity ?? 'block'),
       message: String(row.message ?? ''),
       enabled: asBool(row.enabled),

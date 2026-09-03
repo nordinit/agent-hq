@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { api, type Agent, type Project, type RecurringTaskOverlapPolicy, type RecurringTaskRun, type RecurringTaskSeries, type RecurringTaskSeriesInput, type Sprint } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/date';
+import { AutoGrowTextarea } from '@/components/AutoGrowTextarea';
 import {
   buildScheduleExpression,
   formatScheduleExpression,
@@ -212,7 +213,7 @@ function SeriesModal({
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Description</label>
-              <textarea className={`${fieldClass()} h-24 resize-none`} value={form.description_template} onChange={e => onChange({ ...form, description_template: e.target.value })} placeholder="Details copied onto each generated task." />
+              <AutoGrowTextarea className={fieldClass()} value={form.description_template} onChange={value => onChange({ ...form, description_template: value })} placeholder="Details copied onto each generated task." />
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
