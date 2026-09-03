@@ -37,6 +37,12 @@ interface Sprint {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/** Optional free-text reason on a lifecycle POST, recorded in the audit row. */
+function lifecycleNote(req: Request): string | undefined {
+  const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
+  return typeof body.note === 'string' && body.note.trim() ? body.note.trim() : undefined;
+}
+
 router.use(sprintDefinitionsRouter);
 
 async function requireSprintVisibleForTenant(db: ReturnType<typeof getDb>, sprintId: number | string, tenantId: number): Promise<boolean> {
@@ -155,7 +161,7 @@ router.post('/:id/close', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
-    return res.json(await closeSprint(db, Number(req.params.id), extractActor(req)));
+    return res.json(await closeSprint(db, Number(req.params.id), extractActor(req), lifecycleNote(req)));
   } catch (err) {
     const typedErr = err as Error & { status?: number };
     return res.status(typedErr.status ?? 500).json({ error: typedErr.message });
@@ -169,7 +175,7 @@ router.post('/:id/complete', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     if (!await requireSprintVisibleForTenant(db, req.params.id, tenantId)) return res.status(404).json({ error: 'Sprint not found' });
-    return res.json(await completeSprintRoute(db, Number(req.params.id)));
+    return res.json(await completeSprintRoute(db, Number(req.params.id), extractActor(req), lifecycleNote(req)));
   } catch (err) {
     const typedErr = err as Error & { status?: number };
     return res.status(typedErr.status ?? 500).json({ error: typedErr.message });

@@ -379,6 +379,36 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'sprints.pause_active_sprint',
+    group: 'Context',
+    label: 'Pause and resume workflow',
+    description: 'Allows moving a workflow between the non-terminal lifecycle statuses — planning, active, and paused — for the workflow attached to the MCP agent\'s active dispatched task, or, for a board-scoped client, any workflow inside its assigned project. The request body may carry nothing but status and an optional note: a patch that also touches name, goal, dates, repo configuration, or project_id is refused, so this cannot be used to reassign or reconfigure a workflow. Reversible by construction; it stamps no end date and stands down no agents. Does not allow completing or closing a workflow — that is sprints.complete_active_sprint.',
+    endpoints: [
+      'PUT /api/v1/sprints/:id',
+      'PUT /api/v1/workflows/:id',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
+    key: 'sprints.complete_active_sprint',
+    group: 'Context',
+    label: 'Complete and close workflow',
+    description: 'Allows ending an operating cycle — completing or closing the workflow attached to the MCP agent\'s active dispatched task, or, for a board-scoped client, any workflow inside its assigned project. Completing stamps ended_at and disables the workflow\'s agents; both write an audited status change naming the agent that asked. Held separately from sprints.pause_active_sprint because this is terminal for the cycle while pausing is reversible: an agent that may say "hold on" does not thereby get to say "this is finished". Reopening a completed or closed workflow needs sprints.pause_active_sprint.',
+    endpoints: [
+      'POST /api/v1/sprints/:id/complete',
+      'POST /api/v1/sprints/:id/close',
+      'POST /api/v1/workflows/:id/complete',
+      'POST /api/v1/workflows/:id/close',
+    ],
+    defaultEnabled: {
+      scoped_runtime: false,
+      trusted_admin: true,
+    },
+  },
+  {
     key: 'workflow.read_active_configuration',
     group: 'Workflow',
     label: 'Read active workflow configuration',
@@ -1658,6 +1688,33 @@ function isActiveCustomFieldsOnlyUpdate(body: Record<string, unknown>): boolean 
   return keys.every((key) => ACTIVE_CUSTOM_FIELD_WRITE_ALLOWED_BODY_KEYS.has(key));
 }
 
+/**
+ * The non-terminal workflow statuses. Reaching `complete` or `closed` through the sprint PUT is
+ * deliberately excluded: those have their own endpoints, which stamp ended_at and stand down the
+ * workflow's agents, and their own capability. A status field write to 'complete' would leave a
+ * workflow that reads as finished but never ended.
+ *
+ * Note this list is what a reopen goes *to*, not what it comes *from*: moving a completed or
+ * closed workflow back to active is a supported operator action and stays supported here.
+ */
+const PAUSE_CAPABILITY_TARGET_STATUSES = new Set(['planning', 'planned', 'active', 'paused']);
+const SPRINT_STATUS_WRITE_ALLOWED_BODY_KEYS = new Set(['status', 'note']);
+
+/**
+ * True when a workflow update carries nothing but a non-terminal status (and an optional audit
+ * note). This is the whole difference between "an agent pausing the cycle it is working in" and
+ * a general workflow edit: without it, granting pause would also grant renaming a workflow,
+ * rewriting its repo configuration, and — via project_id — moving it into another project.
+ */
+function isSprintStatusOnlyUpdate(body: Record<string, unknown>): boolean {
+  const keys = Object.keys(body);
+  if (keys.length === 0) return false;
+  if (!Object.prototype.hasOwnProperty.call(body, 'status')) return false;
+  if (!keys.every((key) => SPRINT_STATUS_WRITE_ALLOWED_BODY_KEYS.has(key))) return false;
+  const status = typeof body.status === 'string' ? body.status.trim().toLowerCase() : '';
+  return PAUSE_CAPABILITY_TARGET_STATUSES.has(status);
+}
+
 async function getRecurringTaskSeriesProjectId(db: Db, seriesId: number): Promise<number | null> {
   try {
     const row = await db.get(`SELECT project_id FROM recurring_task_series WHERE id = ?`, seriesId) as
@@ -2350,7 +2407,54 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     });
   }
 
-  const sprintMatch = requestPath.match(/^\/sprints\/(\d+)$/);
+  // Workflow lifecycle writes — pause, resume, complete, close.
+  //
+  // Both path spellings are matched because req.path is not alias-normalized:
+  // normalizeWorkflowRequestAliases folds workflow_id into sprint_id in the body and query only,
+  // and /api/v1/workflows mounts the same router as /api/v1/sprints.
+  //
+  // Scope resolves in two tiers, which is what lets one branch serve both kinds of caller: a
+  // dispatched agent reaches the workflow attached to its own active task, while a board-scoped
+  // client — a phone connector owning no dispatched task, whose scopedSprintIds is empty by
+  // construction — reaches any workflow inside its assigned project.
+  const sprintLifecycleInScope = async (sprintId: number): Promise<boolean> => {
+    if (scopedSprintIds.has(sprintId)) return true;
+    if (canonicalAgentProjectId == null) return false;
+    return await sprintBelongsToProject(db, identity, sprintId, canonicalAgentProjectId);
+  };
+
+  const sprintLifecycleMatch = requestPath.match(/^\/(?:sprints|workflows)\/(\d+)\/(close|complete)$/);
+  if (sprintLifecycleMatch && method === 'POST') {
+    const sprintId = Number(sprintLifecycleMatch[1]);
+    if (!await requireCapability(
+      'sprints.complete_active_sprint',
+      `Workflow completion is disabled for ${identity.agentSlug}.`,
+    )) return;
+    if (await sprintLifecycleInScope(sprintId)) return next();
+    return deny({
+      reason: `Normal Agent HQ MCP keys can only complete or close a workflow attached to their active dispatched task or inside their assigned project.`,
+      requiredCapability: 'sprints.complete_active_sprint',
+    });
+  }
+
+  // A status-only patch to a non-terminal status. Anything else in the body — a rename, repo
+  // configuration, or a project_id that would move the workflow to another project — is not this
+  // capability and falls through to the administrative deny below.
+  const sprintStatusMatch = requestPath.match(/^\/(?:sprints|workflows)\/(\d+)$/);
+  if (sprintStatusMatch && method === 'PUT' && isSprintStatusOnlyUpdate(requestBodyRecord(req.body))) {
+    const sprintId = Number(sprintStatusMatch[1]);
+    if (!await requireCapability(
+      'sprints.pause_active_sprint',
+      `Workflow pause and resume are disabled for ${identity.agentSlug}.`,
+    )) return;
+    if (await sprintLifecycleInScope(sprintId)) return next();
+    return deny({
+      reason: `Normal Agent HQ MCP keys can only pause or resume a workflow attached to their active dispatched task or inside their assigned project.`,
+      requiredCapability: 'sprints.pause_active_sprint',
+    });
+  }
+
+  const sprintMatch = requestPath.match(/^\/(?:sprints|workflows)\/(\d+)$/);
   if (sprintMatch && method === 'GET') {
     const sprintId = Number(sprintMatch[1]);
     if (!await requireCapability(

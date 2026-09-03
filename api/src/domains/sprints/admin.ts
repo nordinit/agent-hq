@@ -37,6 +37,9 @@ const ALLOWED_UPDATE_FIELDS = new Set([
   'repo_access_mode',
   'repo_path',
   'repo_url',
+  // Audit-only: recorded as the reason for the change, never written to a sprints column.
+  // Lets an MCP client say why it paused or resumed a workflow without a second call.
+  'note',
 ]);
 
 async function tableExists(db: Db, table: string): Promise<boolean> {
@@ -420,7 +423,11 @@ export async function updateSprint(
     },
   );
   if (Object.keys(changes).length > 0) {
-    await writeProjectAudit(db, newValues.project_id, 'sprint', sprintId, 'updated', actor, changes);
+    const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null;
+    await writeProjectAudit(db, newValues.project_id, 'sprint', sprintId, 'updated', actor, {
+      ...changes,
+      ...(note ? { note } : {}),
+    });
   }
 
   const routingJoinPredicate = await sprintRoutingJoinPredicate(db);
@@ -474,7 +481,7 @@ export async function deleteSprint(db: Db, sprintId: number, actor: string, tena
   return { ok: true };
 }
 
-export async function closeSprint(db: Db, sprintId: number, actor: string) {
+export async function closeSprint(db: Db, sprintId: number, actor: string, note?: string) {
   const sprint = await db.get('SELECT * FROM sprints WHERE id = ?', sprintId) as SprintRecord | undefined;
   if (!sprint) throw Object.assign(new Error('Sprint not found'), { status: 404 });
   if (sprint.status === 'closed') {
@@ -488,6 +495,7 @@ export async function closeSprint(db: Db, sprintId: number, actor: string) {
 
   await writeProjectAudit(db, sprint.project_id, 'sprint', sprintId, 'updated', actor, {
         status: { old: oldStatus, new: 'closed' },
+        ...(note ? { note } : {}),
       });
 
   await insertRuntimeLog(db, {
@@ -501,10 +509,10 @@ export async function closeSprint(db: Db, sprintId: number, actor: string) {
   return await db.get('SELECT * FROM sprints WHERE id = ?', sprintId);
 }
 
-export async function completeSprintRoute(db: Db, sprintId: number) {
+export async function completeSprintRoute(db: Db, sprintId: number, actor = 'api', note?: string) {
   const sprint = await db.get('SELECT id FROM sprints WHERE id = ?', sprintId);
   if (!sprint) throw Object.assign(new Error('Sprint not found'), { status: 404 });
-  await completeSprint(sprintId);
+  await completeSprint(sprintId, actor, note);
   return await db.get('SELECT * FROM sprints WHERE id = ?', sprintId);
 }
 

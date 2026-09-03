@@ -32,11 +32,15 @@ export interface McpToolProfile {
 }
 
 /**
- * Phone-sized surface: read the board, file and update work, run the recurring series that
- * drive scheduled automation. Deliberately excluded — configuration surfaces (agents, skills,
- * routing, workflow definitions, teams, tools, MCP servers), file upload/download, and the
- * dispatch-scoped lifecycle writes (evidence, outcomes, run check-ins) that only mean something
- * for an agent that owns a dispatched run.
+ * Phone-sized surface: read the board, file and update work, move a workflow through its
+ * lifecycle, run the recurring series that drive scheduled automation. Deliberately excluded —
+ * configuration surfaces (agents, skills, routing, workflow definitions, teams, tools, MCP
+ * servers), file upload/download, and the dispatch-scoped lifecycle writes (evidence, outcomes,
+ * run check-ins) that only mean something for an agent that owns a dispatched run.
+ *
+ * Workflow lifecycle is in while workflow *definitions* stay out, and the line between them is
+ * the point: pausing a cycle from a phone is an operator deciding when work runs, whereas
+ * defining a workflow type is design work that wants the canvas.
  *
  * Names here are the tools' own names — since every tool answers to exactly one name, a profile
  * entry that no longer resolves is a typo, which the profile tests catch.
@@ -65,6 +69,11 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
   'agent_hq_add_task_note',
   'agent_hq_create_task_relationship',
 
+  // Workflow lifecycle. The board's own pause/resume/complete controls, which is a different
+  // thing from the workflow *configuration* excluded below: this moves a cycle the operator
+  // already set up between its statuses, it does not define or reshape one.
+  'agent_hq_set_workflow_status',
+
   // Scheduled automation
   'agent_hq_create_recurring_task_series',
   'agent_hq_update_recurring_task_series',
@@ -74,18 +83,22 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
 ];
 
 /**
- * The capability policy the mobile profile is built against. Two of these exist for this shape of
- * client: `projects.read_project_board` makes a board legible to an identity that owns no
- * dispatched task, and `tasks.write_project_notes` lets it comment on work it is not executing.
- * The rest are existing project-scoped grants. Notably absent: every admin key, both cross-tenant
- * grants, and `tasks.write_active_lifecycle` — a connector should not be able to report evidence
- * or an outcome for a run it is not executing.
+ * The capability policy the mobile profile is built against. Several of these exist for this
+ * shape of client: `projects.read_project_board` makes a board legible to an identity that owns
+ * no dispatched task, `tasks.write_project_notes` lets it comment on work it is not executing,
+ * and the two `sprints.*_active_sprint` writes let it work the lifecycle controls of a workflow
+ * it is not running — all of which resolve through the assigned project rather than a dispatched
+ * task. The rest are existing project-scoped grants. Notably absent: every admin key, both
+ * cross-tenant grants, and `tasks.write_active_lifecycle` — a connector should not be able to
+ * report evidence or an outcome for a run it is not executing.
  */
 const MOBILE_PROFILE_CAPABILITIES: readonly string[] = [
   'discovery.read_catalog',
   'projects.read_project_board',
   'projects.read_active_project',
   'sprints.read_active_sprint',
+  'sprints.pause_active_sprint',
+  'sprints.complete_active_sprint',
   'workflow_definitions.read_project_scope',
   'tasks.read_project_context',
   'tasks.manage_project_tasks',

@@ -1,8 +1,12 @@
 import { getDb } from '../../db/client';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
+import { writeProjectAudit } from '../../lib/projectAudit';
 import { type Db } from "../../db/adapter/types";
 
 export type SprintStatus = 'planning' | 'planned' | 'active' | 'paused' | 'complete' | 'closed';
+
+/** Audit actor for the unattended time/run-limit completions driven by checkSprintCompletion. */
+export const SPRINT_SCHEDULER_ACTOR = 'system:sprint-scheduler';
 
 interface SprintRecord {
   id: number;
@@ -52,7 +56,18 @@ export function normalizeSprintStatus(raw: unknown): SprintStatus {
   throw new Error(`Invalid sprint status "${raw}". Valid values: planning, planned, active, paused, complete, closed`);
 }
 
-export async function completeSprint(sprintId: number): Promise<void> {
+/**
+ * Completing is the terminal end of an operating cycle: it stamps ended_at and stands down the
+ * workflow's agents. `actor` is threaded through because completing is now reachable from MCP as
+ * well as the canvas — an agent-initiated complete has to be as attributable as an operator's,
+ * and until it carried an audit row this was the least traceable write in the lifecycle. The
+ * scheduler paths below pass their own actor rather than inheriting an operator's.
+ */
+export async function completeSprint(
+  sprintId: number,
+  actor = 'api',
+  note?: string,
+): Promise<void> {
   const db = getDb();
   const sprint = await db.get('SELECT * FROM sprints WHERE id = ?', sprintId) as SprintRecord | undefined;
   if (!sprint || sprint.status === 'complete') return;
@@ -64,6 +79,11 @@ export async function completeSprint(sprintId: number): Promise<void> {
   const paused = await db.run(`
     UPDATE agents SET enabled = 0 WHERE sprint_id = ?
   `, sprintId);
+
+  await writeProjectAudit(db, sprint.project_id, 'sprint', sprintId, 'updated', actor, {
+        status: { old: sprint.status, new: 'complete' },
+        ...(note ? { note } : {}),
+      });
 
   await insertRuntimeLog(db, {
         projectId: sprint.project_id,
@@ -91,7 +111,7 @@ export async function checkSprintCompletion(): Promise<void> {
       const startedMs = new Date(sprint.started_at).getTime();
       if (Date.now() >= startedMs + durationMs) {
         console.log(`[sprints] Sprint ${sprint.id} "${sprint.name}" time limit reached, completing.`);
-        await completeSprint(sprint.id);
+        await completeSprint(sprint.id, SPRINT_SCHEDULER_ACTOR, `Time limit reached (${sprint.length_value}).`);
       }
     } else if (sprint.length_kind === 'runs') {
       const maxRuns = parseInt(sprint.length_value, 10);
@@ -105,7 +125,7 @@ export async function checkSprintCompletion(): Promise<void> {
       `, sprint.id) as { cnt: number };
       if (row.cnt >= maxRuns) {
         console.log(`[sprints] Sprint ${sprint.id} "${sprint.name}" run limit reached (${row.cnt}/${maxRuns}), completing.`);
-        await completeSprint(sprint.id);
+        await completeSprint(sprint.id, SPRINT_SCHEDULER_ACTOR, `Run limit reached (${row.cnt}/${maxRuns}).`);
       }
     }
   }

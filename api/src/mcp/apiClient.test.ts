@@ -595,6 +595,53 @@ describe('AgentHqApiClient lifecycle write helpers', () => {
   });
 });
 
+describe('AgentHqApiClient workflow lifecycle helpers', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
+  });
+
+  it('routes each lifecycle transition to the endpoint that performs it', async () => {
+    // Completing and closing must not collapse into a status field write: their endpoints stamp
+    // ended_at, and completing also stands the workflow's agents down.
+    const calls: Array<{ method: string; url: string; body: unknown }> = [];
+    const fetchMock = jest.fn(async (input: string | URL, init?: RequestInit) => {
+      calls.push({
+        method: String(init?.method ?? 'GET'),
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return jsonResponse({ ok: true });
+    });
+    (global as typeof globalThis & { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+    const client = new AgentHqApiClient('http://agent-hq.test');
+
+    await client.updateSprint(42, { status: 'paused', note: 'Holding for review capacity' });
+    await client.completeSprint(42, { note: 'Objectives met' });
+    await client.closeSprint(42);
+
+    expect(calls).toEqual([
+      {
+        method: 'PUT',
+        url: 'http://agent-hq.test/api/v1/sprints/42',
+        body: { status: 'paused', note: 'Holding for review capacity' },
+      },
+      {
+        method: 'POST',
+        url: 'http://agent-hq.test/api/v1/sprints/42/complete',
+        body: { note: 'Objectives met' },
+      },
+      {
+        method: 'POST',
+        url: 'http://agent-hq.test/api/v1/sprints/42/close',
+        body: {},
+      },
+    ]);
+  });
+});
+
 describe('AgentHqApiClient recurring task series helpers', () => {
   const originalFetch = global.fetch;
 

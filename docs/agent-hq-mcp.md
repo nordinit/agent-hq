@@ -738,6 +738,8 @@ The policy the `mobile` profile pairs with:
 | `projects.read_project_board` | the tenant project list, plus task/workflow/metadata collections scoped to the assigned project |
 | `projects.read_active_project` | project detail |
 | `sprints.read_active_sprint` | workflow detail |
+| `sprints.pause_active_sprint` | pause, resume, and reopen a workflow in the assigned project |
+| `sprints.complete_active_sprint` | complete or close a workflow in the assigned project |
 | `workflow_definitions.read_project_scope` | workflow type configuration reads |
 | `tasks.read_project_context` | task detail, notes, history, relationships |
 | `tasks.manage_project_tasks` | create/update/delete tasks and relationships in the assigned project |
@@ -747,7 +749,25 @@ The policy the `mobile` profile pairs with:
 
 Absent by design: every `admin.*` key, and `tasks.write_active_lifecycle` — a connector should not report evidence or an outcome for a run it is not executing.
 
-Two capabilities were added for this shape of client. `projects.read_project_board` covers the collection reads a board view needs; every other read capability resolves to a single record or to the agent's own dispatched task, which is right for a runtime agent and leaves a remote client unable to answer "what is on my board" without an admin key. Each collection that can name a project must name the assigned one. `tasks.write_project_notes` lets an identity comment on work it is not executing, and stops at notes.
+Several capabilities were added for this shape of client. `projects.read_project_board` covers the collection reads a board view needs; every other read capability resolves to a single record or to the agent's own dispatched task, which is right for a runtime agent and leaves a remote client unable to answer "what is on my board" without an admin key. Each collection that can name a project must name the assigned one. `tasks.write_project_notes` lets an identity comment on work it is not executing, and stops at notes.
+
+The two `sprints.*_active_sprint` writes back `agent_hq_set_workflow_status`. Both resolve scope the same way — the workflow attached to the caller's active dispatched task, or any workflow inside its assigned project — and both are off by default for scoped runtime keys, so a dispatched agent gets workflow lifecycle control only when an operator grants it. They are separate because the transitions are not equivalent: pausing is a reversible hold, while completing stamps the end date and stands the workflow's agents down, so an agent that may say "hold on" does not thereby get to say "this cycle is finished."
+
+Neither is in `SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES`, so a scoped policy editor cannot grant workflow lifecycle control to itself or another agent; that stays an administrative act.
+
+### Workflow lifecycle over MCP
+
+`agent_hq_set_workflow_status` takes a `workflow_id`, a target `status`, and an optional `note` recorded on the audit entry. The status routes the call, because the transitions are not the same kind of write:
+
+| Status | Endpoint | Effect |
+|---|---|---|
+| `planning`, `active`, `paused` | `PUT /api/v1/workflows/:id` | status field write; no end date, no agent stand-down |
+| `complete` | `POST /api/v1/workflows/:id/complete` | stamps `ended_at`, disables the workflow's agents |
+| `closed` | `POST /api/v1/workflows/:id/close` | stamps `ended_at` |
+
+Setting `active` on a `complete` or `closed` workflow reopens it — there is deliberately no terminal-state guard, matching what the canvas allows.
+
+`PUT /api/v1/workflows/:id` under `sprints.pause_active_sprint` accepts a body of `status` and `note` and nothing else, and only a non-terminal `status`. A patch that also carries `name`, `goal`, `repo_url`, `ended_at`, or `project_id` falls through to the administrative deny, so the pause grant cannot rename a workflow, rewrite its repo configuration, or move it to another project. Reaching `complete` or `closed` through the field write is refused for the same reason the tool routes them elsewhere: it would leave a workflow that reads as finished but never ended. General workflow editing remains `agent_hq_update_workflow` on an administrative key.
 
 ### OAuth for connectors
 

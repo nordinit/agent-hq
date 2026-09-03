@@ -55,6 +55,22 @@ describe('MCP tool profiles', () => {
     expect(mobile.capabilities).not.toContain('mcp_capability_policies.write');
   });
 
+  it('gives the mobile profile the workflow lifecycle controls but not workflow configuration', () => {
+    // The board's pause/resume/complete buttons are the point of the phone surface; defining a
+    // workflow type is design work that wants the canvas.
+    const mobile = resolveMcpToolProfile('mobile');
+    expect(mobile.toolNames).toContain('agent_hq_set_workflow_status');
+    expect(mobile.capabilities).toEqual(expect.arrayContaining([
+      'sprints.pause_active_sprint',
+      'sprints.complete_active_sprint',
+    ]));
+
+    expect(mobile.toolNames).not.toContain('agent_hq_update_workflow');
+    expect(mobile.toolNames).not.toContain('agent_hq_create_workflow');
+    expect(mobile.toolNames).not.toContain('agent_hq_delete_workflow');
+    expect(mobile.capabilities).not.toContain('workflow_definitions.manage_project_scope');
+  });
+
   it('resolves the full profile by default and rejects unknown names', () => {
     expect(resolveMcpToolProfile().name).toBe('full');
     expect(resolveMcpToolProfile('').name).toBe('full');

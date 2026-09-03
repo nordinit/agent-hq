@@ -766,6 +766,19 @@ export class AgentHqApiClient {
     return this.request<unknown>('DELETE', `/api/v1/sprints/${id}`);
   }
 
+  // Completing and closing are their own endpoints rather than a status field write on
+  // updateSprint: both stamp ended_at, and completing also stands down the workflow's agents.
+  // A PUT that only sets status = 'complete' produces a workflow that reads as finished but
+  // never ended. Returned rows are the raw sprint record, so they are not run through
+  // shapeSprintSummary — that shape would report task_count 0 for metrics it was never given.
+  completeSprint(id: number, data: Record<string, unknown> = {}) {
+    return this.request<unknown>('POST', `/api/v1/sprints/${id}/complete`, data);
+  }
+
+  closeSprint(id: number, data: Record<string, unknown> = {}) {
+    return this.request<unknown>('POST', `/api/v1/sprints/${id}/close`, data);
+  }
+
   listTasks(params: {
     project_id?: number;
     sprint_id?: number;

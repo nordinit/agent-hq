@@ -56,10 +56,13 @@ async function seedScopeFixture(db: Db): Promise<void> {
     `INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`,
     86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project',
   );
+  // Sprint 45 sits in the assigned project without being the dispatched one, which is what
+  // separates the two workflow-lifecycle scope tiers: sprint 42 is reachable because it is
+  // attached to the agent's active task, 45 only because it is inside the assigned project.
   await db.run(`
     INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
-    VALUES (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active')
-  `, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint');
+    VALUES (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active')
+  `, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint', 45, 1, 86, 'Undispatched Same-Project Sprint');
   // session_key is NOT NULL and unique in the real schema. The admin agent is still named Atlas —
   // that is what makes it trusted — but every fixture agent needs its own key.
   await db.run(`
@@ -165,6 +168,13 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       relationship_types: [],
     }));
     app.get('/api/v1/sprints/:id', (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id) }));
+    // Both spellings, because req.path is what the policy matches and /api/v1/workflows mounts
+    // the same router in the real app without any path rewriting.
+    for (const prefix of ['/api/v1/sprints', '/api/v1/workflows']) {
+      app.put(`${prefix}/:id`, (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id), body: req.body }));
+      app.post(`${prefix}/:id/complete`, (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id), status: 'complete' }));
+      app.post(`${prefix}/:id/close`, (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id), status: 'closed' }));
+    }
     const listAssignmentRules = (req: express.Request, res: express.Response) => res.json({ ok: true, query: req.query });
     const createAssignmentRule = (req: express.Request, res: express.Response) => res.status(201).json({ ok: true, body: req.body });
     const getAssignmentRule = (req: express.Request, res: express.Response) => res.json({ ok: true, rule_id: Number(req.params.id), query: req.query });
@@ -232,6 +242,9 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.get('/api/v1/sprints', (req, res) => res.json({ ok: true, query: req.query, sprints: [] }));
     app.get('/api/v1/workflows', (req, res) => res.json({ ok: true, query: req.query, workflows: [] }));
     app.get('/api/v1/workflows/workflow-metadata', (req, res) => res.json({ ok: true, query: req.query }));
+    // Registered after every literal /workflows/* path above so it cannot shadow them. The real
+    // router is ordered the same way and additionally rejects a non-numeric :id up front.
+    app.get('/api/v1/workflows/:id', (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id) }));
 
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
@@ -332,6 +345,175 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await expect(routingRes.json()).resolves.toMatchObject({
       code: 'mcp_scope_denied',
       details: { required_capability: 'routing_transitions.manage_project_scope' },
+    });
+  });
+
+  describe('workflow lifecycle writes', () => {
+    const PAUSE = 'sprints.pause_active_sprint';
+    const COMPLETE = 'sprints.complete_active_sprint';
+
+    const put = (sprintPath: string, body: Record<string, unknown>) => fetch(`${baseUrl}${sprintPath}`, {
+      method: 'PUT',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify(body),
+    });
+    const post = (sprintPath: string) => fetch(`${baseUrl}${sprintPath}`, {
+      method: 'POST',
+      headers: authHeaders(normalKey),
+      body: JSON.stringify({}),
+    });
+
+    it('withholds both lifecycle capabilities from a scoped runtime key by default', async () => {
+      // Neither is defaultEnabled for scoped_runtime: ending or holding a cycle is an explicit
+      // grant, not something every dispatched agent picks up by existing.
+      const pauseRes = await put('/api/v1/sprints/42', { status: 'paused' });
+      expect(pauseRes.status).toBe(403);
+      await expect(pauseRes.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: { required_capability: PAUSE },
+      });
+
+      const completeRes = await post('/api/v1/sprints/42/complete');
+      expect(completeRes.status).toBe(403);
+      await expect(completeRes.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: { required_capability: COMPLETE },
+      });
+    });
+
+    it('pauses and resumes the workflow attached to the active dispatched task', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE]);
+
+      await expect(put('/api/v1/sprints/42', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
+      await expect(put('/api/v1/sprints/42', { status: 'active' }).then((r) => r.status)).resolves.toBe(200);
+      await expect(put('/api/v1/sprints/42', { status: 'planning' }).then((r) => r.status)).resolves.toBe(200);
+      // An audit note rides along without turning the patch into a general edit.
+      await expect(put('/api/v1/sprints/42', { status: 'paused', note: 'Blocked on review' }).then((r) => r.status)).resolves.toBe(200);
+    });
+
+    it('accepts the workflow path spelling as well as the sprint one', async () => {
+      // req.path is not alias-normalized, so a policy branch that matched only /sprints would
+      // silently refuse every caller using the preferred spelling.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+
+      await expect(put('/api/v1/workflows/42', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
+      await expect(post('/api/v1/workflows/42/complete').then((r) => r.status)).resolves.toBe(200);
+      await expect(post('/api/v1/workflows/42/close').then((r) => r.status)).resolves.toBe(200);
+
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['sprints.read_active_sprint']);
+      const readRes = await fetch(`${baseUrl}/api/v1/workflows/42`, { headers: authHeaders(normalKey) });
+      expect(readRes.status).toBe(200);
+    });
+
+    it('reaches a workflow inside the assigned project that is not the dispatched one', async () => {
+      // The board-scoped tier. Sprint 45 is in project 86 but attached to no task of agent 7.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+
+      await expect(put('/api/v1/sprints/45', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
+      await expect(post('/api/v1/sprints/45/complete').then((r) => r.status)).resolves.toBe(200);
+    });
+
+    it('refuses a workflow outside the assigned project or tenant', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+
+      const otherProject = await put('/api/v1/sprints/44', { status: 'paused' });
+      expect(otherProject.status).toBe(403);
+      await expect(otherProject.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: { required_capability: PAUSE },
+      });
+
+      const crossTenant = await post('/api/v1/sprints/43/complete');
+      expect(crossTenant.status).toBe(403);
+    });
+
+    it('separates holding a cycle from ending one', async () => {
+      // Pausing must not imply completing: the first is reversible, the second stamps the end
+      // date and stands the workflow's agents down.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE]);
+
+      const completeRes = await post('/api/v1/sprints/42/complete');
+      expect(completeRes.status).toBe(403);
+      await expect(completeRes.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: { required_capability: COMPLETE },
+      });
+
+      const closeRes = await post('/api/v1/sprints/42/close');
+      expect(closeRes.status).toBe(403);
+
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [COMPLETE]);
+      await expect(post('/api/v1/sprints/42/complete').then((r) => r.status)).resolves.toBe(200);
+      await expect(post('/api/v1/sprints/42/close').then((r) => r.status)).resolves.toBe(200);
+      // ...and completing must not imply pausing.
+      const pauseRes = await put('/api/v1/sprints/42', { status: 'paused' });
+      expect(pauseRes.status).toBe(403);
+      await expect(pauseRes.json()).resolves.toMatchObject({
+        details: { required_capability: PAUSE },
+      });
+    });
+
+    it('refuses a status patch that smuggles in any other workflow field', async () => {
+      // This is the whole reason the body guard exists. Without it the pause grant would also
+      // rename workflows, rewrite repo configuration, and — via project_id — move a workflow
+      // into another project.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+
+      for (const body of [
+        { status: 'paused', project_id: 87 },
+        { status: 'paused', name: 'Renamed' },
+        { status: 'paused', repo_url: 'git@github.com:attacker/repo.git' },
+        { status: 'paused', ended_at: '2026-01-01' },
+        { name: 'Renamed' },
+      ]) {
+        const res = await put('/api/v1/sprints/42', body);
+        expect({ body, status: res.status }).toEqual({ body, status: 403 });
+        await expect(res.json()).resolves.toMatchObject({
+          details: { required_capability: 'admin.full_access' },
+        });
+      }
+    });
+
+    it('refuses to reach a terminal status through the status field write', async () => {
+      // complete and closed have their own endpoints, which stamp ended_at. A field write to
+      // 'complete' would leave a workflow that reads as finished but never ended, so it falls
+      // through to the administrative deny rather than riding in on the pause grant.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+
+      for (const status of ['complete', 'closed']) {
+        const res = await put('/api/v1/sprints/42', { status });
+        expect({ status, code: res.status }).toEqual({ status, code: 403 });
+        await expect(res.json()).resolves.toMatchObject({
+          details: { required_capability: 'admin.full_access' },
+        });
+      }
+    });
+
+    it('leaves general workflow editing to administrative keys', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
+      await expect(put('/api/v1/sprints/42', { goal: 'Rewritten goal' }).then((r) => r.status)).resolves.toBe(403);
+
+      const adminRes = await fetch(`${baseUrl}/api/v1/sprints/42`, {
+        method: 'PUT',
+        headers: authHeaders(adminKey),
+        body: JSON.stringify({ goal: 'Rewritten goal' }),
+      });
+      expect(adminRes.status).toBe(200);
+    });
+
+    it('refuses a key with no assigned project and no dispatched workflow', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 11, [PAUSE, COMPLETE]);
+
+      const res = await fetch(`${baseUrl}/api/v1/sprints/42`, {
+        method: 'PUT',
+        headers: authHeaders(noProjectKey),
+        body: JSON.stringify({ status: 'paused' }),
+      });
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        code: 'mcp_scope_denied',
+        details: { required_capability: PAUSE },
+      });
     });
   });
 

@@ -409,6 +409,107 @@ describe('sprints API create clone support', () => {
     }
   });
 
+  it('audits completing a workflow against the actor that asked for it', async () => {
+    // Completing used to write a runtime log and nothing else, which made it the least
+    // attributable write in the lifecycle — the wrong property once an MCP agent can trigger it.
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const db = getDb();
+
+      const response = await fetch(`${baseUrl}/api/v1/workflows/10/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-actor': 'agent:casper' },
+        body: JSON.stringify({ note: 'Objectives met.' }),
+      });
+      expect(response.status).toBe(200);
+
+      const sprint = await db.get(`SELECT status, ended_at FROM sprints WHERE id = 10`) as { status: string; ended_at: string | null };
+      expect(sprint.status).toBe('complete');
+      expect(sprint.ended_at).not.toBeNull();
+
+      const audit = await db.get(`
+        SELECT actor, changes FROM project_audit_log
+        WHERE entity_type = 'sprint' AND entity_id = 10 AND action = 'updated'
+        ORDER BY id DESC LIMIT 1
+      `) as { actor: string; changes: string };
+      expect(audit.actor).toBe('agent:casper');
+      expect(JSON.parse(audit.changes)).toEqual(expect.objectContaining({
+        status: { old: 'active', new: 'complete' },
+        note: 'Objectives met.',
+      }));
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('records the note and actor on a close and on a status field write', async () => {
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const db = getDb();
+
+      const pauseResponse = await fetch(`${baseUrl}/api/v1/workflows/10`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'x-actor': 'agent:cinder' },
+        body: JSON.stringify({ status: 'paused', note: 'Waiting on review capacity.' }),
+      });
+      expect(pauseResponse.status).toBe(200);
+      await expect(pauseResponse.json()).resolves.toEqual(expect.objectContaining({ status: 'paused' }));
+
+      const pauseAudit = await db.get(`
+        SELECT actor, changes FROM project_audit_log
+        WHERE entity_type = 'sprint' AND entity_id = 10 ORDER BY id DESC LIMIT 1
+      `) as { actor: string; changes: string };
+      expect(pauseAudit.actor).toBe('agent:cinder');
+      expect(JSON.parse(pauseAudit.changes)).toEqual(expect.objectContaining({
+        status: { old: 'active', new: 'paused' },
+        note: 'Waiting on review capacity.',
+      }));
+      // The note is audit-only and must never reach a sprints column.
+      const paused = await db.get(`SELECT status FROM sprints WHERE id = 10`) as { status: string };
+      expect(paused.status).toBe('paused');
+
+      const closeResponse = await fetch(`${baseUrl}/api/v1/workflows/10/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-actor': 'agent:cinder' },
+        body: JSON.stringify({ note: 'Superseded.' }),
+      });
+      expect(closeResponse.status).toBe(200);
+      const closeAudit = await db.get(`
+        SELECT changes FROM project_audit_log
+        WHERE entity_type = 'sprint' AND entity_id = 10 ORDER BY id DESC LIMIT 1
+      `) as { changes: string };
+      expect(JSON.parse(closeAudit.changes)).toEqual(expect.objectContaining({
+        status: { old: 'paused', new: 'closed' },
+        note: 'Superseded.',
+      }));
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('reopens a completed or closed workflow back to active', async () => {
+    // Reopening is a supported operator action and stays one: there is deliberately no guard
+    // stopping a terminal workflow from going back to active.
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const db = getDb();
+
+      for (const terminal of ['complete', 'closed']) {
+        await db.run(`UPDATE sprints SET status = ?, ended_at = '2026-01-01 00:00:00' WHERE id = 10`, terminal);
+
+        const response = await fetch(`${baseUrl}/api/v1/workflows/10`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'x-actor': 'agent:cinder' },
+          body: JSON.stringify({ status: 'active', note: `Reopened from ${terminal}.` }),
+        });
+        expect({ terminal, status: response.status }).toEqual({ terminal, status: 200 });
+        await expect(response.json()).resolves.toEqual(expect.objectContaining({ status: 'active' }));
+      }
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
   it('supports workflow definition aliases with workflow_type request and response fields', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
