@@ -233,6 +233,18 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.get('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
     app.put('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), body: req.body }));
     app.delete('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
+    // Statuses, outcomes and relationship types across all three spellings. These are child rows
+    // of a workflow definition and were unreachable without an admin key until the policy branch
+    // learned about them.
+    for (const prefix of ['/api/v1/sprints', '/api/v1/workflows', '/api/v1/workflow-definitions']) {
+      for (const sub of ['statuses', 'outcomes', 'relationship-types']) {
+        app.get(`${prefix}/types/:key/${sub}`, (req, res) => res.json({ ok: true, key: req.params.key, sub, query: req.query }));
+        app.get(`${prefix}/types/:key/${sub}/:childId`, (req, res) => res.json({ ok: true, key: req.params.key, sub, child_id: req.params.childId }));
+        app.post(`${prefix}/types/:key/${sub}`, (req, res) => res.status(201).json({ ok: true, key: req.params.key, sub, body: req.body }));
+        app.put(`${prefix}/types/:key/${sub}/:childId`, (req, res) => res.json({ ok: true, key: req.params.key, sub, child_id: req.params.childId, body: req.body }));
+        app.delete(`${prefix}/types/:key/${sub}/:childId`, (req, res) => res.json({ ok: true, key: req.params.key, sub, child_id: req.params.childId }));
+      }
+    }
     app.post('/api/v1/external/task-events', (_req, res) => res.status(202).json({ ok: true }));
     app.post('/api/v1/tasks', (_req, res) => res.status(201).json({ ok: true }));
     app.put('/api/v1/tasks/:id', (req, res) => res.json({ ok: true, task_id: Number(req.params.id), body: req.body }));
@@ -684,6 +696,117 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await expect(deleteResponse.json()).resolves.toMatchObject({
       agent_id: 9,
       policy_mode: 'default',
+    });
+  });
+
+  describe('workflow definition child resources', () => {
+    const READ = 'workflow_definitions.read_project_scope';
+    const MANAGE = 'workflow_definitions.manage_project_scope';
+    const SUBS = ['statuses', 'outcomes', 'relationship-types'] as const;
+    const SPELLINGS = ['/api/v1/sprints', '/api/v1/workflows', '/api/v1/workflow-definitions'] as const;
+
+    const call = (method: string, path: string, key = normalKey) => fetch(`${baseUrl}${path}`, {
+      method,
+      headers: authHeaders(key),
+      body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify({ label: 'Probe' }),
+    });
+
+    it('reads statuses, outcomes and relationship types on the assigned project', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ]);
+
+      for (const prefix of SPELLINGS) {
+        for (const sub of SUBS) {
+          const list = await call('GET', `${prefix}/types/dev/${sub}`);
+          expect({ prefix, sub, status: list.status }).toEqual({ prefix, sub, status: 200 });
+
+          const one = await call('GET', `${prefix}/types/dev/${sub}/child-1`);
+          expect({ prefix, sub, status: one.status }).toEqual({ prefix, sub, status: 200 });
+        }
+      }
+    });
+
+    it('creates, updates and deletes them with the manage capability', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+
+      for (const prefix of SPELLINGS) {
+        for (const sub of SUBS) {
+          const created = await call('POST', `${prefix}/types/dev/${sub}`);
+          expect({ prefix, sub, status: created.status }).toEqual({ prefix, sub, status: 201 });
+
+          const updated = await call('PUT', `${prefix}/types/dev/${sub}/child-1`);
+          expect({ prefix, sub, status: updated.status }).toEqual({ prefix, sub, status: 200 });
+
+          const deleted = await call('DELETE', `${prefix}/types/dev/${sub}/child-1`);
+          expect({ prefix, sub, status: deleted.status }).toEqual({ prefix, sub, status: 200 });
+        }
+      }
+    });
+
+    it('creates a child row without an explicit project_id in the body', async () => {
+      // A child inherits the scope of the type in its path; only POST /types, which brings a
+      // definition into being, has to name its project.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
+
+      const child = await fetch(`${baseUrl}/api/v1/sprints/types/dev/statuses`, {
+        method: 'POST',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ name: 'uat_review', label: 'UAT Review', metadata: { emoji: '🧪' } }),
+      });
+      expect(child.status).toBe(201);
+
+      const keylessCreate = await fetch(`${baseUrl}/api/v1/sprints/types`, {
+        method: 'POST',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ key: 'new-type', name: 'New Type' }),
+      });
+      expect(keylessCreate.status).toBe(403);
+      await expect(keylessCreate.json()).resolves.toMatchObject({
+        details: { required_capability: MANAGE },
+      });
+    });
+
+    it('separates reading a definition from editing one', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ]);
+
+      for (const sub of SUBS) {
+        const created = await call('POST', `/api/v1/sprints/types/dev/${sub}`);
+        expect({ sub, status: created.status }).toEqual({ sub, status: 403 });
+        await expect(created.json()).resolves.toMatchObject({
+          details: { required_capability: MANAGE },
+        });
+      }
+    });
+
+    it('refuses a definition outside the assigned project or tenant', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ, MANAGE]);
+
+      // Same tenant, project 87.
+      const otherProject = await call('PUT', '/api/v1/sprints/types/other-project-dev/statuses/review');
+      expect(otherProject.status).toBe(403);
+      await expect(otherProject.json()).resolves.toMatchObject({
+        details: { required_capability: MANAGE },
+      });
+
+      // Tenant 2 — must read as "does not exist here", never as an edit on another tenant.
+      const crossTenant = await call('POST', '/api/v1/sprints/types/eco-dev/outcomes');
+      expect(crossTenant.status).toBe(403);
+
+      // A keyed POST used to skip the existence check and could pass on a request-supplied
+      // scope alone; it must report the definition as absent instead.
+      const unknown = await call('POST', '/api/v1/sprints/types/no-such-type/statuses');
+      expect(unknown.status).toBe(403);
+      await expect(unknown.json()).resolves.toMatchObject({
+        error: expect.stringContaining('does not exist'),
+        details: { required_capability: MANAGE },
+      });
+    });
+
+    it('withholds definition editing from a scoped runtime key by default', async () => {
+      const res = await call('POST', '/api/v1/sprints/types/dev/statuses');
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        details: { required_capability: MANAGE },
+      });
     });
   });
 

@@ -456,7 +456,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'workflow_definitions.read_project_scope',
     group: 'Workflow',
     label: 'Read project workflow definitions',
-    description: 'Allows reading workflow definitions and configurable metadata only when scoped to the MCP agent\'s assigned project and tenant. Does not allow tenant-wide, cross-project, cross-tenant, or mutation access.',
+    description: 'Allows reading a whole workflow definition — the type, its task types, field schemas, statuses, outcomes, and relationship types — only when scoped to the MCP agent\'s assigned project and tenant. Does not allow tenant-wide, cross-project, cross-tenant, or mutation access.',
     endpoints: [
       'GET /api/v1/sprints/config',
       'GET /api/v1/sprints/types/list',
@@ -464,18 +464,36 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
       'GET /api/v1/sprints/types/:key/task-types',
       'GET /api/v1/sprints/types/:key/field-schemas',
       'GET /api/v1/sprints/types/:key/field-schemas/:schemaId',
+      'GET /api/v1/sprints/types/:key/statuses',
+      'GET /api/v1/sprints/types/:key/statuses/:statusKey',
+      'GET /api/v1/sprints/types/:key/outcomes',
+      'GET /api/v1/sprints/types/:key/outcomes/:outcomeId',
+      'GET /api/v1/sprints/types/:key/relationship-types',
+      'GET /api/v1/sprints/types/:key/relationship-types/:relationshipTypeId',
       'GET /api/v1/workflows/config',
       'GET /api/v1/workflows/types/list',
       'GET /api/v1/workflows/types/:key',
       'GET /api/v1/workflows/types/:key/task-types',
       'GET /api/v1/workflows/types/:key/field-schemas',
       'GET /api/v1/workflows/types/:key/field-schemas/:schemaId',
+      'GET /api/v1/workflows/types/:key/statuses',
+      'GET /api/v1/workflows/types/:key/statuses/:statusKey',
+      'GET /api/v1/workflows/types/:key/outcomes',
+      'GET /api/v1/workflows/types/:key/outcomes/:outcomeId',
+      'GET /api/v1/workflows/types/:key/relationship-types',
+      'GET /api/v1/workflows/types/:key/relationship-types/:relationshipTypeId',
       'GET /api/v1/workflow-definitions/config',
       'GET /api/v1/workflow-definitions/types',
       'GET /api/v1/workflow-definitions/types/:key',
       'GET /api/v1/workflow-definitions/types/:key/task-types',
       'GET /api/v1/workflow-definitions/types/:key/field-schemas',
       'GET /api/v1/workflow-definitions/types/:key/field-schemas/:schemaId',
+      'GET /api/v1/workflow-definitions/types/:key/statuses',
+      'GET /api/v1/workflow-definitions/types/:key/statuses/:statusKey',
+      'GET /api/v1/workflow-definitions/types/:key/outcomes',
+      'GET /api/v1/workflow-definitions/types/:key/outcomes/:outcomeId',
+      'GET /api/v1/workflow-definitions/types/:key/relationship-types',
+      'GET /api/v1/workflow-definitions/types/:key/relationship-types/:relationshipTypeId',
     ],
     defaultEnabled: {
       scoped_runtime: false,
@@ -486,7 +504,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'workflow_definitions.manage_project_scope',
     group: 'Workflow',
     label: 'Edit project workflow definitions',
-    description: 'Allows creating, updating, and deleting workflow definitions only inside the MCP agent\'s assigned project and tenant. Does not allow tenant-wide definitions, global definitions, cross-project edits, cross-tenant edits, or unrelated admin routes.',
+    description: 'Allows creating, updating, and deleting every part of a workflow definition — the type itself, its task types, field schemas, statuses and their metadata, outcomes, and relationship types — only inside the MCP agent\'s assigned project and tenant. Statuses and outcomes shape the transition graph an agent moves tasks through, so this grants real authority over how work flows, not just how it is labelled. Does not allow tenant-wide definitions, global definitions, cross-project edits, cross-tenant edits, or unrelated admin routes.',
     endpoints: [
       'POST /api/v1/sprints/types',
       'PUT /api/v1/sprints/types/:key',
@@ -495,6 +513,15 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
       'POST /api/v1/sprints/types/:key/field-schemas',
       'PUT /api/v1/sprints/types/:key/field-schemas/:schemaId',
       'DELETE /api/v1/sprints/types/:key/field-schemas/:schemaId',
+      'POST /api/v1/sprints/types/:key/statuses',
+      'PUT /api/v1/sprints/types/:key/statuses/:statusKey',
+      'DELETE /api/v1/sprints/types/:key/statuses/:statusKey',
+      'POST /api/v1/sprints/types/:key/outcomes',
+      'PUT /api/v1/sprints/types/:key/outcomes/:outcomeId',
+      'DELETE /api/v1/sprints/types/:key/outcomes/:outcomeId',
+      'POST /api/v1/sprints/types/:key/relationship-types',
+      'PUT /api/v1/sprints/types/:key/relationship-types/:relationshipTypeId',
+      'DELETE /api/v1/sprints/types/:key/relationship-types/:relationshipTypeId',
       'POST /api/v1/workflows/types',
       'PUT /api/v1/workflows/types/:key',
       'DELETE /api/v1/workflows/types/:key',
@@ -502,6 +529,15 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
       'POST /api/v1/workflows/types/:key/field-schemas',
       'PUT /api/v1/workflows/types/:key/field-schemas/:schemaId',
       'DELETE /api/v1/workflows/types/:key/field-schemas/:schemaId',
+      'POST /api/v1/workflows/types/:key/statuses',
+      'PUT /api/v1/workflows/types/:key/statuses/:statusKey',
+      'DELETE /api/v1/workflows/types/:key/statuses/:statusKey',
+      'POST /api/v1/workflows/types/:key/outcomes',
+      'PUT /api/v1/workflows/types/:key/outcomes/:outcomeId',
+      'DELETE /api/v1/workflows/types/:key/outcomes/:outcomeId',
+      'POST /api/v1/workflows/types/:key/relationship-types',
+      'PUT /api/v1/workflows/types/:key/relationship-types/:relationshipTypeId',
+      'DELETE /api/v1/workflows/types/:key/relationship-types/:relationshipTypeId',
       'POST /api/v1/workflow-definitions/types',
       'PUT /api/v1/workflow-definitions/types/:key',
       'DELETE /api/v1/workflow-definitions/types/:key',
@@ -509,6 +545,15 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
       'POST /api/v1/workflow-definitions/types/:key/field-schemas',
       'PUT /api/v1/workflow-definitions/types/:key/field-schemas/:schemaId',
       'DELETE /api/v1/workflow-definitions/types/:key/field-schemas/:schemaId',
+      'POST /api/v1/workflow-definitions/types/:key/statuses',
+      'PUT /api/v1/workflow-definitions/types/:key/statuses/:statusKey',
+      'DELETE /api/v1/workflow-definitions/types/:key/statuses/:statusKey',
+      'POST /api/v1/workflow-definitions/types/:key/outcomes',
+      'PUT /api/v1/workflow-definitions/types/:key/outcomes/:outcomeId',
+      'DELETE /api/v1/workflow-definitions/types/:key/outcomes/:outcomeId',
+      'POST /api/v1/workflow-definitions/types/:key/relationship-types',
+      'PUT /api/v1/workflow-definitions/types/:key/relationship-types/:relationshipTypeId',
+      'DELETE /api/v1/workflow-definitions/types/:key/relationship-types/:relationshipTypeId',
     ],
     defaultEnabled: {
       scoped_runtime: false,
@@ -2598,7 +2643,12 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     return next();
   }
 
-  const workflowDefinitionMatch = requestPath.match(/^\/(?:sprints|workflows|workflow-definitions)\/(?:config|types(?:\/list)?|types\/([^/]+)(?:\/(?:task-types|field-schemas(?:\/[^/]+)?))?)$/);
+  // A workflow definition is the type plus everything hanging off it: its task types, its field
+  // schemas, its statuses (and their metadata), the outcomes that drive transitions, and the
+  // relationship types its tasks can use. All of it is one editable object on the canvas and all
+  // of it resolves to the project that owns the type, so the whole tree is authorized here.
+  // task-types is listed separately because it is a collection PUT with no child rows.
+  const workflowDefinitionMatch = requestPath.match(/^\/(?:sprints|workflows|workflow-definitions)\/(?:config|types(?:\/list)?|types\/([^/]+)(?:\/(?:task-types|(?:field-schemas|statuses|outcomes|relationship-types)(?:\/[^/]+)?))?)$/);
   if (workflowDefinitionMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const requiredCapability: AgentMcpCapabilityKey = method === 'GET'
       ? 'workflow_definitions.read_project_scope'
@@ -2632,14 +2682,20 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       || requestScope == null
     ));
 
-    if (workflowDefinitionKey && existingScope == null && method !== 'POST') {
+    // A key in the path must resolve to a definition in this tenant whatever the method. POST is
+    // no longer the exception it was when the only keyless create was POST /types: creating a
+    // status, outcome, or relationship type posts *under* an existing key, and a POST naming a
+    // definition that does not exist here must not fall through on a request-supplied scope.
+    if (workflowDefinitionKey && existingScope == null) {
       return deny({
         reason: `Workflow definition "${workflowDefinitionKey}" is outside the MCP key tenant or does not exist.`,
         requiredCapability,
       });
     }
 
-    if (method === 'POST' && requestScope == null) {
+    // Only the keyless create — POST /types, which brings a definition into being — has to name
+    // its project explicitly. A child row inherits the scope of the type in its path.
+    if (method === 'POST' && workflowDefinitionKey == null && requestScope == null) {
       return deny({
         reason: `Workflow definition creation requires project_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,

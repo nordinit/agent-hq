@@ -740,7 +740,7 @@ The policy the `mobile` profile pairs with:
 | `sprints.read_active_sprint` | workflow detail |
 | `sprints.pause_active_sprint` | pause, resume, and reopen a workflow in the assigned project |
 | `sprints.complete_active_sprint` | complete or close a workflow in the assigned project |
-| `workflow_definitions.read_project_scope` | workflow type configuration reads |
+| `workflow_definitions.read_project_scope` | workflow definition reads — type, task types, field schemas, statuses, outcomes, relationship types |
 | `tasks.read_project_context` | task detail, notes, history, relationships |
 | `tasks.manage_project_tasks` | create/update/delete tasks and relationships in the assigned project |
 | `tasks.write_project_notes` | notes on any task in the assigned project |
@@ -754,6 +754,27 @@ Several capabilities were added for this shape of client. `projects.read_project
 The two `sprints.*_active_sprint` writes back `agent_hq_set_workflow_status`. Both resolve scope the same way — the workflow attached to the caller's active dispatched task, or any workflow inside its assigned project — and both are off by default for scoped runtime keys, so a dispatched agent gets workflow lifecycle control only when an operator grants it. They are separate because the transitions are not equivalent: pausing is a reversible hold, while completing stamps the end date and stands the workflow's agents down, so an agent that may say "hold on" does not thereby get to say "this cycle is finished."
 
 Neither is in `SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES`, so a scoped policy editor cannot grant workflow lifecycle control to itself or another agent; that stays an administrative act.
+
+### Editing workflow definitions over MCP
+
+A workflow definition is the type plus everything hanging off it, and `workflow_definitions.read_project_scope` / `workflow_definitions.manage_project_scope` cover the whole tree:
+
+| Sub-resource | Read | Edit |
+|---|---|---|
+| the type itself | `GET /types`, `GET /types/:key` | `POST /types`, `PUT`/`DELETE /types/:key` |
+| task types | `GET /types/:key/task-types` | `PUT /types/:key/task-types` |
+| field schemas | `GET .../field-schemas[/:schemaId]` | `POST`/`PUT`/`DELETE` |
+| statuses and their metadata | `GET .../statuses[/:statusKey]` | `POST`/`PUT`/`DELETE` |
+| outcomes | `GET .../outcomes[/:outcomeId]` | `POST`/`PUT`/`DELETE` |
+| relationship types | `GET .../relationship-types[/:id]` | `POST`/`PUT`/`DELETE` |
+
+All three path spellings (`/sprints`, `/workflows`, `/workflow-definitions`) resolve identically.
+
+Scope comes from the type named in the path: it must exist in the caller's tenant and belong to the assigned project. A child row inherits that scope, so only the keyless `POST /types` — which brings a definition into being — has to name a `project_id` explicitly. A key that does not resolve is refused as absent whatever the method, including POST, so a request-supplied scope can never stand in for a definition that is not there.
+
+`manage_project_scope` is off by default for scoped runtime keys and is not in `SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES`, so an agent cannot grant it to itself. That default is worth keeping deliberately: statuses and outcomes are the transition graph, so this capability decides how work is allowed to flow, not just how it is labelled.
+
+Reads have a second door regardless: `agent_hq_get_workflow_metadata` returns the resolved statuses, transitions, outcomes and relationship types in one call and is covered by `projects.read_project_board`, which is why the phone profile can render a board without any definition-editing grant.
 
 ### Workflow lifecycle over MCP
 
