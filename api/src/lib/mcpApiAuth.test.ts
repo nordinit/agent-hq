@@ -125,7 +125,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await seedScopeFixture(db);
 
     normalKey = (await issueMcpApiKeyForAgent(db, 7)).apiKey;
-    adminKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
+    adminKey = (await issueMcpApiKeyForAgent(db, 8, 'Agent HQ MCP', 'admin')).apiKey;
     ecoKey = (await issueMcpApiKeyForAgent(db, 10)).apiKey;
     noProjectKey = (await issueMcpApiKeyForAgent(db, 11)).apiKey;
 
@@ -640,6 +640,85 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 11, [MANAGE]);
       const res = await fetch(`${baseUrl}/api/v1/agents?project_id=86`, { headers: authHeaders(noProjectKey) });
       expect(res.status).toBe(403);
+    });
+  });
+
+
+  describe('trust comes from the key, not the agent record', () => {
+    it('ignores system_role, name and slug when resolving authority', async () => {
+      // Every one of these made an agent trusted under the old model. Agent 7 holds a scoped key
+      // throughout, so none of them may promote it now.
+      for (const [column, value] of [
+        ['system_role', 'admin'],
+        ['system_role', 'atlas'],
+        ['name', 'Atlas'],
+        ['slug', 'atlas'],
+      ] as Array<[string, string]>) {
+        await getDb().run(`UPDATE agents SET ${column} = ? WHERE id = 7`, value);
+
+        const identity = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+        expect({ column, value, role: identity.keyRole }).toEqual({ column, value, role: 'scoped' });
+        expect({ column, value, global: identity.globalAdminAccess }).toEqual({ column, value, global: false });
+
+        // And it is refused in practice, not just described as scoped.
+        const res = await fetch(`${baseUrl}/api/v1/agents/9`, { headers: authHeaders(normalKey) });
+        expect({ column, value, status: res.status }).toEqual({ column, value, status: 403 });
+      }
+    });
+
+    it('promotes and demotes with the key role alone', async () => {
+      const identity = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+
+      // Scoped: an administrative route is refused.
+      await expect(fetch(`${baseUrl}/api/v1/agents/9`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(403);
+
+      await getDb().run(`UPDATE mcp_api_keys SET role = 'admin' WHERE id = ?`, identity.keyId);
+      await expect(fetch(`${baseUrl}/api/v1/agents/9`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(200);
+
+      await getDb().run(`UPDATE mcp_api_keys SET role = 'scoped' WHERE id = ?`, identity.keyId);
+      await expect(fetch(`${baseUrl}/api/v1/agents/9`, { headers: authHeaders(normalKey) }).then(r => r.status)).resolves.toBe(403);
+    });
+
+    it('separates admin from super_admin', async () => {
+      const identity = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+      await getDb().run(`UPDATE mcp_api_keys SET role = 'admin' WHERE id = ?`, identity.keyId);
+
+      const admin = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+      expect(admin.keyRole).toBe('admin');
+      // Trusted, but not across tenants.
+      expect(admin.globalAdminAccess).toBe(false);
+
+      await getDb().run(`UPDATE mcp_api_keys SET role = 'super_admin' WHERE id = ?`, identity.keyId);
+      const superAdmin = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+      expect(superAdmin.keyRole).toBe('super_admin');
+      expect(superAdmin.globalAdminAccess).toBe(true);
+    });
+
+    it('treats an unknown or absent role as scoped', async () => {
+      // Least authority on anything unrecognised, so a bad write can never read as a promotion.
+      const identity = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+      await getDb().run(`ALTER TABLE mcp_api_keys DROP CONSTRAINT IF EXISTS mcp_api_keys_role_check`);
+      await getDb().run(`UPDATE mcp_api_keys SET role = 'owner' WHERE id = ?`, identity.keyId);
+
+      const resolved = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+      expect(resolved.keyRole).toBe('scoped');
+      expect(resolved.globalAdminAccess).toBe(false);
+    });
+
+    it('does not let project agent management promote anything', async () => {
+      // The capability added for editing job instructions writes the agent record, which is now
+      // exactly the thing authority is not derived from.
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['agents.manage_project_agents']);
+
+      const res = await fetch(`${baseUrl}/api/v1/agents/9`, {
+        method: 'PUT',
+        headers: authHeaders(normalKey),
+        body: JSON.stringify({ job_instructions: 'Review backend work.' }),
+      });
+      expect(res.status).toBe(200);
+
+      const identity = await resolveMcpApiIdentityForKey(getDb(), normalKey, { updateLastUsed: false });
+      expect(identity.keyRole).toBe('scoped');
     });
   });
 
@@ -2540,8 +2619,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       },
     });
 
+    // Promotion is a change to the KEY, not to the agent record.
     const adminIdentity = await resolveMcpApiIdentityForKey(getDb(), adminKey, { updateLastUsed: false });
-    await getDb().run(`UPDATE mcp_api_keys SET global_admin = 1 WHERE id = ?`, adminIdentity.keyId);
+    expect(adminIdentity.keyRole).toBe('admin');
+    await getDb().run(`UPDATE mcp_api_keys SET role = 'super_admin' WHERE id = ?`, adminIdentity.keyId);
 
     const allowed = await fetch(`${baseUrl}/api/v1/projects/99?tenant_id=2`, {
       method: 'DELETE',

@@ -14,6 +14,17 @@ import { resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScop
 import { type Db } from "../db/adapter/types";
 import { columnExists as sharedColumnExists, tableExists as sharedTableExists } from "../db/introspection";
 
+/**
+ * Authority carried by an MCP key. This is the ONLY source of MCP trust.
+ *
+ * It deliberately does not come from the agent record. Trust used to be derived there — from
+ * system_role, slug, or a name equal to 'Atlas' — all of which are ordinary writable columns, so
+ * any capability that could edit an agent was a latent privilege escalation and the authorization
+ * layer had to defend itself by enumerating fields that were unsafe to write. Authority now comes
+ * from the credential presented instead of from data that credential can edit.
+ */
+export type McpKeyRole = 'scoped' | 'admin' | 'super_admin';
+
 export interface McpApiIdentity {
   keyId: number;
   agentId: number;
@@ -21,6 +32,8 @@ export interface McpApiIdentity {
   agentName: string;
   agentSlug: string;
   systemRole: string | null;
+  /** Authority of the presented key. Never inferred from the agent record. */
+  keyRole: McpKeyRole;
   globalAdminAccess: boolean;
   auditActor: string;
   authorityActor: string;
@@ -753,12 +766,16 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
   'mcp_capability_policies.read',
 ]);
 
+/**
+ * Descriptive identity only. isTrusted and isGlobalAdmin used to live here, derived from
+ * system_role, slug and name; they now come from the key's role. system_role is still resolved
+ * because the rest of the product uses it (Atlas dispatch behaviour, workspace provisioning), but
+ * nothing in this file may read it to decide authority.
+ */
 type AgentIdentityFields = {
   agentName: string;
   agentSlug: string;
   systemRole: string | null;
-  isTrusted: boolean;
-  isGlobalAdmin: boolean;
 };
 
 function resolveAgentIdentityFields(row: Record<string, unknown>): AgentIdentityFields {
@@ -778,20 +795,47 @@ function resolveAgentIdentityFields(row: Record<string, unknown>): AgentIdentity
     ?? agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     ?? `agent-${row.agent_id}`;
   const systemRole = typeof row.system_role === 'string' && row.system_role.trim() ? row.system_role.trim() : null;
-  const isTrusted = systemRole === ATLAS_SYSTEM_ROLE || systemRole === 'admin' || agentSlug === ATLAS_AGENT_SLUG || agentName === ATLAS_AGENT_NAME;
-  const isGlobalAdmin = Number(row.key_global_admin ?? 0) === 1 || Number(row.agent_global_mcp_admin ?? 0) === 1;
 
   return {
     agentName,
     agentSlug,
     systemRole,
-    isTrusted,
-    isGlobalAdmin,
   };
+}
+
+/** Roles that carry administrative authority. Order matters: super_admin implies admin. */
+const MCP_KEY_ROLE_RANK: Record<McpKeyRole, number> = { scoped: 0, admin: 1, super_admin: 2 };
+
+export function normalizeMcpKeyRole(value: unknown): McpKeyRole {
+  const role = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return role === 'admin' || role === 'super_admin' ? role : 'scoped';
+}
+
+function roleIsTrusted(role: McpKeyRole): boolean {
+  return MCP_KEY_ROLE_RANK[role] >= MCP_KEY_ROLE_RANK.admin;
 }
 
 function resolveAgentMcpDefaultPolicy(isTrusted: boolean): AgentMcpDefaultPolicy {
   return isTrusted ? 'trusted_admin' : 'scoped_runtime';
+}
+
+/**
+ * The highest authority any live key for this agent carries.
+ *
+ * Used only where there is no request to read a key from — the permissions UI and the policy
+ * read/write endpoints, which describe an agent rather than a call. Request-time authorization
+ * always uses the presented key's own role, never this.
+ */
+async function resolveAgentHighestKeyRole(db: Db, agentId: number): Promise<McpKeyRole> {
+  if (!await hasTable(db, 'mcp_api_keys')) return 'scoped';
+  if (!await hasColumn(db, 'mcp_api_keys', 'role')) return 'scoped';
+  const rows = await db.all(`
+    SELECT role FROM mcp_api_keys
+    WHERE agent_id = ? AND enabled = 1 AND revoked_at IS NULL
+  `, agentId) as Array<{ role: unknown }>;
+  return rows
+    .map((row) => normalizeMcpKeyRole(row.role))
+    .reduce<McpKeyRole>((best, role) => (MCP_KEY_ROLE_RANK[role] > MCP_KEY_ROLE_RANK[best] ? role : best), 'scoped');
 }
 
 async function loadAgentPermissionContext(db: Db, agentId: number): Promise<{
@@ -827,7 +871,9 @@ async function loadAgentPermissionContext(db: Db, agentId: number): Promise<{
     agentId,
     agentName: fields.agentName,
     agentSlug: fields.agentSlug,
-    defaultPolicy: resolveAgentMcpDefaultPolicy(fields.isTrusted),
+    // No key in hand here, so the agent is described by the strongest authority any of its live
+    // keys carries. Request-time authorization never uses this — it reads the presented key.
+    defaultPolicy: resolveAgentMcpDefaultPolicy(roleIsTrusted(await resolveAgentHighestKeyRole(db, agentId))),
   };
 }
 
@@ -1052,7 +1098,9 @@ async function resolveEffectiveAgentMcpPermissionState(db: Db, identity: McpApiI
 }
 
 async function shapeIdentity(db: Db, row: Record<string, unknown>): Promise<McpApiIdentity> {
-  const { agentName, agentSlug, systemRole, isTrusted, isGlobalAdmin } = resolveAgentIdentityFields(row);
+  const { agentName, agentSlug, systemRole } = resolveAgentIdentityFields(row);
+  const keyRole = normalizeMcpKeyRole(row.key_role);
+  const isGlobalAdmin = keyRole === 'super_admin';
   const tenantId = parsePositiveInt(row.key_tenant_id) ?? parsePositiveInt(row.agent_tenant_id);
   if (!tenantId) {
     throw new McpApiAuthError('MCP API key is not bound to a tenant', 403, 'mcp_api_key_tenant_missing');
@@ -1065,9 +1113,10 @@ async function shapeIdentity(db: Db, row: Record<string, unknown>): Promise<McpA
     agentName,
     agentSlug,
     systemRole,
+    keyRole,
     globalAdminAccess: isGlobalAdmin || await hasExplicitAgentMcpCapability(db, Number(row.agent_id), 'admin.cross_tenant'),
     auditActor: agentSlug,
-    authorityActor: isTrusted ? ATLAS_AGENT_NAME : agentSlug,
+    authorityActor: roleIsTrusted(keyRole) ? ATLAS_AGENT_NAME : agentSlug,
   };
 }
 
@@ -1089,21 +1138,22 @@ export async function resolveMcpApiIdentityForKey(
   const hasAgentEnabled = await hasColumn(db, 'agents', 'enabled');
   const hasDeletedAt = await hasColumn(db, 'agents', 'deleted_at');
   const hasAgentTenant = await hasColumn(db, 'agents', 'tenant_id');
-  const hasAgentGlobalMcpAdmin = await hasColumn(db, 'agents', 'global_mcp_admin');
   const hasKeyExpiry = await hasColumn(db, 'mcp_api_keys', 'expires_at');
+  // Probed rather than assumed so a build that boots against a database one migration behind
+  // resolves every key as scoped — the least authority — instead of failing the query outright.
+  const hasKeyRole = await hasColumn(db, 'mcp_api_keys', 'role');
 
   const row = await db.get(`
     SELECT
       k.id AS key_id,
       k.agent_id AS agent_id,
       k.tenant_id AS key_tenant_id,
-      k.global_admin AS key_global_admin,
+      ${hasKeyRole ? 'k.role' : "'scoped'"} AS key_role,
       k.enabled AS key_enabled,
       k.revoked_at AS revoked_at,
       ${hasKeyExpiry ? 'k.expires_at' : 'NULL'} AS expires_at,
       a.name AS agent_name,
       ${hasAgentTenant ? 'a.tenant_id' : 'NULL'} AS agent_tenant_id,
-      ${hasAgentGlobalMcpAdmin ? 'a.global_mcp_admin' : '0'} AS agent_global_mcp_admin,
       ${hasAgentSlug ? 'a.slug' : 'NULL'} AS slug,
       ${hasOpenClawAgentId ? 'a.openclaw_agent_id' : 'NULL'} AS openclaw_agent_id,
       ${hasSessionKey ? 'a.session_key' : 'NULL'} AS session_key,
@@ -1137,7 +1187,9 @@ export async function resolveMcpApiIdentityForKey(
 
   const rowTenantId = parsePositiveInt(row.key_tenant_id);
   const agentTenantId = parsePositiveInt(row.agent_tenant_id);
-  if (rowTenantId && agentTenantId && rowTenantId !== agentTenantId && Number(row.key_global_admin) !== 1 && Number(row.agent_global_mcp_admin ?? 0) !== 1) {
+  // A key bound to a different tenant than its agent is only legitimate for a super_admin key,
+  // which is permitted across tenants by definition. Reads the key's role, not the agent record.
+  if (rowTenantId && agentTenantId && rowTenantId !== agentTenantId && normalizeMcpKeyRole(row.key_role) !== 'super_admin') {
     throw new McpApiAuthError('MCP API key tenant binding does not match its owning agent', 403, 'mcp_api_key_tenant_mismatch');
   }
 
@@ -1152,11 +1204,17 @@ export async function resolveMcpApiIdentityForKey(
   return await shapeIdentity(db, row);
 }
 
+/**
+ * Issue a key for an agent. `role` is the key's authority and defaults to 'scoped': a key is
+ * ordinary unless someone deliberately asks for an administrative one, so no code path mints
+ * administrative access by omission.
+ */
 export async function issueMcpApiKeyForAgent(
   db: Db,
   agentId: number,
   name = 'Agent HQ MCP',
-): Promise<{ apiKey: string; keyId: number; keyPrefix: string }> {
+  role: McpKeyRole = 'scoped',
+): Promise<{ apiKey: string; keyId: number; keyPrefix: string; role: McpKeyRole }> {
   await ensureTenantSchema(db);
   const agent = await db.get(`SELECT id, tenant_id FROM agents WHERE id = ?`, agentId) as { id: number; tenant_id: number | null } | undefined;
   if (!agent) throw new Error(`Cannot issue MCP API key: agent #${agentId} not found`);
@@ -1165,15 +1223,25 @@ export async function issueMcpApiKeyForAgent(
 
   const apiKey = createMcpApiKeyValue();
   const keyPrefix = apiKey.slice(0, 16);
-  const result = await db.run(`
-    INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash)
-    VALUES (?, ?, ?, ?, ?)
-  `, agentId, tenantId, name, keyPrefix, hashMcpApiKey(apiKey));
+  const hasKeyRole = await hasColumn(db, 'mcp_api_keys', 'role');
+  if (role !== 'scoped' && !hasKeyRole) {
+    throw new Error('Cannot issue an administrative MCP API key: mcp_api_keys.role is missing, so run migrations first.');
+  }
+  const result = hasKeyRole
+    ? await db.run(`
+        INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, role)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, agentId, tenantId, name, keyPrefix, hashMcpApiKey(apiKey), role)
+    : await db.run(`
+        INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash)
+        VALUES (?, ?, ?, ?, ?)
+      `, agentId, tenantId, name, keyPrefix, hashMcpApiKey(apiKey));
 
   return {
     apiKey,
     keyId: Number(result.lastInsertId),
     keyPrefix,
+    role: hasKeyRole ? role : 'scoped',
   };
 }
 
@@ -1275,12 +1343,21 @@ export async function ensureConfiguredRuntimeMcpApiKey(
   if (!tenantId) {
     throw new Error(`Configured AGENT_HQ_MCP_API_KEY could not be materialized because bootstrap agent #${agentId} is not bound to a tenant`);
   }
+  // The configured bootstrap key is the one place an administrative key is minted from
+  // environment rather than by hand, and it stays opt-in: without the flag it is scoped.
   const globalAdmin = ['1', 'true', 'yes', 'on'].includes(String(env.AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN ?? '').trim().toLowerCase()) ? 1 : 0;
+  const role: McpKeyRole = globalAdmin === 1 ? 'super_admin' : 'scoped';
+  const hasKeyRole = await hasColumn(db, 'mcp_api_keys', 'role');
 
-  const result = await db.run(`
-    INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, global_admin)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `, agentId, tenantId, 'Configured runtime MCP API key', keyPrefix, hashMcpApiKey(configuredApiKey), globalAdmin);
+  const result = hasKeyRole
+    ? await db.run(`
+        INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, global_admin, role)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, agentId, tenantId, 'Configured runtime MCP API key', keyPrefix, hashMcpApiKey(configuredApiKey), globalAdmin, role)
+    : await db.run(`
+        INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, global_admin)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, agentId, tenantId, 'Configured runtime MCP API key', keyPrefix, hashMcpApiKey(configuredApiKey), globalAdmin);
 
   return {
     status: 'created',
@@ -1340,10 +1417,7 @@ type ScopedInstanceContext = {
 };
 
 function isTrustedMcpIdentity(identity: McpApiIdentity): boolean {
-  return identity.systemRole === ATLAS_SYSTEM_ROLE
-    || identity.systemRole === 'admin'
-    || identity.agentSlug === ATLAS_AGENT_SLUG
-    || identity.agentName === ATLAS_AGENT_NAME;
+  return roleIsTrusted(identity.keyRole);
 }
 
 function parsePositiveInt(value: unknown): number | null {
@@ -1473,19 +1547,18 @@ async function relationshipBelongsToProject(
 }
 
 /**
- * Fields an agent write must never carry under a project-scoped grant, because
- * resolveAgentIdentityFields derives trust from them: `system_role` of 'admin' or the Atlas role
- * makes an agent trusted, `global_mcp_admin` makes it a super-admin, `tenant_id` moves it between
- * tenants, and `session_key` is how a runtime identity is matched to a row.
+ * Fields an agent write must never carry under a project-scoped grant.
  *
- * A trusted agent resolves to the `trusted_admin` default policy, under which nearly every
- * capability — `admin.full_access` included — is enabled. So without this guard the grant would
- * be a complete privilege escalation rather than a project-scoped one: a connector could PUT its
- * own row with system_role 'admin' and come back as an administrator.
+ * These no longer confer MCP authority — that comes from the presented key's role, which is not
+ * a column on agents and cannot be written through this API at all. This list is now defence in
+ * depth over fields that still bind identity: `system_role` drives Atlas behaviour elsewhere in
+ * the product, `session_key` is how a runtime identity is matched to a row, `tenant_id` moves an
+ * agent between tenants, and `global_mcp_admin` is a legacy privilege column kept for rollback.
  *
- * Deny-list rather than allow-list because the set is small, closed, and defined by exactly what
- * resolveAgentIdentityFields reads — see agentIdentityNameIsReserved for the other half of it.
- * Adding a new trust input there means adding it here.
+ * Before the key-role model these WERE the escalation surface: renaming an agent to 'Atlas' or
+ * setting system_role 'admin' made it trusted, so a connector could promote its own row. Trust
+ * moved onto the credential precisely so that a data-editing capability could never be an
+ * authority-granting one, and this list is no longer what stands between the two.
  */
 const AGENT_TRUST_BEARING_FIELDS = ['system_role', 'global_mcp_admin', 'key_global_admin', 'tenant_id', 'session_key'] as const;
 
@@ -1494,9 +1567,9 @@ function agentTrustBearingFieldInPatch(body: Record<string, unknown>): string | 
 }
 
 /**
- * The other half of the trust guard. resolveAgentIdentityFields also treats an agent as trusted
- * when its slug is the Atlas slug or its name is the Atlas name, so a rename is an escalation
- * path that never mentions a role at all.
+ * Kept after the key-role change, though it no longer guards authority: the Atlas name and slug
+ * identify the built-in assistant that tenant provisioning looks up, so letting a project-scoped
+ * client mint a second one invites a collision rather than an escalation.
  */
 function agentIdentityNameIsReserved(body: Record<string, unknown>): boolean {
   const name = typeof body.name === 'string' ? body.name.trim().toLowerCase() : null;

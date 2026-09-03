@@ -78,7 +78,7 @@ describe('manual MCP/admin task moves', () => {
 
   it('allows manual MCP move from dev_deploy_queued to ready', async () => {
     const db = getDb();
-    const adminKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
+    const adminKey = (await issueMcpApiKeyForAgent(db, 8, 'Agent HQ MCP', 'admin')).apiKey;
 
     await withApp(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/v1/tasks/455`, {
@@ -99,7 +99,7 @@ describe('manual MCP/admin task moves', () => {
 
   it('allows manual MCP move from another constrained status to a normally disallowed target', async () => {
     const db = getDb();
-    const adminKey = (await issueMcpApiKeyForAgent(db, 8)).apiKey;
+    const adminKey = (await issueMcpApiKeyForAgent(db, 8, 'Agent HQ MCP', 'admin')).apiKey;
 
     await withApp(async (baseUrl) => {
       const response = await fetch(`${baseUrl}/api/v1/tasks/456`, {

@@ -1,4 +1,5 @@
 import { setupTestDb, teardownTestDb } from '../db/testDb';
+import { issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
 import express from 'express';
 import type { Server } from 'http';
 import fs from 'fs';
@@ -51,6 +52,10 @@ describe('agent MCP permissions routes', () => {
       INSERT INTO agents (id, tenant_id, name, session_key, system_role, enabled)
       VALUES (?, 1, ?, ?, NULL, 1), (?, 1, ?, ?, 'admin', 1)
     `, 7, 'Cinder', 'agent:cinder:main', 8, 'Atlas', 'agent:atlas:main');
+
+    // The snapshot describes an agent rather than a call, so it reports the strongest authority
+    // any of that agent's live keys carries. system_role no longer confers anything.
+    await issueMcpApiKeyForAgent(db, 8, 'Atlas admin key', 'admin');
   });
 
   afterEach(async () => {
@@ -301,7 +306,31 @@ describe('agent MCP permissions routes', () => {
     }
   });
 
-  it('preserves trusted-admin defaults for admin agents', async () => {
+
+  it('does not treat an admin system_role as trusted without an admin key', async () => {
+    // The whole point of moving trust onto the key: agent 8 still has system_role 'admin', but
+    // once its administrative key is gone it is an ordinary scoped agent.
+    await getDb().run(`UPDATE mcp_api_keys SET revoked_at = '2026-01-01 00:00:00', enabled = 0 WHERE agent_id = 8`);
+
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/agents/8/mcp-permissions`);
+      const body = await response.json() as {
+        default_policy: string;
+        capabilities: Array<{ key: string; enabled: boolean }>;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.default_policy).toBe('scoped_runtime');
+      expect(body.capabilities.find((capability) => capability.key === 'admin.full_access')).toMatchObject({
+        enabled: false,
+      });
+    } finally {
+      await stopTestServer(server);
+    }
+  });
+
+  it('preserves trusted-admin defaults for an agent holding an admin key', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/agents/8/mcp-permissions`);

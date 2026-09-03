@@ -3,6 +3,11 @@ import type { Server } from 'http';
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { authenticateMcpApiKeyIfPresent, issueMcpApiKeyForAgent } from '../lib/mcpApiAuth';
+
+// These fixtures exercise an administrative identity. Authority comes from the key's role now,
+// not from the agent being named Atlas, so the key has to say so.
+const issueMcpApiKeyForAgentAdmin = (db: Parameters<typeof issueMcpApiKeyForAgent>[0], agentId: number, name: string) =>
+  issueMcpApiKeyForAgent(db, agentId, name, 'admin');
 import { getDefaultTenantId } from '../lib/tenantContext';
 import tasksRouter from '../routes/tasks';
 import { AgentHqApiClient } from './apiClient';
@@ -124,7 +129,7 @@ describe('Agent HQ MCP API identity propagation', () => {
 
   it('allows an MCP task status update when the API key maps to Atlas and audits the resolved agent', async () => {
     const { agentId, taskId } = await seedAtlasTask();
-    const { apiKey } = await issueMcpApiKeyForAgent(getDb(), agentId, 'test atlas key');
+    const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'test atlas key');
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -170,7 +175,7 @@ describe('Agent HQ MCP API identity propagation', () => {
   it('creates and updates tasks with workflow custom fields through the MCP API client', async () => {
     const { agentId } = await seedAtlasTask();
     const { projectId, sprintId } = await seedCustomFieldWorkflow();
-    const { apiKey } = await issueMcpApiKeyForAgent(getDb(), agentId, 'custom field create/update key');
+    const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'custom field create/update key');
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -211,7 +216,7 @@ describe('Agent HQ MCP API identity propagation', () => {
   it('returns structured validation errors for invalid workflow custom fields', async () => {
     const { agentId } = await seedAtlasTask();
     const { projectId, sprintId } = await seedCustomFieldWorkflow();
-    const { apiKey } = await issueMcpApiKeyForAgent(getDb(), agentId, 'custom field validation key');
+    const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'custom field validation key');
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -258,7 +263,7 @@ describe('Agent HQ MCP API identity propagation', () => {
 
   it('keeps default workflow task creation compatible without custom fields', async () => {
     const { agentId } = await seedAtlasTask();
-    const { apiKey } = await issueMcpApiKeyForAgent(getDb(), agentId, 'default workflow create key');
+    const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'default workflow create key');
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -282,7 +287,7 @@ describe('Agent HQ MCP API identity propagation', () => {
   it('creates tasks with omitted, todo, ready, and custom initial statuses through the MCP API client', async () => {
     const { agentId } = await seedAtlasTask();
     const { projectId, sprintId } = await seedCustomStatusWorkflow();
-    const { apiKey } = await issueMcpApiKeyForAgent(getDb(), agentId, 'initial status create key');
+    const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'initial status create key');
     const { server, baseUrl } = await startTestServer();
 
     try {
@@ -340,7 +345,7 @@ describe('Agent HQ MCP API identity propagation', () => {
   it('rejects invalid initial statuses without creating a partial task through the MCP API client', async () => {
     const { agentId } = await seedAtlasTask();
     const { projectId, sprintId } = await seedCustomStatusWorkflow();
-    const { apiKey } = await issueMcpApiKeyForAgent(getDb(), agentId, 'invalid initial status key');
+    const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'invalid initial status key');
     const { server, baseUrl } = await startTestServer();
 
     try {

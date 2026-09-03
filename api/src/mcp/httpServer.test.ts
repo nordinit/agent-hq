@@ -16,6 +16,7 @@ function identityFor(agentSlug: string): McpApiIdentity {
     agentName: 'Claude Mobile',
     agentSlug,
     systemRole: null,
+  keyRole: 'scoped' as const,
     globalAdminAccess: false,
     auditActor: agentSlug,
     authorityActor: agentSlug,

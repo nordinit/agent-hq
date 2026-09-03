@@ -63,6 +63,7 @@ function mcpIdentity(agentId: number): McpApiIdentity {
     agentName: `Agent ${agentId}`,
     agentSlug: `agent-${agentId}`,
     systemRole: null,
+  keyRole: 'scoped' as const,
     globalAdminAccess: false,
     auditActor: `agent-${agentId}`,
     authorityActor: `agent-${agentId}`,

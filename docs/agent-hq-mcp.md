@@ -756,6 +756,29 @@ The two `sprints.*_active_sprint` writes back `agent_hq_set_workflow_status`. Bo
 
 Neither is in `SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES`, so a scoped policy editor cannot grant workflow lifecycle control to itself or another agent; that stays an administrative act.
 
+### Where MCP authority comes from
+
+Authority is a property of the **key**, not of the agent it belongs to. `mcp_api_keys.role` is the only input:
+
+| role | effect |
+|---|---|
+| `scoped` | default. The capability policy is the whole answer. |
+| `admin` | trusted: resolves to the `trusted_admin` default policy. |
+| `super_admin` | trusted, and permitted across tenants. |
+
+It used to be derived from the agent record — `system_role` of `admin` or `atlas`, a slug of `atlas`, or a name equal to `Atlas`. All three are ordinary writable columns, so any capability that could edit an agent was a latent privilege escalation: rename an agent to `Atlas` and it came back an administrator. The authorization layer had to defend itself by enumerating fields that were unsafe to write, which is the wrong shape — authority should come from the credential presented, not from data that credential can edit.
+
+Consequences worth knowing:
+
+- **Editing an agent can no longer promote it.** `agents.manage_project_agents` writes the agent record freely, and the record is exactly what authority is not read from.
+- **`system_role` still matters elsewhere** — Atlas dispatch behaviour, workspace provisioning, tenant bootstrap — it just confers nothing over MCP.
+- **An agent can hold keys of different roles.** Request-time authorization always reads the presented key. The permissions UI, which describes an agent rather than a call, reports the strongest role among that agent's live keys.
+- **Anything unrecognised reads as `scoped`.** An unknown role value, a missing column, or a build running one migration behind all resolve to least authority rather than failing open.
+
+Issue an administrative key deliberately: `issueMcpApiKeyForAgent(db, agentId, name, 'admin')`. The default is `scoped`, so no path mints authority by omission. The one environment-driven exception is the configured bootstrap key, which becomes `super_admin` only when `AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN` is set.
+
+Migration 24 backfills existing keys from the old rules, so identities that were administrative before the change stay administrative after it. **Run `npm run db:migrate` before restarting the API** — the new code probes for the column and treats every key as `scoped` when it is missing, so restarting first would strip administrative access until the migration lands.
+
 ### Managing project agents over MCP
 
 `agents.manage_project_agents` covers the roster and each agent's record — job instructions, role, model, skills, workspace and routing configuration — plus its docs bundle, for agents in the assigned project.
