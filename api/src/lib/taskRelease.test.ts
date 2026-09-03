@@ -78,6 +78,29 @@ describe('taskRelease configurable outcome routing', () => {
     expect(await canonicalOutcomeRoute(db, 'review', 'qa_pass', 'backend', 10, 'enhancements')).toBeNull();
   });
 
+  it('does not warn about review evidence, whatever the task type', async () => {
+    // A design, PM, or configuration task reaches review with no branch or commit to cite. The
+    // old unconditional check dated from a board where every task was development work.
+    for (const task_type of ['backend', 'design', 'pm', 'configuration']) {
+      const result = await evaluateTaskIntegrity({ status: 'review', sprint_id: 10, task_type }, db);
+
+      expect({ task_type, warnings: result.integrity_warnings }).toEqual({ task_type, warnings: [] });
+      expect({ task_type, state: result.integrity_state }).toEqual({ task_type, state: 'clean' });
+    }
+  });
+
+  it('still surfaces the QA and deploy checks the workflow does configure', async () => {
+    // Removing the review check must not quiet the checks that ask the configured workflow.
+    await db.run(`
+      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
+      VALUES (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, tenantId);
+
+    const deployed = await evaluateTaskIntegrity({ status: 'deployed', sprint_id: 10, task_type: 'backend' }, db);
+    expect(deployed.integrity_state).toBe('missing_deploy_evidence');
+    expect(deployed.integrity_warnings).toContain('Task is deployed but missing deploy commit/target/timestamp evidence.');
+  });
+
   it('does not mark configuration-style done tasks legacy/unverified when deploy evidence is not part of the workflow', async () => {
     await db.run(`
       INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)

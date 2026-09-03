@@ -192,7 +192,6 @@ export async function evaluateTaskIntegrity(
 ): Promise<IntegrityEvaluation> {
   const warnings: string[] = [];
   const status = task.status ?? null;
-  const reviewOk = hasImplementationEvidence(task);
   const qaOk = hasQaEvidence(task);
   const deployOk = hasDeployEvidence(task);
   const liveOk = hasLiveVerification(task);
@@ -201,10 +200,13 @@ export async function evaluateTaskIntegrity(
 
   let integrityState: IntegrityState = 'clean';
 
-  if (status === 'review' && !reviewOk) {
-    integrityState = 'missing_review_evidence';
-    warnings.push('Task is in review but missing review branch/commit evidence.');
-  } else if (requiresQaEvidence && !qaOk) {
+  // Reaching review with no branch or commit is deliberately not flagged here. It dates from a
+  // board where every task was development work; a design, PM, or configuration task reaches
+  // review with nothing to cite and was warned at for it. Workflows that do want the evidence
+  // say so through sprint_task_transition_requirements, which gates the transition rather than
+  // annotating the task afterwards — the same way the QA and deploy checks below ask the
+  // configured workflow instead of assuming one.
+  if (requiresQaEvidence && !qaOk) {
     integrityState = 'missing_qa_evidence';
     warnings.push(`Task is ${status} but missing QA verification evidence.`);
   } else if (status === 'deployed' && !deployOk) {
