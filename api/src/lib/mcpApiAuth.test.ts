@@ -569,17 +569,16 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       expect(created.status).toBe(201);
     });
 
-    it('refuses every field agent trust is derived from', async () => {
-      // Each of these would turn a scoped agent into a trusted_admin one, under which nearly
-      // every capability including admin.full_access is enabled. Without this guard the grant
-      // would be a total privilege escalation: the connector could promote its own row.
+    it('refuses every field that still binds an agent identity', async () => {
+      // These were the escalation surface before authority moved onto the key: system_role
+      // 'admin' made an agent trusted outright. They confer nothing over MCP now, and are
+      // refused because they still bind identity elsewhere — Atlas behaviour, runtime session
+      // matching, tenant ownership. Defence in depth rather than the barrier it used to be.
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
 
       for (const body of [
         { system_role: 'admin' },
         { system_role: 'atlas' },
-        { global_mcp_admin: 1 },
-        { key_global_admin: 1 },
         { tenant_id: 2 },
         { session_key: 'agent:atlas-admin:main' },
         { job_instructions: 'fine', system_role: 'admin' },
@@ -2543,7 +2542,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: {
         key_tenant_id: 1,
         requested_tenant_id: 2,
-        global_admin: false,
+        key_role: 'scoped',  // capability granted explicitly; the key itself is ordinary
         required_capability: 'admin.cross_tenant',
         super_admin_mcp_access: false,
       },
@@ -2613,7 +2612,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: {
         key_tenant_id: 1,
         requested_tenant_id: 2,
-        global_admin: false,
+        key_role: 'admin',
         required_capability: 'admin.cross_tenant',
         super_admin_mcp_access: false,
       },

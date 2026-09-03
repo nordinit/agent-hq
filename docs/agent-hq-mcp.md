@@ -777,7 +777,7 @@ Consequences worth knowing:
 
 Issue an administrative key deliberately: `issueMcpApiKeyForAgent(db, agentId, name, 'admin')`. The default is `scoped`, so no path mints authority by omission. The one environment-driven exception is the configured bootstrap key, which becomes `super_admin` only when `AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN` is set.
 
-Migration 24 backfills existing keys from the old rules, so identities that were administrative before the change stay administrative after it. **Run `npm run db:migrate` before restarting the API** — the new code probes for the column and treats every key as `scoped` when it is missing, so restarting first would strip administrative access until the migration lands.
+Migration 24 backfills existing keys from the old rules, so identities that were administrative before the change stay administrative after it. Migration 25 then drops the columns it read from — `mcp_api_keys.global_admin` and `agents.global_mcp_admin` — because a privilege column that still exists is one someone will eventually write to and expect to work. That also removes the rollback path: the pre-24 build selects `global_admin` unconditionally, so restoring it means restoring the columns first. **Run `npm run db:migrate` before restarting the API** — the new code probes for the column and treats every key as `scoped` when it is missing, so restarting first would strip administrative access until the migration lands.
 
 ### Managing project agents over MCP
 

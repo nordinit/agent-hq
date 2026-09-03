@@ -395,7 +395,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'agents.manage_project_agents',
     group: 'Context',
     label: 'Manage project agents',
-    description: 'Allows listing, reading, creating, updating and deleting agents inside the MCP agent\'s assigned project and tenant, including their job instructions, role, model, skills, workspace and routing configuration, and their docs bundle. Refuses any create or update that touches a field trust is derived from — system_role, global_mcp_admin, tenant_id or session_key — or that names the Atlas identity, because setting any of those turns a scoped agent into an administrative one. project_id must name the assigned project, so this cannot move an agent between projects or reach one outside it. Does not allow provisioning, workspace or MCP sync, capability-policy edits, or tool allowlists.',
+    description: 'Allows listing, reading, creating, updating and deleting agents inside the MCP agent\'s assigned project and tenant, including their job instructions, role, model, skills, workspace and routing configuration, and their docs bundle. Refuses any create or update touching system_role, tenant_id or session_key, or naming the Atlas identity, because those still bind an agent\'s identity elsewhere in the product; MCP authority itself comes from the presented key\'s role and cannot be written through this API at all. project_id must name the assigned project, so this cannot move an agent between projects or reach one outside it. Does not allow provisioning, workspace or MCP sync, capability-policy edits, or tool allowlists.',
     endpoints: [
       'GET /api/v1/agents',
       'POST /api/v1/agents',
@@ -1223,25 +1223,16 @@ export async function issueMcpApiKeyForAgent(
 
   const apiKey = createMcpApiKeyValue();
   const keyPrefix = apiKey.slice(0, 16);
-  const hasKeyRole = await hasColumn(db, 'mcp_api_keys', 'role');
-  if (role !== 'scoped' && !hasKeyRole) {
-    throw new Error('Cannot issue an administrative MCP API key: mcp_api_keys.role is missing, so run migrations first.');
-  }
-  const result = hasKeyRole
-    ? await db.run(`
-        INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, role)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, agentId, tenantId, name, keyPrefix, hashMcpApiKey(apiKey), role)
-    : await db.run(`
-        INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash)
-        VALUES (?, ?, ?, ?, ?)
-      `, agentId, tenantId, name, keyPrefix, hashMcpApiKey(apiKey));
+  const result = await db.run(`
+    INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, role)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `, agentId, tenantId, name, keyPrefix, hashMcpApiKey(apiKey), role);
 
   return {
     apiKey,
     keyId: Number(result.lastInsertId),
     keyPrefix,
-    role: hasKeyRole ? role : 'scoped',
+    role,
   };
 }
 
@@ -1345,19 +1336,14 @@ export async function ensureConfiguredRuntimeMcpApiKey(
   }
   // The configured bootstrap key is the one place an administrative key is minted from
   // environment rather than by hand, and it stays opt-in: without the flag it is scoped.
-  const globalAdmin = ['1', 'true', 'yes', 'on'].includes(String(env.AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN ?? '').trim().toLowerCase()) ? 1 : 0;
-  const role: McpKeyRole = globalAdmin === 1 ? 'super_admin' : 'scoped';
-  const hasKeyRole = await hasColumn(db, 'mcp_api_keys', 'role');
+  const role: McpKeyRole = ['1', 'true', 'yes', 'on'].includes(String(env.AGENT_HQ_MCP_API_KEY_GLOBAL_ADMIN ?? '').trim().toLowerCase())
+    ? 'super_admin'
+    : 'scoped';
 
-  const result = hasKeyRole
-    ? await db.run(`
-        INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, global_admin, role)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `, agentId, tenantId, 'Configured runtime MCP API key', keyPrefix, hashMcpApiKey(configuredApiKey), globalAdmin, role)
-    : await db.run(`
-        INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, global_admin)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, agentId, tenantId, 'Configured runtime MCP API key', keyPrefix, hashMcpApiKey(configuredApiKey), globalAdmin);
+  const result = await db.run(`
+    INSERT INTO mcp_api_keys (agent_id, tenant_id, name, key_prefix, key_hash, role)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `, agentId, tenantId, 'Configured runtime MCP API key', keyPrefix, hashMcpApiKey(configuredApiKey), role);
 
   return {
     status: 'created',
@@ -1552,15 +1538,15 @@ async function relationshipBelongsToProject(
  * These no longer confer MCP authority — that comes from the presented key's role, which is not
  * a column on agents and cannot be written through this API at all. This list is now defence in
  * depth over fields that still bind identity: `system_role` drives Atlas behaviour elsewhere in
- * the product, `session_key` is how a runtime identity is matched to a row, `tenant_id` moves an
- * agent between tenants, and `global_mcp_admin` is a legacy privilege column kept for rollback.
+ * the product, `session_key` is how a runtime identity is matched to a row, and `tenant_id` moves
+ * an agent between tenants.
  *
  * Before the key-role model these WERE the escalation surface: renaming an agent to 'Atlas' or
  * setting system_role 'admin' made it trusted, so a connector could promote its own row. Trust
  * moved onto the credential precisely so that a data-editing capability could never be an
  * authority-granting one, and this list is no longer what stands between the two.
  */
-const AGENT_TRUST_BEARING_FIELDS = ['system_role', 'global_mcp_admin', 'key_global_admin', 'tenant_id', 'session_key'] as const;
+const AGENT_TRUST_BEARING_FIELDS = ['system_role', 'tenant_id', 'session_key'] as const;
 
 function agentTrustBearingFieldInPatch(body: Record<string, unknown>): string | null {
   return AGENT_TRUST_BEARING_FIELDS.find((field) => Object.prototype.hasOwnProperty.call(body, field)) ?? null;
@@ -2076,7 +2062,7 @@ function sendMcpTenantScopeDenied(res: Response, params: {
       requested_tenant_id: params.requestedTenantId,
       tenant_source: params.tenantSource,
       path: params.path,
-      global_admin: params.identity.globalAdminAccess,
+      key_role: params.identity.keyRole,
       required_capability: 'admin.cross_tenant',
       super_admin_mcp_access: params.identity.globalAdminAccess,
     },
