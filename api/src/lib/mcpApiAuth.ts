@@ -273,6 +273,23 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'routing_rules.read_project_scope',
+    group: 'Workflow',
+    label: 'Read project assignment rules',
+    description: 'Allows reading assignment/routing rules only inside the MCP agent\'s assigned project and tenant. Does not allow rule creation, updates, deletion, or cross-project access.',
+    endpoints: [
+      'GET /api/v1/routing/rules',
+      'GET /api/v1/routing/rules/:id',
+      'GET /api/v1/routing/assignment-rules',
+      'GET /api/v1/routing/assignment-rules/:id',
+      'GET /api/v1/routing-rules',
+      'GET /api/v1/routing-rules/:id',
+      'GET /api/v1/assignment-rules',
+      'GET /api/v1/assignment-rules/:id',
+    ],
+    defaultEnabled: { scoped_runtime: false, trusted_admin: true },
+  },
+  {
     key: 'routing_rules.manage_project_scope',
     group: 'Workflow',
     label: 'Manage project assignment rules',
@@ -759,6 +776,7 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
   'projects.manage_active_files',
   'sprints.read_active_sprint',
   'workflow.read_active_configuration',
+  'routing_rules.read_project_scope',
   'routing_transitions.manage_project_scope',
   'transition_requirements.manage_project_scope',
   'external.write_task_events',
@@ -2713,10 +2731,14 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
 
   const routingRuleMatch = requestPath.match(/^\/(?:routing\/(?:rules|assignment-rules)|routing-rules|assignment-rules)(?:\/(\d+))?$/);
   if (routingRuleMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
-    const requiredCapability: AgentMcpCapabilityKey = 'routing_rules.manage_project_scope';
+    // Management retains read access; a read-only grant must never authorize a mutation.
+    const requiredCapability: AgentMcpCapabilityKey = method === 'GET'
+      && !permissionState.enabledCapabilities.has('routing_rules.manage_project_scope')
+      ? 'routing_rules.read_project_scope'
+      : 'routing_rules.manage_project_scope';
     if (!await requireCapability(
       requiredCapability,
-      `Assignment rule management is disabled for ${identity.agentSlug}.`,
+      `Assignment rule ${method === 'GET' ? 'reading' : 'management'} is disabled for ${identity.agentSlug}.`,
     )) return;
 
     if (canonicalAgentProjectId == null) {

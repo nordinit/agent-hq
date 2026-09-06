@@ -148,6 +148,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     const assignmentRules = byName.get('agent_hq_list_assignment_rules');
     expect(assignmentRules?.domain).toBe('assignment_rules');
     expect(assignmentRules?.description).toContain('assignment rules');
+    expect(assignmentRules?.description).toContain('routing_rules.read_project_scope');
     expect(assignmentRules?.description).toContain('routing_rules.manage_project_scope');
     // Assignment rules used to answer to four names; the routing_rule spelling was the
     // canonical one even though the domain, the REST surface, and the docs all say assignment.

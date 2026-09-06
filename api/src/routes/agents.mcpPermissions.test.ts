@@ -110,6 +110,10 @@ describe('agent MCP permissions routes', () => {
         description: expect.stringContaining('bounded read-only task search'),
         endpoints: ['POST /api/v1/tasks/project-search'],
       });
+      expect(body.capabilities.find((capability) => capability.key === 'routing_rules.read_project_scope')).toMatchObject({
+        label: 'Read project assignment rules', enabled: false,
+        endpoints: expect.arrayContaining(['GET /api/v1/routing/assignment-rules', 'GET /api/v1/routing/rules/:id']),
+      });
       expect(body.capabilities.find((capability) => capability.key === 'routing_rules.manage_project_scope')).toMatchObject({
         group: 'Workflow',
         label: 'Manage project assignment rules',

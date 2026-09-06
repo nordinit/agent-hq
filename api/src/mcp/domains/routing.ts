@@ -120,7 +120,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_list_assignment_rules'],
-    'List assignment rules that map task type and status to agents for workflow-type defaults or workflow overrides. Non-admin MCP keys require routing_rules.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only. sprint_* fields are the current machine-readable compatibility fields.',
+    'List assignment rules that map task type and status to agents for workflow-type defaults or workflow overrides. Non-admin MCP keys require routing_rules.read_project_scope or routing_rules.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only. sprint_* fields are the current machine-readable compatibility fields.',
     {
       ...tenantSelectorSchema,
       project_id: z.number().int().positive().optional().describe('Project ID'),
@@ -136,7 +136,7 @@ export function registerRoutingTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_get_assignment_rule'],
-    'Get a single assignment rule by ID within its scoped project/workflow-type context. Non-admin MCP keys require routing_rules.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only.',
+    'Get a single assignment rule by ID within its scoped project/workflow-type context. Non-admin MCP keys require routing_rules.read_project_scope or routing_rules.manage_project_scope and are limited to their assigned project. Optional tenant_id is super-admin MCP only.',
     {
       rule_id: z.number().int().positive().describe('Assignment rule ID'),
       ...tenantSelectorSchema,

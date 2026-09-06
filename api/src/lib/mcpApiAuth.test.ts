@@ -830,6 +830,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
           'tasks.read_project_context',
           'tasks.search_project_tasks',
           'mcp_capability_policies.read',
+          'routing_rules.read_project_scope',
         ],
       }),
     });
@@ -1899,6 +1900,35 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(allowed.status).toBe(200);
   });
 
+  it('allows routing readers to inspect their project without a run, but never mutate or cross scope', async () => {
+    await getDb().run(`UPDATE tasks SET active_instance_id = NULL WHERE id = 448`);
+    await getDb().run(`UPDATE job_instances SET status = 'done' WHERE agent_id = 7`);
+    await replaceAgentMcpPermissionPolicy(getDb(), 7, ['routing_rules.read_project_scope']);
+    for (const prefix of ['routing/rules', 'routing/assignment-rules', 'routing-rules', 'assignment-rules']) {
+      for (const suffix of ['?project_id=86&sprint_type=dev', '?project_id=86&sprint_id=45', '/501', '/502']) {
+        const response = await fetch(`${baseUrl}/api/v1/${prefix}${suffix}`, { headers: authHeaders(normalKey) });
+        expect(response.status).toBe(200);
+      }
+      for (const suffix of ['', '?sprint_type=dev', '?project_id=87', '?project_id=99', '/503', '/504', '/501?project_id=87']) {
+        const response = await fetch(`${baseUrl}/api/v1/${prefix}${suffix}`, { headers: authHeaders(normalKey) });
+        expect(response.status).toBe(403);
+      }
+      for (const method of ['POST', 'PUT', 'DELETE']) {
+        const response = await fetch(`${baseUrl}/api/v1/${prefix}${method === 'POST' ? '' : '/501'}`, {
+          method, headers: authHeaders(normalKey),
+          body: JSON.stringify({ project_id: 86, sprint_type: 'dev', status: 'ready', agent_id: 7 }),
+        });
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toMatchObject({code: 'mcp_scope_denied', details: { required_capability: 'routing_rules.manage_project_scope' }});
+      }
+    }
+    const crossTenant = await fetch(`${baseUrl}/api/v1/routing/rules?tenant_id=2&project_id=99`, { headers: authHeaders(normalKey) });
+    expect(crossTenant.status).toBe(403);
+    await replaceAgentMcpPermissionPolicy(getDb(), 11, ['routing_rules.read_project_scope']);
+    const noProject = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=86`, { headers: authHeaders(noProjectKey) });
+    expect(noProject.status).toBe(403);
+  });
+
   it('allows scoped routing rule read/create/update/delete when the assigned-project capability is enabled', async () => {
     await replaceAgentMcpPermissionPolicy(getDb(), 7, [
             'discovery.read_catalog',
@@ -1962,7 +1992,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(missingCapability.status).toBe(403);
     await expect(missingCapability.json()).resolves.toMatchObject({
       code: 'mcp_scope_denied',
-      details: { required_capability: 'routing_rules.manage_project_scope' },
+      details: { required_capability: 'routing_rules.read_project_scope' },
     });
 
     await replaceAgentMcpPermissionPolicy(getDb(), 7, [
