@@ -36,6 +36,15 @@ export interface LiveVerificationEvidence {
 
 export interface InlineEvidence extends ReviewEvidence, QaEvidence, DeployEvidence, LiveVerificationEvidence {}
 
+export type OutcomeEvidence = InlineEvidence & Record<string, unknown>;
+
+/** Required evidence is presence, not truthiness: zero and false are real field values. */
+export function normalizedEvidenceValue(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return String(value);
+  return null;
+}
+
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
@@ -207,7 +216,7 @@ export function validateDeployEvidence(ev: DeployEvidence): ValidationResult {
  */
 export function validateInlineEvidenceForOutcome(
   outcome: string,
-  evidence: InlineEvidence,
+  evidence: InlineEvidence | Record<string, unknown>,
   taskRecord: Record<string, unknown>,
   requirements?: GateRequirement[],
 ): ValidationResult {
@@ -227,11 +236,11 @@ export function validateInlineEvidenceForOutcome(
 
     let failed = false;
     if (requirement.requirement_type === 'required') {
-      failed = fields.every(field => !isNonEmpty(effectiveRecord[field]));
+      failed = fields.every(field => normalizedEvidenceValue(effectiveRecord[field]) === null);
     } else if (requirement.requirement_type === 'match') {
-      const fieldValue = effectiveRecord[requirement.field_name];
-      const matchValue = requirement.match_field ? effectiveRecord[requirement.match_field] : null;
-      failed = !isNonEmpty(fieldValue) || !isNonEmpty(matchValue) || fieldValue.trim() !== matchValue.trim();
+      const fieldValue = normalizedEvidenceValue(effectiveRecord[requirement.field_name]);
+      const matchValue = requirement.match_field ? normalizedEvidenceValue(effectiveRecord[requirement.match_field]) : null;
+      failed = fieldValue === null || matchValue === null || fieldValue !== matchValue;
     } else if (requirement.requirement_type === 'from_status') {
       failed = !requirement.match_field || effectiveRecord[requirement.field_name] !== requirement.match_field;
     }
@@ -242,7 +251,9 @@ export function validateInlineEvidenceForOutcome(
   }
 
   for (const [field, value] of Object.entries(evidence)) {
-    if (isNonEmpty(value)) fieldsToValidate.add(field);
+    // Workflow values are type-checked against their schema by the caller. Keep
+    // legacy release-format rules for core lifecycle fields and explicit gates.
+    if (INLINE_EVIDENCE_FIELD_KEYS.includes(field as typeof INLINE_EVIDENCE_FIELD_KEYS[number]) && isNonEmpty(value)) fieldsToValidate.add(field);
   }
 
   for (const field of fieldsToValidate) {
@@ -300,14 +311,9 @@ function validateEvidenceField(fieldName: string, value: unknown, errors: string
  * Extract evidence fields from a request body, returning only the fields
  * that are explicitly provided (not undefined).
  */
-export function extractInlineEvidence(body: Record<string, unknown>): InlineEvidence {
-  const result: InlineEvidence = {};
-  for (const field of INLINE_EVIDENCE_FIELD_KEYS) {
-    if (field in body) {
-      (result as Record<string, unknown>)[field] = body[field] as string | null;
-    }
-  }
-  return result;
+export function extractInlineEvidence(body: Record<string, unknown>, workflowFieldKeys: string[] = []): OutcomeEvidence {
+  const allowed = new Set<string>([...INLINE_EVIDENCE_FIELD_KEYS, ...workflowFieldKeys]);
+  return Object.fromEntries(Object.entries(body).filter(([field, value]) => allowed.has(field) && value !== undefined));
 }
 
 /**

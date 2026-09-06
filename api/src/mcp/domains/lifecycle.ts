@@ -128,7 +128,7 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
       task_id: z.number().int().positive().describe('Task ID'),
       outcome: z.string().min(1).describe('Outcome key to apply'),
       summary: z.string().optional().describe('Truthful outcome summary'),
-      payload: z.record(z.string(), z.unknown()).optional().describe('Workflow-specific evidence and dynamic outcome fields'),
+      payload: z.record(z.string(), z.unknown()).optional().describe('Task fields from the resolved workflow schema, or core lifecycle evidence; validated and saved atomically with the outcome. Unknown/protected fields are rejected. failure_detail and blocker_reason remain lifecycle metadata.'),
       dry_run: z.boolean().optional().describe('Preview configured outcome validation, evidence gates, and status changes without writing task state, notes, history, receipts, or instance state'),
     },
     ({ task_id, ...payload }) => wrap(() => api.postTaskOutcome(task_id, payload))(),

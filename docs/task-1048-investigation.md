@@ -1,7 +1,15 @@
 # Task 1048 investigation — 2026-09-06
 
 Task: Reconcile successful external submission when Agent HQ task state regresses.
-Scope: investigation only. No workflow rule, marketplace submission, or lead task status was changed. Task 1048 remains paused.
+Original scope: investigation only. The findings below describe the pre-fix behavior.
+
+## Authorized implementation update
+
+The user subsequently authorized the start-event configuration change and schema-aware evidence handling. Live workflow mapping 1553 now ignores `agent_started` for Agency project 99 / Lead Generation workflow 114 in approved, submitted, closed, and poc_pending. Resolver readback verified all four protected states plus unchanged ready → in_progress behavior in workflows 114 and 115. The global mapping was not edited.
+
+Agent HQ outcome handling now validates payload fields against the resolved workflow schema and task-type overrides, retains core lifecycle fields, rejects unknown/protected keys, and writes typed values with the transition in one transaction. Explicit null clears optional evidence; required-field gates reject removal of required evidence. Zero and false are present scalar values. Task fields are separate from lifecycle controls, including a schema-defined field named outcome. Validation is repeated under a task row lock; failed, ignored and dry-run outcomes do not persist evidence. Existing active-run and tenant authorization remain in effect.
+
+Regression coverage includes payload-only and persisted proof, type overrides, unknown/protected fields, missing proof, null clears, required scalar fields, invalid transitions, dry-run and terminal rollback, wrong-agent rejection, active-run completion, concurrent requests, and workflow start callbacks. The separate CRM receipt/reconciliation path and CRM persistence crash window remain unimplemented. Task 1048 remains paused; no existing lead was reconciled or resubmitted.
 
 ## Findings
 

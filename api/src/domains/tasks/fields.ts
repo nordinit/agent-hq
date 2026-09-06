@@ -185,7 +185,7 @@ export function validateTaskCustomFields(
         }
         break;
       case 'number':
-        if (typeof value !== 'number' || Number.isNaN(value)) {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
           validationErrors.push(customFieldValidationError(
             field.key,
             'invalid_type',

@@ -1,7 +1,5 @@
 import { applyTaskOutcome, RefusedTaskOutcomeError, resolveRefusedTaskOutcome } from '../../lib/taskOutcome';
 import {
-  extractInlineEvidence,
-  hasAnyEvidence,
   validateInlineEvidenceForOutcome,
   validateReviewEvidence,
   validateQaEvidence,
@@ -10,7 +8,7 @@ import {
 } from '../../lib/evidenceValidation';
 import { loadSprintTaskTransitionRequirements } from '../routing/policy/statuses';
 import type { McpApiIdentity } from '../../lib/mcpApiAuth';
-import { parseCustomFields } from './fields';
+import { extractTaskOutcomeEvidence, outcomePayload, OUTCOME_PAYLOAD_METADATA_KEYS } from './outcomeEvidence';
 import { getCanonicalTaskRecord } from './evidence';
 import { getTaskInstanceAuthorityFailure } from './authority';
 import {
@@ -60,13 +58,14 @@ function topLevelLifecycleEvidenceFields(body: Record<string, unknown>): string[
 }
 
 function normalizeOutcomeBody(body: Record<string, unknown>): Record<string, unknown> {
-  const payload = body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload)
-    ? body.payload as Record<string, unknown>
-    : {};
+  const payload = outcomePayload(body);
   const controls = Object.fromEntries(
     Object.entries(body).filter(([key]) => OUTCOME_CONTROL_FIELD_KEYS.has(key)),
   );
-  return { ...payload, ...controls };
+  // A workflow may have an evidence field called "outcome". It must not
+  // replace the lifecycle command (or any caller/instance controls).
+  const metadata = Object.fromEntries(Object.entries(payload).filter(([key]) => OUTCOME_PAYLOAD_METADATA_KEYS.has(key)));
+  return { ...metadata, ...controls };
 }
 
 function errorWithBody(status: number, body: Record<string, unknown>): Error & { status?: number; body?: Record<string, unknown> } {
@@ -194,8 +193,8 @@ export async function postTaskOutcome(
     throw error;
   }
 
-  const inlineEvidence = extractInlineEvidence(normalizedBody);
-  const hasInline = hasAnyEvidence(inlineEvidence);
+  const inlineEvidence = await extractTaskOutcomeEvidence(db, existing, outcomePayload(body));
+  const hasInline = Object.keys(inlineEvidence).length > 0;
   const transitionRequirements = (await loadSprintTaskTransitionRequirements(db, existing.sprint_id ?? null, outcome, existing.task_type ?? null))
     .map((row): GateRequirement => ({
       field_name: row.field_name,
@@ -205,22 +204,9 @@ export async function postTaskOutcome(
       message: row.message,
     }));
 
-  const canonicalExisting = getCanonicalTaskRecord(existing as unknown as Record<string, unknown>);
-  const existingCustomFields = parseCustomFields(existing.custom_fields_json);
   const evidenceValidation = validateInlineEvidenceForOutcome(outcome, inlineEvidence, {
+    ...getCanonicalTaskRecord(existing),
     status: existing.status,
-    review_branch: canonicalExisting.review_branch,
-    review_commit: canonicalExisting.review_commit,
-    review_url: canonicalExisting.review_url,
-    qa_verified_commit: canonicalExisting.qa_verified_commit,
-    qa_tested_url: canonicalExisting.qa_tested_url,
-    merged_commit: canonicalExisting.merged_commit,
-    deployed_commit: canonicalExisting.deployed_commit,
-    deploy_target: canonicalExisting.deploy_target,
-    deployed_at: canonicalExisting.deployed_at,
-    live_verified_by: canonicalExisting.live_verified_by,
-    live_verified_at: canonicalExisting.live_verified_at,
-    ...existingCustomFields,
   }, transitionRequirements);
 
   const authoritativeInstanceId = options.mcpIdentity
@@ -287,12 +273,40 @@ export async function postTaskOutcome(
     || message.startsWith('live_verified requires')
   );
 
+  const writeValidatedEvidence = async (tx: Db): Promise<void> => {
+    // Serialize evidence+outcome writes and validate against the state actually
+    // being updated, not the earlier preview snapshot.
+    const current = await tx.get(`SELECT id, status, task_type, sprint_id, ${customFieldsSelect}
+      FROM tasks WHERE id = ? FOR UPDATE`, taskId) as typeof existing | undefined;
+    if (!current) throw errorWithBody(404, { error: 'Task not found' });
+    if (options.mcpIdentity) {
+      const currentInstance = await resolveMcpActiveOutcomeInstance(tx, taskId, options.mcpIdentity);
+      if (currentInstance !== authoritativeInstanceId) {
+        throw errorWithBody(409, { error: 'Task active instance changed before outcome write', reason: 'active_instance_changed' });
+      }
+    } else if (authoritativeInstanceId != null) {
+      const failure = await getTaskInstanceAuthorityFailure(tx, taskId, authoritativeInstanceId, 'task outcome');
+      if (failure) throw errorWithBody(failure.status, failure.body);
+    }
+    const evidence = await extractTaskOutcomeEvidence(tx, current, outcomePayload(body));
+    const requirements = await loadSprintTaskTransitionRequirements(tx, current.sprint_id, outcome, current.task_type);
+    const validation = validateInlineEvidenceForOutcome(outcome, evidence, {
+      ...getCanonicalTaskRecord(current), status: current.status,
+    }, requirements);
+    if (!validation.valid) {
+      throw errorWithBody(400, { error: 'Evidence validation failed', validation_errors: validation.errors });
+    }
+    if (hasInline) {
+      await updateTaskEvidence(taskId, changedBy, evidence, {
+        db: tx, explicitClears: new Set(Object.keys(evidence)),
+      });
+    }
+  };
+
   if (dryRun) {
     try {
       const result = await withRolledBackTransaction(db, async (tx) => {
-        if (hasInline) {
-          await updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>, { db: tx });
-        }
+        await writeValidatedEvidence(tx);
         return await applyTaskOutcome(tx, {
           taskId,
           outcome,
@@ -314,7 +328,7 @@ export async function postTaskOutcome(
         outcome: result.outcome,
         instance_closed: result.instanceClosed ?? false,
         evidence_written: false,
-        evidence_would_write: hasInline,
+        evidence_would_write: hasInline && result.applied,
         auto_recovered: result.autoRecovered ?? false,
         recovery_description: result.recoveryDescription ?? null,
         validation_errors: [],
@@ -352,12 +366,11 @@ export async function postTaskOutcome(
     }
   }
 
-  let result;
+  let result: Awaited<ReturnType<typeof applyTaskOutcome>>;
   try {
     result = await db.withTransaction(async (tx) => {
+      await writeValidatedEvidence(tx);
       if (hasInline) {
-        await updateTaskEvidence(taskId, changedBy, inlineEvidence as Record<string, unknown>, { db: tx });
-
         const evFields: string[] = [];
         if (inlineEvidence.review_branch) evFields.push(`Branch: ${inlineEvidence.review_branch}`);
         if (inlineEvidence.review_commit) evFields.push(`Commit: ${inlineEvidence.review_commit}`);
@@ -369,12 +382,14 @@ export async function postTaskOutcome(
         if (inlineEvidence.deploy_target) evFields.push(`Target: ${inlineEvidence.deploy_target}`);
         if (inlineEvidence.deployed_at) evFields.push(`At: ${inlineEvidence.deployed_at}`);
         if (inlineEvidence.live_verified_by) evFields.push(`Verified by: ${inlineEvidence.live_verified_by}`);
+        const workflowFields = Object.keys(inlineEvidence).filter(key => !INLINE_EVIDENCE_FIELD_KEYS.includes(key as typeof INLINE_EVIDENCE_FIELD_KEYS[number]));
+        if (workflowFields.length) evFields.push(`Workflow fields: ${workflowFields.join(', ')}`);
         if (evFields.length > 0) {
           await addTaskNote(taskId, changedBy, `Atomic evidence (with ${outcome})\n${evFields.join('\n')}`, tx);
         }
       }
 
-      return await applyTaskOutcome(tx, {
+      const applied = await applyTaskOutcome(tx, {
         taskId,
         outcome,
         changedBy,
@@ -382,22 +397,25 @@ export async function postTaskOutcome(
         instanceId: authoritativeInstanceId,
         failureDetail,
       });
+      // Ignored/stale outcomes must not leave new evidence on the task either.
+      if (!applied.applied) throw new RollbackOnly(applied);
+      return applied;
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (isOutcomeRefusalMessage(message) && !(error instanceof RefusedTaskOutcomeError)) {
-      // Awaited so the refusal is recorded before the original error propagates and the request
-      // unwinds — unawaited, the write was still pending when the caller had already failed the
-      // release, and its own rejection would have escaped as an unhandled rejection. Contained
-      // in a try/catch because this runs on an error path: a failure to record the refusal must
-      // not replace the error that caused it, which is the more useful of the two.
-      try {
-        await persistOutcomeRefusal(message);
-      } catch (refusalError) {
-        console.warn('[release] could not record the outcome refusal:', refusalError);
+    if (error instanceof RollbackOnly) {
+      result = error.value as Awaited<ReturnType<typeof applyTaskOutcome>>;
+    } else {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isOutcomeRefusalMessage(message) && !(error instanceof RefusedTaskOutcomeError)) {
+        // Preserve the original validation error even if recording its refusal fails.
+        try {
+          await persistOutcomeRefusal(message);
+        } catch (refusalError) {
+          console.warn('[release] could not record the outcome refusal:', refusalError);
+        }
       }
+      throw error;
     }
-    throw error;
   }
 
   const task = await requireTask(taskId, db);
@@ -411,7 +429,7 @@ export async function postTaskOutcome(
     next_status: result.nextStatus,
     outcome: result.outcome,
     instance_closed: result.instanceClosed ?? false,
-    evidence_written: hasInline,
+    evidence_written: hasInline && result.applied,
     auto_recovered: result.autoRecovered ?? false,
     recovery_description: result.recoveryDescription ?? null,
     task: await enrichTask(task),

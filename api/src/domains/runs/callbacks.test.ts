@@ -131,6 +131,29 @@ describe('startRunInstance task ownership repair', () => {
     };
     expect(task).toEqual({ status: 'ready', active_instance_id: OTHER_INSTANCE_ID });
   });
+
+  it.each(['approved', 'submitted', 'closed', 'poc_pending', 'ready'])(
+    'honors a workflow-specific protected-status rule when starting from %s', async (status) => {
+      await seedReadyTaskRun(db, INSTANCE_ID);
+      await db.run(`UPDATE external_event_mappings SET source = 'agent_hq_runtime' WHERE event_name = 'agent_started'`);
+      await db.run(`UPDATE sprints SET sprint_type = 'lead_generation' WHERE id = ?`, SPRINT_ID);
+      await db.run(`UPDATE tasks SET status = ?, task_type = 'proposal' WHERE id = ?`, status, TASK_ID);
+      await db.run(`INSERT INTO external_event_mappings (
+        tenant_id, project_id, sprint_id, sprint_type, source, event_name,
+        status_includes_json, status_excludes_json, action_kind, action_target, enabled, priority
+      ) VALUES (?, ?, ?, 'lead_generation', 'agent_hq_runtime', 'agent_started',
+        '["approved","submitted","closed","poc_pending"]', '[]', 'ignore', NULL, 1, 200)`, TENANT_ID, PROJECT_ID, SPRINT_ID);
+
+      await startRunInstance(db, INSTANCE_ID, 'run:3461');
+      expect(await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = ?`, TASK_ID)).toEqual({
+        status: status === 'ready' ? 'in_progress' : status, active_instance_id: INSTANCE_ID,
+      });
+      expect(await db.get(`SELECT status FROM job_instances WHERE id = ?`, INSTANCE_ID)).toMatchObject({ status: 'running' });
+      if (status !== 'ready') {
+        expect(await db.all(`SELECT * FROM task_history WHERE task_id = ? AND field = 'status'`, TASK_ID)).toEqual([]);
+      }
+    },
+  );
 });
 
 describe('completeRunInstance runtime failure workflow event', () => {

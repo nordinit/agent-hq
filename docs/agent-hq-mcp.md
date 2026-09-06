@@ -298,6 +298,10 @@ Preferred task lifecycle transition path:
 
 `agent_hq_move_task` remains a compatibility helper for direct status moves and older callers. New configurable workflow clients should prefer `agent_hq_post_task_outcome` because outcomes encode the configured transition route, gate evidence, and lifecycle semantics.
 
+Outcome `payload` fields are matched against the task's resolved workflow field schema, including task-type overrides and fields not populated yet. Core review/QA/deploy evidence remains supported. Unknown fields, invalid values, and attempts to write protected task or control fields (such as `status`, `project_id`, or `instance_id`) return a validation error. The top-level `outcome` selects the lifecycle transition; a schema-defined `payload.outcome` is an independent task field. `failure_detail` and `blocker_reason` in the payload remain lifecycle metadata.
+
+Valid field values are merged with existing evidence before checking the configured transition gates. Numbers and booleans retain their types, including `0` and `false`; an explicit `null` clears a nullable field. A required-field gate rejects that clear if it removes required evidence. Evidence and the transition commit together; failed, ignored, and dry-run outcomes do not persist payload fields. Existing active-run ownership and tenant authorization still apply.
+
 ---
 
 ## Task Write Behavior

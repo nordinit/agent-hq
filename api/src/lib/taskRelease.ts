@@ -1,6 +1,7 @@
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
 import { resolveSprintTypeForSprintId, resolveTaskWorkflowContext } from '../domains/sprint-definitions/config';
 import { getCanonicalTaskRecord } from '../domains/tasks/evidence';
+import { normalizedEvidenceValue } from './evidenceValidation';
 import {
   listSprintTaskTransitions,
   loadSprintTaskTransitionRequirements,
@@ -236,11 +237,11 @@ export async function requireReleaseGate(
 
     let failed = false;
     if (req.requirement_type === 'required') {
-      failed = fields.every(field => !normalizedString(taskRecord[field]));
+      failed = fields.every(field => normalizedEvidenceValue(taskRecord[field]) === null);
     } else if (req.requirement_type === 'match') {
-      const fieldValue = normalizedString(taskRecord[req.field_name]);
-      const matchValue = req.match_field ? normalizedString(taskRecord[req.match_field]) : null;
-      failed = !fieldValue || !matchValue || fieldValue !== matchValue;
+      const fieldValue = normalizedEvidenceValue(taskRecord[req.field_name]);
+      const matchValue = req.match_field ? normalizedEvidenceValue(taskRecord[req.match_field]) : null;
+      failed = fieldValue === null || matchValue === null || fieldValue !== matchValue;
     } else if (req.requirement_type === 'from_status') {
       failed = task.status !== req.match_field;
     }
