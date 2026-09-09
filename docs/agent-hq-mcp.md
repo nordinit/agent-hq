@@ -703,6 +703,7 @@ Properties worth knowing before pointing a connector at it:
 - **Servers are built per request** (stateless transport, no session id). Remote connectors reconnect freely, and per-request construction keeps one client's identity from outliving its request.
 - **Keys are read from `Authorization: Bearer` or `x-api-key` directly.** Unlike `/api/v1`, this route does not require the `x-agent-hq-mcp-client` marker header — remote connectors send a plain bearer token and nothing else.
 - **Rate limiting is per key**, defaulting to 120 requests/minute.
+- **Authenticated requests emit `[agent-hq-mcp-http] trace` logs** with UTC time, agent/key ID, profile, method, tool name, HTTP status, protocol/API result, and duration. Tool-list responses include the actual count and a catalog fingerprint. Arguments, credentials, resource URIs, and result text are excluded. A tool failure can have HTTP 200; inspect `result` as well as `http_status`.
 
 Publishing the endpoint (TLS, a public hostname, tunnel or reverse proxy) is deployment work outside this document. Both major clients connect from the vendor's cloud rather than from your device, so `localhost` and VPN-only hosts are unreachable to them.
 
@@ -720,6 +721,8 @@ A profile is a named allow-list of exposed tool names (`api/src/mcp/toolProfiles
 The `mobile` profile includes project task and agent management, routing, recurring series, task evidence, and configured task outcomes. It exposes `agent_hq_post_task_outcome` for status transitions and `agent_hq_delete_task_relationship` for removing links. Generic status moves, run callbacks, workflow definition mutations, skills, teams, tool/server configuration, and file upload/download stay outside this profile.
 
 A profile narrows what a client can *see*. It is not an authorization boundary; the capability policy is.
+
+When changing a remote profile, refresh the connection's tool metadata and start a new conversation. Reconnecting OAuth renews authentication but is not evidence that the tool catalog refreshed. For ChatGPT developer-mode connections, use the connection's **Refresh** action and verify the discovered tool names ([OpenAI instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt#refresh-metadata)). If a client still offers `agent_hq_move_task` while omitting the outcome and relationship-delete tools, compare its metadata with `/mcp` `tools/list`. The REST `/api/v1/mcp/catalog` describes the full server and is not the mobile profile. The transport trace shows whether a refresh actually requested `tools/list` and whether a failed invocation reached Agent HQ.
 
 ### Scoped identity
 

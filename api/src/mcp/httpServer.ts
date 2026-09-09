@@ -28,6 +28,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { AgentHqApiClient } from './apiClient';
 import { RateLimiter } from './rateLimiter';
 import { createAgentHqMcpServer } from './serverFactory';
+import { traceMcpHttpRequest } from './httpTrace';
 import { DEFAULT_MCP_TOOL_PROFILE, resolveMcpToolProfile, type McpToolProfile } from './toolProfiles';
 import { getDb } from '../db/client';
 import {
@@ -176,6 +177,7 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
         ? { allowedHosts: options.allowedHosts, enableDnsRebindingProtection: true }
         : {}),
     });
+    traceMcpHttpRequest(req, res, transport, identity, profile.name);
 
     // The transport writes the response; both objects are per-request and must not outlive it.
     res.on('close', () => {

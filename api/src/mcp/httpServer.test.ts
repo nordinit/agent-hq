@@ -68,10 +68,16 @@ async function connectClient(baseUrl: string, apiKey: string): Promise<Client> {
 
 describe('MCP Streamable HTTP transport', () => {
   let harness: Harness | null = null;
+  let log: jest.SpyInstance;
+
+  beforeEach(() => {
+    log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
 
   afterEach(async () => {
     await harness?.close();
     harness = null;
+    log.mockRestore();
   });
 
   it('serves the profile tool list to an authenticated MCP client', async () => {
@@ -83,6 +89,47 @@ describe('MCP Streamable HTTP transport', () => {
       const names = new Set(listed.tools.map((tool) => tool.name));
 
       expect(names).toEqual(resolveMcpToolProfile('mobile').toolNames);
+      const trace = log.mock.calls.find(([label, entry]) => label === '[agent-hq-mcp-http] trace'
+        && JSON.parse(entry).method === 'tools/list');
+      expect(trace).toBeDefined();
+      expect(JSON.parse(trace![1])).toMatchObject({
+        agent: 'claude-mobile', key_id: 1, profile: 'mobile', result: 'success',
+        tool_count: names.size, catalog_hash: expect.stringMatching(/^[a-f0-9]{16}$/),
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('traces removed tools and validation failures without logging arguments or credentials', async () => {
+    harness = await startHarness();
+    const client = await connectClient(harness.baseUrl, VALID_KEY);
+    try {
+      for (const name of ['agent_hq_move_task', 'agent_hq_delete_task_relationship']) {
+        const response = await client.callTool({name, arguments: {summary: 'private diagnostic content'}});
+        expect(response.isError).toBe(true);
+      }
+      const calls = log.mock.calls.filter(([label, entry]) => label === '[agent-hq-mcp-http] trace'
+        && JSON.parse(entry).method === 'tools/call').map(([, entry]) => JSON.parse(entry));
+      expect(calls).toEqual([
+        expect.objectContaining({tool: 'agent_hq_move_task', result: 'tool_error', http_status: 200}),
+        expect.objectContaining({tool: 'agent_hq_delete_task_relationship', result: 'tool_error', http_status: 200}),
+      ]);
+      const logged = JSON.stringify(log.mock.calls);
+      expect(logged).not.toContain('private diagnostic content');
+      expect(logged).not.toContain(VALID_KEY);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('recognizes REST failures inside the tool result envelope', async () => {
+    harness = await startHarness();
+    const client = await connectClient(harness.baseUrl, VALID_KEY);
+    try {
+      await client.callTool({name: 'agent_hq_get_task', arguments: {task_id: 1}});
+      expect(log.mock.calls.some(([label, entry]) => label === '[agent-hq-mcp-http] trace'
+        && JSON.parse(entry).result === 'api_error')).toBe(true);
     } finally {
       await client.close();
     }
