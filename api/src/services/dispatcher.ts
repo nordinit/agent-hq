@@ -27,6 +27,7 @@ import {
 import { getSkillMaterializationAdapter } from '../runtimes/skillMaterialization';
 import { syncAssignedMcpForAgent } from '../runtimes/mcpMaterialization';
 import { getDb } from '../db/client';
+import { loadTaskRecurrenceMetadata } from '../domains/tasks/recurrence';
 import { nowTimestamp, timestampFromEpochMs } from '../lib/timestamps';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn as durableTableHasColumn } from '../lib/durableRunIdentity';
@@ -2166,6 +2167,7 @@ export async function dispatchTaskToJob(
     project: scope.project,
     job: { agentId: job.agent_id, title: job.title, instructions: job.job_instructions },
     task: {
+      ...await loadTaskRecurrenceMetadata(db, task.id),
       id: task.id,
       title: task.title,
       description: task.description,

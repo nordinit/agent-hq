@@ -715,15 +715,15 @@ A profile is a named allow-list of exposed tool names (`api/src/mcp/toolProfiles
 | Profile | Names exposed | Use |
 |---|---|---|
 | `full` | all ~186 | stdio server default; unchanged behaviour |
-| `mobile` | 24 | HTTP transport default: board reads, task writes, recurring task series |
+| `mobile` | curated subset | HTTP transport default: board reads, task writes, project lifecycle outcomes, recurring task series |
 
-The `mobile` profile deliberately omits the configuration surfaces (agents, skills, routing, workflow definitions, teams, tools, MCP servers), file upload/download, and the dispatch-scoped lifecycle writes — evidence, outcomes, run check-ins — which only mean something for an agent that owns a dispatched run.
+The `mobile` profile includes project task and agent management, routing, recurring series, task evidence, and configured task outcomes. It exposes `agent_hq_post_task_outcome` for status transitions and `agent_hq_delete_task_relationship` for removing links. Generic status moves, run callbacks, workflow definition mutations, skills, teams, tool/server configuration, and file upload/download stay outside this profile.
 
 A profile narrows what a client can *see*. It is not an authorization boundary; the capability policy is.
 
 ### Scoped identity
 
-Give a remote client its own agent identity rather than reusing Atlas's. A connector's key lives outside the machine, in the vendor's connector config, which makes it the key most likely to leak and the one least worth granting broadly. A separate identity is separately revocable, appears on its own in the audit trail, and — unlike anything named Atlas, which `isTrustedMcpIdentity` resolves to trusted-admin defaults — starts from the scoped-runtime policy.
+Give a remote client its own agent identity with a scoped key. A separate identity is independently revocable and appears on its own in the audit trail. Authority comes from the presented key's role and capability policy, not the agent's name or system role.
 
 ```bash
 cd api
@@ -749,10 +749,21 @@ The policy the `mobile` profile pairs with:
 | `tasks.read_project_context` | task detail, notes, history, relationships |
 | `tasks.manage_project_tasks` | create/update/delete tasks and relationships in the assigned project |
 | `tasks.write_project_notes` | notes on any task in the assigned project |
+| `tasks.write_project_lifecycle` | notes, evidence, and configured outcomes on tasks in the assigned project, including tasks with no run or another assigned agent |
 | `tasks.search_project_tasks` | bounded exact-match dedupe search |
 | `recurring_task_series.*` | read and manage scheduled task automation in the assigned project |
 
-Absent by design: every `admin.*` key, and `tasks.write_active_lifecycle` — a connector should not report evidence or an outcome for a run it is not executing.
+Absent by design: every `admin.*` key and `tasks.write_active_lifecycle`. The project lifecycle grant authorizes supervisory outcomes; it does not allow callbacks on another agent's run.
+
+`tasks.write_project_lifecycle` is off by default for scoped runtime keys and must be granted administratively. Existing mobile identities need their stored capability policy updated to the current profile (re-run the provisioning command above; key rotation is unnecessary). The profile exposes tools but does not automatically change an existing identity's permissions.
+
+Every project-wide outcome requires a nonblank `summary` explaining the intervention, for example `"Closed completed stuck occurrence after validating CRM evidence"`. Use `payload` for the workflow evidence. The server derives project scope and actor from the authenticated key, resolves the task's current instance itself, and rechecks scope and instance linkage under the task lock. Caller-supplied actor/capability/instance values cannot elevate authority. Configured transitions and evidence gates still apply; `tasks.manage_project_tasks` cannot edit `status` through generic updates. If both lifecycle grants are held, an owned active run uses the narrower active lifecycle permission.
+
+Successful supervisory outcomes write a `project_lifecycle_outcome` task-history entry in the same transaction as the outcome and evidence. It includes the actor, agent ID, key ID, capability, project, summary, outcome, prior/next status, and instance ID. Refused and ignored attempts also record their result and reason after validation of the required summary. `dry_run: true` requires the same authorization and summary but writes no task state, notes, history, or instance changes.
+
+Task detail, lists (including pagination), context, searches, and recently completed reads expose the same stored occurrence fields: `recurring_series_id`, `scheduled_for`, `schedule_run_id`, and `generated_from`. Ordinary tasks return null for those fields. Initial and retry dispatch prompts include the same provenance for generated occurrences. These fields describe the scheduler occurrence; they are separate from workflow custom fields and from the task's execution instance.
+
+To remove a relationship, list it with `agent_hq_list_task_relationships`, then call `agent_hq_delete_task_relationship` with its `source_task_id` as `task_id` and its record `id` as `relationship_id`. Both endpoints must belong to the caller's assigned project and tenant. Removing a dispatch-blocking relationship also removes its compatibility dependency.
 
 Several capabilities were added for this shape of client. `projects.read_project_board` covers the collection reads a board view needs; every other read capability resolves to a single record or to the agent's own dispatched task, which is right for a runtime agent and leaves a remote client unable to answer "what is on my board" without an admin key. Each collection that can name a project must name the assigned one. `tasks.write_project_notes` lets an identity comment on work it is not executing, and stops at notes.
 

@@ -108,7 +108,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_list_tasks'],
-    'List Agent HQ tasks with optional filtering.',
+    'List Agent HQ tasks with optional filtering. Includes recurring occurrence provenance: recurring_series_id, scheduled_for, schedule_run_id, and generated_from (null for ordinary tasks).',
     {
       project_id: z.number().int().positive().optional().describe('Filter by project ID'),
       sprint_id: z.number().int().positive().optional().describe('Filter by sprint ID'),
@@ -123,7 +123,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_search_project_tasks'],
-    'Search the authenticated agent\'s assigned project for existing tasks using bounded exact-match filters for safe follow-up deduplication. The project scope is derived from the MCP agent identity; caller-supplied project IDs are not accepted. Returns minimal task summaries only and does not allow task mutation or broad listing.',
+    'Search the authenticated agent\'s assigned project for existing tasks using bounded exact-match filters for safe follow-up deduplication. The project scope is derived from the MCP agent identity; caller-supplied project IDs are not accepted. Returns minimal task summaries including recurring_series_id, scheduled_for, schedule_run_id, and generated_from. Does not allow task mutation or broad listing.',
     {
       workflow_id: z.number().int().positive().optional().describe('Optional workflow/sprint ID filter. Must belong to the authenticated agent\'s assigned project to match anything.'),
       sprint_id: z.number().int().positive().optional().describe('Legacy alias for workflow_id.'),
@@ -142,7 +142,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_get_task'],
-    'Get full task detail including blocker, sprint, and assignment context. Scoped non-admin MCP callers need active task context, read project task context, or Project task CRUD for tasks in their assigned project.',
+    'Get full task detail including blocker, sprint, assignment context, and recurring occurrence provenance (recurring_series_id, scheduled_for, schedule_run_id, generated_from). Scoped non-admin MCP callers need active task context, read project task context, or Project task CRUD for tasks in their assigned project.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTask(task_id))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id'] },

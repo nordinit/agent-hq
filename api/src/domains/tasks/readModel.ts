@@ -6,6 +6,7 @@ import { getCanonicalTaskCustomFields, getCanonicalTaskRecord, stripTaskLifecycl
 import { getTaskRelationshipsForEnrichment } from './relationships';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../db/introspection";
 import { nowTimestamp, timestampFromEpochMs } from '../../lib/timestamps';
+import { TASK_RECURRENCE_SELECT, taskRecurrenceMetadata, type TaskRecurrenceMetadata } from './recurrence';
 
 export type TaskRecord = Record<string, unknown>;
 
@@ -22,7 +23,7 @@ async function tableHasTaskColumn(db: ReturnType<typeof getDb>, column: string):
 }
 
 function stripPublicTaskResponseColumns(row: TaskRecord): TaskRecord {
-  return stripTaskLifecycleEvidenceFields(stripRetiredTaskColumns(row));
+  return { ...stripTaskLifecycleEvidenceFields(stripRetiredTaskColumns(row)), ...taskRecurrenceMetadata(row) };
 }
 
 export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
@@ -211,7 +212,7 @@ export const TASK_SELECT = `
 export async function searchTasks(
   db: ReturnType<typeof getDb>,
   query: { q?: unknown; exclude_id?: unknown; limit?: unknown; project_id?: unknown; sprint_id?: unknown; tenant_id?: unknown },
-): Promise<Array<{ id: number; title: string; status: string }>> {
+): Promise<Array<{ id: number; title: string; status: string } & TaskRecurrenceMetadata>> {
   const q = String(query.q ?? '').trim();
   const excludeId = query.exclude_id ? Number(query.exclude_id) : null;
   const projectId = query.project_id ? Number(query.project_id) : null;
@@ -256,12 +257,12 @@ export async function searchTasks(
   params.push(limit);
 
   return await db.all(`
-    SELECT t.id, t.title, t.status
+    SELECT t.id, t.title, t.status, ${TASK_RECURRENCE_SELECT}
     FROM tasks t
     WHERE ${condition}${excludeCondition}${contextCondition}
     ORDER BY t.id DESC
     LIMIT ?
-  `, ...params) as Array<{ id: number; title: string; status: string }>;
+  `, ...params) as Array<{ id: number; title: string; status: string } & TaskRecurrenceMetadata>;
 }
 
 const PROJECT_TASK_SEARCH_MAX_LIMIT = 50;
@@ -284,7 +285,7 @@ export interface ProjectTaskSearchInput {
 }
 
 export interface ProjectTaskSearchResult {
-  tasks: Array<{
+  tasks: Array<TaskRecurrenceMetadata & {
     id: number;
     title: string;
     status: string | null;
@@ -433,6 +434,7 @@ export async function searchProjectTasks(
       a.name AS agent_name,
       t.active_instance_id,
       t.updated_at,
+      ${TASK_RECURRENCE_SELECT},
       t.custom_fields_json
     FROM tasks t
     LEFT JOIN sprints s ON s.id = t.sprint_id AND s.tenant_id = t.tenant_id
@@ -451,6 +453,7 @@ export async function searchProjectTasks(
         matchedCustomFields[key] = customFields[key] ?? null;
       }
       return {
+        ...taskRecurrenceMetadata(row),
         id: Number(row.id),
         title: String(row.title ?? ''),
         status: typeof row.status === 'string' ? row.status : null,
@@ -504,6 +507,7 @@ export async function listRecentlyCompletedTasks(
       t.status,
       t.priority,
       t.project_id,
+      ${TASK_RECURRENCE_SELECT},
       ${customFieldsSelect},
       t.updated_at,
       t.agent_id,

@@ -43,6 +43,7 @@ import { buildDispatchTaskNotesSegmentDraft, type DispatchTaskNotesContext } fro
 import { buildWorkspaceContextSegmentDraft, type DispatchPathContext } from './workspaceContext';
 import type { CallbackContractSegments } from './callbackContract';
 import type { ContextSegmentKind } from './contextBundle';
+import { taskRecurrenceMetadata, type TaskRecurrenceMetadata } from '../../../domains/tasks/recurrence';
 
 /** Canonical section order. Exported so tests and the viewer can assert against one source. */
 export const DISPATCH_CONTEXT_ORDER: readonly ContextSegmentKind[] = [
@@ -83,7 +84,7 @@ export interface DispatchJobContext {
   instructions?: string | null;
 }
 
-export interface DispatchTaskContext {
+export interface DispatchTaskContext extends Partial<TaskRecurrenceMetadata> {
   id: number;
   title: string;
   description: string;
@@ -197,6 +198,9 @@ function taskDraft(input: DispatchContextInput): ContextSegmentDraft {
         `## Assigned Task`,
         `Task #${task.id}: ${task.title}`,
         `Priority: ${task.priority} | Workflow: ${task.workflowName ?? 'none'}`,
+        ...(task.recurring_series_id != null || task.schedule_run_id != null || task.generated_from != null
+          ? [`Recurring provenance: ${JSON.stringify(taskRecurrenceMetadata(task))}`]
+          : []),
         ``,
         task.description,
       ].join('\n')
@@ -211,6 +215,7 @@ function taskDraft(input: DispatchContextInput): ContextSegmentDraft {
           priority: task.priority,
           status: task.status,
           workflow: task.workflowName ?? 'none',
+          ...taskRecurrenceMetadata(task),
         },
       }
       : { type: 'task', label: 'No task' },

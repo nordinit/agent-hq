@@ -123,11 +123,11 @@ export function registerLifecycleTools(ctx: McpDomainContext) {
   
   registerTool(
     ['agent_hq_post_task_outcome'],
-    'Post a task outcome for the active run owned by this MCP key. Put workflow-specific evidence fields in payload.',
+    'Post a configured task outcome for this MCP key\'s active run, or for any task in its assigned project with tasks.write_project_lifecycle. Project-wide outcomes require a summary/reason and audit the authenticated actor and capability. Workflow transitions and evidence gates apply in both cases. Put workflow-specific evidence fields in payload.',
     {
       task_id: z.number().int().positive().describe('Task ID'),
       outcome: z.string().min(1).describe('Outcome key to apply'),
-      summary: z.string().optional().describe('Truthful outcome summary'),
+      summary: z.string().optional().describe('Truthful outcome summary/reason; required and nonblank for project-wide supervisory outcomes'),
       payload: z.record(z.string(), z.unknown()).optional().describe('Task fields from the resolved workflow schema, or core lifecycle evidence; validated and saved atomically with the outcome. Unknown/protected fields are rejected. failure_detail and blocker_reason remain lifecycle metadata.'),
       dry_run: z.boolean().optional().describe('Preview configured outcome validation, evidence gates, and status changes without writing task state, notes, history, receipts, or instance state'),
     },

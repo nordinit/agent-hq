@@ -2,6 +2,10 @@ import { getDb } from './client';
 import { setupTestDb, teardownTestDb } from './testDb';
 import { getDefaultTenantId } from '../lib/tenantContext';
 import { createTaskRecord } from '../domains/tasks/writeModel';
+import { getTaskById, listTasks, searchTasks, searchProjectTasks, listRecentlyCompletedTasks } from '../domains/tasks/readModel';
+import { buildTaskContext } from '../domains/tasks/context';
+import { loadTaskRecurrenceMetadata } from '../domains/tasks/recurrence';
+import { buildDispatchContextBundle } from '../services/dispatch/prompt/dispatchContext';
 import {
   createRecurringTaskSeries,
   linkRecurringRunToGeneratedTask,
@@ -136,6 +140,42 @@ describe('recurring task scheduling schema', () => {
       schedule_run_id: run.id,
       generated_from: 'recurring_task_series',
     }));
+
+    const taskId = Number(task.id);
+    const provenance = { recurring_series_id: series.id, schedule_run_id: run.id,
+      scheduled_for: run.scheduled_for, generated_from: 'recurring_task_series' };
+    expect(await getTaskById(db, taskId)).toMatchObject(provenance);
+    expect(await listTasks(db, { project_id: 612 })).toEqual(expect.arrayContaining([expect.objectContaining(provenance)]));
+    expect(await listTasks(db, { project_id: 612, limit: 10 })).toMatchObject({ tasks: [expect.objectContaining(provenance)] });
+    expect(await searchTasks(db, { q: 'Weekly', project_id: 612 })).toEqual([expect.objectContaining(provenance)]);
+    expect(await searchProjectTasks(db, { tenant_id: 1, project_id: 612 })).toMatchObject({ tasks: [expect.objectContaining(provenance)] });
+    for (const mode of ['summary', 'full'] as const) {
+      expect(await buildTaskContext(taskId, mode)).toMatchObject({ task: provenance });
+    }
+    const dispatchProvenance = await loadTaskRecurrenceMetadata(db, taskId);
+    expect(dispatchProvenance).toEqual(provenance);
+    const bundle = buildDispatchContextBundle({ task: {
+      id: taskId, title: String(task.title), description: '', priority: 'high', status: 'in_progress', ...dispatchProvenance,
+    } });
+    expect(bundle.segments.find(segment => segment.kind === 'task')?.source.detail).toMatchObject(provenance);
+    expect(bundle.promptText).toContain(JSON.stringify(dispatchProvenance));
+
+    await db.run(`UPDATE tasks SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, taskId);
+    expect(await listRecentlyCompletedTasks(db, 24, 612, 1)).toMatchObject({ tasks: [expect.objectContaining(provenance)] });
+  });
+
+  it('returns explicit null provenance for ordinary tasks on compact and full reads', async () => {
+    const db = getDb();
+    await seedProjectSprint();
+    const task = await createTaskRecord(db, {
+      title: 'Ordinary maintenance', project_id: 612, sprint_id: 6121, task_type: 'backend',
+    }, 'test');
+    const empty = { recurring_series_id: null, scheduled_for: null, schedule_run_id: null, generated_from: null };
+    expect(await getTaskById(db, Number(task.id))).toMatchObject(empty);
+    expect(await searchTasks(db, { q: 'Ordinary', project_id: 612 })).toEqual([expect.objectContaining(empty)]);
+    expect(await searchProjectTasks(db, { tenant_id: 1, project_id: 612 })).toMatchObject({ tasks: [expect.objectContaining(empty)] });
+    expect(await buildTaskContext(Number(task.id))).toMatchObject({ task: empty });
+    expect(await loadTaskRecurrenceMetadata(db, Number(task.id))).toEqual(empty);
   });
 
   it('prevents duplicate occurrences for the same series and scheduled time', async () => {

@@ -1,4 +1,5 @@
 import { getDb } from '../db/client';
+import { loadTaskRecurrenceMetadata } from '../domains/tasks/recurrence';
 import {
   runDispatcher, type DispatchResult,
   buildDispatchContextBundle, loadDispatchScopeContext,
@@ -482,6 +483,7 @@ export async function reconcileReviewQaRouting(
         project: scope.project,
         job: { agentId: agent.id, title: agentLabel, instructions: jobInstructions },
         task: {
+          ...await loadTaskRecurrenceMetadata(db, task.id),
           id: task.id,
           title: task.title,
           description: task.description ?? '',

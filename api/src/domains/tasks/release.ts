@@ -7,7 +7,7 @@ import {
   type GateRequirement,
 } from '../../lib/evidenceValidation';
 import { loadSprintTaskTransitionRequirements } from '../routing/policy/statuses';
-import type { McpApiIdentity } from '../../lib/mcpApiAuth';
+import type { McpApiIdentity, ProjectTaskLifecycleAuthorization } from '../../lib/mcpApiAuth';
 import { extractTaskOutcomeEvidence, outcomePayload, OUTCOME_PAYLOAD_METADATA_KEYS } from './outcomeEvidence';
 import { getCanonicalTaskRecord } from './evidence';
 import { getTaskInstanceAuthorityFailure } from './authority';
@@ -151,12 +151,107 @@ async function resolveMcpActiveOutcomeInstance(
   return row.active_instance_id;
 }
 
+interface PostTaskOutcomeOptions {
+  mcpIdentity?: McpApiIdentity | null;
+  projectLifecycle?: ProjectTaskLifecycleAuthorization;
+}
+
+async function resolveProjectOutcomeInstance(db: Db, taskId: number, options: PostTaskOutcomeOptions): Promise<number | null> {
+  const identity = options.mcpIdentity;
+  const grant = options.projectLifecycle;
+  if (!identity || grant?.capability !== 'tasks.write_project_lifecycle') {
+    throw errorWithBody(403, { error: 'Project lifecycle authorization is required' });
+  }
+  const task = await db.get(`
+    SELECT t.active_instance_id, ji.id AS instance_id, ji.task_id AS instance_task_id, ji.tenant_id AS instance_tenant_id
+    FROM tasks t
+    JOIN agents a ON a.id = ? AND a.tenant_id = t.tenant_id AND a.project_id = t.project_id
+    LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
+    WHERE t.id = ? AND t.tenant_id = ? AND t.project_id = ?
+  `, identity.agentId, taskId, identity.tenantId, grant.projectId) as {
+    active_instance_id: number | null; instance_id: number | null;
+    instance_task_id: number | null; instance_tenant_id: number | null;
+  } | undefined;
+  if (!task) throw errorWithBody(403, { error: 'Task is outside the assigned project', code: 'mcp_scope_denied' });
+  if (task.active_instance_id != null && (task.instance_id == null || task.instance_task_id !== taskId || task.instance_tenant_id !== identity.tenantId)) {
+    throw errorWithBody(409, { error: 'Task active instance is missing or not linked to this task and tenant', reason: 'active_instance_not_authoritative' });
+  }
+  return task.active_instance_id;
+}
+
+async function auditProjectOutcome(
+  db: Db, taskId: number, body: Record<string, unknown>, options: PostTaskOutcomeOptions,
+  result: Record<string, unknown>,
+): Promise<void> {
+  if (!options.projectLifecycle || !options.mcpIdentity) return;
+  const identity = options.mcpIdentity;
+  const detail = JSON.stringify({
+    actor: identity.auditActor,
+    agent_id: identity.agentId,
+    key_id: identity.keyId,
+    capability: options.projectLifecycle.capability,
+    project_id: options.projectLifecycle.projectId,
+    outcome: body.outcome,
+    summary: body.summary,
+    ...result,
+  });
+  // Refusals are audited after rollback, so scope may have changed since the
+  // initial authorization. Bind the history insert to the current task scope.
+  const written = await db.run(`
+    INSERT INTO task_history (tenant_id, task_id, changed_by, field, old_value, new_value)
+    SELECT t.tenant_id, t.id, ?, 'project_lifecycle_outcome', NULL, ?
+    FROM tasks t
+    JOIN agents a ON a.id = ? AND a.tenant_id = t.tenant_id AND a.project_id = t.project_id
+    WHERE t.id = ? AND t.tenant_id = ? AND t.project_id = ?
+  `, identity.auditActor, detail, identity.agentId, taskId, identity.tenantId, options.projectLifecycle.projectId);
+  if (written.changes !== 1 && result.result === 'applied') {
+    throw errorWithBody(403, { error: 'Task is outside the assigned project', code: 'mcp_scope_denied' });
+  }
+}
+
 export async function postTaskOutcome(
+  db: Db, taskId: number, body: Record<string, unknown>, changedBy: string,
+  options: PostTaskOutcomeOptions = {},
+) {
+  if (options.mcpIdentity) changedBy = options.mcpIdentity.auditActor;
+  if (options.projectLifecycle) {
+    await resolveProjectOutcomeInstance(db, taskId, options);
+    const summary = typeof body.summary === 'string' ? body.summary.trim() : '';
+    if (!summary) throw errorWithBody(400, {
+      error: 'Project-wide outcomes require a nonblank summary explaining the reason for the intervention',
+      code: 'project_outcome_summary_required',
+    });
+    body = { ...body, summary };
+  }
+  const dryRun = body.dry_run === true || body.dry_run === 'true';
+  let result: Awaited<ReturnType<typeof applyPostedTaskOutcome>>;
+  try {
+    result = await applyPostedTaskOutcome(db, taskId, body, changedBy, options);
+    if (!dryRun && !result.applied) {
+      await auditProjectOutcome(db, taskId, body, options, { result: 'ignored', reason: result.reason });
+    }
+  } catch (error) {
+    if (!dryRun) {
+      await auditProjectOutcome(db, taskId, body, options, {
+        result: 'refused', reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+    throw error;
+  }
+  if (dryRun) return result;
+  // Response enrichment happens after the committed outcome. A read failure here
+  // must not mislabel a successful intervention as refused in the audit trail.
+  const task = await requireTask(taskId, db);
+  maybeTriggerDispatch(task.project_id as number | null | undefined);
+  return { ...result, task: await enrichTask(task) };
+}
+
+async function applyPostedTaskOutcome(
   db: Db,
   taskId: number,
   body: Record<string, unknown>,
   changedBy: string,
-  options: { mcpIdentity?: McpApiIdentity | null } = {},
+  options: PostTaskOutcomeOptions,
 ) {
   const unsupportedTopLevelEvidenceFields = topLevelLifecycleEvidenceFields(body);
   if (unsupportedTopLevelEvidenceFields.length > 0) {
@@ -209,7 +304,9 @@ export async function postTaskOutcome(
     status: existing.status,
   }, transitionRequirements);
 
-  const authoritativeInstanceId = options.mcpIdentity
+  const authoritativeInstanceId = options.projectLifecycle
+    ? await resolveProjectOutcomeInstance(db, taskId, options)
+    : options.mcpIdentity
     ? await resolveMcpActiveOutcomeInstance(db, taskId, options.mcpIdentity)
     : normalizeOptionalInstanceId(normalizedBody.instance_id ?? normalizedBody.instanceId);
   if (!options.mcpIdentity && authoritativeInstanceId != null) {
@@ -280,7 +377,9 @@ export async function postTaskOutcome(
       FROM tasks WHERE id = ? FOR UPDATE`, taskId) as typeof existing | undefined;
     if (!current) throw errorWithBody(404, { error: 'Task not found' });
     if (options.mcpIdentity) {
-      const currentInstance = await resolveMcpActiveOutcomeInstance(tx, taskId, options.mcpIdentity);
+      const currentInstance = options.projectLifecycle
+        ? await resolveProjectOutcomeInstance(tx, taskId, options)
+        : await resolveMcpActiveOutcomeInstance(tx, taskId, options.mcpIdentity);
       if (currentInstance !== authoritativeInstanceId) {
         throw errorWithBody(409, { error: 'Task active instance changed before outcome write', reason: 'active_instance_changed' });
       }
@@ -399,6 +498,10 @@ export async function postTaskOutcome(
       });
       // Ignored/stale outcomes must not leave new evidence on the task either.
       if (!applied.applied) throw new RollbackOnly(applied);
+      await auditProjectOutcome(tx, taskId, body, options, {
+        result: 'applied', prior_status: applied.priorStatus, next_status: applied.nextStatus,
+        instance_id: authoritativeInstanceId,
+      });
       return applied;
     });
   } catch (error) {
@@ -418,8 +521,6 @@ export async function postTaskOutcome(
     }
   }
 
-  const task = await requireTask(taskId, db);
-  maybeTriggerDispatch(task.project_id as number | null | undefined);
   return {
     ok: true,
     applied: result.applied,
@@ -432,7 +533,6 @@ export async function postTaskOutcome(
     evidence_written: hasInline && result.applied,
     auto_recovered: result.autoRecovered ?? false,
     recovery_description: result.recoveryDescription ?? null,
-    task: await enrichTask(task),
   };
 }
 

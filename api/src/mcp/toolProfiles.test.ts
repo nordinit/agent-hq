@@ -92,6 +92,16 @@ describe('MCP tool profiles', () => {
     expect(() => resolveMcpToolProfile('phone')).toThrow(/Unknown Agent HQ MCP tool profile/);
   });
 
+  it('exposes supervisory outcomes and relationship deletion without generic status moves or run callbacks', () => {
+    const mobile = resolveMcpToolProfile('mobile');
+    expect(mobile.capabilities).toContain('tasks.write_project_lifecycle');
+    expect(mobile.capabilities).not.toContain('tasks.write_active_lifecycle');
+    expect(mobile.toolNames).toContain('agent_hq_post_task_outcome');
+    expect(mobile.toolNames).toContain('agent_hq_delete_task_relationship');
+    expect(mobile.toolNames).not.toContain('agent_hq_move_task');
+    expect(mobile.toolNames).not.toContain('agent_hq_start_task_run');
+  });
+
   it('selects only the profile names out of a tool name list', () => {
     const mobile = resolveMcpToolProfile('mobile');
     expect(selectProfileToolNames(mobile, ['agent_hq_list_tasks', 'agent_hq_provision_full_agent']))

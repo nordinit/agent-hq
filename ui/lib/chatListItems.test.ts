@@ -6,10 +6,8 @@ function session(overrides: Partial<ChatListSession> & Pick<ChatListSession, 'ag
   return {
     instance_id: null,
     session_key: `session-${overrides.agent_id}-${overrides.last_activity}`,
-    agent_id: overrides.agent_id,
     agent_name: `Agent ${overrides.agent_id}`,
     project_id: null,
-    last_activity: overrides.last_activity,
     last_message: null,
     message_count: 1,
     ...overrides,

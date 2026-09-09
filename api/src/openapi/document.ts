@@ -2275,6 +2275,10 @@ export const openApiDocument: OpenApiDocument = {
           assigned_agent_name: { type: 'string', nullable: true },
           active_agent_name: { type: 'string', nullable: true },
           active_instance_id: { type: 'integer', nullable: true },
+          recurring_series_id: { type: 'integer', nullable: true, readOnly: true, description: 'Recurring series that generated this occurrence.' },
+          scheduled_for: { type: 'string', nullable: true, readOnly: true, description: 'Scheduled occurrence timestamp.' },
+          schedule_run_id: { type: 'integer', nullable: true, readOnly: true, description: 'Recurring scheduler run that generated this task.' },
+          generated_from: { type: 'string', nullable: true, readOnly: true, description: 'Generation source, such as recurring_task_series.' },
           story_points: { type: 'integer', nullable: true },
           custom_fields: {
             type: 'object',
@@ -2417,11 +2421,11 @@ export const openApiDocument: OpenApiDocument = {
       TaskOutcomeRequest: {
         type: 'object',
         required: ['outcome'],
-        description: 'Apply a workflow outcome. Workflow-defined evidence and custom task fields must be sent in payload; top-level lifecycle evidence fields are rejected on this unversioned outcome route. Use the typed lifecycle evidence endpoints for first-class evidence writes.',
+        description: 'Apply a configured workflow outcome. Scoped MCP keys require active-run ownership or tasks.write_project_lifecycle within their assigned project. Project-wide outcomes require a nonblank summary/reason and audit the authenticated actor and capability. Evidence gates always apply. Workflow evidence and custom task fields must be sent in payload; top-level evidence fields are rejected.',
         properties: {
           outcome: { type: 'string' },
           changed_by: { type: 'string' },
-          summary: { type: 'string' },
+          summary: { type: 'string', description: 'Required and nonblank for project-wide supervisory outcomes.' },
           dry_run: { type: 'boolean' },
           instance_id: { type: 'integer' },
           failure_detail: { type: 'string' },

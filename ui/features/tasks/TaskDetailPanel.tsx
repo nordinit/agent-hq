@@ -219,11 +219,12 @@ function RelatedTasksSection({
     }
   };
 
-  const handleRemove = async (relationshipId: number) => {
+  const handleRemove = async (relationship: TaskRelationship) => {
+    const relationshipId = relationship.id;
     setRemovingId(relationshipId);
     setActionError(null);
     try {
-      await api.deleteTaskRelationship(task.id, relationshipId);
+      await api.deleteTaskRelationship(relationship.source_task_id, relationshipId);
       setRelationships(prev => prev.filter(item => item.id !== relationshipId));
       const refreshedTask = await api.getTask(task.id);
       onTaskUpdate(refreshedTask);
@@ -385,7 +386,7 @@ function RelatedTasksSection({
                         </div>
                         <button
                           type="button"
-                          onClick={(event) => { event.stopPropagation(); void handleRemove(relationship.id); }}
+                          onClick={(event) => { event.stopPropagation(); void handleRemove(relationship); }}
                           disabled={removingId === relationship.id}
                           className="text-xs text-slate-500 hover:text-red-300 transition-colors disabled:opacity-50 shrink-0"
                           title="Remove relationship"

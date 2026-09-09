@@ -155,6 +155,10 @@ describe('task relationships API', () => {
         type: expect.objectContaining({ label: 'Causes' }),
       }));
 
+      const wrongSource = await fetch(`${baseUrl}/api/v1/tasks/${fixture.otherTaskId}/relationships/${created.id}`, { method: 'DELETE' });
+      expect(wrongSource.status).toBe(404);
+      expect(await getDb().get(`SELECT id FROM task_relationships WHERE id = ?`, created.id)).toEqual({ id: created.id });
+
       const dependency = await getDb().get(
         `SELECT blocker_id, blocked_id FROM task_dependencies WHERE blocker_id = ? AND blocked_id = ?`,
         sourceTaskId, targetTaskId,

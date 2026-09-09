@@ -502,8 +502,8 @@ router.delete('/:id/relationships/:relationshipId', async (req: Request, res: Re
       FROM task_relationships tr
       JOIN tasks source ON source.id = tr.source_task_id
       JOIN tasks target ON target.id = tr.target_task_id
-      WHERE tr.id = ? AND source.tenant_id = ? AND target.tenant_id = ?
-    `, req.params.relationshipId, tenantId, tenantId);
+      WHERE tr.id = ? AND tr.source_task_id = ? AND source.tenant_id = ? AND target.tenant_id = ?
+    `, req.params.relationshipId, req.params.id, tenantId, tenantId);
     if (!relationship) return res.status(404).json({ error: 'Relationship not found' });
     res.json(await deleteTaskRelationship(db, Number(req.params.relationshipId)));
   } catch (err) {
@@ -700,6 +700,7 @@ router.post('/:id/outcome', async (req: Request, res: Response) => {
     const changedBy = resolveRequestActor(req, (req.body?.changed_by as string | undefined) ?? 'system').changedBy;
     res.json(await postTaskOutcome(db, id, (req.body ?? {}) as Record<string, unknown>, changedBy, {
       mcpIdentity: getMcpIdentityFromRequest(req),
+      projectLifecycle: req.projectTaskLifecycle,
     }));
   } catch (err) {
     if (sendWorkflowAllowedValuesError(res, err)) return;

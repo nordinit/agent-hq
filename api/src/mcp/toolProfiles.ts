@@ -36,8 +36,8 @@ export interface McpToolProfile {
  * lifecycle, route tasks, manage the project's agents, run the recurring series that drive
  * scheduled automation. Deliberately excluded — the remaining configuration surfaces (skills,
  * workflow definitions, teams, tools, MCP servers), agent provisioning and MCP capability
- * policies, file upload/download, and the dispatch-scoped lifecycle writes (evidence, outcomes,
- * run check-ins) that only mean something for an agent that owns a dispatched run.
+ * policies, file upload/download, and dispatched-run callbacks. Task evidence and configured
+ * outcomes use the separate project lifecycle capability for supervisory interventions.
  *
  * Workflow lifecycle and task routing are in while workflow *definitions* stay out, and the line
  * between them is the point: pausing a cycle or changing who picks up a task is an operator
@@ -67,9 +67,14 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
   // Task writes
   'agent_hq_create_task',
   'agent_hq_update_task',
-  'agent_hq_move_task',
+  'agent_hq_post_task_outcome',
+  'agent_hq_record_review_evidence',
+  'agent_hq_record_qa_evidence',
+  'agent_hq_record_deploy_evidence',
+  'agent_hq_record_live_verification',
   'agent_hq_add_task_note',
   'agent_hq_create_task_relationship',
+  'agent_hq_delete_task_relationship',
 
   // Workflow lifecycle. The board's own pause/resume/complete controls, which is a different
   // thing from the workflow *configuration* excluded below: this moves a cycle the operator
@@ -131,8 +136,8 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
  * it is not running — all of which resolve through the assigned project rather than a dispatched
  * task. The three routing grants do the same for assignment rules, transitions and gates. The
  * rest are existing project-scoped grants. Notably absent: every admin key, both cross-tenant
- * grants, and `tasks.write_active_lifecycle` — a connector should not be able to report evidence
- * or an outcome for a run it is not executing.
+ * grants, and `tasks.write_active_lifecycle`. Project outcomes use an explicit supervisory grant
+ * with a required reason; a connector still cannot send callbacks for another agent's run.
  *
  * `workflow.analyze_routing_graph` and `workflow.edit_routing_config` are here for the graph and
  * for POST /routing/preview, the dry run that reports what a routing edit would touch before it
@@ -157,6 +162,7 @@ const MOBILE_PROFILE_CAPABILITIES: readonly string[] = [
   'tasks.read_project_context',
   'tasks.manage_project_tasks',
   'tasks.write_project_notes',
+  'tasks.write_project_lifecycle',
   'tasks.search_project_tasks',
   'recurring_task_series.read_project_scope',
   'recurring_task_series.manage_project_scope',

@@ -39,10 +39,17 @@ export interface McpApiIdentity {
   authorityActor: string;
 }
 
+/** Set only by scope authorization, never read from caller-supplied JSON. */
+export interface ProjectTaskLifecycleAuthorization {
+  capability: 'tasks.write_project_lifecycle';
+  projectId: number;
+}
+
 declare global {
   namespace Express {
     interface Request {
       mcpIdentity?: McpApiIdentity;
+      projectTaskLifecycle?: ProjectTaskLifecycleAuthorization;
     }
   }
 }
@@ -229,6 +236,21 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
+    key: 'tasks.write_project_lifecycle',
+    group: 'Task lifecycle',
+    label: 'Write project task lifecycle',
+    description: 'Allows notes, evidence, and configured outcomes on any task in the MCP agent\'s assigned project and tenant, without owning its active run. Project-wide outcomes require a nonblank summary/reason and record the authenticated actor and capability in task history. Workflow transitions and evidence gates still apply. Does not grant generic status edits, admin overrides, or callbacks for another agent\'s run.',
+    endpoints: [
+      'POST /api/v1/tasks/:id/notes',
+      'PUT /api/v1/tasks/:id/review-evidence',
+      'PUT /api/v1/tasks/:id/qa-evidence',
+      'PUT /api/v1/tasks/:id/deploy-evidence',
+      'PUT /api/v1/tasks/:id/live-verification',
+      'POST /api/v1/tasks/:id/outcome',
+    ],
+    defaultEnabled: { scoped_runtime: false, trusted_admin: true },
+  },
+  {
     key: 'tasks.create',
     group: 'Task lifecycle',
     label: 'Create Tasks',
@@ -263,7 +285,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'tasks.write_project_notes',
     group: 'Task lifecycle',
     label: 'Write notes on project tasks',
-    description: 'Allows adding notes to any task in the MCP agent\'s assigned project, without owning a dispatched run on it. Notes only: evidence, outcomes, and run check-ins remain scoped to the agent\'s active dispatched task under tasks.write_active_lifecycle, because those drive workflow transitions. Task CRUD is likewise unaffected — this grants no create, update, delete, or relationship access. Intended for remote/operator clients that comment on work they are not executing.',
+    description: 'Allows adding notes to any task in the MCP agent\'s assigned project, without owning a dispatched run on it. Notes only: project-wide evidence and outcomes require tasks.write_project_lifecycle; run callbacks require tasks.write_active_lifecycle. This grants no task CRUD or relationship access.',
     endpoints: [
       'POST /api/v1/tasks/:id/notes',
     ],
@@ -2470,12 +2492,11 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       && taskRelationshipMutationMatch != null
       && ((method === 'POST' && taskRelationshipMutationMatch[2] == null) || (method === 'DELETE' && taskRelationshipMutationMatch[2] != null));
     const projectCrudAllowed = suffix === '' && (method === 'PUT' || method === 'DELETE');
-    // Notes are part of the lifecycle reporting stream, so they stay out of task CRUD: managing a
-    // project's tasks deliberately does not imply writing into that stream. tasks.write_project_notes
-    // is the separate, explicit grant for a client that files notes across the project without
-    // owning a dispatched run — and it stops at notes. Evidence and outcomes fall through to the
-    // dispatch-scoped path below, because those drive workflow transitions and belong to the agent
-    // executing the run.
+    // Prefer the narrower active-run grant when it applies. Supervisory writes use a
+    // separate project grant; CRUD and note-only permissions never imply this authority.
+    const projectLifecycleWriteAllowed = writeAllowed
+      && permissionState.enabledCapabilities.has('tasks.write_project_lifecycle')
+      && !(scopedTaskIds.has(taskId) && permissionState.enabledCapabilities.has('tasks.write_active_lifecycle'));
     const projectNoteWriteAllowed = permissionState.enabledCapabilities.has('tasks.write_project_notes')
       && suffix === 'notes'
       && method === 'POST';
@@ -2504,6 +2525,8 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
         ? 'tasks.manage_project_tasks'
       : projectNoteWriteAllowed
         ? 'tasks.write_project_notes'
+      : projectLifecycleWriteAllowed
+        ? 'tasks.write_project_lifecycle'
       : writeAllowed
         ? 'tasks.write_active_lifecycle'
         : null;
@@ -2520,10 +2543,10 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       return;
     }
 
-    if ((readAllowed && (hasProjectTaskRead || hasProjectTaskCrud)) || projectCrudAllowed || relationshipCrudAllowed || projectNoteWriteAllowed) {
+    if ((readAllowed && (hasProjectTaskRead || hasProjectTaskCrud)) || projectCrudAllowed || relationshipCrudAllowed || projectNoteWriteAllowed || projectLifecycleWriteAllowed) {
       if (canonicalAgentProjectId == null) {
         return deny({
-          reason: `${identity.agentSlug} does not have an assigned project for project task ${projectCrudAllowed || relationshipCrudAllowed || projectNoteWriteAllowed ? 'CRUD' : 'context reads'}.`,
+          reason: `${identity.agentSlug} does not have an assigned project for project task access.`,
           requiredCapability,
           taskId,
         });
@@ -2535,7 +2558,14 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
           taskId,
         });
       }
-      if (method === 'PUT') {
+      if (projectCrudAllowed && method === 'PUT') {
+        if (Object.prototype.hasOwnProperty.call(requestBodyRecord(req.body), 'status')) {
+          return deny({
+            reason: 'Project task CRUD cannot edit status. Post a configured outcome through the task lifecycle endpoint.',
+            requiredCapability,
+            taskId,
+          });
+        }
         const scope = await validateProjectTaskCrudRequestScope(db, identity, requestBodyRecord(req.body), canonicalAgentProjectId);
         if (!scope.ok) {
           return deny({
@@ -2564,6 +2594,9 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
             taskId,
           });
         }
+      }
+      if (requiredCapability === 'tasks.write_project_lifecycle') {
+        req.projectTaskLifecycle = { capability: requiredCapability, projectId: canonicalAgentProjectId };
       }
       return next();
     }

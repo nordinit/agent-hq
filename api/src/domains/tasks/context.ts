@@ -1,4 +1,5 @@
 import { getDb } from '../../db/client';
+import { taskRecurrenceMetadata } from './recurrence';
 import { evaluateTaskIntegrity } from '../../lib/taskRelease';
 import { getCanonicalTaskRecord, stripTaskLifecycleEvidenceFields } from './evidence';
 import { tableExists as sharedTableExists } from "../../db/introspection";
@@ -93,6 +94,7 @@ const LIFECYCLE_FIELDS = new Set([
   'runtime_lifecycle_handoff',
   'lifecycle_outcome',
   'lifecycle_outcome_posted_at',
+  'project_lifecycle_outcome',
 ]);
 const OWNERSHIP_FIELDS = new Set(['agent_id']);
 const PLACEMENT_FIELDS = new Set(['project_id', 'sprint_id']);
@@ -290,6 +292,7 @@ async function loadTask(taskId: number): Promise<RecordLike | null> {
 
   return {
     ...publicTask,
+    ...taskRecurrenceMetadata(task),
     ...await evaluateTaskIntegrity(canonicalTask as { status?: string | null; task_type?: string | null }, db),
     custom_fields: customFields,
     changed_files: parseChangedFiles(task.changed_files_json),
