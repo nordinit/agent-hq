@@ -1,4 +1,6 @@
 'use client';
+import { EnvironmentSetupFields } from '@/components/EnvironmentSetupFields';
+import type { EnvironmentSetup } from '@/lib/api';
 import { formatDateTime, formatDate, formatTime, timeAgo } from '@/lib/date';
 
 import { useEffect, useState, useCallback } from 'react';
@@ -257,6 +259,7 @@ function EditForm({ sprint, onSave, onCancel }: {
     repo_path: sprint.repo_path ?? '',
     repo_url: sprint.repo_url ?? '',
   });
+  const [environmentSetup, setEnvironmentSetup] = useState<EnvironmentSetup>(sprint.environment_setup ?? { mode: 'off' });
   const [saving, setSaving] = useState(false);
   const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
 
@@ -276,6 +279,7 @@ function EditForm({ sprint, onSave, onCancel }: {
     setSaving(true);
     try {
       await onSave({
+        environment_setup: environmentSetup,
         name: form.name,
         goal: form.goal,
         sprint_type: form.sprint_type,
@@ -341,6 +345,7 @@ function EditForm({ sprint, onSave, onCancel }: {
               value={form.repo_url} onChange={e => set('repo_url', e.target.value)} placeholder="git@github.com:owner/repo.git" />
           </div>
         )}
+        <EnvironmentSetupFields value={environmentSetup} onChange={setEnvironmentSetup} />
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs text-slate-400 block mb-1">Status</label>

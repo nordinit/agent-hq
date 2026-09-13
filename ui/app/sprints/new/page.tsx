@@ -1,5 +1,7 @@
 'use client';
 
+import { EnvironmentSetupFields } from '@/components/EnvironmentSetupFields';
+import type { EnvironmentSetup } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { api, Project, Sprint, SprintType } from '@/lib/api';
 import { formatWorkflowTerminology } from '@/lib/sprintLabel';
@@ -45,6 +47,7 @@ export default function NewSprintPage() {
   const [sprintTypes, setSprintTypes] = useState<SprintType[]>([]);
   const [existingSprints, setExistingSprints] = useState<Sprint[]>([]);
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [environmentSetup, setEnvironmentSetup] = useState<EnvironmentSetup>({ mode: 'off' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,6 +79,10 @@ export default function NewSprintPage() {
     setForm((current) => ({ ...current, source_sprint_id: '' }));
   }, [form.source_sprint_id, selectedSourceSprint]);
 
+  useEffect(() => {
+    if (selectedSourceSprint) setEnvironmentSetup(selectedSourceSprint.environment_setup ?? { mode: 'off' });
+  }, [selectedSourceSprint]);
+
   const handleCreate = async () => {
     if (!form.project_id) { setError('Select a project'); return; }
     if (!form.name.trim()) { setError('Name is required'); return; }
@@ -84,6 +91,7 @@ export default function NewSprintPage() {
     try {
       const created = await api.createSprint({
         project_id: Number(form.project_id),
+        environment_setup: environmentSetup,
         name: form.name.trim(),
         goal: form.goal.trim(),
         sprint_type: effectiveSprintType,
@@ -207,6 +215,7 @@ export default function NewSprintPage() {
             </p>
           </div>
 
+          <EnvironmentSetupFields value={environmentSetup} onChange={setEnvironmentSetup} />
           <div>
             <label className="text-xs font-medium text-slate-400 uppercase tracking-wide block mb-1.5">Repository Access Mode</label>
             <div className="relative">

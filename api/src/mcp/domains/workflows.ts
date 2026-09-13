@@ -1,3 +1,4 @@
+import { environmentSetupSchema } from '../../lib/environmentSetup';
 import { z } from 'zod';
 import { McpDomainContext } from '../registrar';
 
@@ -75,6 +76,7 @@ export function registerWorkflowsTools(ctx: McpDomainContext) {
       repo_access_mode: z.enum(['worktree', 'clone']).nullable().optional().describe('Workflow repository access mode'),
       repo_path: z.string().nullable().optional().describe('Workflow-owned local repo path for worktree mode'),
       repo_url: z.string().nullable().optional().describe('Workflow-owned git URL for clone mode'),
+      environment_setup: environmentSetupSchema.optional().describe('Explicit setup policy, independent of repository access; defaults to off'),
     },
     ({ workflow_id, workflow_type, ...patch }) => wrap(() => api.updateSprint(workflow_id, { ...patch, sprint_type: workflow_type ?? patch.sprint_type }))(),
     { domain: 'workflows', rest_paths: ['/api/v1/workflows/:id', '/api/v1/sprints/:id'] },
@@ -107,9 +109,10 @@ export function registerWorkflowsTools(ctx: McpDomainContext) {
       repo_access_mode: z.enum(['worktree', 'clone']).nullable().optional().describe('Workflow repository access mode'),
       repo_path: z.string().nullable().optional().describe('Workflow-owned local repo path for worktree mode'),
       repo_url: z.string().nullable().optional().describe('Workflow-owned git URL for clone mode'),
+      environment_setup: environmentSetupSchema.optional().describe('Explicit setup policy, independent of repository access; defaults to off'),
       dry_run: z.boolean().optional().describe('Return a mutation preview without writing data'),
     },
-    ({ project_id, name, goal, workflow_type, sprint_type, source_workflow_id, source_sprint_id, status, length_kind, length_value, started_at, repo_access_mode, repo_path, repo_url, dry_run }) =>
+    ({ project_id, name, goal, workflow_type, sprint_type, source_workflow_id, source_sprint_id, status, length_kind, length_value, started_at, repo_access_mode, repo_path, repo_url, environment_setup, dry_run }) =>
       wrap(() => api.createSprint({
         project_id,
         name,
@@ -123,6 +126,7 @@ export function registerWorkflowsTools(ctx: McpDomainContext) {
         repo_access_mode,
         repo_path,
         repo_url,
+        environment_setup,
         dry_run,
       }))(),
     { domain: 'workflows', rest_paths: ['/api/v1/workflows', '/api/v1/sprints'] },

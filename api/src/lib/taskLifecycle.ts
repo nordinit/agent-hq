@@ -1,5 +1,9 @@
+import { listConfiguredTerminalStatuses } from '../domains/tasks/terminality';
+import { acquireWorkspaceLease } from '../services/workspaceLease';
+import { prepareWorkspaceCleanup } from '../services/workspaceSafety';
 import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
+import path from 'path';
 import { OPENCLAW_BIN, OPENCLAW_CONFIG_PATH, OPENCLAW_PATH } from '../config';
 import { buildGatewayRunSessionKey } from './sessionKeys';
 import { removeTaskWorktree } from '../services/worktreeManager';
@@ -369,7 +373,16 @@ function resolveCleanupRepoContext(row: {
   };
 }
 
-export async function cleanupDoneTaskWorktrees(db: Db, taskId: number): Promise<number> {
+export async function taskHasConfiguredTerminalStatus(db: Db, taskId: number): Promise<boolean> {
+  const hasSprint = await sharedColumnExists(db, 'tasks', 'sprint_id');
+  const hasTenant = await sharedColumnExists(db, 'tasks', 'tenant_id');
+  const task = await db.get(`SELECT status, ${hasSprint ? 'sprint_id' : 'NULL AS sprint_id'}, ${hasTenant ? 'tenant_id' : 'NULL AS tenant_id'} FROM tasks WHERE id = ?`, taskId) as { status: string; sprint_id: number | null; tenant_id: number | null } | undefined;
+  if (!task) return false;
+  return (await listConfiguredTerminalStatuses(db, { sprintId: task.sprint_id, tenantId: task.tenant_id })).includes(task.status);
+}
+
+export async function cleanupTerminalTaskWorkspaces(db: Db, taskId: number): Promise<number> {
+  if (!await taskHasConfiguredTerminalStatus(db, taskId)) return 0;
   const hasPayloadSent = await sharedColumnExists(db, 'job_instances', 'payload_sent');
   const hasRepoAccessMode = await sharedColumnExists(db, 'agents', 'repo_access_mode');
   const rows = await db.all(`
@@ -391,7 +404,18 @@ export async function cleanupDoneTaskWorktrees(db: Db, taskId: number): Promise<
 
   let removed = 0;
   for (const row of rows) {
+    if (!path.isAbsolute(row.worktree_path) || !/^(?:task-|agent-hq-task-)\d+$/.test(path.basename(row.worktree_path))) continue;
+    let release: (() => void) | null = null;
     try {
+      release = acquireWorkspaceLease(row.worktree_path);
+      if (!release) continue;
+      const live = await db.get(`SELECT id FROM job_instances WHERE status IN ('queued', 'dispatched', 'running') AND (task_id = ? OR worktree_path = ?) LIMIT 1`, taskId, row.worktree_path);
+      if (live || !await taskHasConfiguredTerminalStatus(db, taskId)) continue;
+      const safety = prepareWorkspaceCleanup(row.worktree_path);
+      if (!safety.safe) {
+        console.info(`[taskLifecycle] Task #${taskId}: ${safety.reason}`);
+        continue;
+      }
       const repoContext = resolveCleanupRepoContext(row);
       const result = repoContext.repoAccessMode === 'clone'
         ? removeTaskClone({ workspacePath: row.worktree_path })
@@ -401,15 +425,18 @@ export async function cleanupDoneTaskWorktrees(db: Db, taskId: number): Promise<
           });
       if (result.removed) removed++;
       else if (result.error) {
-        console.warn(`[taskLifecycle] Worktree cleanup failed for done task #${taskId} at ${row.worktree_path}: ${result.error}`);
+        console.warn(`[taskLifecycle] Worktree cleanup failed for terminal task #${taskId} at ${row.worktree_path}: ${result.error}`);
       }
     } catch (err) {
-      console.warn(`[taskLifecycle] Worktree cleanup error for done task #${taskId} at ${row.worktree_path}:`, err);
-    }
+      console.warn(`[taskLifecycle] Worktree cleanup error for terminal task #${taskId} at ${row.worktree_path}:`, err);
+    } finally { release?.(); }
   }
 
   return removed;
 }
+
+/** @deprecated Use cleanupTerminalTaskWorkspaces; eligibility is configured terminality. */
+export const cleanupDoneTaskWorktrees = cleanupTerminalTaskWorkspaces;
 
 // ── Async abort for orphaned instances ───────────────────────────────────────
 
@@ -775,8 +802,8 @@ export async function cleanupTaskExecutionLinkageForStatus(
   if (!task) return false;
 
   const effectiveStatus = nextStatus ?? task.status;
-  if (effectiveStatus === 'done') {
-    await cleanupDoneTaskWorktrees(db, taskId);
+  if (effectiveStatus === task.status && await taskHasConfiguredTerminalStatus(db, taskId)) {
+    await cleanupTerminalTaskWorkspaces(db, taskId);
   }
 
   if (!task.active_instance_id) return false;

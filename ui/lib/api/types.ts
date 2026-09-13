@@ -1303,6 +1303,11 @@ export interface WorkflowConfigResponse {
   sprint_types: SprintTypeConfig[];
 }
 
+export type EnvironmentSetup =
+  | { mode: 'off' }
+  | { mode: 'auto'; roots: string[]; timeoutSeconds: number }
+  | { mode: 'custom'; steps: Array<{ command: string[]; cwd: string }>; timeoutSeconds: number };
+
 export interface Sprint {
   id: number;
   project_id: number;
@@ -1315,6 +1320,7 @@ export interface Sprint {
   length_value: string;
   started_at: string | null;
   ended_at: string | null;
+  environment_setup?: EnvironmentSetup;
   repo_path: string | null;
   repo_url: string | null;
   repo_access_mode: 'worktree' | 'clone' | null;
@@ -1338,6 +1344,7 @@ export interface CreateSprintInput {
   length_kind?: Sprint['length_kind'];
   length_value?: string;
   started_at?: string | null;
+  environment_setup?: EnvironmentSetup;
   repo_path?: string | null;
   repo_url?: string | null;
   repo_access_mode?: Sprint['repo_access_mode'];

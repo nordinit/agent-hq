@@ -2131,6 +2131,22 @@ export const openApiDocument: OpenApiDocument = {
         },
         additionalProperties: true,
       },
+      EnvironmentSetup: {
+        oneOf: [
+          { type: 'object', required: ['mode'], additionalProperties: false, properties: { mode: { type: 'string', enum: ['off'] } } },
+          { type: 'object', required: ['mode'], additionalProperties: false, properties: {
+            mode: { type: 'string', enum: ['auto'] }, roots: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'string' }, default: ['.'] },
+            timeoutSeconds: { type: 'integer', minimum: 1, maximum: 3600, default: 600 },
+          } },
+          { type: 'object', required: ['mode', 'steps'], additionalProperties: false, properties: {
+            mode: { type: 'string', enum: ['custom'] }, timeoutSeconds: { type: 'integer', minimum: 1, maximum: 3600, default: 600 },
+            steps: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'object', required: ['command'], additionalProperties: false, properties: {
+              command: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' } }, cwd: { type: 'string', default: '.' },
+            } } },
+          } },
+        ],
+        description: 'Preparation is independent of repository access and defaults to off. Paths must stay inside the repository. Custom commands are executable/argument arrays, not implicit shell strings.',
+      },
       Sprint: {
         type: 'object',
         required: ['id', 'name'],
@@ -2145,6 +2161,7 @@ export const openApiDocument: OpenApiDocument = {
           status: { type: 'string', nullable: true },
           length_kind: { type: 'string', nullable: true },
           length_value: { type: 'integer', nullable: true },
+          environment_setup: ref('EnvironmentSetup'),
           repo_path: { type: 'string', nullable: true, description: 'Workflow-owned local repository path for worktree mode.' },
           repo_url: { type: 'string', nullable: true, description: 'Workflow-owned git URL for clone mode.' },
           repo_access_mode: { type: 'string', enum: ['worktree', 'clone'], nullable: true, description: 'Workflow-owned repository access mode. Dev workflow dispatch requires this workflow-level repo config.' },
@@ -2167,6 +2184,7 @@ export const openApiDocument: OpenApiDocument = {
           status: { type: 'string' },
           length_kind: { type: 'string' },
           length_value: { type: 'integer' },
+          environment_setup: ref('EnvironmentSetup'),
           repo_path: { type: 'string', nullable: true },
           repo_url: { type: 'string', nullable: true },
           repo_access_mode: { type: 'string', enum: ['worktree', 'clone'], nullable: true },
@@ -2182,6 +2200,7 @@ export const openApiDocument: OpenApiDocument = {
           status: { type: 'string' },
           length_kind: { type: 'string' },
           length_value: { type: 'integer' },
+          environment_setup: ref('EnvironmentSetup'),
           repo_path: { type: 'string', nullable: true },
           repo_url: { type: 'string', nullable: true },
           repo_access_mode: { type: 'string', enum: ['worktree', 'clone'], nullable: true },

@@ -1,8 +1,9 @@
+import { acquireWorkspaceLease } from './workspaceLease';
+import { prepareWorkspaceCleanup } from './workspaceSafety';
 import { execFileSync, type ExecFileSyncOptions } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import {
-  prepareRepoWorkspaceDependencies,
   type RepoWorkspaceDependencySetupResult,
 } from './repoWorkspaceDependencies';
 
@@ -129,11 +130,6 @@ export function createTaskWorktree(params: {
           branch,
           created: false,
           reusedExisting: true,
-          dependencySetup: prepareRepoWorkspaceDependencies({
-            mode: 'worktree',
-            workspacePath,
-            sourceRepoPath: repoPath,
-          }),
         };
       } catch {
         console.warn(`[repoWorkspaceManager] Stale path at ${workspacePath}, removing and recreating worktree`);
@@ -175,11 +171,6 @@ export function createTaskWorktree(params: {
       workspacePath,
       branch,
       created: true,
-      dependencySetup: prepareRepoWorkspaceDependencies({
-        mode: 'worktree',
-        workspacePath,
-        sourceRepoPath: repoPath,
-      }),
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -188,34 +179,15 @@ export function createTaskWorktree(params: {
   }
 }
 
-export function removeTaskWorktree(params: {
-  repoPath: string;
-  worktreePath: string;
-}): RepoWorkspaceCleanupResult {
-  const { repoPath, worktreePath } = params;
-
+export function removeTaskWorktree(params: { repoPath: string; worktreePath: string }): RepoWorkspaceCleanupResult {
+  const { worktreePath } = params;
+  if (!fs.existsSync(worktreePath)) return { removed: true, workspacePath: worktreePath, worktreePath };
   try {
-    if (!fs.existsSync(worktreePath)) {
-      return { removed: true, workspacePath: worktreePath, worktreePath };
-    }
-
-    gitExec(['worktree', 'remove', worktreePath, '--force'], repoPath);
-    try {
-      gitExec(['worktree', 'prune'], repoPath);
-    } catch {
-      // non-fatal
-    }
-
+    const commonDir = gitExec(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktreePath).trim();
+    gitExec(['--git-dir', commonDir, 'worktree', 'remove', '--force', worktreePath], path.dirname(worktreePath));
     return { removed: true, workspacePath: worktreePath, worktreePath };
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    try {
-      fs.rmSync(worktreePath, { recursive: true, force: true });
-      gitExec(['worktree', 'prune'], repoPath);
-      return { removed: true, workspacePath: worktreePath, worktreePath };
-    } catch {
-      return { removed: false, workspacePath: worktreePath, worktreePath, error: errorMsg };
-    }
+  } catch (error) {
+    return { removed: false, workspacePath: worktreePath, worktreePath, error: String(error) };
   }
 }
 
@@ -276,10 +248,6 @@ export function ensureTaskClone(params: {
       branch,
       created: !cloneAlreadyExisted,
       reusedExisting: cloneAlreadyExisted,
-      dependencySetup: prepareRepoWorkspaceDependencies({
-        mode: 'clone',
-        workspacePath,
-      }),
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -306,26 +274,8 @@ export interface WorktreePruneResult {
 export interface TaskWorktreeRecord {
   exists: boolean;
   status: string | null;
+  terminal?: boolean;
 }
-
-/**
- * Task statuses whose workspace is safe to reclaim as soon as it goes idle.
- * These are terminal: the task will never resume work in that working copy.
- */
-export const RECLAIMABLE_TASK_STATUSES: ReadonlySet<string> = new Set([
-  'done',
-  'cancelled',
-  'failed',
-]);
-
-/**
- * Backstop for tasks parked in a non-terminal status (blocked, stalled,
- * review, ...). Their workspace is kept while the task might still resume, but
- * a working copy untouched for this long is abandoned in practice. Without the
- * backstop a task that never reaches a terminal status holds its workspace
- * forever, which is how clone-mode workspaces accumulated indefinitely.
- */
-const DEFAULT_STALE_WORKSPACE_DAYS = 14;
 
 /**
  * Reclaim a task workspace using the strategy its access mode requires:
@@ -380,16 +330,14 @@ export async function pruneOrphanedWorktrees(params: {
   const {
     repoPath,
     basePath,
-    mode = 'worktree',
+    mode,
     maxAgeHours = 24,
-    staleWorkspaceDays = DEFAULT_STALE_WORKSPACE_DAYS,
     getTaskRecord,
     hasLiveInstance,
   } = params;
   const pruned: string[] = [];
   const errors: string[] = [];
   const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
-  const staleMs = staleWorkspaceDays * 24 * 60 * 60 * 1000;
 
   if (!fs.existsSync(basePath)) return { pruned, errors };
 
@@ -402,28 +350,31 @@ export async function pruneOrphanedWorktrees(params: {
     try {
       const stat = fs.statSync(fullPath);
       const ageMs = Date.now() - stat.mtimeMs;
-      if (ageMs < maxAgeMs) continue;
+      if (maxAgeMs > 0 && ageMs < maxAgeMs) continue;
 
       const taskId = candidate.kind === 'task' ? candidate.taskId : null;
       if (await hasLiveInstance(fullPath, taskId)) continue;
 
       if (candidate.kind === 'task') {
         const task = await getTaskRecord(candidate.taskId);
-        // Terminal tasks are reclaimed as soon as they go idle. Tasks parked in
-        // a non-terminal status keep their workspace until it has been
-        // untouched past the stale backstop, so work in progress is preserved
-        // without letting a never-completed task pin its workspace forever.
-        if (task.exists && !RECLAIMABLE_TASK_STATUSES.has(task.status ?? '')) {
-          if (ageMs < staleMs) continue;
-          const idleDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
-          console.log(
-            `[repoWorkspaceManager] Reclaiming stale ${mode} workspace ${fullPath} `
-            + `(task #${candidate.taskId} status=${task.status}, idle ${idleDays}d)`,
-          );
-        }
+        if (task.exists && task.terminal !== true) continue;
       }
 
-      const result = removeWorkspaceForMode({ mode, repoPath, workspacePath: fullPath });
+      const release = acquireWorkspaceLease(fullPath);
+      if (!release) continue;
+      let result: RepoWorkspaceCleanupResult;
+      try {
+        // Recheck under the same lease used by dispatch.
+        if (await hasLiveInstance(fullPath, taskId)) continue;
+        if (candidate.kind === 'task') {
+          const task = await getTaskRecord(candidate.taskId);
+          if (task.exists && task.terminal !== true) continue;
+        }
+        const safety = prepareWorkspaceCleanup(fullPath);
+        if (!safety.safe) { errors.push(`${fullPath}: ${safety.reason}`); continue; }
+        const detectedMode = mode ?? (fs.statSync(path.join(fullPath, '.git')).isFile() ? 'worktree' : 'clone');
+        result = removeWorkspaceForMode({ mode: detectedMode, repoPath, workspacePath: fullPath });
+      } finally { release(); }
       if (result.removed) pruned.push(fullPath);
       else if (result.error) errors.push(`${fullPath}: ${result.error}`);
     } catch (err) {

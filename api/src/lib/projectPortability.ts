@@ -1,3 +1,4 @@
+import { normalizeEnvironmentSetup, type EnvironmentSetup } from './environmentSetup';
 import fs from 'fs';
 import path from 'path';
 import { normalizeRepoConfig } from './repoConfig';
@@ -169,6 +170,7 @@ function portableWorkflow(row: Row): ProjectManifest['workflows'][number] {
     status: String(row.status ?? 'planning'),
     length_kind: String(row.length_kind ?? 'time'),
     length_value: String(row.length_value ?? ''),
+    environment_setup: normalizeEnvironmentSetup(row.environment_setup),
     repo_config: {
       mode: (row.repo_access_mode as 'worktree' | 'clone' | null) ?? null,
       path: (row.repo_path as string | null) ?? null,
@@ -237,6 +239,7 @@ export interface ProjectManifest {
     status: string;
     length_kind: string;
     length_value: string;
+    environment_setup?: EnvironmentSetup;
     repo_config?: { mode: 'worktree' | 'clone' | null; path: string | null; url: string | null };
     field_schemas: Array<{ sprint_type_key: string; task_type: string | null; schema: unknown; is_system: boolean }>;
   }>;
@@ -382,6 +385,8 @@ export async function validateProjectManifest(db: Db, input: unknown, options: {
     warnings.push({ code: 'deprecated_project_repo_config', severity: 'warning', section: 'project', message: 'Project-level repository configuration is deprecated and will not be imported. Configure repository access on workflows.' });
   }
   for (const workflow of manifest.workflows ?? []) {
+    try { normalizeEnvironmentSetup(workflow.environment_setup); }
+    catch (error) { warnings.push({ code: 'invalid_environment_setup', severity: 'error', section: 'workflows', ref: workflow.ref, message: String(error) }); }
     if (workflow.repo_config?.mode === 'worktree' && workflow.repo_config.path) {
       warnings.push({
         code: 'local_workflow_repo_path',
@@ -480,6 +485,7 @@ export async function importProjectManifest(
               repo_path: workflowRepoConfig.repo_path,
               repo_url: workflowRepoConfig.repo_url,
               repo_access_mode: workflowRepoConfig.repo_access_mode,
+              environment_setup: JSON.stringify(normalizeEnvironmentSetup(workflow.environment_setup)),
             });
       workflowIdMap[workflow.ref] = workflowId;
       if (await tableExists(db, 'task_field_schemas')) {

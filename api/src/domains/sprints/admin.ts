@@ -1,3 +1,4 @@
+import { normalizeEnvironmentSetup } from '../../lib/environmentSetup';
 import { writeProjectAudit, diffFields } from '../../lib/projectAudit';
 import { insertRuntimeLog } from '../../lib/runtimeTenantScope';
 import { normalizeRepoConfig, validateRepoConfig } from '../../lib/repoConfig';
@@ -17,6 +18,7 @@ interface SprintCloneSource {
   project_id: number;
   name: string;
   sprint_type: string;
+  environment_setup?: unknown;
 }
 
 type CreateSprintInput = Partial<SprintRecord> & {
@@ -37,6 +39,7 @@ const ALLOWED_UPDATE_FIELDS = new Set([
   'repo_access_mode',
   'repo_path',
   'repo_url',
+  'environment_setup',
   // Audit-only: recorded as the reason for the change, never written to a sprints column.
   // Lets an MCP client say why it paused or resumed a workflow without a second call.
   'note',
@@ -175,7 +178,7 @@ async function getSprintCloneSourceOrThrow(
 
   const hasSprintTenantId = await tableHasColumn(db, 'sprints', 'tenant_id');
   const sourceSprint = await db.get(`
-    SELECT id, project_id, name, sprint_type
+    SELECT id, project_id, name, sprint_type, environment_setup
     FROM sprints
     WHERE id = ?
       ${hasSprintTenantId && tenantId != null ? 'AND tenant_id = ?' : ''}
@@ -211,6 +214,7 @@ export async function createSprint(
     repo_access_mode,
     repo_path,
     repo_url,
+    environment_setup,
   } = body;
   const tenantId = Number.isFinite(Number(body.tenant_id)) ? Number(body.tenant_id) : null;
 
@@ -241,19 +245,20 @@ export async function createSprint(
     throw Object.assign(new Error(repoValidationError), { status: 400 });
   }
   const repoConfig = normalizeRepoConfig({ repo_access_mode, repo_path, repo_url });
+  const environmentSetup = normalizeEnvironmentSetup(environment_setup === undefined ? sourceSprint?.environment_setup : environment_setup);
   let newId = 0;
 
   await db.withTransaction(async (db) => {
     const hasSprintTenantId = await tableHasColumn(db, 'sprints', 'tenant_id');
     const result = hasSprintTenantId
       ? await db.run(`
-          INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, started_at, repo_path, repo_url, repo_access_mode)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, project.tenant_id ?? tenantId, project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, toCanonicalTimestamp(started_at), repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode)
+          INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, started_at, repo_path, repo_url, repo_access_mode, environment_setup)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, project.tenant_id ?? tenantId, project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, toCanonicalTimestamp(started_at), repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode, JSON.stringify(environmentSetup))
       : await db.run(`
-          INSERT INTO sprints (project_id, name, goal, sprint_type, status, length_kind, length_value, started_at, repo_path, repo_url, repo_access_mode)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, toCanonicalTimestamp(started_at), repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode);
+          INSERT INTO sprints (project_id, name, goal, sprint_type, status, length_kind, length_value, started_at, repo_path, repo_url, repo_access_mode, environment_setup)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, project_id, name, goal, resolvedSprintType, normalizedStatus, length_kind, length_value, toCanonicalTimestamp(started_at), repoConfig.repo_path, repoConfig.repo_url, repoConfig.repo_access_mode, JSON.stringify(environmentSetup));
 
     newId = Number(result.lastInsertId);
 
@@ -274,6 +279,7 @@ export async function createSprint(
         repo_access_mode: repoConfig.repo_access_mode,
         repo_path: repoConfig.repo_path,
         repo_url: repoConfig.repo_url,
+        environment_setup: environmentSetup,
       });
 
   return await db.get(`
@@ -324,6 +330,7 @@ export async function updateSprint(
     repo_access_mode,
     repo_path,
     repo_url,
+    environment_setup,
   } = body as Partial<SprintRecord>;
 
   const resolvedSprintType = sprint_type !== undefined
@@ -362,6 +369,7 @@ export async function updateSprint(
         repo_access_mode: (existing as SprintRecord & { repo_access_mode?: 'worktree' | 'clone' | null }).repo_access_mode ?? null,
       };
 
+  const environmentSetup = normalizeEnvironmentSetup(environment_setup === undefined ? existing.environment_setup : environment_setup);
   const newValues = {
     project_id: requestedProjectId,
     name: name ?? existing.name,
@@ -377,6 +385,7 @@ export async function updateSprint(
     repo_path: repoConfig.repo_path,
     repo_url: repoConfig.repo_url,
     repo_access_mode: repoConfig.repo_access_mode,
+    environment_setup: environmentSetup,
   };
 
   await db.run(`
@@ -392,9 +401,10 @@ export async function updateSprint(
       ended_at = ?,
       repo_path = ?,
       repo_url = ?,
-      repo_access_mode = ?
+      repo_access_mode = ?,
+      environment_setup = ?
     WHERE id = ?
-  `, newValues.project_id, newValues.name, newValues.goal, newValues.sprint_type, newValues.status, newValues.length_kind, newValues.length_value, newValues.started_at, newValues.ended_at, newValues.repo_path, newValues.repo_url, newValues.repo_access_mode, sprintId);
+  `, newValues.project_id, newValues.name, newValues.goal, newValues.sprint_type, newValues.status, newValues.length_kind, newValues.length_value, newValues.started_at, newValues.ended_at, newValues.repo_path, newValues.repo_url, newValues.repo_access_mode, JSON.stringify(newValues.environment_setup), sprintId);
 
   const changes = diffFields(
     {
@@ -422,6 +432,10 @@ export async function updateSprint(
       repo_access_mode: newValues.repo_access_mode,
     },
   );
+  const oldEnvironmentSetup = normalizeEnvironmentSetup(existing.environment_setup);
+  if (JSON.stringify(oldEnvironmentSetup) !== JSON.stringify(environmentSetup)) {
+    changes.environment_setup = { old: oldEnvironmentSetup, new: environmentSetup };
+  }
   if (Object.keys(changes).length > 0) {
     const note = typeof body.note === 'string' && body.note.trim() ? body.note.trim() : null;
     await writeProjectAudit(db, newValues.project_id, 'sprint', sprintId, 'updated', actor, {

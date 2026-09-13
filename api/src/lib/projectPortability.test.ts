@@ -253,3 +253,15 @@ it('previews missing dependencies and imports equivalent portable config with re
   const audit = await db.get(`SELECT changes FROM project_audit_log WHERE project_id = ? ORDER BY id DESC LIMIT 1`, result.project_id) as { changes: string };
   expect(JSON.parse(audit.changes)).toMatchObject({ import: true, schema_version: 'agent_hq.project_manifest.v1' });
 });
+
+
+it('preserves workflow environment preparation across export and import', async () => {
+  const db = getDb();
+  const projectId = await seedPortableProject();
+  const setup = { mode: 'custom', steps: [{ command: ['mise', 'run', 'setup'], cwd: '.' }], timeoutSeconds: 600 };
+  await db.run('UPDATE sprints SET environment_setup = ? WHERE project_id = ?', JSON.stringify(setup), projectId);
+  const manifest = (await exportProjectManifest(db, projectId, false)).manifest;
+  expect(manifest.workflows[0].environment_setup).toEqual(setup);
+  const imported = await importProjectManifest(db, manifest, { projectName: 'Setup copy', tenantId: 1, actor: 'test' });
+  expect(await db.get('SELECT environment_setup FROM sprints WHERE project_id = ?', imported.project_id)).toMatchObject({ environment_setup: setup });
+});

@@ -1,3 +1,4 @@
+import type { EnvironmentSetup } from '../lib/environmentSetup';
 /**
  * Agent HQ MCP Server — API Client
  *
@@ -1132,6 +1133,7 @@ export class AgentHqApiClient {
     length_kind?: 'time' | 'runs';
     length_value?: string;
     started_at?: string | null;
+    environment_setup?: EnvironmentSetup;
     repo_access_mode?: 'worktree' | 'clone' | null;
     repo_path?: string | null;
     repo_url?: string | null;
@@ -1153,6 +1155,7 @@ export class AgentHqApiClient {
             length_kind: data.length_kind ?? 'time',
             length_value: data.length_value ?? '',
             started_at: data.started_at ?? null,
+            environment_setup: data.environment_setup,
             repo_access_mode: data.repo_access_mode ?? null,
             repo_path: data.repo_path ?? null,
             repo_url: data.repo_url ?? null,

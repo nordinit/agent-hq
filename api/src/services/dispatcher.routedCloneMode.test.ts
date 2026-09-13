@@ -225,7 +225,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     expect(payload.repoDependencySetup).toEqual([expect.objectContaining({
       strategy: 'skip',
       status: 'skipped',
-      reason: 'no_supported_package_roots',
+      reason: 'environment_setup_off',
     })]);
     expect(instance.worktree_path).toBe(path.join(workspaceRoot, 'task-373'));
   });
@@ -356,4 +356,48 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       callback: { identity: expect.stringMatching(/^run:/) },
     });
   });
+  async function dispatchFixture(): Promise<boolean> {
+    const { dispatchTaskToJob } = await import('./dispatcher');
+    const job = await db.get('SELECT *, id AS agent_id, job_title AS title, name AS agent_name, session_key AS agent_session_key FROM agents WHERE id = 1');
+    const task = await db.get('SELECT *, 0 AS blocking_count FROM tasks WHERE id = 373');
+    return dispatchTaskToJob(db, job as never, task as never, 1);
+  }
+
+  it('finishes a language-independent custom setup before starting the agent and records its policy', async () => {
+    const setup = { mode: 'custom', steps: [{ command: [process.execPath, '-e', "require('fs').writeFileSync('prepared.txt', 'ready')"], cwd: '.' }], timeoutSeconds: 30 };
+    await db.run('UPDATE sprints SET environment_setup = ? WHERE id = 9', JSON.stringify(setup));
+    runtimeDispatch.mockImplementation(async () => {
+      expect(fs.readFileSync(path.join(workspaceRoot, 'task-373/prepared.txt'), 'utf8')).toBe('ready');
+      return { runId: 'prepared-run' };
+    });
+    expect(await dispatchFixture()).toBe(true);
+    await waitForMockCall(runtimeDispatch);
+    expect(runtimeDispatch).toHaveBeenCalledTimes(1);
+    const row = await db.get('SELECT payload_sent FROM job_instances WHERE task_id = 373') as { payload_sent: string };
+    expect(JSON.parse(row.payload_sent)).toMatchObject({ environmentSetup: setup, repoDependencySetup: [{ status: 'prepared', ecosystem: 'custom' }] });
+  });
+
+  it('blocks dispatch and reports setup failures without creating a running instance', async () => {
+    await db.run('UPDATE sprints SET environment_setup = ? WHERE id = 9', JSON.stringify({ mode: 'custom', steps: [{ command: [process.execPath, '-e', 'process.exit(7)'] }] }));
+    expect(await dispatchFixture()).toBe(false);
+    expect(runtimeDispatch).not.toHaveBeenCalled();
+    expect(await db.get('SELECT COUNT(*) AS n FROM job_instances WHERE task_id = 373')).toMatchObject({ n: 0 });
+    const task = await db.get('SELECT failure_detail FROM tasks WHERE id = 373') as { failure_detail: string };
+    expect(task.failure_detail).toContain('Environment setup failed');
+  });
+
+  it.each(['task', 'workflow'])('does not dispatch after %s changes during preparation', async target => {
+    const dependencies = await import('./repoWorkspaceDependencies');
+    const prepare = jest.spyOn(dependencies, 'prepareRepoWorkspaceDependencies').mockImplementation(async () => {
+      if (target === 'task') await db.run("UPDATE tasks SET status = 'closed' WHERE id = 373");
+      else await db.run("UPDATE sprints SET status = 'paused' WHERE id = 9");
+      return [{ status: 'prepared', ecosystem: 'custom', strategy: 'install', packageRoot: '.' }];
+    });
+    try {
+      expect(await dispatchFixture()).toBe(false);
+      expect(runtimeDispatch).not.toHaveBeenCalled();
+      expect(await db.get('SELECT COUNT(*) AS n FROM job_instances WHERE task_id = 373')).toMatchObject({ n: 0 });
+    } finally { prepare.mockRestore(); }
+  });
+
 });

@@ -10,7 +10,9 @@ import { resolveRuntime } from '../runtimes';
 import { resolveRuntimeProviderDispatchSelection } from '../domains/providers/runtimeAdapters';
 import { createTaskWorktree } from './worktreeManager';
 import { ensureTaskClone, type RepoAccessMode } from './repoWorkspaceManager';
-import type { RepoWorkspaceDependencySetupResult } from './repoWorkspaceDependencies';
+import { prepareRepoWorkspaceDependencies, type RepoWorkspaceDependencySetupResult } from './repoWorkspaceDependencies';
+import { normalizeEnvironmentSetup } from '../lib/environmentSetup';
+import { acquireWorkspaceLease } from './workspaceLease';
 import {
   OPENCLAW_CONFIG_PATH as OPENCLAW_CONFIG_PATH_DISPATCHER,
   OPENCLAW_GATEWAY_URL,
@@ -1924,324 +1926,359 @@ export async function dispatchTaskToJob(
   let repoSourceDescriptor: string | null = null;
   let repoDependencySetup: RepoWorkspaceDependencySetupResult[] = [];
 
-  const repoRequired = await isWorkflowRepoRequiredForTask(db, task);
-  if (repoRequired && job.repo_config_source !== 'workflow') {
-    const reason = `Workflow-level repository configuration is required for repo-backed workflow dispatch (workflow_id=${task.sprint_id ?? 'none'}, workflow_type=${task.sprint_type ?? 'unknown'}). Configure repo_access_mode plus repo_path or repo_url on the workflow.`;
-    console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
-    await persistDispatchStartupFailure(db, {
+  const expectedWorkspace = repoAccessMode && job.workspace_path
+    ? `${job.os_user ? `/Users/${job.os_user}/workspaces` : job.workspace_path}/task-${task.id}` : null;
+  const releaseWorkspace = expectedWorkspace ? acquireWorkspaceLease(expectedWorkspace) : () => {};
+  if (!releaseWorkspace) return false;
+  try {
+    const repoRequired = await isWorkflowRepoRequiredForTask(db, task);
+    if (repoRequired && job.repo_config_source !== 'workflow') {
+      const reason = `Workflow-level repository configuration is required for repo-backed workflow dispatch (workflow_id=${task.sprint_id ?? 'none'}, workflow_type=${task.sprint_type ?? 'unknown'}). Configure repo_access_mode plus repo_path or repo_url on the workflow.`;
+      console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
+      await persistDispatchStartupFailure(db, {
+              taskId: task.id,
+              matchedAgentId: job.agent_id,
+              matchedAgentLabel: job.agent_name ?? job.title,
+              routingReason,
+              priorStatus: task.status,
+              tenantId: task.tenant_id,
+              projectId: task.project_id,
+              sprintId: task.sprint_id,
+              sprintType: task.sprint_type,
+              taskType: task.task_type,
+              reason,
+            });
+      return false;
+    }
+
+    if (repoAccessMode === 'worktree') {
+      if (!job.workspace_path || !job.repo_path) {
+        const reason = `${repoOwnerLabel} repo_access_mode=worktree requires workspace_path and repo_path (workspace_path=${job.workspace_path ? 'set' : 'missing'}, repo_path=${job.repo_path ? 'set' : 'missing'})`;
+        console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
+        await persistDispatchStartupFailure(db, {
+                  taskId: task.id,
+                  matchedAgentId: job.agent_id,
+                  matchedAgentLabel: job.agent_name ?? job.title,
+                  routingReason,
+                  priorStatus: task.status,
+                  tenantId: task.tenant_id,
+                  projectId: task.project_id,
+                  sprintId: task.sprint_id,
+                  sprintType: task.sprint_type,
+                  taskType: task.task_type,
+                  reason,
+                });
+        return false;
+      }
+
+      const basePath = job.os_user ? `/Users/${job.os_user}/workspaces` : job.workspace_path;
+      const wtResult = createTaskWorktree({ repoPath: job.repo_path, basePath, taskId: task.id, taskTitle: task.title, agentSlug });
+      if (wtResult.error) {
+        const reason = `Worktree creation failed for task #${task.id}: ${wtResult.error}`;
+        console.warn(`[dispatcher] ${reason}`);
+        await persistDispatchStartupFailure(db, {
+                  taskId: task.id,
+                  matchedAgentId: job.agent_id,
+                  matchedAgentLabel: job.agent_name ?? job.title,
+                  routingReason,
+                  priorStatus: task.status,
+                  tenantId: task.tenant_id,
+                  projectId: task.project_id,
+                  sprintId: task.sprint_id,
+                  sprintType: task.sprint_type,
+                  taskType: task.task_type,
+                  reason,
+                });
+        return false;
+      }
+      repoWorkspacePath = wtResult.workspacePath;
+      repoBranch = wtResult.branch;
+      repoSourceDescriptor = `worktree:${job.repo_path}`;
+      repoDependencySetup = wtResult.dependencySetup ?? [];
+    } else if (repoAccessMode === 'clone') {
+      if (!job.workspace_path || !job.repo_url) {
+        const reason = `${repoOwnerLabel} repo_access_mode=clone requires workspace_path and repo_url (workspace_path=${job.workspace_path ? 'set' : 'missing'}, repo_url=${job.repo_url ? 'set' : 'missing'})`;
+        console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
+        await persistDispatchStartupFailure(db, {
+                  taskId: task.id,
+                  matchedAgentId: job.agent_id,
+                  matchedAgentLabel: job.agent_name ?? job.title,
+                  routingReason,
+                  priorStatus: task.status,
+                  tenantId: task.tenant_id,
+                  projectId: task.project_id,
+                  sprintId: task.sprint_id,
+                  sprintType: task.sprint_type,
+                  taskType: task.task_type,
+                  reason,
+                });
+        return false;
+      }
+
+      const cloneRoot = job.os_user ? `/Users/${job.os_user}/workspaces` : job.workspace_path;
+      const cloneResult = ensureTaskClone({ repoUrl: job.repo_url, workspaceRoot: cloneRoot, taskId: task.id, taskTitle: task.title, agentSlug });
+      if (cloneResult.error) {
+        const reason = `Clone workspace creation failed for task #${task.id}: ${cloneResult.error}`;
+        console.warn(`[dispatcher] ${reason}`);
+        await persistDispatchStartupFailure(db, {
+                  taskId: task.id,
+                  matchedAgentId: job.agent_id,
+                  matchedAgentLabel: job.agent_name ?? job.title,
+                  routingReason,
+                  priorStatus: task.status,
+                  tenantId: task.tenant_id,
+                  projectId: task.project_id,
+                  sprintId: task.sprint_id,
+                  sprintType: task.sprint_type,
+                  taskType: task.task_type,
+                  reason,
+                });
+        return false;
+      }
+      repoWorkspacePath = cloneResult.workspacePath;
+      repoBranch = cloneResult.branch;
+      repoSourceDescriptor = `clone:${job.repo_url}`;
+      repoDependencySetup = cloneResult.dependencySetup ?? [];
+    }
+
+    let environmentSetup;
+    let workflowState: Record<string, unknown> | undefined;
+    try {
+      workflowState = task.sprint_id != null && await tableHasColumn(db, 'sprints', 'environment_setup')
+        ? await db.get('SELECT environment_setup, status, repo_access_mode, repo_path, repo_url FROM sprints WHERE id = ?', task.sprint_id) as Record<string, unknown> | undefined
+        : undefined;
+      environmentSetup = normalizeEnvironmentSetup(workflowState?.environment_setup);
+      repoDependencySetup = await prepareRepoWorkspaceDependencies({ mode: repoAccessMode, workspacePath: repoWorkspacePath, setup: environmentSetup });
+      const failure = repoDependencySetup.find((result) => result.status === 'failed');
+      if (failure) throw new Error(failure.reason ?? 'Environment preparation failed');
+    } catch (error) {
+      await persistDispatchStartupFailure(db, {
+        taskId: task.id, matchedAgentId: job.agent_id, matchedAgentLabel: job.agent_name ?? job.title,
+        routingReason, priorStatus: task.status, tenantId: task.tenant_id, projectId: task.project_id,
+        sprintId: task.sprint_id, sprintType: task.sprint_type, taskType: task.task_type,
+        reason: `Environment setup failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      return false;
+    }
+    // Preparation is asynchronous: a user may have moved or stopped the task.
+    const currentTask = await db.get('SELECT status, sprint_id FROM tasks WHERE id = ?', task.id) as { status: string; sprint_id: number | null } | undefined;
+    if (!currentTask || currentTask.status !== task.status || Number(currentTask.sprint_id) !== Number(task.sprint_id)) return false;
+
+    if (workflowState) {
+      const currentWorkflow = await db.get('SELECT environment_setup, status, repo_access_mode, repo_path, repo_url FROM sprints WHERE id = ?', task.sprint_id);
+      if (JSON.stringify(currentWorkflow) !== JSON.stringify(workflowState)) return false;
+    }
+
+    // Resolved before the instance row exists so its provenance can be recorded on the payload:
+    // a transcript is only explainable if it says which team definition it ran under.
+    const teamContext = await resolveTeamContextForDispatch(db, {
+      agentId: job.agent_id,
+      sprintId: task.sprint_id ?? null,
+    });
+
+    const instancePayload = {
+      mode: 'runtime-dispatch',
+      transport: 'ws.send',
+      agentSlug,
+            repoAccessMode,
+            repoSource: repoSourceDescriptor,
+            repoConfigSource: job.repo_config_source ?? null,
+            repoWorkspacePath,
+      repoBranch,
+      repoDependencySetup,
+      environmentSetup,
+      teamId: teamContext?.teamId ?? null,
+      teamContextVersion: teamContext?.contextVersion ?? null,
+    };
+
+    const supportsDurableRunId = await durableTableHasColumn(db, 'job_instances', 'durable_run_id');
+    const initialDurableRunId = supportsDurableRunId ? createDurableRunId() : null;
+    const instanceTenant = await tenantInsertColumns(db, 'job_instances', task.tenant_id ?? job.tenant_id ?? null);
+    const instanceResult = supportsDurableRunId
+      ? await db.run(`
+          INSERT INTO job_instances (${instanceTenant.columnSql}agent_id, status, dispatched_at, payload_sent, task_id, worktree_path, durable_run_id)
+          VALUES (${instanceTenant.valueSql}?, 'dispatched', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), ?, ?, ?, ?)
+        `, ...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath, initialDurableRunId)
+      : await db.run(`
+          INSERT INTO job_instances (${instanceTenant.columnSql}agent_id, status, dispatched_at, payload_sent, task_id, worktree_path)
+          VALUES (${instanceTenant.valueSql}?, 'dispatched', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), ?, ?, ?)
+        `, ...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath);
+    const instanceId = instanceResult.lastInsertId as number;
+    const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
+    const sessionKey = buildSessionKey(instanceId, durableRunId);
+    const taskNotesContext = await getDispatchTaskNotesContext(db, {
             taskId: task.id,
-            matchedAgentId: job.agent_id,
-            matchedAgentLabel: job.agent_name ?? job.title,
-            routingReason,
-            priorStatus: task.status,
-            tenantId: task.tenant_id,
-            projectId: task.project_id,
-            sprintId: task.sprint_id,
-            sprintType: task.sprint_type,
-            taskType: task.task_type,
-            reason,
+            agentId: job.agent_id,
+            currentInstanceId: instanceId,
           });
-    return false;
-  }
+    const scope = await loadDispatchScopeContext(db, {
+      projectId: task.project_id ?? null,
+      workflowId: task.sprint_id ?? null,
+    });
 
-  if (repoAccessMode === 'worktree') {
-    if (!job.workspace_path || !job.repo_path) {
-      const reason = `${repoOwnerLabel} repo_access_mode=worktree requires workspace_path and repo_path (workspace_path=${job.workspace_path ? 'set' : 'missing'}, repo_path=${job.repo_path ? 'set' : 'missing'})`;
-      console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
-      await persistDispatchStartupFailure(db, {
-                taskId: task.id,
-                matchedAgentId: job.agent_id,
-                matchedAgentLabel: job.agent_name ?? job.title,
-                routingReason,
-                priorStatus: task.status,
-                tenantId: task.tenant_id,
-                projectId: task.project_id,
-                sprintId: task.sprint_id,
-                sprintType: task.sprint_type,
-                taskType: task.task_type,
-                reason,
-              });
-      return false;
+    const nextTaskStatus = deriveDispatchTaskStatus(task.status);
+    const hasFirstDispatchedAt = await tableHasColumn(db, 'tasks', 'first_dispatched_at');
+    const hasTotalDispatchCount = await tableHasColumn(db, 'tasks', 'total_dispatch_count');
+    const hasClaimedAtColumn = await tableHasColumn(db, 'tasks', 'claimed_at');
+    const hasRoutingReasonColumn = await tableHasColumn(db, 'tasks', 'routing_reason');
+
+    const firstDispatchClause = hasFirstDispatchedAt
+      ? "first_dispatched_at = COALESCE(first_dispatched_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),"
+      : '';
+    const dispatchCountClause = hasTotalDispatchCount
+      ? 'total_dispatch_count = total_dispatch_count + 1,'
+      : '';
+    const clearFailureDetailClause = await tableHasColumn(db, 'tasks', 'failure_detail') ? 'failure_detail = NULL,' : '';
+    const clearPreviousStatusClause = await tableHasColumn(db, 'tasks', 'previous_status') ? 'previous_status = NULL,' : '';
+    const assignedAgentClause = await tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id = ?,' : '';
+    const claimedAtClause = hasClaimedAtColumn ? 'claimed_at = NULL,' : '';
+    const routingReasonClause = hasRoutingReasonColumn ? 'routing_reason = ?,' : '';
+    const assignedAgentValues = assignedAgentClause ? [job.agent_id] : [];
+    const routingReasonValues = routingReasonClause ? [routingReason] : [];
+
+    await db.run(`
+      UPDATE tasks
+      SET status = ?,
+          ${assignedAgentClause}
+          agent_id = ?,
+          dispatched_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
+          ${claimedAtClause}
+          active_instance_id = ?,
+          ${routingReasonClause}
+          ${clearFailureDetailClause}
+          ${clearPreviousStatusClause}
+          ${firstDispatchClause}
+          ${dispatchCountClause}
+          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+      WHERE id = ?
+    `, nextTaskStatus, ...assignedAgentValues, job.agent_id, instanceId, ...routingReasonValues, task.id);
+    await syncTaskActiveAgentFromInstance(db, task.id);
+    // Dispatch is where the run/task link is CREATED, which makes it the single most important
+    // active_instance_id transition to record — and it was the one place that recorded nothing. The
+    // UPDATE above sets the column and only a status change was ever written to history, so a task
+    // could show a run attached with no history row explaining when or by what. That is why the
+    // production denial on task 1036 could not be reconstructed: the link was here all along, set
+    // silently at 03:36:18.
+    await writeTaskHistory(
+      db,
+      task.id,
+      'dispatcher',
+      'active_instance_id',
+      task.active_instance_id ?? null,
+      instanceId,
+    );
+
+    if (nextTaskStatus !== task.status) {
+      await writeTaskStatusChange(db, task.id, 'dispatcher', task.status, nextTaskStatus, {
+              instanceId,
+              reason: routingReason ?? null,
+            });
     }
 
-    const basePath = job.os_user ? `/Users/${job.os_user}/workspaces` : job.workspace_path;
-    const wtResult = createTaskWorktree({ repoPath: job.repo_path, basePath, taskId: task.id, taskTitle: task.title, agentSlug });
-    if (wtResult.error) {
-      const reason = `Worktree creation failed for task #${task.id}: ${wtResult.error}`;
-      console.warn(`[dispatcher] ${reason}`);
-      await persistDispatchStartupFailure(db, {
-                taskId: task.id,
-                matchedAgentId: job.agent_id,
-                matchedAgentLabel: job.agent_name ?? job.title,
-                routingReason,
-                priorStatus: task.status,
-                tenantId: task.tenant_id,
-                projectId: task.project_id,
-                sprintId: task.sprint_id,
-                sprintType: task.sprint_type,
-                taskType: task.task_type,
-                reason,
-              });
-      return false;
+    // ── GitHub identity injection (task #613) ────────────────────────────────
+    // Resolve and inject per-agent GitHub credentials so routed agents can
+    // operate under distinct GitHub identities for PR open/approve/merge.
+    // When a task worktree exists, that active repo root must be authoritative
+    // for both dispatch-time cwd and any run-local credential/context files.
+    const dispatchPathContext = resolveDispatchPathContext({
+      worktreePath: repoWorkspacePath,
+      runtimeConfigWorkingDirectory: extractWorkingDirectoryFromRuntimeConfig(job.runtime_config),
+      workspacePath: job.workspace_path,
+    });
+    const ghIdentityEffectiveWorkDir = dispatchPathContext.activeRepoRoot;
+    const ghIdentity = await resolveGitHubIdentity(db, job.agent_id);
+    if (ghIdentity && ghIdentityEffectiveWorkDir) {
+      injectGitHubCredentials(ghIdentityEffectiveWorkDir, ghIdentity.identity);
     }
-    repoWorkspacePath = wtResult.workspacePath;
-    repoBranch = wtResult.branch;
-    repoSourceDescriptor = `worktree:${job.repo_path}`;
-    repoDependencySetup = wtResult.dependencySetup ?? [];
-  } else if (repoAccessMode === 'clone') {
-    if (!job.workspace_path || !job.repo_url) {
-      const reason = `${repoOwnerLabel} repo_access_mode=clone requires workspace_path and repo_url (workspace_path=${job.workspace_path ? 'set' : 'missing'}, repo_url=${job.repo_url ? 'set' : 'missing'})`;
-      console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
-      await persistDispatchStartupFailure(db, {
-                taskId: task.id,
-                matchedAgentId: job.agent_id,
-                matchedAgentLabel: job.agent_name ?? job.title,
-                routingReason,
-                priorStatus: task.status,
-                tenantId: task.tenant_id,
-                projectId: task.project_id,
-                sprintId: task.sprint_id,
-                sprintType: task.sprint_type,
-                taskType: task.task_type,
-                reason,
-              });
-      return false;
-    }
+    // Resolve transport mode from agent runtime type and config (task #632)
+    const transportMode = resolveTransportMode({
+      runtimeType: job.runtime_type,
+      runtimeConfig: job.runtime_config,
+      hooksUrl: job.agent_hooks_url,
+    });
 
-    const cloneRoot = job.os_user ? `/Users/${job.os_user}/workspaces` : job.workspace_path;
-    const cloneResult = ensureTaskClone({ repoUrl: job.repo_url, workspaceRoot: cloneRoot, taskId: task.id, taskTitle: task.title, agentSlug });
-    if (cloneResult.error) {
-      const reason = `Clone workspace creation failed for task #${task.id}: ${cloneResult.error}`;
-      console.warn(`[dispatcher] ${reason}`);
-      await persistDispatchStartupFailure(db, {
-                taskId: task.id,
-                matchedAgentId: job.agent_id,
-                matchedAgentLabel: job.agent_name ?? job.title,
-                routingReason,
-                priorStatus: task.status,
-                tenantId: task.tenant_id,
-                projectId: task.project_id,
-                sprintId: task.sprint_id,
-                sprintType: task.sprint_type,
-                taskType: task.task_type,
-                reason,
-              });
-      return false;
-    }
-    repoWorkspacePath = cloneResult.workspacePath;
-    repoBranch = cloneResult.branch;
-    repoSourceDescriptor = `clone:${job.repo_url}`;
-    repoDependencySetup = cloneResult.dependencySetup ?? [];
-  }
+    const contextBundle = buildDispatchContextBundle({
+      workflow: { id: task.sprint_id ?? null, name: task.sprint_name ?? scope.workflow?.name ?? null, goal: scope.workflow?.goal ?? null },
+      team: teamContext,
+      project: scope.project,
+      job: { agentId: job.agent_id, title: job.title, instructions: job.job_instructions },
+      task: {
+        ...await loadTaskRecurrenceMetadata(db, task.id),
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        priority: task.priority,
+        status: task.status,
+        workflowName: task.sprint_name ?? null,
+      },
+      taskNotes: { context: taskNotesContext, taskId: task.id },
+      workspace: dispatchPathContext,
+      contract: await buildInstanceCallbackContractSegmentDrafts({
+        instanceId,
+        durableRunId,
+        taskId: task.id,
+        taskStatus: task.status,
+        taskType: task.task_type,
+        sprintId: task.sprint_id,
+        sprintType: task.sprint_type,
+        agentSlug,
+        sessionKey,
+        // baseUrl omitted → default Agent HQ base URL / localhost
+        transportMode,
+      }),
+    });
+    const fullMessage = contextBundle.promptText;
 
-  // Resolved before the instance row exists so its provenance can be recorded on the payload:
-  // a transcript is only explainable if it says which team definition it ran under.
-  const teamContext = await resolveTeamContextForDispatch(db, {
-    agentId: job.agent_id,
-    sprintId: task.sprint_id ?? null,
-  });
-
-  const instancePayload = {
-    mode: 'runtime-dispatch',
-    transport: 'ws.send',
-    agentSlug,
-          repoAccessMode,
-          repoSource: repoSourceDescriptor,
-          repoConfigSource: job.repo_config_source ?? null,
-          repoWorkspacePath,
-    repoBranch,
-    repoDependencySetup,
-    teamId: teamContext?.teamId ?? null,
-    teamContextVersion: teamContext?.contextVersion ?? null,
-  };
-
-  const supportsDurableRunId = await durableTableHasColumn(db, 'job_instances', 'durable_run_id');
-  const initialDurableRunId = supportsDurableRunId ? createDurableRunId() : null;
-  const instanceTenant = await tenantInsertColumns(db, 'job_instances', task.tenant_id ?? job.tenant_id ?? null);
-  const instanceResult = supportsDurableRunId
-    ? await db.run(`
-        INSERT INTO job_instances (${instanceTenant.columnSql}agent_id, status, dispatched_at, payload_sent, task_id, worktree_path, durable_run_id)
-        VALUES (${instanceTenant.valueSql}?, 'dispatched', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), ?, ?, ?, ?)
-      `, ...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath, initialDurableRunId)
-    : await db.run(`
-        INSERT INTO job_instances (${instanceTenant.columnSql}agent_id, status, dispatched_at, payload_sent, task_id, worktree_path)
-        VALUES (${instanceTenant.valueSql}?, 'dispatched', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), ?, ?, ?)
-      `, ...instanceTenant.values, job.agent_id, JSON.stringify(instancePayload), task.id, repoWorkspacePath);
-  const instanceId = instanceResult.lastInsertId as number;
-  const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
-  const sessionKey = buildSessionKey(instanceId, durableRunId);
-  const taskNotesContext = await getDispatchTaskNotesContext(db, {
-          taskId: task.id,
-          agentId: job.agent_id,
-          currentInstanceId: instanceId,
-        });
-  const scope = await loadDispatchScopeContext(db, {
-    projectId: task.project_id ?? null,
-    workflowId: task.sprint_id ?? null,
-  });
-
-  const nextTaskStatus = deriveDispatchTaskStatus(task.status);
-  const hasFirstDispatchedAt = await tableHasColumn(db, 'tasks', 'first_dispatched_at');
-  const hasTotalDispatchCount = await tableHasColumn(db, 'tasks', 'total_dispatch_count');
-  const hasClaimedAtColumn = await tableHasColumn(db, 'tasks', 'claimed_at');
-  const hasRoutingReasonColumn = await tableHasColumn(db, 'tasks', 'routing_reason');
-
-  const firstDispatchClause = hasFirstDispatchedAt
-    ? "first_dispatched_at = COALESCE(first_dispatched_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),"
-    : '';
-  const dispatchCountClause = hasTotalDispatchCount
-    ? 'total_dispatch_count = total_dispatch_count + 1,'
-    : '';
-  const clearFailureDetailClause = await tableHasColumn(db, 'tasks', 'failure_detail') ? 'failure_detail = NULL,' : '';
-  const clearPreviousStatusClause = await tableHasColumn(db, 'tasks', 'previous_status') ? 'previous_status = NULL,' : '';
-  const assignedAgentClause = await tableHasColumn(db, 'tasks', 'assigned_agent_id') ? 'assigned_agent_id = ?,' : '';
-  const claimedAtClause = hasClaimedAtColumn ? 'claimed_at = NULL,' : '';
-  const routingReasonClause = hasRoutingReasonColumn ? 'routing_reason = ?,' : '';
-  const assignedAgentValues = assignedAgentClause ? [job.agent_id] : [];
-  const routingReasonValues = routingReasonClause ? [routingReason] : [];
-
-  await db.run(`
-    UPDATE tasks
-    SET status = ?,
-        ${assignedAgentClause}
-        agent_id = ?,
-        dispatched_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
-        ${claimedAtClause}
-        active_instance_id = ?,
-        ${routingReasonClause}
-        ${clearFailureDetailClause}
-        ${clearPreviousStatusClause}
-        ${firstDispatchClause}
-        ${dispatchCountClause}
-        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-    WHERE id = ?
-  `, nextTaskStatus, ...assignedAgentValues, job.agent_id, instanceId, ...routingReasonValues, task.id);
-  await syncTaskActiveAgentFromInstance(db, task.id);
-  // Dispatch is where the run/task link is CREATED, which makes it the single most important
-  // active_instance_id transition to record — and it was the one place that recorded nothing. The
-  // UPDATE above sets the column and only a status change was ever written to history, so a task
-  // could show a run attached with no history row explaining when or by what. That is why the
-  // production denial on task 1036 could not be reconstructed: the link was here all along, set
-  // silently at 03:36:18.
-  await writeTaskHistory(
-    db,
-    task.id,
-    'dispatcher',
-    'active_instance_id',
-    task.active_instance_id ?? null,
-    instanceId,
-  );
-
-  if (nextTaskStatus !== task.status) {
-    await writeTaskStatusChange(db, task.id, 'dispatcher', task.status, nextTaskStatus, {
-            instanceId,
-            reason: routingReason ?? null,
-          });
-  }
-
-  // ── GitHub identity injection (task #613) ────────────────────────────────
-  // Resolve and inject per-agent GitHub credentials so routed agents can
-  // operate under distinct GitHub identities for PR open/approve/merge.
-  // When a task worktree exists, that active repo root must be authoritative
-  // for both dispatch-time cwd and any run-local credential/context files.
-  const dispatchPathContext = resolveDispatchPathContext({
-    worktreePath: repoWorkspacePath,
-    runtimeConfigWorkingDirectory: extractWorkingDirectoryFromRuntimeConfig(job.runtime_config),
-    workspacePath: job.workspace_path,
-  });
-  const ghIdentityEffectiveWorkDir = dispatchPathContext.activeRepoRoot;
-  const ghIdentity = await resolveGitHubIdentity(db, job.agent_id);
-  if (ghIdentity && ghIdentityEffectiveWorkDir) {
-    injectGitHubCredentials(ghIdentityEffectiveWorkDir, ghIdentity.identity);
-  }
-  // Resolve transport mode from agent runtime type and config (task #632)
-  const transportMode = resolveTransportMode({
-    runtimeType: job.runtime_type,
-    runtimeConfig: job.runtime_config,
-    hooksUrl: job.agent_hooks_url,
-  });
-
-  const contextBundle = buildDispatchContextBundle({
-    workflow: { id: task.sprint_id ?? null, name: task.sprint_name ?? scope.workflow?.name ?? null, goal: scope.workflow?.goal ?? null },
-    team: teamContext,
-    project: scope.project,
-    job: { agentId: job.agent_id, title: job.title, instructions: job.job_instructions },
-    task: {
-      ...await loadTaskRecurrenceMetadata(db, task.id),
-      id: task.id,
-      title: task.title,
-      description: task.description,
-      priority: task.priority,
-      status: task.status,
-      workflowName: task.sprint_name ?? null,
-    },
-    taskNotes: { context: taskNotesContext, taskId: task.id },
-    workspace: dispatchPathContext,
-    contract: await buildInstanceCallbackContractSegmentDrafts({
+    // Recorded before the run starts so a dispatch that dies on launch is still explainable.
+    await persistDispatchContextBundle(db, {
+      tenantId: task.tenant_id ?? job.tenant_id ?? null,
       instanceId,
       durableRunId,
       taskId: task.id,
-      taskStatus: task.status,
-      taskType: task.task_type,
-      sprintId: task.sprint_id,
-      sprintType: task.sprint_type,
+      agentId: job.agent_id,
+      bundle: contextBundle,
+    });
+
+    fireAgentRun(
+      db,
+      job,
+      fullMessage,
+      instanceId,
       agentSlug,
-      sessionKey,
-      // baseUrl omitted → default Agent HQ base URL / localhost
-      transportMode,
-    }),
-  });
-  const fullMessage = contextBundle.promptText;
-
-  // Recorded before the run starts so a dispatch that dies on launch is still explainable.
-  await persistDispatchContextBundle(db, {
-    tenantId: task.tenant_id ?? job.tenant_id ?? null,
-    instanceId,
-    durableRunId,
-    taskId: task.id,
-    agentId: job.agent_id,
-    bundle: contextBundle,
-  });
-
-  fireAgentRun(
-    db,
-    job,
-    fullMessage,
-    instanceId,
-    agentSlug,
-    task.status,
-    task.id,
-    task.story_points ?? null,
-    repoWorkspacePath,
-    {
-      repoAccessMode,
-      repoSource: repoSourceDescriptor,
+      task.status,
+      task.id,
+      task.story_points ?? null,
       repoWorkspacePath,
-      repoBranch,
-    },
-    {
-      projectId: task.project_id,
-      sprintId: task.sprint_id,
-      sprintType: task.sprint_type,
-      tenantId: task.tenant_id ?? job.tenant_id ?? null,
-    },
-  ).catch((err) => {
-    console.error(`[dispatcher] Unhandled error in fireAgentRun for instance #${instanceId}:`, err);
-  });
+      {
+        repoAccessMode,
+        repoSource: repoSourceDescriptor,
+        repoWorkspacePath,
+        repoBranch,
+      },
+      {
+        projectId: task.project_id,
+        sprintId: task.sprint_id,
+        sprintType: task.sprint_type,
+        tenantId: task.tenant_id ?? job.tenant_id ?? null,
+      },
+    ).catch((err) => {
+      console.error(`[dispatcher] Unhandled error in fireAgentRun for instance #${instanceId}:`, err);
+    });
 
-  await db.run(`
-    INSERT INTO dispatch_log (task_id, agent_id, routing_reason, candidate_count, candidates_skipped)
-    VALUES (?, ?, ?, ?, ?)
-  `, task.id, job.agent_id, routingReason, candidateCount, JSON.stringify([]));
+    await db.run(`
+      INSERT INTO dispatch_log (task_id, agent_id, routing_reason, candidate_count, candidates_skipped)
+      VALUES (?, ?, ?, ?, ?)
+    `, task.id, job.agent_id, routingReason, candidateCount, JSON.stringify([]));
 
-  console.log(`[dispatcher] Dispatched Task #${task.id} → ${job.title} (${job.agent_name ?? job.agent_id}) — instance #${instanceId}`);
-  await notifyTaskStatusChange(db, {
-        taskId: task.id,
-        fromStatus: task.status,
-        toStatus: nextTaskStatus,
-        source: job.agent_name ?? job.title,
-      });
-  return true;
+    console.log(`[dispatcher] Dispatched Task #${task.id} → ${job.title} (${job.agent_name ?? job.agent_id}) — instance #${instanceId}`);
+    await notifyTaskStatusChange(db, {
+          taskId: task.id,
+          fromStatus: task.status,
+          toStatus: nextTaskStatus,
+          source: job.agent_name ?? job.title,
+        });
+    return true;
+  } finally { releaseWorkspace(); }
 }
 
 export async function runDispatcher(db: Db, projectId?: number): Promise<DispatchResult> {

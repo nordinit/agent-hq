@@ -1,15 +1,14 @@
 import { getDb } from '../db/client';
 import { notifyTelegram } from '../integrations/telegram';
 import { HEARTBEAT_STALE_MS, START_CHECKIN_GRACE_MS } from '../domains/runs/observability';
-import { resolveRepoConfig } from '../lib/repoConfig';
+import { listConfiguredTerminalStatuses } from '../domains/tasks/terminality';
 import { writeTaskHistory, writeTaskRuntimeEndHistory } from '../domains/tasks/history';
 import { markTaskNeedsAttentionForMissingSemanticHandoff, taskRequiresSemanticOutcome } from '../domains/runs/lifecycleHandoff';
 import { determineRuntimeEndEvidenceRecorded } from '../domains/runs/runtimeEnd';
 import { resolveWorkflow } from '../services/contracts/workflowContract';
 import { getCanonicalTaskRecord } from '../domains/tasks/evidence';
-import { scheduleEndedActiveInstanceLinkageCleanup } from '../lib/taskLifecycle';
+import { cleanupTerminalTaskWorkspaces, scheduleEndedActiveInstanceLinkageCleanup } from '../lib/taskLifecycle';
 import { pruneOrphanedWorktrees, resolveWorktreeBasePath } from '../services/worktreeManager';
-import type { RepoAccessMode } from '../services/repoWorkspaceManager';
 import { evaluateOpenClawInstanceSessionState, type OpenClawInstanceSessionStateResult } from '../domains/runs/openclawSessionState';
 import { evaluateRuntimeInstanceLiveness } from '../domains/runs/runtimeSessionState';
 import { abortInstanceExecutionTransport, resolveInstanceAbortTransport } from '../domains/runs/stopInstanceExecution';
@@ -172,76 +171,38 @@ async function recordWorktreePruneNotification(
 export async function runWorktreePrunePass(db: Db = getDb()): Promise<void> {
   const hasAgentTenantId = await tableHasColumn(db, 'agents', 'tenant_id');
   const hasAgentProjectId = await tableHasColumn(db, 'agents', 'project_id');
-  // All three were `.every(async ...)`, which is unconditionally true — every one of these
-  // capability flags reported "present" regardless of the actual schema.
-  const allColumnsPresent = async (table: string, columns: string[]): Promise<boolean> =>
-    (await Promise.all(columns.map((column) => tableHasColumn(db, table, column)))).every(Boolean);
-  const REPO_COLUMNS = ['repo_path', 'repo_url', 'repo_access_mode'];
-  const hasProjectRepoColumns = hasAgentProjectId && await allColumnsPresent('projects', REPO_COLUMNS);
-  const hasWorkflowRepoColumns = await allColumnsPresent('sprints', REPO_COLUMNS);
-  const hasWorkflowRoutingColumns = await allColumnsPresent(
-    'sprint_task_routing_rules', ['agent_id', 'sprint_id', 'project_id', 'sprint_type'],
-  );
   const hasProjectTenantId = hasAgentProjectId && await tableHasColumn(db, 'projects', 'tenant_id');
-
+  // Historical run paths remain eligible after repo settings or agent paths change.
+  const recorded = await db.all(`SELECT DISTINCT task_id FROM job_instances WHERE worktree_path IS NOT NULL AND task_id IS NOT NULL`) as Array<{ task_id: number }>;
+  for (const row of recorded) await cleanupTerminalTaskWorkspaces(db, Number(row.task_id));
   const agents = await db.all(`
-    SELECT a.id, a.name, a.workspace_path, a.repo_path, a.repo_url, a.repo_access_mode, a.os_user,
-           ${hasAgentTenantId ? 'a.tenant_id' : 'NULL'} AS tenant_id,
-           ${hasAgentProjectId ? 'a.project_id' : 'NULL'} AS project_id,
-           ${hasProjectTenantId ? 'p.tenant_id' : 'NULL'} AS project_tenant_id,
-           ${hasProjectRepoColumns ? 'p.repo_path AS project_repo_path, p.repo_url AS project_repo_url, p.repo_access_mode AS project_repo_access_mode' : 'NULL AS project_repo_path, NULL AS project_repo_url, NULL AS project_repo_access_mode'},
-           ${hasWorkflowRepoColumns && hasWorkflowRoutingColumns ? 's.repo_path AS workflow_repo_path, s.repo_url AS workflow_repo_url, s.repo_access_mode AS workflow_repo_access_mode' : 'NULL AS workflow_repo_path, NULL AS workflow_repo_url, NULL AS workflow_repo_access_mode'}
+    SELECT a.id, a.name, a.workspace_path, a.os_user,
+      ${hasAgentTenantId ? 'a.tenant_id' : 'NULL'} AS tenant_id,
+      ${hasAgentProjectId ? 'a.project_id' : 'NULL'} AS project_id,
+      ${hasProjectTenantId ? 'p.tenant_id' : 'NULL'} AS project_tenant_id
     FROM agents a
     ${hasAgentProjectId ? 'LEFT JOIN projects p ON p.id = a.project_id' : ''}
-    ${hasWorkflowRepoColumns && hasWorkflowRoutingColumns ? `LEFT JOIN (
-      SELECT rr.agent_id, MIN(COALESCE(rr.sprint_id, sp.id)) AS sprint_id
-      FROM sprint_task_routing_rules rr
-      LEFT JOIN sprints sp ON sp.project_id = rr.project_id AND sp.sprint_type = rr.sprint_type
-      GROUP BY rr.agent_id
-    ) wr ON wr.agent_id = a.id
-    LEFT JOIN sprints s ON s.id = wr.sprint_id` : ''}
     WHERE a.workspace_path IS NOT NULL AND a.workspace_path != ''
-  `) as Array<{ id: number; name: string | null; tenant_id: number | null; project_id: number | null; project_tenant_id: number | null; workspace_path: string; repo_path: string | null; repo_url: string | null; repo_access_mode: RepoAccessMode | null; os_user: string | null; project_repo_path: string | null; project_repo_url: string | null; project_repo_access_mode: RepoAccessMode | null; workflow_repo_path: string | null; workflow_repo_url: string | null; workflow_repo_access_mode: RepoAccessMode | null }>;
-
+  `) as Array<{ id: number; name: string | null; tenant_id: number | null; project_id: number | null; project_tenant_id: number | null; workspace_path: string; os_user: string | null }>;
+  const visited = new Set<string>();
   for (const agent of agents) {
-    const effectiveRepo = resolveRepoConfig({
-      workflow: {
-        repo_path: agent.workflow_repo_path,
-        repo_url: agent.workflow_repo_url,
-        repo_access_mode: agent.workflow_repo_access_mode,
-      },
-      agent: {
-        repo_path: agent.repo_path,
-        repo_url: agent.repo_url,
-        repo_access_mode: agent.repo_access_mode,
-      },
-    });
-    // Both access modes leak workspaces, so both are reclaimed here. Clone-mode
-    // workspaces are the expensive ones (each gets a real `npm ci` rather than a
-    // symlinked node_modules), and until now they had no prune path at all.
-    const repoAccessMode: RepoAccessMode = effectiveRepo.repo_access_mode === 'clone' ? 'clone' : 'worktree';
-    // An agent with no repo configured has no task workspaces to reclaim.
-    if (!effectiveRepo.repo_path && !effectiveRepo.repo_url) continue;
-    // Detaching a worktree needs the source repo; deleting a clone does not.
-    if (repoAccessMode === 'worktree' && !effectiveRepo.repo_path) continue;
-
     const basePath = resolveWorktreeBasePath({
       osUser: agent.os_user,
       workspacePath: agent.workspace_path,
     });
-    const result = pruneOrphanedWorktrees({
-      repoPath: effectiveRepo.repo_path,
+    if (visited.has(basePath)) continue;
+    visited.add(basePath);
+    const result = await pruneOrphanedWorktrees({
       basePath,
-      mode: repoAccessMode,
       maxAgeHours: 24,
       getTaskRecord: async (taskId: number) => {
         const row = await db.get(`
-          SELECT status
+          SELECT status, ${await tableHasColumn(db, 'tasks', 'sprint_id') ? 'sprint_id' : 'NULL AS sprint_id'}, ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 'tenant_id' : 'NULL AS tenant_id'}
           FROM tasks
           WHERE id = ?
-        `, taskId) as { status: string } | undefined;
+        `, taskId) as { status: string; sprint_id: number | null; tenant_id: number | null } | undefined;
         return row
-          ? { exists: true, status: row.status }
+          ? { exists: true, status: row.status, terminal: (await listConfiguredTerminalStatuses(db, { sprintId: row.sprint_id, tenantId: row.tenant_id })).includes(row.status) }
           : { exists: false, status: null };
       },
       hasLiveInstance: async (worktreePath: string, taskId: number | null) => {
@@ -261,11 +222,12 @@ export async function runWorktreePrunePass(db: Db = getDb()): Promise<void> {
       },
     });
 
-    if ((await result).pruned.length > 0) {
+    for (const error of result.errors) console.info(`[watchdog] Workspace retained: ${error}`);
+    if (result.pruned.length > 0) {
       const agentLabel = agent.name || `agent #${agent.id}`;
-      console.log(`[watchdog] Pruned ${(await result).pruned.length} orphaned worktree(s) for ${agentLabel}`);
-      await recordWorktreePruneNotification(db, agent, (await result).pruned.length);
-      await notifyTelegram(`🧹 Watchdog: pruned ${(await result).pruned.length} orphaned worktree(s) for ${agentLabel}`);
+      console.log(`[watchdog] Pruned ${result.pruned.length} orphaned worktree(s) for ${agentLabel}`);
+      await recordWorktreePruneNotification(db, agent, result.pruned.length);
+      await notifyTelegram(`🧹 Watchdog: pruned ${result.pruned.length} orphaned worktree(s) for ${agentLabel}`);
     }
   }
 }

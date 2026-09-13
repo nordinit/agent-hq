@@ -1,3 +1,4 @@
+import type { EnvironmentSetup } from '../../lib/environmentSetup';
 import { type Db } from "../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
@@ -15,6 +16,7 @@ export interface SprintRecord {
   repo_path: string | null;
   repo_url: string | null;
   repo_access_mode: 'worktree' | 'clone' | null;
+  environment_setup?: EnvironmentSetup;
   created_at: string;
 }
 
