@@ -16,6 +16,8 @@ import { insertRuntimeLog, resolveRuntimeTenantId, tenantInsertColumns } from '.
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
 import { nowTimestamp } from './timestamps';
 import { type Db } from "../db/adapter/types";
+import { randomUUID } from 'crypto';
+import { withTelemetryCausation } from '../domains/telemetry/capture';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
 export interface ApplyTaskOutcomeInput {
@@ -586,198 +588,205 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     ? reviewOwnerAgentId
     : (effectiveOutcome === 'completed_for_review' ? reviewOwnerAgentId : reloadedExisting.review_owner_agent_id ?? null);
 
-  // Store failure or blocker detail on the task when failing.
-  // Also capture previous_status so retry or reopen can restore workflow
-  // position instead of always resetting to 'ready'.
-  const preserveFailureMetadata = isUnsuccessfulOutcome || nextStatus === 'failed' || nextStatus === 'stalled';
-  const assignmentColumn = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id';
-  if (isUnsuccessfulOutcome) {
-    await db.run(`
-      UPDATE tasks
-      SET status = ?,
-          ${assignmentColumn} = ?,
-          review_owner_agent_id = ?,
-          failure_detail = ?,
-          previous_status = ?,
-          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-      WHERE id = ?
-    `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.failureDetail ?? input.summary ?? null, preserveFailureMetadata ? priorStatus : null, input.taskId);
-  } else {
-    await db.run(`
-      UPDATE tasks
-      SET status = ?,
-          ${assignmentColumn} = ?,
-          review_owner_agent_id = ?,
-          failure_detail = NULL,
-          previous_status = NULL,
-          updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-      WHERE id = ?
-    `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.taskId);
-  }
-  await syncTaskActiveAgentFromInstance(db, input.taskId);
-
-  // Record the task outcome on the authoritative instance so the Jobs UI can
-  // distinguish execution status (done/failed) from task workflow outcome.
-  const lifecyclePostedAt = nowTimestamp();
-  let runtimeEndedBeforeOutcome = false;
-  if (input.instanceId != null) {
-    const runtimeState = await db.get(`SELECT runtime_ended_at FROM job_instances WHERE id = ?`, input.instanceId) as { runtime_ended_at: string | null } | undefined;
-    runtimeEndedBeforeOutcome = Boolean(runtimeState?.runtime_ended_at);
-    await db.run(`
-      UPDATE job_instances
-      SET task_outcome = ?,
-          lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
-          lifecycle_handoff_status = CASE
-            WHEN runtime_ended_at IS NOT NULL THEN 'reconciled'
-            ELSE 'posted'
-          END,
-          semantic_outcome_missing = 0,
-          runtime_completed_at = COALESCE(runtime_completed_at, runtime_ended_at)
-      WHERE id = ?
-    `, effectiveOutcome, input.instanceId);
-  } else if (reloadedExisting.active_instance_id != null) {
-    const runtimeState = await db.get(`SELECT runtime_ended_at FROM job_instances WHERE id = ?`, reloadedExisting.active_instance_id) as { runtime_ended_at: string | null } | undefined;
-    runtimeEndedBeforeOutcome = Boolean(runtimeState?.runtime_ended_at);
-    await db.run(`
-      UPDATE job_instances
-      SET task_outcome = ?,
-          lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
-          lifecycle_handoff_status = CASE
-            WHEN runtime_ended_at IS NOT NULL THEN 'reconciled'
-            ELSE 'posted'
-          END,
-          semantic_outcome_missing = 0,
-          runtime_completed_at = COALESCE(runtime_completed_at, runtime_ended_at)
-      WHERE id = ?
-    `, effectiveOutcome, reloadedExisting.active_instance_id);
-  }
-
-  // Close the authoritative run before status-driven linkage cleanup. Cleanup may mark a
-  // still-running, sessionless instance as failed when the destination status no longer permits
-  // active execution. Closing afterward would therefore see an already-terminal failed instance
-  // and skip the accepted outcome's successful completion bookkeeping. Keep the accepted outcome
-  // authoritative by closing its run before cleanup mutates any remaining execution linkage.
-  let instanceClosed = false;
-  const authoritativeInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
-  if (!input.dryRun && authoritativeInstanceId != null && isTerminalOutcome(effectiveOutcome)) {
-    const instanceStatus = effectiveOutcome === 'failed' || effectiveOutcome === 'infra_failed' || isRuntimeFailureOutcome(effectiveOutcome) ? 'failed' : 'done';
-    try {
-      const closeResult = await closeInstance({
-        db,
-        instanceId: authoritativeInstanceId,
-        status: instanceStatus,
-        summary: input.summary ?? null,
-        outcome: effectiveOutcome,
-        skipIfAlreadyDone: true,
-        recordCompletionNote: false,
-      });
-      instanceClosed = closeResult.closed;
-    } catch (closeErr) {
-      // Non-fatal: log and continue. Task status was already updated.
-      console.warn(`[taskOutcome] Auto-close failed for instance ${authoritativeInstanceId} (non-fatal):`, closeErr instanceof Error ? closeErr.message : closeErr);
+  // Accepted semantic evidence, its transition and run bookkeeping share a
+  // transaction/cause. Gate refusals above retain their existing audit behavior.
+  const telemetryInstanceId=input.instanceId??reloadedExisting.active_instance_id;
+  const telemetryOutcomeAgent=telemetryInstanceId==null?undefined:await db.value<number>(
+    'SELECT agent_id FROM job_instances WHERE id=? AND task_id=?',telemetryInstanceId,input.taskId);
+  return withTelemetryCausation(db, `outcome:${input.taskId}:${randomUUID()}`, async (db) => {
+    // Store failure or blocker detail on the task when failing.
+    // Also capture previous_status so retry or reopen can restore workflow
+    // position instead of always resetting to 'ready'.
+    const preserveFailureMetadata = isUnsuccessfulOutcome || nextStatus === 'failed' || nextStatus === 'stalled';
+    const assignmentColumn = hasAssignedAgentColumn ? 'assigned_agent_id' : 'agent_id';
+    if (isUnsuccessfulOutcome) {
+      await db.run(`
+        UPDATE tasks
+        SET status = ?,
+            ${assignmentColumn} = ?,
+            review_owner_agent_id = ?,
+            failure_detail = ?,
+            previous_status = ?,
+            updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+        WHERE id = ?
+      `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.failureDetail ?? input.summary ?? null, preserveFailureMetadata ? priorStatus : null, input.taskId);
+    } else {
+      await db.run(`
+        UPDATE tasks
+        SET status = ?,
+            ${assignmentColumn} = ?,
+            review_owner_agent_id = ?,
+            failure_detail = NULL,
+            previous_status = NULL,
+            updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+        WHERE id = ?
+      `, nextStatus, nextAssignedAgentId, nextReviewOwnerAgentId, input.taskId);
     }
-  }
+    await syncTaskActiveAgentFromInstance(db, input.taskId);
 
-  await cleanupTaskExecutionLinkageForStatus(db, input.taskId, nextStatus, {
-        authoritativeInstanceId,
-        changedBy: 'task_outcome',
-      });
-  await writeTaskLifecycleOutcomeHistory(db, input.taskId, changedBy, {
-        outcome: effectiveOutcome,
-        postedAt: lifecyclePostedAt,
-        postedAfterRuntimeEnd: runtimeEndedBeforeOutcome,
-      });
-  if (nextAssignedAgentId !== reloadedExisting.assigned_agent_id) {
-    await logHistory(
-            db,
-            input.taskId,
-            changedBy,
-            'assigned_agent_id',
-            await resolveAgentName(db, reloadedExisting.assigned_agent_id),
-            await resolveAgentName(db, nextAssignedAgentId),
-          );
-  }
+    // Record the task outcome on the authoritative instance so the Jobs UI can
+    // distinguish execution status (done/failed) from task workflow outcome.
+    const lifecyclePostedAt = nowTimestamp();
+    let runtimeEndedBeforeOutcome = false;
+    if (input.instanceId != null) {
+      const runtimeState = await db.get(`SELECT runtime_ended_at FROM job_instances WHERE id = ?`, input.instanceId) as { runtime_ended_at: string | null } | undefined;
+      runtimeEndedBeforeOutcome = Boolean(runtimeState?.runtime_ended_at);
+      await db.run(`
+        UPDATE job_instances
+        SET task_outcome = ?,
+            lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
+            lifecycle_handoff_status = CASE
+              WHEN runtime_ended_at IS NOT NULL THEN 'reconciled'
+              ELSE 'posted'
+            END,
+            semantic_outcome_missing = 0,
+            runtime_completed_at = COALESCE(runtime_completed_at, runtime_ended_at)
+        WHERE id = ?
+      `, effectiveOutcome, input.instanceId);
+    } else if (reloadedExisting.active_instance_id != null) {
+      const runtimeState = await db.get(`SELECT runtime_ended_at FROM job_instances WHERE id = ?`, reloadedExisting.active_instance_id) as { runtime_ended_at: string | null } | undefined;
+      runtimeEndedBeforeOutcome = Boolean(runtimeState?.runtime_ended_at);
+      await db.run(`
+        UPDATE job_instances
+        SET task_outcome = ?,
+            lifecycle_outcome_posted_at = COALESCE(lifecycle_outcome_posted_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
+            lifecycle_handoff_status = CASE
+              WHEN runtime_ended_at IS NOT NULL THEN 'reconciled'
+              ELSE 'posted'
+            END,
+            semantic_outcome_missing = 0,
+            runtime_completed_at = COALESCE(runtime_completed_at, runtime_ended_at)
+        WHERE id = ?
+      `, effectiveOutcome, reloadedExisting.active_instance_id);
+    }
 
-  // ── Emit task_event for this outcome-driven status transition (#586) ─────
-  await writeTaskStatusChange(db, input.taskId, changedBy, priorStatus, nextStatus, {
-        instanceId: input.instanceId ?? reloadedExisting.active_instance_id,
-        reason: input.summary ?? null,
-        projectId: reloadedExisting.project_id,
-        agentId: reloadedExisting.agent_id,
-      });
-
-  // ── Record failure_stage on instance (#586) ──────────────────────────────
-  if (isUnsuccessfulOutcome || effectiveOutcome.startsWith('failed:')) {
-    const failInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
-    if (failInstanceId != null) {
+    // Close the authoritative run before status-driven linkage cleanup. Cleanup may mark a
+    // still-running, sessionless instance as failed when the destination status no longer permits
+    // active execution. Closing afterward would therefore see an already-terminal failed instance
+    // and skip the accepted outcome's successful completion bookkeeping. Keep the accepted outcome
+    // authoritative by closing its run before cleanup mutates any remaining execution linkage.
+    let instanceClosed = false;
+    const authoritativeInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
+    if (!input.dryRun && authoritativeInstanceId != null && isTerminalOutcome(effectiveOutcome)) {
+      const instanceStatus = effectiveOutcome === 'failed' || effectiveOutcome === 'infra_failed' || isRuntimeFailureOutcome(effectiveOutcome) ? 'failed' : 'done';
       try {
-        await db.run(`UPDATE job_instances SET failure_stage = ? WHERE id = ?`, priorStatus, failInstanceId);
-      } catch { /* non-fatal */ }
+        const closeResult = await closeInstance({
+          db,
+          instanceId: authoritativeInstanceId,
+          status: instanceStatus,
+          summary: input.summary ?? null,
+          outcome: effectiveOutcome,
+          skipIfAlreadyDone: true,
+          recordCompletionNote: false,
+        });
+        instanceClosed = closeResult.closed;
+      } catch (closeErr) {
+        // Non-fatal: log and continue. Task status was already updated.
+        console.warn(`[taskOutcome] Auto-close failed for instance ${authoritativeInstanceId} (non-fatal):`, closeErr instanceof Error ? closeErr.message : closeErr);
+      }
     }
-  }
 
-  // ── Integrity anomaly detection (#586) ───────────────────────────────────
-  const finalTaskState = await reloadTaskOutcomeTaskRow(db, input.taskId);
-  const iProjectId = finalTaskState.project_id;
-  const iInstanceId = input.instanceId ?? finalTaskState.active_instance_id;
-  const iAgentId = finalTaskState.agent_id;
+    await cleanupTaskExecutionLinkageForStatus(db, input.taskId, nextStatus, {
+          authoritativeInstanceId,
+          changedBy: 'task_outcome',
+        });
+    await writeTaskLifecycleOutcomeHistory(db, input.taskId, changedBy, {
+          outcome: effectiveOutcome,
+          postedAt: lifecyclePostedAt,
+          postedAfterRuntimeEnd: runtimeEndedBeforeOutcome,
+        });
+    if (nextAssignedAgentId !== reloadedExisting.assigned_agent_id) {
+      await logHistory(
+              db,
+              input.taskId,
+              changedBy,
+              'assigned_agent_id',
+              await resolveAgentName(db, reloadedExisting.assigned_agent_id),
+              await resolveAgentName(db, nextAssignedAgentId),
+            );
+    }
 
-  // Reaching review with no branch or commit is no longer recorded as an anomaly. It assumed
-  // every task was development work; a design, PM, or configuration task arrives at review with
-  // nothing to cite, and counting that as a defect made the integrity feed a measure of task
-  // type rather than of anything wrong. A workflow that wants the evidence requires it in
-  // sprint_task_transition_requirements, where requireReleaseGate blocks the transition outright.
-  if (effectiveOutcome === 'qa_pass' && !finalTaskState.qa_verified_commit) {
-    await emitIntegrityEvent(db, {
-            taskId: input.taskId, anomalyType: 'missing_qa_evidence',
-            detail: `Task posted qa_pass (next status: ${nextStatus}) with no qa_verified_commit`,
-            instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-          });
-  }
+    // ── Emit task_event for this outcome-driven status transition (#586) ─────
+    await writeTaskStatusChange(db, input.taskId, changedBy, priorStatus, nextStatus, {
+          instanceId: input.instanceId ?? reloadedExisting.active_instance_id,
+          reason: input.summary ?? null,
+          projectId: reloadedExisting.project_id,
+          agentId: reloadedExisting.agent_id,
+        });
 
-  if (effectiveOutcome === 'qa_pass' && finalTaskState.review_commit && finalTaskState.qa_verified_commit
-    && finalTaskState.review_commit !== finalTaskState.qa_verified_commit) {
-    await emitIntegrityEvent(db, {
-            taskId: input.taskId, anomalyType: 'commit_mismatch',
-            detail: `review_commit=${finalTaskState.review_commit} ≠ qa_verified_commit=${finalTaskState.qa_verified_commit}`,
-            instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-          });
-  }
+    // ── Record failure_stage on instance (#586) ──────────────────────────────
+    if (isUnsuccessfulOutcome || effectiveOutcome.startsWith('failed:')) {
+      const failInstanceId = input.instanceId ?? reloadedExisting.active_instance_id;
+      if (failInstanceId != null) {
+        try {
+          await db.run(`UPDATE job_instances SET failure_stage = ? WHERE id = ?`, priorStatus, failInstanceId);
+        } catch { /* non-fatal */ }
+      }
+    }
 
-  if (nextStatus === 'done' && finalTaskState.deployed_at && !finalTaskState.live_verified_at) {
-    await emitIntegrityEvent(db, {
-            taskId: input.taskId, anomalyType: 'deployed_not_verified',
-            detail: `Task reached done without live_verified_at being set`,
-            instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
-          });
-  }
+    // ── Integrity anomaly detection (#586) ───────────────────────────────────
+    const finalTaskState = await reloadTaskOutcomeTaskRow(db, input.taskId);
+    const iProjectId = finalTaskState.project_id;
+    const iInstanceId = input.instanceId ?? finalTaskState.active_instance_id;
+    const iAgentId = finalTaskState.agent_id;
 
-  const failureInfo = isUnsuccessfulOutcome ? `${autoRecovered ? ', auto-recovered' : ''}` : '';
-  const message = `Outcome transition: task #${input.taskId} (${priorStatus} → ${nextStatus}), outcome="${effectiveOutcome}"${input.outcome !== effectiveOutcome ? `, requested_outcome="${input.outcome}"` : ''}${failureInfo}, actor="${changedBy}"${finalTaskState.agent_id ? `, agent_id=${finalTaskState.agent_id}` : ''}${input.instanceId != null ? `, instance_id=${input.instanceId}` : ''}${input.summary ? `, summary: ${input.summary}` : ''}`;
-  await insertAuditLog(db, message, input.taskId, input.instanceId);
+    // Reaching review with no branch or commit is no longer recorded as an anomaly. It assumed
+    // every task was development work; a design, PM, or configuration task arrives at review with
+    // nothing to cite, and counting that as a defect made the integrity feed a measure of task
+    // type rather than of anything wrong. A workflow that wants the evidence requires it in
+    // sprint_task_transition_requirements, where requireReleaseGate blocks the transition outright.
+    if (effectiveOutcome === 'qa_pass' && !finalTaskState.qa_verified_commit) {
+      await emitIntegrityEvent(db, {
+              taskId: input.taskId, anomalyType: 'missing_qa_evidence',
+              detail: `Task posted qa_pass (next status: ${nextStatus}) with no qa_verified_commit`,
+              instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
+            });
+    }
 
-  if (input.summary) {
-    await addAuditNote(db, input.taskId, changedBy, `Outcome: ${effectiveOutcome} — ${input.summary}`);
-  }
+    if (effectiveOutcome === 'qa_pass' && finalTaskState.review_commit && finalTaskState.qa_verified_commit
+      && finalTaskState.review_commit !== finalTaskState.qa_verified_commit) {
+      await emitIntegrityEvent(db, {
+              taskId: input.taskId, anomalyType: 'commit_mismatch',
+              detail: `review_commit=${finalTaskState.review_commit} ≠ qa_verified_commit=${finalTaskState.qa_verified_commit}`,
+              instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
+            });
+    }
 
-  if (!input.dryRun) {
-    await notifyTaskStatusChange(db, {
-            taskId: input.taskId,
-            fromStatus: priorStatus,
-            toStatus: nextStatus,
-            source: changedBy,
-          });
-  }
+    if (nextStatus === 'done' && finalTaskState.deployed_at && !finalTaskState.live_verified_at) {
+      await emitIntegrityEvent(db, {
+              taskId: input.taskId, anomalyType: 'deployed_not_verified',
+              detail: `Task reached done without live_verified_at being set`,
+              instanceId: iInstanceId, projectId: iProjectId, agentId: iAgentId,
+            });
+    }
 
-  return {
-    ok: true,
-    applied: true,
-    ignored: false,
-    priorStatus,
-    nextStatus,
-    outcome: effectiveOutcome,
-    instanceClosed,
-    autoRecovered,
-    recoveryDescription,
-  };
+    const failureInfo = isUnsuccessfulOutcome ? `${autoRecovered ? ', auto-recovered' : ''}` : '';
+    const message = `Outcome transition: task #${input.taskId} (${priorStatus} → ${nextStatus}), outcome="${effectiveOutcome}"${input.outcome !== effectiveOutcome ? `, requested_outcome="${input.outcome}"` : ''}${failureInfo}, actor="${changedBy}"${finalTaskState.agent_id ? `, agent_id=${finalTaskState.agent_id}` : ''}${input.instanceId != null ? `, instance_id=${input.instanceId}` : ''}${input.summary ? `, summary: ${input.summary}` : ''}`;
+    await insertAuditLog(db, message, input.taskId, input.instanceId);
+
+    if (input.summary) {
+      await addAuditNote(db, input.taskId, changedBy, `Outcome: ${effectiveOutcome} — ${input.summary}`);
+    }
+
+    if (!input.dryRun) {
+      await notifyTaskStatusChange(db, {
+              taskId: input.taskId,
+              fromStatus: priorStatus,
+              toStatus: nextStatus,
+              source: changedBy,
+            });
+    }
+
+    return {
+      ok: true,
+      applied: true,
+      ignored: false,
+      priorStatus,
+      nextStatus,
+      outcome: effectiveOutcome,
+      instanceClosed,
+      autoRecovered,
+      recoveryDescription,
+    };
+  }, {outcomeAgentId:telemetryOutcomeAgent});
 }

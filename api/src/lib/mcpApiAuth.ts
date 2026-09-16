@@ -50,6 +50,8 @@ declare global {
     interface Request {
       mcpIdentity?: McpApiIdentity;
       projectTaskLifecycle?: ProjectTaskLifecycleAuthorization;
+      /** Assigned project selected by MCP capability authorization, never caller JSON. */
+      telemetryProjectId?: number;
     }
   }
 }
@@ -134,6 +136,36 @@ export interface AgentMcpCapabilityDefinition {
 }
 
 export const AGENT_MCP_CAPABILITY_CATALOG = [
+  {
+    key: 'telemetry.read', group: 'Telemetry', label: 'Read project telemetry',
+    description: 'Read the canonical telemetry catalog, saved metrics/profiles/reports, bindings, coverage, retained results and contributors within the credential agent\'s assigned project and tenant. Rechecks source access for retained results; does not run queries or change definitions.',
+    endpoints: ['GET /api/v1/telemetry/v2/catalog', 'GET /api/v1/telemetry/v2/metrics', 'GET /api/v1/telemetry/v2/metrics/:id', 'GET /api/v1/telemetry/v2/profiles', 'GET /api/v1/telemetry/v2/profiles/:id', 'GET /api/v1/telemetry/v2/reports', 'GET /api/v1/telemetry/v2/reports/:id', 'GET /api/v1/telemetry/v2/bindings', 'GET /api/v1/telemetry/v2/queries/:id', 'GET /api/v1/telemetry/v2/queries/:id/contributors', 'GET /api/v1/telemetry/v2/reports/:id/snapshots', 'GET /api/v1/telemetry/v2/snapshots', 'GET /api/v1/telemetry/v2/coverage', 'GET /api/v1/telemetry/v2/backfills', 'GET /api/v1/telemetry/v2/settings'],
+    defaultEnabled: { scoped_runtime: false, trusted_admin: true },
+  },
+  {
+    key: 'telemetry.query', group: 'Telemetry', label: 'Calculate project telemetry',
+    description: 'Validate, preview, calculate and cancel bounded telemetry queries in the assigned project using the same evaluator as the UI. Definitions, component references, filters, groups and retained evidence remain tenant/project authorized.',
+    endpoints: ['POST /api/v1/telemetry/v2/definitions/validate', 'POST /api/v1/telemetry/v2/queries/preview', 'POST /api/v1/telemetry/v2/queries', 'DELETE /api/v1/telemetry/v2/queries/:id'],
+    defaultEnabled: { scoped_runtime: false, trusted_admin: true },
+  },
+  {
+    key: 'telemetry.manage_metrics', group: 'Telemetry', label: 'Manage project metrics and profiles',
+    description: 'Create immutable metric/profile revisions and scoped bindings, and archive definitions inside the assigned project. Does not change task schemas, values, routing rules or runtime behavior. Importing a package also requires telemetry.manage_reports.',
+    endpoints: ['POST /api/v1/telemetry/v2/metrics', 'POST /api/v1/telemetry/v2/metrics/:id/revisions', 'DELETE /api/v1/telemetry/v2/metrics/:id', 'POST /api/v1/telemetry/v2/profiles', 'POST /api/v1/telemetry/v2/profiles/:id/revisions', 'DELETE /api/v1/telemetry/v2/profiles/:id', 'PUT /api/v1/telemetry/v2/bindings', 'POST /api/v1/telemetry/v2/import'],
+    defaultEnabled: { scoped_runtime: false, trusted_admin: true },
+  },
+  {
+    key: 'telemetry.manage_reports', group: 'Telemetry', label: 'Manage project telemetry reports',
+    description: 'Create immutable saved report revisions, freeze retained results as report snapshots and archive reports within the assigned project. Importing a package also requires telemetry.manage_metrics. Does not grant telemetry maintenance, retention changes or workflow edits.',
+    endpoints: ['POST /api/v1/telemetry/v2/reports', 'POST /api/v1/telemetry/v2/reports/:id/revisions', 'DELETE /api/v1/telemetry/v2/reports/:id', 'POST /api/v1/telemetry/v2/reports/:id/snapshots', 'POST /api/v1/telemetry/v2/import'],
+    defaultEnabled: { scoped_runtime: false, trusted_admin: true },
+  },
+  {
+    key: 'telemetry.export', group: 'Telemetry', label: 'Export project telemetry definitions',
+    description: 'Export authorized metric/profile/report definitions and their canonical references for explicit destination remapping. This grant does not export another project\'s records or activate imported definitions.',
+    endpoints: ['POST /api/v1/telemetry/v2/export'],
+    defaultEnabled: { scoped_runtime: false, trusted_admin: true },
+  },
   {
     key: 'discovery.read_catalog',
     group: 'Discovery',
@@ -2206,6 +2238,30 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     });
     return false;
   };
+
+  if (requestPath === '/telemetry/v2' || requestPath.startsWith('/telemetry/v2/')) {
+    const path = requestPath.slice('/telemetry/v2'.length);
+    let requiredCapability: AgentMcpCapabilityKey;
+    if (method === 'POST' && path === '/bindings/preview') requiredCapability = 'telemetry.read';
+    else if (method === 'GET' && /^\/(?:catalog|metrics(?:\/[^/]+)?|profiles(?:\/[^/]+)?|reports(?:\/[^/]+(?:\/snapshots)?)?|bindings|queries\/[^/]+(?:\/contributors)?|snapshots|coverage|backfills|settings)$/.test(path)) requiredCapability = 'telemetry.read';
+    else if ((method === 'POST' && ['/definitions/validate', '/queries/preview', '/queries'].includes(path)) || (method === 'DELETE' && /^\/queries\/[^/]+$/.test(path))) requiredCapability = 'telemetry.query';
+    else if ((method === 'POST' && /^\/(metrics|profiles)(?:\/[^/]+\/revisions)?$/.test(path)) || (method === 'DELETE' && /^\/(metrics|profiles)\/[^/]+$/.test(path)) || (method === 'PUT' && path === '/bindings')) requiredCapability = 'telemetry.manage_metrics';
+    else if ((method === 'POST' && /^\/reports(?:\/[^/]+\/(revisions|snapshots))?$/.test(path)) || (method === 'DELETE' && /^\/reports\/[^/]+$/.test(path))) requiredCapability = 'telemetry.manage_reports';
+    else if (method === 'POST' && path === '/export') requiredCapability = 'telemetry.export';
+    else if (method === 'POST' && path === '/import') {
+      if (!await requireCapability('telemetry.manage_reports', 'Importing a telemetry package requires permission to manage project reports.')) return;
+      requiredCapability = 'telemetry.manage_metrics';
+    } else requiredCapability = 'admin.full_access';
+    // Unrecognized telemetry routes and operational backfill/retention writes are not
+    // covered by ordinary read/query grants. Full-access keys were handled above.
+    if (!await requireCapability(requiredCapability, `Telemetry action requires ${requiredCapability}.`)) return;
+    if (canonicalAgentProjectId == null) return deny({ reason: 'Telemetry capabilities require an assigned project.', requiredCapability });
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as Record<string, any> : {};
+    const selectors = [req.query.project_id, body.project_id, body.scope?.project_id, body.definition?.scope?.project_id];
+    if (selectors.some(selector => selector !== undefined && parsePositiveInt(selector) !== canonicalAgentProjectId)) return deny({ reason: 'Telemetry scope cannot exceed the assigned project.', requiredCapability });
+    req.telemetryProjectId = canonicalAgentProjectId;
+    return next();
+  }
 
   if (requestPath === '/mcp/catalog' || requestPath === '/mcp/catalog/health') {
     if (!await requireCapability(

@@ -1,0 +1,135 @@
+{
+  "description": "API regression evidence for configurable telemetry M0–M6. Disposable PostgreSQL test databases; no production migration or backfill.",
+  "full_run": {
+    "command": "env AGENT_HQ_TEST_PG_URL=postgresql://localhost/postgres npm test -- --runInBand --json --outputFile=/private/tmp/agent-hq-telemetry-api-final.json",
+    "working_directory": "api",
+    "started_at": "2026-09-10T05:01:01.925Z",
+    "success": false,
+    "suites": {
+      "total": 240,
+      "passed": 239,
+      "failed": 1
+    },
+    "tests": {
+      "total": 2421,
+      "passed": 2419,
+      "failed": 2
+    },
+    "failures": [
+      {
+        "file": "api/src/routes/routing.test.ts",
+        "tests": [
+          {
+            "name": "routing rules API lists and resolves workflow event default and override scopes with task-type matching",
+            "messages": [
+              "Error: thrown: \"Exceeded timeout of 60000 ms for a hook.\nAdd a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout.\"\n    at api/src/routes/routing.test.ts:116:3\n    at _dispatchDescribe (api/node_modules/jest-circus/build/jestAdapterInit.js:604:26)\n    at describe (api/node_modules/jest-circus/build/jestAdapterInit.js:572:44)\n    at Object.<anonymous> (api/src/routes/routing.test.ts:115:1)\n    at Runtime._execModule (api/node_modules/jest-runtime/build/index.js:1264:24)\n    at Runtime._loadModule (api/node_modules/jest-runtime/build/index.js:940:12)\n    at Runtime.requireModule (api/node_modules/jest-runtime/build/index.js:828:12)\n    at jestAdapter (api/node_modules/jest-circus/build/runner.js:95:13)\n    at runTestInternal (api/node_modules/jest-runner/build/index.js:275:16)\n    at runTest (api/node_modules/jest-runner/build/index.js:343:7)",
+              "Error: thrown: \"Exceeded timeout of 60000 ms for a hook.\nAdd a timeout value to this test to increase the timeout, if this is a long-running test. See https://jestjs.io/docs/api#testname-fn-timeout.\"\n    at api/src/routes/routing.test.ts:122:3\n    at _dispatchDescribe (api/node_modules/jest-circus/build/jestAdapterInit.js:604:26)\n    at describe (api/node_modules/jest-circus/build/jestAdapterInit.js:572:44)\n    at Object.<anonymous> (api/src/routes/routing.test.ts:115:1)\n    at Runtime._execModule (api/node_modules/jest-runtime/build/index.js:1264:24)\n    at Runtime._loadModule (api/node_modules/jest-runtime/build/index.js:940:12)\n    at Runtime.requireModule (api/node_modules/jest-runtime/build/index.js:828:12)\n    at jestAdapter (api/node_modules/jest-circus/build/runner.js:95:13)\n    at runTestInternal (api/node_modules/jest-runner/build/index.js:275:16)\n    at runTest (api/node_modules/jest-runner/build/index.js:343:7)"
+            ]
+          },
+          {
+            "name": "routing rules API reads and writes sprint-type-specific contract templates with fallback",
+            "messages": [
+              "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 200\nReceived: 500\n    at Object.<anonymous> (api/src/routes/routing.test.ts:2415:38)\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)"
+            ]
+          }
+        ]
+      }
+    ],
+    "telemetry_suites": [
+      {
+        "file": "api/src/routes/telemetry-v2.test.ts",
+        "status": "passed",
+        "tests": 27
+      },
+      {
+        "file": "api/src/domains/telemetry/capture.test.ts",
+        "status": "passed",
+        "tests": 37
+      },
+      {
+        "file": "api/src/routes/telemetry.legacy-scope.test.ts",
+        "status": "passed",
+        "tests": 17
+      },
+      {
+        "file": "api/src/domains/telemetry/portability.test.ts",
+        "status": "passed",
+        "tests": 12
+      },
+      {
+        "file": "api/src/domains/telemetry/data.test.ts",
+        "status": "passed",
+        "tests": 14
+      },
+      {
+        "file": "api/src/lib/projectPortability.telemetry.test.ts",
+        "status": "passed",
+        "tests": 6
+      },
+      {
+        "file": "api/src/domains/telemetry/signals.test.ts",
+        "status": "passed",
+        "tests": 13
+      },
+      {
+        "file": "api/src/domains/telemetry/catalog.test.ts",
+        "status": "passed",
+        "tests": 9
+      },
+      {
+        "file": "api/src/lib/mcpTelemetryAuth.test.ts",
+        "status": "passed",
+        "tests": 8
+      },
+      {
+        "file": "api/src/domains/telemetry/retention.test.ts",
+        "status": "passed",
+        "tests": 5
+      },
+      {
+        "file": "api/src/domains/telemetry/queries.family.test.ts",
+        "status": "passed",
+        "tests": 3
+      },
+      {
+        "file": "api/src/domains/telemetry/catalogRouting.test.ts",
+        "status": "passed",
+        "tests": 3
+      },
+      {
+        "file": "api/src/domains/telemetry/evaluator.test.ts",
+        "status": "passed",
+        "tests": 38
+      },
+      {
+        "file": "api/src/domains/telemetry/recipes.test.ts",
+        "status": "passed",
+        "tests": 3
+      },
+      {
+        "file": "api/src/mcp/domains/telemetry.test.ts",
+        "status": "passed",
+        "tests": 5
+      }
+    ]
+  },
+  "routing_retry": {
+    "command": "env AGENT_HQ_TEST_PG_URL=postgresql://localhost/postgres npm test -- --runInBand src/routes/routing.test.ts --json --outputFile=/private/tmp/agent-hq-telemetry-routing-retry.json",
+    "working_directory": "api",
+    "started_at": "2026-09-10T05:11:10.050Z",
+    "success": true,
+    "suites": {
+      "total": 1,
+      "passed": 1,
+      "failed": 0
+    },
+    "tests": {
+      "total": 61,
+      "passed": 61,
+      "failed": 0
+    },
+    "failures": [],
+    "telemetry_suites": []
+  },
+  "interpretation": "All telemetry-related suites passed in the full run. The two routing failures did not reproduce when the complete 61-test routing suite was rerun alone. Their cause remains unconfirmed; the isolated retry does not change the failed status of the full run."
+}

@@ -9,6 +9,16 @@ const POSTGRES_DDL_FIXTURES = new Set([
   path.join(TEST_ROOT, 'db', 'pg', 'migrationVerification.test.ts'),
 ]);
 
+function withoutCaptureFaultInjection(body: string): string {
+  // These tests still use the complete migrated schema. Temporary constraints
+  // and trigger outages verify atomic writes/recovery, not a substitute schema.
+  return body
+    .replace(/\bALTER\s+TABLE\s+(?:telemetry_outbox|telemetry_observations)\s+(?:ADD|DROP)\s+CONSTRAINT\s+(?:capture|projection)_failure_fixture\b/gi, '')
+    .replace(/\bALTER\s+TABLE\s+(?:runtime_executions|tasks)\s+(?:DISABLE|ENABLE)\s+TRIGGER\s+telemetry_capture\b/gi, '')
+    .replace(/\bALTER\s+TABLE\s+tasks\s+(?:DISABLE|ENABLE)\s+TRIGGER\s+telemetry_task_status_identity\b/gi, '')
+    .replace(/\bALTER\s+TABLE\s+sprint_type_task_statuses\s+(?:DISABLE|ENABLE)\s+TRIGGER\s+telemetry_signal_generation\b/gi, '');
+}
+
 function code(source: string): string {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -55,7 +65,7 @@ describe('PostgreSQL-only test suite', () => {
       .filter(({ file, body }) => (
         !POSTGRES_DDL_FIXTURES.has(file)
         && ![SQLITE_EXCEPTION, SQLITE_LINT_FIXTURE].includes(file)
-        && /\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX)\b/i.test(body)
+        && /\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX)\b/i.test(withoutCaptureFaultInjection(body))
       ))
       .map(({ file }) => path.relative(TEST_ROOT, file));
 

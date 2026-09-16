@@ -1,0 +1,1127 @@
+{
+  "/overview": {
+    "status": 200,
+    "body": {
+      "total_created": 1,
+      "total_with_outcome": 1,
+      "first_pass_rate_pct": 100,
+      "avg_cycle_time_hours": 2,
+      "avg_reopened_count": 0,
+      "needs_split_count": 0,
+      "by_source": [
+        {
+          "source": "manual",
+          "count": 1
+        }
+      ],
+      "by_confidence": [
+        {
+          "confidence": "",
+          "count": 1
+        }
+      ],
+      "by_scope_size": [
+        {
+          "scope_size": "",
+          "count": 1
+        }
+      ],
+      "by_quality": [
+        {
+          "outcome_quality": "",
+          "count": 1
+        }
+      ],
+      "top_failure_reasons": []
+    }
+  },
+  "/review": {
+    "status": 200,
+    "body": {
+      "tasks": [
+        {
+          "id": 2002,
+          "title": "Audit Task Two",
+          "status": "done",
+          "priority": "medium",
+          "created_at": "2026-09-10 02:19:29",
+          "updated_at": "2026-09-10 02:19:29",
+          "project_name": "Audit Project Two",
+          "sprint_name": "Audit Workflow Two",
+          "job_title": "Two",
+          "agent_name": "Audit Agent Two",
+          "source": "manual",
+          "confidence": "",
+          "scope_size": "",
+          "needs_split": 0,
+          "expected_artifact": "",
+          "success_mode": "",
+          "open_questions": "",
+          "assumptions": "",
+          "creation_event_at": "2026-09-10 02:19:29",
+          "first_pass_qa": 1,
+          "reopened_count": 0,
+          "rerouted_count": 0,
+          "split_after_creation": 0,
+          "blocked_after_creation": 0,
+          "clarification_count": 0,
+          "cycle_time_hours": 2,
+          "outcome_quality": "",
+          "failure_reasons": [],
+          "outcome_summary": "",
+          "outcome_recorded_at": "2026-09-10 02:19:29"
+        }
+      ],
+      "total": 1,
+      "limit": 50,
+      "offset": 0
+    }
+  },
+  "/review/2002": {
+    "status": 200,
+    "body": {
+      "task": {
+        "id": 2002,
+        "title": "Audit Task Two",
+        "description": "",
+        "status": "done",
+        "priority": "medium",
+        "project_id": 22,
+        "agent_id": 202,
+        "created_at": "2026-09-10 02:19:29",
+        "updated_at": "2026-09-10 02:19:29",
+        "active_instance_id": null,
+        "recurring": 0,
+        "sprint_id": 222,
+        "branch_url": null,
+        "retry_count": 0,
+        "max_retries": 3,
+        "dispatched_at": "2026-09-09 08:00:00",
+        "claimed_at": null,
+        "routing_reason": "audit-route-two",
+        "task_type": null,
+        "story_points": null,
+        "origin_task_id": null,
+        "defect_type": null,
+        "failure_class": null,
+        "failure_detail": null,
+        "review_owner_agent_id": null,
+        "paused_at": null,
+        "pause_reason": null,
+        "first_dispatched_at": null,
+        "total_dispatch_count": 0,
+        "manual_intervention_count": 0,
+        "previous_status": null,
+        "custom_fields_json": "{\"amount\":20}",
+        "recurring_series_id": null,
+        "scheduled_for": null,
+        "schedule_run_id": null,
+        "generated_from": null,
+        "assigned_agent_id": 202,
+        "tenant_id": 2,
+        "project_name": "Audit Project Two",
+        "sprint_name": "Audit Workflow Two",
+        "job_title": "Two",
+        "agent_name": "Audit Agent Two",
+        "blockers": [],
+        "blocking": []
+      },
+      "creation_event": {
+        "id": 2,
+        "task_id": 2002,
+        "project_id": 22,
+        "sprint_id": 222,
+        "job_id": 202,
+        "source": "manual",
+        "routing": "",
+        "confidence": "",
+        "scope_size": "",
+        "assumptions": "",
+        "open_questions": "",
+        "needs_split": 0,
+        "expected_artifact": "",
+        "success_mode": "",
+        "raw_input": "",
+        "created_at": "2026-09-10 02:19:29",
+        "agent_id": null,
+        "tenant_id": 2
+      },
+      "outcome_metrics": {
+        "id": 2,
+        "task_id": 2002,
+        "project_id": 22,
+        "sprint_id": 222,
+        "job_id": 202,
+        "first_pass_qa": 1,
+        "reopened_count": 0,
+        "rerouted_count": 0,
+        "split_after_creation": 0,
+        "blocked_after_creation": 0,
+        "clarification_count": 0,
+        "notes_count": 0,
+        "cycle_time_hours": 2,
+        "outcome_quality": "",
+        "failure_reasons": [],
+        "outcome_summary": "",
+        "recorded_at": "2026-09-10 02:19:29",
+        "updated_at": "2026-09-10 02:19:29",
+        "agent_id": null,
+        "spawned_defects": 0,
+        "tenant_id": 2
+      },
+      "history": [
+        {
+          "id": 1,
+          "task_id": 2002,
+          "changed_by": "system",
+          "field": "status",
+          "old_value": "review",
+          "new_value": "done",
+          "created_at": "2026-09-10 02:19:29",
+          "tenant_id": 2
+        }
+      ],
+      "notes": []
+    }
+  },
+  "/schema-config": {
+    "status": 200,
+    "body": {
+      "id": 1,
+      "description": "Default telemetry metadata fields for task creation",
+      "updated_at": null,
+      "fields": [
+        {
+          "key": "source",
+          "label": "Source",
+          "type": "select",
+          "required": false,
+          "enabled": true,
+          "options": [
+            "manual",
+            "skill",
+            "agent",
+            "api",
+            "import"
+          ]
+        },
+        {
+          "key": "routing",
+          "label": "Routing",
+          "type": "text",
+          "required": false,
+          "enabled": true
+        },
+        {
+          "key": "confidence",
+          "label": "Confidence",
+          "type": "select",
+          "required": false,
+          "enabled": true,
+          "options": [
+            "",
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        {
+          "key": "scope_size",
+          "label": "Scope Size",
+          "type": "select",
+          "required": false,
+          "enabled": true,
+          "options": [
+            "",
+            "xs",
+            "small",
+            "medium",
+            "large",
+            "xl"
+          ]
+        },
+        {
+          "key": "assumptions",
+          "label": "Assumptions",
+          "type": "textarea",
+          "required": false,
+          "enabled": true
+        },
+        {
+          "key": "open_questions",
+          "label": "Open Questions",
+          "type": "textarea",
+          "required": false,
+          "enabled": true
+        },
+        {
+          "key": "needs_split",
+          "label": "Needs Split",
+          "type": "boolean",
+          "required": false,
+          "enabled": true
+        },
+        {
+          "key": "expected_artifact",
+          "label": "Expected Artifact",
+          "type": "text",
+          "required": false,
+          "enabled": true
+        },
+        {
+          "key": "success_mode",
+          "label": "Success Mode",
+          "type": "text",
+          "required": false,
+          "enabled": true
+        },
+        {
+          "key": "raw_input",
+          "label": "Raw Input",
+          "type": "textarea",
+          "required": false,
+          "enabled": false
+        }
+      ]
+    }
+  },
+  "/recommendations": {
+    "status": 200,
+    "body": {
+      "generated_at": "2026-09-10T02:19:29.748Z",
+      "scope": {},
+      "task_count": 2,
+      "outcome_count": 2,
+      "recommendations": [],
+      "failure_summary": []
+    }
+  },
+  "/sessions": {
+    "status": 200,
+    "body": {
+      "totals": {
+        "total_sessions": 2,
+        "total_messages": 3,
+        "avg_messages_per_session": 1.5,
+        "total_token_input": null,
+        "total_token_output": null,
+        "avg_token_input": null,
+        "avg_token_output": null,
+        "unique_agents": 2,
+        "unique_tasks": 2
+      },
+      "by_runtime": [
+        {
+          "runtime": "openclaw",
+          "count": 2
+        }
+      ],
+      "by_status": [
+        {
+          "status": "completed",
+          "count": 2
+        }
+      ],
+      "by_agent": [
+        {
+          "agent_id": 101,
+          "agent_name": "Audit Agent One",
+          "session_count": 1,
+          "total_messages": 1,
+          "total_token_input": null,
+          "total_token_output": null,
+          "avg_messages": 1
+        },
+        {
+          "agent_id": 202,
+          "agent_name": "Audit Agent Two",
+          "session_count": 1,
+          "total_messages": 2,
+          "total_token_input": null,
+          "total_token_output": null,
+          "avg_messages": 2
+        }
+      ]
+    }
+  },
+  "/pipeline-health?from=2020-01-01&to=2030-01-01": {
+    "status": 200,
+    "body": {
+      "period": {
+        "from": "2020-01-01",
+        "to": "2030-01-01"
+      },
+      "completed_in_period": 2,
+      "board_distribution": [],
+      "total_dispatched_in_period": 2,
+      "failure_rate_pct": 0,
+      "stale_task_count": 0,
+      "manual_interventions_in_period": 0,
+      "integrity_anomaly_count_open": 2
+    }
+  },
+  "/bottlenecks?project_id=22": {
+    "status": 200,
+    "body": {
+      "time_in_status": [],
+      "aging_buckets": [],
+      "top_stuck": [],
+      "review_bounces": [
+        {
+          "task_id": 1001,
+          "title": "Audit Task One",
+          "review_count": 2
+        },
+        {
+          "task_id": 2002,
+          "title": "Audit Task Two",
+          "review_count": 2
+        }
+      ]
+    }
+  },
+  "/failures?from=2020-01-01&to=2030-01-01": {
+    "status": 200,
+    "body": {
+      "period": {
+        "from": "2020-01-01",
+        "to": "2030-01-01"
+      },
+      "total_dispatched": 2,
+      "total_failed": 0,
+      "failure_rate_pct": 0,
+      "by_outcome": [],
+      "by_agent": [
+        {
+          "agent_id": 101,
+          "agent_name": "Audit Agent One",
+          "total": 1,
+          "failed": 0,
+          "fail_pct": 0
+        },
+        {
+          "agent_id": 202,
+          "agent_name": "Audit Agent Two",
+          "total": 1,
+          "failed": 0,
+          "fail_pct": 0
+        }
+      ],
+      "by_task_type": [
+        {
+          "task_type": "unknown",
+          "total": 2,
+          "failed": 0,
+          "fail_pct": 0
+        }
+      ],
+      "by_stage": [
+        {
+          "failure_stage": "audit-stage-one",
+          "count": 1
+        },
+        {
+          "failure_stage": "audit-stage-two",
+          "count": 1
+        }
+      ],
+      "top_failing_tasks": []
+    }
+  },
+  "/integrity": {
+    "status": 200,
+    "body": {
+      "total_anomalies": 2,
+      "anomaly_counts_by_type": [
+        {
+          "type": "missing_review_evidence",
+          "label": "Missing Review Evidence",
+          "description": "Task reached review with no branch or commit recorded.",
+          "count": 2
+        },
+        {
+          "type": "missing_qa_evidence",
+          "label": "Missing QA Evidence",
+          "description": "Task reached qa_pass with no qa_verified_commit.",
+          "count": 0
+        },
+        {
+          "type": "commit_mismatch",
+          "label": "Commit Mismatch",
+          "description": "Review commit differs from QA verified commit.",
+          "count": 0
+        },
+        {
+          "type": "deployed_not_verified",
+          "label": "Deployed Not Verified",
+          "description": "Task reached done without live_verified_at being set.",
+          "count": 0
+        },
+        {
+          "type": "stale_outcome_write",
+          "label": "Stale Outcome Write",
+          "description": "Outcome submitted by a non-authoritative instance.",
+          "count": 0
+        },
+        {
+          "type": "branch_missing_on_origin",
+          "label": "Branch Missing on Origin",
+          "description": "Review branch recorded but not found on remote.",
+          "count": 0
+        },
+        {
+          "type": "evidence_placeholder",
+          "label": "Evidence Placeholder",
+          "description": "Evidence fields contain placeholder/dummy values.",
+          "count": 0
+        },
+        {
+          "type": "missing_lifecycle_handoff",
+          "label": "Missing Lifecycle Handoff",
+          "description": "Runtime ended without the required semantic lifecycle outcome.",
+          "count": 0
+        }
+      ],
+      "anomaly_rate_trend": [
+        {
+          "date": "2026-09-10",
+          "count": 2
+        }
+      ],
+      "by_agent": [
+        {
+          "agent_id": 101,
+          "agent_name": "Audit Agent One",
+          "count": 1
+        },
+        {
+          "agent_id": 202,
+          "agent_name": "Audit Agent Two",
+          "count": 1
+        }
+      ],
+      "affected_tasks": [
+        {
+          "id": 2002,
+          "title": "Audit Task Two",
+          "status": "done",
+          "priority": "medium",
+          "anomaly_count": 1,
+          "anomaly_types": "missing_review_evidence"
+        },
+        {
+          "id": 1001,
+          "title": "Audit Task One",
+          "status": "done",
+          "priority": "medium",
+          "anomaly_count": 1,
+          "anomaly_types": "missing_review_evidence"
+        }
+      ]
+    }
+  },
+  "/routing?from=2020-01-01&to=2030-01-01": {
+    "status": 200,
+    "body": {
+      "period": {
+        "from": "2020-01-01",
+        "to": "2030-01-01"
+      },
+      "routing_reason_summary": [
+        {
+          "routing_reason": "audit-route-one",
+          "dispatched": 1,
+          "success": 1,
+          "failed": 0,
+          "stalled": 0,
+          "success_pct": 100,
+          "fail_pct": 0
+        },
+        {
+          "routing_reason": "audit-route-two",
+          "dispatched": 1,
+          "success": 1,
+          "failed": 0,
+          "stalled": 0,
+          "success_pct": 100,
+          "fail_pct": 0
+        }
+      ],
+      "by_agent": [
+        {
+          "agent_id": 101,
+          "agent_name": "Audit Agent One",
+          "dispatched": 1,
+          "done": 1,
+          "failed": 0,
+          "success_pct": 100
+        },
+        {
+          "agent_id": 202,
+          "agent_name": "Audit Agent Two",
+          "dispatched": 1,
+          "done": 1,
+          "failed": 0,
+          "success_pct": 100
+        }
+      ],
+      "routing_rules": []
+    }
+  },
+  "/templates?from=2020-01-01&to=2030-01-01": {
+    "status": 200,
+    "body": {
+      "period": {
+        "from": "2020-01-01",
+        "to": "2030-01-01"
+      },
+      "by_template": [
+        {
+          "agent_id": 101,
+          "agent_name": "Audit Agent One",
+          "job_title": "One",
+          "job_instructions_updated_at": null,
+          "instructions_version": 0,
+          "total_runs": 1,
+          "success": 0,
+          "failed": 1,
+          "cancelled": 0,
+          "success_pct": 0,
+          "fail_pct": 100,
+          "avg_cycle_min": null,
+          "total_tokens": 0,
+          "avg_tokens": 0,
+          "meaningful_output_count": 0,
+          "meaningful_output_rate_pct": 0
+        },
+        {
+          "agent_id": 202,
+          "agent_name": "Audit Agent Two",
+          "job_title": "Two",
+          "job_instructions_updated_at": null,
+          "instructions_version": 0,
+          "total_runs": 1,
+          "success": 0,
+          "failed": 1,
+          "cancelled": 0,
+          "success_pct": 0,
+          "fail_pct": 100,
+          "avg_cycle_min": null,
+          "total_tokens": 0,
+          "avg_tokens": 0,
+          "meaningful_output_count": 0,
+          "meaningful_output_rate_pct": 0
+        }
+      ]
+    }
+  },
+  "/events": {
+    "status": 200,
+    "body": {
+      "events": [
+        {
+          "id": 5,
+          "task_id": 1001,
+          "project_id": 11,
+          "sprint_id": null,
+          "agent_id": 101,
+          "from_status": "in_progress",
+          "to_status": "review",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 14:00:00",
+          "tenant_id": 1,
+          "task_title": "Audit Task One",
+          "agent_name": "Audit Agent One"
+        },
+        {
+          "id": 10,
+          "task_id": 2002,
+          "project_id": 22,
+          "sprint_id": null,
+          "agent_id": 202,
+          "from_status": "in_progress",
+          "to_status": "review",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 14:00:00",
+          "tenant_id": 2,
+          "task_title": "Audit Task Two",
+          "agent_name": "Audit Agent Two"
+        },
+        {
+          "id": 9,
+          "task_id": 2002,
+          "project_id": 22,
+          "sprint_id": null,
+          "agent_id": 202,
+          "from_status": "review",
+          "to_status": "in_progress",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 13:00:00",
+          "tenant_id": 2,
+          "task_title": "Audit Task Two",
+          "agent_name": "Audit Agent Two"
+        },
+        {
+          "id": 4,
+          "task_id": 1001,
+          "project_id": 11,
+          "sprint_id": null,
+          "agent_id": 101,
+          "from_status": "review",
+          "to_status": "in_progress",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 13:00:00",
+          "tenant_id": 1,
+          "task_title": "Audit Task One",
+          "agent_name": "Audit Agent One"
+        },
+        {
+          "id": 3,
+          "task_id": 1001,
+          "project_id": 11,
+          "sprint_id": null,
+          "agent_id": 101,
+          "from_status": "in_progress",
+          "to_status": "review",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 12:00:00",
+          "tenant_id": 1,
+          "task_title": "Audit Task One",
+          "agent_name": "Audit Agent One"
+        },
+        {
+          "id": 8,
+          "task_id": 2002,
+          "project_id": 22,
+          "sprint_id": null,
+          "agent_id": 202,
+          "from_status": "in_progress",
+          "to_status": "review",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 12:00:00",
+          "tenant_id": 2,
+          "task_title": "Audit Task Two",
+          "agent_name": "Audit Agent Two"
+        },
+        {
+          "id": 2,
+          "task_id": 1001,
+          "project_id": 11,
+          "sprint_id": null,
+          "agent_id": 101,
+          "from_status": "ready",
+          "to_status": "in_progress",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 11:00:00",
+          "tenant_id": 1,
+          "task_title": "Audit Task One",
+          "agent_name": "Audit Agent One"
+        },
+        {
+          "id": 7,
+          "task_id": 2002,
+          "project_id": 22,
+          "sprint_id": null,
+          "agent_id": 202,
+          "from_status": "ready",
+          "to_status": "in_progress",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 11:00:00",
+          "tenant_id": 2,
+          "task_title": "Audit Task Two",
+          "agent_name": "Audit Agent Two"
+        },
+        {
+          "id": 6,
+          "task_id": 2002,
+          "project_id": 22,
+          "sprint_id": null,
+          "agent_id": 202,
+          "from_status": null,
+          "to_status": "ready",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 10:00:00",
+          "tenant_id": 2,
+          "task_title": "Audit Task Two",
+          "agent_name": "Audit Agent Two"
+        },
+        {
+          "id": 1,
+          "task_id": 1001,
+          "project_id": 11,
+          "sprint_id": null,
+          "agent_id": 101,
+          "from_status": null,
+          "to_status": "ready",
+          "moved_by": "system",
+          "move_type": "automatic",
+          "instance_id": null,
+          "reason": null,
+          "created_at": "2026-09-08 10:00:00",
+          "tenant_id": 1,
+          "task_title": "Audit Task One",
+          "agent_name": "Audit Agent One"
+        }
+      ],
+      "total": 10,
+      "limit": 100,
+      "offset": 0
+    }
+  },
+  "swallowed_sql_errors": [
+    "error: column \"dur\" does not exist"
+  ],
+  "overview_date_filter": {
+    "status": 500,
+    "body": {
+      "error": "error: column tom.created_at does not exist"
+    }
+  },
+  "foreign_task_drilldown": {
+    "status": 404,
+    "body": {
+      "error": "Task not found"
+    }
+  },
+  "foreign_task_metric_write": {
+    "status": 404,
+    "body": {
+      "error": "Task not found"
+    }
+  },
+  "foreign_integrity_resolve": {
+    "status": 200,
+    "body": {
+      "id": 1,
+      "task_id": 1001,
+      "project_id": 11,
+      "agent_id": 101,
+      "instance_id": null,
+      "anomaly_type": "missing_review_evidence",
+      "detail": "Audit tenant one detail",
+      "resolved": 1,
+      "resolved_at": "2026-09-10 02:19:29",
+      "created_at": "2026-09-10 02:19:29",
+      "tenant_id": 1
+    }
+  },
+  "foreign_integrity_insert": {
+    "status": 201,
+    "body": {
+      "ok": true,
+      "task_id": 1001,
+      "anomaly_type": "missing_qa_evidence"
+    }
+  },
+  "foreign_integrity_insert_persisted": {
+    "task_id": 1001,
+    "tenant_id": 1,
+    "project_id": null
+  },
+  "nonexistent_integrity_insert": {
+    "status": 201,
+    "body": {
+      "ok": true,
+      "task_id": 999999,
+      "anomaly_type": "missing_qa_evidence"
+    }
+  },
+  "nonexistent_integrity_rows": 0,
+  "failures_agent_filter": {
+    "status": 200,
+    "body": {
+      "period": {
+        "from": "2020-01-01",
+        "to": "2030-01-01"
+      },
+      "total_dispatched": 1,
+      "total_failed": 0,
+      "failure_rate_pct": 0,
+      "by_outcome": [],
+      "by_agent": [
+        {
+          "agent_id": 202,
+          "agent_name": "Audit Agent Two",
+          "total": 1,
+          "failed": 0,
+          "fail_pct": 0
+        }
+      ],
+      "by_task_type": [
+        {
+          "task_type": "unknown",
+          "total": 1,
+          "failed": 0,
+          "fail_pct": 0
+        }
+      ],
+      "by_stage": [
+        {
+          "failure_stage": "audit-stage-one",
+          "count": 1
+        },
+        {
+          "failure_stage": "audit-stage-two",
+          "count": 1
+        }
+      ],
+      "top_failing_tasks": []
+    }
+  },
+  "schema_save": {
+    "status": 200,
+    "body": {
+      "id": 1,
+      "fields": [
+        {
+          "key": "revenue",
+          "label": "Revenue",
+          "type": "number",
+          "required": true,
+          "enabled": true,
+          "analytics_enabled": true
+        }
+      ],
+      "description": "",
+      "updated_at": "2026-09-10 02:19:29"
+    }
+  },
+  "canonical_fields_after_telemetry_save": [
+    {
+      "key": "amount",
+      "label": "amount",
+      "type": "number",
+      "required": false,
+      "help_text": "",
+      "system": false
+    }
+  ],
+  "schema_read_other_tenant": {
+    "status": 200,
+    "body": {
+      "id": 1,
+      "fields": [
+        {
+          "key": "revenue",
+          "label": "Revenue",
+          "type": "number",
+          "required": true,
+          "enabled": true,
+          "analytics_enabled": true
+        }
+      ],
+      "description": "",
+      "updated_at": "2026-09-10 02:19:29"
+    }
+  },
+  "malformed_schema_save": {
+    "status": 200,
+    "body": {
+      "id": 1,
+      "fields": [
+        null
+      ],
+      "description": "",
+      "updated_at": "2026-09-10 02:19:29"
+    }
+  },
+  "duplicate_creation_post": {
+    "status": 201,
+    "body": {
+      "id": 3,
+      "task_id": 2002,
+      "project_id": 22,
+      "sprint_id": 222,
+      "job_id": 202,
+      "source": "manual",
+      "routing": "",
+      "confidence": "",
+      "scope_size": "",
+      "assumptions": "",
+      "open_questions": "",
+      "needs_split": 0,
+      "expected_artifact": "",
+      "success_mode": "",
+      "raw_input": "",
+      "created_at": "2026-09-10 02:19:29",
+      "agent_id": null,
+      "tenant_id": 2
+    }
+  },
+  "duplicate_review": {
+    "status": 200,
+    "total": 2,
+    "ids": [
+      2002,
+      2002
+    ]
+  },
+  "duplicate_creation_overview": {
+    "status": 200,
+    "body": {
+      "total_created": 2,
+      "total_with_outcome": 1,
+      "first_pass_rate_pct": 100,
+      "avg_cycle_time_hours": 2,
+      "avg_reopened_count": 0,
+      "needs_split_count": 0,
+      "by_source": [
+        {
+          "source": "manual",
+          "count": 2
+        }
+      ],
+      "by_confidence": [
+        {
+          "confidence": "",
+          "count": 2
+        }
+      ],
+      "by_scope_size": [
+        {
+          "scope_size": "",
+          "count": 2
+        }
+      ],
+      "by_quality": [
+        {
+          "outcome_quality": "",
+          "count": 1
+        }
+      ],
+      "top_failure_reasons": []
+    }
+  },
+  "duplicate_outcome_post": {
+    "status": 500,
+    "body": {
+      "error": "error: duplicate key value violates unique constraint \"uq_task_outcome_metrics_task_id\""
+    }
+  },
+  "invalid_outcome_values": {
+    "status": 200,
+    "body": {
+      "id": 2,
+      "task_id": 2002,
+      "project_id": 22,
+      "sprint_id": 222,
+      "job_id": 202,
+      "first_pass_qa": 1,
+      "reopened_count": -3,
+      "rerouted_count": 0,
+      "split_after_creation": 0,
+      "blocked_after_creation": 0,
+      "clarification_count": 0,
+      "notes_count": 0,
+      "cycle_time_hours": -10,
+      "outcome_quality": "",
+      "failure_reasons": [],
+      "outcome_summary": "",
+      "recorded_at": "2026-09-10 02:19:29",
+      "updated_at": "2026-09-10 02:19:29",
+      "agent_id": null,
+      "spawned_defects": 0,
+      "tenant_id": 2
+    }
+  },
+  "invalid_pagination": {
+    "status": 500,
+    "body": {
+      "error": "error: LIMIT must not be negative"
+    }
+  },
+  "timestamp_formats": {
+    "iso_midnight_total": 0,
+    "sql_midnight_total": 2
+  },
+  "closed_workflow_task_list": {
+    "before": 1,
+    "after": [],
+    "explicit_include_closed": 1
+  },
+  "assigned_agent_creation": {
+    "status": 201,
+    "body": {
+      "id": 4,
+      "task_id": 2002,
+      "project_id": 22,
+      "sprint_id": 222,
+      "job_id": null,
+      "source": "manual",
+      "routing": "",
+      "confidence": "",
+      "scope_size": "",
+      "assumptions": "",
+      "open_questions": "",
+      "needs_split": 0,
+      "expected_artifact": "",
+      "success_mode": "",
+      "raw_input": "",
+      "created_at": "2026-09-10 02:19:29",
+      "agent_id": null,
+      "tenant_id": 2
+    }
+  },
+  "assigned_agent_review_filter": {
+    "status": 200,
+    "body": {
+      "tasks": [],
+      "total": 0,
+      "limit": 50,
+      "offset": 0
+    }
+  },
+  "history_contract": [
+    {
+      "id": 1,
+      "task_id": 2002,
+      "changed_by": "system",
+      "field": "status",
+      "old_value": "review",
+      "new_value": "done",
+      "created_at": "2026-09-10 02:19:29",
+      "tenant_id": 2
+    }
+  ],
+  "ordinary_task_creation": {
+    "task_id": 1,
+    "stored_custom_fields": {
+      "amount": 30
+    },
+    "creation_events": 0,
+    "outcome_metrics": 0
+  },
+  "ui_helpers": {
+    "failed_task_qa": "Pending",
+    "qa_pass_task_qa": "Pending",
+    "confidence_without_recorded_confidence": 0.85,
+    "done_task_after_retry_qa": "Pass"
+  }
+}

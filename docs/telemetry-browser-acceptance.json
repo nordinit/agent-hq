@@ -1,0 +1,18 @@
+{
+  "checked_at": "2026-09-10T04:54:05.731Z",
+  "ui_url": "http://127.0.0.1:3568",
+  "fixture": "disposable synthetic PostgreSQL",
+  "results": [
+    "Guided canonical numeric sum210; six retained contributors agree.",
+    "Metric/report save, pinned report execution, and frozen snapshot.",
+    "Editing metric to mean preserves the report\u2019s original sum revision.",
+    "Scoped binding preview/save, inherited project mean35, and workflow disable suppresses six tasks.",
+    "Configured first pass2/4; successful-only denominator2/3.",
+    "Invalid draft is shown as an error.",
+    "Project filter and independently configured submission milestone return1."
+  ],
+  "metric_id": "0b164bfa-e489-4bbf-85ce-082fca1abe5e",
+  "report_id": "b5b3b641-40aa-4219-82f6-48dd636db566",
+  "page_errors": [],
+  "notes": "Actual headless Chromium interactions with the isolated production UI build and disposable PostgreSQL API fixture; no telemetry response mocks."
+}

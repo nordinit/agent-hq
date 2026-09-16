@@ -15,6 +15,7 @@ import { runsClient } from './runs';
 import { tasksClient } from './tasks';
 import { teamsClient } from './teams';
 import { workflowsClient } from './workflows';
+import { telemetryClient } from './telemetry';
 
 export const api = {
   ...agentsClient,
@@ -30,4 +31,5 @@ export const api = {
   ...runtimesClient,
   ...teamsClient,
   ...dispatchContextClient,
+  ...telemetryClient,
 };

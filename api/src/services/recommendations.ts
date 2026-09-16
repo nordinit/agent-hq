@@ -96,6 +96,7 @@ export const FAILURE_TAXONOMY: FailureTaxonomyEntry[] = [
 // ── Rule Engine ──────────────────────────────────────────────────────────────
 
 interface QueryFilters {
+  tenant_id?: number;
   project_id?: number;
   sprint_id?: number;
   job_id?: number;
@@ -109,6 +110,10 @@ function buildWhere(
   conditions: string[],
   params: unknown[]
 ): void {
+  if(filters.tenant_id!=null){
+    conditions.push(`${alias}.task_id IN (SELECT id FROM tasks WHERE tenant_id=?${filters.project_id==null?'':' AND project_id=?'})`);
+    params.push(filters.tenant_id);if(filters.project_id!=null)params.push(filters.project_id);
+  }
   if (filters.project_id) { conditions.push(`${alias}.project_id = ?`); params.push(filters.project_id); }
   if (filters.sprint_id)  { conditions.push(`${alias}.sprint_id = ?`);  params.push(filters.sprint_id);  }
   if (filters.job_id)     { conditions.push(`${alias}.job_id = ?`);     params.push(filters.job_id);     }
@@ -127,6 +132,10 @@ export async function generateRecommendations(db: Db, filters: QueryFilters = {}
 
   const ceConds: string[] = [];
   const ceParams: unknown[] = [];
+  if(filters.tenant_id!=null){
+    ceConds.push(`tce.task_id IN (SELECT id FROM tasks WHERE tenant_id=?${filters.project_id==null?'':' AND project_id=?'})`);
+    ceParams.push(filters.tenant_id);if(filters.project_id!=null)ceParams.push(filters.project_id);
+  }
   if (filters.project_id) { ceConds.push('tce.project_id = ?'); ceParams.push(filters.project_id); }
   if (filters.sprint_id)  { ceConds.push('tce.sprint_id = ?');  ceParams.push(filters.sprint_id);  }
   if (filters.job_id)     { ceConds.push('tce.job_id = ?');     ceParams.push(filters.job_id);     }
@@ -137,6 +146,7 @@ export async function generateRecommendations(db: Db, filters: QueryFilters = {}
   // Task filter for counting
   const tConds: string[] = [];
   const tParams: unknown[] = [];
+  if(filters.tenant_id!=null){tConds.push('t.tenant_id=?');tParams.push(filters.tenant_id);}
   if (filters.project_id) { tConds.push('t.project_id = ?'); tParams.push(filters.project_id); }
   if (filters.sprint_id)  { tConds.push('t.sprint_id = ?');  tParams.push(filters.sprint_id);  }
   if (filters.job_id)     { tConds.push('t.assigned_agent_id = ?');    tParams.push(filters.job_id);     }
@@ -185,7 +195,7 @@ export async function generateRecommendations(db: Db, filters: QueryFilters = {}
       SELECT tom.job_id, a.name as agent_name,
              COUNT(*) as total, SUM(tom.first_pass_qa) as passed
       FROM task_outcome_metrics tom
-      LEFT JOIN agents a ON a.id = tom.job_id
+      LEFT JOIN agents a ON a.id = tom.job_id AND a.tenant_id=(SELECT tenant_id FROM tasks WHERE id=tom.task_id)
       ${omWhere}
       GROUP BY tom.job_id, a.name
       HAVING COUNT(*) >= 2 AND (CAST(SUM(tom.first_pass_qa) AS REAL) / COUNT(*)) < 0.7
@@ -254,7 +264,7 @@ export async function generateRecommendations(db: Db, filters: QueryFilters = {}
       SELECT tom.job_id, a.name as agent_name,
              AVG(tom.cycle_time_hours) as avg_h, COUNT(*) as n
       FROM task_outcome_metrics tom
-      LEFT JOIN agents a ON a.id = tom.job_id
+      LEFT JOIN agents a ON a.id = tom.job_id AND a.tenant_id=(SELECT tenant_id FROM tasks WHERE id=tom.task_id)
       ${omWhere ? omWhere + ' AND' : 'WHERE'} tom.cycle_time_hours IS NOT NULL
       GROUP BY tom.job_id, a.name
       HAVING COUNT(*) >= 2 AND AVG(tom.cycle_time_hours) > 8

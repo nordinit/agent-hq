@@ -8,15 +8,8 @@ afterEach(() => {
   localProcesses.localProcessSupervisor.clearForTests();
 });
 
-// The PostgreSQL pool is deliberately NOT closed here.
-//
-// Closing it per FILE looked tidy and was wrong for the same reason closing it per TEST was:
-// closeTestDb() clears testFixture's cached handle, so the next file's setup re-enters the clone
-// path and runs DROP DATABASE + CREATE DATABASE ... TEMPLATE again. Cloning a 71-table template is
-// slow enough that whole files then failed on jest's 5s timeout — including under --runInBand,
-// which is what ruled out worker contention as the cause and pointed back here.
-//
-// The fixture's model is one database per WORKER, held for the worker's lifetime and reset by
-// truncation in setupTestDb(). One clone per worker instead of one per file is the difference
-// between a suite that finishes and one that times out. The database is dropped by
-// dropWorkerDatabase(), and stale ones are reaped by global setup on the next run.
+// Fixtures own their PostgreSQL pools. Tests may close pools between cases, but
+// the same worker database is reused and reset by truncation, not cloned again.
+// A database without connections can therefore still belong to a live worker.
+// Global setup only reaps databases stamped with a proven exited local owner;
+// shared templates and unknown/remote owners require explicit cleanup.

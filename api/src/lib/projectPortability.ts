@@ -7,6 +7,8 @@ import { nowTimestamp } from './timestamps';
 import { type Db } from "../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 import { resolveUploadsRoot } from '../config';
+import { exportTelemetry, importTelemetry } from '../domains/telemetry/portability';
+import { getTelemetryCatalog } from '../domains/telemetry/catalog';
 
 function getProjectUploadsBase(): string {
   return process.env.AGENT_HQ_PROJECT_UPLOADS_DIR ?? path.join(resolveUploadsRoot(), 'projects');
@@ -54,6 +56,8 @@ export interface ProjectImportPreview {
     recurring_templates: number;
     files: number;
     unresolved_dependencies: number;
+    telemetry_definitions?: number;
+    telemetry_bindings?: number;
   };
   warnings: ProjectImportWarning[];
 }
@@ -180,6 +184,12 @@ function portableWorkflow(row: Row): ProjectManifest['workflows'][number] {
   };
 }
 
+function portableConfiguration(row:Row):Row {
+  return Object.fromEntries(Object.entries(row).filter(([key])=>!['id','tenant_id','project_id','created_at','updated_at','status_seeded_at'].includes(key)));
+}
+type PortableWorkflowType={key:string;configuration:Row;task_types:Row[];statuses:Row[];outcomes:Row[]};
+type PortableTelemetry=Omit<Awaited<ReturnType<typeof exportTelemetry>>,'exported_at'>;
+
 function replaceRefs(row: Row, sprintIdToRef: Map<number, string>, agentIdToRef: Map<number, string>): Row {
   const next: Row = { ...row };
   delete next.id;
@@ -241,8 +251,11 @@ export interface ProjectManifest {
     length_value: string;
     environment_setup?: EnvironmentSetup;
     repo_config?: { mode: 'worktree' | 'clone' | null; path: string | null; url: string | null };
-    field_schemas: Array<{ sprint_type_key: string; task_type: string | null; schema: unknown; is_system: boolean }>;
+    field_schemas: Array<{ source_schema_id?: number; sprint_type_key: string; task_type: string | null; schema: unknown; is_system: boolean }>;
+    statuses?: Row[];
   }>;
+  workflow_types?: PortableWorkflowType[];
+  telemetry?: PortableTelemetry;
   routing: {
     status_routes: Row[];
     transitions: Row[];
@@ -268,10 +281,13 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
   if (!project) throw Object.assign(new Error('Project not found'), { status: 404 });
 
   const warnings: ProjectImportWarning[] = [];
-  const agents = (await selectRows(db, 'agents', 'WHERE project_id = ?', [projectId], 'name ASC, id ASC')).map(portableAgent);
-  const workflows = (await selectRows(db, 'sprints', 'WHERE project_id = ?', [projectId], 'name ASC, id ASC')).map(portableWorkflow);
-  const agentIdToRef = new Map((await selectRows(db, 'agents', 'WHERE project_id = ?', [projectId])).map((row) => [Number(row.id), `agent:${row.id}`]));
-  const sprintIdToRef = new Map((await selectRows(db, 'sprints', 'WHERE project_id = ?', [projectId])).map((row) => [Number(row.id), `workflow:${row.id}`]));
+  const tenantId=project.tenant_id==null?null:Number(project.tenant_id);
+  const agentRows=await selectRows(db,'agents','WHERE project_id=? AND tenant_id IS NOT DISTINCT FROM ?',[projectId,tenantId],'name ASC,id ASC');
+  const workflowRows=await selectRows(db,'sprints','WHERE project_id=? AND tenant_id IS NOT DISTINCT FROM ?',[projectId,tenantId],'name ASC,id ASC');
+  const agents = agentRows.map(portableAgent);
+  const workflows = workflowRows.map(portableWorkflow);
+  const agentIdToRef = new Map(agentRows.map((row) => [Number(row.id), `agent:${row.id}`]));
+  const sprintIdToRef = new Map(workflowRows.map((row) => [Number(row.id), `workflow:${row.id}`]));
   const agentsByRef = new Map(agents.map((agent) => [agent.ref, agent]));
   const workflowsByType = new Map(workflows.map((workflow) => [workflow.sprint_type, workflow]));
 
@@ -292,10 +308,12 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
   }
 
   if (await tableExists(db, 'task_field_schemas')) {
-    for (const schema of await selectRows(db, 'task_field_schemas', 'WHERE sprint_type_key IN (SELECT DISTINCT sprint_type FROM sprints WHERE project_id = ?)', [projectId], 'sprint_type_key ASC, task_type ASC, id ASC')) {
+    for (const schema of await selectRows(db, 'task_field_schemas', `WHERE tenant_id=? AND sprint_type_key=ANY(?::text[])
+      AND NOT EXISTS(SELECT 1 FROM sprint_types st WHERE st.tenant_id=task_field_schemas.tenant_id AND st.key=task_field_schemas.sprint_type_key AND st.project_id IS NOT NULL AND st.project_id<>?)`, [tenantId,[...workflowsByType.keys()],projectId], 'sprint_type_key ASC, task_type ASC, id ASC')) {
       const workflow = workflowsByType.get(String(schema.sprint_type_key));
       if (workflow) {
         workflow.field_schemas.push({
+          source_schema_id:Number(schema.id),
           sprint_type_key: String(schema.sprint_type_key),
           task_type: (schema.task_type as string | null) ?? null,
           schema: parseJson(schema.schema_json, {}),
@@ -303,6 +321,17 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
         });
       }
     }
+  }
+  const workflowTypes:PortableWorkflowType[]=[];
+  for(const type of await selectRows(db,'sprint_types','WHERE tenant_id=? AND key=ANY(?::text[]) AND (project_id IS NULL OR project_id=?)',[tenantId,[...workflowsByType.keys()],projectId],'key ASC')){
+    const key=String(type.key),definition:PortableWorkflowType={key,configuration:portableConfiguration(type),task_types:[],statuses:[],outcomes:[]};
+    for(const [section,table] of [['task_types','sprint_type_task_types'],['statuses','sprint_type_task_statuses'],['outcomes','sprint_type_outcomes']] as const)
+      definition[section]=(await selectRows(db,table,'WHERE tenant_id=? AND sprint_type_key=?',[tenantId,key])).map(portableConfiguration);
+    workflowTypes.push(definition);
+  }
+  for(const workflow of workflows){
+    const statuses=await selectRows(db,'sprint_task_statuses','WHERE sprint_id=?',[Number(workflow.ref.slice('workflow:'.length))]);
+    if(statuses.length)workflow.statuses=statuses.map(row=>{const portable=portableConfiguration(row);delete portable.sprint_id;return portable;});
   }
 
   const files = (await selectRows(db, 'project_files', 'WHERE project_id = ?', [projectId], 'original_name ASC, id ASC')).map((file) => {
@@ -331,10 +360,26 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
     transition_requirements: (await selectRows(db, 'sprint_task_transition_requirements', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
     task_routing_rules: (await selectRows(db, 'sprint_task_routing_rules', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
     story_point_model_routing: (await selectRows(db, 'story_point_model_routing', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    external_event_mappings: (await selectRows(db, 'external_event_mappings', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
+    external_event_mappings: (await selectRows(db, 'external_event_mappings', 'WHERE project_id = ?', [projectId])).map((row) => ({...replaceRefs(row, sprintIdToRef, agentIdToRef),source_mapping_id:Number(row.id)})),
   };
 
   const recurring_task_templates = (await selectRows(db, 'recurring_task_series', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef));
+  let telemetry:PortableTelemetry|undefined;
+  if(tenantId!=null&&await tableExists(db,'telemetry_definitions')){
+    try{
+      const {exported_at:_,...bundle}=await exportTelemetry(db,{tenantId,projectId,actor:'project_export'},{scope:{project_id:projectId}});
+      if(bundle.resources.length||bundle.bindings.length)telemetry=bundle;
+    }catch(error){warnings.push({code:'telemetry_export_unresolved',severity:'warning',section:'telemetry',message:`Telemetry export requires review: ${error instanceof Error?error.message:'Unavailable telemetry references.'}`});}
+  }
+  if(tenantId!=null&&telemetry?.event_mappings?.length){
+    // Copy only tenant defaults actually referenced by this project's telemetry.
+    // Import narrows these cloned defaults to the new project; unrelated tenant
+    // event configuration is not part of the manifest.
+    const included=new Set(routing.external_event_mappings.map(row=>row.source_mapping_id));
+    const needed=telemetry.event_mappings.map(mapping=>mapping.source.id).filter(id=>!included.has(id));
+    if(needed.length)for(const row of await selectRows(db,'external_event_mappings','WHERE tenant_id=? AND project_id IS NULL AND id=ANY(?::bigint[])',[tenantId,needed]))
+      routing.external_event_mappings.push({...replaceRefs(row,sprintIdToRef,agentIdToRef),source_mapping_id:Number(row.id)});
+  }
   const manifest = sortStable({
     schema_version: PROJECT_MANIFEST_SCHEMA_VERSION,
     project: portableProject(project),
@@ -343,6 +388,8 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
     routing,
     recurring_task_templates,
     files,
+    ...(workflowTypes.length?{workflow_types:workflowTypes}:{}),
+    ...(telemetry?{telemetry}:{}),
   }) as ProjectManifest;
 
   return { manifest, warnings };
@@ -380,6 +427,24 @@ export async function validateProjectManifest(db: Db, input: unknown, options: {
   }
   if (!manifest.project?.name) {
     warnings.push({ code: 'missing_project', severity: 'error', message: 'Manifest project.name is required.' });
+  }
+  if(manifest.workflow_types!==undefined){
+    if(!Array.isArray(manifest.workflow_types)||manifest.workflow_types.length>100)warnings.push({code:'invalid_workflow_types',severity:'error',section:'workflow_types',message:'Workflow type configuration must contain at most 100 entries.'});
+    else{
+      const seen=new Set<string>();
+      for(const type of manifest.workflow_types){
+        if(!type||typeof type.key!=='string'||!type.key||type.key.length>128||seen.has(type.key)||!type.configuration||typeof type.configuration!=='object'||
+          ['task_types','statuses','outcomes'].some(section=>!Array.isArray(type[section as keyof typeof type])||(type[section as keyof typeof type] as unknown[]).length>500))
+          warnings.push({code:'invalid_workflow_type',severity:'error',section:'workflow_types',message:'Workflow types require unique bounded keys and at most 500 task types, statuses, and outcomes each.'});
+        else seen.add(type.key);
+      }
+    }
+  }
+  if(manifest.telemetry!==undefined){
+    const telemetry=manifest.telemetry;
+    if(!telemetry||telemetry.format!=='agent-hq-telemetry'||telemetry.version!==1||!Array.isArray(telemetry.resources)||!Array.isArray(telemetry.catalog)||
+      telemetry.resources.length>100||telemetry.catalog.length>5000||Buffer.byteLength(JSON.stringify(telemetry),'utf8')>4*1024*1024)
+      warnings.push({code:'invalid_telemetry_bundle',severity:'warning',section:'telemetry',message:'The optional telemetry package is invalid or too large; project configuration can still be imported, with telemetry requiring review.'});
   }
   if (manifest.project?.repo_config?.mode === 'worktree' && manifest.project.repo_config.path) {
     warnings.push({ code: 'deprecated_project_repo_config', severity: 'warning', section: 'project', message: 'Project-level repository configuration is deprecated and will not be imported. Configure repository access on workflows.' });
@@ -442,6 +507,7 @@ export async function validateProjectManifest(db: Db, input: unknown, options: {
       recurring_templates: countSection(manifest as ProjectManifest, 'recurring_task_templates'),
       files: countSection(manifest as ProjectManifest, 'files'),
       unresolved_dependencies: unresolved,
+      ...(manifest.telemetry?{telemetry_definitions:Array.isArray(manifest.telemetry.resources)?manifest.telemetry.resources.length:0,telemetry_bindings:Array.isArray(manifest.telemetry.bindings)?manifest.telemetry.bindings.length:0}:{}),
     },
     warnings,
   };
@@ -451,12 +517,14 @@ export async function importProjectManifest(
   db: Db,
   input: unknown,
   options: { projectName?: string; enableAgents?: boolean; activateWorkflows?: boolean; importFiles?: boolean; tenantId?: number; actor?: string } = {},
-): Promise<{ project_id: number; preview: ProjectImportPreview; id_map: { agents: Record<string, number>; workflows: Record<string, number> } }> {
+): Promise<{ project_id: number; preview: ProjectImportPreview; id_map: { agents: Record<string, number>; workflows: Record<string, number>; workflow_types?:Record<string,string>; schemas?:Record<string,number> };telemetry?:Awaited<ReturnType<typeof importTelemetry>> }> {
   const preview = await validateProjectManifest(db, input, { projectName: options.projectName, importFiles: options.importFiles });
   if (!preview.valid) throw Object.assign(new Error('Manifest validation failed'), { status: 400, preview });
   const manifest = input as ProjectManifest;
   const agentIdMap: Record<string, number> = {};
   const workflowIdMap: Record<string, number> = {};
+  const typeKeyMap:Record<string,string>={},schemaIdMap:Record<string,number>={};
+  let telemetryResult:Awaited<ReturnType<typeof importTelemetry>>|undefined;
   const projectName = preview.proposed_project_name;
 
   const project_id = await db.withTransaction(async (db) => {
@@ -466,6 +534,26 @@ export async function importProjectManifest(
           description: manifest.project.description ?? '',
           context_md: manifest.project.context_md ?? '',
         });
+
+    // Canonical configuration travels with the copied workflow. A type-key
+    // collision creates a project-local copy instead of changing an existing
+    // tenant's schemas or silently adopting different milestone semantics.
+    if(options.tenantId!=null){
+      const typeDefinitions=new Map((manifest.workflow_types??[]).map(type=>[type.key,type]));
+      for(const sourceKey of new Set((manifest.workflows??[]).map(workflow=>workflow.sprint_type??'generic'))){
+        const definition=typeDefinitions.get(sourceKey);
+        const existing=await db.get<Row>('SELECT * FROM sprint_types WHERE tenant_id=? AND key=?',options.tenantId,sourceKey);
+        let targetKey=sourceKey;
+        if(existing&&(definition||existing.project_id!=null)){
+          const base=`${sourceKey.slice(0,96)}_import_${projectId}`;targetKey=base;let suffix=1;
+          while(await db.get('SELECT id FROM sprint_types WHERE tenant_id=? AND key=?',options.tenantId,targetKey))targetKey=`${base}_${suffix++}`;
+        }
+        if(!existing||targetKey!==sourceKey)await insertDynamic(db,'sprint_types',{...portableConfiguration(definition?.configuration??{}),tenant_id:options.tenantId,project_id:projectId,key:targetKey,name:definition?.configuration.name??sourceKey,is_system:0});
+        typeKeyMap[sourceKey]=targetKey;
+        if(definition)for(const [section,table] of [['task_types','sprint_type_task_types'],['statuses','sprint_type_task_statuses'],['outcomes','sprint_type_outcomes']] as const)
+          for(const row of definition[section])await insertDynamic(db,table,{...portableConfiguration(row),tenant_id:options.tenantId,sprint_type_key:targetKey,is_system:0});
+      }
+    }
 
     for (const workflow of manifest.workflows ?? []) {
       const workflowRepoConfig = normalizeRepoConfig({
@@ -478,7 +566,7 @@ export async function importProjectManifest(
               project_id: projectId,
               name: workflow.name,
               goal: workflow.goal ?? '',
-              sprint_type: workflow.sprint_type ?? 'generic',
+              sprint_type: typeKeyMap[workflow.sprint_type]??workflow.sprint_type??'generic',
               status: options.activateWorkflows ? (workflow.status || 'planning') : 'planning',
               length_kind: workflow.length_kind ?? 'time',
               length_value: workflow.length_value ?? '',
@@ -488,23 +576,28 @@ export async function importProjectManifest(
               environment_setup: JSON.stringify(normalizeEnvironmentSetup(workflow.environment_setup)),
             });
       workflowIdMap[workflow.ref] = workflowId;
+      for(const status of workflow.statuses??[])await insertDynamic(db,'sprint_task_statuses',{...portableConfiguration(status),sprint_id:workflowId,is_system:0});
       if (await tableExists(db, 'task_field_schemas')) {
         for (const schema of workflow.field_schemas ?? []) {
-          const existing = await db.get(`
+          const targetType=typeKeyMap[schema.sprint_type_key]??schema.sprint_type_key;
+          const existing = await db.get<{id:number}>(`
             SELECT id FROM task_field_schemas
-            WHERE sprint_type_key = ?
+            WHERE tenant_id IS NOT DISTINCT FROM ? AND sprint_type_key = ?
               AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
             LIMIT 1
-          `, schema.sprint_type_key, schema.task_type ?? null, schema.task_type ?? null);
+          `, options.tenantId??null,targetType, schema.task_type ?? null, schema.task_type ?? null);
+          let schemaId=existing?.id;
           if (!existing) {
-            await insertDynamic(db, 'task_field_schemas', {
-                            sprint_type_key: schema.sprint_type_key,
+            schemaId=await insertDynamic(db, 'task_field_schemas', {
+                            tenant_id:options.tenantId??null,
+                            sprint_type_key: targetType,
                             task_type: schema.task_type ?? null,
                             schema_json: stringifyStable(schema.schema ?? {}),
                             is_system: schema.is_system ? 1 : 0,
                             updated_at: nowTimestamp(),
                           });
           }
+          if(schema.source_schema_id!=null&&schemaId!=null)schemaIdMap[String(schema.source_schema_id)]=Number(schemaId);
         }
       }
     }
@@ -562,6 +655,8 @@ export async function importProjectManifest(
         next.agent_id = typeof next.agent_ref === 'string' ? agentIdMap[next.agent_ref] ?? null : null;
         delete next.agent_ref;
       }
+      if(typeof next.sprint_type==='string')next.sprint_type=typeKeyMap[next.sprint_type]??next.sprint_type;
+      if(typeof next.sprint_type_key==='string')next.sprint_type_key=typeKeyMap[next.sprint_type_key]??next.sprint_type_key;
       return next;
     };
 
@@ -570,8 +665,46 @@ export async function importProjectManifest(
     for (const row of manifest.routing?.transition_requirements ?? []) await insertDynamic(db, 'sprint_task_transition_requirements', await scopedRow('sprint_task_transition_requirements', row));
     for (const row of manifest.routing?.task_routing_rules ?? []) await insertDynamic(db, 'sprint_task_routing_rules', await scopedRow('sprint_task_routing_rules', row));
     for (const row of manifest.routing?.story_point_model_routing ?? []) await insertDynamic(db, 'story_point_model_routing', await scopedRow('story_point_model_routing', row));
-    for (const row of manifest.routing?.external_event_mappings ?? []) await insertDynamic(db, 'external_event_mappings', await scopedRow('external_event_mappings', row));
+    const eventMappingIdMap:Record<string,number>={};
+    for (const row of manifest.routing?.external_event_mappings ?? []) {
+      const id=await insertDynamic(db, 'external_event_mappings', await scopedRow('external_event_mappings', row));
+      if(row.source_mapping_id!=null)eventMappingIdMap[String(row.source_mapping_id)]=id;
+    }
     for (const row of manifest.recurring_task_templates ?? []) await insertDynamic(db, 'recurring_task_series', { ...(await scopedRow('recurring_task_series', row)), enabled: 0, next_run_at: null, last_run_at: null });
+
+    if(manifest.telemetry&&!preview.warnings.some(warning=>warning.code==='invalid_telemetry_bundle')){
+      if(options.tenantId==null)preview.warnings.push({code:'missing_telemetry_tenant',severity:'warning',section:'telemetry',message:'Telemetry requires a destination tenant and was not imported.'});
+      else try{
+        telemetryResult=await db.withTransaction(async tx=>{
+          const access={tenantId:options.tenantId!,projectId,actor:options.actor??'project_import'};
+          const referenceMap:Record<string,string>={[`project:${manifest.project.source_id}`]:String(projectId)};
+          for(const [ref,id] of Object.entries({...agentIdMap,...workflowIdMap}))referenceMap[ref]=String(id);
+          for(const [source,target] of Object.entries(typeKeyMap))referenceMap[`workflow_type:${source}`]=target;
+          for(const [source,id] of Object.entries(schemaIdMap))referenceMap[`schema:${source}`]=String(id);
+          for(const [source,id] of Object.entries(eventMappingIdMap))referenceMap[`event_mapping:${source}`]=String(id);
+          const retiredSignalKeys=new Set((manifest.telemetry!.signals??[]).filter(signal=>signal.retired).map(signal=>`${signal.kind}:${signal.key}`));
+          for(const type of manifest.workflow_types??[]){
+            for(const row of type.task_types)referenceMap[`task_type:${row.task_type}`]=String(row.task_type);
+            for(const row of type.statuses)if(!retiredSignalKeys.has(`status:${row.status_key}`))referenceMap[`status:${row.status_key}`]=String(row.status_key);
+            for(const row of type.outcomes)if(!retiredSignalKeys.has(`outcome:${row.outcome_key}`))referenceMap[`outcome:${row.outcome_key}`]=String(row.outcome_key);
+          }
+          for(const workflow of manifest.workflows??[])for(const row of workflow.statuses??[])if(!retiredSignalKeys.has(`status:${row.status_key}`))referenceMap[`status:${row.status_key}`]=String(row.status_key);
+          const destination=await getTelemetryCatalog(tx,access,{project_id:projectId});
+          for(const field of manifest.telemetry!.catalog){
+            if(field.retired===true||!field.source||typeof field.source!=='object')continue;
+            const source=field.source as {schema_id?:number;field_key?:string};
+            const schemaId=schemaIdMap[String(source.schema_id)];
+            if(!schemaId)continue;
+            const matches=destination.fields.filter(candidate=>candidate.source?.schema_id===schemaId&&candidate.key===source.field_key&&candidate.type===field.type);
+            if(matches.length===1)referenceMap[String(field.id)]=matches[0].id;
+          }
+          return importTelemetry(tx,access,{bundle:manifest.telemetry,scope:{project_id:projectId},reference_map:referenceMap});
+        });
+        for(const item of telemetryResult.imported)if(item.state==='draft')preview.warnings.push({code:'missing_telemetry_reference',severity:'warning',section:'telemetry',ref:item.id,message:`Telemetry ${item.name} remains a draft: ${(item.issues??[]).join(' ')}`});
+        for(const binding of telemetryResult.bindings)if(binding.activated===false)preview.warnings.push({code:'missing_telemetry_binding_reference',severity:'warning',section:'telemetry',message:`Telemetry binding ${binding.family_key} requires review: ${binding.reason}`});
+      }catch(error){preview.warnings.push({code:'telemetry_import_unresolved',severity:'warning',section:'telemetry',message:`Project configuration was copied, but telemetry requires review: ${error instanceof Error?error.message:'Invalid telemetry package.'}`});}
+      preview.counts.unresolved_dependencies=preview.warnings.filter(warning=>warning.code.startsWith('missing_')||warning.severity==='error'||warning.code==='telemetry_import_unresolved').length;
+    }
 
     if (options.importFiles) {
       const dir = path.join(getProjectUploadsBase(), String(projectId));
@@ -605,7 +738,7 @@ export async function importProjectManifest(
     return projectId;
   });
 
-  return { project_id, preview, id_map: { agents: agentIdMap, workflows: workflowIdMap } };
+  return { project_id, preview, id_map: { agents: agentIdMap, workflows: workflowIdMap,...(Object.keys(typeKeyMap).length?{workflow_types:typeKeyMap}:{}),...(Object.keys(schemaIdMap).length?{schemas:schemaIdMap}:{}) },...(telemetryResult?{telemetry:telemetryResult}:{}) };
 }
 
 export async function repairImportedProjectTenantScope(

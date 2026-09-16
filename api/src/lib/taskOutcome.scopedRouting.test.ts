@@ -573,7 +573,7 @@ describe('applyTaskOutcome scoped routing_config resolution', () => {
     });
 
     expect(cleanupTaskExecutionLinkageForStatus).toHaveBeenCalledWith(
-      db,
+      expect.objectContaining({ inTransaction: true }),
       417,
       'review',
       expect.objectContaining({

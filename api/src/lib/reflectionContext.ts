@@ -63,6 +63,8 @@ export interface TaskContext {
   updated_at: string;
   notes: Array<{ id: number; author: string; content: string; created_at: string }>;
   outcome_metrics: OutcomeMetrics | null;
+  /** Kept for compatibility; these recorded summaries are not configured v2 measurements. */
+  outcome_metrics_source?: 'legacy_recorded_summary';
 }
 
 export interface OutcomeMetrics {
@@ -192,6 +194,7 @@ export async function buildReflectionContext(
         ...taskRow,
         notes,
         outcome_metrics: metricsRow ?? null,
+        outcome_metrics_source: 'legacy_recorded_summary',
       };
     }
   }

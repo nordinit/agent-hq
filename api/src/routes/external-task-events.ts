@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
+import { withTelemetryCausation } from '../domains/telemetry/capture';
 import { validateReviewEvidence } from '../lib/evidenceValidation';
 import { getMcpIdentityFromRequest, type McpApiIdentity } from '../lib/mcpApiAuth';
 import { notifyTaskStatusChange } from '../lib/taskNotifications';
@@ -826,7 +827,7 @@ router.post('/task-events', async (req: Request, res: Response) => {
         validateReviewEvidenceForMapping(normalized);
       }
 
-      const applied = await db.withTransaction(async (tx) => {
+      const applied = await withTelemetryCausation(db, `external:${fingerprint}`, async (tx) => {
         let actionApplied = false;
         let nextStatus = task.status;
         let outcome: string | null = null;
@@ -874,10 +875,10 @@ router.post('/task-events', async (req: Request, res: Response) => {
           });
         }
 
+        await markReceiptProcessed(tx, receiptId, 'processed', mapping);
         return { actionApplied, nextStatus, outcome };
       });
 
-      await markReceiptProcessed(db, receiptId, 'processed', mapping);
       return res.json({
         ok: true,
         duplicate: false,

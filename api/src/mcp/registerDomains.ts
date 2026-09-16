@@ -14,6 +14,7 @@ import { registerTeamsTools } from './domains/teams';
 import { registerTasksTools } from './domains/tasks';
 import { registerToolRegistryTools } from './domains/tool-registry';
 import { registerWorkflowsTools } from './domains/workflows';
+import { registerTelemetryTools } from './domains/telemetry';
 
 export function registerAgentHqMcpDomains(context: McpDomainContext) {
   registerProjectsTools(context);
@@ -30,5 +31,6 @@ export function registerAgentHqMcpDomains(context: McpDomainContext) {
   registerTeamsTools(context);
   registerRoutingTools(context);
   registerTaskDefinitionsTools(context);
+  registerTelemetryTools(context);
   registerResourcesTools(context);
 }

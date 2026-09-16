@@ -11,6 +11,7 @@ import { TaskStatusesTable } from './sections/TaskStatusesSection';
 import { TaskFieldSchemasTable } from './sections/TaskFieldsSection';
 import { RelationshipTypesTable } from './sections/RelationshipTypesSection';
 import { RunOutcomesTable } from './sections/RunOutcomesSection';
+import TelemetryScopeSummary from '@/features/telemetry/TelemetryScopeSummary';
 import {
   BACKEND_ONLY_OUTCOMES,
   TAB_HELP,
@@ -644,6 +645,7 @@ export default function SprintDefinitionsPage() {
     { id: 'task-fields', label: 'Task Fields', count: fieldSchemasForTable.length },
     { id: 'relationship-types', label: 'Relationships', count: relationshipTypesForTable.length },
     { id: 'outcomes', label: 'Run Outcomes', count: runOutcomesForTable.length },
+    { id: 'metrics', label: 'Metrics' },
   ];
 
   return (
@@ -794,6 +796,7 @@ export default function SprintDefinitionsPage() {
             </div>
           </div>
 
+          {activeTab === 'metrics' && <Card><TelemetryScopeSummary scope={{ workflow_type: selectedKey }} /></Card>}
           {activeTab === 'overview' && (
             <Card className="space-y-6">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">

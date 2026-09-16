@@ -30,6 +30,9 @@ import { startReconciler } from './scheduler/reconciler';
 import projectFilesRouter from './routes/project-files';
 import workflowFilesRouter from './routes/workflow-files';
 import telemetryRouter from './routes/telemetry';
+import telemetryV2Router from './routes/telemetry-v2';
+import { startTelemetryCaptureWorker } from './domains/telemetry/capture';
+import { startTelemetryQueryWorker } from './domains/telemetry/queries';
 import browserRouter from './routes/browser';
 import setupRouter from './routes/setup';
 import settingsRouter from './routes/settings';
@@ -503,6 +506,7 @@ app.delete('/api/v1/assignment-rules/:id', (req, res, next) => {
 });
 app.use('/api/v1/projects/:id/files', projectFilesRouter);
 app.use('/api/v1/projects/:projectId/workflows/:workflowId/files', workflowFilesRouter);
+app.use('/api/v1/telemetry/v2', telemetryV2Router);
 app.use('/api/v1/telemetry', telemetryRouter);
 app.use('/api/v1/routing', routingRouter);
 app.use('/api/v1/dispatch', dispatchRouter);
@@ -612,6 +616,10 @@ async function startServer(): Promise<void> {
   // migration ledger has been verified, otherwise a stale process gets a window to mutate data
   // before the asynchronous verification failure terminates it.
   await verifyStartupSchema();
+  // Analytics workers never dispatch agents or mutate workflow status. Capture
+  // stays active even when operational automation is disabled.
+  startTelemetryCaptureWorker(getDb(), { onError: () => console.error('[telemetry] Observation projection failed; pending facts will retry.') });
+  startTelemetryQueryWorker(getDb());
 
   const automationDisabled = process.env.AGENT_HQ_DISABLE_AUTOMATION === '1';
   if (automationDisabled) {

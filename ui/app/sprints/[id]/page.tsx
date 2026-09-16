@@ -4,6 +4,7 @@ import type { EnvironmentSetup } from '@/lib/api';
 import { formatDateTime, formatDate, formatTime, timeAgo } from '@/lib/date';
 
 import { useEffect, useState, useCallback } from 'react';
+import TelemetryScopeSummary from '@/features/telemetry/TelemetryScopeSummary';
 import { useParams, useRouter } from 'next/navigation';
 import { useLiveRefresh } from '@/lib/useLiveRefresh';
 import {
@@ -654,7 +655,7 @@ export default function SprintDetailPage() {
         {tab === 'overview' && <OverviewTab sprint={sprint} metrics={metrics} />}
         {tab === 'tasks' && <TasksTab sprint={sprint} tasks={tasks} onRefresh={load} />}
         {tab === 'files' && <ProjectFiles projectId={sprint.project_id} workflowId={sprint.id} scope="workflow" />}
-        {tab === 'metrics' && <MetricsTab metrics={metrics} />}
+        {tab === 'metrics' && <div className="space-y-5"><Card><TelemetryScopeSummary scope={{ project_id: sprint.project_id, workflow_id: sprint.id, workflow_type: sprint.sprint_type ?? undefined }} /></Card><details><summary className="cursor-pointer text-sm text-slate-500">Legacy workflow summary</summary><div className="mt-4"><MetricsTab metrics={metrics} /></div></details></div>}
       </div>
     </div>
   );

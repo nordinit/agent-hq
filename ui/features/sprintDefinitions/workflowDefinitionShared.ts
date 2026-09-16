@@ -3,7 +3,7 @@
 import type { CustomFieldDefinition, SprintTypeOutcome, TaskFieldSchema, TaskRelationshipTypeConfig } from '@/lib/api';
 
 export type Notice = { type: 'success' | 'error'; message: string } | null;
-export type SprintDefinitionTab = 'overview' | 'task-statuses' | 'task-fields' | 'relationship-types' | 'outcomes';
+export type SprintDefinitionTab = 'overview' | 'task-statuses' | 'task-fields' | 'relationship-types' | 'outcomes' | 'metrics';
 export type SprintTypeForm = { key: string; name: string; description: string };
 export type FieldSchemaForm = { id?: number; task_type: string; fields: CustomFieldDefinition[] };
 export type SchemaEditorPlacement =
@@ -69,6 +69,7 @@ export const COLOR_CLASSES: Record<string, string> = {
 };
 
 export const TAB_HELP: Record<SprintDefinitionTab, string> = {
+  metrics: 'Inspect inherited metric definitions and configure measurements for this workflow type.',
   overview: 'Edit the workflow details and the task types users and agents can create inside this workflow type.',
   'task-statuses': 'Edit the task status labels and colors users and agents see for this workflow type.',
   'task-fields': 'Define the task fields users and agents will see on tasks in this workflow type. Use the default schema for shared fields and task-type schemas only when a specific task type needs different fields.',

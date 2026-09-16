@@ -540,6 +540,17 @@ export class AgentHqApiClient {
     return data as T;
   }
 
+  /** Telemetry tools use the exact REST contract consumed by the reporting UI. */
+  telemetryGet(path: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null) query.set(key, String(value));
+    return this.request('GET', `/telemetry/v2${path}${query.size ? `?${query}` : ''}`);
+  }
+
+  telemetryWrite(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<unknown> {
+    return this.request(method, `/telemetry/v2${path}`, body);
+  }
+
   private async requestMultipart<T>(
     method: string,
     path: string,

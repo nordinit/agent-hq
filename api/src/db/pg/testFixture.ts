@@ -1,9 +1,10 @@
 import crypto from 'crypto';
-import { Pool } from 'pg';
+import { Pool,escapeIdentifier,escapeLiteral } from 'pg';
 import { PostgresAdapter } from '../adapter/PostgresAdapter';
 import type { Db } from '../adapter/types';
 import { POSTGRES_MIGRATION_DIRS } from './migrationDirs';
 import { loadMigrations, runMigrations, verifyMigrationsCurrent } from './migrationRunner';
+import {makeWorkerDatabaseName,workerDatabaseOwnerComment} from './testDatabaseCleanup';
 
 /**
  * PostgreSQL fixtures for the test suite, replacing initSchema()-built SQLite databases.
@@ -117,7 +118,7 @@ function workerDatabaseName(): string {
   // would DROP and re-CREATE the other's database mid-test. The process id disambiguates them
   // while staying stable for the worker's lifetime, which is what the per-worker reuse relies on.
   const worker = process.env.JEST_WORKER_ID ?? '1';
-  return `agent_hq_test_w${worker}_p${process.pid}_${migrationFingerprint()}`;
+  return makeWorkerDatabaseName(worker,migrationFingerprint());
 }
 
 /**
@@ -185,6 +186,9 @@ async function createWorkerDatabase(): Promise<Db> {
       // being run inside a transaction — hence a bare query on a fresh connection.
       await admin.query(`CREATE DATABASE "${workerDb}" TEMPLATE "${templateDb}"`);
     }
+    // A clone can have no connections while this admin pool is its only user,
+    // or between test files. Other Jest runs must retain it while we are alive.
+    await admin.query(`COMMENT ON DATABASE ${escapeIdentifier(workerDb)} IS ${escapeLiteral(workerDatabaseOwnerComment())}`);
   } finally {
     await admin.end();
   }

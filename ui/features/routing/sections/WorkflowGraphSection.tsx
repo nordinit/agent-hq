@@ -1,6 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { telemetryScopeQuery } from '@/lib/telemetryPresentation';
 import { api, type Agent, type HistoricalTrace, type HypotheticalTrace, type WorkflowGraph, type WorkflowGraphEdge, type WorkflowGraphNode } from '@/lib/api';
 import { Card } from '@/components/ui/card';
 import { SectionHeader, COLOR_BADGE_CLASSES } from '@/components/workflowConfig';
@@ -907,6 +909,7 @@ export default function WorkflowGraphSection({
         )}
 
         <Card className="h-fit p-5">
+          {(selectedNode || selectedArc) && <div className="mb-4 space-y-2 border-b border-slate-700/60 pb-3">{selectedNode ? <Link className="block text-xs text-amber-300 hover:underline" href={`/telemetry${telemetryScopeQuery({ project_id: projectId, workflow_id: sprintId, workflow_type: sprintType, task_type: taskTypeLens, milestone: selectedNode.id })}`}>Measure this stage →</Link> : arcEdges(selectedArc!).map(edge => <Link key={edge.id} className="block text-xs text-amber-300 hover:underline" href={`/telemetry${telemetryScopeQuery({ project_id: projectId, workflow_id: sprintId, workflow_type: sprintType, task_type: edge.task_type ?? taskTypeLens, outcome: edge.outcome, from_status: edge.from, to_status: edge.to })}`}>Measure {edge.outcome}: {edge.from} → {edge.to}</Link>)}</div>}
           {selection?.kind === 'gate' ? (
             <GateComposer
               draft={selection.draft}
