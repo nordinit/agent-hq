@@ -11,6 +11,20 @@ export interface TelemetryChoice {
   scopes?: TelemetryScope[];
 }
 
+export type TelemetryChoiceScopeCatalog = Pick<TelemetryCatalog, 'workflow_types' | 'task_types'>;
+
+/** Browse the configured task types, including types with only shared fields. */
+export function telemetryChoiceScopeOptions(choices: TelemetryChoice[], catalog?: TelemetryChoiceScopeCatalog, workflowType = '') {
+  const scopes = choices.flatMap(choice => choice.scopes ?? []);
+  const workflows = catalog?.workflow_types ?? scopes.flatMap(scope => scope.workflow_type ? [{ key: scope.workflow_type, name: scope.workflow_type }] : []);
+  const tasks: TelemetryCatalog['task_types'] = catalog?.task_types ?? scopes.flatMap(scope => scope.task_type ? [{ key: scope.task_type, workflow_type: scope.workflow_type }] : []);
+  const workflowTypes = [...new Map(workflows.map(type => [type.key, { value: type.key, label: type.name }])).values()].sort((a, b) => a.label.localeCompare(b.label));
+  const taskTypes = [...new Map(tasks.filter(type => !workflowType || !type.workflow_type || type.workflow_type === workflowType)
+    .map(type => [type.key, { value: type.key, label: type.label || type.key }])).values()].sort((a, b) => a.label.localeCompare(b.label));
+  // Visibility must not depend on the number of matches after choosing a workflow.
+  return { workflowTypes, taskTypes, showTaskTypes: tasks.length > 0 || workflows.length > 0 };
+}
+
 export function telemetryGuideRequirements(guide: TelemetryGuide) {
   const journey = ['journey_count', 'first_pass', 'ever_blocked', 'percent_blocked', 'funnel'].includes(guide.recipe)
     || (guide.recipe === 'numeric' && ['at_entry', 'at_resolution'].includes(guide.basis));

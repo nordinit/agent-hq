@@ -3,11 +3,12 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { filterTelemetryChoices, type TelemetryChoice } from '@/lib/telemetryBuilderOptions';
+import { filterTelemetryChoices, telemetryChoiceScopeOptions, type TelemetryChoice, type TelemetryChoiceScopeCatalog } from '@/lib/telemetryBuilderOptions';
 import { inputClass, Select } from './TelemetryControls';
 
-export default function TelemetryChoicePicker({ label, value, onChange, options, placeholder = 'Choose a condition', hint }: {
+export default function TelemetryChoicePicker({ label, value, onChange, options, scopeCatalog, placeholder = 'Choose a condition', hint }: {
   label: string; value: string; onChange: (value: string) => void; options: TelemetryChoice[]; placeholder?: string; hint?: string;
+  scopeCatalog?: TelemetryChoiceScopeCatalog;
 }) {
   const id = useId();
   const dialog = useRef<HTMLDialogElement>(null);
@@ -22,8 +23,7 @@ export default function TelemetryChoicePicker({ label, value, onChange, options,
   const [active, setActive] = useState(0);
   const selected = options.find(option => option.value === value);
   const categories = [...new Set(options.map(option => option.category))];
-  const workflows = [...new Set(options.flatMap(option => option.scopes?.flatMap(scope => scope.workflow_type ? [scope.workflow_type] : []) ?? []))].sort();
-  const taskTypes = [...new Set(options.flatMap(option => option.scopes?.filter(scope => !workflowType || !scope.workflow_type || scope.workflow_type === workflowType).flatMap(scope => scope.task_type ? [scope.task_type] : []) ?? []))].sort();
+  const { workflowTypes, taskTypes, showTaskTypes } = telemetryChoiceScopeOptions(options, scopeCatalog, workflowType);
   const browsing = Boolean(category || query.trim());
   const choices = browsing ? filterTelemetryChoices(options, category, query, workflowType, taskType) : [];
 
@@ -65,9 +65,13 @@ export default function TelemetryChoicePicker({ label, value, onChange, options,
         <div className="mb-4 flex items-start justify-between gap-3"><div><h3 id={`${id}-title`} className="font-semibold">{label}</h3><p className="mt-1 text-xs text-slate-400">Choose a category to browse, or search across choices.</p></div><Button type="button" size="sm" variant="ghost" aria-label="Close choices" onClick={() => setOpen(false)}><X className="h-4 w-4"/></Button></div>
         <div className="relative"><Search aria-hidden className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400"/><input ref={search} type="search" aria-label={`Search ${label}`} className={`${inputClass} pl-9`} placeholder="Search names, keys, or workflow context…" value={query}
           onChange={event => { setQuery(event.target.value); setActive(0); }} onKeyDown={event => { if (event.key === 'ArrowDown' && choices.length) { event.preventDefault(); focusChoice(0); } }}/></div>
-        {(workflows.length > 1 || taskTypes.length > 1 || taskType) && <div className="mt-3 space-y-2"><div className="grid gap-2 sm:grid-cols-2">
-          {workflows.length > 1 && <Select label="Narrow by workflow type" value={workflowType} onChange={next => { setWorkflowType(next); setTaskType(''); setActive(0); }} options={[{ value: '', label: 'All workflow types' }, ...workflows.map(value => ({ value, label: value }))]}/>}
-          {(taskTypes.length > 1 || taskType) && <Select label="Narrow by task type" value={taskType} onChange={next => { setTaskType(next); setActive(0); }} options={[{ value: '', label: 'All task types' }, ...taskTypes.map(value => ({ value, label: value }))]}/>}
+        {(workflowTypes.length > 0 || showTaskTypes) && <div className="mt-3 space-y-2"><div className="grid gap-2 sm:grid-cols-2">
+          {workflowTypes.length > 0 && <Select label="Narrow by workflow type" value={workflowType} onChange={next => {
+            setWorkflowType(next);
+            if (!telemetryChoiceScopeOptions(options, scopeCatalog, next).taskTypes.some(type => type.value === taskType)) setTaskType('');
+            setActive(0);
+          }} options={[{ value: '', label: 'All workflow types' }, ...workflowTypes]}/>}
+          {showTaskTypes && <Select label="Narrow by task type" value={taskType} disabled={!taskTypes.length} onChange={next => { setTaskType(next); setActive(0); }} options={[{ value: '', label: taskTypes.length ? 'All task types' : 'No task types in this workflow' }, ...taskTypes]}/>}
         </div><p className="text-xs text-slate-500">These filters narrow the choices shown; they do not change the metric population.</p></div>}
         <div className="mt-4 grid gap-3 sm:grid-cols-[170px_minmax(0,1fr)]">
           <div aria-label="Choice categories" className="flex flex-wrap content-start gap-1 sm:flex-col">

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildTelemetryDefinition, newTelemetryGuide, telemetrySignal } from './telemetryBuilder.ts';
-import { filterTelemetryChoices, telemetryFieldChoices, telemetryFilterOperations, telemetryFilterValues, telemetryGuideRequirements, telemetryGuideSelectionIssue, telemetryNumericFields, telemetryPopulationFields, telemetrySignalChoices } from './telemetryBuilderOptions.ts';
+import { filterTelemetryChoices, telemetryChoiceScopeOptions, telemetryFieldChoices, telemetryFilterOperations, telemetryFilterValues, telemetryGuideRequirements, telemetryGuideSelectionIssue, telemetryNumericFields, telemetryPopulationFields, telemetrySignalChoices } from './telemetryBuilderOptions.ts';
 import type { TelemetryCatalog } from './telemetryTypes.ts';
 
 const catalog: TelemetryCatalog = {
@@ -59,6 +59,38 @@ test('numeric and population choices honor compatible grains and value timing', 
   assert.ok(!telemetryPopulationFields(catalog, newTelemetryGuide()).some(field => field.id === 'event.outcome'));
   assert.ok(telemetryPopulationFields(catalog, { ...guide, basis: 'at_event' }).some(field => field.id === 'event.outcome'));
   assert.ok(!telemetryPopulationFields(catalog, guide).some(field => field.id === 'tokens_in'));
+});
+
+test('workflow narrowing retains a single task type and includes types with only shared fields', () => {
+  const choices = telemetryFieldChoices(catalog.fields, catalog);
+  const scopeCatalog = { workflow_types: [...catalog.workflow_types, { key: 'empty', name: 'Empty workflow' }], task_types: [
+    { key: 'lead', label: 'Lead', workflow_type: 'sales' },
+    { key: 'ops', label: 'Operations', workflow_type: 'sales' },
+    { key: 'article', label: 'Article', workflow_type: 'content' },
+  ] };
+  const sales = telemetryChoiceScopeOptions(choices, scopeCatalog, 'sales');
+  assert.deepEqual(sales.taskTypes, [{ value: 'lead', label: 'Lead' }, { value: 'ops', label: 'Operations' }]);
+  assert.equal(sales.showTaskTypes, true);
+  // No fields are scoped to ops, but shared fields can still be used for these tasks.
+  assert.ok(filterTelemetryChoices(choices, '*', '', 'sales', 'ops').some(choice => choice.value === 'story_points'));
+  const content = telemetryChoiceScopeOptions(choices, scopeCatalog, 'content');
+  assert.deepEqual(content.taskTypes, [{ value: 'article', label: 'Article' }]);
+  assert.equal(content.showTaskTypes, true);
+  const empty = telemetryChoiceScopeOptions(choices, scopeCatalog, 'empty');
+  assert.deepEqual(empty.taskTypes, []);
+  assert.equal(empty.showTaskTypes, true);
+  assert.equal(telemetryChoiceScopeOptions(choices, scopeCatalog).taskTypes.length, 3);
+});
+
+test('scope options deduplicate task keys, retain shared types, and support pickers without a catalog', () => {
+  const scopeCatalog = { workflow_types: catalog.workflow_types, task_types: [
+    { key: 'ops', workflow_type: 'sales' }, { key: 'ops', workflow_type: 'content' }, { key: 'shared' },
+  ] };
+  assert.deepEqual(telemetryChoiceScopeOptions([], scopeCatalog).taskTypes.map(type => type.value), ['ops', 'shared']);
+  assert.deepEqual(telemetryChoiceScopeOptions([], scopeCatalog, 'sales').taskTypes.map(type => type.value), ['ops', 'shared']);
+  const choices = telemetryFieldChoices(catalog.fields, catalog);
+  assert.deepEqual(telemetryChoiceScopeOptions(choices, undefined, 'sales').taskTypes.map(type => type.value), ['lead', 'proposal']);
+  assert.deepEqual(telemetryChoiceScopeOptions([{ value: '1', label: 'Agent', category: 'Agents', description: '' }]), { workflowTypes: [], taskTypes: [], showTaskTypes: false });
 });
 
 test('typed population controls offer boolean and catalog values and valid comparisons', () => {
