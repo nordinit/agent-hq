@@ -299,7 +299,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'tasks.manage_project_tasks',
     group: 'Task lifecycle',
     label: 'Project task CRUD',
-    description: 'Allows creating, reading, updating, and deleting generic tasks and workflow-configured task relationships only inside the MCP agent\'s assigned project and tenant. Project scope is resolved from the agent identity and validated against project_id, sprint_id/workflow_id, relationship peer tasks, target task project, and assignment agent_id. Does not allow active-task lifecycle writes, admin outcomes, cross-project edits, cross-tenant access, or unrelated admin routes.',
+    description: 'Allows creating, reading, updating, and deleting generic tasks and workflow-configured task relationships only inside the MCP agent\'s assigned project and tenant. Project scope is resolved from the agent identity and validated against project_id, workflow_id, relationship peer tasks, target task project, and assignment agent_id. Does not allow active-task lifecycle writes, admin outcomes, cross-project edits, cross-tenant access, or unrelated admin routes.',
     endpoints: [
       'GET /api/v1/tasks/:id',
       'POST /api/v1/tasks',
@@ -413,9 +413,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     endpoints: [
       'GET /api/v1/projects',
       'GET /api/v1/tasks',
-      'GET /api/v1/sprints',
       'GET /api/v1/workflows',
-      'GET /api/v1/sprints/workflow-metadata',
       'GET /api/v1/workflows/workflow-metadata',
     ],
     defaultEnabled: {
@@ -450,12 +448,12 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
-    key: 'sprints.read_active_sprint',
+    key: 'workflows.read_active_workflow',
     group: 'Context',
-    label: 'Read active sprint',
-    description: 'Allows reading the sprint attached to the active dispatched task.',
+    label: 'Read active workflow',
+    description: 'Allows reading the workflow attached to the active dispatched task.',
     endpoints: [
-      'GET /api/v1/sprints/:id',
+      'GET /api/v1/workflows/:id',
     ],
     defaultEnabled: {
       scoped_runtime: true,
@@ -481,12 +479,11 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
-    key: 'sprints.pause_active_sprint',
+    key: 'workflows.pause_active_workflow',
     group: 'Context',
     label: 'Pause and resume workflow',
-    description: 'Allows moving a workflow between the non-terminal lifecycle statuses — planning, active, and paused — for the workflow attached to the MCP agent\'s active dispatched task, or, for a board-scoped client, any workflow inside its assigned project. The request body may carry nothing but status and an optional note: a patch that also touches name, goal, dates, repo configuration, or project_id is refused, so this cannot be used to reassign or reconfigure a workflow. Reversible by construction; it stamps no end date and stands down no agents. Does not allow completing or closing a workflow — that is sprints.complete_active_sprint.',
+    description: 'Allows moving a workflow between the non-terminal lifecycle statuses — planning, active, and paused — for the workflow attached to the MCP agent\'s active dispatched task, or, for a board-scoped client, any workflow inside its assigned project. The request body may carry nothing but status and an optional note: a patch that also touches name, goal, dates, repo configuration, or project_id is refused, so this cannot be used to reassign or reconfigure a workflow. Reversible by construction; it stamps no end date and stands down no agents. Does not allow completing or closing a workflow — that is workflows.complete_active_workflow.',
     endpoints: [
-      'PUT /api/v1/sprints/:id',
       'PUT /api/v1/workflows/:id',
     ],
     defaultEnabled: {
@@ -495,13 +492,11 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     },
   },
   {
-    key: 'sprints.complete_active_sprint',
+    key: 'workflows.complete_active_workflow',
     group: 'Context',
     label: 'Complete and close workflow',
-    description: 'Allows ending an operating cycle — completing or closing the workflow attached to the MCP agent\'s active dispatched task, or, for a board-scoped client, any workflow inside its assigned project. Completing stamps ended_at and disables the workflow\'s agents; both write an audited status change naming the agent that asked. Held separately from sprints.pause_active_sprint because this is terminal for the cycle while pausing is reversible: an agent that may say "hold on" does not thereby get to say "this is finished". Reopening a completed or closed workflow needs sprints.pause_active_sprint.',
+    description: 'Allows ending an operating cycle — completing or closing the workflow attached to the MCP agent\'s active dispatched task, or, for a board-scoped client, any workflow inside its assigned project. Completing stamps ended_at and disables the workflow\'s agents; both write an audited status change naming the agent that asked. Held separately from workflows.pause_active_workflow because this is terminal for the cycle while pausing is reversible: an agent that may say "hold on" does not thereby get to say "this is finished". Reopening a completed or closed workflow needs workflows.pause_active_workflow.',
     endpoints: [
-      'POST /api/v1/sprints/:id/complete',
-      'POST /api/v1/sprints/:id/close',
       'POST /api/v1/workflows/:id/complete',
       'POST /api/v1/workflows/:id/close',
     ],
@@ -514,7 +509,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'workflow.read_active_configuration',
     group: 'Workflow',
     label: 'Read active workflow configuration',
-    description: 'Allows reading workflow transitions and transition requirements for the active task\'s sprint and project.',
+    description: 'Allows reading workflow transitions and transition requirements for the active task\'s workflow and project.',
     endpoints: [
       'GET /api/v1/routing/transitions',
       'GET /api/v1/routing/transition-requirements',
@@ -560,18 +555,6 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     label: 'Read project workflow definitions',
     description: 'Allows reading a whole workflow definition — the type, its task types, field schemas, statuses, outcomes, and relationship types — only when scoped to the MCP agent\'s assigned project and tenant. Does not allow tenant-wide, cross-project, cross-tenant, or mutation access.',
     endpoints: [
-      'GET /api/v1/sprints/config',
-      'GET /api/v1/sprints/types/list',
-      'GET /api/v1/sprints/types/:key',
-      'GET /api/v1/sprints/types/:key/task-types',
-      'GET /api/v1/sprints/types/:key/field-schemas',
-      'GET /api/v1/sprints/types/:key/field-schemas/:schemaId',
-      'GET /api/v1/sprints/types/:key/statuses',
-      'GET /api/v1/sprints/types/:key/statuses/:statusKey',
-      'GET /api/v1/sprints/types/:key/outcomes',
-      'GET /api/v1/sprints/types/:key/outcomes/:outcomeId',
-      'GET /api/v1/sprints/types/:key/relationship-types',
-      'GET /api/v1/sprints/types/:key/relationship-types/:relationshipTypeId',
       'GET /api/v1/workflows/config',
       'GET /api/v1/workflows/types/list',
       'GET /api/v1/workflows/types/:key',
@@ -608,22 +591,6 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     label: 'Edit project workflow definitions',
     description: 'Allows creating, updating, and deleting every part of a workflow definition — the type itself, its task types, field schemas, statuses and their metadata, outcomes, and relationship types — only inside the MCP agent\'s assigned project and tenant. Statuses and outcomes shape the transition graph an agent moves tasks through, so this grants real authority over how work flows, not just how it is labelled. Does not allow tenant-wide definitions, global definitions, cross-project edits, cross-tenant edits, or unrelated admin routes.',
     endpoints: [
-      'POST /api/v1/sprints/types',
-      'PUT /api/v1/sprints/types/:key',
-      'DELETE /api/v1/sprints/types/:key',
-      'PUT /api/v1/sprints/types/:key/task-types',
-      'POST /api/v1/sprints/types/:key/field-schemas',
-      'PUT /api/v1/sprints/types/:key/field-schemas/:schemaId',
-      'DELETE /api/v1/sprints/types/:key/field-schemas/:schemaId',
-      'POST /api/v1/sprints/types/:key/statuses',
-      'PUT /api/v1/sprints/types/:key/statuses/:statusKey',
-      'DELETE /api/v1/sprints/types/:key/statuses/:statusKey',
-      'POST /api/v1/sprints/types/:key/outcomes',
-      'PUT /api/v1/sprints/types/:key/outcomes/:outcomeId',
-      'DELETE /api/v1/sprints/types/:key/outcomes/:outcomeId',
-      'POST /api/v1/sprints/types/:key/relationship-types',
-      'PUT /api/v1/sprints/types/:key/relationship-types/:relationshipTypeId',
-      'DELETE /api/v1/sprints/types/:key/relationship-types/:relationshipTypeId',
       'POST /api/v1/workflows/types',
       'PUT /api/v1/workflows/types/:key',
       'DELETE /api/v1/workflows/types/:key',
@@ -701,7 +668,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'transition_requirements.manage_project_scope',
     group: 'Workflow',
     label: 'Project transition requirement CRUD',
-    description: 'Allows reading, creating, updating, and deleting workflow gate requirements only inside the MCP agent\'s assigned project and tenant. Requires explicit project_id plus sprint_type, or sprint_id/workflow_id scoped to the assigned project. Does not allow global defaults, cross-project edits, cross-tenant edits, workflow transition changes, or unrelated admin routes.',
+    description: 'Allows reading, creating, updating, and deleting workflow gate requirements only inside the MCP agent\'s assigned project and tenant. Requires explicit project_id plus workflow_type, or workflow_id scoped to the assigned project. Does not allow global defaults, cross-project edits, cross-tenant edits, workflow transition changes, or unrelated admin routes.',
     endpoints: [
       'GET /api/v1/routing/transition-requirements',
       'POST /api/v1/routing/transition-requirements',
@@ -828,7 +795,7 @@ const SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES = new Set<AgentMcpCapabilityKey>([
   'tasks.manage_project_tasks',
   'projects.read_active_project',
   'projects.manage_active_files',
-  'sprints.read_active_sprint',
+  'workflows.read_active_workflow',
   'workflow.read_active_configuration',
   'routing_rules.read_project_scope',
   'routing_transitions.manage_project_scope',
@@ -1463,7 +1430,7 @@ export function getMcpIdentityFromRequest(req: Request): McpApiIdentity | null {
 type ScopedTaskContext = {
   taskId: number;
   projectId: number | null;
-  sprintId: number | null;
+  workflowId: number | null;
   activeInstanceId: number | null;
 };
 
@@ -1490,7 +1457,7 @@ async function getScopedTaskContexts(db: Db, identity: McpApiIdentity): Promise<
     SELECT DISTINCT
       t.id AS task_id,
       t.project_id AS project_id,
-      t.sprint_id AS sprint_id,
+      t.workflow_id AS workflow_id,
       t.active_instance_id AS active_instance_id
     FROM tasks t
     LEFT JOIN job_instances active_ji ON active_ji.id = t.active_instance_id
@@ -1510,7 +1477,7 @@ async function getScopedTaskContexts(db: Db, identity: McpApiIdentity): Promise<
     return {
       taskId: Number(record.task_id),
       projectId: parsePositiveInt(record.project_id),
-      sprintId: parsePositiveInt(record.sprint_id),
+      workflowId: parsePositiveInt(record.workflow_id),
       activeInstanceId: parsePositiveInt(record.active_instance_id),
     };
   });
@@ -1648,16 +1615,16 @@ async function agentBelongsToProject(db: Db, identity: McpApiIdentity, agentId: 
   return parsePositiveInt(row?.project_id) === projectId;
 }
 
-async function sprintBelongsToProject(db: Db, identity: McpApiIdentity, sprintId: number, projectId: number): Promise<boolean> {
-  if (!await hasTable(db, 'sprints')) return false;
-  const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+async function workflowBelongsToProject(db: Db, identity: McpApiIdentity, workflowId: number, projectId: number): Promise<boolean> {
+  if (!await hasTable(db, 'workflows')) return false;
+  const hasWorkflowTenant = await hasColumn(db, 'workflows', 'tenant_id');
   const row = await db.get(`
     SELECT project_id
-    FROM sprints
+    FROM workflows
     WHERE id = ?
-      ${hasSprintTenant ? 'AND tenant_id = ?' : ''}
+      ${hasWorkflowTenant ? 'AND tenant_id = ?' : ''}
     LIMIT 1
-  `, sprintId, ...(hasSprintTenant ? [identity.tenantId] : [])) as { project_id: number | null } | undefined;
+  `, workflowId, ...(hasWorkflowTenant ? [identity.tenantId] : [])) as { project_id: number | null } | undefined;
   return parsePositiveInt(row?.project_id) === projectId;
 }
 
@@ -1678,9 +1645,9 @@ async function validateProjectTaskCrudRequestScope(
     return { ok: false, reason: `Requested project_id ${requestedProjectId} is outside the assigned project for ${identity.agentSlug}.` };
   }
 
-  const requestedSprintId = parsePositiveInt(firstPresent(body.sprint_id, body.workflow_id));
-  if (requestedSprintId != null && !await sprintBelongsToProject(db, identity, requestedSprintId, projectId)) {
-    return { ok: false, reason: `Requested sprint/workflow #${requestedSprintId} is outside the assigned project for ${identity.agentSlug}.` };
+  const requestedWorkflowId = parsePositiveInt(firstPresent(body.workflow_id, body.workflow_id));
+  if (requestedWorkflowId != null && !await workflowBelongsToProject(db, identity, requestedWorkflowId, projectId)) {
+    return { ok: false, reason: `Requested workflow #${requestedWorkflowId} is outside the assigned project for ${identity.agentSlug}.` };
   }
 
   const requestedAgentId = parsePositiveInt(body.agent_id);
@@ -1712,15 +1679,15 @@ async function taskIdForInstance(db: Db, instanceId: number): Promise<number | n
 
 type RoutingRuleScopeContext = {
   projectId: number | null;
-  sprintId: number | null;
-  sprintType: string | null;
+  workflowId: number | null;
+  workflowType: string | null;
   source: 'request' | 'existing_rule';
 };
 
 type RoutingTransitionScopeContext = {
   projectId: number | null;
-  sprintId: number | null;
-  sprintType: string | null;
+  workflowId: number | null;
+  workflowType: string | null;
   source: 'request' | 'existing_transition';
 };
 
@@ -1740,31 +1707,31 @@ async function getRoutingRuleScopeFromRuleId(
   ruleId: number,
   tenantId: number,
 ): Promise<RoutingRuleScopeContext | null> {
-  if (!await hasTable(db, 'sprint_task_routing_rules')) return null;
-  const hasRoutingProject = await hasColumn(db, 'sprint_task_routing_rules', 'project_id');
-  const hasRoutingSprintType = await hasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
-  const hasRoutingTenant = await hasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
-  const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+  if (!await hasTable(db, 'workflow_task_routing_rules')) return null;
+  const hasRoutingProject = await hasColumn(db, 'workflow_task_routing_rules', 'project_id');
+  const hasRoutingWorkflowType = await hasColumn(db, 'workflow_task_routing_rules', 'workflow_type');
+  const hasRoutingTenant = await hasColumn(db, 'workflow_task_routing_rules', 'tenant_id');
+  const hasWorkflowTenant = await hasColumn(db, 'workflows', 'tenant_id');
   const row = await db.get(`
     SELECT
       trr.id,
       ${hasRoutingProject ? 'trr.project_id' : 'NULL'} AS routing_project_id,
-      trr.sprint_id AS routing_sprint_id,
-      ${hasRoutingSprintType ? 'trr.sprint_type' : 'NULL'} AS routing_sprint_type,
-      s.project_id AS sprint_project_id,
-      s.sprint_type AS sprint_type
-    FROM sprint_task_routing_rules trr
-    LEFT JOIN sprints s ON s.id = trr.sprint_id
+      trr.workflow_id AS routing_workflow_id,
+      ${hasRoutingWorkflowType ? 'trr.workflow_type' : 'NULL'} AS routing_workflow_type,
+      s.project_id AS workflow_project_id,
+      s.workflow_type AS workflow_type
+    FROM workflow_task_routing_rules trr
+    LEFT JOIN workflows s ON s.id = trr.workflow_id
     WHERE trr.id = ?
       ${hasRoutingTenant ? 'AND trr.tenant_id = ?' : ''}
-      ${!hasRoutingTenant && hasSprintTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
+      ${!hasRoutingTenant && hasWorkflowTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
     LIMIT 1
-  `, ruleId, ...((hasRoutingTenant || (!hasRoutingTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  `, ruleId, ...((hasRoutingTenant || (!hasRoutingTenant && hasWorkflowTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
-    projectId: parsePositiveInt(row.routing_project_id) ?? parsePositiveInt(row.sprint_project_id),
-    sprintId: parsePositiveInt(row.routing_sprint_id),
-    sprintType: normalizeScopeString(row.routing_sprint_type) ?? normalizeScopeString(row.sprint_type),
+    projectId: parsePositiveInt(row.routing_project_id) ?? parsePositiveInt(row.workflow_project_id),
+    workflowId: parsePositiveInt(row.routing_workflow_id),
+    workflowType: normalizeScopeString(row.routing_workflow_type) ?? normalizeScopeString(row.workflow_type),
     source: 'existing_rule',
   };
 }
@@ -1774,33 +1741,33 @@ async function getRoutingRuleScopeFromRequest(
   input: Record<string, unknown>,
   tenantId: number,
 ): Promise<RoutingRuleScopeContext | null> {
-  const sprintId = parsePositiveInt(firstPresent(input.sprint_id, input.workflow_id));
+  const workflowId = parsePositiveInt(firstPresent(input.workflow_id, input.workflow_id));
   const requestedProjectId = parsePositiveInt(input.project_id);
-  const requestedSprintType = normalizeScopeString(firstPresent(input.sprint_type, input.workflow_type));
+  const requestedWorkflowType = normalizeScopeString(firstPresent(input.workflow_type, input.workflow_type));
 
-  if (sprintId != null) {
-    if (!await hasTable(db, 'sprints')) return { projectId: requestedProjectId, sprintId, sprintType: requestedSprintType, source: 'request' };
-    const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
-    const sprint = await db.get(`
-      SELECT id, project_id, sprint_type
-      FROM sprints
+  if (workflowId != null) {
+    if (!await hasTable(db, 'workflows')) return { projectId: requestedProjectId, workflowId, workflowType: requestedWorkflowType, source: 'request' };
+    const hasWorkflowTenant = await hasColumn(db, 'workflows', 'tenant_id');
+    const workflow = await db.get(`
+      SELECT id, project_id, workflow_type
+      FROM workflows
       WHERE id = ?
-        ${hasSprintTenant ? 'AND tenant_id = ?' : ''}
+        ${hasWorkflowTenant ? 'AND tenant_id = ?' : ''}
       LIMIT 1
-    `, sprintId, ...(hasSprintTenant ? [tenantId] : [])) as { id: number; project_id: number | null; sprint_type: string | null } | undefined;
-    if (!sprint) return { projectId: null, sprintId, sprintType: requestedSprintType, source: 'request' };
+    `, workflowId, ...(hasWorkflowTenant ? [tenantId] : [])) as { id: number; project_id: number | null; workflow_type: string | null } | undefined;
+    if (!workflow) return { projectId: null, workflowId, workflowType: requestedWorkflowType, source: 'request' };
     return {
-      projectId: parsePositiveInt(sprint.project_id),
-      sprintId,
-      sprintType: normalizeScopeString(sprint.sprint_type) ?? requestedSprintType,
+      projectId: parsePositiveInt(workflow.project_id),
+      workflowId,
+      workflowType: normalizeScopeString(workflow.workflow_type) ?? requestedWorkflowType,
       source: 'request',
     };
   }
 
   return {
     projectId: requestedProjectId,
-    sprintId: null,
-    sprintType: requestedSprintType,
+    workflowId: null,
+    workflowType: requestedWorkflowType,
     source: 'request',
   };
 }
@@ -1816,31 +1783,31 @@ async function getRoutingTransitionScopeFromTransitionId(
   transitionId: number,
   tenantId: number,
 ): Promise<RoutingTransitionScopeContext | null> {
-  if (!await hasTable(db, 'sprint_task_transitions')) return null;
-  const hasTransitionProject = await hasColumn(db, 'sprint_task_transitions', 'project_id');
-  const hasTransitionSprintType = await hasColumn(db, 'sprint_task_transitions', 'sprint_type');
-  const hasTransitionTenant = await hasColumn(db, 'sprint_task_transitions', 'tenant_id');
-  const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+  if (!await hasTable(db, 'workflow_task_transitions')) return null;
+  const hasTransitionProject = await hasColumn(db, 'workflow_task_transitions', 'project_id');
+  const hasTransitionWorkflowType = await hasColumn(db, 'workflow_task_transitions', 'workflow_type');
+  const hasTransitionTenant = await hasColumn(db, 'workflow_task_transitions', 'tenant_id');
+  const hasWorkflowTenant = await hasColumn(db, 'workflows', 'tenant_id');
   const row = await db.get(`
     SELECT
       stt.id,
       ${hasTransitionProject ? 'stt.project_id' : 'NULL'} AS transition_project_id,
-      stt.sprint_id AS transition_sprint_id,
-      ${hasTransitionSprintType ? 'stt.sprint_type' : 'NULL'} AS transition_sprint_type,
-      s.project_id AS sprint_project_id,
-      s.sprint_type AS sprint_type
-    FROM sprint_task_transitions stt
-    LEFT JOIN sprints s ON s.id = stt.sprint_id
+      stt.workflow_id AS transition_workflow_id,
+      ${hasTransitionWorkflowType ? 'stt.workflow_type' : 'NULL'} AS transition_workflow_type,
+      s.project_id AS workflow_project_id,
+      s.workflow_type AS workflow_type
+    FROM workflow_task_transitions stt
+    LEFT JOIN workflows s ON s.id = stt.workflow_id
     WHERE stt.id = ?
       ${hasTransitionTenant ? 'AND stt.tenant_id = ?' : ''}
-      ${!hasTransitionTenant && hasSprintTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
+      ${!hasTransitionTenant && hasWorkflowTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
     LIMIT 1
-  `, transitionId, ...((hasTransitionTenant || (!hasTransitionTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  `, transitionId, ...((hasTransitionTenant || (!hasTransitionTenant && hasWorkflowTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
-    projectId: parsePositiveInt(row.transition_project_id) ?? parsePositiveInt(row.sprint_project_id),
-    sprintId: parsePositiveInt(row.transition_sprint_id),
-    sprintType: normalizeScopeString(row.transition_sprint_type) ?? normalizeScopeString(row.sprint_type),
+    projectId: parsePositiveInt(row.transition_project_id) ?? parsePositiveInt(row.workflow_project_id),
+    workflowId: parsePositiveInt(row.transition_workflow_id),
+    workflowType: normalizeScopeString(row.transition_workflow_type) ?? normalizeScopeString(row.workflow_type),
     source: 'existing_transition',
   };
 }
@@ -1854,8 +1821,8 @@ async function getRoutingTransitionScopeFromRequest(
   if (!ruleScope) return null;
   return {
     projectId: ruleScope.projectId,
-    sprintId: ruleScope.sprintId,
-    sprintType: ruleScope.sprintType,
+    workflowId: ruleScope.workflowId,
+    workflowType: ruleScope.workflowType,
     source: 'request',
   };
 }
@@ -1877,12 +1844,12 @@ async function getWorkflowDefinitionScopeFromKey(
   workflowDefinitionKey: string,
   tenantId: number,
 ): Promise<WorkflowDefinitionScopeContext | null> {
-  if (!await hasTable(db, 'sprint_types')) return null;
-  const hasTenant = await hasColumn(db, 'sprint_types', 'tenant_id');
-  const hasProject = await hasColumn(db, 'sprint_types', 'project_id');
+  if (!await hasTable(db, 'workflow_types')) return null;
+  const hasTenant = await hasColumn(db, 'workflow_types', 'tenant_id');
+  const hasProject = await hasColumn(db, 'workflow_types', 'project_id');
   const row = await db.get(`
     SELECT key, ${hasProject ? 'project_id' : 'NULL'} AS project_id
-    FROM sprint_types
+    FROM workflow_types
     WHERE key = ?
       ${hasTenant ? 'AND tenant_id = ?' : ''}
     LIMIT 1
@@ -1897,7 +1864,7 @@ async function getWorkflowDefinitionScopeFromKey(
 
 function getWorkflowDefinitionScopeFromRequest(input: Record<string, unknown>): WorkflowDefinitionScopeContext | null {
   const projectId = parsePositiveInt(input.project_id);
-  const key = normalizeScopeString(firstPresent(input.key, input.sprint_type_key, input.workflow_type_key, input.workflow_definition_key));
+  const key = normalizeScopeString(firstPresent(input.key, input.workflow_type_key, input.workflow_type_key, input.workflow_definition_key));
   if (projectId == null && key == null) return null;
   return {
     projectId,
@@ -1928,7 +1895,7 @@ function isActiveCustomFieldsOnlyUpdate(body: Record<string, unknown>): boolean 
 }
 
 /**
- * The non-terminal workflow statuses. Reaching `complete` or `closed` through the sprint PUT is
+ * The non-terminal workflow statuses. Reaching `complete` or `closed` through the workflow PUT is
  * deliberately excluded: those have their own endpoints, which stamp ended_at and stand down the
  * workflow's agents, and their own capability. A status field write to 'complete' would leave a
  * workflow that reads as finished but never ended.
@@ -1937,7 +1904,7 @@ function isActiveCustomFieldsOnlyUpdate(body: Record<string, unknown>): boolean 
  * closed workflow back to active is a supported operator action and stays supported here.
  */
 const PAUSE_CAPABILITY_TARGET_STATUSES = new Set(['planning', 'planned', 'active', 'paused']);
-const SPRINT_STATUS_WRITE_ALLOWED_BODY_KEYS = new Set(['status', 'note']);
+const WORKFLOW_STATUS_WRITE_ALLOWED_BODY_KEYS = new Set(['status', 'note']);
 
 /**
  * True when a workflow update carries nothing but a non-terminal status (and an optional audit
@@ -1945,11 +1912,11 @@ const SPRINT_STATUS_WRITE_ALLOWED_BODY_KEYS = new Set(['status', 'note']);
  * a general workflow edit: without it, granting pause would also grant renaming a workflow,
  * rewriting its repo configuration, and — via project_id — moving it into another project.
  */
-function isSprintStatusOnlyUpdate(body: Record<string, unknown>): boolean {
+function isWorkflowStatusOnlyUpdate(body: Record<string, unknown>): boolean {
   const keys = Object.keys(body);
   if (keys.length === 0) return false;
   if (!Object.prototype.hasOwnProperty.call(body, 'status')) return false;
-  if (!keys.every((key) => SPRINT_STATUS_WRITE_ALLOWED_BODY_KEYS.has(key))) return false;
+  if (!keys.every((key) => WORKFLOW_STATUS_WRITE_ALLOWED_BODY_KEYS.has(key))) return false;
   const status = typeof body.status === 'string' ? body.status.trim().toLowerCase() : '';
   return PAUSE_CAPABILITY_TARGET_STATUSES.has(status);
 }
@@ -1973,8 +1940,8 @@ function workflowDefinitionScopeMatchesAssignedProject(scope: WorkflowDefinition
 
 type TransitionRequirementScopeContext = {
   projectId: number | null;
-  sprintId: number | null;
-  sprintType: string | null;
+  workflowId: number | null;
+  workflowType: string | null;
   source: 'request' | 'existing_requirement';
 };
 
@@ -1983,31 +1950,31 @@ async function getTransitionRequirementScopeFromRequirementId(
   requirementId: number,
   tenantId: number,
 ): Promise<TransitionRequirementScopeContext | null> {
-  if (!await hasTable(db, 'sprint_task_transition_requirements')) return null;
-  const hasRequirementProject = await hasColumn(db, 'sprint_task_transition_requirements', 'project_id');
-  const hasRequirementSprintType = await hasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
-  const hasRequirementTenant = await hasColumn(db, 'sprint_task_transition_requirements', 'tenant_id');
-  const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
+  if (!await hasTable(db, 'workflow_task_transition_requirements')) return null;
+  const hasRequirementProject = await hasColumn(db, 'workflow_task_transition_requirements', 'project_id');
+  const hasRequirementWorkflowType = await hasColumn(db, 'workflow_task_transition_requirements', 'workflow_type');
+  const hasRequirementTenant = await hasColumn(db, 'workflow_task_transition_requirements', 'tenant_id');
+  const hasWorkflowTenant = await hasColumn(db, 'workflows', 'tenant_id');
   const row = await db.get(`
     SELECT
       req.id,
       ${hasRequirementProject ? 'req.project_id' : 'NULL'} AS requirement_project_id,
-      req.sprint_id AS requirement_sprint_id,
-      ${hasRequirementSprintType ? 'req.sprint_type' : 'NULL'} AS requirement_sprint_type,
-      s.project_id AS sprint_project_id,
-      s.sprint_type AS sprint_type
-    FROM sprint_task_transition_requirements req
-    LEFT JOIN sprints s ON s.id = req.sprint_id
+      req.workflow_id AS requirement_workflow_id,
+      ${hasRequirementWorkflowType ? 'req.workflow_type' : 'NULL'} AS requirement_workflow_type,
+      s.project_id AS workflow_project_id,
+      s.workflow_type AS workflow_type
+    FROM workflow_task_transition_requirements req
+    LEFT JOIN workflows s ON s.id = req.workflow_id
     WHERE req.id = ?
       ${hasRequirementTenant ? 'AND req.tenant_id = ?' : ''}
-      ${!hasRequirementTenant && hasSprintTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
+      ${!hasRequirementTenant && hasWorkflowTenant ? 'AND (s.tenant_id = ? OR s.id IS NULL)' : ''}
     LIMIT 1
-  `, requirementId, ...((hasRequirementTenant || (!hasRequirementTenant && hasSprintTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
+  `, requirementId, ...((hasRequirementTenant || (!hasRequirementTenant && hasWorkflowTenant)) ? [tenantId] : [])) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
-    projectId: parsePositiveInt(row.requirement_project_id) ?? parsePositiveInt(row.sprint_project_id),
-    sprintId: parsePositiveInt(row.requirement_sprint_id),
-    sprintType: normalizeScopeString(row.requirement_sprint_type) ?? normalizeScopeString(row.sprint_type),
+    projectId: parsePositiveInt(row.requirement_project_id) ?? parsePositiveInt(row.workflow_project_id),
+    workflowId: parsePositiveInt(row.requirement_workflow_id),
+    workflowType: normalizeScopeString(row.requirement_workflow_type) ?? normalizeScopeString(row.workflow_type),
     source: 'existing_requirement',
   };
 }
@@ -2017,34 +1984,34 @@ async function getTransitionRequirementScopeFromRequest(
   input: Record<string, unknown>,
   tenantId: number,
 ): Promise<TransitionRequirementScopeContext | null> {
-  const sprintId = parsePositiveInt(firstPresent(input.sprint_id, input.workflow_id));
+  const workflowId = parsePositiveInt(firstPresent(input.workflow_id, input.workflow_id));
   const requestedProjectId = parsePositiveInt(input.project_id);
-  const requestedSprintType = normalizeScopeString(firstPresent(input.sprint_type, input.workflow_type));
+  const requestedWorkflowType = normalizeScopeString(firstPresent(input.workflow_type, input.workflow_type));
 
-  if (sprintId != null) {
-    if (!await hasTable(db, 'sprints')) return { projectId: requestedProjectId, sprintId, sprintType: requestedSprintType, source: 'request' };
-    const hasSprintTenant = await hasColumn(db, 'sprints', 'tenant_id');
-    const sprint = await db.get(`
-      SELECT id, project_id, sprint_type
-      FROM sprints
+  if (workflowId != null) {
+    if (!await hasTable(db, 'workflows')) return { projectId: requestedProjectId, workflowId, workflowType: requestedWorkflowType, source: 'request' };
+    const hasWorkflowTenant = await hasColumn(db, 'workflows', 'tenant_id');
+    const workflow = await db.get(`
+      SELECT id, project_id, workflow_type
+      FROM workflows
       WHERE id = ?
-        ${hasSprintTenant ? 'AND tenant_id = ?' : ''}
+        ${hasWorkflowTenant ? 'AND tenant_id = ?' : ''}
       LIMIT 1
-    `, sprintId, ...(hasSprintTenant ? [tenantId] : [])) as { id: number; project_id: number | null; sprint_type: string | null } | undefined;
-    if (!sprint) return { projectId: null, sprintId, sprintType: requestedSprintType, source: 'request' };
+    `, workflowId, ...(hasWorkflowTenant ? [tenantId] : [])) as { id: number; project_id: number | null; workflow_type: string | null } | undefined;
+    if (!workflow) return { projectId: null, workflowId, workflowType: requestedWorkflowType, source: 'request' };
     return {
-      projectId: parsePositiveInt(sprint.project_id),
-      sprintId,
-      sprintType: normalizeScopeString(sprint.sprint_type) ?? requestedSprintType,
+      projectId: parsePositiveInt(workflow.project_id),
+      workflowId,
+      workflowType: normalizeScopeString(workflow.workflow_type) ?? requestedWorkflowType,
       source: 'request',
     };
   }
 
-  if (requestedProjectId == null && requestedSprintType == null) return null;
+  if (requestedProjectId == null && requestedWorkflowType == null) return null;
   return {
     projectId: requestedProjectId,
-    sprintId: null,
-    sprintType: requestedSprintType,
+    workflowId: null,
+    workflowType: requestedWorkflowType,
     source: 'request',
   };
 }
@@ -2053,7 +2020,7 @@ function transitionRequirementScopeMatchesAssignedProject(scope: TransitionRequi
   return canonicalAgentProjectId != null
     && scope?.projectId != null
     && scope.projectId === canonicalAgentProjectId
-    && scope.sprintType != null;
+    && scope.workflowType != null;
 }
 
 async function insertMcpScopeDeniedNote(db: Db, params: {
@@ -2183,7 +2150,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   const instanceScopes = await getScopedInstanceContexts(db, identity);
   const scopedTaskIds = new Set(taskScopes.map((row) => row.taskId));
   const scopedProjectIds = new Set(taskScopes.map((row) => row.projectId).filter((value): value is number => value != null));
-  const scopedSprintIds = new Set(taskScopes.map((row) => row.sprintId).filter((value): value is number => value != null));
+  const scopedWorkflowIds = new Set(taskScopes.map((row) => row.workflowId).filter((value): value is number => value != null));
   const scopedInstanceIds = new Set(instanceScopes.map((row) => row.instanceId));
   const canonicalAgentProjectId = await getCanonicalAgentProjectId(db, identity);
 
@@ -2744,12 +2711,12 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   const workflowFileMatch = requestPath.match(/^\/projects\/(\d+)\/workflows\/(\d+)\/files(?:\/(\d+)(?:\/(?:download|versions))?)?$/);
   if (workflowFileMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const projectId = Number(workflowFileMatch[1]);
-    const sprintId = Number(workflowFileMatch[2]);
+    const workflowId = Number(workflowFileMatch[2]);
     if (!await requireCapability(
       'projects.manage_active_files',
       `Workflow file access is disabled for ${identity.agentSlug}.`,
     )) return;
-    if (scopedProjectIds.has(projectId) && scopedSprintIds.has(sprintId)) return next();
+    if (scopedProjectIds.has(projectId) && scopedWorkflowIds.has(workflowId)) return next();
     return deny({
       reason: `Normal Agent HQ MCP keys can only manage workflow files for the project and workflow attached to their active dispatched task.`,
       requiredCapability: 'projects.manage_active_files',
@@ -2759,62 +2726,58 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
 
   // Workflow lifecycle writes — pause, resume, complete, close.
   //
-  // Both path spellings are matched because req.path is not alias-normalized:
-  // normalizeWorkflowRequestAliases folds workflow_id into sprint_id in the body and query only,
-  // and /api/v1/workflows mounts the same router as /api/v1/sprints.
-  //
   // Scope resolves in two tiers, which is what lets one branch serve both kinds of caller: a
   // dispatched agent reaches the workflow attached to its own active task, while a board-scoped
-  // client — a phone connector owning no dispatched task, whose scopedSprintIds is empty by
+  // client — a phone connector owning no dispatched task, whose scopedWorkflowIds is empty by
   // construction — reaches any workflow inside its assigned project.
-  const sprintLifecycleInScope = async (sprintId: number): Promise<boolean> => {
-    if (scopedSprintIds.has(sprintId)) return true;
+  const workflowLifecycleInScope = async (workflowId: number): Promise<boolean> => {
+    if (scopedWorkflowIds.has(workflowId)) return true;
     if (canonicalAgentProjectId == null) return false;
-    return await sprintBelongsToProject(db, identity, sprintId, canonicalAgentProjectId);
+    return await workflowBelongsToProject(db, identity, workflowId, canonicalAgentProjectId);
   };
 
-  const sprintLifecycleMatch = requestPath.match(/^\/(?:sprints|workflows)\/(\d+)\/(close|complete)$/);
-  if (sprintLifecycleMatch && method === 'POST') {
-    const sprintId = Number(sprintLifecycleMatch[1]);
+  const workflowLifecycleMatch = requestPath.match(/^\/workflows\/(\d+)\/(close|complete)$/);
+  if (workflowLifecycleMatch && method === 'POST') {
+    const workflowId = Number(workflowLifecycleMatch[1]);
     if (!await requireCapability(
-      'sprints.complete_active_sprint',
+      'workflows.complete_active_workflow',
       `Workflow completion is disabled for ${identity.agentSlug}.`,
     )) return;
-    if (await sprintLifecycleInScope(sprintId)) return next();
+    if (await workflowLifecycleInScope(workflowId)) return next();
     return deny({
       reason: `Normal Agent HQ MCP keys can only complete or close a workflow attached to their active dispatched task or inside their assigned project.`,
-      requiredCapability: 'sprints.complete_active_sprint',
+      requiredCapability: 'workflows.complete_active_workflow',
     });
   }
 
   // A status-only patch to a non-terminal status. Anything else in the body — a rename, repo
   // configuration, or a project_id that would move the workflow to another project — is not this
   // capability and falls through to the administrative deny below.
-  const sprintStatusMatch = requestPath.match(/^\/(?:sprints|workflows)\/(\d+)$/);
-  if (sprintStatusMatch && method === 'PUT' && isSprintStatusOnlyUpdate(requestBodyRecord(req.body))) {
-    const sprintId = Number(sprintStatusMatch[1]);
+  const workflowStatusMatch = requestPath.match(/^\/workflows\/(\d+)$/);
+  if (workflowStatusMatch && method === 'PUT' && isWorkflowStatusOnlyUpdate(requestBodyRecord(req.body))) {
+    const workflowId = Number(workflowStatusMatch[1]);
     if (!await requireCapability(
-      'sprints.pause_active_sprint',
+      'workflows.pause_active_workflow',
       `Workflow pause and resume are disabled for ${identity.agentSlug}.`,
     )) return;
-    if (await sprintLifecycleInScope(sprintId)) return next();
+    if (await workflowLifecycleInScope(workflowId)) return next();
     return deny({
       reason: `Normal Agent HQ MCP keys can only pause or resume a workflow attached to their active dispatched task or inside their assigned project.`,
-      requiredCapability: 'sprints.pause_active_sprint',
+      requiredCapability: 'workflows.pause_active_workflow',
     });
   }
 
-  const sprintMatch = requestPath.match(/^\/(?:sprints|workflows)\/(\d+)$/);
-  if (sprintMatch && method === 'GET') {
-    const sprintId = Number(sprintMatch[1]);
+  const workflowMatch = requestPath.match(/^\/workflows\/(\d+)$/);
+  if (workflowMatch && method === 'GET') {
+    const workflowId = Number(workflowMatch[1]);
     if (!await requireCapability(
-      'sprints.read_active_sprint',
-      `Sprint reads are disabled for ${identity.agentSlug}.`,
+      'workflows.read_active_workflow',
+      `Workflow reads are disabled for ${identity.agentSlug}.`,
     )) return;
-    if (scopedSprintIds.has(sprintId)) return next();
+    if (scopedWorkflowIds.has(workflowId)) return next();
     return deny({
-      reason: `Normal Agent HQ MCP keys can only read the sprint attached to their active dispatched task.`,
-      requiredCapability: 'sprints.read_active_sprint',
+      reason: `Normal Agent HQ MCP keys can only read the workflow attached to their active dispatched task.`,
+      requiredCapability: 'workflows.read_active_workflow',
     });
   }
 
@@ -2845,9 +2808,9 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     const existingScope = ruleId != null ? await getRoutingRuleScopeFromRuleId(db, ruleId, identity.tenantId) : null;
     const requestHasScope = firstPresent(
       requestInput.project_id,
-      requestInput.sprint_id,
       requestInput.workflow_id,
-      requestInput.sprint_type,
+      requestInput.workflow_id,
+      requestInput.workflow_type,
       requestInput.workflow_type,
     ) !== undefined;
     const requestedScope = requestHasScope ? await getRoutingRuleScopeFromRequest(db, requestInput, identity.tenantId) : null;
@@ -2865,14 +2828,14 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
 
     if (method === 'POST' && requestedScope == null) {
       return deny({
-        reason: `Assignment rule creation requires project_id or sprint_id within the assigned project for ${identity.agentSlug}.`,
+        reason: `Assignment rule creation requires project_id or workflow_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }
 
     if (method === 'GET' && ruleId == null && requestedScope == null) {
       return deny({
-        reason: `Assignment rule listing requires project_id or sprint_id within the assigned project for ${identity.agentSlug}.`,
+        reason: `Assignment rule listing requires project_id or workflow_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }
@@ -2910,9 +2873,9 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     const existingScope = transitionId != null ? await getRoutingTransitionScopeFromTransitionId(db, transitionId, identity.tenantId) : null;
     const requestHasScope = firstPresent(
       requestInput.project_id,
-      requestInput.sprint_id,
       requestInput.workflow_id,
-      requestInput.sprint_type,
+      requestInput.workflow_id,
+      requestInput.workflow_type,
       requestInput.workflow_type,
     ) !== undefined;
     const requestedScope = requestHasScope ? await getRoutingTransitionScopeFromRequest(db, requestInput, identity.tenantId) : null;
@@ -2930,14 +2893,14 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
 
     if (method === 'POST' && requestedScope == null) {
       return deny({
-        reason: `Workflow transition creation requires project_id with sprint_type or sprint_id within the assigned project for ${identity.agentSlug}.`,
+        reason: `Workflow transition creation requires project_id with workflow_type or workflow_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }
 
     if (method === 'GET' && transitionId == null && requestedScope == null) {
       return deny({
-        reason: `Workflow transition listing requires project_id with sprint_type or sprint_id within the assigned project for ${identity.agentSlug}.`,
+        reason: `Workflow transition listing requires project_id with workflow_type or workflow_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }
@@ -2957,7 +2920,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   // relationship types its tasks can use. All of it is one editable object on the canvas and all
   // of it resolves to the project that owns the type, so the whole tree is authorized here.
   // task-types is listed separately because it is a collection PUT with no child rows.
-  const workflowDefinitionMatch = requestPath.match(/^\/(?:sprints|workflows|workflow-definitions)\/(?:config|types(?:\/list)?|types\/([^/]+)(?:\/(?:task-types|(?:field-schemas|statuses|outcomes|relationship-types)(?:\/[^/]+)?))?)$/);
+  const workflowDefinitionMatch = requestPath.match(/^\/(?:workflows|workflow-definitions)\/(?:config|types(?:\/list)?|types\/([^/]+)(?:\/(?:task-types|(?:field-schemas|statuses|outcomes|relationship-types)(?:\/[^/]+)?))?)$/);
   if (workflowDefinitionMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const requiredCapability: AgentMcpCapabilityKey = method === 'GET'
       ? 'workflow_definitions.read_project_scope'
@@ -3011,7 +2974,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       });
     }
 
-    if (method === 'GET' && requestPath.match(/^\/(?:sprints|workflows|workflow-definitions)\/(?:config|types(?:\/list)?)$/) && requestScope == null) {
+    if (method === 'GET' && requestPath.match(/^\/(?:workflows|workflow-definitions)\/(?:config|types(?:\/list)?)$/) && requestScope == null) {
       return deny({
         reason: `Workflow definition readback requires project_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
@@ -3032,13 +2995,13 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   if (transitionRequirementMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const hasManageTransitionRequirements = permissionState.enabledCapabilities.has('transition_requirements.manage_project_scope');
     if (method === 'GET' && !hasManageTransitionRequirements && permissionState.enabledCapabilities.has('workflow.read_active_configuration')) {
-      const sprintId = parsePositiveInt(req.query.sprint_id);
+      const workflowId = parsePositiveInt(req.query.workflow_id);
       const projectId = parsePositiveInt(req.query.project_id);
-      const sprintAllowed = sprintId != null && scopedSprintIds.has(sprintId);
+      const workflowAllowed = workflowId != null && scopedWorkflowIds.has(workflowId);
       const projectAllowed = projectId != null && scopedProjectIds.has(projectId);
-      if (sprintAllowed && projectAllowed) return next();
+      if (workflowAllowed && projectAllowed) return next();
       return deny({
-        reason: `Normal Agent HQ MCP keys can only read workflow configuration scoped to the active task's sprint and project.`,
+        reason: `Normal Agent HQ MCP keys can only read workflow configuration scoped to the active task's workflow and project.`,
         requiredCapability: 'workflow.read_active_configuration',
       });
     }
@@ -3081,7 +3044,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
             ? 'update'
             : 'delete';
       return deny({
-        reason: `Transition requirement ${action} requires explicit project_id plus sprint_type, or sprint_id/workflow_id within the assigned project for ${identity.agentSlug}.`,
+        reason: `Transition requirement ${action} requires explicit project_id plus workflow_type, or workflow_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }
@@ -3105,13 +3068,13 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       'workflow.read_active_configuration',
       `Workflow configuration reads are disabled for ${identity.agentSlug}.`,
     )) return;
-    const sprintId = parsePositiveInt(req.query.sprint_id);
+    const workflowId = parsePositiveInt(req.query.workflow_id);
     const projectId = parsePositiveInt(req.query.project_id);
-    const sprintAllowed = sprintId != null && scopedSprintIds.has(sprintId);
+    const workflowAllowed = workflowId != null && scopedWorkflowIds.has(workflowId);
     const projectAllowed = projectId != null && scopedProjectIds.has(projectId);
-    if (sprintAllowed && projectAllowed) return next();
+    if (workflowAllowed && projectAllowed) return next();
     return deny({
-      reason: `Normal Agent HQ MCP keys can only read workflow configuration scoped to the active task's sprint and project.`,
+      reason: `Normal Agent HQ MCP keys can only read workflow configuration scoped to the active task's workflow and project.`,
       requiredCapability: 'workflow.read_active_configuration',
     });
   }
@@ -3125,12 +3088,12 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   // getScopedTaskContexts builds from tasks the agent has queued, dispatched or running. Those
   // are empty between runs, so an agent could analyze the graph it routes through only while
   // mid-run, and a board-scoped client — which owns no dispatched task at all — never could.
-  const routingScopeInScope = async (projectId: number | null, sprintId: number | null): Promise<boolean> => {
+  const routingScopeInScope = async (projectId: number | null, workflowId: number | null): Promise<boolean> => {
     if (projectId != null && scopedProjectIds.has(projectId)) return true;
-    if (sprintId != null && scopedSprintIds.has(sprintId)) return true;
+    if (workflowId != null && scopedWorkflowIds.has(workflowId)) return true;
     if (canonicalAgentProjectId == null) return false;
     if (projectId != null && projectId === canonicalAgentProjectId) return true;
-    if (sprintId != null) return await sprintBelongsToProject(db, identity, sprintId, canonicalAgentProjectId);
+    if (workflowId != null) return await workflowBelongsToProject(db, identity, workflowId, canonicalAgentProjectId);
     return false;
   };
 
@@ -3140,9 +3103,9 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       'workflow.analyze_routing_graph',
       `Routing graph analysis is disabled for ${identity.agentSlug}.`,
     )) return;
-    const graphSprintId = parsePositiveInt(req.query.sprint_id ?? req.query.workflow_id);
+    const graphWorkflowId = parsePositiveInt(req.query.workflow_id);
     const graphProjectId = parsePositiveInt(req.query.project_id);
-    if (await routingScopeInScope(graphProjectId, graphSprintId)) return next();
+    if (await routingScopeInScope(graphProjectId, graphWorkflowId)) return next();
     return deny({
       reason: `Normal Agent HQ MCP keys can only analyze routing graphs scoped to their assigned project or the active task's workflow.`,
       requiredCapability: 'workflow.analyze_routing_graph',
@@ -3160,10 +3123,10 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     )) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const previewProjectId = parsePositiveInt(body.project_id ?? req.query.project_id);
-    const previewSprintId = parsePositiveInt(
-      body.sprint_id ?? body.workflow_id ?? req.query.sprint_id ?? req.query.workflow_id,
+    const previewWorkflowId = parsePositiveInt(
+      body.workflow_id ?? req.query.workflow_id,
     );
-    if (await routingScopeInScope(previewProjectId, previewSprintId)) return next();
+    if (await routingScopeInScope(previewProjectId, previewWorkflowId)) return next();
     return deny({
       reason: `Normal Agent HQ MCP keys can only preview or audit routing changes inside their assigned project or the active task's workflow.`,
       requiredCapability: 'workflow.edit_routing_config',
@@ -3265,14 +3228,11 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   // task, which leaves no way to answer "what is on my board" — the first thing a remote client
   // asks and the last thing a runtime agent needs. These are the collection endpoints, gated on
   // their own capability and, wherever the route can name a project, required to name the
-  // assigned one. `workflow_id` has already been folded into `sprint_id` by
-  // normalizeWorkflowRequestAliases, so only the sprint spelling is read here.
+  // assigned one.
   if (method === 'GET' && (
     requestPath === '/projects'
     || requestPath === '/tasks'
-    || requestPath === '/sprints'
     || requestPath === '/workflows'
-    || requestPath === '/sprints/workflow-metadata'
     || requestPath === '/workflows/workflow-metadata'
   )) {
     if (!await requireCapability(
@@ -3291,15 +3251,15 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
       });
     }
 
-    if (requestPath === '/sprints/workflow-metadata' || requestPath === '/workflows/workflow-metadata') {
-      const metadataSprintId = parsePositiveInt(req.query.sprint_id);
+    if (requestPath === '/workflows/workflow-metadata') {
+      const metadataWorkflowId = parsePositiveInt(req.query.workflow_id);
       // With no workflow selector the response is tenant-level workflow-type configuration —
       // the same shape workflow_definitions.read_project_scope already exposes. With one, it
       // must resolve inside the assigned project.
-      if (metadataSprintId == null) return next();
-      if (!await sprintBelongsToProject(db, identity, metadataSprintId, canonicalAgentProjectId)) {
+      if (metadataWorkflowId == null) return next();
+      if (!await workflowBelongsToProject(db, identity, metadataWorkflowId, canonicalAgentProjectId)) {
         return deny({
-          reason: `Workflow #${metadataSprintId} is outside the assigned project for ${identity.agentSlug}.`,
+          reason: `Workflow #${metadataWorkflowId} is outside the assigned project for ${identity.agentSlug}.`,
           requiredCapability: 'projects.read_project_board',
         });
       }

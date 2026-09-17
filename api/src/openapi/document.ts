@@ -115,8 +115,7 @@ export const openApiDocument: OpenApiDocument = {
     { name: 'Project Files', description: 'Project-scoped file metadata and uploads.' },
     { name: 'Workflow Files', description: 'Workflow-scoped file metadata, uploads, and version history.' },
     { name: 'Workflows', description: 'Workflow lifecycle and workflow metadata. These are the preferred endpoints for boards and operating cycles.' },
-    { name: 'Sprints', description: 'Legacy aliases for workflow lifecycle and metadata endpoints. Existing sprint clients remain supported.' },
-    { name: 'Workflow Definitions', description: 'Workflow type, status, field schema, relationship, and outcome definitions. Sprint type routes remain legacy aliases during compatibility.' },
+    { name: 'Workflow Definitions', description: 'Workflow type, status, field schema, relationship, and outcome definitions. Workflow type routes remain legacy aliases during compatibility.' },
     { name: 'Tasks', description: 'Task records, workflow outcomes, evidence, notes, blockers, attachments, and history.' },
     { name: 'Agents', description: 'Agent configuration, skills, tool assignments, and routing config.' },
     { name: 'Runtime Drivers', description: 'Read-only runtime prerequisite diagnostics that do not launch a model.' },
@@ -797,121 +796,7 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
-    '/sprints': {
-      get: {
-        tags: ['Sprints'],
-        summary: 'List sprints (legacy workflow alias).',
-        description: 'Legacy alias for listing workflows. Prefer GET /api/v1/workflows in new clients.',
-        operationId: 'listSprints',
-        parameters: [
-          intQuery('project_id', 'Filter by project ID.'),
-          stringQuery('status', 'Filter by sprint status.'),
-        ],
-        responses: {
-          '200': response('Sprint list.', arrayOf(ref('Sprint'))),
-          default: errorResponseRef,
-        },
-      },
-      post: {
-        tags: ['Sprints'],
-        summary: 'Create a sprint (legacy workflow alias).',
-        description: 'Legacy alias for creating a workflow. Prefer POST /api/v1/workflows in new clients.',
-        operationId: 'createSprint',
-        requestBody: requestBody(ref('SprintCreateRequest'), {
-          project_id: 1,
-          name: 'Docs Site Sprint',
-          goal: 'Publish self-hosting docs',
-          sprint_type: 'dev',
-        }),
-        responses: {
-          '201': response('Created sprint.', ref('Sprint')),
-          '400': errorResponseRef,
-          default: errorResponseRef,
-        },
-      },
-    },
-    '/sprints/{id}': {
-      get: {
-        tags: ['Sprints'],
-        summary: 'Read sprint details (legacy workflow alias).',
-        description: 'Legacy alias for reading workflow details. Prefer GET /api/v1/workflows/{id} in new clients.',
-        operationId: 'getSprint',
-        parameters: [idParam('id', 'Sprint ID.')],
-        responses: {
-          '200': response('Sprint.', ref('Sprint')),
-          '404': notFoundResponseRef,
-          default: errorResponseRef,
-        },
-      },
-      put: {
-        tags: ['Sprints'],
-        summary: 'Update a sprint (legacy workflow alias).',
-        description: 'Legacy alias for updating a workflow. Prefer PUT /api/v1/workflows/{id} in new clients.',
-        operationId: 'updateSprint',
-        parameters: [idParam('id', 'Sprint ID.')],
-        requestBody: requestBody(ref('SprintUpdateRequest'), { status: 'active' }),
-        responses: {
-          '200': response('Updated sprint.', ref('Sprint')),
-          '400': errorResponseRef,
-          '404': notFoundResponseRef,
-          default: errorResponseRef,
-        },
-      },
-      delete: {
-        tags: ['Sprints'],
-        summary: 'Delete a sprint (legacy workflow alias).',
-        description: 'Legacy alias for deleting a workflow. Prefer DELETE /api/v1/workflows/{id} in new clients.',
-        operationId: 'deleteSprint',
-        parameters: [idParam('id', 'Sprint ID.')],
-        responses: {
-          '200': okResponse,
-          '404': notFoundResponseRef,
-          default: errorResponseRef,
-        },
-      },
-    },
-    '/sprints/{id}/metrics': {
-      get: {
-        tags: ['Sprints'],
-        summary: 'Read sprint aggregate metrics (legacy workflow alias).',
-        description: 'Legacy alias for workflow metrics. Prefer GET /api/v1/workflows/{id}/metrics in new clients.',
-        operationId: 'getSprintMetrics',
-        parameters: [idParam('id', 'Sprint ID.')],
-        responses: {
-          '200': response('Sprint metrics.', ref('SprintMetrics')),
-          default: errorResponseRef,
-        },
-      },
-    },
-    '/sprints/{id}/close': {
-      post: {
-        tags: ['Sprints'],
-        summary: 'Close a sprint (legacy workflow alias).',
-        description: 'Legacy alias for closing a workflow. Prefer POST /api/v1/workflows/{id}/close in new clients.',
-        operationId: 'closeSprint',
-        parameters: [idParam('id', 'Sprint ID.')],
-        requestBody: requestBody(ref('EmptyObject'), {}, false),
-        responses: {
-          '200': response('Closed sprint result.', ref('SprintLifecycleResponse')),
-          default: errorResponseRef,
-        },
-      },
-    },
-    '/sprints/{id}/complete': {
-      post: {
-        tags: ['Sprints'],
-        summary: 'Complete a sprint if completion criteria pass (legacy workflow alias).',
-        description: 'Legacy alias for completing a workflow. Prefer POST /api/v1/workflows/{id}/complete in new clients.',
-        operationId: 'completeSprint',
-        parameters: [idParam('id', 'Sprint ID.')],
-        requestBody: requestBody(ref('EmptyObject'), {}, false),
-        responses: {
-          '200': response('Completed sprint result.', ref('SprintLifecycleResponse')),
-          '409': errorResponseRef,
-          default: errorResponseRef,
-        },
-      },
-    },
+
     '/workflows': {
       get: {
         tags: ['Workflows'],
@@ -1019,38 +904,38 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
-    '/sprints/types/list': {
+    '/workflows/types/list': {
       get: {
         tags: ['Workflow Definitions'],
         summary: 'List workflow type definitions.',
-        description: 'Lists reusable workflow definitions. This route is a sprint-type compatibility path until workflow-definition routes are added.',
-        operationId: 'listSprintTypes',
+        description: 'Lists reusable workflow definitions. This route is a workflow-type compatibility path until workflow-definition routes are added.',
+        operationId: 'listWorkflowTypes',
         responses: {
-          '200': response('Sprint type list.', arrayOf(ref('SprintTypeDefinition'))),
+          '200': response('Workflow type list.', arrayOf(ref('WorkflowTypeDefinition'))),
           default: errorResponseRef,
         },
       },
     },
-    '/sprints/types/{key}': {
+    '/workflows/types/{key}': {
       get: {
         tags: ['Workflow Definitions'],
         summary: 'Read a workflow type definition.',
-        description: 'Reads a reusable workflow definition. This route is a sprint-type compatibility path until workflow-definition routes are added.',
-        operationId: 'getSprintType',
+        description: 'Reads a reusable workflow definition. This route is a workflow-type compatibility path until workflow-definition routes are added.',
+        operationId: 'getWorkflowType',
         parameters: [{ name: 'key', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
-          '200': response('Sprint type definition.', ref('SprintTypeDefinition')),
+          '200': response('Workflow type definition.', ref('WorkflowTypeDefinition')),
           '404': notFoundResponseRef,
           default: errorResponseRef,
         },
       },
     },
-    '/sprints/types/{key}/field-schemas': {
+    '/workflows/types/{key}/field-schemas': {
       get: {
         tags: ['Workflow Definitions'],
         summary: 'List task field schemas for a workflow type.',
-        description: 'Lists task field schemas for a reusable workflow definition. This route is a sprint-type compatibility path until workflow-definition routes are added.',
-        operationId: 'listSprintTypeFieldSchemas',
+        description: 'Lists task field schemas for a reusable workflow definition. This route is a workflow-type compatibility path until workflow-definition routes are added.',
+        operationId: 'listWorkflowTypeFieldSchemas',
         parameters: [{ name: 'key', in: 'path', required: true, schema: { type: 'string' } }],
         responses: {
           '200': response('Field schemas.', arrayOf(ref('TaskFieldSchema'))),
@@ -1060,8 +945,8 @@ export const openApiDocument: OpenApiDocument = {
       post: {
         tags: ['Workflow Definitions'],
         summary: 'Create a task field schema for a workflow type.',
-        description: 'Creates a task field schema for a reusable workflow definition. This route is a sprint-type compatibility path until workflow-definition routes are added.',
-        operationId: 'createSprintTypeFieldSchema',
+        description: 'Creates a task field schema for a reusable workflow definition. This route is a workflow-type compatibility path until workflow-definition routes are added.',
+        operationId: 'createWorkflowTypeFieldSchema',
         parameters: [{ name: 'key', in: 'path', required: true, schema: { type: 'string' } }],
         requestBody: requestBody(ref('TaskFieldSchemaCreateRequest'), {
           task_type: 'backend',
@@ -1081,7 +966,7 @@ export const openApiDocument: OpenApiDocument = {
         operationId: 'listTasks',
         parameters: [
           intQuery('project_id', 'Filter by project ID.'),
-          intQuery('sprint_id', 'Filter by sprint ID.'),
+          intQuery('workflow_id', 'Filter by workflow ID.'),
           intQuery('limit', 'Maximum rows to return.'),
           intQuery('offset', 'Rows to skip.'),
           boolQuery('exclude_done', 'Exclude completed tasks.'),
@@ -1101,7 +986,7 @@ export const openApiDocument: OpenApiDocument = {
           title: 'Generate OpenAPI document',
           description: 'Expose a self-hosted OpenAPI document for docs tooling.',
           project_id: 1,
-          sprint_id: 2,
+          workflow_id: 2,
           task_type: 'backend',
           priority: 'high',
         }),
@@ -1165,12 +1050,12 @@ export const openApiDocument: OpenApiDocument = {
     '/tasks/field-schema/resolve': {
       get: {
         tags: ['Tasks'],
-        summary: 'Resolve task field schema for a sprint/task type.',
+        summary: 'Resolve task field schema for a workflow/task type.',
         operationId: 'resolveTaskFieldSchema',
         parameters: [
-          intQuery('sprint_id', 'Sprint ID.'),
+          intQuery('workflow_id', 'Workflow ID.'),
           stringQuery('task_type', 'Task type key.'),
-          stringQuery('sprint_type', 'Sprint type key.'),
+          stringQuery('workflow_type', 'Workflow type key.'),
         ],
         responses: {
           '200': response('Resolved task field schema.', ref('ResolvedTaskFieldSchema')),
@@ -2147,7 +2032,7 @@ export const openApiDocument: OpenApiDocument = {
         ],
         description: 'Preparation is independent of repository access and defaults to off. Paths must stay inside the repository. Custom commands are executable/argument arrays, not implicit shell strings.',
       },
-      Sprint: {
+      Workflow: {
         type: 'object',
         required: ['id', 'name'],
         properties: {
@@ -2155,9 +2040,9 @@ export const openApiDocument: OpenApiDocument = {
           project_id: { type: 'integer', nullable: true },
           name: { type: 'string' },
           goal: { type: 'string', nullable: true },
-          sprint_type: { type: 'string', nullable: true },
-          workflow_id: { type: 'integer', nullable: true },
           workflow_type: { type: 'string', nullable: true },
+          workflow_id: { type: 'integer', nullable: true },
+
           status: { type: 'string', nullable: true },
           length_kind: { type: 'string', nullable: true },
           length_value: { type: 'integer', nullable: true },
@@ -2170,17 +2055,17 @@ export const openApiDocument: OpenApiDocument = {
         },
         additionalProperties: true,
       },
-      SprintCreateRequest: {
+      WorkflowCreateRequest: {
         type: 'object',
         required: ['project_id', 'name'],
         properties: {
           project_id: { type: 'integer' },
           name: { type: 'string' },
           goal: { type: 'string' },
-          sprint_type: { type: 'string' },
           workflow_type: { type: 'string' },
-          source_sprint_id: { type: 'integer' },
+
           source_workflow_id: { type: 'integer' },
+
           status: { type: 'string' },
           length_kind: { type: 'string' },
           length_value: { type: 'integer' },
@@ -2190,13 +2075,13 @@ export const openApiDocument: OpenApiDocument = {
           repo_access_mode: { type: 'string', enum: ['worktree', 'clone'], nullable: true },
         },
       },
-      SprintUpdateRequest: {
+      WorkflowUpdateRequest: {
         type: 'object',
         properties: {
           name: { type: 'string' },
           goal: { type: 'string' },
-          sprint_type: { type: 'string' },
           workflow_type: { type: 'string' },
+
           status: { type: 'string' },
           length_kind: { type: 'string' },
           length_value: { type: 'integer' },
@@ -2206,47 +2091,22 @@ export const openApiDocument: OpenApiDocument = {
           repo_access_mode: { type: 'string', enum: ['worktree', 'clone'], nullable: true },
         },
       },
-      SprintMetrics: {
-        type: 'object',
-        additionalProperties: true,
-      },
-      Workflow: {
-        allOf: [ref('Sprint')],
-        description: 'Workflow record. During the sprint-to-workflow compatibility period, responses include workflow fields alongside legacy sprint fields where supported.',
-      },
-      WorkflowCreateRequest: {
-        allOf: [ref('SprintCreateRequest')],
-        description: 'Workflow create request. Prefer workflow_type and source_workflow_id; sprint_type and source_sprint_id remain accepted legacy aliases.',
-      },
-      WorkflowUpdateRequest: {
-        allOf: [ref('SprintUpdateRequest')],
-        description: 'Workflow update request. Prefer workflow_type; sprint_type remains an accepted legacy alias.',
-      },
       WorkflowMetrics: {
-        allOf: [ref('SprintMetrics')],
-        description: 'Workflow aggregate metrics. Shape matches legacy sprint metrics during compatibility.',
-      },
-      SprintLifecycleResponse: {
         type: 'object',
-        properties: {
-          ok: { type: 'boolean' },
-          sprint: ref('Sprint'),
-          message: { type: 'string' },
-        },
         additionalProperties: true,
       },
+
       WorkflowLifecycleResponse: {
         type: 'object',
         properties: {
           ok: { type: 'boolean' },
           workflow: ref('Workflow'),
-          sprint: ref('Sprint'),
           message: { type: 'string' },
         },
         additionalProperties: true,
-        description: 'Workflow lifecycle response. The legacy sprint property may be present for compatibility.',
       },
-      SprintTypeDefinition: {
+
+      WorkflowTypeDefinition: {
         type: 'object',
         required: ['key', 'label'],
         properties: {
@@ -2260,10 +2120,10 @@ export const openApiDocument: OpenApiDocument = {
       },
       TaskFieldSchema: {
         type: 'object',
-        required: ['id', 'sprint_type_key', 'schema'],
+        required: ['id', 'workflow_type_key', 'schema'],
         properties: {
           id: { type: 'integer' },
-          sprint_type_key: { type: 'string' },
+          workflow_type_key: { type: 'string' },
           task_type: { type: 'string', nullable: true },
           schema: { type: 'object', additionalProperties: true },
         },
@@ -2279,7 +2139,7 @@ export const openApiDocument: OpenApiDocument = {
       },
       Task: {
         type: 'object',
-        required: ['id', 'title', 'status', 'sprint_id'],
+        required: ['id', 'title', 'status', 'workflow_id'],
         properties: {
           id: { type: 'integer' },
           title: { type: 'string' },
@@ -2288,7 +2148,7 @@ export const openApiDocument: OpenApiDocument = {
           priority: { type: 'string', nullable: true },
           task_type: { type: 'string', nullable: true },
           project_id: { type: 'integer', nullable: true },
-          sprint_id: { type: 'integer' },
+          workflow_id: { type: 'integer' },
           assigned_agent_id: { type: 'integer', nullable: true },
           agent_id: { type: 'integer', nullable: true },
           assigned_agent_name: { type: 'string', nullable: true },
@@ -2311,7 +2171,7 @@ export const openApiDocument: OpenApiDocument = {
             additionalProperties: true,
             description: 'Resolved field schema metadata for custom_fields.',
           },
-          resolved_sprint_type: { type: 'string', nullable: true },
+          resolved_workflow_type: { type: 'string', nullable: true },
           created_at: { type: 'string', nullable: true },
           updated_at: { type: 'string', nullable: true },
         },
@@ -2319,12 +2179,12 @@ export const openApiDocument: OpenApiDocument = {
       },
       TaskCreateRequest: {
         type: 'object',
-        required: ['title', 'sprint_id'],
+        required: ['title', 'workflow_id'],
         properties: {
           title: { type: 'string' },
           description: { type: 'string' },
           project_id: { type: 'integer' },
-          sprint_id: { type: 'integer' },
+          workflow_id: { type: 'integer' },
           task_type: { type: 'string' },
           priority: { type: 'string' },
           story_points: { type: 'integer' },
@@ -2340,7 +2200,7 @@ export const openApiDocument: OpenApiDocument = {
           status: { type: 'string' },
           priority: { type: 'string' },
           task_type: { type: 'string' },
-          sprint_id: { type: 'integer' },
+          workflow_id: { type: 'integer' },
           agent_id: { type: 'integer', nullable: true },
           custom_fields: { type: 'object', additionalProperties: true },
         },
@@ -2369,8 +2229,8 @@ export const openApiDocument: OpenApiDocument = {
       ProjectTaskSearchRequest: {
         type: 'object',
         properties: {
-          workflow_id: { type: 'integer', description: 'Optional workflow/sprint ID filter.' },
-          sprint_id: { type: 'integer', description: 'Legacy alias for workflow_id.' },
+          workflow_id: { type: 'integer', description: 'Optional workflow ID filter.' },
+
           statuses: { type: 'array', items: { type: 'string' } },
           active_only: { type: 'boolean', description: 'Alias for nonterminal_only.' },
           nonterminal_only: { type: 'boolean', description: 'Exclude terminal tasks such as done, cancelled, and failed.' },
@@ -2400,8 +2260,8 @@ export const openApiDocument: OpenApiDocument = {
           status: { type: 'string', nullable: true },
           task_type: { type: 'string', nullable: true },
           project_id: { type: 'integer' },
-          sprint_id: { type: 'integer', nullable: true },
-          sprint_name: { type: 'string', nullable: true },
+          workflow_id: { type: 'integer', nullable: true },
+          workflow_name: { type: 'string', nullable: true },
           agent_id: { type: 'integer', nullable: true },
           agent_name: { type: 'string', nullable: true },
           active_instance_id: { type: 'integer', nullable: true },
@@ -2425,7 +2285,7 @@ export const openApiDocument: OpenApiDocument = {
       ResolvedTaskFieldSchema: {
         type: 'object',
         properties: {
-          sprint_type: { type: 'string', nullable: true },
+          workflow_type: { type: 'string', nullable: true },
           allowed_task_types: { type: 'array', items: { type: 'string' } },
           fields: { type: 'array', items: { type: 'object', additionalProperties: true } },
           schema: { type: 'object', additionalProperties: true },
@@ -2674,7 +2534,7 @@ export const openApiDocument: OpenApiDocument = {
         properties: {
           id: { type: 'integer' },
           project_id: { type: 'integer', nullable: true },
-          sprint_id: { type: 'integer', nullable: true },
+          workflow_id: { type: 'integer', nullable: true },
           task_type: { type: 'string', nullable: true },
           agent_id: { type: 'integer', nullable: true },
           priority: { type: 'integer', nullable: true },
@@ -2686,7 +2546,7 @@ export const openApiDocument: OpenApiDocument = {
         type: 'object',
         properties: {
           project_id: { type: 'integer' },
-          sprint_id: { type: 'integer' },
+          workflow_id: { type: 'integer' },
           task_type: { type: 'string' },
           agent_id: { type: 'integer' },
           priority: { type: 'integer' },

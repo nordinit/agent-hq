@@ -1,18 +1,18 @@
 'use client';
 
 import { useMemo, Suspense } from 'react';
-import { formatSprintLabel } from '@/lib/sprintLabel';
+import { formatWorkflowLabel } from '@/lib/workflowLabel';
 import { TaskDetailPanel } from '@/features/tasks/TaskDetailPanel';
 import { TaskBoard, TaskBoardSection } from '@/features/tasks/TaskBoard';
 import { TaskBoardErrorBoundary } from '@/features/tasks/TaskBoardErrorBoundary';
-import { MultiSprintFilter, TaskTypeFilter, TasksPageToolbar } from '@/features/tasks/TasksPageFilters';
+import { MultiWorkflowFilter, TaskTypeFilter, TasksPageToolbar } from '@/features/tasks/TasksPageFilters';
 import { TaskModal } from '@/features/tasks/TaskModal';
 import { useTasksPageState, type Task } from '@/features/tasks/useTasksPageState';
 function TasksPageInner() {
   const {
     projects,
     tasks,
-    sprints,
+    workflows,
     selectedProject,
     setSelectedProject,
     loading,
@@ -29,10 +29,10 @@ function TasksPageInner() {
     setActiveInstanceOnly,
     selectedTaskType,
     setSelectedTaskType,
-    selectedSprintIds,
-    setSelectedSprintIds,
-    loadingSprintIds,
-    selectedSingleSprintId,
+    selectedWorkflowIds,
+    setSelectedWorkflowIds,
+    loadingWorkflowIds,
+    selectedSingleWorkflowId,
     taskStatusCatalog,
     taskTypeOptions,
     defaultNewTaskStatus,
@@ -51,47 +51,47 @@ function TasksPageInner() {
     filteredTasks,
     visibleTaskCount,
     isFiltered,
-    loadedSprintIds,
+    loadedWorkflowIds,
   } = useTasksPageState();
 
   const visibleWorkflowTypes = useMemo(() => {
-    const visibleSprints = selectedSprintIds.length > 0
-      ? sprints.filter(sprint => selectedSprintIds.includes(sprint.id))
-      : sprints;
+    const visibleWorkflows = selectedWorkflowIds.length > 0
+      ? workflows.filter(workflow => selectedWorkflowIds.includes(workflow.id))
+      : workflows;
     const seen = new Set<string>();
     const types: string[] = [];
-    for (const sprint of visibleSprints) {
-      if (!sprint.sprint_type || seen.has(sprint.sprint_type)) continue;
-      seen.add(sprint.sprint_type);
-      types.push(sprint.sprint_type);
+    for (const workflow of visibleWorkflows) {
+      if (!workflow.workflow_type || seen.has(workflow.workflow_type)) continue;
+      seen.add(workflow.workflow_type);
+      types.push(workflow.workflow_type);
     }
     return types;
-  }, [selectedSprintIds, sprints]);
+  }, [selectedWorkflowIds, workflows]);
 
   const desktopSections = useMemo<TaskBoardSection[] | undefined>(() => {
-    if (sprints.length <= 1) return undefined;
+    if (workflows.length <= 1) return undefined;
 
     // When workflow filter is active, only show sections for selected workflows
-    const visibleSprints = selectedSprintIds.length > 0
-      ? sprints.filter(s => selectedSprintIds.includes(s.id))
-      : sprints;
+    const visibleWorkflows = selectedWorkflowIds.length > 0
+      ? workflows.filter(s => selectedWorkflowIds.includes(s.id))
+      : workflows;
 
     // Always render a section for every visible workflow — even if its tasks
     // are not yet loaded. Visibility triggers lazy fetch via onSectionVisible/IntersectionObserver.
     // Exception: when a search/filter is active, hide workflow sections with zero matching tasks
     // so the user only sees signal.
-    const sprintSections: TaskBoardSection[] = visibleSprints
-      .map(sprint => {
-        const sprintTasks = filteredTasks.filter(t => t.sprint_id === sprint.id);
-        const isLoading = loadingSprintIds.has(sprint.id);
+    const workflowSections: TaskBoardSection[] = visibleWorkflows
+      .map(workflow => {
+        const workflowTasks = filteredTasks.filter(t => t.workflow_id === workflow.id);
+        const isLoading = loadingWorkflowIds.has(workflow.id);
         // hasUnloadedTasks: workflow is active, has no loaded tasks, and hasn't finished lazy loading
-        const hasUnloadedTasks = sprintTasks.length === 0 && !isLoading && !loadedSprintIds.current.has(sprint.id);
+        const hasUnloadedTasks = workflowTasks.length === 0 && !isLoading && !loadedWorkflowIds.current.has(workflow.id);
         return {
-          key: `sprint-${sprint.id}`,
-          title: `🏃 ${formatSprintLabel(sprint)}`,
-          tasks: sprintTasks,
-          sprintType: sprint.sprint_type,
-          statusLabel: sprint.status,
+          key: `workflow-${workflow.id}`,
+          title: `🏃 ${formatWorkflowLabel(workflow)}`,
+          tasks: workflowTasks,
+          workflowType: workflow.workflow_type,
+          statusLabel: workflow.status,
           // When search is active and no tasks match, don't claim unloaded tasks exist either —
           // the visible set has already been filtered, so we suppress the section entirely below.
           hasUnloadedTasks: isFiltered ? false : hasUnloadedTasks,
@@ -103,20 +103,20 @@ function TasksPageInner() {
       .filter(s => !isFiltered || s.tasks.length > 0);
 
     // Only show "No Workflow" when unassigned tasks actually exist and no workflow filter is active.
-    if (selectedSprintIds.length === 0) {
-      const unsprinted = filteredTasks.filter(t => !t.sprint_id);
-      if (unsprinted.length > 0) {
-        sprintSections.push({
-          key: 'no-sprint',
+    if (selectedWorkflowIds.length === 0) {
+      const unworkflowed = filteredTasks.filter(t => !t.workflow_id);
+      if (unworkflowed.length > 0) {
+        workflowSections.push({
+          key: 'no-workflow',
           title: 'No Workflow',
-          tasks: unsprinted,
+          tasks: unworkflowed,
           tone: 'muted',
         });
       }
     }
 
-    return sprintSections;
-  }, [sprints, filteredTasks, loadingSprintIds, selectedSprintIds, isFiltered]);
+    return workflowSections;
+  }, [workflows, filteredTasks, loadingWorkflowIds, selectedWorkflowIds, isFiltered]);
 
   return (
     <div className="flex flex-1 min-h-0 flex-col bg-slate-950 p-2 md:p-6 overflow-x-hidden overflow-y-auto md:overflow-hidden md:pb-6">
@@ -138,17 +138,17 @@ function TasksPageInner() {
         onProjectChange={setSelectedProject}
       />
 
-      {(sprints.length > 0 || taskTypeOptions.length > 0) && (
+      {(workflows.length > 0 || taskTypeOptions.length > 0) && (
         <div className="mb-2 flex flex-shrink-0 flex-col gap-2 md:mb-3 md:flex-row md:items-start">
-          {sprints.length > 0 && (
+          {workflows.length > 0 && (
             <div className="min-w-0 md:flex-1">
-              <MultiSprintFilter
-                sprints={sprints}
-                selectedIds={selectedSprintIds}
+              <MultiWorkflowFilter
+                workflows={workflows}
+                selectedIds={selectedWorkflowIds}
                 onChange={ids => {
-                  setSelectedSprintIds(ids);
+                  setSelectedWorkflowIds(ids);
                   // Trigger lazy load for newly-selected workflows
-                  ids.forEach(id => handleSectionVisible(`sprint-${id}`));
+                  ids.forEach(id => handleSectionVisible(`workflow-${id}`));
                 }}
               />
             </div>
@@ -172,20 +172,20 @@ function TasksPageInner() {
               <TaskBoard
                 tasks={filteredTasks}
                 storageKey="tasks-visible-cols"
-                sprintId={selectedSingleSprintId}
+                workflowId={selectedSingleWorkflowId}
                 workflowTypes={visibleWorkflowTypes}
                 onTaskClick={task => setViewTask(task as Task)}
                 onLinkTask={handleLinkTask}
                 onRemoveBlocker={handleRemoveBlocker}
                 onPause={handlePause}
                 onStatusChange={handleStatusChange}
-                showSprint
+                showWorkflow
                 sections={desktopSections}
                 onSectionVisible={handleSectionVisible}
                 isFiltered={isFiltered}
               />
               {/* Hint when workflow filter is active and tasks are still loading */}
-              {selectedSprintIds.length > 0 && filteredTasks.length === 0 && selectedSprintIds.some(id => loadingSprintIds.has(id)) && (
+              {selectedWorkflowIds.length > 0 && filteredTasks.length === 0 && selectedWorkflowIds.some(id => loadingWorkflowIds.has(id)) && (
                 <div className="flex-shrink-0 flex items-center justify-center py-4 text-slate-400 text-sm italic text-center px-4 animate-pulse">
                   Loading workflow tasks…
                 </div>

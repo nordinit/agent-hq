@@ -42,7 +42,7 @@ async function seedTaskContextFixture(): Promise<void> {
   await ensureDefaultTenant();
 
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (86, 1, 'Agent HQ', '', '')`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (42, 1, 86, 'Enhancements', '', 'generic', 'active')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (42, 1, 86, 'Enhancements', '', 'generic', 'active')`);
   await db.run(`
     INSERT INTO agents (id, tenant_id, name, role, session_key, workspace_path, status)
     VALUES (7, 1, 'Cinder', 'Backend Engineer', 'agent:cinder:test', '/tmp/cinder', 'running')
@@ -50,7 +50,7 @@ async function seedTaskContextFixture(): Promise<void> {
 
   await db.run(`
     INSERT INTO tasks (
-      id, tenant_id, title, description, status, priority, project_id, sprint_id, agent_id, active_instance_id, task_type, story_points,
+      id, tenant_id, title, description, status, priority, project_id, workflow_id, agent_id, active_instance_id, task_type, story_points,
       custom_fields_json, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, 460, 1, 'Add task-context endpoint', 'Create a truthful task context surface.', 'review', 'high', 86, 42, 7, null, 'backend', 5, JSON.stringify({
@@ -60,11 +60,11 @@ async function seedTaskContextFixture(): Promise<void> {
         }), '2026-05-09 18:31:00');
 
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, sprint_id, task_type, custom_fields_json)
+    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, workflow_id, task_type, custom_fields_json)
     VALUES (461, 1, 'Lease manager follow-up', '', 'in_progress', 'medium', 86, 42, 'backend', '{}')
   `);
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, sprint_id, task_type, custom_fields_json)
+    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, workflow_id, task_type, custom_fields_json)
     VALUES (462, 1, 'QA downstream task', '', 'todo', 'medium', 86, 42, 'qa', '{}')
   `);
   await db.run(`INSERT INTO task_dependencies (blocker_id, blocked_id) VALUES (461, 460), (460, 462)`);

@@ -14,10 +14,10 @@ export interface InstanceCallbackContractInput {
   taskStatus: string;
   /** Task type (e.g. 'pm', 'pm_analysis', 'pm_operational', 'backend', 'qa'). Used to select the correct terminal outcome. */
   taskType?: string | null;
-  /** Machine-readable legacy workflow id field. Kept as sprintId until the compatibility window ends. */
-  sprintId?: number | null;
-  /** Machine-readable legacy workflow type field. Kept as sprintType until the compatibility window ends. */
-  sprintType?: string | null;
+  /** Workflow ID for this dispatch. */
+  workflowId?: number | null;
+  /** Workflow type for this dispatch. */
+  workflowType?: string | null;
   agentSlug: string;
   sessionKey: string;
   /** Base URL for legacy lifecycle transport metadata. Defaults to Agent HQ base URL env vars (localhost). */
@@ -42,8 +42,8 @@ export async function buildInstanceCallbackContract({
   taskId,
   taskStatus,
   taskType,
-  sprintId,
-  sprintType,
+  workflowId,
+  workflowType,
   agentSlug,
   sessionKey,
   baseUrl: baseUrlOverride,
@@ -55,8 +55,8 @@ export async function buildInstanceCallbackContract({
     taskId,
     taskStatus,
     taskType,
-    sprintId,
-    sprintType,
+    workflowId,
+    workflowType,
     agentSlug,
     sessionKey,
     baseUrl: baseUrlOverride,
@@ -92,8 +92,8 @@ export async function buildInstanceCallbackContractSegmentDrafts(
     taskId: input.taskId,
     taskStatus: input.taskStatus,
     taskType: input.taskType,
-    sprintId: input.sprintId,
-    sprintType: input.sprintType,
+    workflowId: input.workflowId,
+    workflowType: input.workflowType,
     agentSlug: input.agentSlug,
     sessionKey: input.sessionKey,
     baseUrl: input.baseUrl,
@@ -161,9 +161,9 @@ export async function appendInstanceInstructions(
   sessionKey: string,
   baseUrl?: string,
   taskType?: string | null,
-  sprintId?: number | null,
-  sprintType?: string | null,
+  workflowId?: number | null,
+  workflowType?: string | null,
   transportMode?: 'local' | 'remote-direct',
 ): Promise<string> {
-  return `${message}\n\n${await buildInstanceCallbackContract({ instanceId, durableRunId, taskId, taskStatus, taskType, sprintId, sprintType, agentSlug, sessionKey, baseUrl, transportMode })}`;
+  return `${message}\n\n${await buildInstanceCallbackContract({ instanceId, durableRunId, taskId, taskStatus, taskType, workflowId, workflowType, agentSlug, sessionKey, baseUrl, transportMode })}`;
 }

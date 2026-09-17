@@ -54,10 +54,10 @@ describe('recurring task scheduling schema', () => {
     await teardownTestDb();
   });
 
-  async function seedProjectSprint(): Promise<void> {
+  async function seedProjectWorkflow(): Promise<void> {
     const db = getDb();
     // The real baseline carries the foreign keys the hand-written fixture schema never had:
-    // projects/sprints/agents all point at tenants, and recurring_task_series points at all three.
+    // projects/workflows/agents all point at tenants, and recurring_task_series points at all three.
     // So the tenant has to exist before its children rather than being left implicit.
     const tenantId = await getDefaultTenantId(db);
     await db.run(`
@@ -65,8 +65,8 @@ describe('recurring task scheduling schema', () => {
       VALUES (612, ?, 'Recurring Tasks', '', '')
     `, tenantId);
     await db.run(`
-      INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
-      VALUES (6121, ?, 612, 'Fixed Sprint', '', 'dev', 'active', 'time', '2w')
+      INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
+      VALUES (6121, ?, 612, 'Fixed Workflow', '', 'dev', 'active', 'time', '2w')
     `, tenantId);
     await db.run(`
       INSERT INTO agents (id, tenant_id, name, role, session_key)
@@ -74,13 +74,13 @@ describe('recurring task scheduling schema', () => {
     `, tenantId);
   }
 
-  it('creates a fixed-sprint series, records a run, and links the generated task metadata', async () => {
+  it('creates a fixed-workflow series, records a run, and links the generated task metadata', async () => {
     const db = getDb();
-    await seedProjectSprint();
+    await seedProjectWorkflow();
 
     const series = await createRecurringTaskSeries(db, {
           project_id: 612,
-          sprint_id: 6121,
+          workflow_id: 6121,
           title_template: 'Weekly backend maintenance',
           description_template: 'Run the backend maintenance checklist.',
           task_type: 'backend',
@@ -108,7 +108,7 @@ describe('recurring task scheduling schema', () => {
           status: 'in_progress',
           priority: 'high',
           project_id: 612,
-          sprint_id: 6121,
+          workflow_id: 6121,
           agent_id: 6122,
           task_type: 'backend',
           story_points: 3,
@@ -122,7 +122,7 @@ describe('recurring task scheduling schema', () => {
 
     expect(series).toEqual(expect.objectContaining({
       project_id: 612,
-      sprint_id: 6121,
+      workflow_id: 6121,
       schedule_expression: 'every monday 09:00',
       timezone: 'America/New_York',
       overlap_policy: 'skip_if_active',
@@ -166,9 +166,9 @@ describe('recurring task scheduling schema', () => {
 
   it('returns explicit null provenance for ordinary tasks on compact and full reads', async () => {
     const db = getDb();
-    await seedProjectSprint();
+    await seedProjectWorkflow();
     const task = await createTaskRecord(db, {
-      title: 'Ordinary maintenance', project_id: 612, sprint_id: 6121, task_type: 'backend',
+      title: 'Ordinary maintenance', project_id: 612, workflow_id: 6121, task_type: 'backend',
     }, 'test');
     const empty = { recurring_series_id: null, scheduled_for: null, schedule_run_id: null, generated_from: null };
     expect(await getTaskById(db, Number(task.id))).toMatchObject(empty);
@@ -180,11 +180,11 @@ describe('recurring task scheduling schema', () => {
 
   it('prevents duplicate occurrences for the same series and scheduled time', async () => {
     const db = getDb();
-    await seedProjectSprint();
+    await seedProjectWorkflow();
 
     const series = await createRecurringTaskSeries(db, {
           project_id: 612,
-          sprint_id: 6121,
+          workflow_id: 6121,
           title_template: 'Daily QA sweep',
           task_type: 'qa',
           priority: 'medium',
@@ -213,7 +213,7 @@ describe('recurring task scheduling schema', () => {
             title: 'Daily QA sweep',
             status: 'in_progress',
             project_id: 612,
-            sprint_id: 6121,
+            workflow_id: 6121,
             task_type: 'qa',
             story_points: 1,
             recurring_series_id: series.id,
@@ -227,7 +227,7 @@ describe('recurring task scheduling schema', () => {
                 title: 'Daily QA sweep duplicate',
                 status: 'in_progress',
                 project_id: 612,
-                sprint_id: 6121,
+                workflow_id: 6121,
                 task_type: 'qa',
                 story_points: 1,
                 recurring_series_id: series.id,

@@ -26,8 +26,8 @@ describe('recurring task scheduler', () => {
       VALUES (613, 'Recurring Scheduler', '', '', CURRENT_TIMESTAMP)
     `);
     await db.run(`
-      INSERT INTO sprints (id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at)
-      VALUES (6131, 613, 'Fixed Sprint', '', 'dev', ?, 'time', '2w', CURRENT_TIMESTAMP)
+      INSERT INTO workflows (id, project_id, name, goal, workflow_type, status, length_kind, length_value, created_at)
+      VALUES (6131, 613, 'Fixed Workflow', '', 'dev', ?, 'time', '2w', CURRENT_TIMESTAMP)
     `, status);
     await db.run(`
       INSERT INTO agents (id, name, role, session_key)
@@ -38,7 +38,7 @@ describe('recurring task scheduler', () => {
   async function createDueSeries(input: Partial<Parameters<typeof createRecurringTaskSeries>[1]> = {}) {
     return await createRecurringTaskSeries(getDb(), {
           project_id: 613,
-          sprint_id: 6131,
+          workflow_id: 6131,
           title_template: 'Weekly backend maintenance',
           description_template: 'Run the backend maintenance checklist.',
           task_type: 'backend',
@@ -83,7 +83,7 @@ describe('recurring task scheduler', () => {
       title: 'Weekly backend maintenance',
       status: 'ready',
       project_id: 613,
-      sprint_id: 6131,
+      workflow_id: 6131,
       agent_id: null,
       assigned_agent_id: 6132,
       task_type: 'backend',
@@ -137,7 +137,7 @@ describe('recurring task scheduler', () => {
             title: 'Prior generated task',
             status: 'ready',
             project_id: 613,
-            sprint_id: 6131,
+            workflow_id: 6131,
             task_type: 'backend',
             story_points: 3,
             recurring_series_id: series.id,
@@ -172,7 +172,7 @@ describe('recurring task scheduler', () => {
             title: 'Prior generated task',
             status: 'ready',
             project_id: 613,
-            sprint_id: 6131,
+            workflow_id: 6131,
             task_type: 'backend',
             story_points: 3,
             recurring_series_id: series.id,
@@ -187,9 +187,9 @@ describe('recurring task scheduler', () => {
     expect((await db.get(`SELECT COUNT(*) AS n FROM tasks WHERE recurring_series_id = ?`, series.id) as { n: number }).n).toBe(2);
   });
 
-  it('records paused fixed sprints as skipped and still advances the series', async () => {
+  it('records paused fixed workflows as skipped and still advances the series', async () => {
     const db = getDb();
-    await db.run(`UPDATE sprints SET status = 'paused' WHERE id = 6131`);
+    await db.run(`UPDATE workflows SET status = 'paused' WHERE id = 6131`);
     const series = await createDueSeries();
 
     const summary = await runRecurringTaskSchedulerTick(db, { now: new Date('2026-05-18T13:00:01.000Z') });
@@ -197,33 +197,33 @@ describe('recurring task scheduler', () => {
     expect(summary.skipped).toBe(1);
     const run = await db.get(`SELECT status, error_message FROM recurring_task_runs WHERE series_id = ?`, series.id) as { status: string; error_message: string };
     expect(run).toEqual(expect.objectContaining({ status: 'skipped' }));
-    expect(run.error_message).toContain('sprint_paused');
+    expect(run.error_message).toContain('workflow_paused');
     const updatedSeries = await db.get(`SELECT enabled, next_run_at FROM recurring_task_series WHERE id = ?`, series.id) as { enabled: number; next_run_at: string };
     expect(updatedSeries.enabled).toBe(1);
     expect(updatedSeries.next_run_at).toBe('2026-05-25T13:00:00.000Z');
   });
 
-  it('records closed fixed sprints as failed and disables the series', async () => {
+  it('records closed fixed workflows as failed and disables the series', async () => {
     const db = getDb();
     const series = await createDueSeries();
-    await db.run(`UPDATE sprints SET status = 'closed' WHERE id = 6131`);
+    await db.run(`UPDATE workflows SET status = 'closed' WHERE id = 6131`);
 
     const summary = await runRecurringTaskSchedulerTick(db, { now: new Date('2026-05-18T13:00:01.000Z') });
 
     expect(summary.failed).toBe(1);
     const run = await db.get(`SELECT status, error_message FROM recurring_task_runs WHERE series_id = ?`, series.id) as { status: string; error_message: string };
     expect(run.status).toBe('failed');
-    expect(run.error_message).toContain('fixed_sprint_unavailable');
+    expect(run.error_message).toContain('fixed_workflow_unavailable');
     const updatedSeries = await db.get(`SELECT enabled, next_run_at FROM recurring_task_series WHERE id = ?`, series.id) as { enabled: number; next_run_at: string | null };
     expect(updatedSeries.enabled).toBe(0);
     expect(updatedSeries.next_run_at).toBeNull();
   });
 
-  it('records invalid sprint-scoped status_on_create as failed and disables the series', async () => {
+  it('records invalid workflow-scoped status_on_create as failed and disables the series', async () => {
     const db = getDb();
-    await db.run(`DELETE FROM sprint_task_statuses WHERE sprint_id = 6131`);
+    await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = 6131`);
     await db.run(`
-      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
+      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json)
       VALUES (6131, 'todo', 'Todo', 'slate', 0, 1, '[]', 0, 1, '{}')
     `);
     const series = await createPersistedDriftSeries({ status_on_create: 'ready' });

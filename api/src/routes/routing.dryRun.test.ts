@@ -30,7 +30,7 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   return { server, baseUrl: `http://127.0.0.1:${address.port}` };
 }
 
-async function seedScope(): Promise<{ projectId: number; sprintId: number; agentId: number }> {
+async function seedScope(): Promise<{ projectId: number; workflowId: number; agentId: number }> {
   const db = getDb();
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'DryRun Tenant', 'dry-run', 1)`);
   await db.run(`
@@ -42,38 +42,38 @@ async function seedScope(): Promise<{ projectId: number; sprintId: number; agent
     VALUES ('ready', 'Ready', 0, 1)
   `);
   await db.run(`
-    INSERT INTO sprint_types (tenant_id, key, name, status_seeded_at, repo_required)
+    INSERT INTO workflow_types (tenant_id, key, name, status_seeded_at, repo_required)
     VALUES (1, 'dev', 'Development', '2026-08-05T00:00:00.000Z', 0)
   `);
   await db.run(`
-    INSERT INTO sprint_type_task_statuses
-      (tenant_id, sprint_type_key, status_key, label, terminal, is_system, stage_order, is_default_entry)
+    INSERT INTO workflow_type_task_statuses
+      (tenant_id, workflow_type_key, status_key, label, terminal, is_system, stage_order, is_default_entry)
     VALUES (1, 'dev', 'ready', 'Ready', 0, 1, 0, 1)
   `);
   const project = await db.run(
     `INSERT INTO projects (tenant_id, name, description, context_md) VALUES (1, 'DryRun Project', '', '')`,
   );
   const projectId = Number(project.lastInsertId);
-  const sprint = await db.run(
-    `INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+  const workflow = await db.run(
+    `INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
      VALUES (1, ?, 'DryRun Workflow', '', 'dev', 'active', 'time', '2w')`,
     projectId,
   );
-  const sprintId = Number(sprint.lastInsertId);
+  const workflowId = Number(workflow.lastInsertId);
   await db.run(`
-    INSERT INTO sprint_task_statuses
-      (sprint_id, status_key, label, terminal, is_system, stage_order, is_default_entry)
+    INSERT INTO workflow_task_statuses
+      (workflow_id, status_key, label, terminal, is_system, stage_order, is_default_entry)
     VALUES (?, 'ready', 'Ready', 0, 1, 0, 1)
-  `, sprintId);
+  `, workflowId);
   const agent = await db.run(
     `INSERT INTO agents (tenant_id, name, session_key, enabled, project_id) VALUES (1, 'DryRun Agent', 'dryrun-agent', 1, ?)`,
     projectId,
   );
-  return { projectId, sprintId, agentId: Number(agent.lastInsertId) };
+  return { projectId, workflowId, agentId: Number(agent.lastInsertId) };
 }
 
 async function countRules(): Promise<number> {
-  const row = await getDb().get(`SELECT COUNT(*) AS n FROM sprint_task_routing_rules`) as { n: number | string };
+  const row = await getDb().get(`SELECT COUNT(*) AS n FROM workflow_task_routing_rules`) as { n: number | string };
   return Number(row.n);
 }
 
@@ -98,7 +98,7 @@ describe('routing dry_run does not persist', () => {
   });
 
   it('rolls a previewed assignment rule back on PostgreSQL', async () => {
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
@@ -108,8 +108,8 @@ describe('routing dry_run does not persist', () => {
       body: JSON.stringify({
         dry_run: true,
         project_id: projectId,
-        sprint_id: sprintId,
-        sprint_type: 'dev',
+        workflow_id: workflowId,
+        workflow_type: 'dev',
         task_type: null,
         status: 'ready',
         agent_id: agentId,
@@ -128,7 +128,7 @@ describe('routing dry_run does not persist', () => {
   });
 
   it('still persists when dry_run is absent, so the rollback is not swallowing real writes', async () => {
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
@@ -137,8 +137,8 @@ describe('routing dry_run does not persist', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         project_id: projectId,
-        sprint_id: sprintId,
-        sprint_type: 'dev',
+        workflow_id: workflowId,
+        workflow_type: 'dev',
         task_type: null,
         status: 'ready',
         agent_id: agentId,
@@ -150,7 +150,7 @@ describe('routing dry_run does not persist', () => {
   });
 
   it('surfaces a validation failure as an error rather than a successful preview', async () => {
-    const { projectId, sprintId } = await seedScope();
+    const { projectId, workflowId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
@@ -162,8 +162,8 @@ describe('routing dry_run does not persist', () => {
       body: JSON.stringify({
         dry_run: true,
         project_id: projectId,
-        sprint_id: sprintId,
-        sprint_type: 'dev',
+        workflow_id: workflowId,
+        workflow_type: 'dev',
         task_type: null,
         status: 'ready',
         agent_id: 999999,
@@ -181,7 +181,7 @@ describe('routing dry_run does not persist', () => {
     // A botched rollback can leave a PostgreSQL connection in the aborted-transaction
     // state (25P02), where every subsequent statement fails. The symptom is the NEXT
     // request failing, not this one.
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
@@ -189,7 +189,7 @@ describe('routing dry_run does not persist', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        dry_run: true, project_id: projectId, sprint_id: sprintId, sprint_type: 'dev',
+        dry_run: true, project_id: projectId, workflow_id: workflowId, workflow_type: 'dev',
         task_type: null, status: 'ready', agent_id: agentId,
       }),
     });

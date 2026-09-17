@@ -63,7 +63,7 @@
  *     nowTimestamp(), id);
  *
  *   // writing a caller-supplied / runtime-supplied instant
- *   await db.run('UPDATE sprints SET ended_at = ? WHERE id = ?',
+ *   await db.run('UPDATE workflows SET ended_at = ? WHERE id = ?',
  *     toCanonicalTimestamp(req.body.ended_at), id);
  *
  *   // Prefer CANONICAL_TIMESTAMP_SQL when building SQL strings so the exact

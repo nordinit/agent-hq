@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { api, type HistoricalTrace, type Project, type Sprint, type SprintType } from '@/lib/api';
-import { formatSprintNumber } from '@/lib/sprintLabel';
-import { useSprintOutcomeCatalog } from '@/lib/useSprintOutcomeCatalog';
+import { api, type HistoricalTrace, type Project, type Workflow, type WorkflowType } from '@/lib/api';
+import { formatWorkflowNumber } from '@/lib/workflowLabel';
+import { useWorkflowOutcomeCatalog } from '@/lib/useWorkflowOutcomeCatalog';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
 import { getRoutingWorkflowTypeOptions } from '@/lib/routingWorkflowTypes';
 import { Card } from '@/components/ui/card';
@@ -15,7 +15,7 @@ import RoutingRulesSection from '@/features/routing/sections/RoutingRulesSection
 import TransitionRequirementsSection from '@/features/routing/sections/TransitionRequirementsSection';
 import TransitionsSection from '@/features/routing/sections/TransitionsSection';
 import WorkflowGraphSection from '@/features/routing/sections/WorkflowGraphSection';
-import { formatSprintTypeLabel } from '@/features/routing/workflowConfigShared';
+import { formatWorkflowTypeLabel } from '@/features/routing/workflowConfigShared';
 import { ChevronDown, GitBranch } from 'lucide-react';
 
 type RoutingTab = 'graph' | 'rules' | 'transitions' | 'transition-reqs' | 'external-events' | 'agent-contract';
@@ -28,47 +28,47 @@ export default function RoutingPage() {
   const traceTaskId = Number(searchParams?.get('trace_task') ?? '');
   const [historicalTrace, setHistoricalTrace] = useState<HistoricalTrace | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
-  const [sprintTypes, setSprintTypes] = useState<SprintType[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [workflowTypes, setWorkflowTypes] = useState<WorkflowType[]>([]);
   const validProjectIds = useMemo(() => projects.map(project => project.id), [projects]);
   const [selectedProjectId, setSelectedProjectId] = useProjectFilterPreference({ validProjectIds });
-  const [selectedSprintId, setSelectedSprintId] = useState<number | null>(null);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RoutingTab>('graph');
-  const sprintScopedTabs: RoutingTab[] = ['graph', 'rules', 'transitions', 'transition-reqs'];
-  const [selectedSprintType, setSelectedSprintType] = useState<string | null>(null);
+  const workflowScopedTabs: RoutingTab[] = ['graph', 'rules', 'transitions', 'transition-reqs'];
+  const [selectedWorkflowType, setSelectedWorkflowType] = useState<string | null>(null);
   const selectedProject = projects.find(project => project.id === selectedProjectId) ?? null;
-  const selectedSprint = sprints.find(sprint => sprint.id === selectedSprintId) ?? null;
-  const selectedSprintMatchesProject = selectedProjectId !== null
-    && selectedSprint !== null
-    && selectedSprint.project_id === selectedProjectId;
-  const projectScopedSprints = selectedProjectId
-    ? sprints.filter(sprint => sprint.project_id === selectedProjectId)
-    : sprints;
-  const availableSprintTypes = useMemo(() => getRoutingWorkflowTypeOptions(sprintTypes), [sprintTypes]);
-  const availableSprintTypeKeys = useMemo(() => availableSprintTypes.map(type => type.key), [availableSprintTypes]);
-  const effectiveSprintType = selectedSprintMatchesProject
-    ? (selectedSprint.sprint_type ?? selectedSprintType)
-    : selectedSprintType;
-  const scopedSprintId = selectedSprintMatchesProject ? selectedSprintId : null;
-  const scopedSprintName = selectedSprintMatchesProject ? selectedSprint.name : null;
-  const scopedSprintType = effectiveSprintType ?? null;
-  const outcomeCatalog = useSprintOutcomeCatalog(scopedSprintType);
+  const selectedWorkflow = workflows.find(workflow => workflow.id === selectedWorkflowId) ?? null;
+  const selectedWorkflowMatchesProject = selectedProjectId !== null
+    && selectedWorkflow !== null
+    && selectedWorkflow.project_id === selectedProjectId;
+  const projectScopedWorkflows = selectedProjectId
+    ? workflows.filter(workflow => workflow.project_id === selectedProjectId)
+    : workflows;
+  const availableWorkflowTypes = useMemo(() => getRoutingWorkflowTypeOptions(workflowTypes), [workflowTypes]);
+  const availableWorkflowTypeKeys = useMemo(() => availableWorkflowTypes.map(type => type.key), [availableWorkflowTypes]);
+  const effectiveWorkflowType = selectedWorkflowMatchesProject
+    ? (selectedWorkflow.workflow_type ?? selectedWorkflowType)
+    : selectedWorkflowType;
+  const scopedWorkflowId = selectedWorkflowMatchesProject ? selectedWorkflowId : null;
+  const scopedWorkflowName = selectedWorkflowMatchesProject ? selectedWorkflow.name : null;
+  const scopedWorkflowType = effectiveWorkflowType ?? null;
+  const outcomeCatalog = useWorkflowOutcomeCatalog(scopedWorkflowType);
 
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([
       api.getProjects(),
-      api.getSprints(undefined, true),
-      api.getSprintTypes(),
+      api.getWorkflows(undefined, true),
+      api.getWorkflowTypes(),
     ])
-      .then(([projectList, sprintList, sprintTypeList]) => {
+      .then(([projectList, workflowList, workflowTypeList]) => {
         setProjects(projectList);
-        setSprints(sprintList);
-        setSprintTypes(sprintTypeList);
-        setSelectedSprintId(current => {
-          if (current && sprintList.some(sprint => sprint.id === current)) return current;
+        setWorkflows(workflowList);
+        setWorkflowTypes(workflowTypeList);
+        setSelectedWorkflowId(current => {
+          if (current && workflowList.some(workflow => workflow.id === current)) return current;
           return null;
         });
       })
@@ -92,32 +92,32 @@ export default function RoutingPage() {
         setHistoricalTrace(result);
         setActiveTab('graph');
         if (result.task.project_id) setSelectedProjectId(result.task.project_id);
-        if (result.task.sprint_type) setSelectedSprintType(result.task.sprint_type);
-        if (result.task.sprint_id) setSelectedSprintId(result.task.sprint_id);
+        if (result.task.workflow_type) setSelectedWorkflowType(result.task.workflow_type);
+        if (result.task.workflow_id) setSelectedWorkflowId(result.task.workflow_id);
       })
       .catch(e => { if (!cancelled) setError(String(e)); });
     return () => { cancelled = true; };
   }, [traceTaskId, setSelectedProjectId]);
 
   useEffect(() => {
-    setSelectedSprintType(current => {
-      if (current && availableSprintTypeKeys.includes(current)) return current;
-      return availableSprintTypeKeys[0] ?? null;
+    setSelectedWorkflowType(current => {
+      if (current && availableWorkflowTypeKeys.includes(current)) return current;
+      return availableWorkflowTypeKeys[0] ?? null;
     });
-  }, [availableSprintTypeKeys]);
+  }, [availableWorkflowTypeKeys]);
 
   useEffect(() => {
     // A replay pins the scope to the traced task's own workflow. Without this guard
-    // the reset below races the trace load: projectScopedSprints is still empty on
+    // the reset below races the trace load: projectScopedWorkflows is still empty on
     // mount, so the workflow the trace just selected gets cleared and the graph falls
     // back to type defaults — which for most projects means no transitions at all.
-    if (historicalTrace?.task.sprint_id) return;
-    setSelectedSprintId(current => {
-      if (!selectedSprintType) return null;
-      if (current && projectScopedSprints.some(sprint => sprint.id === current && sprint.sprint_type === selectedSprintType)) return current;
+    if (historicalTrace?.task.workflow_id) return;
+    setSelectedWorkflowId(current => {
+      if (!selectedWorkflowType) return null;
+      if (current && projectScopedWorkflows.some(workflow => workflow.id === current && workflow.workflow_type === selectedWorkflowType)) return current;
       return null;
     });
-  }, [projectScopedSprints, selectedSprintType, historicalTrace]);
+  }, [projectScopedWorkflows, selectedWorkflowType, historicalTrace]);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -140,8 +140,8 @@ export default function RoutingPage() {
   // resolved flattens the base outcomes plus one copy per task type, so the same key recurs
   // once per type. Without the dedupe the composer lists every outcome about ten times.
   const graphOutcomeKeys = [...new Set(outcomeCatalog.resolved.map(outcome => outcome.outcome_key))].sort();
-  const filteredSprints = selectedProjectId && scopedSprintType
-    ? sprints.filter(sprint => sprint.project_id === selectedProjectId && sprint.sprint_type === scopedSprintType)
+  const filteredWorkflows = selectedProjectId && scopedWorkflowType
+    ? workflows.filter(workflow => workflow.project_id === selectedProjectId && workflow.workflow_type === scopedWorkflowType)
     : [];
 
   return (
@@ -157,7 +157,7 @@ export default function RoutingPage() {
         </p>
       </div>
 
-      {(sprintScopedTabs.includes(activeTab) || activeTab === 'external-events') && (
+      {(workflowScopedTabs.includes(activeTab) || activeTab === 'external-events') && (
         <Card className={SCOPE_CARD_CLASS}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
@@ -199,14 +199,14 @@ export default function RoutingPage() {
                 <div className="relative">
                   <select
                     className="appearance-none w-full bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-amber-500 disabled:opacity-60"
-                    value={selectedSprintType ?? ''}
-                    onChange={e => setSelectedSprintType(e.target.value || null)}
-                    disabled={availableSprintTypes.length === 0}
+                    value={selectedWorkflowType ?? ''}
+                    onChange={e => setSelectedWorkflowType(e.target.value || null)}
+                    disabled={availableWorkflowTypes.length === 0}
                   >
                     <option value="">Select workflow type…</option>
-                    {availableSprintTypes.map(type => (
+                    {availableWorkflowTypes.map(type => (
                       <option key={type.key} value={type.key}>
-                        {type.name || formatSprintTypeLabel(type.key)}
+                        {type.name || formatWorkflowTypeLabel(type.key)}
                       </option>
                     ))}
                   </select>
@@ -218,14 +218,14 @@ export default function RoutingPage() {
                 <div className="relative">
                   <select
                     className="appearance-none w-full bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-amber-500 disabled:opacity-60"
-                    value={scopedSprintId ?? ''}
-                    onChange={e => setSelectedSprintId(e.target.value ? Number(e.target.value) : null)}
-                    disabled={filteredSprints.length === 0}
+                    value={scopedWorkflowId ?? ''}
+                    onChange={e => setSelectedWorkflowId(e.target.value ? Number(e.target.value) : null)}
+                    disabled={filteredWorkflows.length === 0}
                   >
-                    <option value="">{selectedSprintType ? 'All (default)' : 'Select workflow type first…'}</option>
-                    {filteredSprints.map(sprint => (
-                      <option key={sprint.id} value={sprint.id}>
-                        {formatSprintNumber(sprint.id)} · {sprint.name}
+                    <option value="">{selectedWorkflowType ? 'All (default)' : 'Select workflow type first…'}</option>
+                    {filteredWorkflows.map(workflow => (
+                      <option key={workflow.id} value={workflow.id}>
+                        {formatWorkflowNumber(workflow.id)} · {workflow.name}
                       </option>
                     ))}
                   </select>
@@ -267,11 +267,11 @@ export default function RoutingPage() {
       {activeTab === 'graph' && (
         <WorkflowGraphSection
           projectId={selectedProjectId}
-          sprintId={scopedSprintId}
-          sprintName={scopedSprintName}
-          sprintType={scopedSprintType}
+          workflowId={scopedWorkflowId}
+          workflowName={scopedWorkflowName}
+          workflowType={scopedWorkflowType}
           outcomeCatalog={graphOutcomeKeys}
-          workflowCount={filteredSprints.length}
+          workflowCount={filteredWorkflows.length}
           historicalTrace={historicalTrace}
           onClearHistoricalTrace={() => {
             setHistoricalTrace(null);
@@ -281,15 +281,15 @@ export default function RoutingPage() {
       )}
 
       {activeTab === 'rules' && (
-        <RoutingRulesSection projectId={selectedProjectId} sprintId={scopedSprintId} sprintName={scopedSprintName} sprintType={scopedSprintType} />
+        <RoutingRulesSection projectId={selectedProjectId} workflowId={scopedWorkflowId} workflowName={scopedWorkflowName} workflowType={scopedWorkflowType} />
       )}
 
       {activeTab === 'transitions' && (
         <TransitionsSection
           projectId={selectedProjectId}
-          sprintId={scopedSprintId}
-          sprintName={scopedSprintName}
-          sprintType={scopedSprintType}
+          workflowId={scopedWorkflowId}
+          workflowName={scopedWorkflowName}
+          workflowType={scopedWorkflowType}
           outcomeCatalog={outcomeCatalog}
         />
       )}
@@ -297,9 +297,9 @@ export default function RoutingPage() {
       {activeTab === 'transition-reqs' && (
         <TransitionRequirementsSection
           projectId={selectedProjectId}
-          sprintId={scopedSprintId}
-          sprintType={scopedSprintType}
-          sprintName={scopedSprintName}
+          workflowId={scopedWorkflowId}
+          workflowType={scopedWorkflowType}
+          workflowName={scopedWorkflowName}
           outcomeCatalog={outcomeCatalog}
         />
       )}
@@ -308,8 +308,8 @@ export default function RoutingPage() {
         <ExternalEventsRoutingSection
           projectId={selectedProjectId}
           projectName={selectedProject?.name ?? null}
-          sprintId={scopedSprintId}
-          sprintType={scopedSprintType}
+          workflowId={scopedWorkflowId}
+          workflowType={scopedWorkflowType}
         />
       )}
 

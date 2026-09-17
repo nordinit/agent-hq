@@ -3,12 +3,12 @@ import type { Server } from 'http';
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import tasksRouter from './tasks';
-import sprintsRouter from './sprints';
+import workflowsRouter from './workflows';
 
 interface Fixture {
   tenantId: number;
   projectId: number;
-  sprintId: number;
+  workflowId: number;
   sourceTaskId: number;
   targetTaskId: number;
   otherTaskId: number;
@@ -26,16 +26,16 @@ async function seedFixture(): Promise<Fixture> {
     VALUES ('default_tenant_id', ?), ('active_tenant_id', ?)
   `, String(tenantId), String(tenantId));
   await db.run(`
-    INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
+    INSERT INTO workflow_types (tenant_id, key, name, description, is_system)
     VALUES (?, 'generic', 'Generic', '', 1)
   `, tenantId);
   await db.run(`
-    INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
+    INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system)
     VALUES (?, 'generic', 'backend', 1)
   `, tenantId);
   await db.run(`
-    INSERT INTO sprint_type_relationship_types (
-      tenant_id, sprint_type_key, key, label, inverse_label, category,
+    INSERT INTO workflow_type_relationship_types (
+      tenant_id, workflow_type_key, key, label, inverse_label, category,
       affects_dispatch_eligibility, direction_semantics, active_statuses_json,
       resolved_statuses_json, is_system, metadata_json
     ) VALUES (?, 'generic', 'blocked_by', 'Blocked by', 'Blocks', 'dependency',
@@ -48,21 +48,21 @@ async function seedFixture(): Promise<Fixture> {
   );
   const projectId = Number(project.lastInsertId);
 
-  const sprint = await db.run(`
-    INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+  const workflow = await db.run(`
+    INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
     VALUES (?, ?, 'Enhancements', '', 'generic', 'active', 'time', '2w')
   `, tenantId, projectId);
-  const sprintId = Number(sprint.lastInsertId);
+  const workflowId = Number(workflow.lastInsertId);
 
   const insertTask = async (title: string, status: string): Promise<number> => Number((await db.run(`
-    INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, sprint_id, task_type)
+    INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, workflow_id, task_type)
     VALUES (?, ?, '', ?, 'medium', ?, ?, 'backend')
-  `, tenantId, title, status, projectId, sprintId)).lastInsertId);
+  `, tenantId, title, status, projectId, workflowId)).lastInsertId);
 
   return {
     tenantId,
     projectId,
-    sprintId,
+    workflowId,
     sourceTaskId: await insertTask('Source task', 'ready'),
     targetTaskId: await insertTask('Target task', 'ready'),
     otherTaskId: await insertTask('Other task', 'done'),
@@ -73,7 +73,7 @@ async function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(express.json());
   app.use('/api/v1/tasks', tasksRouter);
-  app.use('/api/v1/sprints', sprintsRouter);
+  app.use('/api/v1/workflows', workflowsRouter);
 
   return new Promise((resolve) => {
     const server = app.listen(0, '127.0.0.1', () => {
@@ -102,7 +102,7 @@ describe('task relationships API', () => {
     await teardownTestDb();
   });
 
-  it('creates, lists, and deletes generic relationships with sprint-defined type validation', async () => {
+  it('creates, lists, and deletes generic relationships with workflow-defined type validation', async () => {
     const { sourceTaskId, targetTaskId } = fixture;
     const { server, baseUrl } = await startTestServer();
     try {
@@ -116,7 +116,7 @@ describe('task relationships API', () => {
         error: expect.stringContaining('Relationship type "causes" is not defined'),
       }));
 
-      const typeResponse = await fetch(`${baseUrl}/api/v1/sprints/types/generic/relationship-types`, {
+      const typeResponse = await fetch(`${baseUrl}/api/v1/workflows/types/generic/relationship-types`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -243,7 +243,7 @@ describe('task relationships API', () => {
   it('does not create hidden dispatch dependencies for legacy blockers when blocked_by is not configured', async () => {
     const { sourceTaskId, targetTaskId } = fixture;
     const db = getDb();
-    await db.run(`DELETE FROM sprint_type_relationship_types WHERE key = 'blocked_by'`);
+    await db.run(`DELETE FROM workflow_type_relationship_types WHERE key = 'blocked_by'`);
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/tasks/${sourceTaskId}/blockers`, {
@@ -282,14 +282,14 @@ describe('task relationships API', () => {
       `INSERT INTO projects (tenant_id, name) VALUES (?, 'Other Project')`,
       otherTenantId,
     )).lastInsertId);
-    const otherSprintId = Number((await db.run(`
-      INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+    const otherWorkflowId = Number((await db.run(`
+      INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
       VALUES (?, ?, 'Other Enhancements', '', 'generic', 'active', 'time', '2w')
     `, otherTenantId, otherProjectId)).lastInsertId);
     const otherTenantTaskId = Number((await db.run(`
-      INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, sprint_id, task_type)
+      INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, workflow_id, task_type)
       VALUES (?, 'Other tenant task', '', 'ready', 'medium', ?, ?, 'backend')
-    `, otherTenantId, otherProjectId, otherSprintId)).lastInsertId);
+    `, otherTenantId, otherProjectId, otherWorkflowId)).lastInsertId);
 
     const { server, baseUrl } = await startTestServer();
     try {

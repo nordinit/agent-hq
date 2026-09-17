@@ -38,7 +38,7 @@ async function addMember(teamId: number, agentId: number, role: string): Promise
 
 async function createWorkflow(teamId: number | null, workflowType = 'delivery'): Promise<number> {
   const result = await getDb().run(
-    `INSERT INTO sprints (tenant_id, project_id, name, sprint_type, team_id) VALUES (1, 1, 'Billing', ?, ?)`,
+    `INSERT INTO workflows (tenant_id, project_id, name, workflow_type, team_id) VALUES (1, 1, 'Billing', ?, ?)`,
     workflowType, teamId,
   );
   return result.lastInsertId as number;
@@ -74,7 +74,7 @@ async function addTemplateRule(
 
 async function rulesFor(workflowId: number): Promise<Array<Record<string, unknown>>> {
   return await getDb().all(
-    `SELECT * FROM sprint_task_routing_rules WHERE sprint_id = ? ORDER BY status ASC`,
+    `SELECT * FROM workflow_task_routing_rules WHERE workflow_id = ? ORDER BY status ASC`,
     workflowId,
   );
 }
@@ -183,7 +183,7 @@ describe('team routing template application', () => {
     const workflowId = await createWorkflow(teamId);
 
     await getDb().run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, status, agent_id)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, status, agent_id)
       VALUES (1, ?, 1, 'delivery', 'ready', ?)
     `, workflowId, local);
 
@@ -209,7 +209,7 @@ describe('team routing template application', () => {
     // The operator repoints the materialized rule by hand...
     const [materialized] = await rulesFor(workflowId);
     await getDb().run(
-      `UPDATE sprint_task_routing_rules SET agent_id = ? WHERE id = ?`,
+      `UPDATE workflow_task_routing_rules SET agent_id = ? WHERE id = ?`,
       operatorPick, materialized.id,
     );
     // ...and the template independently changes.
@@ -298,7 +298,7 @@ describe('team routing template application', () => {
     );
     expect(audits).toHaveLength(2);
     expect(audits[0]).toMatchObject({
-      entity_table: 'sprint_task_routing_rules', action: 'created', actor: 'nordini', actor_kind: 'user',
+      entity_table: 'workflow_task_routing_rules', action: 'created', actor: 'nordini', actor_kind: 'user',
     });
   });
 

@@ -35,8 +35,8 @@ Atlas should act like an implementation-minded workflow consultant.
 Use these concepts precisely:
 
 - **Project**: the top-level workspace or client/product.
-- **Workflow**: a board/operating cycle inside a project. Legacy APIs may still expose this as a sprint.
-- **Workflow type**: a reusable workflow definition for allowed task types, task fields, status templates, and setup defaults. Legacy APIs may still expose this as a sprint type.
+- **Workflow**: a board/operating cycle inside a project. Legacy APIs may still expose this as a workflow.
+- **Workflow type**: a reusable workflow definition for allowed task types, task fields, status templates, and setup defaults. Legacy APIs may still expose this as a workflow type.
 - **Task type**: a workflow-specific, stable classification for the life of a task. It can describe a work kind or routing lane, but must not merely restate the current phase.
 - **Task field schema**: custom structured fields shown on tasks in a workflow type.
 - **Status**: the task's current workflow state: what is true now and what action can happen next.
@@ -61,7 +61,7 @@ Use these concepts precisely:
    - Treat task type as stable identity, status as current truth, outcome as the event causing movement, and run state as an execution attempt.
 
 3. **Design**
-   - Use `references/sprint-definition-guide.md` for workflow types and lifecycle shape.
+   - Use `references/workflow-definition-guide.md` for workflow types and lifecycle shape.
    - Use `references/task-fields-guide.md` for structured task fields.
    - Use `references/routing-rules-guide.md` for status/task-type agent assignment.
    - Use `references/model-routing-guide.md` for model/thinking policy.
@@ -70,7 +70,7 @@ Use these concepts precisely:
 4. **Propose**
    Present a compact plan:
    - work-item boundary and modeling mode
-   - project/workflow/workflow type
+   - project/workflow type
    - task types and fields
    - statuses, transitions, and gate requirements
    - agents and assignment rules
@@ -113,7 +113,7 @@ Load only the references needed for the current setup:
 
 - `references/onboarding-interview.md`: questions and output format for discovery.
 - `references/work-modeling-guide.md`: unit-of-work, task-type/status granularity, routing, and agent-design decisions.
-- `references/sprint-definition-guide.md`: workflow type and lifecycle design.
+- `references/workflow-definition-guide.md`: workflow type and lifecycle design.
 - `references/task-fields-guide.md`: custom task field schema guidance.
 - `references/routing-rules-guide.md`: assignment rules, transitions, and gate requirements.
 - `references/model-routing-guide.md`: provider/model/thinking routing policy.

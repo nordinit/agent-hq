@@ -6,7 +6,7 @@ import { relationshipDispatchImpactLabel, relationshipTypeOptionLabel } from './
 function relationshipType(overrides: Partial<TaskRelationshipTypeConfig>): TaskRelationshipTypeConfig {
   return {
     id: 1,
-    sprint_type_key: 'dev',
+    workflow_type_key: 'dev',
     key: 'blocked_by',
     label: 'Blocked by',
     inverse_label: 'Blocks',

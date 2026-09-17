@@ -33,10 +33,10 @@ async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: 
     SELECT t.id,
            ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
            t.status, t.task_type, t.project_id, t.agent_id, t.active_instance_id,
-           t.sprint_id, s.sprint_type,
+           t.workflow_id, s.workflow_type,
            ji.status AS instance_status
     FROM tasks t
-    LEFT JOIN sprints s ON s.id = t.sprint_id
+    LEFT JOIN workflows s ON s.id = t.workflow_id
     JOIN job_instances ji ON ji.task_id = t.id
     WHERE ji.id = ?
     LIMIT 1
@@ -46,8 +46,8 @@ async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: 
     tenant_id: number | null;
     task_type: string | null;
     project_id: number | null;
-    sprint_id: number | null;
-    sprint_type: string | null;
+    workflow_id: number | null;
+    workflow_type: string | null;
     agent_id: number | null;
     active_instance_id: number | null;
     instance_status: string | null;
@@ -81,8 +81,8 @@ async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: 
       eventName: 'agent_started',
       tenantId: task.tenant_id,
       projectId: task.project_id,
-      sprintId: task.sprint_id,
-      sprintType: task.sprint_type,
+      workflowId: task.workflow_id,
+      workflowType: task.workflow_type,
       taskType: task.task_type,
       currentStatus: task.status,
     })) ?? (await resolveWorkflowEventMapping(db, {
@@ -90,8 +90,8 @@ async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: 
           eventName: 'agent_started',
           tenantId: task.tenant_id,
           projectId: task.project_id,
-          sprintId: task.sprint_id,
-          sprintType: task.sprint_type,
+          workflowId: task.workflow_id,
+          workflowType: task.workflow_type,
           taskType: task.task_type,
           currentStatus: task.status,
         })) ?? (await resolveWorkflowEventMapping(db, {
@@ -99,8 +99,8 @@ async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: 
           eventName: 'agent_started',
           tenantId: task.tenant_id,
           projectId: task.project_id,
-          sprintId: task.sprint_id,
-          sprintType: task.sprint_type,
+          workflowId: task.workflow_id,
+          workflowType: task.workflow_type,
           taskType: task.task_type,
           currentStatus: task.status,
         })) ?? (await resolveWorkflowEventMapping(db, {
@@ -108,8 +108,8 @@ async function applyConfiguredStartEvent(db: Db, instanceId: number, changedBy: 
           eventName: 'agent_started',
           tenantId: task.tenant_id,
           projectId: task.project_id,
-          sprintId: task.sprint_id,
-          sprintType: task.sprint_type,
+          workflowId: task.workflow_id,
+          workflowType: task.workflow_type,
           taskType: task.task_type,
           currentStatus: task.status,
         }));
@@ -297,10 +297,10 @@ export async function completeRunInstance(
   const taskRow = taskId
     ? await db.get(`
         SELECT ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
-               t.status, t.task_type, t.project_id, t.agent_id, t.sprint_id, s.sprint_type,
+               t.status, t.task_type, t.project_id, t.agent_id, t.workflow_id, s.workflow_type,
                ${await tableHasColumn(db, 'tasks', 'custom_fields_json') ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
         FROM tasks t
-        LEFT JOIN sprints s ON s.id = t.sprint_id
+        LEFT JOIN workflows s ON s.id = t.workflow_id
         WHERE t.id = ?
       `, taskId) as {
         status: string;
@@ -308,8 +308,8 @@ export async function completeRunInstance(
         task_type: string | null;
         project_id: number | null;
         agent_id: number | null;
-        sprint_id: number | null;
-        sprint_type: string | null;
+        workflow_id: number | null;
+        workflow_type: string | null;
         custom_fields_json: string | null;
       } | undefined
     : undefined;
@@ -317,8 +317,8 @@ export async function completeRunInstance(
   const resolvedWorkflow = taskRow ? await resolveWorkflow({
       taskStatus: taskRow.status,
       taskType: taskRow.task_type,
-      sprintId: taskRow.sprint_id,
-      sprintType: taskRow.sprint_type,
+      workflowId: taskRow.workflow_id,
+      workflowType: taskRow.workflow_type,
       db,
     }) : null;
   const evidenceRecorded = determineRuntimeEndEvidenceRecorded(resolvedWorkflow?.workflowPhase ?? null, canonicalTaskRow);
@@ -399,8 +399,8 @@ export async function completeRunInstance(
       priorTaskStatus: taskRow.status,
       tenantId: taskRow.tenant_id,
       projectId: taskRow.project_id,
-      sprintId: taskRow.sprint_id,
-      sprintType: taskRow.sprint_type,
+      workflowId: taskRow.workflow_id,
+      workflowType: taskRow.workflow_type,
       taskType: taskRow.task_type,
       agentId: taskRow.agent_id,
       summary,

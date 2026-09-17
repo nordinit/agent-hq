@@ -12,13 +12,13 @@ jest.mock('../../services/browserPool', () => ({
 
 const TENANT_ID = 8801;
 const PROJECT_ID = 8802;
-const SPRINT_ID = 8803;
+const WORKFLOW_ID = 8803;
 const AGENT_ID = 7;
 
 /**
  * The owning tenant/project/workflow chain, which the old hand-written schema did without.
- * tasks.sprint_id is NOT NULL and foreign-keyed to sprints, so a task cannot be seeded without
- * one, and sprints in turn needs a project and a tenant.
+ * tasks.workflow_id is NOT NULL and foreign-keyed to workflows, so a task cannot be seeded without
+ * one, and workflows in turn needs a project and a tenant.
  *
  * Fixed high ids keep the fixture isolated from the domain ids used by its assertions.
  */
@@ -26,9 +26,9 @@ async function seedTenantScope(db: Db): Promise<void> {
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, 'Semantic Handoff', 'semantic-handoff', 0)`, TENANT_ID);
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (?, ?, 'Semantic Handoff', '', '')`, PROJECT_ID, TENANT_ID);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+    INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
     VALUES (?, ?, ?, 'Handoff', '', 'generic', 'active', 'time', '2w')
-  `, SPRINT_ID, TENANT_ID, PROJECT_ID);
+  `, WORKFLOW_ID, TENANT_ID, PROJECT_ID);
   await db.run(`
     INSERT INTO agents (id, tenant_id, name, job_title, session_key, workspace_path)
     VALUES (?, ?, 'Vulcan', 'Backend', 'agent:vulcan-backend:local', '')
@@ -37,9 +37,9 @@ async function seedTenantScope(db: Db): Promise<void> {
 
 async function insertTask(db: Db, taskId: number, status: string): Promise<void> {
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id, updated_at)
+    INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id, active_instance_id, updated_at)
     VALUES (?, ?, ?, ?, 'Task', ?, ?, NULL, CURRENT_TIMESTAMP)
-  `, taskId, TENANT_ID, PROJECT_ID, SPRINT_ID, status, AGENT_ID);
+  `, taskId, TENANT_ID, PROJECT_ID, WORKFLOW_ID, status, AGENT_ID);
 }
 
 async function seedTaskAndInstance(db: Db, options?: {

@@ -75,18 +75,18 @@ type Selection =
 
 export default function WorkflowGraphSection({
   projectId,
-  sprintId,
-  sprintType,
-  sprintName,
+  workflowId,
+  workflowType,
+  workflowName,
   historicalTrace,
   onClearHistoricalTrace,
   outcomeCatalog,
   workflowCount,
 }: {
   projectId: number | null;
-  sprintId: number | null;
-  sprintType: string | null;
-  sprintName: string | null;
+  workflowId: number | null;
+  workflowType: string | null;
+  workflowName: string | null;
   /** Full outcome catalog for the type — graph.edges only shows outcomes already in use. */
   outcomeCatalog?: string[];
   /** Workflows of this type in the project, for stating what a shared edit reaches. */
@@ -127,13 +127,13 @@ export default function WorkflowGraphSection({
   }, [graph, catalogFields]);
 
   useEffect(() => {
-    if (!sprintType && !sprintId) { setCatalogFields([]); return; }
+    if (!workflowType && !workflowId) { setCatalogFields([]); return; }
     let cancelled = false;
-    api.getTransitionRequirementFields(sprintId ?? undefined, undefined, sprintType ?? undefined)
+    api.getTransitionRequirementFields(workflowId ?? undefined, undefined, workflowType ?? undefined)
       .then(res => { if (!cancelled) setCatalogFields(res.field_names ?? []); })
       .catch(() => { if (!cancelled) setCatalogFields([]); });
     return () => { cancelled = true; };
-  }, [sprintType, sprintId]);
+  }, [workflowType, workflowId]);
 
   useEffect(() => {
     if (!projectId) { setAgents([]); return; }
@@ -145,20 +145,20 @@ export default function WorkflowGraphSection({
   }, [projectId]);
 
   const load = useCallback(() => {
-    if (!sprintType) {
+    if (!workflowType) {
       setGraph(null);
       return;
     }
     setLoading(true);
     setError(null);
-    api.getRoutingGraph(projectId, sprintType, sprintId, taskTypeLens)
+    api.getRoutingGraph(projectId, workflowType, workflowId, taskTypeLens)
       .then(setGraph)
       .catch(e => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [projectId, sprintId, sprintType, taskTypeLens]);
+  }, [projectId, workflowId, workflowType, taskTypeLens]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setSelection(null); }, [projectId, sprintId, sprintType, taskTypeLens]);
+  useEffect(() => { setSelection(null); }, [projectId, workflowId, workflowType, taskTypeLens]);
 
   const layout = useMemo(
     () => computeGraphLayout(graph?.nodes ?? [], graph?.edges ?? []),
@@ -195,7 +195,7 @@ export default function WorkflowGraphSection({
     [arcEdges],
   );
 
-  if (!sprintType) {
+  if (!workflowType) {
     return (
       <Card className="p-10 text-center text-sm text-slate-400">
         Select a workflow type above to see its routing graph.
@@ -241,9 +241,9 @@ export default function WorkflowGraphSection({
 
   // Inheritance only exists relative to a selected workflow. At workflow-type scope every
   // row IS the default, so badging them all "default" would be noise.
-  const scopeAware = sprintId != null;
+  const scopeAware = workflowId != null;
   const guardContext: GuardContext = {
-    workflowId: sprintId,
+    workflowId: workflowId,
     projectId,
     workflowCount: workflowCount ?? 0,
   };
@@ -283,8 +283,8 @@ export default function WorkflowGraphSection({
     setTraceError(null);
     api.traceRouting({
       projectId,
-      workflowType: sprintType,
-      workflowId: sprintId,
+      workflowType: workflowType,
+      workflowId: workflowId,
       taskType: traceForm.taskType || null,
       fromStatus: traceForm.fromStatus,
       outcome: traceForm.outcome,
@@ -368,7 +368,7 @@ export default function WorkflowGraphSection({
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-400">
           {graph.stats.node_count} statuses · {graph.stats.edge_count} transitions
-          {sprintName ? ` · ${sprintName}` : ' · workflow-type defaults'}
+          {workflowName ? ` · ${workflowName}` : ' · workflow-type defaults'}
         </span>
         {scopeSummary.label && (
           <span className="rounded-md border border-purple-500/30 bg-purple-950/20 px-2 py-1 text-purple-200">
@@ -613,9 +613,9 @@ export default function WorkflowGraphSection({
                   const problem = arcHasProblem(arc);
                   const allShadowed = edges.length > 0 && edges.every(e => e.shadowed_by !== null);
                   // Scope facts. These only mean anything with a workflow selected: without
-                  // one every row is a workflow-type default and effective_for_sprint is true.
+                  // one every row is a workflow-type default and effective_for_workflow is true.
                   const superseded = scopeAware && edges.length > 0
-                    && edges.every(e => e.effective_for_sprint === false);
+                    && edges.every(e => e.effective_for_workflow === false);
                   const hasOverride = scopeAware && edges.some(e => e.is_override);
                   const traceVisits = arc.edgeIds.reduce((sum, id) => sum + (tracedEdges.get(id) ?? 0), 0);
                   const onTrace = traceVisits > 0;
@@ -825,7 +825,7 @@ export default function WorkflowGraphSection({
                 const baseLabel = edges.length === 1 ? edges[0].outcome : `${edges.length} outcomes`;
                 const label = visits > 1 ? `${baseLabel} ×${visits}` : baseLabel;
                 const labelSuperseded = scopeAware && edges.length > 0
-                  && edges.every(e => e.effective_for_sprint === false);
+                  && edges.every(e => e.effective_for_workflow === false);
                 const labelOverride = shouldMarkIndividually(edges, scopeAware)
                   && edges.some(e => scopePresentation(e, scopeAware) === 'override');
                 const position = arc.adjacent
@@ -909,7 +909,7 @@ export default function WorkflowGraphSection({
         )}
 
         <Card className="h-fit p-5">
-          {(selectedNode || selectedArc) && <div className="mb-4 space-y-2 border-b border-slate-700/60 pb-3">{selectedNode ? <Link className="block text-xs text-amber-300 hover:underline" href={`/telemetry${telemetryScopeQuery({ project_id: projectId, workflow_id: sprintId, workflow_type: sprintType, task_type: taskTypeLens, milestone: selectedNode.id })}`}>Measure this stage →</Link> : arcEdges(selectedArc!).map(edge => <Link key={edge.id} className="block text-xs text-amber-300 hover:underline" href={`/telemetry${telemetryScopeQuery({ project_id: projectId, workflow_id: sprintId, workflow_type: sprintType, task_type: edge.task_type ?? taskTypeLens, outcome: edge.outcome, from_status: edge.from, to_status: edge.to })}`}>Measure {edge.outcome}: {edge.from} → {edge.to}</Link>)}</div>}
+          {(selectedNode || selectedArc) && <div className="mb-4 space-y-2 border-b border-slate-700/60 pb-3">{selectedNode ? <Link className="block text-xs text-amber-300 hover:underline" href={`/telemetry${telemetryScopeQuery({ project_id: projectId, workflow_id: workflowId, workflow_type: workflowType, task_type: taskTypeLens, milestone: selectedNode.id })}`}>Measure this stage →</Link> : arcEdges(selectedArc!).map(edge => <Link key={edge.id} className="block text-xs text-amber-300 hover:underline" href={`/telemetry${telemetryScopeQuery({ project_id: projectId, workflow_id: workflowId, workflow_type: workflowType, task_type: edge.task_type ?? taskTypeLens, outcome: edge.outcome, from_status: edge.from, to_status: edge.to })}`}>Measure {edge.outcome}: {edge.from} → {edge.to}</Link>)}</div>}
           {selection?.kind === 'gate' ? (
             <GateComposer
               draft={selection.draft}
@@ -1113,7 +1113,7 @@ function NodeInspector({
                   {assignment.is_override
                     ? <span className="text-purple-300">· this workflow</span>
                     : <span className="text-cyan-300">· workflow-type default</span>}
-                  {assignment.effective_for_sprint === false && (
+                  {assignment.effective_for_workflow === false && (
                     <span className="text-amber-400">· superseded</span>
                   )}
                 </span>
@@ -1228,7 +1228,7 @@ function ArcInspector({
                 {edge.kind === 'transition' && (edge.is_override
                   ? <span className="text-purple-300"> · this workflow</span>
                   : <span className="text-cyan-300"> · workflow-type default</span>)}
-                {edge.effective_for_sprint === false && (
+                {edge.effective_for_workflow === false && (
                   <span className="text-amber-400"> · superseded by an override</span>
                 )}
                 {!edge.enabled && ' · disabled'}
@@ -1296,7 +1296,7 @@ function ArcInspector({
                         {gate.is_override && (
                           <span className="text-purple-300"> · this workflow</span>
                         )}
-                        {gate.effective_for_sprint === false && (
+                        {gate.effective_for_workflow === false && (
                           <span className="text-slate-600"> · superseded</span>
                         )}
                       </button>

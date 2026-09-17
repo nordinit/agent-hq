@@ -6,8 +6,8 @@
 
 export {
   resolveWorkflow,
-  getAllowedTaskTypesForSprintType,
-  isTaskTypeAllowedForSprintType,
+  getAllowedTaskTypesForWorkflowType,
+  isTaskTypeAllowedForWorkflowType,
   getEvidenceRequirements,
   resolveEvidenceRequirements,
   PIPELINE_STAGES,
@@ -31,8 +31,8 @@ export {
 
 export {
   getAgentContractRoot,
-  getSprintTypeContractPath,
+  getWorkflowTypeContractPath,
   normalizeContractTemplateKey,
-  readSprintTypeContractTemplate,
-  writeSprintTypeContractTemplate,
+  readWorkflowTypeContractTemplate,
+  writeWorkflowTypeContractTemplate,
 } from './templateStore';

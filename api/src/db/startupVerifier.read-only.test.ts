@@ -63,8 +63,8 @@ describe('PostgreSQL startup gate', () => {
     await expect(installInitialConfiguration(db)).resolves.toEqual(expect.objectContaining({ installed: true }));
     const installedSnapshot = await snapshotDatabaseRows(db);
     expect(installedSnapshot.tenants.length).toBeGreaterThan(0);
-    expect(installedSnapshot.sprint_task_transitions.length).toBeGreaterThan(0);
-    expect(installedSnapshot.sprint_task_transition_requirements.length).toBeGreaterThan(0);
+    expect(installedSnapshot.workflow_task_transitions.length).toBeGreaterThan(0);
+    expect(installedSnapshot.workflow_task_transition_requirements.length).toBeGreaterThan(0);
 
     await expect(verifyStartupSchema()).resolves.toBeUndefined();
     expect(await snapshotDatabaseRows(db)).toEqual(installedSnapshot);

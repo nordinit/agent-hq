@@ -14,10 +14,10 @@ export interface TaskStatusesState {
 }
 
 export function useTaskStatuses(
-  sprintId?: number | null,
-  options?: { sprintType?: string | null; taskType?: string | null },
+  workflowId?: number | null,
+  options?: { workflowType?: string | null; taskType?: string | null },
 ): TaskStatusesState {
-  const { metadata, loading } = useWorkflowMetadata(sprintId, options);
+  const { metadata, loading } = useWorkflowMetadata(workflowId, options);
   const statuses = metadata.statuses;
   const definitions = useMemo(() => normalizeTaskStatuses(statuses), [statuses]);
   const allColumns = useMemo(() => getTaskBoardColumns(statuses), [statuses]);

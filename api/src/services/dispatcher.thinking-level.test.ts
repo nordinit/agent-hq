@@ -99,7 +99,7 @@ async function seedProjectParents(
   db: Db,
   options: {
     projectTenantId?: number;
-    sprints?: Array<{ id: number; sprintType: string; tenantId?: number; name?: string }>;
+    workflows?: Array<{ id: number; workflowType: string; tenantId?: number; name?: string }>;
   } = {},
 ): Promise<void> {
   const projectTenantId = options.projectTenantId ?? 1;
@@ -111,11 +111,11 @@ async function seedProjectParents(
       (4, 'Tenant Four', 'tenant-four', 0)
   `);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, ?, 'Agent HQ')`, projectTenantId);
-  for (const sprint of options.sprints ?? []) {
+  for (const workflow of options.workflows ?? []) {
     await db.run(`
-      INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
+      INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status)
       VALUES (?, ?, 86, ?, ?, 'active')
-    `, sprint.id, sprint.tenantId ?? projectTenantId, sprint.name ?? `Workflow ${sprint.id}`, sprint.sprintType);
+    `, workflow.id, workflow.tenantId ?? projectTenantId, workflow.name ?? `Workflow ${workflow.id}`, workflow.workflowType);
   }
 }
 
@@ -144,7 +144,7 @@ describe('runDispatcher thinking-level routing', () => {
     const db = await setupTestDb();
     await seedProjectParents(db);
     await db.run(`
-      INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
+      INSERT INTO story_point_model_routing (project_id, workflow_id, max_points, provider, model, thinking_level, label)
       VALUES (86, NULL, 5, 'anthropic', 'anthropic/claude-sonnet-4-6', 'medium', 'default route')
     `);
 
@@ -164,7 +164,7 @@ describe('runDispatcher thinking-level routing', () => {
     const db = await setupTestDb();
     await seedProjectParents(db);
     await db.run(`
-      INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, enabled, label)
+      INSERT INTO story_point_model_routing (project_id, workflow_id, max_points, provider, model, thinking_level, enabled, label)
       VALUES
         (86, NULL, 5, 'anthropic', 'anthropic/disabled', 'medium', 0, 'disabled route'),
         (86, NULL, 8, 'anthropic', 'anthropic/enabled', 'low', 1, 'enabled route')
@@ -178,26 +178,26 @@ describe('runDispatcher thinking-level routing', () => {
     await teardownTestDb();
   });
 
-  it('resolveModelFromStoryPoints prefers sprint scoped rules before project scoped rules', async () => {
+  it('resolveModelFromStoryPoints prefers workflow scoped rules before project scoped rules', async () => {
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 57, sprintType: 'generic' }] });
+    await seedProjectParents(db, { workflows: [{ id: 57, workflowType: 'generic' }] });
     await db.run(`
-      INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
+      INSERT INTO story_point_model_routing (project_id, workflow_id, max_points, provider, model, thinking_level, label)
       VALUES
         (86, NULL, 5, 'openai-codex', 'openai/gpt-5.4', 'medium', 'project'),
-        (86, 57, 5, 'openai-codex', 'openai/gpt-5.5', 'high', 'sprint')
+        (86, 57, 5, 'openai-codex', 'openai/gpt-5.5', 'high', 'workflow')
     `);
 
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toEqual({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, workflowId: 57 })).toEqual({
       model: 'openai/gpt-5.5',
       max_turns: null,
       max_budget_usd: null,
       thinking_level: 'high',
       fast_mode: null,
-      label: 'sprint',
+      label: 'workflow',
     });
 
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 58 })).toEqual({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, workflowId: 58 })).toEqual({
       model: 'openai/gpt-5.4',
       max_turns: null,
       max_budget_usd: null,
@@ -209,47 +209,47 @@ describe('runDispatcher thinking-level routing', () => {
     await teardownTestDb();
   });
 
-  it('resolveModelFromStoryPoints applies sprint-type scoped rules between sprint and project scopes', async () => {
+  it('resolveModelFromStoryPoints applies workflow-type scoped rules between workflow and project scopes', async () => {
     const db = await setupTestDb();
     await seedProjectParents(db, {
-      sprints: [
-        { id: 57, sprintType: 'dev' },
-        { id: 58, sprintType: 'dev' },
-        { id: 59, sprintType: 'generic' },
+      workflows: [
+        { id: 57, workflowType: 'dev' },
+        { id: 58, workflowType: 'dev' },
+        { id: 59, workflowType: 'generic' },
       ],
     });
     await db.run(`
-      INSERT INTO story_point_model_routing (project_id, sprint_id, sprint_type, max_points, provider, model, thinking_level, label)
+      INSERT INTO story_point_model_routing (project_id, workflow_id, workflow_type, max_points, provider, model, thinking_level, label)
       VALUES
         (86, NULL, NULL, 5, 'openai-codex', 'openai/project', 'medium', 'project'),
         (NULL, NULL, 'dev', 5, 'openai-codex', 'openai/global-dev-default', 'low', 'global-dev-default'),
         (86, NULL, 'dev', 5, 'openai-codex', 'openai/dev-default', 'high', 'dev-default'),
-        (86, 57, NULL, 5, 'openai-codex', 'openai/sprint', 'adaptive', 'sprint')
+        (86, 57, NULL, 5, 'openai-codex', 'openai/workflow', 'adaptive', 'workflow')
     `);
 
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toEqual(expect.objectContaining({
-      model: 'openai/sprint',
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, workflowId: 57 })).toEqual(expect.objectContaining({
+      model: 'openai/workflow',
       thinking_level: 'adaptive',
-      label: 'sprint',
+      label: 'workflow',
     }));
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 58 })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, workflowId: 58 })).toEqual(expect.objectContaining({
       model: 'openai/dev-default',
       thinking_level: 'high',
       label: 'dev-default',
     }));
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 59 })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, workflowId: 59 })).toEqual(expect.objectContaining({
       model: 'openai/project',
       thinking_level: 'medium',
       label: 'project',
     }));
 
     await db.run(`DELETE FROM story_point_model_routing WHERE label = 'dev-default'`);
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 58 })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, workflowId: 58 })).toEqual(expect.objectContaining({
       model: 'openai/global-dev-default',
       thinking_level: 'low',
       label: 'global-dev-default',
     }));
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { sprintType: 'dev' })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { workflowType: 'dev' })).toEqual(expect.objectContaining({
       model: 'openai/global-dev-default',
       thinking_level: 'low',
       label: 'global-dev-default',
@@ -260,13 +260,13 @@ describe('runDispatcher thinking-level routing', () => {
 
   it('resolveModelFromStoryPoints ignores legacy global rows with no explicit scope', async () => {
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 57, sprintType: 'generic' }] });
+    await seedProjectParents(db, { workflows: [{ id: 57, workflowType: 'generic' }] });
     await db.run(`
-      INSERT INTO story_point_model_routing (project_id, sprint_id, max_points, provider, model, thinking_level, label)
+      INSERT INTO story_point_model_routing (project_id, workflow_id, max_points, provider, model, thinking_level, label)
       VALUES (NULL, NULL, 5, 'openai-codex', 'openai/gpt-5.4', 'medium', 'legacy-global')
     `);
 
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, sprintId: 57 })).toBeNull();
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai-codex', { projectId: 86, workflowId: 57 })).toBeNull();
 
     await teardownTestDb();
   });
@@ -275,17 +275,17 @@ describe('runDispatcher thinking-level routing', () => {
     const db = await setupTestDb();
     await seedProjectParents(db, { projectTenantId: 4 });
     await db.run(`
-      INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, sprint_type, max_points, provider, model, thinking_level, label)
+      INSERT INTO story_point_model_routing (tenant_id, project_id, workflow_id, workflow_type, max_points, provider, model, thinking_level, label)
       VALUES
         (1, 86, NULL, 'dev', 5, 'openai', 'anthropic/claude-sonnet-4-6', 'medium', 'tenant-1-wrong-model'),
         (4, 86, NULL, 'dev', 5, 'openai', 'openai/gpt-5.5', 'high', 'tenant-4-openai')
     `);
 
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 4, projectId: 86, sprintType: 'dev' })).toEqual(expect.objectContaining({
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 4, projectId: 86, workflowType: 'dev' })).toEqual(expect.objectContaining({
       model: 'openai/gpt-5.5',
       label: 'tenant-4-openai',
     }));
-    expect(await resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 2, projectId: 86, sprintType: 'dev' })).toBeNull();
+    expect(await resolveModelFromStoryPoints(db, 3, 'openai', { tenantId: 2, projectId: 86, workflowType: 'dev' })).toBeNull();
 
     await teardownTestDb();
   });
@@ -294,7 +294,7 @@ describe('runDispatcher thinking-level routing', () => {
     const db = await setupTestDb();
     await seedProjectParents(db, {
       projectTenantId: 4,
-      sprints: [{ id: 10, sprintType: 'generic', tenantId: 4 }],
+      workflows: [{ id: 10, workflowType: 'generic', tenantId: 4 }],
     });
     await db.run(`
       INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, sort_rules)
@@ -302,19 +302,19 @@ describe('runDispatcher thinking-level routing', () => {
     `);
 
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, workflow_id, created_at, story_points, updated_at)
       VALUES (382, 4, 'Add thinking routing', 'Implement support', 'ready', 'medium', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 4, '2026-04-28T20:00:00.000Z')
     `);
 
     await db.run(`
-      INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, max_points, provider, model, thinking_level, fast_mode, label)
+      INSERT INTO story_point_model_routing (tenant_id, project_id, workflow_id, max_points, provider, model, thinking_level, fast_mode, label)
       VALUES
         (1, 86, 10, 4, 'openai', 'anthropic/claude-sonnet-4-6', 'medium', 0, 'Tenant 1 Anthropic route'),
         (4, 86, 10, 4, 'openai', 'openai/gpt-5.5', 'high', 1, 'Tenant 4 OpenAI route')
     `);
 
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (4, 10, 86, 'generic', 'backend', 'ready', 1, 5)
     `);
 
@@ -370,19 +370,19 @@ describe('runDispatcher thinking-level routing', () => {
 
   it('makes task worktree authoritative for runtime cwd and repo-root metadata', async () => {
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
+    await seedProjectParents(db, { workflows: [{ id: 10, workflowType: 'generic' }] });
     await db.run(`
       INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
       VALUES (1, 1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'claude-code', '{"workingDirectory":"  /parent/workspace/../workspace-root  "}', '/parent/workspace', 'anthropic', '/repos/agent-hq', '[]')
     `);
 
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, workflow_id, created_at, story_points, updated_at)
       VALUES (375, 1, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
     `);
 
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 5)
     `);
 
@@ -476,7 +476,7 @@ describe('runDispatcher thinking-level routing', () => {
 
   it('writes run context into the active worktree with consistent repo-root metadata', async () => {
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
+    await seedProjectParents(db, { workflows: [{ id: 10, workflowType: 'generic' }] });
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatcher-worktree-'));
     const workspaceRoot = path.join(tempRoot, 'workspace-root');
     const worktreeRoot = path.join(workspaceRoot, 'task-375');
@@ -489,12 +489,12 @@ describe('runDispatcher thinking-level routing', () => {
       `, workspaceRoot);
 
       await db.run(`
-        INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
+        INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, workflow_id, created_at, story_points, updated_at)
         VALUES (375, 1, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
       `);
 
       await db.run(`
-        INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+        INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
         VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 5)
       `);
 
@@ -548,19 +548,19 @@ describe('runDispatcher thinking-level routing', () => {
 
   it('normalizes dispatch path inputs before making the worktree authoritative', async () => {
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
+    await seedProjectParents(db, { workflows: [{ id: 10, workflowType: 'generic' }] });
     await db.run(`
       INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, repo_path, sort_rules)
       VALUES (1, 1, 'Backend Engineer', 86, 'Do the task', 1, 900, 'anthropic/claude-sonnet-4-6', '[]', 'agent:backend:main', 'Cinder', 'openclaw', '{"workingDirectory":"/parent/workspace"}', '/parent/workspace', 'anthropic', '/repos/agent-hq', '[]')
     `);
 
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, story_points, updated_at)
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, workflow_id, created_at, story_points, updated_at)
       VALUES (375, 1, 'Fix worktree root handoff', 'Make worktree repo root authoritative', 'ready', 'high', 1, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', 3, '2026-04-28T20:00:00.000Z')
     `);
 
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 5)
     `);
 
@@ -600,17 +600,17 @@ describe('runDispatcher thinking-level routing', () => {
     jest.clearAllMocks();
 
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic', name: 'Bugs' }] });
+    await seedProjectParents(db, { workflows: [{ id: 10, workflowType: 'generic', name: 'Bugs' }] });
 
     await db.run(`
       INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
       VALUES (1, 1, 'Ember', 86, 'Do the task', 1, 900, 'agent:ember:main', 'Ember', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'ember-frontend', '[]')
     `);
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, workflow_id, created_at, updated_at)
       VALUES (442, 1, 'Surface dispatcher failure', 'Task', 'ready', 'high', 86, 'frontend', 10, '2026-05-06T18:00:00.000Z', '2026-05-06T18:00:00.000Z')
     `);
-    await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'generic', 'frontend', 'ready', 1, 10)`);
+    await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'generic', 'frontend', 'ready', 1, 10)`);
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
     createTaskWorktree.mockReturnValue({
@@ -621,7 +621,7 @@ describe('runDispatcher thinking-level routing', () => {
     });
 
     await db.run(`
-      INSERT INTO external_event_mappings (tenant_id, project_id, sprint_id, sprint_type, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
+      INSERT INTO external_event_mappings (tenant_id, project_id, workflow_id, workflow_type, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
       VALUES (1, 86, 10, 'generic', 'agent_hq_dispatcher', 'dispatch_startup_failed', 'frontend', 'status', 'stalled', 1, 1, 100)
     `);
 
@@ -703,9 +703,9 @@ describe('runDispatcher thinking-level routing', () => {
     jest.clearAllMocks();
 
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'dev', name: 'Enhancements' }] });
+    await seedProjectParents(db, { workflows: [{ id: 10, workflowType: 'dev', name: 'Enhancements' }] });
     await db.run(`
-      INSERT INTO sprint_types (tenant_id, key, name, repo_required)
+      INSERT INTO workflow_types (tenant_id, key, name, repo_required)
       VALUES (1, 'dev', 'Development', 1)
     `);
 
@@ -714,12 +714,12 @@ describe('runDispatcher thinking-level routing', () => {
       VALUES (1, 1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:cinder:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
     `);
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, workflow_id, created_at, updated_at)
       VALUES (932, 1, 'Notify operators when dispatch startup fails without a status change', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-07-06T18:00:00.000Z', '2026-07-06T18:00:00.000Z')
     `);
-    await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'dev', 'backend', 'ready', 1, 10)`);
+    await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'dev', 'backend', 'ready', 1, 10)`);
     await db.run(`
-      INSERT INTO external_event_mappings (tenant_id, project_id, sprint_id, sprint_type, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
+      INSERT INTO external_event_mappings (tenant_id, project_id, workflow_id, workflow_type, source, event_name, task_type, action_kind, action_target, apply_failure_detail, enabled, priority)
       VALUES (1, 86, 10, 'dev', 'agent_hq_dispatcher', 'dispatch_startup_failed', 'backend', 'ignore', NULL, 1, 1, 100)
     `);
 
@@ -781,17 +781,17 @@ describe('runDispatcher thinking-level routing', () => {
     jest.clearAllMocks();
 
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic', name: 'Bugs' }] });
+    await seedProjectParents(db, { workflows: [{ id: 10, workflowType: 'generic', name: 'Bugs' }] });
 
     await db.run(`
       INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, name, runtime_type, workspace_path, repo_path, repo_access_mode, openclaw_agent_id, sort_rules)
       VALUES (1, 1, 'Cinder', 86, 'Do the task', 1, 900, 'agent:agent-hq:cinder-platform-engineer:backend-engineer:main', 'Cinder', 'openclaw', '/parent/workspace', '/repos/agent-hq', 'worktree', 'cinder-backend', '[]')
     `);
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, workflow_id, created_at, updated_at)
       VALUES (444, 1, 'Surface dispatcher failure', 'Task', 'ready', 'high', 86, 'backend', 10, '2026-05-06T18:00:00.000Z', '2026-05-06T18:00:00.000Z')
     `);
-    await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 10)`);
+    await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'generic', 'backend', 'ready', 1, 10)`);
 
     const { createTaskWorktree } = jest.requireMock('./worktreeManager') as { createTaskWorktree: jest.Mock };
     createTaskWorktree.mockReturnValue({
@@ -867,21 +867,21 @@ describe('runDispatcher thinking-level routing', () => {
     await teardownTestDb();
   });
 
-  it('does not dispatch a stalled task that lacks a matching sprint routing rule, even if agent_id is set', async () => {
+  it('does not dispatch a stalled task that lacks a matching workflow routing rule, even if agent_id is set', async () => {
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
+    await seedProjectParents(db, { workflows: [{ id: 10, workflowType: 'generic' }] });
     await db.run(`
       INSERT INTO agents (id, tenant_id, job_title, project_id, job_instructions, enabled, timeout_seconds, model, skill_names, session_key, name, runtime_type, runtime_config, workspace_path, preferred_provider, sort_rules)
       VALUES (2, 1, 'Beacon', 86, 'Do the task', 1, 900, 'openai/gpt-5.5', '[]', 'agent:beacon:main', 'Beacon', 'openclaw', '{}', '/tmp', 'openai-codex', '[]')
     `);
 
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, sprint_id, created_at, updated_at)
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, agent_id, project_id, task_type, workflow_id, created_at, updated_at)
       VALUES (417, 1, 'Stalled task should not redispatch', 'Regression coverage', 'stalled', 'high', 2, 86, 'backend', 10, '2026-04-28T20:00:00.000Z', '2026-04-28T20:00:00.000Z')
     `);
 
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'generic', 'backend', 'ready', 2, 5)
     `);
 
@@ -910,7 +910,7 @@ describe('runDispatcher thinking-level routing', () => {
     });
 
     expect(logSpy).toHaveBeenCalledWith(
-      '[dispatcher] Task #417 not dispatched: no matching routing rule for sprint_id=10 status=stalled task_type=backend'
+      '[dispatcher] Task #417 not dispatched: no matching routing rule for workflow_id=10 status=stalled task_type=backend'
     );
 
     logSpy.mockRestore();
@@ -919,13 +919,13 @@ describe('runDispatcher thinking-level routing', () => {
 
   it('dispatchInstance passes routed thinking_level into runtime dispatch', async () => {
     const db = await setupTestDb();
-    await seedProjectParents(db, { sprints: [{ id: 10, sprintType: 'generic' }] });
+    await seedProjectParents(db, { workflows: [{ id: 10, workflowType: 'generic' }] });
     await db.run(`
       INSERT INTO agents (id, tenant_id, name, session_key, project_id, job_title, job_instructions)
       VALUES (1, 1, 'Cinder', 'agent:cinder:main', 86, 'Backend Engineer', 'Do the task')
     `);
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id, task_type, story_points)
+      INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id, task_type, story_points)
       VALUES (382, 1, 'Add thinking routing', 86, 10, 'backend', 6)
     `);
     await db.run(`
@@ -934,7 +934,7 @@ describe('runDispatcher thinking-level routing', () => {
     `);
 
     await db.run(`
-      INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, max_points, provider, model, thinking_level, label)
+      INSERT INTO story_point_model_routing (tenant_id, project_id, workflow_id, max_points, provider, model, thinking_level, label)
       VALUES (1, 86, 10, 8, NULL, 'openai/gpt-5.5', 'adaptive', 'deeper route')
     `);
 
@@ -953,7 +953,7 @@ describe('runDispatcher thinking-level routing', () => {
         message: 'Run the task',
         storyPoints: 6,
         projectId: 86,
-        sprintId: 10,
+        workflowId: 10,
         model: null,
         timeoutSeconds: 900,
         runtimeType: 'openclaw',

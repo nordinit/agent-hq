@@ -20,8 +20,8 @@ export type MissingSemanticHandoffDisposition = 'recorded_only' | 'moved_to_need
 interface TaskLifecycleContractRow {
   status: string;
   task_type: string | null;
-  sprint_id: number | null;
-  sprint_type: string | null;
+  workflow_id: number | null;
+  workflow_type: string | null;
 }
 
 interface MissingHandoffRuntimeMeta {
@@ -45,9 +45,9 @@ interface MarkMissingHandoffParams {
 export async function taskRequiresSemanticOutcome(db: Db, taskId: number | null | undefined): Promise<boolean> {
   if (!taskId) return false;
   const task = await db.get(`
-    SELECT t.status, t.task_type, t.sprint_id, s.sprint_type
+    SELECT t.status, t.task_type, t.workflow_id, s.workflow_type
     FROM tasks t
-    LEFT JOIN sprints s ON s.id = t.sprint_id
+    LEFT JOIN workflows s ON s.id = t.workflow_id
     WHERE t.id = ?
     LIMIT 1
   `, taskId) as TaskLifecycleContractRow | undefined;
@@ -56,8 +56,8 @@ export async function taskRequiresSemanticOutcome(db: Db, taskId: number | null 
   const workflow = await resolveWorkflow({
       taskStatus: task.status,
       taskType: task.task_type,
-      sprintId: task.sprint_id,
-      sprintType: task.sprint_type,
+      workflowId: task.workflow_id,
+      workflowType: task.workflow_type,
       db,
     });
   return workflow.requiresSemanticOutcome;
@@ -67,7 +67,7 @@ async function tableHasColumn(db: Db, table: string, column: string): Promise<bo
     return await sharedColumnExists(db, table, column);
 }
 
-async function resolveMissingOutcomeMapping(db: Db, task: { tenant_id: number | null; project_id: number | null; sprint_id?: number | null; sprint_type?: string | null; task_type: string | null; status: string }): Promise<WorkflowEventMapping | null> {
+async function resolveMissingOutcomeMapping(db: Db, task: { tenant_id: number | null; project_id: number | null; workflow_id?: number | null; workflow_type?: string | null; task_type: string | null; status: string }): Promise<WorkflowEventMapping | null> {
   const mappingsTable = await sharedTableExists(db, 'external_event_mappings');
   if (!mappingsTable) return null;
 
@@ -77,8 +77,8 @@ async function resolveMissingOutcomeMapping(db: Db, task: { tenant_id: number | 
           eventName,
           tenantId: task.tenant_id,
           projectId: task.project_id,
-          sprintId: task.sprint_id ?? null,
-          sprintType: task.sprint_type ?? null,
+          workflowId: task.workflow_id ?? null,
+          workflowType: task.workflow_type ?? null,
           taskType: task.task_type,
           currentStatus: task.status,
         });
@@ -111,14 +111,14 @@ export async function markTaskNeedsAttentionForMissingSemanticHandoff(
            tasks.status AS status,
            ${taskColumns.has('task_type') ? 'tasks.task_type' : 'NULL'} AS task_type,
            ${taskColumns.has('project_id') ? 'tasks.project_id' : 'NULL'} AS project_id,
-           ${taskColumns.has('sprint_id') ? 'tasks.sprint_id' : 'NULL'} AS sprint_id,
-           s.sprint_type,
+           ${taskColumns.has('workflow_id') ? 'tasks.workflow_id' : 'NULL'} AS workflow_id,
+           s.workflow_type,
            ${taskColumns.has('agent_id') ? 'tasks.agent_id' : 'NULL'} AS agent_id
     FROM tasks
-    LEFT JOIN sprints s ON s.id = tasks.sprint_id
+    LEFT JOIN workflows s ON s.id = tasks.workflow_id
     WHERE tasks.id = ?
   `, params.taskId) as
-    | { id: number; tenant_id: number | null; title: string; status: string; task_type: string | null; project_id: number | null; sprint_id: number | null; sprint_type: string | null; agent_id: number | null }
+    | { id: number; tenant_id: number | null; title: string; status: string; task_type: string | null; project_id: number | null; workflow_id: number | null; workflow_type: string | null; agent_id: number | null }
     | undefined;
   if (!task) return null;
 

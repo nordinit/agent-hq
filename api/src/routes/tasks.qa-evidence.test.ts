@@ -23,11 +23,11 @@ async function resetDb(): Promise<void> {
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1)`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (10, 1, 1, 'Bugs', 'generic')`);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1)`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Bugs', 'generic')`);
   await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, enabled) VALUES (7, 1, 'Talon', 'agent:talon:main', 1)`);
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, custom_fields_json, active_instance_id)
+    INSERT INTO tasks (id, tenant_id, title, status, task_type, workflow_id, project_id, agent_id, custom_fields_json, active_instance_id)
     VALUES (383, 1, 'Task 383', 'review', 'backend', 10, 1, 7, ?, NULL)
   `, JSON.stringify({ review_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329' }));
   await db.run(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status, dispatched_at) VALUES (1784, 1, 383, 7, 'running', CURRENT_TIMESTAMP)`);
@@ -392,14 +392,14 @@ describe('tasks qa-evidence aliases', () => {
           }), 383);
 
     const task = await db.get(`
-      SELECT id, status, task_type, sprint_id, custom_fields_json
+      SELECT id, status, task_type, workflow_id, custom_fields_json
       FROM tasks
       WHERE id = ?
     `, 383) as {
       id: number;
       status: string;
       task_type: string | null;
-      sprint_id: number | null;
+      workflow_id: number | null;
       custom_fields_json: string | null;
     };
 
@@ -439,7 +439,7 @@ describe('tasks qa-evidence aliases', () => {
   it('supports configured OR field expressions for release gates', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message)
+      INSERT INTO workflow_task_transition_requirements (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message)
       VALUES (1, 10, 1, 'generic', NULL, 'deployed_live', 'merged_commit|deployed_commit', 'required', NULL, 'block', 'deployed_live requires merged_commit or deployed_commit')
     `);
 
@@ -447,7 +447,7 @@ describe('tasks qa-evidence aliases', () => {
           id: 383,
           status: 'ready_to_merge',
           task_type: 'backend',
-          sprint_id: 10,
+          workflow_id: 10,
           custom_fields_json: JSON.stringify({
             deployed_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
           }),
@@ -459,7 +459,7 @@ describe('tasks qa-evidence aliases', () => {
   it('rejects premature or malformed live_verified release-gate validation when the workflow config requires it', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message)
+      INSERT INTO workflow_task_transition_requirements (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message)
       VALUES
         (1, 10, 1, 'generic', NULL, 'live_verified', 'status', 'from_status', 'deployed', 'block', 'live_verified requires task status deployed'),
         (1, 10, 1, 'generic', NULL, 'live_verified', 'live_verified_by', 'required', NULL, 'block', 'live_verified requires live_verified_by'),
@@ -470,7 +470,7 @@ describe('tasks qa-evidence aliases', () => {
           id: 383,
           status: 'ready_to_merge',
           task_type: 'backend',
-          sprint_id: 10,
+          workflow_id: 10,
           custom_fields_json: JSON.stringify({
             deployed_commit: '6d614b3b104ae36d1dd75210b9f9fb0342673329',
             live_verified_by: null,

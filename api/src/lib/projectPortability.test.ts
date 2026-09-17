@@ -39,8 +39,8 @@ async function seedPortableProject(): Promise<number> {
     VALUES (1, 'Portable Source', 'Source description', '# Context', '/tmp/source-worktree', 'worktree')
   `)).lastInsertId);
 
-  const sprintId = Number((await db.run(`
-    INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+  const workflowId = Number((await db.run(`
+    INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
     VALUES (1, ?, 'Enhancements', 'Ship portability', 'dev', 'active', 'runs', '5')
   `, projectId)).lastInsertId);
 
@@ -73,21 +73,21 @@ async function seedPortableProject(): Promise<number> {
     VALUES (1, ?, 'in_progress', 'completed_for_review', 'review', 1)
   `, projectId);
   await db.run(`
-    INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_id, sprint_type, task_type, from_status, outcome, to_status, priority)
+    INSERT INTO workflow_task_transitions (tenant_id, project_id, workflow_id, workflow_type, task_type, from_status, outcome, to_status, priority)
     VALUES (1, ?, ?, 'dev', 'enhancement', 'ready', 'completed_for_review', 'review', 20)
-  `, projectId, sprintId);
+  `, projectId, workflowId);
   await db.run(`
-    INSERT INTO sprint_task_transition_requirements (tenant_id, project_id, sprint_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, message, priority)
+    INSERT INTO workflow_task_transition_requirements (tenant_id, project_id, workflow_id, workflow_type, task_type, outcome, field_name, requirement_type, severity, message, priority)
     VALUES (1, ?, ?, 'dev', 'enhancement', 'completed_for_review', 'review_commit', 'required', 'block', 'Commit is required', 30)
-  `, projectId, sprintId);
+  `, projectId, workflowId);
   await db.run(`
-    INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_id, sprint_type, task_type, status, agent_id, priority)
+    INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_id, workflow_type, task_type, status, agent_id, priority)
     VALUES (1, ?, ?, 'dev', 'enhancement', 'ready', ?, 10)
-  `, projectId, sprintId, agentId);
+  `, projectId, workflowId, agentId);
   await db.run(`
-    INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, sprint_type, max_points, provider, model, label)
+    INSERT INTO story_point_model_routing (tenant_id, project_id, workflow_id, workflow_type, max_points, provider, model, label)
     VALUES (1, ?, ?, 'dev', 5, 'anthropic', 'claude-sonnet-4-5', 'Default')
-  `, projectId, sprintId);
+  `, projectId, workflowId);
   await db.run(`
     INSERT INTO external_event_mappings (
       tenant_id, project_id, source, event_name, task_type, status_includes_json, status_excludes_json,
@@ -97,16 +97,16 @@ async function seedPortableProject(): Promise<number> {
   `, projectId);
   await db.run(`
     INSERT INTO recurring_task_series (
-      tenant_id, project_id, sprint_id, title_template, description_template, task_type, priority,
+      tenant_id, project_id, workflow_id, title_template, description_template, task_type, priority,
       story_points, status_on_create, schedule_expression, timezone, enabled, agent_id
     )
     VALUES (1, ?, ?, 'Weekly cleanup', 'Clean up docs', 'dev', 'medium', 2, 'ready', '0 9 * * 1', 'America/New_York', 1, ?)
-  `, projectId, sprintId, agentId);
+  `, projectId, workflowId, agentId);
 
   await db.run(`
-    INSERT INTO tasks (project_id, sprint_id, title, description, status, priority, task_type, story_points)
+    INSERT INTO tasks (project_id, workflow_id, title, description, status, priority, task_type, story_points)
     VALUES (?, ?, 'Live task must not export', 'Runtime state', 'in_progress', 'high', 'dev', 3)
-  `, projectId, sprintId);
+  `, projectId, workflowId);
   await db.run(`
     INSERT INTO job_instances (agent_id, status, session_key, payload_sent, response)
     VALUES (?, 'running', 'run:live', '{"secret":"runtime"}', 'still running')
@@ -193,20 +193,20 @@ it('previews missing dependencies and imports equivalent portable config with re
   };
   expect(importedAgent).toMatchObject({ tenant_id: 2, enabled: 0, runtime_type: 'claude-code', model: 'claude-sonnet-4-5', project_id: result.project_id });
 
-  const importedSprint = await db.get(`SELECT id, tenant_id, status, sprint_type FROM sprints WHERE project_id = ?`, result.project_id) as { id: number; tenant_id: number; status: string; sprint_type: string };
-  expect(importedSprint).toMatchObject({ tenant_id: 2, status: 'planning', sprint_type: 'dev' });
+  const importedWorkflow = await db.get(`SELECT id, tenant_id, status, workflow_type FROM workflows WHERE project_id = ?`, result.project_id) as { id: number; tenant_id: number; status: string; workflow_type: string };
+  expect(importedWorkflow).toMatchObject({ tenant_id: 2, status: 'planning', workflow_type: 'dev' });
 
   const assignment = await db.get(`SELECT enabled FROM agent_tool_assignments WHERE agent_id = ?`, importedAgent.id) as { enabled: number };
   expect(assignment.enabled).toBe(0);
   const recurring = await db.get(`SELECT tenant_id, enabled, next_run_at FROM recurring_task_series WHERE project_id = ?`, result.project_id) as { tenant_id: number; enabled: number; next_run_at: string | null };
   expect(recurring).toMatchObject({ tenant_id: 2, enabled: 0, next_run_at: null });
-  const routing = await db.get(`SELECT agent_id, sprint_id FROM sprint_task_routing_rules WHERE project_id = ?`, result.project_id);
-  expect(routing).toMatchObject({ agent_id: importedAgent.id, sprint_id: importedSprint.id });
+  const routing = await db.get(`SELECT agent_id, workflow_id FROM workflow_task_routing_rules WHERE project_id = ?`, result.project_id);
+  expect(routing).toMatchObject({ agent_id: importedAgent.id, workflow_id: importedWorkflow.id });
   for (const table of [
     'routing_config',
-    'sprint_task_routing_rules',
-    'sprint_task_transitions',
-    'sprint_task_transition_requirements',
+    'workflow_task_routing_rules',
+    'workflow_task_transitions',
+    'workflow_task_transition_requirements',
     'story_point_model_routing',
     'external_event_mappings',
     'recurring_task_series',
@@ -215,9 +215,9 @@ it('previews missing dependencies and imports equivalent portable config with re
     expect(tenantCounts).toEqual([{ tenant_id: 2, count: 1 }]);
   }
   await db.run(`UPDATE routing_config SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
-  await db.run(`UPDATE sprint_task_routing_rules SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
-  await db.run(`UPDATE sprint_task_transitions SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
-  await db.run(`UPDATE sprint_task_transition_requirements SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  await db.run(`UPDATE workflow_task_routing_rules SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  await db.run(`UPDATE workflow_task_transitions SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
+  await db.run(`UPDATE workflow_task_transition_requirements SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
   await db.run(`UPDATE story_point_model_routing SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
   await db.run(`UPDATE external_event_mappings SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
   await db.run(`UPDATE recurring_task_series SET tenant_id = 1 WHERE project_id = ?`, result.project_id);
@@ -227,9 +227,9 @@ it('previews missing dependencies and imports equivalent portable config with re
     tenant_id: 2,
     updated: {
       routing_config: 1,
-      sprint_task_routing_rules: 1,
-      sprint_task_transitions: 1,
-      sprint_task_transition_requirements: 1,
+      workflow_task_routing_rules: 1,
+      workflow_task_transitions: 1,
+      workflow_task_transition_requirements: 1,
       story_point_model_routing: 1,
       external_event_mappings: 1,
       recurring_task_series: 1,
@@ -237,9 +237,9 @@ it('previews missing dependencies and imports equivalent portable config with re
   });
   for (const table of [
     'routing_config',
-    'sprint_task_routing_rules',
-    'sprint_task_transitions',
-    'sprint_task_transition_requirements',
+    'workflow_task_routing_rules',
+    'workflow_task_transitions',
+    'workflow_task_transition_requirements',
     'story_point_model_routing',
     'external_event_mappings',
     'recurring_task_series',
@@ -254,14 +254,13 @@ it('previews missing dependencies and imports equivalent portable config with re
   expect(JSON.parse(audit.changes)).toMatchObject({ import: true, schema_version: 'agent_hq.project_manifest.v1' });
 });
 
-
 it('preserves workflow environment preparation across export and import', async () => {
   const db = getDb();
   const projectId = await seedPortableProject();
   const setup = { mode: 'custom', steps: [{ command: ['mise', 'run', 'setup'], cwd: '.' }], timeoutSeconds: 600 };
-  await db.run('UPDATE sprints SET environment_setup = ? WHERE project_id = ?', JSON.stringify(setup), projectId);
+  await db.run('UPDATE workflows SET environment_setup = ? WHERE project_id = ?', JSON.stringify(setup), projectId);
   const manifest = (await exportProjectManifest(db, projectId, false)).manifest;
   expect(manifest.workflows[0].environment_setup).toEqual(setup);
   const imported = await importProjectManifest(db, manifest, { projectName: 'Setup copy', tenantId: 1, actor: 'test' });
-  expect(await db.get('SELECT environment_setup FROM sprints WHERE project_id = ?', imported.project_id)).toMatchObject({ environment_setup: setup });
+  expect(await db.get('SELECT environment_setup FROM workflows WHERE project_id = ?', imported.project_id)).toMatchObject({ environment_setup: setup });
 });

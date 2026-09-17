@@ -9,7 +9,7 @@
 // overlay renderer and two data sources.
 //
 // NOTE ON PRECEDENCE: the hypothetical resolver below reproduces the ordering used by
-// resolveRoutingRuleForSprint and the dispatcher — task-type specificity first, then
+// resolveRoutingRuleForWorkflow and the dispatcher — task-type specificity first, then
 // priority DESC, then id ASC. buildWorkflowGraph already applies exactly this rule when
 // it computes `shadowed_by`, so a shadowed edge can never win here either. If that
 // ordering ever changes, graph.ts, rules.ts and dispatcher.ts must change together.
@@ -86,8 +86,8 @@ export async function traceHypothetical(
   db: Db,
   input: {
     project_id?: unknown;
-    sprint_id?: unknown;
-    sprint_type?: unknown;
+    workflow_id?: unknown;
+    workflow_type?: unknown;
     tenant_id?: unknown;
     task_type?: unknown;
     from_status?: unknown;
@@ -108,8 +108,8 @@ export async function traceHypothetical(
   // task_type=null transition is still a legitimate — just lower-precedence — match.
   const graph = await getWorkflowGraph(db, {
     project_id: input.project_id,
-    sprint_id: input.sprint_id,
-    sprint_type: input.sprint_type,
+    workflow_id: input.workflow_id,
+    workflow_type: input.workflow_type,
     tenant_id: input.tenant_id,
   });
 
@@ -248,8 +248,8 @@ export type HistoricalTrace = {
     status: string;
     task_type: string | null;
     project_id: number | null;
-    sprint_id: number | null;
-    sprint_type: string | null;
+    workflow_id: number | null;
+    workflow_type: string | null;
   };
   scope: WorkflowGraph['scope'];
   steps: TraceStep[];
@@ -274,25 +274,25 @@ export async function traceTaskHistory(
   if (!Number.isFinite(taskId)) throw withStatus('A valid task id is required', 400);
 
   const task = await db.get(`
-    SELECT t.id, t.title, t.status, t.task_type, t.sprint_id,
+    SELECT t.id, t.title, t.status, t.task_type, t.workflow_id,
            COALESCE(s.project_id, t.project_id) AS project_id,
-           s.sprint_type
+           s.workflow_type
     FROM tasks t
-    LEFT JOIN sprints s ON s.id = t.sprint_id
+    LEFT JOIN workflows s ON s.id = t.workflow_id
     WHERE t.id = ?
     LIMIT 1
   `, taskId) as Record<string, unknown> | undefined;
   if (!task) throw withStatus(`Task ${taskId} not found`, 404);
 
-  const sprintType = typeof task.sprint_type === 'string' ? task.sprint_type : null;
+  const workflowType = typeof task.workflow_type === 'string' ? task.workflow_type : null;
 
   // Resolve the trace against the graph for the task's own workflow, so what the user
   // sees highlighted is exactly the configuration the task is governed by today.
-  const graph = sprintType
+  const graph = workflowType
     ? await getWorkflowGraph(db, {
       project_id: task.project_id,
-      sprint_id: task.sprint_id,
-      sprint_type: sprintType,
+      workflow_id: task.workflow_id,
+      workflow_type: workflowType,
       tenant_id: input.tenant_id,
     })
     : null;
@@ -390,13 +390,13 @@ export async function traceTaskHistory(
       status: String(task.status ?? ''),
       task_type: taskType,
       project_id: task.project_id == null ? null : Number(task.project_id),
-      sprint_id: task.sprint_id == null ? null : Number(task.sprint_id),
-      sprint_type: sprintType,
+      workflow_id: task.workflow_id == null ? null : Number(task.workflow_id),
+      workflow_type: workflowType,
     },
     scope: graph?.scope ?? {
       project_id: task.project_id == null ? null : Number(task.project_id),
-      workflow_type: sprintType,
-      workflow_id: task.sprint_id == null ? null : Number(task.sprint_id),
+      workflow_type: workflowType,
+      workflow_id: task.workflow_id == null ? null : Number(task.workflow_id),
       task_type: null,
     },
     steps,

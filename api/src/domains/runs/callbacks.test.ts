@@ -12,7 +12,7 @@ jest.mock('../../integrations/telegram', () => ({
 }));
 
 const PROJECT_ID = 86;
-const SPRINT_ID = 700;
+const WORKFLOW_ID = 700;
 const AGENT_ID = 94;
 const TASK_ID = 552;
 const INSTANCE_ID = 3461;
@@ -21,7 +21,7 @@ const TENANT_ID = 42;
 const OTHER_INSTANCE_ID = 9999;
 
 /**
- * Parents that the real schema requires and the old hand-built one did not: tasks.sprint_id is
+ * Parents that the real schema requires and the old hand-built one did not: tasks.workflow_id is
  * NOT NULL and both it and project_id are foreign keys, so a task cannot exist on its own.
  */
 async function seedScope(db: Db): Promise<void> {
@@ -38,9 +38,9 @@ async function seedScope(db: Db): Promise<void> {
     PROJECT_ID, TENANT_ID,
   );
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
+    INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status)
     VALUES (?, ?, ?, 'Routing', 'dev', 'active')
-  `, SPRINT_ID, TENANT_ID, PROJECT_ID);
+  `, WORKFLOW_ID, TENANT_ID, PROJECT_ID);
   await db.run(`
     INSERT INTO agents (id, tenant_id, name, session_key, openclaw_agent_id, runtime_type)
     VALUES (?, ?, 'Cinder (Backend)', 'cinder-backend', 'cinder-backend', 'openclaw')
@@ -61,9 +61,9 @@ async function seedScope(db: Db): Promise<void> {
  */
 async function seedReadyTaskRun(db: Db, activeInstanceId: number | null = null): Promise<void> {
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, updated_at)
+    INSERT INTO tasks (id, tenant_id, title, status, task_type, workflow_id, project_id, agent_id, updated_at)
     VALUES (?, ?, 'Allow task routing rules that apply to all task types', 'ready', 'backend', ?, ?, ?, CURRENT_TIMESTAMP)
-  `, TASK_ID, TENANT_ID, SPRINT_ID, PROJECT_ID, AGENT_ID);
+  `, TASK_ID, TENANT_ID, WORKFLOW_ID, PROJECT_ID, AGENT_ID);
   await db.run(`
     INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, dispatched_at)
     VALUES (?, ?, ?, ?, 'running', CURRENT_TIMESTAMP)
@@ -136,13 +136,13 @@ describe('startRunInstance task ownership repair', () => {
     'honors a workflow-specific protected-status rule when starting from %s', async (status) => {
       await seedReadyTaskRun(db, INSTANCE_ID);
       await db.run(`UPDATE external_event_mappings SET source = 'agent_hq_runtime' WHERE event_name = 'agent_started'`);
-      await db.run(`UPDATE sprints SET sprint_type = 'lead_generation' WHERE id = ?`, SPRINT_ID);
+      await db.run(`UPDATE workflows SET workflow_type = 'lead_generation' WHERE id = ?`, WORKFLOW_ID);
       await db.run(`UPDATE tasks SET status = ?, task_type = 'proposal' WHERE id = ?`, status, TASK_ID);
       await db.run(`INSERT INTO external_event_mappings (
-        tenant_id, project_id, sprint_id, sprint_type, source, event_name,
+        tenant_id, project_id, workflow_id, workflow_type, source, event_name,
         status_includes_json, status_excludes_json, action_kind, action_target, enabled, priority
       ) VALUES (?, ?, ?, 'lead_generation', 'agent_hq_runtime', 'agent_started',
-        '["approved","submitted","closed","poc_pending"]', '[]', 'ignore', NULL, 1, 200)`, TENANT_ID, PROJECT_ID, SPRINT_ID);
+        '["approved","submitted","closed","poc_pending"]', '[]', 'ignore', NULL, 1, 200)`, TENANT_ID, PROJECT_ID, WORKFLOW_ID);
 
       await startRunInstance(db, INSTANCE_ID, 'run:3461');
       expect(await db.get(`SELECT status, active_instance_id FROM tasks WHERE id = ?`, TASK_ID)).toEqual({

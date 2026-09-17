@@ -16,14 +16,14 @@ import { getRoutingTaskTypeBadgeClass, getRoutingTaskTypeLabel, parseRoutingRule
 
 export default function RoutingRulesSection({
   projectId,
-  sprintId,
-  sprintName,
-  sprintType,
+  workflowId,
+  workflowName,
+  workflowType,
 }: {
   projectId: number | null;
-  sprintId: number | null;
-  sprintName: string | null;
-  sprintType: string | null;
+  workflowId: number | null;
+  workflowName: string | null;
+  workflowType: string | null;
 }) {
   const [rules, setRules] = useState<TaskRoutingRule[]>([]);
   const [agentsList, setAgentsList] = useState<{ id: number; name: string }[]>([]);
@@ -50,14 +50,14 @@ export default function RoutingRulesSection({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { metadata: workflowMetadata } = useWorkflowMetadata(sprintId ?? undefined, {
-    sprintType: sprintId ? null : sprintType,
+  const { metadata: workflowMetadata } = useWorkflowMetadata(workflowId ?? undefined, {
+    workflowType: workflowId ? null : workflowType,
   });
 
-  const { options: sprintTaskTypeOptions } = useTaskTypes(sprintId, {
-    sprintType: sprintId ? null : sprintType,
+  const { options: workflowTaskTypeOptions } = useTaskTypes(workflowId, {
+    workflowType: workflowId ? null : workflowType,
   });
-  const taskTypeOptions = useMemo(() => [{ value: '__all__', label: 'All task types' }, ...sprintTaskTypeOptions], [sprintTaskTypeOptions]);
+  const taskTypeOptions = useMemo(() => [{ value: '__all__', label: 'All task types' }, ...workflowTaskTypeOptions], [workflowTaskTypeOptions]);
 
   const TYPE_BADGE: Record<string, string> = {
     frontend: 'bg-blue-900/60 text-blue-300',
@@ -122,7 +122,7 @@ export default function RoutingRulesSection({
   )), [rules, filterTaskTypes, filterStatuses, filterAgentIds, filterPriorities, filterStates]);
 
   const load = useCallback(() => {
-    if (!sprintType) {
+    if (!workflowType) {
       setRules([]);
       setAgentsList([]);
       setStatusCatalog([]);
@@ -131,9 +131,9 @@ export default function RoutingRulesSection({
     }
     setLoading(true);
     Promise.all([
-      api.getRoutingRules(projectId ?? undefined, sprintId ?? undefined, sprintType),
+      api.getRoutingRules(projectId ?? undefined, workflowId ?? undefined, workflowType),
       api.getAgents(projectId ?? undefined),
-      api.getWorkflowMetadata(sprintId ? { sprint_id: sprintId } : { sprint_type: sprintType }),
+      api.getWorkflowMetadata(workflowId ? { workflow_id: workflowId } : { workflow_type: workflowType }),
     ])
       .then(([r, a, statuses]) => {
         setRules(r.rules);
@@ -142,7 +142,7 @@ export default function RoutingRulesSection({
       })
       .catch(e => console.error(e))
       .finally(() => setLoading(false));
-  }, [projectId, sprintId, sprintType]);
+  }, [projectId, workflowId, workflowType]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -188,8 +188,8 @@ export default function RoutingRulesSection({
     try {
       await api.createRoutingRule({
         project_id: projectId ?? undefined,
-        sprint_id: sprintId ?? undefined,
-        sprint_type: sprintType ?? undefined,
+        workflow_id: workflowId ?? undefined,
+        workflow_type: workflowType ?? undefined,
         task_type: newForm.task_type === '__all__' ? null : newForm.task_type,
         status: newForm.status,
         agent_id: Number(newForm.agent_id),
@@ -249,8 +249,8 @@ export default function RoutingRulesSection({
     try {
       await api.updateRoutingRule(id, {
         project_id: projectId ?? undefined,
-        sprint_id: sprintId ?? undefined,
-        sprint_type: sprintType ?? undefined,
+        workflow_id: workflowId ?? undefined,
+        workflow_type: workflowType ?? undefined,
         task_type: editForm.task_type === '__all__' ? null : editForm.task_type,
         status: editForm.status,
         agent_id: Number(editForm.agent_id),
@@ -268,7 +268,7 @@ export default function RoutingRulesSection({
   const handleDelete = async (id: number) => {
     if (!confirm('Delete this assignment rule?')) return;
     try {
-      await api.deleteRoutingRule(id, sprintId ?? undefined, projectId ?? undefined);
+      await api.deleteRoutingRule(id, workflowId ?? undefined, projectId ?? undefined);
       load();
     } catch (e) {
       alert(String(e));
@@ -279,8 +279,8 @@ export default function RoutingRulesSection({
     try {
       await api.updateRoutingRule(rule.id, {
         project_id: projectId ?? undefined,
-        sprint_id: rule.sprint_id ?? sprintId ?? undefined,
-        sprint_type: rule.sprint_type ?? sprintType ?? undefined,
+        workflow_id: rule.workflow_id ?? workflowId ?? undefined,
+        workflow_type: rule.workflow_type ?? workflowType ?? undefined,
         enabled: rule.enabled ? 0 : 1,
       });
       load();
@@ -295,7 +295,7 @@ export default function RoutingRulesSection({
     </div>
   );
 
-  if (!sprintType) {
+  if (!workflowType) {
     return (
       <Card className="bg-slate-900/50 border-slate-700/50 p-6 text-sm text-slate-400">
         Select a workflow type to view all-project defaults, or choose a project to edit project-scoped defaults and workflow overrides.
@@ -305,7 +305,7 @@ export default function RoutingRulesSection({
 
   return (
     <div className="space-y-4" data-tour-target="routing-rules">
-      <RoutingWarningBanner warnings={routingWarnings} scopeLabel={sprintName ?? 'This workflow'} />
+      <RoutingWarningBanner warnings={routingWarnings} scopeLabel={workflowName ?? 'This workflow'} />
       <SectionHeader
         label="Assignment Rules"
         help={`${ROUTING_TABLE_HELP.rules} Choose All task types when the rule should apply regardless of backend, frontend, QA, or other task-type-specific scopes.`}
@@ -375,7 +375,7 @@ export default function RoutingRulesSection({
                       {taskTypeOptions.length === 0 && <option value="">No workflow task types</option>}
                     </select>
                   </td>
-                  <td className="px-3 py-2.5 text-xs text-slate-400">{`${sprintId ? 'Workflow override' : 'Workflow-type default'}${newForm.task_type === '__all__' ? ' • All task types' : ''}`}</td>
+                  <td className="px-3 py-2.5 text-xs text-slate-400">{`${workflowId ? 'Workflow override' : 'Workflow-type default'}${newForm.task_type === '__all__' ? ' • All task types' : ''}`}</td>
                   <td className="px-3 py-2.5">
                     <select
                       value={newForm.status}
@@ -455,7 +455,7 @@ export default function RoutingRulesSection({
                       )}
                     </td>
                     <td className="px-3 py-2.5">
-                      <ScopeBadge kind={rule.scope_kind === 'sprint_type_default' ? 'default_scope' : rule.scope_kind} />
+                      <ScopeBadge kind={rule.scope_kind === 'workflow_type_default' ? 'default_scope' : rule.scope_kind} />
                     </td>
                     <td className="px-3 py-2.5">
                       {editing ? (

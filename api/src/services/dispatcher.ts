@@ -184,7 +184,6 @@ function gatewayFetch(hookPath: string, init: RequestInit): Promise<Response> {
 }
 // ── End container routing config ─────────────────────────────────────────────
 
-
 /**
  * hooksFetch — send a /hooks/agent request to the correct OpenClaw instance.
  *
@@ -304,7 +303,7 @@ interface RelationshipDispatchEligibility {
   blockingCountByTaskId: Map<number, number>;
 }
 /**
- * RoutingRuleRow — a sprint_task_routing_rules row joined with the agent.
+ * RoutingRuleRow — a workflow_task_routing_rules row joined with the agent.
  * The `agent_id` field maps directly to the agents table.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -453,8 +452,8 @@ async function persistDispatchStartupFailure(
     routingReason: string;
     priorStatus: string;
     projectId?: number | null;
-    sprintId?: number | null;
-    sprintType?: string | null;
+    workflowId?: number | null;
+    workflowType?: string | null;
     taskType?: string | null;
     reason: string;
     retryCount?: number;
@@ -476,8 +475,8 @@ async function persistDispatchStartupFailure(
               eventName: DISPATCH_STARTUP_FAILED_EVENT,
               tenantId: params.tenantId ?? null,
               projectId: params.projectId ?? null,
-              sprintId: params.sprintId ?? null,
-              sprintType: params.sprintType ?? null,
+              workflowId: params.workflowId ?? null,
+              workflowType: params.workflowType ?? null,
               taskType: params.taskType ?? null,
               currentStatus: params.priorStatus,
             })
@@ -661,9 +660,9 @@ function relationshipResolvedStatuses(raw: unknown): string[] {
 
 async function isRelationshipModelAvailable(db: Db): Promise<boolean> {
   return await tableExists(db, 'task_relationships')
-    && await tableExists(db, 'sprint_type_relationship_types')
-    && await tableHasColumn(db, 'sprint_type_relationship_types', 'affects_dispatch_eligibility')
-    && await tableHasColumn(db, 'sprint_type_relationship_types', 'direction_semantics');
+    && await tableExists(db, 'workflow_type_relationship_types')
+    && await tableHasColumn(db, 'workflow_type_relationship_types', 'affects_dispatch_eligibility')
+    && await tableHasColumn(db, 'workflow_type_relationship_types', 'direction_semantics');
 }
 
 async function getRelationshipDispatchEligibility(db: Db, projectId?: number | null): Promise<RelationshipDispatchEligibility | null> {
@@ -677,8 +676,8 @@ async function getRelationshipDispatchEligibility(db: Db, projectId?: number | n
   // escape. Terminality is workflow-configurable (a workflow may deliberately
   // treat `failed` as retryable), so resolve it exactly the way dispatch
   // eligibility does instead of assuming the global terminal set.
-  const sourceTerminality = await buildResolvedTaskTerminalityExpression(db, 'source', 'source_sprint');
-  const targetTerminality = await buildResolvedTaskTerminalityExpression(db, 'target', 'target_sprint');
+  const sourceTerminality = await buildResolvedTaskTerminalityExpression(db, 'source', 'source_workflow');
+  const targetTerminality = await buildResolvedTaskTerminalityExpression(db, 'target', 'target_workflow');
 
   const projectFilter = projectId == null ? '' : 'AND (source.project_id = ? OR target.project_id = ?)';
   const params = [
@@ -697,7 +696,7 @@ async function getRelationshipDispatchEligibility(db: Db, projectId?: number | n
            target.title AS target_title,
            target.status AS target_status,
            target.project_id AS target_project_id,
-           rt.sprint_type_key,
+           rt.workflow_type_key,
            rt.label,
            rt.inverse_label,
            rt.direction_semantics,
@@ -707,16 +706,16 @@ async function getRelationshipDispatchEligibility(db: Db, projectId?: number | n
     FROM task_relationships tr
     JOIN tasks source ON source.id = tr.source_task_id
     JOIN tasks target ON target.id = tr.target_task_id
-    LEFT JOIN sprints source_sprint ON source_sprint.id = source.sprint_id
-    LEFT JOIN sprints target_sprint ON target_sprint.id = target.sprint_id
-    JOIN sprint_type_relationship_types rt
+    LEFT JOIN workflows source_workflow ON source_workflow.id = source.workflow_id
+    LEFT JOIN workflows target_workflow ON target_workflow.id = target.workflow_id
+    JOIN workflow_type_relationship_types rt
       ON rt.key = tr.relationship_type_key
-     AND rt.sprint_type_key IN (COALESCE(source_sprint.sprint_type, 'generic'), 'generic')
+     AND rt.workflow_type_key IN (COALESCE(source_workflow.workflow_type, 'generic'), 'generic')
     WHERE rt.affects_dispatch_eligibility = 1
       AND rt.direction_semantics IN ('target_blocks_source', 'source_blocks_target')
       ${projectFilter}
     ORDER BY tr.id ASC,
-             CASE WHEN rt.sprint_type_key = COALESCE(source_sprint.sprint_type, 'generic') THEN 0 ELSE 1 END ASC
+             CASE WHEN rt.workflow_type_key = COALESCE(source_workflow.workflow_type, 'generic') THEN 0 ELSE 1 END ASC
   `, ...params) as Array<Record<string, unknown>>;
 
   const seenRelationshipIds = new Set<number>();
@@ -782,7 +781,6 @@ async function annotateRelationshipDispatchBlocks(db: Db, blockedByTaskId: Map<n
   }
 }
 
-
 /**
  * Assemble the runtime config a dispatch hands to the adapter.
  *
@@ -825,19 +823,19 @@ export const DISPATCHABLE_ROUTED_STATUSES = TASK_STATUSES.filter(
 async function buildResolvedTaskTerminalityExpression(
   db: Db,
   taskAlias: string,
-  sprintAlias: string | null,
+  workflowAlias: string | null,
 ): Promise<{ sql: string; params: unknown[] }> {
   const sources: string[] = [];
   const params: unknown[] = [];
 
-  if (await tableExists(db, 'sprint_task_statuses') && await tableHasColumn(db, 'sprint_task_statuses', 'terminal')) {
-    const workflowStatusOrder = await tableHasColumn(db, 'sprint_task_statuses', 'id') ? 'ORDER BY sprint_status.id DESC' : '';
+  if (await tableExists(db, 'workflow_task_statuses') && await tableHasColumn(db, 'workflow_task_statuses', 'terminal')) {
+    const workflowStatusOrder = await tableHasColumn(db, 'workflow_task_statuses', 'id') ? 'ORDER BY workflow_status.id DESC' : '';
     sources.push(`
       (
-        SELECT sprint_status.terminal
-        FROM sprint_task_statuses sprint_status
-        WHERE sprint_status.sprint_id = ${taskAlias}.sprint_id
-          AND sprint_status.status_key = ${taskAlias}.status
+        SELECT workflow_status.terminal
+        FROM workflow_task_statuses workflow_status
+        WHERE workflow_status.workflow_id = ${taskAlias}.workflow_id
+          AND workflow_status.status_key = ${taskAlias}.status
         ${workflowStatusOrder}
         LIMIT 1
       )
@@ -845,43 +843,43 @@ async function buildResolvedTaskTerminalityExpression(
   }
 
   if (
-    sprintAlias
-    && await tableExists(db, 'sprint_type_task_statuses')
-    && await tableHasColumn(db, 'sprint_type_task_statuses', 'terminal')
+    workflowAlias
+    && await tableExists(db, 'workflow_type_task_statuses')
+    && await tableHasColumn(db, 'workflow_type_task_statuses', 'terminal')
   ) {
     const hasTaskTenant = await tableHasColumn(db, 'tasks', 'tenant_id');
-    const hasSprintTypeTenant = await tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
-    const sprintTypeStatusOrder = await tableHasColumn(db, 'sprint_type_task_statuses', 'id') ? 'ORDER BY sprint_type_status.id DESC' : '';
-    sources.push(hasTaskTenant && hasSprintTypeTenant
+    const hasWorkflowTypeTenant = await tableHasColumn(db, 'workflow_type_task_statuses', 'tenant_id');
+    const workflowTypeStatusOrder = await tableHasColumn(db, 'workflow_type_task_statuses', 'id') ? 'ORDER BY workflow_type_status.id DESC' : '';
+    sources.push(hasTaskTenant && hasWorkflowTypeTenant
       ? `
         COALESCE(
           (
-            SELECT sprint_type_status.terminal
-            FROM sprint_type_task_statuses sprint_type_status
-            WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
-              AND sprint_type_status.status_key = ${taskAlias}.status
-              AND sprint_type_status.tenant_id = ${taskAlias}.tenant_id
-            ${sprintTypeStatusOrder}
+            SELECT workflow_type_status.terminal
+            FROM workflow_type_task_statuses workflow_type_status
+            WHERE workflow_type_status.workflow_type_key = ${workflowAlias}.workflow_type
+              AND workflow_type_status.status_key = ${taskAlias}.status
+              AND workflow_type_status.tenant_id = ${taskAlias}.tenant_id
+            ${workflowTypeStatusOrder}
             LIMIT 1
           ),
           (
-            SELECT sprint_type_status.terminal
-            FROM sprint_type_task_statuses sprint_type_status
-            WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
-              AND sprint_type_status.status_key = ${taskAlias}.status
-              AND sprint_type_status.tenant_id IS NULL
-            ${sprintTypeStatusOrder}
+            SELECT workflow_type_status.terminal
+            FROM workflow_type_task_statuses workflow_type_status
+            WHERE workflow_type_status.workflow_type_key = ${workflowAlias}.workflow_type
+              AND workflow_type_status.status_key = ${taskAlias}.status
+              AND workflow_type_status.tenant_id IS NULL
+            ${workflowTypeStatusOrder}
             LIMIT 1
           )
         )
       `
       : `
         (
-          SELECT sprint_type_status.terminal
-          FROM sprint_type_task_statuses sprint_type_status
-          WHERE sprint_type_status.sprint_type_key = ${sprintAlias}.sprint_type
-            AND sprint_type_status.status_key = ${taskAlias}.status
-          ${sprintTypeStatusOrder}
+          SELECT workflow_type_status.terminal
+          FROM workflow_type_task_statuses workflow_type_status
+          WHERE workflow_type_status.workflow_type_key = ${workflowAlias}.workflow_type
+            AND workflow_type_status.status_key = ${taskAlias}.status
+          ${workflowTypeStatusOrder}
           LIMIT 1
         )
       `);
@@ -916,9 +914,9 @@ async function buildResolvedTaskTerminalityExpression(
 export async function getNonDispatchableTaskStatusPredicate(
   db: Db,
   taskAlias = 't',
-  sprintAlias: string | null = 's',
+  workflowAlias: string | null = 's',
 ): Promise<{ sql: string; params: unknown[] }> {
-  const resolvedTerminality = await buildResolvedTaskTerminalityExpression(db, taskAlias, sprintAlias);
+  const resolvedTerminality = await buildResolvedTaskTerminalityExpression(db, taskAlias, workflowAlias);
   return {
     sql: `(${resolvedTerminality.sql}) = 0`,
     params: resolvedTerminality.params,
@@ -966,11 +964,11 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
     SELECT t.id, t.title, t.description, t.status, t.priority,
            t.${assignmentColumn} as agent_id,
            ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL'} AS tenant_id,
-           t.project_id, t.task_type, t.sprint_id, s.name as sprint_name, s.sprint_type,
+           t.project_id, t.task_type, t.workflow_id, s.name as workflow_name, s.workflow_type,
            t.created_at, t.story_points, t.active_instance_id,
            ${legacyBlockingCountSelect}
     FROM tasks t
-    LEFT JOIN sprints s ON s.id = t.sprint_id
+    LEFT JOIN workflows s ON s.id = t.workflow_id
     WHERE ${statusEligibility.sql}
       AND t.active_instance_id IS NULL
       AND t.paused_at IS NULL
@@ -978,8 +976,8 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
         t.dispatched_at IS NULL
         OR t.dispatched_at < ?
       )
-      AND (t.sprint_id IS NULL OR EXISTS (
-        SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status = 'active'
+      AND (t.workflow_id IS NULL OR EXISTS (
+        SELECT 1 FROM workflows sp WHERE sp.id = t.workflow_id AND sp.status = 'active'
       ))
       ${legacyBlockerEligibilityClause}
   `;
@@ -1004,8 +1002,8 @@ async function getAllDispatchableTasks(db: Db, projectId?: number | null): Promi
 }
 
 /**
- * getMatchingRoutingRules — returns sprint routing rules that match a task's
- * sprint_id/status/task_type, ordered by scope specificity, task-type
+ * getMatchingRoutingRules — returns workflow routing rules that match a task's
+ * workflow_id/status/task_type, ordered by scope specificity, task-type
  * specificity, priority DESC, and stable id tiebreaker. Each row includes full
  * agent fields for dispatch.
  */
@@ -1019,12 +1017,12 @@ async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<Rou
     REPO_COLUMNS.map((column) => tableHasColumn(db, 'projects', column)),
   )).every(Boolean);
   const hasWorkflowRepoColumns = (await Promise.all(
-    REPO_COLUMNS.map((column) => tableHasColumn(db, 'sprints', column)),
+    REPO_COLUMNS.map((column) => tableHasColumn(db, 'workflows', column)),
   )).every(Boolean);
-  const hasScopedRoutingColumns = await tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
-    && await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
-  const hasRoutingTenantColumn = await tableHasColumn(db, 'sprint_task_routing_rules', 'tenant_id');
-  const routingRuleEnabledCondition = await tableHasColumn(db, 'sprint_task_routing_rules', 'enabled') ? 'AND rr.enabled = 1' : '';
+  const hasScopedRoutingColumns = await tableHasColumn(db, 'workflow_task_routing_rules', 'project_id')
+    && await tableHasColumn(db, 'workflow_task_routing_rules', 'workflow_type');
+  const hasRoutingTenantColumn = await tableHasColumn(db, 'workflow_task_routing_rules', 'tenant_id');
+  const routingRuleEnabledCondition = await tableHasColumn(db, 'workflow_task_routing_rules', 'enabled') ? 'AND rr.enabled = 1' : '';
   const hasAgentTenantColumn = await tableHasColumn(db, 'agents', 'tenant_id');
   const hasProviderConnectionColumn = await tableHasColumn(db, 'agents', 'provider_connection_id');
   const projectRepoSelect = hasProjectRepoColumns
@@ -1034,7 +1032,7 @@ async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<Rou
     ? 's.repo_path as workflow_repo_path, s.repo_url as workflow_repo_url, s.repo_access_mode as workflow_repo_access_mode,'
     : 'NULL as workflow_repo_path, NULL as workflow_repo_url, NULL as workflow_repo_access_mode,';
   const projectJoin = hasProjectsTable ? 'LEFT JOIN projects p ON p.id = a.project_id' : '';
-  const workflowJoin = hasWorkflowRepoColumns ? 'LEFT JOIN sprints s ON s.id = COALESCE(rr.sprint_id, ?)' : '';
+  const workflowJoin = hasWorkflowRepoColumns ? 'LEFT JOIN workflows s ON s.id = COALESCE(rr.workflow_id, ?)' : '';
 
   const tenantCondition = [
     hasRoutingTenantColumn && task.tenant_id != null ? 'rr.tenant_id = ?' : null,
@@ -1058,7 +1056,7 @@ async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<Rou
              ${projectRepoSelect}
              ${workflowRepoSelect}
              a.os_user
-      FROM sprint_task_routing_rules rr
+      FROM workflow_task_routing_rules rr
       JOIN agents a ON a.id = rr.agent_id AND a.enabled = 1
       ${projectJoin}
       ${workflowJoin}
@@ -1067,37 +1065,37 @@ async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<Rou
         ${routingRuleEnabledCondition}
         AND rr.status = ?
         AND (rr.task_type = ? OR rr.task_type IS NULL)
-      ORDER BY CASE WHEN rr.sprint_id = ? THEN 0 ELSE 1 END,
+      ORDER BY CASE WHEN rr.workflow_id = ? THEN 0 ELSE 1 END,
                CASE WHEN rr.task_type = ? THEN 0 ELSE 1 END,
                rr.priority DESC,
                rr.id ASC
-    `, ...(hasWorkflowRepoColumns ? [task.sprint_id ?? null] : []), ...params, ...tenantParams, status, task.task_type ?? null, task.sprint_id ?? null, task.task_type ?? null) as RoutingRuleRow[];
+    `, ...(hasWorkflowRepoColumns ? [task.workflow_id ?? null] : []), ...params, ...tenantParams, status, task.task_type ?? null, task.workflow_id ?? null, task.task_type ?? null) as RoutingRuleRow[];
 
-  const loadSprintScopedRules = async (status: string): Promise<RoutingRuleRow[]> => {
-    if (!task.sprint_id) return [];
-    if (hasScopedRoutingColumns && task.project_id && task.sprint_type) {
+  const loadWorkflowScopedRules = async (status: string): Promise<RoutingRuleRow[]> => {
+    if (!task.workflow_id) return [];
+    if (hasScopedRoutingColumns && task.project_id && task.workflow_type) {
       return await runRuleQuery(
-        'rr.project_id = ? AND rr.sprint_type = ? AND (rr.sprint_id = ? OR rr.sprint_id IS NULL)',
-        [task.project_id, task.sprint_type, task.sprint_id],
+        'rr.project_id = ? AND rr.workflow_type = ? AND (rr.workflow_id = ? OR rr.workflow_id IS NULL)',
+        [task.project_id, task.workflow_type, task.workflow_id],
         status,
       );
     }
-    return await runRuleQuery('rr.sprint_id = ?', [task.sprint_id], status);
+    return await runRuleQuery('rr.workflow_id = ?', [task.workflow_id], status);
   };
 
   try {
-    const sprintRules = await loadSprintScopedRules(task.status);
-    if (sprintRules.length > 0) return sprintRules;
+    const workflowRules = await loadWorkflowScopedRules(task.status);
+    if (workflowRules.length > 0) return workflowRules;
   } catch {
-    // sprint-scoped tables may not exist in minimal test DBs; fall through
+    // workflow-scoped tables may not exist in minimal test DBs; fall through
   }
 
-  if (task.status === 'in_progress' && task.sprint_id) {
+  if (task.status === 'in_progress' && task.workflow_id) {
     try {
-      const sprintFallback = await loadSprintScopedRules('ready');
-      if (sprintFallback.length > 0) return sprintFallback;
+      const workflowFallback = await loadWorkflowScopedRules('ready');
+      if (workflowFallback.length > 0) return workflowFallback;
     } catch {
-      // sprint-scoped tables may not exist in minimal test DBs
+      // workflow-scoped tables may not exist in minimal test DBs
     }
   }
 
@@ -1105,31 +1103,31 @@ async function getMatchingRoutingRules(db: Db, task: CandidateTask): Promise<Rou
 }
 
 async function isWorkflowRepoRequiredForTask(db: Db, task: CandidateTask): Promise<boolean> {
-  if (!task.sprint_id) return false;
-  if (!await tableHasColumn(db, 'sprint_types', 'repo_required')) {
-    return task.sprint_type === 'dev';
+  if (!task.workflow_id) return false;
+  if (!await tableHasColumn(db, 'workflow_types', 'repo_required')) {
+    return task.workflow_type === 'dev';
   }
 
   try {
-    const hasSprintTypesTenant = await tableHasColumn(db, 'sprint_types', 'tenant_id');
-    const hasSprintsTenant = await tableHasColumn(db, 'sprints', 'tenant_id');
-    const tenantJoin = hasSprintTypesTenant && hasSprintsTenant
+    const hasWorkflowTypesTenant = await tableHasColumn(db, 'workflow_types', 'tenant_id');
+    const hasWorkflowsTenant = await tableHasColumn(db, 'workflows', 'tenant_id');
+    const tenantJoin = hasWorkflowTypesTenant && hasWorkflowsTenant
       ? 'AND (st.tenant_id IS NULL OR st.tenant_id = s.tenant_id)'
       : '';
-    const tenantOrder = hasSprintTypesTenant ? 'ORDER BY st.tenant_id IS NULL ASC' : '';
+    const tenantOrder = hasWorkflowTypesTenant ? 'ORDER BY st.tenant_id IS NULL ASC' : '';
     const row = await db.get(`
       SELECT COALESCE(st.repo_required, 0) AS repo_required
-      FROM sprints s
-      LEFT JOIN sprint_types st
-        ON st.key = s.sprint_type
+      FROM workflows s
+      LEFT JOIN workflow_types st
+        ON st.key = s.workflow_type
         ${tenantJoin}
       WHERE s.id = ?
       ${tenantOrder}
       LIMIT 1
-    `, task.sprint_id) as { repo_required?: number | null } | undefined;
+    `, task.workflow_id) as { repo_required?: number | null } | undefined;
     return row?.repo_required === 1;
   } catch {
-    return task.sprint_type === 'dev';
+    return task.workflow_type === 'dev';
   }
 }
 
@@ -1431,7 +1429,7 @@ async function fireAgentRun(
     repoWorkspacePath: string | null;
     repoBranch: string | null;
   },
-  modelScope?: { projectId?: number | null; sprintId?: number | null; sprintType?: string | null; tenantId?: number | null },
+  modelScope?: { projectId?: number | null; workflowId?: number | null; workflowType?: string | null; tenantId?: number | null },
 ): Promise<void> {
   const timeoutSec = job.timeout_seconds || 900;
   const durableRunId = await ensureJobInstanceDurableRunId(db, instanceId);
@@ -1724,7 +1722,7 @@ async function fireAgentRun(
     const runtimeBoundary = buildRuntimeBoundaryV1({
       tenantId,
       projectId: job.project_id ?? modelScope?.projectId ?? null,
-      workflowId: modelScope?.sprintId ?? null,
+      workflowId: modelScope?.workflowId ?? null,
       taskId: taskId ?? null,
       instanceId,
       durableRunId: boundaryDurableRunId,
@@ -1893,7 +1891,7 @@ async function fireAgentRun(
 
 /**
  * dispatchTaskToJob — shared helper that fires a single task to a single job.
- * Used by the explicit sprint-routing path.
+ * Used by the explicit workflow-routing path.
  * Returns true if dispatch succeeded.
  */
 export async function dispatchTaskToJob(
@@ -1933,7 +1931,7 @@ export async function dispatchTaskToJob(
   try {
     const repoRequired = await isWorkflowRepoRequiredForTask(db, task);
     if (repoRequired && job.repo_config_source !== 'workflow') {
-      const reason = `Workflow-level repository configuration is required for repo-backed workflow dispatch (workflow_id=${task.sprint_id ?? 'none'}, workflow_type=${task.sprint_type ?? 'unknown'}). Configure repo_access_mode plus repo_path or repo_url on the workflow.`;
+      const reason = `Workflow-level repository configuration is required for repo-backed workflow dispatch (workflow_id=${task.workflow_id ?? 'none'}, workflow_type=${task.workflow_type ?? 'unknown'}). Configure repo_access_mode plus repo_path or repo_url on the workflow.`;
       console.warn(`[dispatcher] Blocking task #${task.id}: ${reason}`);
       await persistDispatchStartupFailure(db, {
               taskId: task.id,
@@ -1943,8 +1941,8 @@ export async function dispatchTaskToJob(
               priorStatus: task.status,
               tenantId: task.tenant_id,
               projectId: task.project_id,
-              sprintId: task.sprint_id,
-              sprintType: task.sprint_type,
+              workflowId: task.workflow_id,
+              workflowType: task.workflow_type,
               taskType: task.task_type,
               reason,
             });
@@ -1963,8 +1961,8 @@ export async function dispatchTaskToJob(
                   priorStatus: task.status,
                   tenantId: task.tenant_id,
                   projectId: task.project_id,
-                  sprintId: task.sprint_id,
-                  sprintType: task.sprint_type,
+                  workflowId: task.workflow_id,
+                  workflowType: task.workflow_type,
                   taskType: task.task_type,
                   reason,
                 });
@@ -1984,8 +1982,8 @@ export async function dispatchTaskToJob(
                   priorStatus: task.status,
                   tenantId: task.tenant_id,
                   projectId: task.project_id,
-                  sprintId: task.sprint_id,
-                  sprintType: task.sprint_type,
+                  workflowId: task.workflow_id,
+                  workflowType: task.workflow_type,
                   taskType: task.task_type,
                   reason,
                 });
@@ -2007,8 +2005,8 @@ export async function dispatchTaskToJob(
                   priorStatus: task.status,
                   tenantId: task.tenant_id,
                   projectId: task.project_id,
-                  sprintId: task.sprint_id,
-                  sprintType: task.sprint_type,
+                  workflowId: task.workflow_id,
+                  workflowType: task.workflow_type,
                   taskType: task.task_type,
                   reason,
                 });
@@ -2028,8 +2026,8 @@ export async function dispatchTaskToJob(
                   priorStatus: task.status,
                   tenantId: task.tenant_id,
                   projectId: task.project_id,
-                  sprintId: task.sprint_id,
-                  sprintType: task.sprint_type,
+                  workflowId: task.workflow_id,
+                  workflowType: task.workflow_type,
                   taskType: task.task_type,
                   reason,
                 });
@@ -2044,8 +2042,8 @@ export async function dispatchTaskToJob(
     let environmentSetup;
     let workflowState: Record<string, unknown> | undefined;
     try {
-      workflowState = task.sprint_id != null && await tableHasColumn(db, 'sprints', 'environment_setup')
-        ? await db.get('SELECT environment_setup, status, repo_access_mode, repo_path, repo_url FROM sprints WHERE id = ?', task.sprint_id) as Record<string, unknown> | undefined
+      workflowState = task.workflow_id != null && await tableHasColumn(db, 'workflows', 'environment_setup')
+        ? await db.get('SELECT environment_setup, status, repo_access_mode, repo_path, repo_url FROM workflows WHERE id = ?', task.workflow_id) as Record<string, unknown> | undefined
         : undefined;
       environmentSetup = normalizeEnvironmentSetup(workflowState?.environment_setup);
       repoDependencySetup = await prepareRepoWorkspaceDependencies({ mode: repoAccessMode, workspacePath: repoWorkspacePath, setup: environmentSetup });
@@ -2055,17 +2053,17 @@ export async function dispatchTaskToJob(
       await persistDispatchStartupFailure(db, {
         taskId: task.id, matchedAgentId: job.agent_id, matchedAgentLabel: job.agent_name ?? job.title,
         routingReason, priorStatus: task.status, tenantId: task.tenant_id, projectId: task.project_id,
-        sprintId: task.sprint_id, sprintType: task.sprint_type, taskType: task.task_type,
+        workflowId: task.workflow_id, workflowType: task.workflow_type, taskType: task.task_type,
         reason: `Environment setup failed: ${error instanceof Error ? error.message : String(error)}`,
       });
       return false;
     }
     // Preparation is asynchronous: a user may have moved or stopped the task.
-    const currentTask = await db.get('SELECT status, sprint_id FROM tasks WHERE id = ?', task.id) as { status: string; sprint_id: number | null } | undefined;
-    if (!currentTask || currentTask.status !== task.status || Number(currentTask.sprint_id) !== Number(task.sprint_id)) return false;
+    const currentTask = await db.get('SELECT status, workflow_id FROM tasks WHERE id = ?', task.id) as { status: string; workflow_id: number | null } | undefined;
+    if (!currentTask || currentTask.status !== task.status || Number(currentTask.workflow_id) !== Number(task.workflow_id)) return false;
 
     if (workflowState) {
-      const currentWorkflow = await db.get('SELECT environment_setup, status, repo_access_mode, repo_path, repo_url FROM sprints WHERE id = ?', task.sprint_id);
+      const currentWorkflow = await db.get('SELECT environment_setup, status, repo_access_mode, repo_path, repo_url FROM workflows WHERE id = ?', task.workflow_id);
       if (JSON.stringify(currentWorkflow) !== JSON.stringify(workflowState)) return false;
     }
 
@@ -2073,7 +2071,7 @@ export async function dispatchTaskToJob(
     // a transcript is only explainable if it says which team definition it ran under.
     const teamContext = await resolveTeamContextForDispatch(db, {
       agentId: job.agent_id,
-      sprintId: task.sprint_id ?? null,
+      workflowId: task.workflow_id ?? null,
     });
 
     const instancePayload = {
@@ -2113,7 +2111,7 @@ export async function dispatchTaskToJob(
           });
     const scope = await loadDispatchScopeContext(db, {
       projectId: task.project_id ?? null,
-      workflowId: task.sprint_id ?? null,
+      workflowId: task.workflow_id ?? null,
     });
 
     const nextTaskStatus = deriveDispatchTaskStatus(task.status);
@@ -2198,7 +2196,7 @@ export async function dispatchTaskToJob(
     });
 
     const contextBundle = buildDispatchContextBundle({
-      workflow: { id: task.sprint_id ?? null, name: task.sprint_name ?? scope.workflow?.name ?? null, goal: scope.workflow?.goal ?? null },
+      workflow: { id: task.workflow_id ?? null, name: task.workflow_name ?? scope.workflow?.name ?? null, goal: scope.workflow?.goal ?? null },
       team: teamContext,
       project: scope.project,
       job: { agentId: job.agent_id, title: job.title, instructions: job.job_instructions },
@@ -2209,7 +2207,7 @@ export async function dispatchTaskToJob(
         description: task.description,
         priority: task.priority,
         status: task.status,
-        workflowName: task.sprint_name ?? null,
+        workflowName: task.workflow_name ?? null,
       },
       taskNotes: { context: taskNotesContext, taskId: task.id },
       workspace: dispatchPathContext,
@@ -2219,8 +2217,8 @@ export async function dispatchTaskToJob(
         taskId: task.id,
         taskStatus: task.status,
         taskType: task.task_type,
-        sprintId: task.sprint_id,
-        sprintType: task.sprint_type,
+        workflowId: task.workflow_id,
+        workflowType: task.workflow_type,
         agentSlug,
         sessionKey,
         // baseUrl omitted → default Agent HQ base URL / localhost
@@ -2257,8 +2255,8 @@ export async function dispatchTaskToJob(
       },
       {
         projectId: task.project_id,
-        sprintId: task.sprint_id,
-        sprintType: task.sprint_type,
+        workflowId: task.workflow_id,
+        workflowType: task.workflow_type,
         tenantId: task.tenant_id ?? job.tenant_id ?? null,
       },
     ).catch((err) => {
@@ -2304,7 +2302,7 @@ export async function runDispatcher(db: Db, projectId?: number): Promise<Dispatc
       const rules = await getMatchingRoutingRules(db, task);
       if (rules.length === 0) {
         console.log(
-          `[dispatcher] Task #${task.id} not dispatched: no matching routing rule for sprint_id=${task.sprint_id ?? 'none'} status=${task.status} task_type=${task.task_type ?? 'null'}`
+          `[dispatcher] Task #${task.id} not dispatched: no matching routing rule for workflow_id=${task.workflow_id ?? 'none'} status=${task.status} task_type=${task.task_type ?? 'null'}`
         );
         result.skipped++;
         continue;
@@ -2415,7 +2413,7 @@ export async function loadDispatchScopeContext(
   const [workflowRow, projectRow] = await Promise.all([
     params.workflowId
       ? db.get<{ id: number; name: string | null; goal: string | null }>(
-        `SELECT id, name, goal FROM sprints WHERE id = ?`, params.workflowId,
+        `SELECT id, name, goal FROM workflows WHERE id = ?`, params.workflowId,
       )
       : Promise.resolve(undefined),
     params.projectId
@@ -2463,7 +2461,7 @@ export interface DispatchInstanceParams {
   runtimeConfig?: unknown;
   storyPoints?: number | null;
   projectId?: number | null;
-  sprintId?: number | null;
+  workflowId?: number | null;
   repoAccessMode?: RepoAccessMode | null;
   repoSource?: string | null;
   repoWorkspacePath?: string | null;
@@ -2481,7 +2479,7 @@ export interface DispatchInstanceParams {
 /**
  * dispatchInstance — unified dispatch orchestrator.
  *
- * All dispatch paths (scheduler, reconciler, sprint summaries) call this
+ * All dispatch paths (scheduler, reconciler, workflow summaries) call this
  * instead of the legacy dispatchJob(). It:
  *   1. Builds a deterministic session key
  *   2. Resolves the agent slug
@@ -2529,7 +2527,7 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
     })) ?? 1;
   const spModel = await resolveModelFromStoryPoints(db, params.storyPoints ?? null, preferredProvider, {
       projectId: params.projectId ?? null,
-      sprintId: params.sprintId ?? null,
+      workflowId: params.workflowId ?? null,
       tenantId,
     });
   const effectiveModel = spModel?.model || params.model || null;
@@ -2668,7 +2666,7 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
     const runtimeBoundary = buildRuntimeBoundaryV1({
       tenantId,
       projectId: params.projectId ?? null,
-      workflowId: params.sprintId ?? null,
+      workflowId: params.workflowId ?? null,
       taskId: null,
       instanceId: params.instanceId,
       durableRunId: boundaryDurableRunId,

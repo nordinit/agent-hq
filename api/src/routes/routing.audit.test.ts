@@ -25,34 +25,34 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   return { server, baseUrl: `http://127.0.0.1:${address.port}` };
 }
 
-async function seedScope(): Promise<{ projectId: number; sprintId: number; agentId: number }> {
+async function seedScope(): Promise<{ projectId: number; workflowId: number; agentId: number }> {
   const db = getDb();
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name) VALUES (1, 'dev', 'Development')`);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'dev', 'Development')`);
   await db.run(`
-    INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, stage_order, is_default_entry)
+    INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, stage_order, is_default_entry)
     VALUES
       (1, 'dev', 'todo', 'To Do', 0, 1),
       (1, 'dev', 'ready', 'Ready', 1, 0)
   `);
   const project = await db.run(`INSERT INTO projects (tenant_id, name, description, context_md) VALUES (1, 'Audit Project', '', '')`);
   const projectId = Number(project.lastInsertId);
-  const sprint = await db.run(
-    `INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+  const workflow = await db.run(
+    `INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
      VALUES (1, ?, 'Audit Workflow', '', 'dev', 'active', 'time', '2w')`,
     projectId,
   );
-  const sprintId = Number(sprint.lastInsertId);
+  const workflowId = Number(workflow.lastInsertId);
   await db.run(`
-    INSERT INTO sprint_task_statuses (sprint_id, status_key, label, stage_order, is_default_entry)
+    INSERT INTO workflow_task_statuses (workflow_id, status_key, label, stage_order, is_default_entry)
     VALUES (?, 'todo', 'To Do', 0, 1), (?, 'ready', 'Ready', 1, 0)
-  `, sprintId, sprintId);
+  `, workflowId, workflowId);
   const agent = await db.run(
     `INSERT INTO agents (tenant_id, name, session_key, enabled, project_id) VALUES (1, 'Audit Agent', 'audit-agent', 1, ?)`,
     projectId,
   );
-  return { projectId, sprintId, agentId: Number(agent.lastInsertId) };
+  return { projectId, workflowId, agentId: Number(agent.lastInsertId) };
 }
 
 interface AuditRow {
@@ -94,20 +94,20 @@ describe('routing config audit', () => {
   });
 
   it('records a created assignment rule with its scope and after-image', async () => {
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     const response = await createRule(baseUrl, {
-      project_id: projectId, sprint_id: sprintId, sprint_type: 'dev',
+      project_id: projectId, workflow_id: workflowId, workflow_type: 'dev',
       task_type: null, status: 'ready', agent_id: agentId,
     });
     expect(response.status).toBe(201);
 
-    const rows = (await auditRows()).filter((row) => row.entity_table === 'sprint_task_routing_rules');
+    const rows = (await auditRows()).filter((row) => row.entity_table === 'workflow_task_routing_rules');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       action: 'created',
       project_id: projectId,
       workflow_type: 'dev',
-      workflow_id: sprintId,
+      workflow_id: workflowId,
     });
     expect(rows[0].entity_id).toBeGreaterThan(0);
     expect(JSON.parse(rows[0].before_json)).toBeNull();
@@ -115,10 +115,10 @@ describe('routing config audit', () => {
   });
 
   it('writes NO audit row for a dry run', async () => {
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     await createRule(baseUrl, {
       dry_run: true,
-      project_id: projectId, sprint_id: sprintId, sprint_type: 'dev',
+      project_id: projectId, workflow_id: workflowId, workflow_type: 'dev',
       task_type: null, status: 'ready', agent_id: agentId,
     });
     // The audit write is inside the dry run's transaction, so it rolls back with the change.
@@ -126,16 +126,16 @@ describe('routing config audit', () => {
   });
 
   it('records the before-image and a field diff on an update', async () => {
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     const created = await (await createRule(baseUrl, {
-      project_id: projectId, sprint_id: sprintId, sprint_type: 'dev',
+      project_id: projectId, workflow_id: workflowId, workflow_type: 'dev',
       task_type: null, status: 'ready', agent_id: agentId,
     })).json() as { id: number };
 
     const updated = await fetch(`${baseUrl}/api/v1/routing/rules/${created.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId, sprint_id: sprintId, sprint_type: 'dev', priority: 55 }),
+      body: JSON.stringify({ project_id: projectId, workflow_id: workflowId, workflow_type: 'dev', priority: 55 }),
     });
     expect(updated.status).toBe(200);
 
@@ -147,14 +147,14 @@ describe('routing config audit', () => {
   });
 
   it('keeps the before-image on a delete, where the row is gone by the time it returns', async () => {
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     const created = await (await createRule(baseUrl, {
-      project_id: projectId, sprint_id: sprintId, sprint_type: 'dev',
+      project_id: projectId, workflow_id: workflowId, workflow_type: 'dev',
       task_type: null, status: 'ready', agent_id: agentId,
     })).json() as { id: number };
 
     const deleted = await fetch(
-      `${baseUrl}/api/v1/routing/rules/${created.id}?project_id=${projectId}&workflow_id=${sprintId}`,
+      `${baseUrl}/api/v1/routing/rules/${created.id}?project_id=${projectId}&workflow_id=${workflowId}`,
       { method: 'DELETE' },
     );
     expect(deleted.status).toBe(200);
@@ -166,9 +166,9 @@ describe('routing config audit', () => {
   });
 
   it('attributes a browser request honestly rather than calling it "api"', async () => {
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     await createRule(baseUrl, {
-      project_id: projectId, sprint_id: sprintId, sprint_type: 'dev',
+      project_id: projectId, workflow_id: workflowId, workflow_type: 'dev',
       task_type: null, status: 'ready', agent_id: agentId,
     });
     const [row] = await auditRows();
@@ -178,9 +178,9 @@ describe('routing config audit', () => {
   });
 
   it('records an X-Actor header as a user when one is supplied', async () => {
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     await createRule(baseUrl, {
-      project_id: projectId, sprint_id: sprintId, sprint_type: 'dev',
+      project_id: projectId, workflow_id: workflowId, workflow_type: 'dev',
       task_type: null, status: 'ready', agent_id: agentId,
     }, { 'X-Actor': 'masiah' });
     const [row] = await auditRows();
@@ -188,9 +188,9 @@ describe('routing config audit', () => {
   });
 
   it('does not record a change that failed validation', async () => {
-    const { projectId, sprintId } = await seedScope();
+    const { projectId, workflowId } = await seedScope();
     const response = await createRule(baseUrl, {
-      project_id: projectId, sprint_id: sprintId, sprint_type: 'dev',
+      project_id: projectId, workflow_id: workflowId, workflow_type: 'dev',
       task_type: null, status: 'ready', agent_id: 999999,
     });
     expect(response.status).toBeGreaterThanOrEqual(400);

@@ -2,14 +2,14 @@ import type { Db } from '../../db/adapter/types';
 import { tableColumns } from '../../db/introspection';
 import { DEV_LIFECYCLE_FIELD_DEFINITIONS, INLINE_EVIDENCE_FIELD_KEYS } from '../../lib/starterCatalog';
 import { extractInlineEvidence, type OutcomeEvidence } from '../../lib/evidenceValidation';
-import { resolveTaskFieldSchemaForSprint } from '../sprint-definitions/config';
+import { resolveTaskFieldSchemaForWorkflow } from '../workflow-definitions/config';
 import { TaskCustomFieldValidationError, validateTaskCustomFields } from './fields';
 
 // Failure metadata has an established lifecycle meaning and is not task-field evidence.
 export const OUTCOME_PAYLOAD_METADATA_KEYS = new Set(['failure_detail', 'blocker_reason']);
 const RESERVED_PAYLOAD_KEYS = new Set([
   '__proto__', 'constructor', 'prototype', 'payload', 'changed_by', 'authority_by',
-  'summary', 'dry_run', 'instance_id', 'instanceId', 'sprint_type', 'workflow_id', 'workflow_type',
+  'summary', 'dry_run', 'instance_id', 'instanceId', 'workflow_id', 'workflow_type',
 ]);
 
 export function outcomePayload(body: Record<string, unknown>): Record<string, unknown> {
@@ -23,10 +23,10 @@ export function outcomePayload(body: Record<string, unknown>): Record<string, un
 /** Match payload evidence against this task's schema; never silently drop an unknown key. */
 export async function extractTaskOutcomeEvidence(
   db: Db,
-  task: { sprint_id: number | null; task_type: string | null },
+  task: { workflow_id: number | null; task_type: string | null },
   payload: Record<string, unknown>,
 ): Promise<OutcomeEvidence> {
-  const resolved = await resolveTaskFieldSchemaForSprint(db, { sprintId: task.sprint_id, taskType: task.task_type });
+  const resolved = await resolveTaskFieldSchemaForWorkflow(db, { workflowId: task.workflow_id, taskType: task.task_type });
   const lifecycleKeys = new Set<string>(INLINE_EVIDENCE_FIELD_KEYS);
   const protectedKeys = new Set([
     ...RESERVED_PAYLOAD_KEYS,

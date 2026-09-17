@@ -23,7 +23,7 @@ import { getNeedsAttentionEligibleStatuses } from '../lib/reconcilerConfig';
 import { buildHookSessionKey, resolveRuntimeAgentSlug } from '../lib/sessionKeys';
 import { createDurableRunId, ensureJobInstanceDurableRunId, tableHasColumn } from '../lib/durableRunIdentity';
 import { insertRuntimeLog } from '../lib/runtimeTenantScope';
-import { resolveSprintTaskRoutingAssignment } from '../domains/routing/policy/statuses';
+import { resolveWorkflowTaskRoutingAssignment } from '../domains/routing/policy/statuses';
 import { resolveTeamContextForDispatch } from '../domains/teams/context';
 import { runRecurringTaskSchedulerTick, type RecurringTaskSchedulerSummary } from './recurringTaskScheduler';
 import { syncTaskActiveAgentFromInstance } from '../domains/tasks/ownership';
@@ -111,7 +111,7 @@ interface TaskRow {
   agent_id: number | null;
   assigned_agent_id: number | null;
   project_id: number | null;
-  sprint_id: number | null;
+  workflow_id: number | null;
   task_type: string | null;
   review_owner_agent_id: number | null;
   active_instance_id: number | null;
@@ -143,16 +143,16 @@ interface AgentRow {
   /** Agent workspace directory — the authoritative repo root when no worktree exists. */
   workspace_path: string | null;
   timeout_seconds: number;
-  sprint_id: number | null;
+  workflow_id: number | null;
   enabled: number;
 }
 
-interface SprintRow {
+interface WorkflowRow {
   id: number;
   name: string;
   goal: string;
   status: string;
-  sprint_type: string | null;
+  workflow_type: string | null;
 }
 
 interface RoutingRuleRow {
@@ -258,9 +258,9 @@ async function hasTaskLiveInstance(db: Db, taskId: number): Promise<boolean> {
 async function resolveRoutedTaskAgentId(db: Db, task: TaskRow): Promise<number | null> {
   if (!task.task_type) return null;
   try {
-    return (await resolveSprintTaskRoutingAssignment(
+    return (await resolveWorkflowTaskRoutingAssignment(
           db,
-          task.sprint_id ?? null,
+          task.workflow_id ?? null,
           task.task_type,
           task.status,
         )).agent_id ?? null;
@@ -345,7 +345,7 @@ async function getReconcilerProjectIds(db: Db): Promise<number[]> {
  * instructions that named `qa_pass`/`qa_fail` outcomes, a `changed_by` of "agency-qa", and direct
  * `PUT /qa-evidence` and `POST /outcome` HTTP calls. All three were assumptions:
  *
- *   - the outcomes are workflow-configured (resolveWorkflow reads them from sprint type config;
+ *   - the outcomes are workflow-configured (resolveWorkflow reads them from workflow type config;
  *     qa_pass/qa_fail are only the compatibility fallback), so a workflow using `approved` /
  *     `changes_requested` was told to post an outcome it did not accept;
  *   - the HTTP instructions contradicted the contract template rendered into the same prompt,
@@ -366,8 +366,8 @@ export async function reconcileReviewQaRouting(
     FROM tasks t
     WHERE t.status = 'review'
       AND t.paused_at IS NULL
-      AND (t.sprint_id IS NULL OR EXISTS (
-        SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status != 'closed'
+      AND (t.workflow_id IS NULL OR EXISTS (
+        SELECT 1 FROM workflows sp WHERE sp.id = t.workflow_id AND sp.status != 'closed'
       ))
     ORDER BY t.updated_at ASC
   `) as TaskRow[];
@@ -376,13 +376,13 @@ export async function reconcileReviewQaRouting(
   const routedTasks = await db.all(`
     SELECT t.*
     FROM tasks t
-    LEFT JOIN sprints s ON s.id = t.sprint_id
+    LEFT JOIN workflows s ON s.id = t.workflow_id
     WHERE ${statusEligibility.sql}
       AND t.paused_at IS NULL
       AND t.assigned_agent_id IS NOT NULL
       AND t.active_instance_id IS NULL
-      AND (t.sprint_id IS NULL OR EXISTS (
-        SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status != 'closed'
+      AND (t.workflow_id IS NULL OR EXISTS (
+        SELECT 1 FROM workflows sp WHERE sp.id = t.workflow_id AND sp.status != 'closed'
       ))
     ORDER BY t.updated_at ASC
   `, ...statusEligibility.params) as TaskRow[];
@@ -415,8 +415,8 @@ export async function reconcileReviewQaRouting(
     const task = await reassignTaskIfNeeded(db, originalTask, routedAgentId);
     if (!task.assigned_agent_id) continue;
 
-    const sprint = task.sprint_id
-      ? await db.get('SELECT * FROM sprints WHERE id = ?', task.sprint_id) as SprintRow | undefined
+    const workflow = task.workflow_id
+      ? await db.get('SELECT * FROM workflows WHERE id = ?', task.workflow_id) as WorkflowRow | undefined
       : undefined;
 
     // The agent's own instructions, exactly as the routed dispatch path uses them. This path used
@@ -446,7 +446,7 @@ export async function reconcileReviewQaRouting(
 
       const teamContext = await resolveTeamContextForDispatch(db, {
         agentId: agent.id,
-        sprintId: task.sprint_id ?? null,
+        workflowId: task.workflow_id ?? null,
       });
 
       const agentSlug = resolveRuntimeAgentSlug(agent)
@@ -470,14 +470,14 @@ export async function reconcileReviewQaRouting(
 
       const scope = await loadDispatchScopeContext(db, {
         projectId: task.project_id ?? null,
-        workflowId: task.sprint_id ?? null,
+        workflowId: task.workflow_id ?? null,
       });
 
       const contextBundle = buildDispatchContextBundle({
         workflow: {
-          id: task.sprint_id ?? null,
-          name: sprint?.name ?? scope.workflow?.name ?? null,
-          goal: sprint?.goal ?? scope.workflow?.goal ?? null,
+          id: task.workflow_id ?? null,
+          name: workflow?.name ?? scope.workflow?.name ?? null,
+          goal: workflow?.goal ?? scope.workflow?.goal ?? null,
         },
         team: teamContext,
         project: scope.project,
@@ -489,7 +489,7 @@ export async function reconcileReviewQaRouting(
           description: task.description ?? '',
           priority: task.priority ?? 'medium',
           status: task.status,
-          workflowName: sprint?.name ?? null,
+          workflowName: workflow?.name ?? null,
         },
         taskNotes: { context: taskNotesContext, taskId: task.id },
         workspace: pathContext,
@@ -499,8 +499,8 @@ export async function reconcileReviewQaRouting(
           taskId: task.id,
           taskStatus: task.status,
           taskType: task.task_type ?? null,
-          sprintId: task.sprint_id ?? null,
-          sprintType: sprint?.sprint_type ?? null,
+          workflowId: task.workflow_id ?? null,
+          workflowType: workflow?.workflow_type ?? null,
           agentSlug,
           sessionKey: runSessionKey,
           transportMode: resolveTransportMode({
@@ -532,7 +532,7 @@ export async function reconcileReviewQaRouting(
           runtimeConfig: agent.runtime_config,
           storyPoints: task.story_points ?? null,
           projectId: task.project_id ?? null,
-          sprintId: task.sprint_id ?? null,
+          workflowId: task.workflow_id ?? null,
           taskId: task.id,
           contextBundle,
         }),
@@ -799,8 +799,8 @@ async function logStuckReviewTasks(db: Db): Promise<void> {
       AND t.paused_at IS NULL
       AND t.active_instance_id IS NULL
       AND t.updated_at < to_char((now() AT TIME ZONE 'utc' - interval '5 minute'), 'YYYY-MM-DD HH24:MI:SS')
-      AND (t.sprint_id IS NULL OR EXISTS (
-        SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status != 'closed'
+      AND (t.workflow_id IS NULL OR EXISTS (
+        SELECT 1 FROM workflows sp WHERE sp.id = t.workflow_id AND sp.status != 'closed'
       ))
   `) as Array<{ id: number; title: string; agent_id: number | null; updated_at: string }>;
 

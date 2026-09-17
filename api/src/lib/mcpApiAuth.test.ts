@@ -56,13 +56,13 @@ async function seedScopeFixture(db: Db): Promise<void> {
     `INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)`,
     86, 1, 'Agent HQ', 87, 1, 'Other Tenant One Project', 99, 2, 'EcoPool Project',
   );
-  // Sprint 45 sits in the assigned project without being the dispatched one, which is what
-  // separates the two workflow-lifecycle scope tiers: sprint 42 is reachable because it is
+  // Workflow 45 sits in the assigned project without being the dispatched one, which is what
+  // separates the two workflow-lifecycle scope tiers: workflow 42 is reachable because it is
   // attached to the agent's active task, 45 only because it is inside the assigned project.
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
+    INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status)
     VALUES (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active'), (?, ?, ?, ?, 'dev', 'active')
-  `, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Sprint', 43, 2, 99, 'EcoPool Sprint', 45, 1, 86, 'Undispatched Same-Project Sprint');
+  `, 42, 1, 86, 'Enhancements', 44, 1, 87, 'Other Project Workflow', 43, 2, 99, 'EcoPool Workflow', 45, 1, 86, 'Undispatched Same-Project Workflow');
   // session_key is NOT NULL and unique in the real schema. The admin agent is still named Atlas —
   // that is what makes it trusted — but every fixture agent needs its own key.
   await db.run(`
@@ -80,23 +80,23 @@ async function seedScopeFixture(db: Db): Promise<void> {
     11, 1, null, 'No Project Agent', 'agent:no-project:main',
   );
   await db.run(`
-    INSERT INTO sprint_task_routing_rules (id, tenant_id, project_id, sprint_id, sprint_type, task_type, status, agent_id, priority)
+    INSERT INTO workflow_task_routing_rules (id, tenant_id, project_id, workflow_id, workflow_type, task_type, status, agent_id, priority)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, 501, 1, 86, null, 'dev', 'backend', 'ready', 7, 10, 502, 1, 86, 42, 'dev', 'qa', 'review', 9, 20, 503, 1, 87, null, 'dev', 'backend', 'ready', 9, 10, 504, 2, 99, null, 'dev', 'backend', 'ready', 10, 10);
   await db.run(`
-    INSERT INTO sprint_task_transition_requirements (id, tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+    INSERT INTO workflow_task_transition_requirements (id, tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, 601, 1, null, 86, 'dev', null, 'completed_for_review', 'review_commit', 'required', null, 'block', 'Review commit is required', 1, 10, 602, 1, 42, 86, 'dev', 'backend', 'completed_for_review', 'review_branch', 'required', null, 'block', 'Review branch is required', 1, 20, 603, 1, null, 87, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Other project row', 1, 10, 604, 2, null, 99, 'dev', null, 'completed_for_review', 'review_url', 'required', null, 'block', 'Cross tenant row', 1, 10);
   // These three workflow definitions are authoritative: every scope assertion below depends on
   // 'dev' being owned by project 86, so replace any rows left by earlier fixture setup.
-  await db.run(`DELETE FROM sprint_types`);
-  // sprint_types.project_id is part of the migrated PostgreSQL baseline.
+  await db.run(`DELETE FROM workflow_types`);
+  // workflow_types.project_id is part of the migrated PostgreSQL baseline.
   await db.run(`
-    INSERT INTO sprint_types (tenant_id, project_id, key, name, description, is_system)
+    INSERT INTO workflow_types (tenant_id, project_id, key, name, description, is_system)
     VALUES (?, ?, ?, ?, ?, 0), (?, ?, ?, ?, ?, 0), (?, ?, ?, ?, ?, 0)
   `, 1, 86, 'dev', 'Development', 'Agent HQ project development workflow', 1, 87, 'other-project-dev', 'Other project development', 'Other project workflow', 2, 99, 'eco-dev', 'Eco development', 'EcoPool workflow');
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, title)
+    INSERT INTO tasks (id, tenant_id, project_id, workflow_id, agent_id, assigned_agent_id, title)
     VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)
   `, 448, 1, 86, 42, 7, 9, 'Dispatched Agent HQ task', 449, 2, 99, 43, 9, 9, 'Cross tenant dispatched task', 450, 2, 99, 43, 10, 10, 'EcoPool worker task', 451, 1, 86, 42, null, null, 'Unassigned Agent HQ task', 452, 1, 87, 44, null, null, 'Other project task');
   await db.run(`
@@ -164,22 +164,20 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.get('/api/v1/agents/:id/docs', (req, res) => res.json({ ok: true, agent_id: Number(req.params.id) }));
     app.post('/api/v1/mcp-servers', (_req, res) => res.status(201).json({ ok: true }));
     app.use('/api/v1/projects/:id/files', projectFilesRouter);
-    app.get('/api/v1/sprints/workflow-metadata', async (req, res) => res.json({
+    app.get('/api/v1/workflows/workflow-metadata', async (req, res) => res.json({
       ok: true,
       tenant_id: await resolveTenantIdFromRequest(getDb(), req),
-      sprint_type: req.query.sprint_type ?? 'generic',
+      workflow_type: req.query.workflow_type ?? 'generic',
       task_type: req.query.task_type ?? null,
       statuses: [],
       outcomes: [],
       relationship_types: [],
     }));
-    app.get('/api/v1/sprints/:id', (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id) }));
-    // Both spellings, because req.path is what the policy matches and /api/v1/workflows mounts
-    // the same router in the real app without any path rewriting.
-    for (const prefix of ['/api/v1/sprints', '/api/v1/workflows']) {
-      app.put(`${prefix}/:id`, (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id), body: req.body }));
-      app.post(`${prefix}/:id/complete`, (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id), status: 'complete' }));
-      app.post(`${prefix}/:id/close`, (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id), status: 'closed' }));
+    // Lifecycle handlers use the same paths as the application.
+    for (const prefix of ['/api/v1/workflows']) {
+      app.put(`${prefix}/:id`, (req, res) => res.json({ ok: true, workflow_id: Number(req.params.id), body: req.body }));
+      app.post(`${prefix}/:id/complete`, (req, res) => res.json({ ok: true, workflow_id: Number(req.params.id), status: 'complete' }));
+      app.post(`${prefix}/:id/close`, (req, res) => res.json({ ok: true, workflow_id: Number(req.params.id), status: 'closed' }));
     }
     const listAssignmentRules = (req: express.Request, res: express.Response) => res.json({ ok: true, query: req.query });
     const createAssignmentRule = (req: express.Request, res: express.Response) => res.status(201).json({ ok: true, body: req.body });
@@ -203,21 +201,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.post('/api/v1/routing/trace', (req, res) => res.json({ ok: true, body: req.body }));
     app.post('/api/v1/routing/preview', (req, res) => res.json({ ok: true, body: req.body }));
     app.get('/api/v1/routing/audit', (req, res) => res.json({ ok: true, query: req.query }));
-    app.get('/api/v1/sprints/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
-    app.get('/api/v1/sprints/types/list', (req, res) => res.json({ ok: true, query: req.query }));
-    app.get('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
-    app.post('/api/v1/sprints/types', (req, res) => res.status(201).json({ ok: true, body: req.body }));
-    app.put('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
-    app.delete('/api/v1/sprints/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
-    app.get('/api/v1/sprints/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, task_types: [] }));
-    app.put('/api/v1/sprints/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
-    app.get('/api/v1/sprints/types/:key/field-schemas', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, field_schemas: [] }));
-    app.post('/api/v1/sprints/types/:key/field-schemas', (req, res) => res.status(201).json({ ok: true, key: req.params.key, body: req.body }));
-    app.get('/api/v1/sprints/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
-    app.put('/api/v1/sprints/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), body: req.body }));
-    app.delete('/api/v1/sprints/types/:key/field-schemas/:schemaId', (req, res) => res.json({ ok: true, key: req.params.key, schema_id: Number(req.params.schemaId), query: req.query }));
     app.get('/api/v1/workflows/config', (req, res) => res.json({ ok: true, project_id: req.query.project_id ? Number(req.query.project_id) : null }));
     app.get('/api/v1/workflows/types/list', (req, res) => res.json({ ok: true, query: req.query }));
+    app.get('/api/v1/workflows/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
+    app.post('/api/v1/workflows/types', (req, res) => res.status(201).json({ ok: true, body: req.body }));
+    app.put('/api/v1/workflows/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
+    app.delete('/api/v1/workflows/types/:key', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query }));
     app.get('/api/v1/workflows/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, task_types: [] }));
     app.put('/api/v1/workflows/types/:key/task-types', (req, res) => res.json({ ok: true, key: req.params.key, body: req.body }));
     app.get('/api/v1/workflows/types/:key/field-schemas', (req, res) => res.json({ ok: true, key: req.params.key, query: req.query, field_schemas: [] }));
@@ -245,7 +234,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     // Statuses, outcomes and relationship types across all three spellings. These are child rows
     // of a workflow definition and were unreachable without an admin key until the policy branch
     // learned about them.
-    for (const prefix of ['/api/v1/sprints', '/api/v1/workflows', '/api/v1/workflow-definitions']) {
+    for (const prefix of ['/api/v1/workflows', '/api/v1/workflow-definitions']) {
       for (const sub of ['statuses', 'outcomes', 'relationship-types']) {
         app.get(`${prefix}/types/:key/${sub}`, (req, res) => res.json({ ok: true, key: req.params.key, sub, query: req.query }));
         app.get(`${prefix}/types/:key/${sub}/:childId`, (req, res) => res.json({ ok: true, key: req.params.key, sub, child_id: req.params.childId }));
@@ -260,13 +249,11 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     app.delete('/api/v1/tasks/:id', (req, res) => res.json({ ok: true, task_id: Number(req.params.id) }));
     app.get('/api/v1/tasks', (req, res) => res.json({ ok: true, query: req.query, tasks: [] }));
     app.get('/api/v1/projects', (_req, res) => res.json({ ok: true, projects: [] }));
-    app.get('/api/v1/sprints', (req, res) => res.json({ ok: true, query: req.query, sprints: [] }));
+    app.get('/api/v1/workflows/:id', (req, res) => res.json({ ok: true, workflow_id: Number(req.params.id) }));
     app.get('/api/v1/workflows', (req, res) => res.json({ ok: true, query: req.query, workflows: [] }));
     app.get('/api/v1/workflows/workflow-metadata', (req, res) => res.json({ ok: true, query: req.query }));
     // Registered after every literal /workflows/* path above so it cannot shadow them. The real
     // router is ordered the same way and additionally rejects a non-numeric :id up front.
-    app.get('/api/v1/workflows/:id', (req, res) => res.json({ ok: true, sprint_id: Number(req.params.id) }));
-
     await new Promise<void>((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
         const address = server?.address();
@@ -356,10 +343,10 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const projectFilesRes = await fetch(`${baseUrl}/api/v1/projects/86/files`, { headers: authHeaders(normalKey) });
     expect(projectFilesRes.status).toBe(200);
 
-    const sprintRes = await fetch(`${baseUrl}/api/v1/sprints/42`, { headers: authHeaders(normalKey) });
-    expect(sprintRes.status).toBe(200);
+    const workflowRes = await fetch(`${baseUrl}/api/v1/workflows/42`, { headers: authHeaders(normalKey) });
+    expect(workflowRes.status).toBe(200);
 
-    const routingRes = await fetch(`${baseUrl}/api/v1/routing/transitions?sprint_id=42&project_id=86`, {
+    const routingRes = await fetch(`${baseUrl}/api/v1/routing/transitions?workflow_id=42&project_id=86`, {
       headers: authHeaders(normalKey),
     });
     expect(routingRes.status).toBe(403);
@@ -370,15 +357,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   describe('workflow lifecycle writes', () => {
-    const PAUSE = 'sprints.pause_active_sprint';
-    const COMPLETE = 'sprints.complete_active_sprint';
+    const PAUSE = 'workflows.pause_active_workflow';
+    const COMPLETE = 'workflows.complete_active_workflow';
 
-    const put = (sprintPath: string, body: Record<string, unknown>) => fetch(`${baseUrl}${sprintPath}`, {
+    const put = (workflowPath: string, body: Record<string, unknown>) => fetch(`${baseUrl}${workflowPath}`, {
       method: 'PUT',
       headers: authHeaders(normalKey),
       body: JSON.stringify(body),
     });
-    const post = (sprintPath: string) => fetch(`${baseUrl}${sprintPath}`, {
+    const post = (workflowPath: string) => fetch(`${baseUrl}${workflowPath}`, {
       method: 'POST',
       headers: authHeaders(normalKey),
       body: JSON.stringify({}),
@@ -387,14 +374,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     it('withholds both lifecycle capabilities from a scoped runtime key by default', async () => {
       // Neither is defaultEnabled for scoped_runtime: ending or holding a cycle is an explicit
       // grant, not something every dispatched agent picks up by existing.
-      const pauseRes = await put('/api/v1/sprints/42', { status: 'paused' });
+      const pauseRes = await put('/api/v1/workflows/42', { status: 'paused' });
       expect(pauseRes.status).toBe(403);
       await expect(pauseRes.json()).resolves.toMatchObject({
         code: 'mcp_scope_denied',
         details: { required_capability: PAUSE },
       });
 
-      const completeRes = await post('/api/v1/sprints/42/complete');
+      const completeRes = await post('/api/v1/workflows/42/complete');
       expect(completeRes.status).toBe(403);
       await expect(completeRes.json()).resolves.toMatchObject({
         code: 'mcp_scope_denied',
@@ -405,15 +392,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     it('pauses and resumes the workflow attached to the active dispatched task', async () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE]);
 
-      await expect(put('/api/v1/sprints/42', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
-      await expect(put('/api/v1/sprints/42', { status: 'active' }).then((r) => r.status)).resolves.toBe(200);
-      await expect(put('/api/v1/sprints/42', { status: 'planning' }).then((r) => r.status)).resolves.toBe(200);
+      await expect(put('/api/v1/workflows/42', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
+      await expect(put('/api/v1/workflows/42', { status: 'active' }).then((r) => r.status)).resolves.toBe(200);
+      await expect(put('/api/v1/workflows/42', { status: 'planning' }).then((r) => r.status)).resolves.toBe(200);
       // An audit note rides along without turning the patch into a general edit.
-      await expect(put('/api/v1/sprints/42', { status: 'paused', note: 'Blocked on review' }).then((r) => r.status)).resolves.toBe(200);
+      await expect(put('/api/v1/workflows/42', { status: 'paused', note: 'Blocked on review' }).then((r) => r.status)).resolves.toBe(200);
     });
 
-    it('accepts the workflow path spelling as well as the sprint one', async () => {
-      // req.path is not alias-normalized, so a policy branch that matched only /sprints would
+    it('accepts the workflow path spelling as well as the workflow one', async () => {
+      // req.path is not alias-normalized, so a policy branch that matched only /workflows would
       // silently refuse every caller using the preferred spelling.
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
 
@@ -421,30 +408,30 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       await expect(post('/api/v1/workflows/42/complete').then((r) => r.status)).resolves.toBe(200);
       await expect(post('/api/v1/workflows/42/close').then((r) => r.status)).resolves.toBe(200);
 
-      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['sprints.read_active_sprint']);
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, ['workflows.read_active_workflow']);
       const readRes = await fetch(`${baseUrl}/api/v1/workflows/42`, { headers: authHeaders(normalKey) });
       expect(readRes.status).toBe(200);
     });
 
     it('reaches a workflow inside the assigned project that is not the dispatched one', async () => {
-      // The board-scoped tier. Sprint 45 is in project 86 but attached to no task of agent 7.
+      // The board-scoped tier. Workflow 45 is in project 86 but attached to no task of agent 7.
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
 
-      await expect(put('/api/v1/sprints/45', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
-      await expect(post('/api/v1/sprints/45/complete').then((r) => r.status)).resolves.toBe(200);
+      await expect(put('/api/v1/workflows/45', { status: 'paused' }).then((r) => r.status)).resolves.toBe(200);
+      await expect(post('/api/v1/workflows/45/complete').then((r) => r.status)).resolves.toBe(200);
     });
 
     it('refuses a workflow outside the assigned project or tenant', async () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
 
-      const otherProject = await put('/api/v1/sprints/44', { status: 'paused' });
+      const otherProject = await put('/api/v1/workflows/44', { status: 'paused' });
       expect(otherProject.status).toBe(403);
       await expect(otherProject.json()).resolves.toMatchObject({
         code: 'mcp_scope_denied',
         details: { required_capability: PAUSE },
       });
 
-      const crossTenant = await post('/api/v1/sprints/43/complete');
+      const crossTenant = await post('/api/v1/workflows/43/complete');
       expect(crossTenant.status).toBe(403);
     });
 
@@ -453,21 +440,21 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       // date and stands the workflow's agents down.
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE]);
 
-      const completeRes = await post('/api/v1/sprints/42/complete');
+      const completeRes = await post('/api/v1/workflows/42/complete');
       expect(completeRes.status).toBe(403);
       await expect(completeRes.json()).resolves.toMatchObject({
         code: 'mcp_scope_denied',
         details: { required_capability: COMPLETE },
       });
 
-      const closeRes = await post('/api/v1/sprints/42/close');
+      const closeRes = await post('/api/v1/workflows/42/close');
       expect(closeRes.status).toBe(403);
 
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [COMPLETE]);
-      await expect(post('/api/v1/sprints/42/complete').then((r) => r.status)).resolves.toBe(200);
-      await expect(post('/api/v1/sprints/42/close').then((r) => r.status)).resolves.toBe(200);
+      await expect(post('/api/v1/workflows/42/complete').then((r) => r.status)).resolves.toBe(200);
+      await expect(post('/api/v1/workflows/42/close').then((r) => r.status)).resolves.toBe(200);
       // ...and completing must not imply pausing.
-      const pauseRes = await put('/api/v1/sprints/42', { status: 'paused' });
+      const pauseRes = await put('/api/v1/workflows/42', { status: 'paused' });
       expect(pauseRes.status).toBe(403);
       await expect(pauseRes.json()).resolves.toMatchObject({
         details: { required_capability: PAUSE },
@@ -487,7 +474,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
         { status: 'paused', ended_at: '2026-01-01' },
         { name: 'Renamed' },
       ]) {
-        const res = await put('/api/v1/sprints/42', body);
+        const res = await put('/api/v1/workflows/42', body);
         expect({ body, status: res.status }).toEqual({ body, status: 403 });
         await expect(res.json()).resolves.toMatchObject({
           details: { required_capability: 'admin.full_access' },
@@ -502,7 +489,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
 
       for (const status of ['complete', 'closed']) {
-        const res = await put('/api/v1/sprints/42', { status });
+        const res = await put('/api/v1/workflows/42', { status });
         expect({ status, code: res.status }).toEqual({ status, code: 403 });
         await expect(res.json()).resolves.toMatchObject({
           details: { required_capability: 'admin.full_access' },
@@ -512,9 +499,9 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
 
     it('leaves general workflow editing to administrative keys', async () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [PAUSE, COMPLETE]);
-      await expect(put('/api/v1/sprints/42', { goal: 'Rewritten goal' }).then((r) => r.status)).resolves.toBe(403);
+      await expect(put('/api/v1/workflows/42', { goal: 'Rewritten goal' }).then((r) => r.status)).resolves.toBe(403);
 
-      const adminRes = await fetch(`${baseUrl}/api/v1/sprints/42`, {
+      const adminRes = await fetch(`${baseUrl}/api/v1/workflows/42`, {
         method: 'PUT',
         headers: authHeaders(adminKey),
         body: JSON.stringify({ goal: 'Rewritten goal' }),
@@ -525,7 +512,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     it('refuses a key with no assigned project and no dispatched workflow', async () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 11, [PAUSE, COMPLETE]);
 
-      const res = await fetch(`${baseUrl}/api/v1/sprints/42`, {
+      const res = await fetch(`${baseUrl}/api/v1/workflows/42`, {
         method: 'PUT',
         headers: authHeaders(noProjectKey),
         body: JSON.stringify({ status: 'paused' }),
@@ -537,7 +524,6 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       });
     });
   });
-
 
   describe('project agent management', () => {
     const MANAGE = 'agents.manage_project_agents';
@@ -641,7 +627,6 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       expect(res.status).toBe(403);
     });
   });
-
 
   describe('trust comes from the key, not the agent record', () => {
     it('ignores system_role, name and slug when resolving authority', async () => {
@@ -896,7 +881,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const READ = 'workflow_definitions.read_project_scope';
     const MANAGE = 'workflow_definitions.manage_project_scope';
     const SUBS = ['statuses', 'outcomes', 'relationship-types'] as const;
-    const SPELLINGS = ['/api/v1/sprints', '/api/v1/workflows', '/api/v1/workflow-definitions'] as const;
+    const SPELLINGS = ['/api/v1/workflows', '/api/v1/workflow-definitions'] as const;
 
     const call = (method: string, path: string, key = normalKey) => fetch(`${baseUrl}${path}`, {
       method,
@@ -940,14 +925,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       // definition into being, has to name its project.
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [MANAGE]);
 
-      const child = await fetch(`${baseUrl}/api/v1/sprints/types/dev/statuses`, {
+      const child = await fetch(`${baseUrl}/api/v1/workflows/types/dev/statuses`, {
         method: 'POST',
         headers: authHeaders(normalKey),
         body: JSON.stringify({ name: 'uat_review', label: 'UAT Review', metadata: { emoji: '🧪' } }),
       });
       expect(child.status).toBe(201);
 
-      const keylessCreate = await fetch(`${baseUrl}/api/v1/sprints/types`, {
+      const keylessCreate = await fetch(`${baseUrl}/api/v1/workflows/types`, {
         method: 'POST',
         headers: authHeaders(normalKey),
         body: JSON.stringify({ key: 'new-type', name: 'New Type' }),
@@ -962,7 +947,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ]);
 
       for (const sub of SUBS) {
-        const created = await call('POST', `/api/v1/sprints/types/dev/${sub}`);
+        const created = await call('POST', `/api/v1/workflows/types/dev/${sub}`);
         expect({ sub, status: created.status }).toEqual({ sub, status: 403 });
         await expect(created.json()).resolves.toMatchObject({
           details: { required_capability: MANAGE },
@@ -974,19 +959,19 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ, MANAGE]);
 
       // Same tenant, project 87.
-      const otherProject = await call('PUT', '/api/v1/sprints/types/other-project-dev/statuses/review');
+      const otherProject = await call('PUT', '/api/v1/workflows/types/other-project-dev/statuses/review');
       expect(otherProject.status).toBe(403);
       await expect(otherProject.json()).resolves.toMatchObject({
         details: { required_capability: MANAGE },
       });
 
       // Tenant 2 — must read as "does not exist here", never as an edit on another tenant.
-      const crossTenant = await call('POST', '/api/v1/sprints/types/eco-dev/outcomes');
+      const crossTenant = await call('POST', '/api/v1/workflows/types/eco-dev/outcomes');
       expect(crossTenant.status).toBe(403);
 
       // A keyed POST used to skip the existence check and could pass on a request-supplied
       // scope alone; it must report the definition as absent instead.
-      const unknown = await call('POST', '/api/v1/sprints/types/no-such-type/statuses');
+      const unknown = await call('POST', '/api/v1/workflows/types/no-such-type/statuses');
       expect(unknown.status).toBe(403);
       await expect(unknown.json()).resolves.toMatchObject({
         error: expect.stringContaining('does not exist'),
@@ -995,7 +980,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
 
     it('withholds definition editing from a scoped runtime key by default', async () => {
-      const res = await call('POST', '/api/v1/sprints/types/dev/statuses');
+      const res = await call('POST', '/api/v1/workflows/types/dev/statuses');
       expect(res.status).toBe(403);
       await expect(res.json()).resolves.toMatchObject({
         details: { required_capability: MANAGE },
@@ -1010,22 +995,22 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
             'workflow_definitions.manage_project_scope',
           ]);
 
-    const configResponse = await fetch(`${baseUrl}/api/v1/sprints/config?project_id=86`, {
+    const configResponse = await fetch(`${baseUrl}/api/v1/workflows/config?project_id=86`, {
       headers: authHeaders(normalKey),
     });
     expect(configResponse.status).toBe(200);
 
-    const listResponse = await fetch(`${baseUrl}/api/v1/sprints/types/list?project_id=86`, {
+    const listResponse = await fetch(`${baseUrl}/api/v1/workflows/types/list?project_id=86`, {
       headers: authHeaders(normalKey),
     });
     expect(listResponse.status).toBe(200);
 
-    const getResponse = await fetch(`${baseUrl}/api/v1/sprints/types/dev?project_id=86`, {
+    const getResponse = await fetch(`${baseUrl}/api/v1/workflows/types/dev?project_id=86`, {
       headers: authHeaders(normalKey),
     });
     expect(getResponse.status).toBe(200);
 
-    const createResponse = await fetch(`${baseUrl}/api/v1/sprints/types`, {
+    const createResponse = await fetch(`${baseUrl}/api/v1/workflows/types`, {
       method: 'POST',
       headers: authHeaders(normalKey),
       body: JSON.stringify({
@@ -1037,14 +1022,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(createResponse.status).toBe(201);
 
-    const updateResponse = await fetch(`${baseUrl}/api/v1/sprints/types/dev`, {
+    const updateResponse = await fetch(`${baseUrl}/api/v1/workflows/types/dev`, {
       method: 'PUT',
       headers: authHeaders(normalKey),
       body: JSON.stringify({ project_id: 86, name: 'Development updated' }),
     });
     expect(updateResponse.status).toBe(200);
 
-    const deleteResponse = await fetch(`${baseUrl}/api/v1/sprints/types/dev?project_id=86`, {
+    const deleteResponse = await fetch(`${baseUrl}/api/v1/workflows/types/dev?project_id=86`, {
       method: 'DELETE',
       headers: authHeaders(normalKey),
     });
@@ -1076,12 +1061,6 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       headers: authHeaders(normalKey),
     });
     expect(canonicalWorkflowTaskTypesResponse.status).toBe(200);
-
-    const canonicalSprintTaskTypesResponse = await fetch(`${baseUrl}/api/v1/sprints/types/dev/task-types?project_id=86`, {
-      headers: authHeaders(normalKey),
-    });
-    expect(canonicalSprintTaskTypesResponse.status).toBe(200);
-
     const updateDefinitionTaskTypesResponse = await fetch(`${baseUrl}/api/v1/workflow-definitions/types/dev/task-types`, {
       method: 'PUT',
       headers: authHeaders(normalKey),
@@ -1254,7 +1233,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('denies workflow definition reads and edits without capability or outside assigned project scope', async () => {
-    const missingCapability = await fetch(`${baseUrl}/api/v1/sprints/types/list?project_id=86`, {
+    const missingCapability = await fetch(`${baseUrl}/api/v1/workflows/types/list?project_id=86`, {
       headers: authHeaders(normalKey),
     });
     expect(missingCapability.status).toBe(403);
@@ -1278,7 +1257,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
             'workflow_definitions.manage_project_scope',
           ]);
 
-    const unscopedList = await fetch(`${baseUrl}/api/v1/sprints/types/list`, {
+    const unscopedList = await fetch(`${baseUrl}/api/v1/workflows/types/list`, {
       headers: authHeaders(normalKey),
     });
     expect(unscopedList.status).toBe(403);
@@ -1296,12 +1275,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'workflow_definitions.read_project_scope' },
     });
 
-    const otherProjectRead = await fetch(`${baseUrl}/api/v1/sprints/types/other-project-dev?project_id=87`, {
+    const otherProjectRead = await fetch(`${baseUrl}/api/v1/workflows/types/other-project-dev?project_id=87`, {
       headers: authHeaders(normalKey),
     });
     expect(otherProjectRead.status).toBe(403);
 
-    const otherProjectCreate = await fetch(`${baseUrl}/api/v1/sprints/types`, {
+    const otherProjectCreate = await fetch(`${baseUrl}/api/v1/workflows/types`, {
       method: 'POST',
       headers: authHeaders(normalKey),
       body: JSON.stringify({ key: 'wrong-project', project_id: 87, name: 'Wrong project' }),
@@ -1354,14 +1333,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'workflow_definitions.manage_project_scope' },
     });
 
-    const moveOutOfScope = await fetch(`${baseUrl}/api/v1/sprints/types/dev`, {
+    const moveOutOfScope = await fetch(`${baseUrl}/api/v1/workflows/types/dev`, {
       method: 'PUT',
       headers: authHeaders(normalKey),
       body: JSON.stringify({ project_id: 87, name: 'Move elsewhere' }),
     });
     expect(moveOutOfScope.status).toBe(403);
 
-    const crossTenantSelector = await fetch(`${baseUrl}/api/v1/sprints/types/eco-dev?tenant_id=2&project_id=99`, {
+    const crossTenantSelector = await fetch(`${baseUrl}/api/v1/workflows/types/eco-dev?tenant_id=2&project_id=99`, {
       headers: authHeaders(normalKey),
     });
     expect(crossTenantSelector.status).toBe(403);
@@ -1378,7 +1357,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
             'workflow_definitions.manage_project_scope',
           ]);
 
-    const response = await fetch(`${baseUrl}/api/v1/sprints/types/list?project_id=86`, {
+    const response = await fetch(`${baseUrl}/api/v1/workflows/types/list?project_id=86`, {
       headers: authHeaders(noProjectKey),
     });
     expect(response.status).toBe(403);
@@ -1388,7 +1367,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
   });
 
-  async function seedRecurringTaskSeries(seriesId: number, projectId: number, sprintId: number): Promise<void> {
+  async function seedRecurringTaskSeries(seriesId: number, projectId: number, workflowId: number): Promise<void> {
     const db = getDb();
     // The cross-project case deliberately names a project no agent here is assigned to. The real
     // schema has a recurring_task_series -> projects foreign key, so that project has to exist as
@@ -1400,13 +1379,13 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     );
     await db.run(`
       INSERT INTO recurring_task_series (
-        id, tenant_id, project_id, sprint_id, title_template, description_template, task_type,
+        id, tenant_id, project_id, workflow_id, title_template, description_template, task_type,
         priority, story_points, status_on_create, schedule_expression, timezone,
         enabled, overlap_policy, created_by, updated_by, created_at, updated_at
       ) VALUES (?, 1, ?, ?, 'Series', 'Series body', 'ops', 'high', 2, 'ready',
         'every monday 09:00', 'America/New_York', 0, 'skip_if_active', 'test', 'test',
         '2026-07-01 00:00:00', '2026-07-01 00:00:00')
-    `, seriesId, projectId, sprintId);
+    `, seriesId, projectId, workflowId);
   }
 
   it('allows an owning agent to persist custom fields on its own active task', async () => {
@@ -1694,7 +1673,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       body: JSON.stringify({
         title: 'Runtime follow-up',
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         task_type: 'dev',
       }),
     });
@@ -1715,7 +1694,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       body: JSON.stringify({
         title: 'Scoped follow-up',
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         agent_id: 9,
       }),
     });
@@ -1730,7 +1709,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       body: JSON.stringify({
         title: 'Scoped update',
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         agent_id: 9,
       }),
     });
@@ -1740,7 +1719,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       task_id: 451,
       body: {
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         agent_id: 9,
       },
     });
@@ -1794,7 +1773,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const crossProjectCreate = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ title: 'Wrong project', project_id: 87, sprint_id: 44 }),
+      body: JSON.stringify({ title: 'Wrong project', project_id: 87, workflow_id: 44 }),
     });
     expect(crossProjectCreate.status).toBe(403);
     await expect(crossProjectCreate.json()).resolves.toMatchObject({
@@ -1806,12 +1785,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const crossProjectUpdate = await fetch(`${baseUrl}/api/v1/tasks/451`, {
       method: 'PUT',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ sprint_id: 44 }),
+      body: JSON.stringify({ workflow_id: 44 }),
     });
     expect(crossProjectUpdate.status).toBe(403);
     await expect(crossProjectUpdate.json()).resolves.toMatchObject({
       code: 'mcp_scope_denied',
-      error: expect.stringContaining('sprint/workflow #44'),
+      error: expect.stringContaining('workflow #44'),
       details: { required_capability: 'tasks.manage_project_tasks', task_id: 451 },
     });
 
@@ -1905,18 +1884,18 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await getDb().run(`UPDATE job_instances SET status = 'done' WHERE agent_id = 7`);
     await replaceAgentMcpPermissionPolicy(getDb(), 7, ['routing_rules.read_project_scope']);
     for (const prefix of ['routing/rules', 'routing/assignment-rules', 'routing-rules', 'assignment-rules']) {
-      for (const suffix of ['?project_id=86&sprint_type=dev', '?project_id=86&sprint_id=45', '/501', '/502']) {
+      for (const suffix of ['?project_id=86&workflow_type=dev', '?project_id=86&workflow_id=45', '/501', '/502']) {
         const response = await fetch(`${baseUrl}/api/v1/${prefix}${suffix}`, { headers: authHeaders(normalKey) });
         expect(response.status).toBe(200);
       }
-      for (const suffix of ['', '?sprint_type=dev', '?project_id=87', '?project_id=99', '/503', '/504', '/501?project_id=87']) {
+      for (const suffix of ['', '?workflow_type=dev', '?project_id=87', '?project_id=99', '/503', '/504', '/501?project_id=87']) {
         const response = await fetch(`${baseUrl}/api/v1/${prefix}${suffix}`, { headers: authHeaders(normalKey) });
         expect(response.status).toBe(403);
       }
       for (const method of ['POST', 'PUT', 'DELETE']) {
         const response = await fetch(`${baseUrl}/api/v1/${prefix}${method === 'POST' ? '' : '/501'}`, {
           method, headers: authHeaders(normalKey),
-          body: JSON.stringify({ project_id: 86, sprint_type: 'dev', status: 'ready', agent_id: 7 }),
+          body: JSON.stringify({ project_id: 86, workflow_type: 'dev', status: 'ready', agent_id: 7 }),
         });
         expect(response.status).toBe(403);
         await expect(response.json()).resolves.toMatchObject({code: 'mcp_scope_denied', details: { required_capability: 'routing_rules.manage_project_scope' }});
@@ -1935,7 +1914,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
             'routing_rules.manage_project_scope',
           ]);
 
-    const listResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&sprint_type=dev`, {
+    const listResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&workflow_type=dev`, {
       headers: authHeaders(normalKey),
     });
     expect(listResponse.status).toBe(200);
@@ -1950,7 +1929,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       headers: authHeaders(normalKey),
       body: JSON.stringify({
         project_id: 86,
-        sprint_type: 'dev',
+        workflow_type: 'dev',
         task_type: 'backend',
         status: 'ready',
         agent_id: 7,
@@ -1958,23 +1937,23 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(createResponse.status).toBe(201);
 
-    const sprintCreateResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
+    const workflowCreateResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
       method: 'POST',
       headers: authHeaders(normalKey),
       body: JSON.stringify({
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         task_type: 'qa',
         status: 'review',
         agent_id: 9,
       }),
     });
-    expect(sprintCreateResponse.status).toBe(201);
+    expect(workflowCreateResponse.status).toBe(201);
 
     const updateResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/501`, {
       method: 'PUT',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ project_id: 86, sprint_type: 'dev', enabled: false }),
+      body: JSON.stringify({ project_id: 86, workflow_type: 'dev', enabled: false }),
     });
     expect(updateResponse.status).toBe(200);
 
@@ -1986,7 +1965,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('denies routing rule edits without capability and outside the assigned project scope', async () => {
-    const missingCapability = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&sprint_type=dev`, {
+    const missingCapability = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&workflow_type=dev`, {
       headers: authHeaders(normalKey),
     });
     expect(missingCapability.status).toBe(403);
@@ -2009,7 +1988,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'routing_rules.manage_project_scope' },
     });
 
-    const allProjectDefault = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?sprint_type=dev`, {
+    const allProjectDefault = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?workflow_type=dev`, {
       headers: authHeaders(normalKey),
     });
     expect(allProjectDefault.status).toBe(403);
@@ -2028,14 +2007,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const moveOutOfScope = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/501`, {
       method: 'PUT',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ project_id: 87, sprint_type: 'dev' }),
+      body: JSON.stringify({ project_id: 87, workflow_type: 'dev' }),
     });
     expect(moveOutOfScope.status).toBe(403);
 
     const crossTenantByBody = await fetch(`${baseUrl}/api/v1/routing/assignment-rules`, {
       method: 'POST',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ project_id: 99, sprint_type: 'dev', task_type: 'backend', status: 'ready', agent_id: 10 }),
+      body: JSON.stringify({ project_id: 99, workflow_type: 'dev', task_type: 'backend', status: 'ready', agent_id: 10 }),
     });
     expect(crossTenantByBody.status).toBe(403);
     await expect(crossTenantByBody.json()).resolves.toMatchObject({
@@ -2043,7 +2022,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'routing_rules.manage_project_scope' },
     });
 
-    const crossTenantSelector = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?tenant_id=2&project_id=99&sprint_type=dev`, {
+    const crossTenantSelector = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?tenant_id=2&project_id=99&workflow_type=dev`, {
       headers: authHeaders(normalKey),
     });
     expect(crossTenantSelector.status).toBe(403);
@@ -2059,7 +2038,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
             'routing_rules.manage_project_scope',
           ]);
 
-    const response = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&sprint_type=dev`, {
+    const response = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=86&workflow_type=dev`, {
       headers: authHeaders(noProjectKey),
     });
     expect(response.status).toBe(403);
@@ -2069,9 +2048,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
   });
 
-
   it('lets a key with no dispatched run reach the routing graph for its assigned project', async () => {
-    // scopedProjectIds/scopedSprintIds are built from queued, dispatched or running work, so they
+    // scopedProjectIds/scopedWorkflowIds are built from queued, dispatched or running work, so they
     // are empty whenever the agent is between runs. Before the assigned-project tier this denied
     // an agent the graph for the very project it routes through, and denied a board-scoped client
     // — which never owns a dispatched task — every time.
@@ -2093,7 +2071,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const preview = await fetch(`${baseUrl}/api/v1/routing/preview`, {
       method: 'POST',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ project_id: 86, sprint_type: 'dev', operations: [] }),
+      body: JSON.stringify({ project_id: 86, workflow_type: 'dev', operations: [] }),
     });
     expect(preview.status).toBe(200);
 
@@ -2123,7 +2101,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const otherPreview = await fetch(`${baseUrl}/api/v1/routing/preview`, {
       method: 'POST',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ project_id: 87, sprint_type: 'dev', operations: [] }),
+      body: JSON.stringify({ project_id: 87, workflow_type: 'dev', operations: [] }),
     });
     expect(otherPreview.status).toBe(403);
 
@@ -2151,7 +2129,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const denied = await fetch(`${baseUrl}/api/v1/routing/preview`, {
       method: 'POST',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ project_id: 86, sprint_type: 'dev', operations: [] }),
+      body: JSON.stringify({ project_id: 86, workflow_type: 'dev', operations: [] }),
     });
     expect(denied.status).toBe(403);
     await expect(denied.json()).resolves.toMatchObject({
@@ -2187,14 +2165,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const otherProject = await fetch(`${baseUrl}/api/v1/routing/preview`, {
       method: 'POST',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ project_id: 87, sprint_type: 'dev', operations: [] }),
+      body: JSON.stringify({ project_id: 87, workflow_type: 'dev', operations: [] }),
     });
     expect(otherProject.status).toBe(403);
 
     const unscoped = await fetch(`${baseUrl}/api/v1/routing/preview`, {
       method: 'POST',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ sprint_type: 'dev', operations: [] }),
+      body: JSON.stringify({ workflow_type: 'dev', operations: [] }),
     });
     expect(unscoped.status).toBe(403);
   });
@@ -2205,12 +2183,12 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
             'transition_requirements.manage_project_scope',
           ]);
 
-    const listDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&sprint_type=dev`, {
+    const listDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&workflow_type=dev`, {
       headers: authHeaders(normalKey),
     });
     expect(listDefault.status).toBe(200);
 
-    const listOverride = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?sprint_id=42`, {
+    const listOverride = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?workflow_id=42`, {
       headers: authHeaders(normalKey),
     });
     expect(listOverride.status).toBe(200);
@@ -2220,7 +2198,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       headers: authHeaders(normalKey),
       body: JSON.stringify({
         project_id: 86,
-        sprint_type: 'dev',
+        workflow_type: 'dev',
         outcome: 'completed_for_review',
         field_name: 'review_commit',
       }),
@@ -2231,7 +2209,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       method: 'POST',
       headers: authHeaders(normalKey),
       body: JSON.stringify({
-        sprint_id: 42,
+        workflow_id: 42,
         outcome: 'qa_pass',
         field_name: 'qa_verified_commit',
       }),
@@ -2243,7 +2221,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       headers: authHeaders(normalKey),
       body: JSON.stringify({
         project_id: 86,
-        sprint_type: 'dev',
+        workflow_type: 'dev',
         message: 'Updated scoped default',
       }),
     });
@@ -2253,19 +2231,19 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       method: 'PUT',
       headers: authHeaders(normalKey),
       body: JSON.stringify({
-        sprint_id: 42,
+        workflow_id: 42,
         message: 'Updated scoped override',
       }),
     });
     expect(updateOverride.status).toBe(200);
 
-    const deleteDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/601?project_id=86&sprint_type=dev`, {
+    const deleteDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/601?project_id=86&workflow_type=dev`, {
       method: 'DELETE',
       headers: authHeaders(normalKey),
     });
     expect(deleteDefault.status).toBe(200);
 
-    const deleteOverride = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/602?sprint_id=42`, {
+    const deleteOverride = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/602?workflow_id=42`, {
       method: 'DELETE',
       headers: authHeaders(normalKey),
     });
@@ -2273,7 +2251,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('denies scoped transition requirement CRUD without capability or outside assigned project scope', async () => {
-    const missingCapability = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&sprint_type=dev`, {
+    const missingCapability = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&workflow_type=dev`, {
       headers: authHeaders(normalKey),
     });
     expect(missingCapability.status).toBe(403);
@@ -2296,7 +2274,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       details: { required_capability: 'transition_requirements.manage_project_scope' },
     });
 
-    const allProjectDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?sprint_type=dev`, {
+    const allProjectDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?workflow_type=dev`, {
       headers: authHeaders(normalKey),
     });
     expect(allProjectDefault.status).toBe(403);
@@ -2304,7 +2282,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const otherProjectRow = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/603`, {
       method: 'PUT',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ project_id: 87, sprint_type: 'dev', message: 'Nope' }),
+      body: JSON.stringify({ project_id: 87, workflow_type: 'dev', message: 'Nope' }),
     });
     expect(otherProjectRow.status).toBe(403);
     await expect(otherProjectRow.json()).resolves.toMatchObject({
@@ -2315,7 +2293,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const moveOutOfScope = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/601`, {
       method: 'PUT',
       headers: authHeaders(normalKey),
-      body: JSON.stringify({ project_id: 87, sprint_type: 'dev' }),
+      body: JSON.stringify({ project_id: 87, workflow_type: 'dev' }),
     });
     expect(moveOutOfScope.status).toBe(403);
 
@@ -2326,7 +2304,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     });
     expect(missingExplicitUpdateScope.status).toBe(403);
 
-    const crossTenantSelector = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?tenant_id=2&project_id=99&sprint_type=dev`, {
+    const crossTenantSelector = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?tenant_id=2&project_id=99&workflow_type=dev`, {
       headers: authHeaders(normalKey),
     });
     expect(crossTenantSelector.status).toBe(403);
@@ -2342,7 +2320,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
             'transition_requirements.manage_project_scope',
           ]);
 
-    const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&sprint_type=dev`, {
+    const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=86&workflow_type=dev`, {
       headers: authHeaders(noProjectKey),
     });
     expect(response.status).toBe(403);
@@ -2371,7 +2349,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       body: JSON.stringify({
         title: 'Agency defect follow-up',
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         task_type: 'dev',
       }),
     });
@@ -2492,7 +2470,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
             'discovery.read_catalog',
             'tasks.read_active_context',
             'tasks.write_active_lifecycle',
-            'sprints.read_active_sprint',
+            'workflows.read_active_workflow',
             'workflow.read_active_configuration',
             'external.write_task_events',
           ]);
@@ -2523,7 +2501,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     await replaceAgentMcpPermissionPolicy(getDb(), 7, [
             'discovery.read_catalog',
             'tasks.write_active_lifecycle',
-            'sprints.read_active_sprint',
+            'workflows.read_active_workflow',
             'workflow.read_active_configuration',
             'external.write_task_events',
           ]);
@@ -2580,7 +2558,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
   });
 
   it('rejects tenant query/header manipulation for default and EcoPool MCP keys', async () => {
-    const workflowMetadataTenantSelectorRes = await fetch(`${baseUrl}/api/v1/sprints/workflow-metadata?tenant_id=1&sprint_type=dev`, { headers: authHeaders(normalKey) });
+    const workflowMetadataTenantSelectorRes = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?tenant_id=1&workflow_type=dev`, { headers: authHeaders(normalKey) });
     expect(workflowMetadataTenantSelectorRes.status).toBe(403);
     await expect(workflowMetadataTenantSelectorRes.json()).resolves.toMatchObject({
       code: 'mcp_tenant_scope_denied',
@@ -2660,14 +2638,14 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     expect(allowed.status).toBe(200);
     await expect(allowed.json()).resolves.toMatchObject({ ok: true, project_id: 99 });
 
-    const selectedTenantMetadata = await fetch(`${baseUrl}/api/v1/sprints/workflow-metadata?tenant_id=2&sprint_type=dev&task_type=backend`, {
+    const selectedTenantMetadata = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?tenant_id=2&workflow_type=dev&task_type=backend`, {
       headers: authHeaders(adminKey),
     });
     expect(selectedTenantMetadata.status).toBe(200);
     await expect(selectedTenantMetadata.json()).resolves.toMatchObject({
       ok: true,
       tenant_id: 2,
-      sprint_type: 'dev',
+      workflow_type: 'dev',
       task_type: 'backend',
     });
   });
@@ -2713,7 +2691,7 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     const updateRoutingRuleRes = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/503`, {
       method: 'PUT',
       headers: authHeaders(adminKey),
-      body: JSON.stringify({ project_id: 87, sprint_type: 'dev', enabled: false }),
+      body: JSON.stringify({ project_id: 87, workflow_type: 'dev', enabled: false }),
     });
     expect(updateRoutingRuleRes.status).toBe(200);
   });
@@ -2767,12 +2745,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       const tasks = await fetch(`${baseUrl}/api/v1/tasks?project_id=86`, { headers: authHeaders(normalKey) });
       expect(tasks.status).toBe(200);
 
-      const sprints = await fetch(`${baseUrl}/api/v1/sprints?project_id=86`, { headers: authHeaders(normalKey) });
-      expect(sprints.status).toBe(200);
-
       const workflows = await fetch(`${baseUrl}/api/v1/workflows?project_id=86`, { headers: authHeaders(normalKey) });
       expect(workflows.status).toBe(200);
-
       // The project list is tenant-filtered downstream and carries no task content.
       const projects = await fetch(`${baseUrl}/api/v1/projects`, { headers: authHeaders(normalKey) });
       expect(projects.status).toBe(200);
@@ -2785,8 +2759,8 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       expect(tasks.status).toBe(403);
       await expect(tasks.json()).resolves.toMatchObject({ code: 'mcp_scope_denied' });
 
-      const sprints = await fetch(`${baseUrl}/api/v1/sprints?project_id=99`, { headers: authHeaders(normalKey) });
-      expect(sprints.status).toBe(403);
+      const workflows = await fetch(`${baseUrl}/api/v1/workflows?project_id=99`, { headers: authHeaders(normalKey) });
+      expect(workflows.status).toBe(403);
     });
 
     it('refuses a board collection that names no project at all', async () => {
@@ -2801,15 +2775,15 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
     it('scopes workflow metadata by the workflow it names', async () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 7, ['projects.read_project_board']);
 
-      const own = await fetch(`${baseUrl}/api/v1/sprints/workflow-metadata?sprint_id=42`, { headers: authHeaders(normalKey) });
+      const own = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_id=42`, { headers: authHeaders(normalKey) });
       expect(own.status).toBe(200);
 
       // Workflow 44 belongs to project 87.
-      const other = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?sprint_id=44`, { headers: authHeaders(normalKey) });
+      const other = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_id=44`, { headers: authHeaders(normalKey) });
       expect(other.status).toBe(403);
 
       // With no workflow selector the response is tenant-level workflow-type configuration.
-      const unscoped = await fetch(`${baseUrl}/api/v1/sprints/workflow-metadata?sprint_type=dev`, { headers: authHeaders(normalKey) });
+      const unscoped = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_type=dev`, { headers: authHeaders(normalKey) });
       expect(unscoped.status).toBe(200);
     });
 

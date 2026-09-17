@@ -8,7 +8,7 @@ import projectsRouter from './projects';
 import tasksRouter from './tasks';
 import agentsRouter from './agents';
 import artifactsRouter from './artifacts';
-import sprintsRouter from './sprints';
+import workflowsRouter from './workflows';
 import toolsRouter, { agentToolsRouter } from './tools';
 import mcpServersRouter, { agentMcpServersRouter } from './mcp-servers';
 import { getDb } from '../db/client';
@@ -41,7 +41,7 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   app.use('/api/v1/agents/:id/tools', agentToolsRouter);
   app.use('/api/v1/mcp-servers', mcpServersRouter);
   app.use('/api/v1/agents/:id/mcp-servers', agentMcpServersRouter);
-  app.use('/api/v1/sprints', sprintsRouter);
+  app.use('/api/v1/workflows', workflowsRouter);
   const server = await new Promise<Server>((resolve) => {
     const bound = app.listen(0, '127.0.0.1', () => resolve(bound));
   });
@@ -110,7 +110,7 @@ describe('tenant workspace isolation', () => {
       expect((await db.get(`SELECT COUNT(*) AS n FROM tenants WHERE slug = 'acme'`) as { n: number }).n).toBe(1);
       expect((await db.get(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ?`, first.tenant.id) as { n: number }).n).toBe(1);
       expect((await db.get(`SELECT COUNT(*) AS n FROM projects WHERE tenant_id = ? AND name = ?`, first.tenant.id, DEFAULT_PROJECT_NAME) as { n: number }).n).toBe(1);
-      expect((await db.get(`SELECT COUNT(*) AS n FROM sprints WHERE tenant_id = ?`, first.tenant.id) as { n: number }).n).toBe(4);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM workflows WHERE tenant_id = ?`, first.tenant.id) as { n: number }).n).toBe(4);
       expect((await db.get(`SELECT COUNT(*) AS n FROM agents WHERE tenant_id = ? AND system_role = ?`, first.tenant.id, ATLAS_SYSTEM_ROLE) as { n: number }).n).toBe(1);
       const atlasAgent = await db.get(`
         SELECT id, workspace_path
@@ -240,60 +240,60 @@ describe('tenant workspace isolation', () => {
         WHERE s.slug = 'agent-hq'
           AND a.tenant_id != s.tenant_id
       `) as { n: number }).n).toBe(0);
-      const starterSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, first.tenant.id) as { id: number };
-      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
+      const starterWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, first.tenant.id) as { id: number };
+      expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, starterWorkflow.id) as { n: number }).n).toBeGreaterThan(0);
       const expectedRelationshipCounts: Record<string, number> = { dev: 5, generic: 1, ops: 1, lead_generation: 1 };
-      for (const sprintType of ['dev', 'generic', 'ops', 'lead_generation']) {
-        const starterSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? AND sprint_type = ? LIMIT 1`, first.tenant.id, sprintType) as { id: number };
-        expect(starterSprint).toBeTruthy();
-        expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
-        expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`, starterSprint.id) as { n: number }).n).toBeGreaterThan(0);
-        expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_type_task_statuses WHERE sprint_type_key = ?`, sprintType) as { n: number }).n).toBeGreaterThan(0);
+      for (const workflowType of ['dev', 'generic', 'ops', 'lead_generation']) {
+        const starterWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? AND workflow_type = ? LIMIT 1`, first.tenant.id, workflowType) as { id: number };
+        expect(starterWorkflow).toBeTruthy();
+        expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, starterWorkflow.id) as { n: number }).n).toBeGreaterThan(0);
+        expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_task_transitions WHERE workflow_id = ?`, starterWorkflow.id) as { n: number }).n).toBeGreaterThan(0);
+        expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_type_task_statuses WHERE workflow_type_key = ?`, workflowType) as { n: number }).n).toBeGreaterThan(0);
         expect((await db.get(`
           SELECT COUNT(*) AS n
-          FROM sprint_type_relationship_types
-          WHERE tenant_id = ? AND sprint_type_key = ?
-        `, first.tenant.id, sprintType) as { n: number }).n).toBe(expectedRelationshipCounts[sprintType]);
+          FROM workflow_type_relationship_types
+          WHERE tenant_id = ? AND workflow_type_key = ?
+        `, first.tenant.id, workflowType) as { n: number }).n).toBe(expectedRelationshipCounts[workflowType]);
       }
       expect((await db.get(`
         SELECT COUNT(*) AS n
-        FROM sprint_task_routing_rules rr
+        FROM workflow_task_routing_rules rr
         JOIN agents a ON a.id = rr.agent_id
         JOIN projects p ON p.id = rr.project_id
         WHERE rr.tenant_id = ?
           AND p.name = ?
-          AND rr.sprint_type = 'dev'
+          AND rr.workflow_type = 'dev'
           AND rr.task_type = 'backend'
           AND rr.status = 'ready'
           AND a.system_role = ?
       `, first.tenant.id, DEFAULT_PROJECT_NAME, STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Developer Agent')?.systemRole) as { n: number }).n).toBe(1);
       expect((await db.get(`
         SELECT COUNT(*) AS n
-        FROM sprint_task_routing_rules rr
+        FROM workflow_task_routing_rules rr
         JOIN agents a ON a.id = rr.agent_id
         JOIN projects p ON p.id = rr.project_id
         WHERE rr.tenant_id = ?
           AND p.name = ?
-          AND rr.sprint_type = 'dev'
+          AND rr.workflow_type = 'dev'
           AND rr.task_type = 'backend'
           AND rr.status = 'review'
           AND a.system_role = ?
       `, first.tenant.id, DEFAULT_PROJECT_NAME, STARTER_AGENT_DEFINITIONS.find((definition) => definition.name === 'Review Agent')?.systemRole) as { n: number }).n).toBe(1);
       const defaultProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? AND name = ?`, first.tenant.id, DEFAULT_PROJECT_NAME) as { id: number };
-      const devWorkflow = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? AND project_id = ? AND sprint_type = 'dev'`, first.tenant.id, defaultProject.id) as { id: number };
+      const devWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? AND project_id = ? AND workflow_type = 'dev'`, first.tenant.id, defaultProject.id) as { id: number };
       const sampleTaskId = Number((await db.run(`
-        INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority, task_type, story_points)
+        INSERT INTO tasks (tenant_id, project_id, workflow_id, title, description, status, priority, task_type, story_points)
         VALUES (?, ?, ?, 'Sample backend task', '', 'ready', 'medium', 'backend', 3)
       `, first.tenant.id, defaultProject.id, devWorkflow.id)).lastInsertId);
       expect((await db.get(`
         SELECT COUNT(*) AS n
         FROM tasks t
-        JOIN sprints s ON s.id = t.sprint_id
-        JOIN sprint_task_routing_rules rr
+        JOIN workflows s ON s.id = t.workflow_id
+        JOIN workflow_task_routing_rules rr
           ON rr.tenant_id = t.tenant_id
          AND rr.project_id = t.project_id
-         AND rr.sprint_type = s.sprint_type
-         AND (rr.sprint_id = t.sprint_id OR rr.sprint_id IS NULL)
+         AND rr.workflow_type = s.workflow_type
+         AND (rr.workflow_id = t.workflow_id OR rr.workflow_id IS NULL)
          AND rr.status = t.status
          AND rr.task_type = t.task_type
         JOIN agents a ON a.id = rr.agent_id AND a.enabled = 0
@@ -310,8 +310,8 @@ describe('tenant workspace isolation', () => {
       `, first.tenant.id, DEFAULT_PROJECT_NAME) as { n: number }).n).toBe(3);
       expect((await db.get(`
         SELECT COUNT(*) AS n
-        FROM sprint_type_relationship_types
-        WHERE tenant_id != ? AND sprint_type_key IN ('dev', 'generic', 'ops')
+        FROM workflow_type_relationship_types
+        WHERE tenant_id != ? AND workflow_type_key IN ('dev', 'generic', 'ops')
       `, first.tenant.id) as { n: number }).n).toBeGreaterThan(0);
     } finally {
       await stopServer(server);
@@ -329,8 +329,8 @@ describe('tenant workspace isolation', () => {
       const db = getDb();
       const opsWorkflow = await db.get(`
         SELECT id
-        FROM sprints
-        WHERE tenant_id = ? AND sprint_type = 'ops'
+        FROM workflows
+        WHERE tenant_id = ? AND workflow_type = 'ops'
         LIMIT 1
       `, created.tenant.id) as { id: number };
       expect(opsWorkflow).toBeTruthy();
@@ -363,7 +363,7 @@ describe('tenant workspace isolation', () => {
         ON CONFLICT DO NOTHING
       `, developer!.id, defaultServer.id);
 
-      await db.run(`DELETE FROM sprints WHERE id = ?`, opsWorkflow.id);
+      await db.run(`DELETE FROM workflows WHERE id = ?`, opsWorkflow.id);
       const ledgerCountBefore = (await db.get(`
         SELECT COUNT(*) AS n
         FROM default_package_applications
@@ -387,12 +387,12 @@ describe('tenant workspace isolation', () => {
       await ensureTenantSchema(db);
       expect((await db.get(`
         SELECT COUNT(*) AS n
-        FROM sprints
-        WHERE tenant_id = ? AND sprint_type = 'ops'
+        FROM workflows
+        WHERE tenant_id = ? AND workflow_type = 'ops'
       `, created.tenant.id) as { n: number }).n).toBe(0);
       expect((await db.get(`
         SELECT COUNT(*) AS n
-        FROM sprints
+        FROM workflows
         WHERE tenant_id = ? AND name = 'Operations'
       `, created.tenant.id) as { n: number }).n).toBe(0);
       expect((await db.get(`
@@ -431,12 +431,12 @@ describe('tenant workspace isolation', () => {
       const db = getDb();
       const opsWorkflow = await db.get(`
         SELECT id
-        FROM sprints
-        WHERE tenant_id = ? AND sprint_type = 'ops'
+        FROM workflows
+        WHERE tenant_id = ? AND workflow_type = 'ops'
         LIMIT 1
       `, created.tenant.id) as { id: number };
       expect(opsWorkflow).toBeTruthy();
-      await db.run(`DELETE FROM sprints WHERE id = ?`, opsWorkflow.id);
+      await db.run(`DELETE FROM workflows WHERE id = ?`, opsWorkflow.id);
 
       const reinstall = await json<{ ok: boolean; result: { mode: string; created: Record<string, number> } }>(`${baseUrl}/api/v1/tenants/${created.tenant.id}/default-package/reinstall`, {
         method: 'POST',
@@ -446,8 +446,8 @@ describe('tenant workspace isolation', () => {
       expect(reinstall.result.created.workflows).toBeGreaterThanOrEqual(1);
       expect((await db.get(`
         SELECT COUNT(*) AS n
-        FROM sprints
-        WHERE tenant_id = ? AND sprint_type = 'ops' AND name = 'Operations'
+        FROM workflows
+        WHERE tenant_id = ? AND workflow_type = 'ops' AND name = 'Operations'
       `, created.tenant.id) as { n: number }).n).toBe(1);
       expect((await db.get(`
         SELECT COUNT(*) AS n
@@ -476,8 +476,8 @@ describe('tenant workspace isolation', () => {
       const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1 LIMIT 1`) as { id: number };
       const insertStatus = async (tenantId: number, label: string): Promise<void> => {
         await db.run(`
-          INSERT INTO sprint_type_task_statuses (
-            tenant_id, sprint_type_key, status_key, label, color, terminal, is_system,
+          INSERT INTO workflow_type_task_statuses (
+            tenant_id, workflow_type_key, status_key, label, color, terminal, is_system,
             allowed_transitions_json, stage_order, is_default_entry, metadata_json,
             created_at, updated_at
           ) VALUES (?, 'generic', 'todo', ?, 'slate', 0, 1, '[]', 0, 1, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -493,17 +493,17 @@ describe('tenant workspace isolation', () => {
         body: JSON.stringify({ name: 'Gamma', slug: 'gamma' }),
       });
 
-      const starterSprint = await db.get(`
+      const starterWorkflow = await db.get(`
         SELECT id
-        FROM sprints
-        WHERE tenant_id = ? AND sprint_type = 'generic'
+        FROM workflows
+        WHERE tenant_id = ? AND workflow_type = 'generic'
         LIMIT 1
       `, created.tenant.id) as { id: number };
       expect((await db.get(`
         SELECT COUNT(*) AS n
-        FROM sprint_task_statuses
-        WHERE sprint_id = ? AND status_key = 'todo'
-      `, starterSprint.id) as { n: number }).n).toBe(1);
+        FROM workflow_task_statuses
+        WHERE workflow_id = ? AND status_key = 'todo'
+      `, starterWorkflow.id) as { n: number }).n).toBe(1);
     } finally {
       await stopServer(server);
     }
@@ -524,21 +524,21 @@ describe('tenant workspace isolation', () => {
 
       const db = getDb();
       await db.run(`
-        UPDATE sprint_type_task_statuses
+        UPDATE workflow_type_task_statuses
         SET label = 'Acme Todo'
-        WHERE tenant_id = ? AND sprint_type_key = 'generic' AND status_key = 'todo'
+        WHERE tenant_id = ? AND workflow_type_key = 'generic' AND status_key = 'todo'
       `, acme.tenant.id);
       await db.run(`
-        UPDATE sprint_type_task_statuses
+        UPDATE workflow_type_task_statuses
         SET label = 'Beta Todo'
-        WHERE tenant_id = ? AND sprint_type_key = 'generic' AND status_key = 'todo'
+        WHERE tenant_id = ? AND workflow_type_key = 'generic' AND status_key = 'todo'
       `, beta.tenant.id);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
       const acmeMetadata = await json<{
         statuses: Array<{ name: string; label: string }>;
         relationship_types: Array<{ tenant_id?: number; key: string }>;
-      }>(`${baseUrl}/api/v1/sprints/workflow-metadata?sprint_type=generic`);
+      }>(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_type=generic`);
       expect(acmeMetadata.statuses.map((status) => status.name)).toEqual(['todo', 'ready', 'in_progress', 'review', 'done']);
       expect(acmeMetadata.statuses.find((status) => status.name === 'todo')?.label).toBe('Acme Todo');
       expect(acmeMetadata.relationship_types).toEqual([
@@ -549,7 +549,7 @@ describe('tenant workspace isolation', () => {
       const betaMetadata = await json<{
         statuses: Array<{ name: string; label: string }>;
         relationship_types: Array<{ tenant_id?: number; key: string }>;
-      }>(`${baseUrl}/api/v1/sprints/workflow-metadata?sprint_type=generic`);
+      }>(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_type=generic`);
       expect(betaMetadata.statuses.map((status) => status.name)).toEqual(['todo', 'ready', 'in_progress', 'review', 'done']);
       expect(betaMetadata.statuses.find((status) => status.name === 'todo')?.label).toBe('Beta Todo');
       expect(betaMetadata.relationship_types).toEqual([
@@ -647,12 +647,12 @@ describe('tenant workspace isolation', () => {
       const defaultTenant = await db.get(`SELECT id FROM tenants WHERE is_default = 1`) as { id: number };
       const acmeAgent = await db.get(`SELECT id FROM agents WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
       const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
-      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const acmeWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
       const acmeTask = {
         id: Number((await db.run(`
-          INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
+          INSERT INTO tasks (tenant_id, project_id, workflow_id, title, description, status, priority)
           VALUES (?, ?, ?, 'Acme cleanup task', '', 'todo', 'medium')
-        `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId),
+        `, acme.tenant.id, acmeProject.id, acmeWorkflow.id)).lastInsertId),
       };
       const acmeToolId = Number((await db.run(`
         INSERT INTO tools (tenant_id, name, slug, implementation_type, implementation_body)
@@ -674,9 +674,9 @@ describe('tenant workspace isolation', () => {
       await db.run(`INSERT INTO chat_messages (id, agent_id, role, content, session_key) VALUES ('acme-chat', ?, 'user', 'hi', 'acme-session')`, acmeAgent.id);
       await db.run(`INSERT INTO canonical_chat_sessions (agent_id, channel, session_key) VALUES (?, 'web', 'acme-session')`, acmeAgent.id);
       await db.run(`
-        INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, sprint_type, max_points, model)
+        INSERT INTO story_point_model_routing (tenant_id, project_id, workflow_id, workflow_type, max_points, model)
         VALUES (?, ?, ?, 'generic', 1, 'test-model')
-      `, acme.tenant.id, acmeProject.id, acmeSprint.id);
+      `, acme.tenant.id, acmeProject.id, acmeWorkflow.id);
       await db.run(`
         INSERT INTO external_event_mappings (tenant_id, project_id, event_name)
         VALUES (?, ?, 'acme.delete.test')
@@ -707,7 +707,7 @@ describe('tenant workspace isolation', () => {
       expect(body.tenants?.some((tenant) => tenant.id === beta.tenant.id)).toBe(true);
       expect(body.deleted_counts?.tenants).toBe(1);
 
-      for (const table of ['projects', 'sprints', 'tasks', 'agents', 'tools', 'mcp_servers', 'sessions', 'story_point_model_routing', 'external_event_mappings']) {
+      for (const table of ['projects', 'workflows', 'tasks', 'agents', 'tools', 'mcp_servers', 'sessions', 'story_point_model_routing', 'external_event_mappings']) {
         expect((await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ?`, acme.tenant.id) as { n: number }).n).toBe(0);
       }
       expect((await db.get(`SELECT COUNT(*) AS n FROM session_messages WHERE session_id = ?`, sessionId) as { n: number }).n).toBe(0);
@@ -1041,12 +1041,12 @@ describe('tenant workspace isolation', () => {
       const db = getDb();
       const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
       const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
-      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
-      const betaSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
       await db.run(`
-        INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
+        INSERT INTO tasks (tenant_id, project_id, workflow_id, title, description, status, priority)
         VALUES (?, ?, ?, ?, '', 'todo', 'medium'), (?, ?, ?, ?, '', 'todo', 'medium')
-      `, acme.tenant.id, acmeProject.id, acmeSprint.id, 'Acme Task', beta.tenant.id, betaProject.id, betaSprint.id, 'Beta Task');
+      `, acme.tenant.id, acmeProject.id, acmeWorkflow.id, 'Acme Task', beta.tenant.id, betaProject.id, betaWorkflow.id, 'Beta Task');
       await db.run(`
         INSERT INTO agents (tenant_id, project_id, name, role, session_key, workspace_path)
         VALUES (?, ?, 'Acme Agent', 'Agent', 'acme-agent', ''), (?, ?, 'Beta Agent', 'Agent', 'beta-agent', '')
@@ -1056,12 +1056,12 @@ describe('tenant workspace isolation', () => {
       const acmeProjects = await json<Array<{ tenant_id: number; name: string }>>(`${baseUrl}/api/v1/projects`);
       const acmeTasks = await json<Array<{ tenant_id: number; title: string }>>(`${baseUrl}/api/v1/tasks?include_closed=true`);
       const acmeAgents = await json<Array<{ tenant_id: number; name: string }>>(`${baseUrl}/api/v1/agents`);
-      const acmeSprints = await json<Array<{ tenant_id: number }>>(`${baseUrl}/api/v1/sprints?include_closed=true`);
+      const acmeWorkflows = await json<Array<{ tenant_id: number }>>(`${baseUrl}/api/v1/workflows?include_closed=true`);
       await setActiveTenant(baseUrl, beta.tenant.id);
       const betaProjects = await json<Array<{ tenant_id: number; name: string }>>(`${baseUrl}/api/v1/projects`);
       const betaTasks = await json<Array<{ tenant_id: number; title: string }>>(`${baseUrl}/api/v1/tasks?include_closed=true`);
       const betaAgents = await json<Array<{ tenant_id: number; name: string }>>(`${baseUrl}/api/v1/agents`);
-      const betaSprints = await json<Array<{ tenant_id: number }>>(`${baseUrl}/api/v1/sprints?include_closed=true`);
+      const betaWorkflows = await json<Array<{ tenant_id: number }>>(`${baseUrl}/api/v1/workflows?include_closed=true`);
 
       expect(acmeProjects.every((row) => row.tenant_id === acme.tenant.id)).toBe(true);
       expect(betaProjects.every((row) => row.tenant_id === beta.tenant.id)).toBe(true);
@@ -1073,8 +1073,8 @@ describe('tenant workspace isolation', () => {
       expect(acmeAgents.map((row) => row.name)).not.toContain('Beta Agent');
       expect(betaAgents.map((row) => row.name)).toEqual(expect.arrayContaining([ATLAS_AGENT_NAME, 'Beta Agent']));
       expect(betaAgents.map((row) => row.name)).not.toContain('Acme Agent');
-      expect(acmeSprints.every((row) => row.tenant_id === acme.tenant.id)).toBe(true);
-      expect(betaSprints.every((row) => row.tenant_id === beta.tenant.id)).toBe(true);
+      expect(acmeWorkflows.every((row) => row.tenant_id === acme.tenant.id)).toBe(true);
+      expect(betaWorkflows.every((row) => row.tenant_id === beta.tenant.id)).toBe(true);
     } finally {
       await stopServer(server);
     }
@@ -1153,82 +1153,82 @@ describe('tenant workspace isolation', () => {
 
       const db = getDb();
       const acmeStarter = await db.get(`
-        SELECT key, tenant_id FROM sprint_types WHERE tenant_id = ? AND key = 'generic' LIMIT 1
+        SELECT key, tenant_id FROM workflow_types WHERE tenant_id = ? AND key = 'generic' LIMIT 1
       `, acme.tenant.id) as { key: string; tenant_id: number } | undefined;
       const betaStarter = await db.get(`
-        SELECT key, tenant_id FROM sprint_types WHERE tenant_id = ? AND key = 'generic' LIMIT 1
+        SELECT key, tenant_id FROM workflow_types WHERE tenant_id = ? AND key = 'generic' LIMIT 1
       `, beta.tenant.id) as { key: string; tenant_id: number } | undefined;
       expect(acmeStarter).toMatchObject({ key: 'generic', tenant_id: acme.tenant.id });
       expect(betaStarter).toMatchObject({ key: 'generic', tenant_id: beta.tenant.id });
-      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_types WHERE tenant_id IS NULL`) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_types WHERE tenant_id IS NULL`) as { n: number }).n).toBe(0);
 
       await db.run(`
-        INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
+        INSERT INTO workflow_types (tenant_id, key, name, description, is_system)
         VALUES (?, 'tenant_leak_regression', 'Tenant Leak Regression', '', 0)
       `, acme.tenant.id);
       await db.run(`
-        INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
+        INSERT INTO workflow_types (tenant_id, key, name, description, is_system)
         VALUES (?, 'tenant_leak_regression_beta', 'Tenant Leak Regression Beta', '', 0)
       `, beta.tenant.id);
 
       const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
       const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
-      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
-      const betaSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
       const acmeAgent = await db.get(`SELECT id FROM agents WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
 
       await db.run(`
-        UPDATE sprints
-        SET sprint_type = 'tenant_leak_regression', status = 'active'
+        UPDATE workflows
+        SET workflow_type = 'tenant_leak_regression', status = 'active'
         WHERE id = ?
-      `, acmeSprint.id);
+      `, acmeWorkflow.id);
       await db.run(`
-        UPDATE sprints
-        SET sprint_type = 'tenant_leak_regression', status = 'closed'
+        UPDATE workflows
+        SET workflow_type = 'tenant_leak_regression', status = 'closed'
         WHERE id = ?
-      `, betaSprint.id);
+      `, betaWorkflow.id);
 
       const acmeTaskId = Number((await db.run(`
-        INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
+        INSERT INTO tasks (tenant_id, project_id, workflow_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Acme Active Task', '', 'in_progress', 'medium')
-      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId);
+      `, acme.tenant.id, acmeProject.id, acmeWorkflow.id)).lastInsertId);
       await db.run(`INSERT INTO job_instances (task_id, agent_id, status) VALUES (?, ?, 'running')`, acmeTaskId, acmeAgent.id);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
-      const acmeTypeDelete = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_leak_regression`, { method: 'DELETE' });
+      const acmeTypeDelete = await fetch(`${baseUrl}/api/v1/workflows/types/tenant_leak_regression`, { method: 'DELETE' });
       expect(acmeTypeDelete.status).toBe(409);
       await expect(acmeTypeDelete.json()).resolves.toMatchObject({
         error: 'Cannot delete workflow type "tenant_leak_regression" because 1 open workflow(s) still use it in this tenant',
-        code: 'sprint_type_in_use',
-        open_sprint_count: 1,
+        code: 'workflow_type_in_use',
+        open_workflow_count: 1,
       });
-      await expect(fetch(`${baseUrl}/api/v1/sprints/types/tenant_leak_regression_beta`)).resolves.toMatchObject({ status: 404 });
+      await expect(fetch(`${baseUrl}/api/v1/workflows/types/tenant_leak_regression_beta`)).resolves.toMatchObject({ status: 404 });
 
-      const wrongTenantDelete = await fetch(`${baseUrl}/api/v1/sprints/${betaSprint.id}`, { method: 'DELETE' });
+      const wrongTenantDelete = await fetch(`${baseUrl}/api/v1/workflows/${betaWorkflow.id}`, { method: 'DELETE' });
       expect(wrongTenantDelete.status).toBe(404);
 
       await setActiveTenant(baseUrl, beta.tenant.id);
-      const betaDelete = await fetch(`${baseUrl}/api/v1/sprints/${betaSprint.id}`, { method: 'DELETE' });
+      const betaDelete = await fetch(`${baseUrl}/api/v1/workflows/${betaWorkflow.id}`, { method: 'DELETE' });
       expect(betaDelete.status).toBe(200);
       await expect(betaDelete.json()).resolves.toEqual({ ok: true });
-      expect((await db.get(`SELECT COUNT(*) AS n FROM sprints WHERE id = ?`, betaSprint.id) as { n: number }).n).toBe(0);
-      expect((await db.get(`SELECT COUNT(*) AS n FROM sprints WHERE id = ?`, acmeSprint.id) as { n: number }).n).toBe(1);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM workflows WHERE id = ?`, betaWorkflow.id) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM workflows WHERE id = ?`, acmeWorkflow.id) as { n: number }).n).toBe(1);
 
-      const betaTypeResponse = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_leak_regression_beta`);
+      const betaTypeResponse = await fetch(`${baseUrl}/api/v1/workflows/types/tenant_leak_regression_beta`);
       expect(betaTypeResponse.status).toBe(200);
-      const betaType = await betaTypeResponse.json() as { deletion: { protected: boolean; open_sprint_count: number; total_sprint_count: number } };
+      const betaType = await betaTypeResponse.json() as { deletion: { protected: boolean; open_workflow_count: number; total_workflow_count: number } };
       expect(betaType.deletion).toEqual(expect.objectContaining({
         protected: false,
-        open_sprint_count: 0,
-        total_sprint_count: 0,
+        open_workflow_count: 0,
+        total_workflow_count: 0,
       }));
-      const betaTypeDelete = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_leak_regression_beta`, { method: 'DELETE' });
+      const betaTypeDelete = await fetch(`${baseUrl}/api/v1/workflows/types/tenant_leak_regression_beta`, { method: 'DELETE' });
       expect(betaTypeDelete.status).toBe(200);
       await expect(betaTypeDelete.json()).resolves.toEqual({ ok: true });
-      expect((await db.get(`SELECT COUNT(*) AS n FROM sprint_types WHERE key = 'tenant_leak_regression_beta'`) as { n: number }).n).toBe(0);
+      expect((await db.get(`SELECT COUNT(*) AS n FROM workflow_types WHERE key = 'tenant_leak_regression_beta'`) as { n: number }).n).toBe(0);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
-      const acmeSameKeyCreate = await fetch(`${baseUrl}/api/v1/sprints/types`, {
+      const acmeSameKeyCreate = await fetch(`${baseUrl}/api/v1/workflows/types`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: 'tenant_same_key_regression', name: 'Tenant Same Key Regression' }),
@@ -1236,7 +1236,7 @@ describe('tenant workspace isolation', () => {
       expect(acmeSameKeyCreate.status).toBe(201);
 
       await setActiveTenant(baseUrl, beta.tenant.id);
-      const betaSameKeyCreate = await fetch(`${baseUrl}/api/v1/sprints/types`, {
+      const betaSameKeyCreate = await fetch(`${baseUrl}/api/v1/workflows/types`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: 'tenant_same_key_regression', name: 'Tenant Same Key Regression' }),
@@ -1244,7 +1244,7 @@ describe('tenant workspace isolation', () => {
       expect(betaSameKeyCreate.status).toBe(201);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
-      const acmeRelationshipCreate = await json<{ id: number; tenant_id: number; key: string }>(`${baseUrl}/api/v1/sprints/types/tenant_same_key_regression/relationship-types`, {
+      const acmeRelationshipCreate = await json<{ id: number; tenant_id: number; key: string }>(`${baseUrl}/api/v1/workflows/types/tenant_same_key_regression/relationship-types`, {
         method: 'POST',
         body: JSON.stringify({
           key: 'tenant_owned_relation',
@@ -1260,7 +1260,7 @@ describe('tenant workspace isolation', () => {
       });
 
       await setActiveTenant(baseUrl, beta.tenant.id);
-      const betaRelationshipCreate = await json<{ id: number; tenant_id: number; key: string }>(`${baseUrl}/api/v1/sprints/types/tenant_same_key_regression/relationship-types`, {
+      const betaRelationshipCreate = await json<{ id: number; tenant_id: number; key: string }>(`${baseUrl}/api/v1/workflows/types/tenant_same_key_regression/relationship-types`, {
         method: 'POST',
         body: JSON.stringify({
           key: 'tenant_owned_relation',
@@ -1275,7 +1275,7 @@ describe('tenant workspace isolation', () => {
         key: 'tenant_owned_relation',
       });
 
-      const betaRelationships = await json<{ relationship_types: Array<{ id: number; tenant_id: number; key: string; label: string }> }>(`${baseUrl}/api/v1/sprints/types/tenant_same_key_regression/relationship-types`);
+      const betaRelationships = await json<{ relationship_types: Array<{ id: number; tenant_id: number; key: string; label: string }> }>(`${baseUrl}/api/v1/workflows/types/tenant_same_key_regression/relationship-types`);
       expect(betaRelationships.relationship_types).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: betaRelationshipCreate.id, tenant_id: beta.tenant.id, key: 'tenant_owned_relation', label: 'Beta Tenant Owned Relation' }),
       ]));
@@ -1283,31 +1283,31 @@ describe('tenant workspace isolation', () => {
         expect.objectContaining({ id: acmeRelationshipCreate.id }),
       ]));
 
-      await expect(fetch(`${baseUrl}/api/v1/sprints/types/tenant_same_key_regression/relationship-types/${acmeRelationshipCreate.id}`)).resolves.toMatchObject({ status: 404 });
-      const betaRelationshipDelete = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_same_key_regression/relationship-types/${betaRelationshipCreate.id}`, { method: 'DELETE' });
+      await expect(fetch(`${baseUrl}/api/v1/workflows/types/tenant_same_key_regression/relationship-types/${acmeRelationshipCreate.id}`)).resolves.toMatchObject({ status: 404 });
+      const betaRelationshipDelete = await fetch(`${baseUrl}/api/v1/workflows/types/tenant_same_key_regression/relationship-types/${betaRelationshipCreate.id}`, { method: 'DELETE' });
       expect(betaRelationshipDelete.status).toBe(200);
       await expect(betaRelationshipDelete.json()).resolves.toEqual({ ok: true });
 
       await setActiveTenant(baseUrl, acme.tenant.id);
-      const acmeRelationshipStillVisible = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_same_key_regression/relationship-types/${acmeRelationshipCreate.id}`);
+      const acmeRelationshipStillVisible = await fetch(`${baseUrl}/api/v1/workflows/types/tenant_same_key_regression/relationship-types/${acmeRelationshipCreate.id}`);
       expect(acmeRelationshipStillVisible.status).toBe(200);
 
       await setActiveTenant(baseUrl, beta.tenant.id);
-      const betaSameKeyDelete = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_same_key_regression`, { method: 'DELETE' });
+      const betaSameKeyDelete = await fetch(`${baseUrl}/api/v1/workflows/types/tenant_same_key_regression`, { method: 'DELETE' });
       expect(betaSameKeyDelete.status).toBe(200);
       await expect(betaSameKeyDelete.json()).resolves.toEqual({ ok: true });
 
       await setActiveTenant(baseUrl, acme.tenant.id);
-      const acmeSameKeyStillVisible = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_same_key_regression`);
+      const acmeSameKeyStillVisible = await fetch(`${baseUrl}/api/v1/workflows/types/tenant_same_key_regression`);
       expect(acmeSameKeyStillVisible.status).toBe(200);
 
-      const acmeTypeResponse = await fetch(`${baseUrl}/api/v1/sprints/types/tenant_leak_regression`);
+      const acmeTypeResponse = await fetch(`${baseUrl}/api/v1/workflows/types/tenant_leak_regression`);
       expect(acmeTypeResponse.status).toBe(200);
-      const acmeType = await acmeTypeResponse.json() as { deletion: { protected: boolean; open_sprint_count: number; total_sprint_count: number } };
+      const acmeType = await acmeTypeResponse.json() as { deletion: { protected: boolean; open_workflow_count: number; total_workflow_count: number } };
       expect(acmeType.deletion).toEqual(expect.objectContaining({
         protected: true,
-        open_sprint_count: 1,
-        total_sprint_count: 1,
+        open_workflow_count: 1,
+        total_workflow_count: 1,
       }));
     } finally {
       await stopServer(server);
@@ -1330,16 +1330,16 @@ describe('tenant workspace isolation', () => {
       const db = getDb();
       const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
       const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
-      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
-      const betaSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
       const acmeTaskId = Number((await db.run(`
-        INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
+        INSERT INTO tasks (tenant_id, project_id, workflow_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Acme direct task', '', 'todo', 'medium')
-      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId);
+      `, acme.tenant.id, acmeProject.id, acmeWorkflow.id)).lastInsertId);
       const betaTaskId = Number((await db.run(`
-        INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
+        INSERT INTO tasks (tenant_id, project_id, workflow_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Beta direct task', '', 'todo', 'medium')
-      `, beta.tenant.id, betaProject.id, betaSprint.id)).lastInsertId);
+      `, beta.tenant.id, betaProject.id, betaWorkflow.id)).lastInsertId);
       const acmeAgentId = Number((await db.run(`
         INSERT INTO agents (tenant_id, project_id, name, role, session_key, workspace_path)
         VALUES (?, ?, 'Acme Tool Agent', 'Agent', 'acme-tool-agent', '')
@@ -1416,23 +1416,23 @@ describe('tenant workspace isolation', () => {
       const db = getDb();
       const acmeProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
       const betaProject = await db.get(`SELECT id FROM projects WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
-      const acmeSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
-      const betaSprint = await db.get(`SELECT id FROM sprints WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
+      const acmeWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, acme.tenant.id) as { id: number };
+      const betaWorkflow = await db.get(`SELECT id FROM workflows WHERE tenant_id = ? LIMIT 1`, beta.tenant.id) as { id: number };
       const acmeTaskId = Number((await db.run(`
-        INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
+        INSERT INTO tasks (tenant_id, project_id, workflow_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Acme relationship source', '', 'todo', 'medium')
-      `, acme.tenant.id, acmeProject.id, acmeSprint.id)).lastInsertId);
+      `, acme.tenant.id, acmeProject.id, acmeWorkflow.id)).lastInsertId);
       const betaTaskId = Number((await db.run(`
-        INSERT INTO tasks (tenant_id, project_id, sprint_id, title, description, status, priority)
+        INSERT INTO tasks (tenant_id, project_id, workflow_id, title, description, status, priority)
         VALUES (?, ?, ?, 'Beta relationship target', '', 'todo', 'medium')
-      `, beta.tenant.id, betaProject.id, betaSprint.id)).lastInsertId);
+      `, beta.tenant.id, betaProject.id, betaWorkflow.id)).lastInsertId);
 
       await setActiveTenant(baseUrl, acme.tenant.id);
-      await expect(fetch(`${baseUrl}/api/v1/sprints/${betaSprint.id}`)).resolves.toMatchObject({ status: 404 });
-      await expect(fetch(`${baseUrl}/api/v1/sprints/${betaSprint.id}/metrics`)).resolves.toMatchObject({ status: 404 });
-      await expect(fetch(`${baseUrl}/api/v1/sprints/${betaSprint.id}/close`, { method: 'POST' })).resolves.toMatchObject({ status: 404 });
+      await expect(fetch(`${baseUrl}/api/v1/workflows/${betaWorkflow.id}`)).resolves.toMatchObject({ status: 404 });
+      await expect(fetch(`${baseUrl}/api/v1/workflows/${betaWorkflow.id}/metrics`)).resolves.toMatchObject({ status: 404 });
+      await expect(fetch(`${baseUrl}/api/v1/workflows/${betaWorkflow.id}/close`, { method: 'POST' })).resolves.toMatchObject({ status: 404 });
 
-      const crossProjectWorkflow = await fetch(`${baseUrl}/api/v1/sprints/${acmeSprint.id}`, {
+      const crossProjectWorkflow = await fetch(`${baseUrl}/api/v1/workflows/${acmeWorkflow.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project_id: betaProject.id }),
@@ -1452,7 +1452,7 @@ describe('tenant workspace isolation', () => {
         body: JSON.stringify({
           title: 'Invalid cross tenant task',
           project_id: acmeProject.id,
-          sprint_id: acmeSprint.id,
+          workflow_id: acmeWorkflow.id,
           relationships: [{ target_task_id: betaTaskId, relationship_type_key: 'relates_to' }],
         }),
       });

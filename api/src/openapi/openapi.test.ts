@@ -113,12 +113,12 @@ describe('Agent HQ OpenAPI document', () => {
     }
   });
 
-  it('documents workflows as the first-class board lifecycle surface while keeping sprint aliases', () => {
+  it('documents the canonical workflow lifecycle surface', () => {
     const document = getOpenApiDocument();
     const tagNames = document.tags.map(tag => tag.name);
 
     expect(tagNames).toContain('Workflows');
-    expect(tagNames).toContain('Sprints');
+    expect(tagNames).toContain('Workflows');
     expect(document.paths['/api/v1/workflows'].get.summary).toBe('List workflows.');
     expect(document.paths['/api/v1/workflows'].get.responses['200']).toMatchObject({
       content: {
@@ -127,7 +127,7 @@ describe('Agent HQ OpenAPI document', () => {
         },
       },
     });
-    expect(document.paths['/api/v1/sprints'].get.description).toContain('Legacy alias');
+    expect(tagNames.filter(name => name === 'Workflows')).toHaveLength(1);
     expect(document.components.schemas.Workflow).toBeDefined();
     expect(document.components.schemas.WorkflowLifecycleResponse).toBeDefined();
   });

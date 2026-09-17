@@ -274,7 +274,7 @@ export interface JobInstance {
   artifact_outcome?: string | null;
   run_is_stale?: number | null;
   stale_at?: string | null;
-  /** Task workflow outcome — distinct from execution status and configured by sprint workflow metadata. */
+  /** Task workflow outcome — distinct from execution status and configured by workflow workflow metadata. */
   task_outcome?: string | null;
   /** Model that was selected / used for this run (e.g. anthropic/claude-opus-5) */
   effective_model?: string | null;
@@ -517,7 +517,7 @@ export interface StarterModelRoutingPlan {
 
 export interface StarterWorkflowPlan {
   template: StarterTemplateCatalogEntry;
-  workflow: { name: string; sprint_type: string; goal: string };
+  workflow: { name: string; workflow_type: string; goal: string };
   statuses: string[];
   task_types: string[];
   fields: Array<{ key: string; label?: string; type?: string; required?: boolean; options?: string[] }>;
@@ -533,7 +533,7 @@ export interface StarterSetupPlan {
   template: StarterTemplateCatalogEntry;
   templates: StarterTemplateCatalogEntry[];
   project: { name: string; description: string };
-  workflow: { name: string; sprint_type: string; goal: string };
+  workflow: { name: string; workflow_type: string; goal: string };
   workflows: StarterWorkflowPlan[];
   agents: StarterAgentPlan[];
   routes: StarterRoutePlan[];
@@ -608,7 +608,7 @@ export interface CompletedRecentTask {
   priority: string;
   project_id: number | null;
   project_name: string | null;
-  sprint_name: string | null;
+  workflow_name: string | null;
   agent_name: string | null;
   custom_fields?: Record<string, unknown> | null;
   updated_at: string;
@@ -722,7 +722,7 @@ export interface TenantDeleteResponse {
 export interface ProjectAuditEntry {
   id: number;
   project_id: number;
-  entity_type: 'project' | 'sprint' | 'agent';
+  entity_type: 'project' | 'workflow' | 'agent';
   entity_id: number;
   action: 'created' | 'updated' | 'deleted';
   actor: string;
@@ -801,7 +801,7 @@ export interface ArtifactFile {
 
 export type TaskStatus = string;
 
-export interface SprintRelationshipTypeInput {
+export interface WorkflowRelationshipTypeInput {
   key: string;
   label: string;
   inverse_label?: string;
@@ -817,7 +817,7 @@ export interface SprintRelationshipTypeInput {
 
 export interface TaskRelationshipTypeConfig {
   id: number;
-  sprint_type_key: string;
+  workflow_type_key: string;
   key: string;
   label: string;
   inverse_label: string;
@@ -837,7 +837,7 @@ export interface TaskRelationshipTaskRef {
   id: number;
   title: string;
   status: string;
-  sprint_id?: number | null;
+  workflow_id?: number | null;
   task_type?: string | null;
 }
 
@@ -874,8 +874,8 @@ export interface Task {
   assigned_agent_name?: string | null;
   active_agent_name?: string | null;
   project_id: number | null;
-  sprint_id: number | null;
-  sprint_name?: string | null;
+  workflow_id: number | null;
+  workflow_name?: string | null;
   agent_name?: string;
   recurring?: number | boolean;
   recurring_series_id?: number | null;
@@ -940,7 +940,7 @@ export interface Task {
   defect_type?: string | null;
   spawned_defects?: number | null;
   custom_fields?: Record<string, unknown> | null;
-  resolved_sprint_type?: string | null;
+  resolved_workflow_type?: string | null;
   resolved_custom_field_schema?: {
     fields?: CustomFieldDefinition[];
   } | null;
@@ -957,14 +957,11 @@ export interface RecurringTaskSeries {
   id: number;
   project_id: number;
   project_name: string | null;
-  sprint_id: number;
-  sprint_name: string | null;
-  sprint_status: string | null;
-  sprint_type: string | null;
-  workflow_id?: number;
-  workflow_name?: string | null;
-  workflow_status?: string | null;
-  workflow_type?: string | null;
+  workflow_id: number;
+  workflow_name: string | null;
+  workflow_status: string | null;
+  workflow_type: string | null;
+
   title_template: string;
   description_template: string;
   task_type: string;
@@ -992,7 +989,7 @@ export interface RecurringTaskSeries {
 export interface RecurringTaskSeriesInput {
   project_id: number;
   workflow_id: number;
-  sprint_id?: number;
+
   title_template: string;
   description_template?: string;
   task_type: string;
@@ -1050,7 +1047,6 @@ export interface TaskNote {
   created_at: string;
 }
 
-
 export interface CustomFieldDefinition {
   key: string;
   label?: string;
@@ -1062,7 +1058,7 @@ export interface CustomFieldDefinition {
 }
 
 export interface ResolvedTaskFieldSchemaResponse {
-  sprint_type: string;
+  workflow_type: string;
   allowed_task_types: string[];
   fields: CustomFieldDefinition[];
   schema?: TaskFieldSchemaDocument;
@@ -1177,14 +1173,14 @@ export interface CanonicalSessionMessagesResponse {
   in_progress: boolean;
 }
 
-export interface SprintTypeDeletionState {
+export interface WorkflowTypeDeletionState {
   protected: boolean;
-  reason: 'generic' | 'open_sprints' | null;
-  open_sprint_count: number;
-  total_sprint_count: number;
+  reason: 'generic' | 'open_workflows' | null;
+  open_workflow_count: number;
+  total_workflow_count: number;
 }
 
-export interface SprintType {
+export interface WorkflowType {
   key: string;
   name: string;
   description: string;
@@ -1193,9 +1189,9 @@ export interface SprintType {
   updated_at: string;
 }
 
-export interface SprintTypeTaskType {
+export interface WorkflowTypeTaskType {
   id: number;
-  sprint_type_key: string;
+  workflow_type_key: string;
   task_type: string | null;
   is_system: number;
   created_at: string;
@@ -1208,7 +1204,7 @@ export interface TaskFieldSchemaDocument {
 
 export interface TaskFieldSchema {
   id: number;
-  sprint_type_key: string;
+  workflow_type_key: string;
   task_type: string | null;
   schema: TaskFieldSchemaDocument;
   is_system: number;
@@ -1216,9 +1212,9 @@ export interface TaskFieldSchema {
   updated_at: string;
 }
 
-export interface SprintTypeOutcome {
+export interface WorkflowTypeOutcome {
   id: number;
-  sprint_type_key: string;
+  workflow_type_key: string;
   task_type: string | null;
   outcome_key: string;
   label: string;
@@ -1233,7 +1229,7 @@ export interface SprintTypeOutcome {
   updated_at: string;
 }
 
-export interface ResolvedSprintOutcome extends Omit<SprintTypeOutcome, 'id' | 'created_at' | 'updated_at'> {
+export interface ResolvedWorkflowOutcome extends Omit<WorkflowTypeOutcome, 'id' | 'created_at' | 'updated_at'> {
   id?: number;
   source?: 'configured' | 'fallback';
   created_at?: string;
@@ -1279,28 +1275,28 @@ export interface McpCatalog {
   tools: McpCatalogTool[];
 }
 
-export interface ResolvedSprintOutcomes {
-  base: ResolvedSprintOutcome[];
-  by_task_type: Record<string, ResolvedSprintOutcome[]>;
+export interface ResolvedWorkflowOutcomes {
+  base: ResolvedWorkflowOutcome[];
+  by_task_type: Record<string, ResolvedWorkflowOutcome[]>;
 }
 
-export interface SprintOutcomesResponse {
-  outcomes: SprintTypeOutcome[];
-  resolved_outcomes: ResolvedSprintOutcomes | null;
+export interface WorkflowOutcomesResponse {
+  outcomes: WorkflowTypeOutcome[];
+  resolved_outcomes: ResolvedWorkflowOutcomes | null;
 }
 
-export interface SprintTypeConfig extends SprintType {
-  deletion?: SprintTypeDeletionState;
-  task_types: SprintTypeTaskType[];
+export interface WorkflowTypeConfig extends WorkflowType {
+  deletion?: WorkflowTypeDeletionState;
+  task_types: WorkflowTypeTaskType[];
   statuses?: TaskStatusMeta[];
   field_schemas: TaskFieldSchema[];
-  outcomes: SprintTypeOutcome[];
-  resolved_outcomes: ResolvedSprintOutcomes | null;
+  outcomes: WorkflowTypeOutcome[];
+  resolved_outcomes: ResolvedWorkflowOutcomes | null;
   relationship_types?: TaskRelationshipTypeConfig[];
 }
 
 export interface WorkflowConfigResponse {
-  sprint_types: SprintTypeConfig[];
+  workflow_types: WorkflowTypeConfig[];
 }
 
 export type EnvironmentSetup =
@@ -1308,13 +1304,13 @@ export type EnvironmentSetup =
   | { mode: 'auto'; roots: string[]; timeoutSeconds: number }
   | { mode: 'custom'; steps: Array<{ command: string[]; cwd: string }>; timeoutSeconds: number };
 
-export interface Sprint {
+export interface Workflow {
   id: number;
   project_id: number;
   project_name?: string;
   name: string;
   goal: string;
-  sprint_type: string;
+  workflow_type: string;
   status: 'planning' | 'active' | 'paused' | 'complete' | 'closed';
   length_kind: 'time' | 'runs';
   length_value: string;
@@ -1334,29 +1330,29 @@ export interface Sprint {
   remaining_story_points?: number;
 }
 
-export interface CreateSprintInput {
+export interface CreateWorkflowInput {
   project_id: number;
   name: string;
   goal?: string;
-  sprint_type?: string;
-  source_sprint_id?: number;
-  status?: Sprint['status'];
-  length_kind?: Sprint['length_kind'];
+  workflow_type?: string;
+  source_workflow_id?: number;
+  status?: Workflow['status'];
+  length_kind?: Workflow['length_kind'];
   length_value?: string;
   started_at?: string | null;
   environment_setup?: EnvironmentSetup;
   repo_path?: string | null;
   repo_url?: string | null;
-  repo_access_mode?: Sprint['repo_access_mode'];
+  repo_access_mode?: Workflow['repo_access_mode'];
 }
 
-export interface SprintAssignment extends Sprint {
+export interface WorkflowAssignment extends Workflow {
   assignment_kind: 'primary' | 'attached';
-  is_primary_sprint: number;
+  is_primary_workflow: number;
 }
 
-export interface SprintMetrics {
-  sprint_id: number;
+export interface WorkflowMetrics {
+  workflow_id: number;
   tasks_total: number;
   tasks_done: number;
   completion_rate: number;
@@ -1371,9 +1367,9 @@ export interface SprintMetrics {
   avg_task_duration_ms: number;
 }
 
-export interface ProjectMetrics extends SprintMetrics {
+export interface ProjectMetrics extends WorkflowMetrics {
   project_id: number;
-  sprint_count: number;
+  workflow_count: number;
 }
 
 export interface TaskStatusMeta {
@@ -1423,8 +1419,8 @@ export interface SystemPolicy {
 
 export interface WorkflowRoutingWarning {
   kind: 'routed_status_missing_external_event_or_outcome_transitions';
-  sprint_id: number;
-  sprint_type: string;
+  workflow_id: number;
+  workflow_type: string;
   status: string;
   status_label: string;
   task_types: string[];
@@ -1436,7 +1432,7 @@ export interface WorkflowRoutingWarning {
 
 export interface WorkflowOutcomeMeta {
   id?: number;
-  sprint_type_key: string;
+  workflow_type_key: string;
   task_type: string | null;
   outcome_key: string;
   label: string;
@@ -1450,8 +1446,8 @@ export interface WorkflowOutcomeMeta {
 }
 
 export interface WorkflowMetadataResponse {
-  sprint_id: number | null;
-  sprint_type: string;
+  workflow_id: number | null;
+  workflow_type: string;
   task_type: string | null;
   task_types: WorkflowTaskTypeMeta[];
   statuses: TaskStatusMeta[];
@@ -1486,20 +1482,20 @@ export interface RoutingTransition {
   id: number;
   project_id: number | null;
   project_name?: string | null;
-  sprint_id?: number | null;
-  sprint_name?: string | null;
-  sprint_type?: string | null;
+  workflow_id?: number | null;
+  workflow_name?: string | null;
+  workflow_type?: string | null;
   task_type?: string | null;
   from_status: string;
   outcome: string;
   to_status: string;
   enabled: number;
   priority?: number;
-  scope_kind?: 'sprint_type_default' | 'default_scope' | 'sprint_override';
+  scope_kind?: 'workflow_type_default' | 'default_scope' | 'workflow_override';
   is_inherited?: boolean;
   is_override?: boolean;
-  overridden_by_sprint?: boolean;
-  effective_for_sprint?: boolean;
+  overridden_by_workflow?: boolean;
+  effective_for_workflow?: boolean;
   /** Legacy compatibility field. Transition rows remain operator-configurable even if older data still carries this flag. */
   is_protected?: number;
 }
@@ -1508,29 +1504,29 @@ export interface TaskRoutingRule {
   id: number;
   project_id?: number;
   project_name?: string | null;
-  sprint_id?: number | null;
-  sprint_name?: string | null;
-  sprint_type?: string | null;
+  workflow_id?: number | null;
+  workflow_name?: string | null;
+  workflow_type?: string | null;
   task_type: string | null;
   status: string;
   agent_id: number;
   agent_name?: string | null;
   enabled: number;
   priority: number;
-  scope_kind?: 'sprint_type_default' | 'sprint_override';
+  scope_kind?: 'workflow_type_default' | 'workflow_override';
   is_inherited?: boolean;
   is_override?: boolean;
-  overridden_by_sprint?: boolean;
-  effective_for_sprint?: boolean;
+  overridden_by_workflow?: boolean;
+  effective_for_workflow?: boolean;
   created_at?: string;
   updated_at?: string;
 }
 
 export interface TransitionRequirement {
   id: number;
-  sprint_id?: number | null;
-  sprint_name?: string | null;
-  sprint_type?: string | null;
+  workflow_id?: number | null;
+  workflow_name?: string | null;
+  workflow_type?: string | null;
   project_id?: number | null;
   task_type: string | null;
   outcome: string;
@@ -1541,27 +1537,27 @@ export interface TransitionRequirement {
   message: string;
   enabled: number;
   priority: number;
-  scope_kind?: 'sprint_type_default' | 'default_scope' | 'sprint_override';
+  scope_kind?: 'workflow_type_default' | 'default_scope' | 'workflow_override';
   is_inherited?: boolean;
   is_override?: boolean;
-  overridden_by_sprint?: boolean;
-  effective_for_sprint?: boolean;
+  overridden_by_workflow?: boolean;
+  effective_for_workflow?: boolean;
   created_at?: string;
   updated_at?: string;
 }
 
 export interface RoutingScopeInfo {
   project_id: number;
-  sprint_type: string;
-  sprint_id: number | null;
+  workflow_type: string;
+  workflow_id: number | null;
 }
 
 export interface WorkflowEventMapping {
   id: number;
   project_id: number | null;
-  sprint_id?: number | null;
-  sprint_type?: string | null;
-  scope_kind?: 'sprint_type_default' | 'default_scope' | 'sprint_override';
+  workflow_id?: number | null;
+  workflow_type?: string | null;
+  scope_kind?: 'workflow_type_default' | 'default_scope' | 'workflow_override';
   is_inherited?: boolean;
   is_override?: boolean;
   source: string | null;
@@ -1586,7 +1582,7 @@ export interface WorkflowEventMapping {
 export type ExternalEventMapping = WorkflowEventMapping;
 
 export interface TransitionRequirementFieldsResponse {
-  sprint_type: string;
+  workflow_type: string;
   task_type: string | null;
   fields: CustomFieldDefinition[];
   field_names: string[];
@@ -1691,7 +1687,7 @@ export interface WorkflowGraphAssignment {
   is_inherited: boolean;
   is_override: boolean;
   /** False when a workflow-scoped override supersedes this inherited row. */
-  effective_for_sprint: boolean;
+  effective_for_workflow: boolean;
 }
 
 export interface WorkflowGraphInboundEvent {
@@ -1737,7 +1733,7 @@ export interface WorkflowGraphGate {
   scope_kind: string;
   is_inherited: boolean;
   is_override: boolean;
-  effective_for_sprint: boolean;
+  effective_for_workflow: boolean;
 }
 
 export interface WorkflowGraphEdge {
@@ -1756,7 +1752,7 @@ export interface WorkflowGraphEdge {
   is_inherited: boolean;
   is_override: boolean;
   /** False when a workflow-scoped override supersedes this inherited row. */
-  effective_for_sprint: boolean;
+  effective_for_workflow: boolean;
   parallel_group: string;
   is_back_edge: boolean;
   shadowed_by: string | null;
@@ -1854,8 +1850,8 @@ export interface HistoricalTrace {
     status: string;
     task_type: string | null;
     project_id: number | null;
-    sprint_id: number | null;
-    sprint_type: string | null;
+    workflow_id: number | null;
+    workflow_type: string | null;
   };
   scope: WorkflowGraph['scope'];
   steps: TraceStep[];

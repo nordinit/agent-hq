@@ -8,9 +8,9 @@ beforeEach(async()=>{
   db=await setupTestDb();
   await db.run(`INSERT INTO tenants(id,name,slug) VALUES(1,'One','one'),(2,'Two','two')`);
   await db.run(`INSERT INTO projects(id,tenant_id,name) VALUES(1,1,'First'),(2,2,'Second')`);
-  await db.run(`INSERT INTO sprint_types(tenant_id,key,name) VALUES(1,'article','Article'),(2,'article','Other article')`);
-  await db.run(`INSERT INTO sprints(id,tenant_id,project_id,name,sprint_type) VALUES(1,1,1,'Articles','article'),(2,2,2,'Other','article')`);
-  await db.run(`INSERT INTO task_field_schemas(tenant_id,sprint_type_key,schema_json) VALUES(1,'article',?), (2,'article',?)`,
+  await db.run(`INSERT INTO workflow_types(tenant_id,key,name) VALUES(1,'article','Article'),(2,'article','Other article')`);
+  await db.run(`INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(1,1,1,'Articles','article'),(2,2,2,'Other','article')`);
+  await db.run(`INSERT INTO task_field_schemas(tenant_id,workflow_type_key,schema_json) VALUES(1,'article',?), (2,'article',?)`,
     JSON.stringify({fields:[{key:'amount',type:'number',label:'Amount'},{key:'accepted',type:'checkbox'}]}),
     JSON.stringify({fields:[{key:'secret_other_tenant',type:'text'}]}));
   await db.run(`INSERT INTO agents(id,tenant_id,name,session_key,model,job_instructions) VALUES(1,1,'A','private-session','model-a','private instructions')`);
@@ -18,7 +18,7 @@ beforeEach(async()=>{
 afterEach(async()=>{await teardownTestDb();});
 
 async function task(id=1,tenantId=1){
-  await db.run(`INSERT INTO tasks(id,tenant_id,title,sprint_id,project_id,status,task_type,assigned_agent_id,custom_fields_json)
+  await db.run(`INSERT INTO tasks(id,tenant_id,title,workflow_id,project_id,status,task_type,assigned_agent_id,custom_fields_json)
     VALUES(?,?,?,?,?,'draft','article',?,?)`,id,tenantId,'A task',tenantId,tenantId,tenantId===1?1:null,
     JSON.stringify({amount:12.5,accepted:false,undeclared_secret:'must not survive',secret_other_tenant:'also hidden'}));
 }
@@ -181,7 +181,7 @@ it('captures dependencies without conflating them with configured blockage',asyn
 });
 
 it('applies task-type schema overrides and preserves descriptors when fields later change',async()=>{
-  await db.run(`INSERT INTO task_field_schemas(tenant_id,sprint_type_key,task_type,schema_json) VALUES(1,'article','article',?)`,
+  await db.run(`INSERT INTO task_field_schemas(tenant_id,workflow_type_key,task_type,schema_json) VALUES(1,'article','article',?)`,
     JSON.stringify({fields:[{key:'amount',type:'select',options:['negotiated']},{key:'typed',type:'number'}]}));
   await task();
   await db.run(`UPDATE task_field_schemas SET schema_json=? WHERE tenant_id=1 AND task_type='article'`,JSON.stringify({fields:[{key:'amount',type:'text'}]}));
@@ -234,8 +234,8 @@ it('preserves original event context when an old outcome is corrected after a ta
   await task();
   await db.run(`INSERT INTO task_history(id,tenant_id,task_id,field,new_value) VALUES(1,1,1,'lifecycle_outcome','old')`);
   await db.run(`INSERT INTO projects(id,tenant_id,name) VALUES(3,1,'New project')`);
-  await db.run(`INSERT INTO sprints(id,tenant_id,project_id,name,sprint_type) VALUES(3,1,3,'New workflow','article')`);
-  await db.run(`UPDATE tasks SET project_id=3,sprint_id=3,custom_fields_json='{"amount":99}' WHERE id=1`);
+  await db.run(`INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(3,1,3,'New workflow','article')`);
+  await db.run(`UPDATE tasks SET project_id=3,workflow_id=3,custom_fields_json='{"amount":99}' WHERE id=1`);
   await db.run(`UPDATE task_history SET new_value='corrected' WHERE id=1`);
   await drainTelemetryOutbox(db);
   const correction=await db.get<{project_id:number;workflow_id:number;payload:any}>(`SELECT project_id,workflow_id,payload
@@ -303,7 +303,7 @@ it('purges project snapshots and associated task history when the project is del
   expect(rows.length).toBeGreaterThan(0);
   for(const row of rows) expect(JSON.stringify(row)).not.toContain('custom_fields');
   expect(await db.value(`SELECT COUNT(*) FROM telemetry_observations WHERE source='projects' AND entity_id=1 AND kind<>'configuration.deleted'`)).toBe(0);
-  expect(await db.value(`SELECT COUNT(*) FROM telemetry_observations WHERE source='sprints' AND entity_id=1 AND kind<>'configuration.deleted'`)).toBe(0);
+  expect(await db.value(`SELECT COUNT(*) FROM telemetry_observations WHERE source='workflows' AND entity_id=1 AND kind<>'configuration.deleted'`)).toBe(0);
 });
 
 it('purges deleted agent execution data while retaining surviving task observations',async()=>{
@@ -345,7 +345,7 @@ it.each(['agent','workflow','run','runtime'])('revokes retained taskless proofs 
   await db.run(`INSERT INTO telemetry_query_results(id,tenant_id,scope,request,state,actor,expires_at)
     VALUES('proof',1,'{}','{}','complete','test',clock_timestamp()+interval '1 hour')`);
   if(target==='agent')await db.run('UPDATE agents SET project_id=3 WHERE id=1');
-  else if(target==='workflow')await db.run('UPDATE sprints SET project_id=3 WHERE id=1');
+  else if(target==='workflow')await db.run('UPDATE workflows SET project_id=3 WHERE id=1');
   else if(target==='run')await db.run('UPDATE job_instances SET agent_id=3 WHERE id=1');
   else await db.run('UPDATE runtime_executions SET instance_id=2 WHERE instance_id=1');
   expect(await db.value('SELECT COUNT(*) FROM telemetry_query_results')).toBe(0);
@@ -364,7 +364,7 @@ it('bootstraps taskless execution scope from its canonical tenant-owned agent',a
 
 it('records dependency resolution and reopening according to configured terminality',async()=>{
   await task();await task(3);
-  await db.run(`INSERT INTO sprint_task_statuses(sprint_id,status_key,label,terminal) VALUES(1,'accepted','Accepted',1)`);
+  await db.run(`INSERT INTO workflow_task_statuses(workflow_id,status_key,label,terminal) VALUES(1,'accepted','Accepted',1)`);
   await db.run(`INSERT INTO task_dependencies(blocker_id,blocked_id) VALUES(1,3)`);
   await db.run(`UPDATE tasks SET status='accepted' WHERE id=1`);
   await db.run(`UPDATE tasks SET status='draft' WHERE id=1`);
@@ -378,7 +378,7 @@ it('records global and scoped terminality edits that change an existing dependen
   await task();await task(3);
   await db.run(`INSERT INTO task_dependencies(blocker_id,blocked_id) VALUES(1,3)`);
   await db.run(`INSERT INTO task_statuses(name,label,terminal) VALUES('draft','Draft',1)`);
-  await db.run(`INSERT INTO sprint_type_task_statuses(tenant_id,sprint_type_key,status_key,label,terminal) VALUES(1,'article','draft','Draft',0)`);
+  await db.run(`INSERT INTO workflow_type_task_statuses(tenant_id,workflow_type_key,status_key,label,terminal) VALUES(1,'article','draft','Draft',0)`);
   await drainTelemetryOutbox(db);
   const changes=(await observedTask(3)).filter(row=>row.kind==='task.dependencies_changed');
   expect(changes.map(row=>row.payload.after.unresolved_dependencies)).toEqual([1,0,1]);
@@ -386,9 +386,9 @@ it('records global and scoped terminality edits that change an existing dependen
 
 it('marks dependencies outside the task project for historical scope redaction',async()=>{
   await db.run(`INSERT INTO projects(id,tenant_id,name) VALUES(3,1,'Third')`);
-  await db.run(`INSERT INTO sprints(id,tenant_id,project_id,name,sprint_type) VALUES(3,1,3,'Third','article')`);
+  await db.run(`INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(3,1,3,'Third','article')`);
   await task();await task(3);
-  await db.run(`UPDATE tasks SET project_id=3,sprint_id=3 WHERE id=1`);
+  await db.run(`UPDATE tasks SET project_id=3,workflow_id=3 WHERE id=1`);
   await db.run(`INSERT INTO task_dependencies(blocker_id,blocked_id) VALUES(1,3)`);
   await drainTelemetryOutbox(db);
   expect((await observedTask(3)).at(-1)?.payload.after).toMatchObject({unresolved_dependencies:1,dependencies_within_project:false,dependencies_within_tenant:true});
@@ -396,7 +396,7 @@ it('marks dependencies outside the task project for historical scope redaction',
 
 it('does not lose the final dependency count when different blockers resolve concurrently',async()=>{
   await task();await task(3);await task(4);
-  await db.run(`INSERT INTO sprint_task_statuses(sprint_id,status_key,label,terminal) VALUES(1,'accepted','Accepted',1)`);
+  await db.run(`INSERT INTO workflow_task_statuses(workflow_id,status_key,label,terminal) VALUES(1,'accepted','Accepted',1)`);
   await db.run(`INSERT INTO task_dependencies(blocker_id,blocked_id) VALUES(1,4),(3,4)`);
   let release!:()=>void;let notifyReady!:()=>void;
   const held=new Promise<void>(resolve=>{release=resolve;});

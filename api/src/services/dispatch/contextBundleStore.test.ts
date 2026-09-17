@@ -23,11 +23,11 @@ async function seed(): Promise<void> {
   `);
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (86, 1, 'Agent HQ', '', '')`);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
+    INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status)
     VALUES (42, 1, 86, 'Enhancements', 'Ship the viewer.', 'generic', 'active')
   `);
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, sprint_id, task_type, custom_fields_json)
+    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, workflow_id, task_type, custom_fields_json)
     VALUES (460, 1, 'Add the context viewer', 'Build it.', 'in_progress', 'high', 86, 42, 'backend', '{}')
   `);
   for (const instanceId of [700, 701]) {

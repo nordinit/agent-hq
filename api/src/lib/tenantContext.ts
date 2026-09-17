@@ -13,7 +13,7 @@ import {
   buildCanonicalAgentMainSessionKey,
   slugifySessionKeyPart,
 } from './sessionKeys';
-import { ensureProjectBacklogSprint } from './starterSetup';
+import { ensureProjectBacklogWorkflow } from './starterSetup';
 import {
   DEFAULT_PROJECT_NAME,
   LEGACY_STARTER_PROJECT_NAME,
@@ -269,7 +269,7 @@ const TENANT_OWNED_TABLES = [
   'projects',
   'agents',
   'tasks',
-  'sprints',
+  'workflows',
   'job_instances',
   'logs',
   'chat_messages',
@@ -281,9 +281,9 @@ const TENANT_OWNED_TABLES = [
   'task_outcome_metrics',
   'sessions',
   'routing_config',
-  'sprint_task_routing_rules',
-  'sprint_task_transitions',
-  'sprint_task_transition_requirements',
+  'workflow_task_routing_rules',
+  'workflow_task_transitions',
+  'workflow_task_transition_requirements',
   'story_point_model_routing',
   'provider_config',
   'github_identities',
@@ -296,10 +296,10 @@ const TENANT_OWNED_TABLES = [
 
 const WORKFLOW_DEFINITION_CONFIG_TABLES = [
   'task_field_schemas',
-  'sprint_type_task_types',
-  'sprint_type_task_statuses',
-  'sprint_type_outcomes',
-  'sprint_type_relationship_types',
+  'workflow_type_task_types',
+  'workflow_type_task_statuses',
+  'workflow_type_outcomes',
+  'workflow_type_relationship_types',
 ] as const;
 
 const verifiedTenantSchemaDbs = new WeakSet<Db>();
@@ -494,7 +494,7 @@ async function assertNoNullTenantOwnership(db: Db, table: string): Promise<void>
 export async function verifyTenantSchemaForStartup(db: Db): Promise<number> {
   if (verifiedTenantSchemaDbs.has(db)) return await requireCurrentDefaultTenantId(db);
   const defaultTenantId = await requireCurrentDefaultTenantId(db);
-  for (const table of [...TENANT_OWNED_TABLES, 'sprint_types', ...WORKFLOW_DEFINITION_CONFIG_TABLES]) {
+  for (const table of [...TENANT_OWNED_TABLES, 'workflow_types', ...WORKFLOW_DEFINITION_CONFIG_TABLES]) {
     await assertNoNullTenantOwnership(db, table);
   }
   verifiedTenantSchemaDbs.add(db);
@@ -725,7 +725,7 @@ export async function ensureTenantAgentHqMcpServer(db: Db, tenantId: number): Pr
     INSERT INTO mcp_servers (tenant_id, name, slug, description, transport, command, args, env, cwd, enabled)
     VALUES (?, ?, ?, ?, 'stdio', ?, ?, ?, ?, 1)
     ON CONFLICT (tenant_id, slug) DO NOTHING
-  `, tenantId, 'Agent HQ MCP Server', AGENT_HQ_MCP_SERVER_SLUG, 'Tenant-local stdio MCP server exposing Agent HQ projects, sprints, tasks, and agents.', nodeExecutable, args, env, cwd);
+  `, tenantId, 'Agent HQ MCP Server', AGENT_HQ_MCP_SERVER_SLUG, 'Tenant-local stdio MCP server exposing Agent HQ projects, workflows, tasks, and agents.', nodeExecutable, args, env, cwd);
 
   return (await db.get(`
     SELECT id FROM mcp_servers WHERE tenant_id = ? AND slug = ? LIMIT 1
@@ -916,7 +916,7 @@ async function provisionTenantDefaultWorkspace(db: Db, tenantId: number): Promis
     `, DEFAULT_PROJECT_NAME, 'Default Agent HQ workspace project.', 'Reusable starter workspace project.', projectId);
   }
 
-  await ensureProjectBacklogSprint(db, projectId);
+  await ensureProjectBacklogWorkflow(db, projectId);
   const atlasAgentId = await ensureTenantDefaultAtlasAgent(db, tenantId, projectId);
   await ensureStarterAgentMcpAssignments(db, tenantId, atlasAgentId, [AGENT_HQ_MCP_SERVER_SLUG]);
   await ensureTenantStarterAgents(db, tenantId, projectId, tenantSlug);
@@ -1158,18 +1158,18 @@ export async function deleteTenant(db: Db, tenantId: number, input: { confirmati
     addCounts(counts, await deleteWhere(db, 'agent_tool_assignments', `tool_id IN (SELECT id FROM tools WHERE tenant_id = ?)`, [tenantId], 'agent_tool_assignments'));
     addCounts(counts, await deleteWhere(db, 'project_audit_log', `project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, [tenantId]));
     addCounts(counts, await deleteWhere(db, 'routing_config', `project_id IN (SELECT id FROM projects WHERE tenant_id = ?)`, [tenantId]));
-    addCounts(counts, await deleteWhere(db, 'sprint_task_statuses', `sprint_id IN (SELECT id FROM sprints WHERE tenant_id = ?)`, [tenantId]));
+    addCounts(counts, await deleteWhere(db, 'workflow_task_statuses', `workflow_id IN (SELECT id FROM workflows WHERE tenant_id = ?)`, [tenantId]));
 
     for (const table of [
       'sessions',
       'external_event_mappings',
       'story_point_model_routing',
-      'sprint_task_transition_requirements',
-      'sprint_task_transitions',
-      'sprint_task_routing_rules',
+      'workflow_task_transition_requirements',
+      'workflow_task_transitions',
+      'workflow_task_routing_rules',
       'recurring_task_series',
       'tasks',
-      'sprints',
+      'workflows',
       'tools',
       'skills',
       'mcp_servers',

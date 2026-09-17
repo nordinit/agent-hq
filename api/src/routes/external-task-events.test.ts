@@ -50,14 +50,14 @@ async function resetDb(): Promise<void> {
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1)`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (10, 1, 1, 'Enhancements', 'generic')`);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1)`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Enhancements', 'generic')`);
   await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, openclaw_agent_id, job_title, enabled) VALUES (7, 1, 1, 'Lease Manager', 'agent:lease-manager:main', ?, ?, 'Service', 1)`, DEV_ENV_LEASE_MANAGER_SOURCE, DEV_ENV_LEASE_MANAGER_SOURCE);
   await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, job_title, enabled) VALUES (42, 1, 1, 'Cinder', 'agent:cinder:main', 'cinder-backend', 'Backend Engineer', 1)`);
   await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, job_title, enabled) VALUES (43, 1, 1, 'Scoped No Access', 'agent:scoped-no-access:main', 'scoped-no-access', 'Backend Engineer', 1)`);
   await db.run(`
     INSERT INTO tasks (
-      id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
+      id, tenant_id, title, status, task_type, workflow_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
     ) VALUES (449, 1, 'External task event callback', 'in_progress', 'backend', 10, 1, 42, NULL, 42, CURRENT_TIMESTAMP)
   `);
   await db.run(`
@@ -69,7 +69,7 @@ async function resetDb(): Promise<void> {
   await db.run(`UPDATE tasks SET active_instance_id = 1784 WHERE id = 449`);
   await seedDefaultExternalEventMappings(db);
   await db.run(`
-    INSERT INTO sprint_task_transitions (tenant_id, sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status)
+    INSERT INTO workflow_task_transitions (tenant_id, workflow_id, project_id, workflow_type, task_type, from_status, outcome, to_status)
     VALUES
       (1, 10, 1, 'generic', 'backend', 'in_progress', 'completed_for_review', 'review'),
       (1, 10, 1, 'generic', 'backend', 'in_progress', 'dev_deploy_queued', 'dev_deploy_queued'),
@@ -81,7 +81,7 @@ async function resetDb(): Promise<void> {
       (1, 10, 1, 'generic', 'backend', 'in_progress', 'blocked', 'stalled')
   `);
   await db.run(`
-    INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, message)
+    INSERT INTO workflow_task_transition_requirements (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, message)
     VALUES
       (1, 10, 1, 'generic', 'backend', 'completed_for_review', 'review_branch', 'review_branch required'),
       (1, 10, 1, 'generic', 'backend', 'completed_for_review', 'review_commit', 'review_commit required')
@@ -259,10 +259,10 @@ describe('external task events route', () => {
   it('denies scoped external task-event management without capability and across project boundaries', async () => {
     const db = getDb();
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (2, 1, 'Other Project')`);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, 1, 2, 'Other Project Sprint', 'generic')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (20, 1, 2, 'Other Project Workflow', 'generic')`);
     await db.run(`
       INSERT INTO tasks (
-        id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
+        id, tenant_id, title, status, task_type, workflow_id, project_id, agent_id, active_instance_id, review_owner_agent_id, updated_at
       ) VALUES (450, 1, 'Other project event', 'in_progress', 'backend', 20, 2, 42, NULL, 42, CURRENT_TIMESTAMP)
     `);
     const payload = {
@@ -654,7 +654,7 @@ describe('external task events route', () => {
     const db = getDb();
     (cleanupTaskExecutionLinkageForStatus as jest.Mock).mockClear();
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, message)
+      INSERT INTO workflow_task_transition_requirements (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, message)
       VALUES (1, 10, 1, 'generic', 'backend', 'completed_for_review', 'configuration_resource', 'configuration_resource required')
     `);
     await db.run(`UPDATE tasks SET status = 'dev_deploying' WHERE id = 449`);

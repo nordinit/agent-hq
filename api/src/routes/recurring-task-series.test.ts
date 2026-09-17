@@ -38,7 +38,7 @@ async function seedFixture(): Promise<void> {
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (614, ?, 'Recurring API', '', '')`, tenantId);
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (615, ?, 'Other Project', '', '')`, tenantId);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+    INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
     VALUES
       (6141, ?, 614, 'Fixed Workflow', '', 'recurring_api', 'active', 'time', '2w'),
       (6142, ?, 614, 'Closed Workflow', '', 'recurring_api', 'closed', 'time', '2w'),
@@ -48,15 +48,15 @@ async function seedFixture(): Promise<void> {
     INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
     VALUES (6143, ?, 614, 'Pinned Cinder', 'Backend Engineer', 'agent:pinned-cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
   `, tenantId);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, tenantId);
-  await db.run(`DELETE FROM sprint_type_task_types WHERE tenant_id = ? AND sprint_type_key = 'recurring_api'`, tenantId);
-  await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, tenantId);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, tenantId);
+  await db.run(`DELETE FROM workflow_type_task_types WHERE tenant_id = ? AND workflow_type_key = 'recurring_api'`, tenantId);
+  await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, tenantId);
 }
 
 function validPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     project_id: 614,
-    sprint_id: 6141,
+    workflow_id: 6141,
     title_template: 'Weekly backend maintenance',
     description_template: 'Run maintenance checks.',
     task_type: 'backend',
@@ -104,15 +104,14 @@ describe('recurring task series API', () => {
     const created = await createSeries();
     expect(created).toMatchObject({
       project_id: 614,
-      sprint_id: 6141,
+      workflow_id: 6141,
       task_type: 'backend',
       status_on_create: 'ready',
       enabled: true,
       schedule: 'every monday 09:00',
       project_name: 'Recurring API',
-      sprint_name: 'Fixed Workflow',
-      workflow_id: 6141,
       workflow_name: 'Fixed Workflow',
+
       agent_id: 6143,
       agent_pin: expect.objectContaining({ behavior: 'optional_pinned_assignment' }),
     });
@@ -159,12 +158,12 @@ describe('recurring task series API', () => {
     await expect(deleteRes.json()).resolves.toEqual({ ok: true, deleted_id: id });
   });
 
-  it('accepts workflow_id as the fixed workflow alias while preserving sprint fields', async () => {
-    const created = await createSeries({ workflow_id: 6141, sprint_id: undefined });
+  it('accepts workflow_id as the fixed workflow alias while preserving workflow fields', async () => {
+    const created = await createSeries({ workflow_id: 6141 });
     expect(created).toMatchObject({
       project_id: 614,
-      sprint_id: 6141,
       workflow_id: 6141,
+
       workflow_name: 'Fixed Workflow',
       task_type: 'backend',
       status_on_create: 'ready',
@@ -174,7 +173,7 @@ describe('recurring task series API', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { total: number; series: Array<Record<string, unknown>> };
     expect(body.total).toBe(1);
-    expect(body.series[0]).toMatchObject({ id: created.id, sprint_id: 6141, workflow_id: 6141 });
+    expect(body.series[0]).toMatchObject({ id: created.id, workflow_id: 6141 });
   });
 
   it('lists and filters by project, workflow, enabled state, and next_run_at window', async () => {
@@ -184,7 +183,7 @@ describe('recurring task series API', () => {
     const nextRun = String(enabled.next_run_at);
     const from = new Date(new Date(nextRun).getTime() - 60_000).toISOString();
     const to = new Date(new Date(nextRun).getTime() + 60_000).toISOString();
-    const res = await fetch(`${baseUrl}/api/v1/recurring-task-series?project_id=614&sprint_id=6141&enabled=true&next_run_from=${encodeURIComponent(from)}&next_run_to=${encodeURIComponent(to)}`);
+    const res = await fetch(`${baseUrl}/api/v1/recurring-task-series?project_id=614&workflow_id=6141&enabled=true&next_run_from=${encodeURIComponent(from)}&next_run_to=${encodeURIComponent(to)}`);
     expect(res.status).toBe(200);
     const body = await res.json() as { series: Array<Record<string, unknown>>; total: number };
     expect(body.total).toBe(1);
@@ -253,12 +252,12 @@ describe('recurring task series API', () => {
 
   it('rejects invalid project/workflow, schedule, timezone, status, and task type combinations', async () => {
     for (const [override, code] of [
-      [{ sprint_id: 6151 }, 'workflow_project_mismatch'],
-      [{ sprint_id: 6142 }, 'fixed_workflow_unavailable'],
+      [{ workflow_id: 6151 }, 'workflow_project_mismatch'],
+      [{ workflow_id: 6142 }, 'fixed_workflow_unavailable'],
       [{ schedule: 'weekly on monday' }, 'schedule_invalid'],
       [{ timezone: 'Mars/Olympus' }, 'timezone_invalid'],
       [{ status_on_create: 'not_real' }, 'status_on_create_unsupported'],
-      [{ task_type: 'qa' }, 'task_type_not_allowed_for_sprint_type'],
+      [{ task_type: 'qa' }, 'task_type_not_allowed_for_workflow_type'],
     ] as Array<[Record<string, unknown>, string]>) {
       const res = await fetch(`${baseUrl}/api/v1/recurring-task-series`, {
         method: 'POST',
@@ -283,7 +282,7 @@ describe('recurring task series API', () => {
     expect(body.task).toMatchObject({
       title: 'Weekly backend maintenance',
       project_id: 614,
-      sprint_id: 6141,
+      workflow_id: 6141,
       agent_id: null,
       assigned_agent_id: 6143,
       status: 'ready',
@@ -316,15 +315,15 @@ describe('recurring task series API', () => {
       VALUES (714, ?, 'EcoPool', '', '')
     `, ecoPoolTenantId);
     await db.run(`
-      INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+      INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
       VALUES (7141, ?, 714, 'EcoPool Workflow', '', 'recurring_api', 'active', 'time', '2w')
     `, ecoPoolTenantId);
     await db.run(`
       INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
       VALUES (7143, ?, 714, 'EcoPool Agent', 'Backend Engineer', 'agent:ecopool:test', '/tmp/ecopool', 'idle', 'openai-codex')
     `, ecoPoolTenantId);
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, ecoPoolTenantId);
-    await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, ecoPoolTenantId);
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (?, 'recurring_api', 'Recurring API', 1) ON CONFLICT DO NOTHING`, ecoPoolTenantId);
+    await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system) VALUES (?, 'recurring_api', 'backend', 1)`, ecoPoolTenantId);
 
     const defaultSeries = await createSeries({ title_template: 'Default weekly maintenance' });
     await setActiveTenantId(db, ecoPoolTenantId);
@@ -333,7 +332,7 @@ describe('recurring task series API', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(validPayload({
         project_id: 714,
-        sprint_id: 7141,
+        workflow_id: 7141,
         title_template: 'EcoPool weekly maintenance',
         agent_id: 7143,
       })),

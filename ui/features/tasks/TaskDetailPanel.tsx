@@ -9,7 +9,7 @@ import { useRouter } from 'next/navigation';
 import { getTaskStatusMaps } from '@/lib/taskStatuses';
 import { getRunLifecycle } from '@/lib/runLifecycle';
 import { shouldClearInvalidTaskType, useTaskTypes } from '@/lib/taskTypes';
-import { formatSprintLabel } from '@/lib/sprintLabel';
+import { formatWorkflowLabel } from '@/lib/workflowLabel';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
 import { TaskModal } from '@/features/tasks/TaskModal';
 import { resolveEffectiveModel, shortModelName, useModelRoutingRules } from './modelRouting';
@@ -38,7 +38,7 @@ const {
 } = getTaskStatusMaps();
 
 interface ProjOpt { id: number; name: string; }
-interface SprintOpt { id: number; name: string; status?: string; sprint_type?: string; }
+interface WorkflowOpt { id: number; name: string; status?: string; workflow_type?: string; }
 
 interface Props {
   task: Task;
@@ -54,8 +54,6 @@ interface Props {
 type FormState = Task & { recurring: boolean };
 
 // ── Time helper ──────────────────────────────────────────────────────────────
-
-
 
 // ── Related Tasks Section ───────────────────────────────────────────────────
 
@@ -415,32 +413,32 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
   const [latestContextInstanceId, setLatestContextInstanceId] = useState<number | null>(null);
   const [contextInstanceId, setContextInstanceId] = useState<number | null>(null);
   const [projects, setProjects] = useState<ProjOpt[]>([]);
-  const [sprints, setSprints] = useState<SprintOpt[]>([]);
-  const [loadingSprints, setLoadingSprints] = useState(false);
+  const [workflows, setWorkflows] = useState<WorkflowOpt[]>([]);
+  const [loadingWorkflows, setLoadingWorkflows] = useState(false);
   const [form, setForm] = useState<FormState>({ ...task, recurring: !!task.recurring });
   const modelRoutingRules = useModelRoutingRules(
     form.project_id ?? localTask.project_id ?? null,
-    form.sprint_id ?? localTask.sprint_id ?? null,
+    form.workflow_id ?? localTask.workflow_id ?? null,
   );
   const effectiveModel = resolveEffectiveModel(
     form.story_points ?? localTask.story_points,
     modelRoutingRules,
     form.project_id ?? localTask.project_id ?? null,
-    form.sprint_id ?? localTask.sprint_id ?? null,
+    form.workflow_id ?? localTask.workflow_id ?? null,
   );
-  const selectedSprint = useMemo(
-    () => sprints.find(sprint => sprint.id === (form.sprint_id ?? localTask.sprint_id ?? null)) ?? null,
-    [form.sprint_id, localTask.sprint_id, sprints],
+  const selectedWorkflow = useMemo(
+    () => workflows.find(workflow => workflow.id === (form.workflow_id ?? localTask.workflow_id ?? null)) ?? null,
+    [form.workflow_id, localTask.workflow_id, workflows],
   );
-  const taskTypeSprintId = form.sprint_id ?? localTask.sprint_id ?? null;
-  const taskTypeSprintType = taskTypeSprintId
-    ? selectedSprint?.sprint_type ?? localTask.resolved_sprint_type ?? null
-    : localTask.resolved_sprint_type ?? null;
-  const { options: taskTypeOptions, loading: taskTypesLoading, error: taskTypesError } = useTaskTypes(taskTypeSprintId, {
-    sprintType: taskTypeSprintId ? null : taskTypeSprintType,
+  const taskTypeWorkflowId = form.workflow_id ?? localTask.workflow_id ?? null;
+  const taskTypeWorkflowType = taskTypeWorkflowId
+    ? selectedWorkflow?.workflow_type ?? localTask.resolved_workflow_type ?? null
+    : localTask.resolved_workflow_type ?? null;
+  const { options: taskTypeOptions, loading: taskTypesLoading, error: taskTypesError } = useTaskTypes(taskTypeWorkflowId, {
+    workflowType: taskTypeWorkflowId ? null : taskTypeWorkflowType,
   });
-  const { metadata: taskWorkflowMetadata, outcomeMap, nonFailureOutcomes } = useWorkflowMetadata(form.sprint_id ?? localTask.sprint_id ?? null, {
-    sprintType: (form.sprint_id ?? localTask.sprint_id ?? null) ? null : taskTypeSprintType,
+  const { metadata: taskWorkflowMetadata, outcomeMap, nonFailureOutcomes } = useWorkflowMetadata(form.workflow_id ?? localTask.workflow_id ?? null, {
+    workflowType: (form.workflow_id ?? localTask.workflow_id ?? null) ? null : taskTypeWorkflowType,
     taskType: form.task_type ?? localTask.task_type ?? null,
   });
   const statusDefinitions = statuses && statuses.length > 0 ? statuses : taskWorkflowMetadata.statuses;
@@ -463,30 +461,30 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
   useEffect(() => {
     let cancelled = false;
 
-    const loadProjectSprints = async () => {
+    const loadProjectWorkflows = async () => {
       if (!form.project_id) {
-        if (!cancelled) setSprints([]);
+        if (!cancelled) setWorkflows([]);
         return;
       }
 
-      setLoadingSprints(true);
+      setLoadingWorkflows(true);
       try {
-        const projectSprints = await api.getSprints(form.project_id, true);
+        const projectWorkflows = await api.getWorkflows(form.project_id, true);
         if (cancelled) return;
-        setSprints(projectSprints);
-        if (form.sprint_id != null && !projectSprints.some(sprint => sprint.id === form.sprint_id)) {
-          setForm(current => current.sprint_id == null ? current : ({ ...current, sprint_id: null, sprint_name: null, task_type: null }));
+        setWorkflows(projectWorkflows);
+        if (form.workflow_id != null && !projectWorkflows.some(workflow => workflow.id === form.workflow_id)) {
+          setForm(current => current.workflow_id == null ? current : ({ ...current, workflow_id: null, workflow_name: null, task_type: null }));
         }
       } catch {
-        if (!cancelled) setSprints([]);
+        if (!cancelled) setWorkflows([]);
       } finally {
-        if (!cancelled) setLoadingSprints(false);
+        if (!cancelled) setLoadingWorkflows(false);
       }
     };
 
-    loadProjectSprints();
+    loadProjectWorkflows();
     return () => { cancelled = true; };
-  }, [form.project_id, form.sprint_id]);
+  }, [form.project_id, form.workflow_id]);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -498,7 +496,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
   const [historyEntries, setHistoryEntries] = useState<TaskHistory[]>([]);
   const [resolvedFieldSchema, setResolvedFieldSchema] = useState<ResolvedTaskFieldSchemaResponse | null>(task.resolved_custom_field_schema
     ? {
-        sprint_type: task.resolved_sprint_type ?? 'generic',
+        workflow_type: task.resolved_workflow_type ?? 'generic',
         allowed_task_types: [],
         fields: task.resolved_custom_field_schema.fields ?? [],
       }
@@ -513,7 +511,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
   useEffect(() => {
     let cancelled = false;
 
-    api.resolveTaskFieldSchema({ sprint_id: form.sprint_id ?? null, task_type: form.task_type ?? null })
+    api.resolveTaskFieldSchema({ workflow_id: form.workflow_id ?? null, task_type: form.task_type ?? null })
       .then(schema => {
         if (!cancelled) setResolvedFieldSchema(schema);
       })
@@ -524,7 +522,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
     return () => {
       cancelled = true;
     };
-  }, [form.sprint_id, form.task_type]);
+  }, [form.workflow_id, form.task_type]);
 
   useEffect(() => {
     setForm(current => shouldClearInvalidTaskType(current.task_type ?? null, taskTypeOptions, taskTypesLoading)
@@ -813,15 +811,15 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
               </div>
 
               {/* Workflow */}
-              {localTask.sprint_name && localTask.sprint_id && (
+              {localTask.workflow_name && localTask.workflow_id && (
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-slate-500 uppercase tracking-wide w-20 shrink-0">Workflow</span>
                   <Link
-                    href={`/workflows/${localTask.sprint_id}`}
+                    href={`/workflows/${localTask.workflow_id}`}
                     onClick={onClose}
                     className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-violet-900/50 text-violet-300 hover:bg-violet-800/60 hover:text-violet-200 transition-colors"
                   >
-                    🏃 {formatSprintLabel({ id: localTask.sprint_id, name: localTask.sprint_name })}
+                    🏃 {formatWorkflowLabel({ id: localTask.workflow_id, name: localTask.workflow_name })}
                   </Link>
                 </div>
               )}
@@ -874,7 +872,6 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                   </span>
                 </div>
               )}
-
 
               {/* Active agent */}
               {localTask.agent_id && (
@@ -1103,7 +1100,7 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                 <div className="space-y-3 rounded-lg border border-slate-700 bg-slate-800/40 p-3">
                   <div>
                     <p className="text-xs font-medium text-slate-400 uppercase tracking-wide">Workflow Task Fields</p>
-                    <p className="text-[10px] text-slate-500 mt-1">Driven by workflow type {resolvedFieldSchema?.sprint_type ?? task.resolved_sprint_type ?? 'generic'}.</p>
+                    <p className="text-[10px] text-slate-500 mt-1">Driven by workflow type {resolvedFieldSchema?.workflow_type ?? task.resolved_workflow_type ?? 'generic'}.</p>
                   </div>
                   {(resolvedFieldSchema?.fields ?? []).map(field => {
                     const value = (form.custom_fields ?? {})[field.key];
@@ -1236,8 +1233,8 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                       setForm(current => ({
                         ...current,
                         project_id: nextProjectId,
-                        sprint_id: current.project_id === nextProjectId ? current.sprint_id : null,
-                        sprint_name: current.project_id === nextProjectId ? current.sprint_name : null,
+                        workflow_id: current.project_id === nextProjectId ? current.workflow_id : null,
+                        workflow_name: current.project_id === nextProjectId ? current.workflow_name : null,
                         task_type: current.project_id === nextProjectId ? current.task_type : null,
                       }));
                     }}
@@ -1256,26 +1253,26 @@ export function TaskDetailPanel({ task, statuses, onClose, onSave, onDelete, onC
                 <div className="relative">
                   <select
                     className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8 disabled:opacity-60"
-                    value={form.sprint_id ?? ''}
+                    value={form.workflow_id ?? ''}
                     onChange={e => setForm(current => ({
                       ...current,
-                      sprint_id: e.target.value ? Number(e.target.value) : null,
-                      sprint_name: e.target.value ? (sprints.find(sprint => sprint.id === Number(e.target.value))?.name ?? current.sprint_name ?? null) : null,
+                      workflow_id: e.target.value ? Number(e.target.value) : null,
+                      workflow_name: e.target.value ? (workflows.find(workflow => workflow.id === Number(e.target.value))?.name ?? current.workflow_name ?? null) : null,
                       task_type: null,
                     }))}
-                    disabled={!form.project_id || loadingSprints}
+                    disabled={!form.project_id || loadingWorkflows}
                   >
                     <option value="">{form.project_id ? '— No workflow —' : 'Select a project first'}</option>
-                    {sprints.map(sprint => (
-                      <option key={sprint.id} value={sprint.id}>
-                        {formatSprintLabel(sprint)}{sprint.status ? ` (${sprint.status})` : ''}
+                    {workflows.map(workflow => (
+                      <option key={workflow.id} value={workflow.id}>
+                        {formatWorkflowLabel(workflow)}{workflow.status ? ` (${workflow.status})` : ''}
                       </option>
                     ))}
                   </select>
                   <ChevronDown className="absolute right-2 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
                 </div>
                 <p className="text-[10px] text-slate-600 mt-0.5">
-                  {loadingSprints ? 'Loading workflows...' : form.project_id ? 'Choose a workflow for this project or leave it unassigned' : 'Assign a project before choosing a workflow'}
+                  {loadingWorkflows ? 'Loading workflows...' : form.project_id ? 'Choose a workflow for this project or leave it unassigned' : 'Assign a project before choosing a workflow'}
                 </p>
               </div>
 

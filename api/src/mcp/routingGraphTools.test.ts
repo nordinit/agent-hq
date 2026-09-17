@@ -72,8 +72,8 @@ describe('routing graph MCP tools', () => {
     const catalog = await loadCatalog();
     for (const name of ['agent_hq_get_routing_graph', 'agent_hq_analyze_routing_graph']) {
       const tool = catalog.tools.find((entry) => entry.canonical_name === name);
-      const sprintType = tool?.args.find((arg) => arg.name === 'sprint_type');
-      expect(sprintType?.required).toBe(true);
+      const workflowType = tool?.args.find((arg) => arg.name === 'workflow_type');
+      expect(workflowType?.required).toBe(true);
     }
   });
 
@@ -81,7 +81,7 @@ describe('routing graph MCP tools', () => {
     const catalog = await loadCatalog();
     const tool = catalog.tools.find((entry) => entry.canonical_name === 'agent_hq_trace_routing');
     const required = tool?.args.filter((arg) => arg.required).map((arg) => arg.name) ?? [];
-    expect(required).toEqual(expect.arrayContaining(['sprint_type', 'from_status', 'outcome']));
+    expect(required).toEqual(expect.arrayContaining(['workflow_type', 'from_status', 'outcome']));
   });
 
   it('maps each tool to the REST path it wraps', async () => {

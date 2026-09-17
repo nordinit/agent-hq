@@ -16,12 +16,12 @@ function getProjectUploadsBase(): string {
 
 export const PROJECT_MANIFEST_SCHEMA_VERSION = 'agent_hq.project_manifest.v1';
 const TENANT_SCOPED_PROJECT_CONFIG_TABLES = [
-  'sprints',
+  'workflows',
   'agents',
   'routing_config',
-  'sprint_task_routing_rules',
-  'sprint_task_transitions',
-  'sprint_task_transition_requirements',
+  'workflow_task_routing_rules',
+  'workflow_task_transitions',
+  'workflow_task_transition_requirements',
   'story_point_model_routing',
   'external_event_mappings',
   'recurring_task_series',
@@ -170,7 +170,7 @@ function portableWorkflow(row: Row): ProjectManifest['workflows'][number] {
     ref: `workflow:${row.id}`,
     name: String(row.name ?? ''),
     goal: String(row.goal ?? ''),
-    sprint_type: String(row.sprint_type ?? 'generic'),
+    workflow_type: String(row.workflow_type ?? 'generic'),
     status: String(row.status ?? 'planning'),
     length_kind: String(row.length_kind ?? 'time'),
     length_value: String(row.length_value ?? ''),
@@ -190,14 +190,14 @@ function portableConfiguration(row:Row):Row {
 type PortableWorkflowType={key:string;configuration:Row;task_types:Row[];statuses:Row[];outcomes:Row[]};
 type PortableTelemetry=Omit<Awaited<ReturnType<typeof exportTelemetry>>,'exported_at'>;
 
-function replaceRefs(row: Row, sprintIdToRef: Map<number, string>, agentIdToRef: Map<number, string>): Row {
+function replaceRefs(row: Row, workflowIdToRef: Map<number, string>, agentIdToRef: Map<number, string>): Row {
   const next: Row = { ...row };
   delete next.id;
   delete next.created_at;
   delete next.updated_at;
   delete next.project_id;
-  if (typeof row.sprint_id === 'number') next.workflow_ref = sprintIdToRef.get(row.sprint_id) ?? null;
-  delete next.sprint_id;
+  if (typeof row.workflow_id === 'number') next.workflow_ref = workflowIdToRef.get(row.workflow_id) ?? null;
+  delete next.workflow_id;
   if (typeof row.agent_id === 'number') next.agent_ref = agentIdToRef.get(row.agent_id) ?? null;
   delete next.agent_id;
   return next;
@@ -240,7 +240,7 @@ export interface ProjectManifest {
     ref: string;
     name: string;
     goal: string;
-    sprint_type: string;
+    workflow_type: string;
     /**
      * Dropped with the workflow-template model. Still accepted so manifests exported
      * before the removal keep importing; the value is ignored.
@@ -251,7 +251,7 @@ export interface ProjectManifest {
     length_value: string;
     environment_setup?: EnvironmentSetup;
     repo_config?: { mode: 'worktree' | 'clone' | null; path: string | null; url: string | null };
-    field_schemas: Array<{ source_schema_id?: number; sprint_type_key: string; task_type: string | null; schema: unknown; is_system: boolean }>;
+    field_schemas: Array<{ source_schema_id?: number; workflow_type_key: string; task_type: string | null; schema: unknown; is_system: boolean }>;
     statuses?: Row[];
   }>;
   workflow_types?: PortableWorkflowType[];
@@ -283,13 +283,13 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
   const warnings: ProjectImportWarning[] = [];
   const tenantId=project.tenant_id==null?null:Number(project.tenant_id);
   const agentRows=await selectRows(db,'agents','WHERE project_id=? AND tenant_id IS NOT DISTINCT FROM ?',[projectId,tenantId],'name ASC,id ASC');
-  const workflowRows=await selectRows(db,'sprints','WHERE project_id=? AND tenant_id IS NOT DISTINCT FROM ?',[projectId,tenantId],'name ASC,id ASC');
+  const workflowRows=await selectRows(db,'workflows','WHERE project_id=? AND tenant_id IS NOT DISTINCT FROM ?',[projectId,tenantId],'name ASC,id ASC');
   const agents = agentRows.map(portableAgent);
   const workflows = workflowRows.map(portableWorkflow);
   const agentIdToRef = new Map(agentRows.map((row) => [Number(row.id), `agent:${row.id}`]));
-  const sprintIdToRef = new Map(workflowRows.map((row) => [Number(row.id), `workflow:${row.id}`]));
+  const workflowIdToRef = new Map(workflowRows.map((row) => [Number(row.id), `workflow:${row.id}`]));
   const agentsByRef = new Map(agents.map((agent) => [agent.ref, agent]));
-  const workflowsByType = new Map(workflows.map((workflow) => [workflow.sprint_type, workflow]));
+  const workflowsByType = new Map(workflows.map((workflow) => [workflow.workflow_type, workflow]));
 
   for (const assignment of await selectRows(db, 'agent_tool_assignments', 'WHERE agent_id IN (SELECT id FROM agents WHERE project_id = ?)', [projectId], 'id ASC')) {
     const tool = await db.get('SELECT slug, name FROM tools WHERE id = ?', assignment.tool_id) as { slug: string; name: string } | undefined;
@@ -308,13 +308,13 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
   }
 
   if (await tableExists(db, 'task_field_schemas')) {
-    for (const schema of await selectRows(db, 'task_field_schemas', `WHERE tenant_id=? AND sprint_type_key=ANY(?::text[])
-      AND NOT EXISTS(SELECT 1 FROM sprint_types st WHERE st.tenant_id=task_field_schemas.tenant_id AND st.key=task_field_schemas.sprint_type_key AND st.project_id IS NOT NULL AND st.project_id<>?)`, [tenantId,[...workflowsByType.keys()],projectId], 'sprint_type_key ASC, task_type ASC, id ASC')) {
-      const workflow = workflowsByType.get(String(schema.sprint_type_key));
+    for (const schema of await selectRows(db, 'task_field_schemas', `WHERE tenant_id=? AND workflow_type_key=ANY(?::text[])
+      AND NOT EXISTS(SELECT 1 FROM workflow_types st WHERE st.tenant_id=task_field_schemas.tenant_id AND st.key=task_field_schemas.workflow_type_key AND st.project_id IS NOT NULL AND st.project_id<>?)`, [tenantId,[...workflowsByType.keys()],projectId], 'workflow_type_key ASC, task_type ASC, id ASC')) {
+      const workflow = workflowsByType.get(String(schema.workflow_type_key));
       if (workflow) {
         workflow.field_schemas.push({
           source_schema_id:Number(schema.id),
-          sprint_type_key: String(schema.sprint_type_key),
+          workflow_type_key: String(schema.workflow_type_key),
           task_type: (schema.task_type as string | null) ?? null,
           schema: parseJson(schema.schema_json, {}),
           is_system: Number(schema.is_system ?? 0) === 1,
@@ -323,15 +323,15 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
     }
   }
   const workflowTypes:PortableWorkflowType[]=[];
-  for(const type of await selectRows(db,'sprint_types','WHERE tenant_id=? AND key=ANY(?::text[]) AND (project_id IS NULL OR project_id=?)',[tenantId,[...workflowsByType.keys()],projectId],'key ASC')){
+  for(const type of await selectRows(db,'workflow_types','WHERE tenant_id=? AND key=ANY(?::text[]) AND (project_id IS NULL OR project_id=?)',[tenantId,[...workflowsByType.keys()],projectId],'key ASC')){
     const key=String(type.key),definition:PortableWorkflowType={key,configuration:portableConfiguration(type),task_types:[],statuses:[],outcomes:[]};
-    for(const [section,table] of [['task_types','sprint_type_task_types'],['statuses','sprint_type_task_statuses'],['outcomes','sprint_type_outcomes']] as const)
-      definition[section]=(await selectRows(db,table,'WHERE tenant_id=? AND sprint_type_key=?',[tenantId,key])).map(portableConfiguration);
+    for(const [section,table] of [['task_types','workflow_type_task_types'],['statuses','workflow_type_task_statuses'],['outcomes','workflow_type_outcomes']] as const)
+      definition[section]=(await selectRows(db,table,'WHERE tenant_id=? AND workflow_type_key=?',[tenantId,key])).map(portableConfiguration);
     workflowTypes.push(definition);
   }
   for(const workflow of workflows){
-    const statuses=await selectRows(db,'sprint_task_statuses','WHERE sprint_id=?',[Number(workflow.ref.slice('workflow:'.length))]);
-    if(statuses.length)workflow.statuses=statuses.map(row=>{const portable=portableConfiguration(row);delete portable.sprint_id;return portable;});
+    const statuses=await selectRows(db,'workflow_task_statuses','WHERE workflow_id=?',[Number(workflow.ref.slice('workflow:'.length))]);
+    if(statuses.length)workflow.statuses=statuses.map(row=>{const portable=portableConfiguration(row);delete portable.workflow_id;return portable;});
   }
 
   const files = (await selectRows(db, 'project_files', 'WHERE project_id = ?', [projectId], 'original_name ASC, id ASC')).map((file) => {
@@ -355,15 +355,15 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
   });
 
   const routing = {
-    status_routes: (await selectRows(db, 'routing_config', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    transitions: (await selectRows(db, 'sprint_task_transitions', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    transition_requirements: (await selectRows(db, 'sprint_task_transition_requirements', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    task_routing_rules: (await selectRows(db, 'sprint_task_routing_rules', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    story_point_model_routing: (await selectRows(db, 'story_point_model_routing', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef)),
-    external_event_mappings: (await selectRows(db, 'external_event_mappings', 'WHERE project_id = ?', [projectId])).map((row) => ({...replaceRefs(row, sprintIdToRef, agentIdToRef),source_mapping_id:Number(row.id)})),
+    status_routes: (await selectRows(db, 'routing_config', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, workflowIdToRef, agentIdToRef)),
+    transitions: (await selectRows(db, 'workflow_task_transitions', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, workflowIdToRef, agentIdToRef)),
+    transition_requirements: (await selectRows(db, 'workflow_task_transition_requirements', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, workflowIdToRef, agentIdToRef)),
+    task_routing_rules: (await selectRows(db, 'workflow_task_routing_rules', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, workflowIdToRef, agentIdToRef)),
+    story_point_model_routing: (await selectRows(db, 'story_point_model_routing', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, workflowIdToRef, agentIdToRef)),
+    external_event_mappings: (await selectRows(db, 'external_event_mappings', 'WHERE project_id = ?', [projectId])).map((row) => ({...replaceRefs(row, workflowIdToRef, agentIdToRef),source_mapping_id:Number(row.id)})),
   };
 
-  const recurring_task_templates = (await selectRows(db, 'recurring_task_series', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, sprintIdToRef, agentIdToRef));
+  const recurring_task_templates = (await selectRows(db, 'recurring_task_series', 'WHERE project_id = ?', [projectId])).map((row) => replaceRefs(row, workflowIdToRef, agentIdToRef));
   let telemetry:PortableTelemetry|undefined;
   if(tenantId!=null&&await tableExists(db,'telemetry_definitions')){
     try{
@@ -378,7 +378,7 @@ export async function exportProjectManifest(db: Db, projectId: number, includeFi
     const included=new Set(routing.external_event_mappings.map(row=>row.source_mapping_id));
     const needed=telemetry.event_mappings.map(mapping=>mapping.source.id).filter(id=>!included.has(id));
     if(needed.length)for(const row of await selectRows(db,'external_event_mappings','WHERE tenant_id=? AND project_id IS NULL AND id=ANY(?::bigint[])',[tenantId,needed]))
-      routing.external_event_mappings.push({...replaceRefs(row,sprintIdToRef,agentIdToRef),source_mapping_id:Number(row.id)});
+      routing.external_event_mappings.push({...replaceRefs(row,workflowIdToRef,agentIdToRef),source_mapping_id:Number(row.id)});
   }
   const manifest = sortStable({
     schema_version: PROJECT_MANIFEST_SCHEMA_VERSION,
@@ -540,18 +540,18 @@ export async function importProjectManifest(
     // tenant's schemas or silently adopting different milestone semantics.
     if(options.tenantId!=null){
       const typeDefinitions=new Map((manifest.workflow_types??[]).map(type=>[type.key,type]));
-      for(const sourceKey of new Set((manifest.workflows??[]).map(workflow=>workflow.sprint_type??'generic'))){
+      for(const sourceKey of new Set((manifest.workflows??[]).map(workflow=>workflow.workflow_type??'generic'))){
         const definition=typeDefinitions.get(sourceKey);
-        const existing=await db.get<Row>('SELECT * FROM sprint_types WHERE tenant_id=? AND key=?',options.tenantId,sourceKey);
+        const existing=await db.get<Row>('SELECT * FROM workflow_types WHERE tenant_id=? AND key=?',options.tenantId,sourceKey);
         let targetKey=sourceKey;
         if(existing&&(definition||existing.project_id!=null)){
           const base=`${sourceKey.slice(0,96)}_import_${projectId}`;targetKey=base;let suffix=1;
-          while(await db.get('SELECT id FROM sprint_types WHERE tenant_id=? AND key=?',options.tenantId,targetKey))targetKey=`${base}_${suffix++}`;
+          while(await db.get('SELECT id FROM workflow_types WHERE tenant_id=? AND key=?',options.tenantId,targetKey))targetKey=`${base}_${suffix++}`;
         }
-        if(!existing||targetKey!==sourceKey)await insertDynamic(db,'sprint_types',{...portableConfiguration(definition?.configuration??{}),tenant_id:options.tenantId,project_id:projectId,key:targetKey,name:definition?.configuration.name??sourceKey,is_system:0});
+        if(!existing||targetKey!==sourceKey)await insertDynamic(db,'workflow_types',{...portableConfiguration(definition?.configuration??{}),tenant_id:options.tenantId,project_id:projectId,key:targetKey,name:definition?.configuration.name??sourceKey,is_system:0});
         typeKeyMap[sourceKey]=targetKey;
-        if(definition)for(const [section,table] of [['task_types','sprint_type_task_types'],['statuses','sprint_type_task_statuses'],['outcomes','sprint_type_outcomes']] as const)
-          for(const row of definition[section])await insertDynamic(db,table,{...portableConfiguration(row),tenant_id:options.tenantId,sprint_type_key:targetKey,is_system:0});
+        if(definition)for(const [section,table] of [['task_types','workflow_type_task_types'],['statuses','workflow_type_task_statuses'],['outcomes','workflow_type_outcomes']] as const)
+          for(const row of definition[section])await insertDynamic(db,table,{...portableConfiguration(row),tenant_id:options.tenantId,workflow_type_key:targetKey,is_system:0});
       }
     }
 
@@ -561,12 +561,12 @@ export async function importProjectManifest(
         repo_path: workflow.repo_config?.mode === 'worktree' ? workflow.repo_config.path : null,
         repo_url: workflow.repo_config?.mode === 'clone' ? workflow.repo_config.url : null,
       });
-      const workflowId = await insertDynamic(db, 'sprints', {
+      const workflowId = await insertDynamic(db, 'workflows', {
               tenant_id: options.tenantId ?? null,
               project_id: projectId,
               name: workflow.name,
               goal: workflow.goal ?? '',
-              sprint_type: typeKeyMap[workflow.sprint_type]??workflow.sprint_type??'generic',
+              workflow_type: typeKeyMap[workflow.workflow_type]??workflow.workflow_type??'generic',
               status: options.activateWorkflows ? (workflow.status || 'planning') : 'planning',
               length_kind: workflow.length_kind ?? 'time',
               length_value: workflow.length_value ?? '',
@@ -576,13 +576,13 @@ export async function importProjectManifest(
               environment_setup: JSON.stringify(normalizeEnvironmentSetup(workflow.environment_setup)),
             });
       workflowIdMap[workflow.ref] = workflowId;
-      for(const status of workflow.statuses??[])await insertDynamic(db,'sprint_task_statuses',{...portableConfiguration(status),sprint_id:workflowId,is_system:0});
+      for(const status of workflow.statuses??[])await insertDynamic(db,'workflow_task_statuses',{...portableConfiguration(status),workflow_id:workflowId,is_system:0});
       if (await tableExists(db, 'task_field_schemas')) {
         for (const schema of workflow.field_schemas ?? []) {
-          const targetType=typeKeyMap[schema.sprint_type_key]??schema.sprint_type_key;
+          const targetType=typeKeyMap[schema.workflow_type_key]??schema.workflow_type_key;
           const existing = await db.get<{id:number}>(`
             SELECT id FROM task_field_schemas
-            WHERE tenant_id IS NOT DISTINCT FROM ? AND sprint_type_key = ?
+            WHERE tenant_id IS NOT DISTINCT FROM ? AND workflow_type_key = ?
               AND (task_type = ? OR (task_type IS NULL AND ?::text IS NULL))
             LIMIT 1
           `, options.tenantId??null,targetType, schema.task_type ?? null, schema.task_type ?? null);
@@ -590,7 +590,7 @@ export async function importProjectManifest(
           if (!existing) {
             schemaId=await insertDynamic(db, 'task_field_schemas', {
                             tenant_id:options.tenantId??null,
-                            sprint_type_key: targetType,
+                            workflow_type_key: targetType,
                             task_type: schema.task_type ?? null,
                             schema_json: stringifyStable(schema.schema ?? {}),
                             is_system: schema.is_system ? 1 : 0,
@@ -648,22 +648,22 @@ export async function importProjectManifest(
         next.tenant_id = options.tenantId ?? null;
       }
       if ('workflow_ref' in next) {
-        next.sprint_id = typeof next.workflow_ref === 'string' ? workflowIdMap[next.workflow_ref] ?? null : null;
+        next.workflow_id = typeof next.workflow_ref === 'string' ? workflowIdMap[next.workflow_ref] ?? null : null;
         delete next.workflow_ref;
       }
       if ('agent_ref' in next) {
         next.agent_id = typeof next.agent_ref === 'string' ? agentIdMap[next.agent_ref] ?? null : null;
         delete next.agent_ref;
       }
-      if(typeof next.sprint_type==='string')next.sprint_type=typeKeyMap[next.sprint_type]??next.sprint_type;
-      if(typeof next.sprint_type_key==='string')next.sprint_type_key=typeKeyMap[next.sprint_type_key]??next.sprint_type_key;
+      if(typeof next.workflow_type==='string')next.workflow_type=typeKeyMap[next.workflow_type]??next.workflow_type;
+      if(typeof next.workflow_type_key==='string')next.workflow_type_key=typeKeyMap[next.workflow_type_key]??next.workflow_type_key;
       return next;
     };
 
     for (const row of manifest.routing?.status_routes ?? []) await insertDynamic(db, 'routing_config', await scopedRow('routing_config', row));
-    for (const row of manifest.routing?.transitions ?? []) await insertDynamic(db, 'sprint_task_transitions', await scopedRow('sprint_task_transitions', row));
-    for (const row of manifest.routing?.transition_requirements ?? []) await insertDynamic(db, 'sprint_task_transition_requirements', await scopedRow('sprint_task_transition_requirements', row));
-    for (const row of manifest.routing?.task_routing_rules ?? []) await insertDynamic(db, 'sprint_task_routing_rules', await scopedRow('sprint_task_routing_rules', row));
+    for (const row of manifest.routing?.transitions ?? []) await insertDynamic(db, 'workflow_task_transitions', await scopedRow('workflow_task_transitions', row));
+    for (const row of manifest.routing?.transition_requirements ?? []) await insertDynamic(db, 'workflow_task_transition_requirements', await scopedRow('workflow_task_transition_requirements', row));
+    for (const row of manifest.routing?.task_routing_rules ?? []) await insertDynamic(db, 'workflow_task_routing_rules', await scopedRow('workflow_task_routing_rules', row));
     for (const row of manifest.routing?.story_point_model_routing ?? []) await insertDynamic(db, 'story_point_model_routing', await scopedRow('story_point_model_routing', row));
     const eventMappingIdMap:Record<string,number>={};
     for (const row of manifest.routing?.external_event_mappings ?? []) {

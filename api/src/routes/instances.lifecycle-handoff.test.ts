@@ -18,23 +18,23 @@ async function seedFixture(): Promise<void> {
   `);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Agent HQ')`);
   await db.run(`
-    INSERT INTO sprint_types (tenant_id, key, name, description, is_system)
+    INSERT INTO workflow_types (tenant_id, key, name, description, is_system)
     VALUES (1, 'dev', 'Development', '', 1)
   `);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
+    INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status)
     VALUES (42, 1, 86, 'Development', '', 'dev', 'active')
   `);
   await db.run(`
     INSERT INTO agents (
-      id, tenant_id, project_id, sprint_id, name, role, session_key, runtime_type
+      id, tenant_id, project_id, workflow_id, name, role, session_key, runtime_type
     ) VALUES (
       96, 1, 86, 42, 'Talon (QA)', 'QA Engineer', 'agency-qa', 'openclaw'
     )
   `);
   await db.run(`
     INSERT INTO tasks (
-      id, tenant_id, title, status, task_type, sprint_id, project_id, agent_id,
+      id, tenant_id, title, status, task_type, workflow_id, project_id, agent_id,
       custom_fields_json, updated_at
     ) VALUES (
       403,

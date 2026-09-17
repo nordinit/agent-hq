@@ -45,11 +45,11 @@ async function setupDb(options: { includeTaskDispatchMetadataColumns?: boolean }
     INSERT INTO agents (id, tenant_id, name, job_title, project_id, job_instructions, enabled, timeout_seconds, session_key, runtime_type, sort_rules)
     VALUES (1, 1, 'Cinder', 'Backend Engineer', 86, 'Do the task', 1, 900, 'agent:cinder:main', 'openclaw', '[]')
   `);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, repo_required) VALUES (1, 'dev', 'Development', 0)`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status) VALUES (10, 1, 86, 'Enhancements', 'dev', 'active')`);
-  await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'dev', 'backend', 'ready', 1, 10)`);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name, repo_required) VALUES (1, 'dev', 'Development', 0)`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status) VALUES (10, 1, 86, 'Enhancements', 'dev', 'active')`);
+  await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority) VALUES (1, 10, 86, 'dev', 'backend', 'ready', 1, 10)`);
   await db.run(`
-    INSERT INTO sprint_type_relationship_types (tenant_id, sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility, direction_semantics, resolved_statuses_json)
+    INSERT INTO workflow_type_relationship_types (tenant_id, workflow_type_key, key, label, inverse_label, category, affects_dispatch_eligibility, direction_semantics, resolved_statuses_json)
     VALUES
       (1, 'dev', 'blocked_by', 'Blocked by', 'Blocks', 'dependency', 1, 'target_blocks_source', '["done","cancelled"]'),
       (1, 'dev', 'blocks', 'Blocks', 'Blocked by', 'dependency', 1, 'source_blocks_target', '["done","cancelled"]'),
@@ -60,7 +60,7 @@ async function setupDb(options: { includeTaskDispatchMetadataColumns?: boolean }
 
 async function insertTask(db: Db, id: number, status = 'ready', taskType = 'backend'): Promise<void> {
   await db.run(`
-    INSERT INTO tasks (id, title, description, status, priority, project_id, tenant_id, task_type, sprint_id, created_at, updated_at)
+    INSERT INTO tasks (id, title, description, status, priority, project_id, tenant_id, task_type, workflow_id, created_at, updated_at)
     VALUES (?, ?, 'Task', ?, 'high', 86, 1, ?, 10, '2026-05-20T12:00:00.000Z', '2026-05-20T12:00:00.000Z')
   `, id, `Task ${id}`, status, taskType);
 }
@@ -90,7 +90,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     await teardownTestDb();
   });
 
-  it('keeps sprint overrides ahead of higher-priority sprint-type fallback candidates', async () => {
+  it('keeps workflow overrides ahead of higher-priority workflow-type fallback candidates', async () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`
@@ -98,7 +98,7 @@ describe('dispatcher relationship-driven eligibility', () => {
       VALUES (2, 1, 'Vulcan', 'Backend Engineer', 86, 'Do the task', 1, 900, 'agent:vulcan:main', 'openclaw', '[]')
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, NULL, 86, 'dev', 'backend', 'ready', 2, 100)
     `);
     await insertTask(db, 608, 'ready');
@@ -116,7 +116,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'dev', 'backend', 'intake', 1, 10)
     `);
     await insertTask(db, 797, 'intake');
@@ -147,11 +147,11 @@ describe('dispatcher relationship-driven eligibility', () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`
-      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
       VALUES (10, 'archived', 'Archived', 1, 99)
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'dev', 'backend', 'archived', 1, 10)
     `);
     await insertTask(db, 799, 'archived');
@@ -168,11 +168,11 @@ describe('dispatcher relationship-driven eligibility', () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`
-      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
       VALUES (10, 'failed', 'Failed', 0, 80)
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'dev', 'backend', 'failed', 1, 10)
     `);
     await insertTask(db, 800, 'failed');
@@ -186,17 +186,17 @@ describe('dispatcher relationship-driven eligibility', () => {
     await teardownTestDb();
   });
 
-  it('uses workflow-specific terminality before sprint-type and global fallbacks', async () => {
+  it('uses workflow-specific terminality before workflow-type and global fallbacks', async () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
-    await db.run(`INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
     await db.run(`
-      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
       VALUES (10, 'failed', 'Failed', 0, 80)
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'dev', 'backend', 'failed', 1, 10)
     `);
     await insertTask(db, 801, 'failed');
@@ -214,13 +214,13 @@ describe('dispatcher relationship-driven eligibility', () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 0)`);
-    await db.run(`INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
     await db.run(`
-      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
       VALUES (10, 'failed', 'Failed', 1, 80)
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'dev', 'backend', 'failed', 1, 10)
     `);
     await insertTask(db, 806, 'failed');
@@ -237,13 +237,13 @@ describe('dispatcher relationship-driven eligibility', () => {
     const db = await setupDb({ includeTaskDispatchMetadataColumns: false });
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
-    await db.run(`INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
     await db.run(`
-      INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+      INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
       VALUES (10, 'failed', 'Failed', 0, 80)
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'dev', 'backend', 'failed', 1, 10)
     `);
     await insertTask(db, 805, 'failed');
@@ -267,16 +267,16 @@ describe('dispatcher relationship-driven eligibility', () => {
     await teardownTestDb();
   });
 
-  it('uses tenant-specific sprint-type terminality before global status fallback', async () => {
+  it('uses tenant-specific workflow-type terminality before global status fallback', async () => {
     const db = await setupDb();
     const { runDispatcher } = await import('./dispatcher');
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
     await db.run(`
-      INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, terminal)
+      INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal)
       VALUES (1, 'dev', 'failed', 'Failed', 0)
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (1, 10, 86, 'dev', 'backend', 'failed', 1, 10)
     `);
     await insertTask(db, 802, 'failed');
@@ -299,7 +299,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('cancelled', 'Cancelled', 1)`);
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES
         (1, 10, 86, 'dev', 'backend', 'done', 1, 10),
         (1, 10, 86, 'dev', 'backend', 'cancelled', 1, 10),
@@ -378,7 +378,7 @@ describe('dispatcher relationship-driven eligibility', () => {
   // post the outcome that would clear the blocker.
   async function insertNarrowBlockerType(db: Db): Promise<void> {
     await db.run(`
-      INSERT INTO sprint_type_relationship_types (tenant_id, sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility, direction_semantics, resolved_statuses_json)
+      INSERT INTO workflow_type_relationship_types (tenant_id, workflow_type_key, key, label, inverse_label, category, affects_dispatch_eligibility, direction_semantics, resolved_statuses_json)
       VALUES (1, 'dev', 'narrow_blocked_by', 'Blocked by', 'Blocks', 'dependency', 1, 'target_blocks_source', '["done"]')
     `);
     // Terminality comes from configuration, so state it explicitly rather than
@@ -427,7 +427,7 @@ describe('dispatcher relationship-driven eligibility', () => {
     await insertNarrowBlockerType(db);
     // This workflow treats `failed` as retryable, so the blocker can still
     // progress and must keep blocking.
-    await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
     await insertTask(db, 530, 'ready');
     await insertTask(db, 567, 'failed', 'frontend');
     await db.run(`INSERT INTO task_relationships (source_task_id, target_task_id, relationship_type_key) VALUES (530, 567, 'narrow_blocked_by')`);

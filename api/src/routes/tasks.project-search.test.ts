@@ -65,7 +65,7 @@ async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; othe
     VALUES (?, ?, ?, '', ''), (?, ?, ?, '', ''), (?, ?, ?, '', '')
   `, 99, 1, 'Agency', 100, 1, 'Other Project', 200, 2, 'Tenant Two Project');
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
+    INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status)
     VALUES (?, ?, ?, ?, '', 'lead_generation', 'active'),
            (?, ?, ?, ?, '', 'lead_generation', 'active'),
            (?, ?, ?, ?, '', 'lead_generation', 'active')
@@ -78,7 +78,7 @@ async function seedProjectTaskSearchFixture(): Promise<{ agencyKey: string; othe
   `, 7, 1, 99, 'James', 'Agency Worker', 'agent:james:test', '/tmp/james', 8, 1, 100, 'Other Worker', 'Other Worker', 'agent:other:test', '/tmp/other', 9, 2, 200, 'Tenant Two Worker', 'Tenant Two Worker', 'agent:tenant-two:test', '/tmp/tenant-two');
   await db.run(`
     INSERT INTO tasks (
-      id, tenant_id, title, description, status, priority, project_id, sprint_id, agent_id,
+      id, tenant_id, title, description, status, priority, project_id, workflow_id, agent_id,
       task_type, custom_fields_json, updated_at
     )
     VALUES
@@ -144,7 +144,7 @@ describe('POST /api/v1/tasks/project-search', () => {
         status: 'in_progress',
         task_type: 'lead_generation',
         project_id: 99,
-        sprint_id: 501,
+        workflow_id: 501,
         matched_custom_fields: { crm_lead_id: 'crm-123' },
       }),
     ]);

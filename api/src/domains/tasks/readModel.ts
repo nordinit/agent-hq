@@ -48,7 +48,7 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
       return {};
     }
   })();
-  const resolvedFieldSchema = await resolveTaskFieldSchema(task.sprint_id, task.task_type);
+  const resolvedFieldSchema = await resolveTaskFieldSchema(task.workflow_id, task.task_type);
   const assignedAgentId = typeof task.assigned_agent_id === 'number' ? task.assigned_agent_id : null;
   const activeAgentId = typeof task.agent_id === 'number' ? task.agent_id : null;
   const agentNames = (async () => {
@@ -73,10 +73,10 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
   const hasRelationshipTable = await sharedTableExists(db, 'task_relationships');
   const blockers = hasRelationshipTable
     ? await db.all(`
-      SELECT DISTINCT t.*, a.name as agent_name, s.name as sprint_name
+      SELECT DISTINCT t.*, a.name as agent_name, s.name as workflow_name
       FROM tasks t
       LEFT JOIN agents a ON a.id = t.agent_id
-      LEFT JOIN sprints s ON s.id = t.sprint_id
+      LEFT JOIN workflows s ON s.id = t.workflow_id
       WHERE (
         t.id IN (SELECT blocker_id FROM task_dependencies WHERE blocked_id = ?)
          OR t.id IN (
@@ -93,20 +93,20 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
       ${tenantFilter}
     `, ...(tenantId == null ? [id, id, id] : [id, id, id, tenantId])) as TaskRecord[]
     : await db.all(`
-      SELECT t.*, a.name as agent_name, s.name as sprint_name
+      SELECT t.*, a.name as agent_name, s.name as workflow_name
       FROM tasks t
       LEFT JOIN agents a ON a.id = t.agent_id
-      LEFT JOIN sprints s ON s.id = t.sprint_id
+      LEFT JOIN workflows s ON s.id = t.workflow_id
       WHERE t.id IN (SELECT blocker_id FROM task_dependencies WHERE blocked_id = ?)
       ${tenantFilter}
     `, ...(tenantId == null ? [id] : [id, tenantId])) as TaskRecord[];
 
   const blocking = hasRelationshipTable
     ? await db.all(`
-      SELECT DISTINCT t.*, a.name as agent_name, s.name as sprint_name
+      SELECT DISTINCT t.*, a.name as agent_name, s.name as workflow_name
       FROM tasks t
       LEFT JOIN agents a ON a.id = t.agent_id
-      LEFT JOIN sprints s ON s.id = t.sprint_id
+      LEFT JOIN workflows s ON s.id = t.workflow_id
       WHERE (
         t.id IN (SELECT blocked_id FROM task_dependencies WHERE blocker_id = ?)
          OR t.id IN (
@@ -123,10 +123,10 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
       ${tenantFilter}
     `, ...(tenantId == null ? [id, id, id] : [id, id, id, tenantId])) as TaskRecord[]
     : await db.all(`
-      SELECT t.*, a.name as agent_name, s.name as sprint_name
+      SELECT t.*, a.name as agent_name, s.name as workflow_name
       FROM tasks t
       LEFT JOIN agents a ON a.id = t.agent_id
-      LEFT JOIN sprints s ON s.id = t.sprint_id
+      LEFT JOIN workflows s ON s.id = t.workflow_id
       WHERE t.id IN (SELECT blocked_id FROM task_dependencies WHERE blocker_id = ?)
       ${tenantFilter}
     `, ...(tenantId == null ? [id] : [id, tenantId])) as TaskRecord[];
@@ -140,7 +140,7 @@ export async function enrichTask(task: TaskRecord): Promise<TaskRecord> {
     latest_task_outcome: latestTaskOutcome,
     changed_files: changedFiles,
     custom_fields: unifiedCustomFields,
-    resolved_sprint_type: resolvedFieldSchema.sprint_type,
+    resolved_workflow_type: resolvedFieldSchema.workflow_type,
     resolved_custom_field_schema: resolvedFieldSchema.schema,
     relationships: await getTaskRelationshipsForEnrichment(id),
     assigned_agent_name: assignedAgentId == null ? null : (await agentNames).get(assignedAgentId) ?? null,
@@ -158,7 +158,7 @@ export const TASK_SELECT = `
   SELECT
     t.*,
     a.name as agent_name,
-    s.name as sprint_name,
+    s.name as workflow_name,
     ji.id as active_instance_id,
     ji.status as active_instance_status,
     ji.session_key as active_instance_session_key,
@@ -202,7 +202,7 @@ export const TASK_SELECT = `
     COALESCE(tom.spawned_defects, 0) as spawned_defects
   FROM tasks t
   LEFT JOIN agents a ON a.id = t.agent_id
-  LEFT JOIN sprints s ON s.id = t.sprint_id
+  LEFT JOIN workflows s ON s.id = t.workflow_id
   LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
   LEFT JOIN instance_artifacts ia ON ia.instance_id = ji.id
   LEFT JOIN tasks origin_t ON origin_t.id = t.origin_task_id
@@ -211,12 +211,12 @@ export const TASK_SELECT = `
 
 export async function searchTasks(
   db: ReturnType<typeof getDb>,
-  query: { q?: unknown; exclude_id?: unknown; limit?: unknown; project_id?: unknown; sprint_id?: unknown; tenant_id?: unknown },
+  query: { q?: unknown; exclude_id?: unknown; limit?: unknown; project_id?: unknown; workflow_id?: unknown; tenant_id?: unknown },
 ): Promise<Array<{ id: number; title: string; status: string } & TaskRecurrenceMetadata>> {
   const q = String(query.q ?? '').trim();
   const excludeId = query.exclude_id ? Number(query.exclude_id) : null;
   const projectId = query.project_id ? Number(query.project_id) : null;
-  const sprintId = query.sprint_id ? Number(query.sprint_id) : null;
+  const workflowId = query.workflow_id ? Number(query.workflow_id) : null;
   const tenantId = query.tenant_id ? Number(query.tenant_id) : null;
   const limit = Math.min(Math.max(1, Number(query.limit) || 20), 50);
 
@@ -245,9 +245,9 @@ export async function searchTasks(
     contextCondition += ' AND t.project_id = ?';
     params.push(projectId);
   }
-  if (sprintId !== null && Number.isInteger(sprintId) && sprintId > 0) {
-    contextCondition += ' AND t.sprint_id = ?';
-    params.push(sprintId);
+  if (workflowId !== null && Number.isInteger(workflowId) && workflowId > 0) {
+    contextCondition += ' AND t.workflow_id = ?';
+    params.push(workflowId);
   }
   if (tenantId !== null && Number.isInteger(tenantId) && tenantId > 0) {
     contextCondition += ' AND t.tenant_id = ?';
@@ -272,8 +272,8 @@ const CUSTOM_FIELD_KEY_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
 export interface ProjectTaskSearchInput {
   tenant_id: number;
   project_id: number;
-  sprint_id?: unknown;
   workflow_id?: unknown;
+
   statuses?: unknown;
   status?: unknown;
   active_only?: unknown;
@@ -291,8 +291,8 @@ export interface ProjectTaskSearchResult {
     status: string | null;
     task_type: string | null;
     project_id: number;
-    sprint_id: number | null;
-    sprint_name: string | null;
+    workflow_id: number | null;
+    workflow_name: string | null;
     agent_id: number | null;
     agent_name: string | null;
     active_instance_id: number | null;
@@ -375,8 +375,8 @@ export async function searchProjectTasks(
 
   const limit = parseBoundedPositiveInt(input.limit, PROJECT_TASK_SEARCH_DEFAULT_LIMIT, PROJECT_TASK_SEARCH_MAX_LIMIT);
   const offset = parseBoundedOffset(input.offset);
-  const parsedSprintId = Number(input.workflow_id ?? input.sprint_id);
-  const sprintId = Number.isInteger(parsedSprintId) && parsedSprintId > 0 ? parsedSprintId : null;
+  const parsedWorkflowId = Number(input.workflow_id);
+  const workflowId = Number.isInteger(parsedWorkflowId) && parsedWorkflowId > 0 ? parsedWorkflowId : null;
   const statuses = parseStringList(input.statuses ?? input.status);
   const taskType = typeof input.task_type === 'string' && input.task_type.trim() ? input.task_type.trim() : null;
   const customFieldMatches = parseExactCustomFieldMatches(input.custom_fields);
@@ -384,9 +384,9 @@ export async function searchProjectTasks(
   const conditions = ['t.tenant_id = ?', 't.project_id = ?'];
   const params: unknown[] = [tenantId, projectId];
 
-  if (sprintId !== null) {
-    conditions.push('t.sprint_id = ?');
-    params.push(sprintId);
+  if (workflowId !== null) {
+    conditions.push('t.workflow_id = ?');
+    params.push(workflowId);
   }
   if (statuses.length === 1) {
     conditions.push('t.status = ?');
@@ -396,7 +396,7 @@ export async function searchProjectTasks(
     params.push(...statuses);
   }
   if (parseBooleanFlag(input.active_only) || parseBooleanFlag(input.nonterminal_only)) {
-    const terminalStatuses = await listConfiguredTerminalStatuses(db, { sprintId, tenantId });
+    const terminalStatuses = await listConfiguredTerminalStatuses(db, { workflowId, tenantId });
     if (terminalStatuses.length > 0) {
       conditions.push(`(t.status IS NULL OR t.status NOT IN (${terminalStatuses.map(() => '?').join(',')}))`);
       params.push(...terminalStatuses);
@@ -428,8 +428,8 @@ export async function searchProjectTasks(
       t.status,
       t.task_type,
       t.project_id,
-      t.sprint_id,
-      s.name AS sprint_name,
+      t.workflow_id,
+      s.name AS workflow_name,
       t.agent_id,
       a.name AS agent_name,
       t.active_instance_id,
@@ -437,7 +437,7 @@ export async function searchProjectTasks(
       ${TASK_RECURRENCE_SELECT},
       t.custom_fields_json
     FROM tasks t
-    LEFT JOIN sprints s ON s.id = t.sprint_id AND s.tenant_id = t.tenant_id
+    LEFT JOIN workflows s ON s.id = t.workflow_id AND s.tenant_id = t.tenant_id
     LEFT JOIN agents a ON a.id = t.agent_id AND a.tenant_id = t.tenant_id
     WHERE ${whereSql}
     ORDER BY t.updated_at DESC, t.id DESC
@@ -459,8 +459,8 @@ export async function searchProjectTasks(
         status: typeof row.status === 'string' ? row.status : null,
         task_type: typeof row.task_type === 'string' ? row.task_type : null,
         project_id: Number(row.project_id),
-        sprint_id: typeof row.sprint_id === 'number' ? row.sprint_id : null,
-        sprint_name: typeof row.sprint_name === 'string' ? row.sprint_name : null,
+        workflow_id: typeof row.workflow_id === 'number' ? row.workflow_id : null,
+        workflow_name: typeof row.workflow_name === 'string' ? row.workflow_name : null,
         agent_id: typeof row.agent_id === 'number' ? row.agent_id : null,
         agent_name: typeof row.agent_name === 'string' ? row.agent_name : null,
         active_instance_id: typeof row.active_instance_id === 'number' ? row.active_instance_id : null,
@@ -514,7 +514,7 @@ export async function listRecentlyCompletedTasks(
       a.name  AS agent_name,
       a.job_title AS job_title,
       p.name  AS project_name,
-      s.name  AS sprint_name,
+      s.name  AS workflow_name,
       (
         SELECT th.new_value
         FROM task_history th
@@ -545,7 +545,7 @@ export async function listRecentlyCompletedTasks(
     FROM tasks t
     LEFT JOIN agents a ON a.id = t.agent_id
     LEFT JOIN projects p ON p.id = t.project_id
-    LEFT JOIN sprints s ON s.id = t.sprint_id
+    LEFT JOIN workflows s ON s.id = t.workflow_id
     WHERE t.status = 'done'
       AND t.updated_at >= ?
       ${projectFilter}
@@ -567,7 +567,7 @@ export async function listTasks(
   db: ReturnType<typeof getDb>,
   query: {
     project_id?: unknown;
-    sprint_id?: unknown;
+    workflow_id?: unknown;
     job_id?: unknown;
     limit?: unknown;
     offset?: unknown;
@@ -584,7 +584,7 @@ export async function listTasks(
 ): Promise<Record<string, unknown>[] | Record<string, unknown>> {
   const {
     project_id,
-    sprint_id,
+    workflow_id,
     job_id,
     limit,
     offset,
@@ -612,9 +612,9 @@ export async function listTasks(
     conditions.push('t.tenant_id = ?');
     params.push(Number(tenant_id));
   }
-  if (sprint_id) {
-    conditions.push('t.sprint_id = ?');
-    params.push(Number(sprint_id));
+  if (workflow_id) {
+    conditions.push('t.workflow_id = ?');
+    params.push(Number(workflow_id));
   }
   if (job_id) {
     conditions.push(hasAssignedAgentColumn
@@ -661,8 +661,8 @@ export async function listTasks(
     conditions.push("t.status != 'done'");
   }
   if (!include_closed || include_closed === 'false') {
-    conditions.push(`(t.sprint_id IS NULL OR EXISTS (
-      SELECT 1 FROM sprints sp WHERE sp.id = t.sprint_id AND sp.status != 'closed'
+    conditions.push(`(t.workflow_id IS NULL OR EXISTS (
+      SELECT 1 FROM workflows sp WHERE sp.id = t.workflow_id AND sp.status != 'closed'
     ))`);
   }
   if (conditions.length > 0) {

@@ -69,8 +69,8 @@ const mobileOverflowNavItems = [
 function isNavItemActive(pathname: string, href: string) {
   if (href === '/tasks') return pathname === '/tasks' || /^\/tasks\/\d+/.test(pathname);
   if (href.startsWith('/settings')) return pathname.startsWith('/settings');
-  if (href === '/workflows') return pathname.startsWith('/workflows') || pathname.startsWith('/sprints');
-  if (href === '/workflow-definitions') return pathname.startsWith('/workflow-definitions') || pathname.startsWith('/sprint-definitions');
+  if (href === '/workflows') return pathname.startsWith('/workflows');
+  if (href === '/workflow-definitions') return pathname.startsWith('/workflow-definitions');
   return href === '/'
     ? pathname === '/'
     : href === '/capabilities'

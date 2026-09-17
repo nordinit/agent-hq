@@ -1,4 +1,4 @@
-import { resolveSprintTaskRoutingAssignment } from '../domains/routing/policy/statuses';
+import { resolveWorkflowTaskRoutingAssignment } from '../domains/routing/policy/statuses';
 import { type Db } from "../db/adapter/types";
 
 export const USER_UPDATE_OUTCOME = 'user_update';
@@ -10,7 +10,7 @@ export function isManualUserStatusChange(changedBy: string | null | undefined, p
 
 export async function resolveTaskRoutingRule(
   db: Db,
-  sprintId: number | null | undefined,
+  workflowId: number | null | undefined,
   _projectId: number | null | undefined,
   taskType: string | null | undefined,
   status: string | null | undefined,
@@ -19,14 +19,14 @@ export async function resolveTaskRoutingRule(
     return { agentId: null, routingReason: null };
   }
 
-  const sprintRule = await resolveSprintTaskRoutingAssignment(db, sprintId ?? null, taskType ?? null, status);
-  if (sprintRule.agent_id == null) {
+  const workflowRule = await resolveWorkflowTaskRoutingAssignment(db, workflowId ?? null, taskType ?? null, status);
+  if (workflowRule.agent_id == null) {
     return { agentId: null, routingReason: null };
   }
 
   return {
-    agentId: sprintRule.agent_id,
-    routingReason: `Sprint policy: ${taskType ?? 'all task types'}/${status} → agent #${sprintRule.agent_id}`,
+    agentId: workflowRule.agent_id,
+    routingReason: `Workflow policy: ${taskType ?? 'all task types'}/${status} → agent #${workflowRule.agent_id}`,
   };
 }
 
@@ -36,7 +36,7 @@ export async function resolveManualUserUpdate(
     changedBy: string | null | undefined;
     priorStatus: string | null | undefined;
     nextStatus: string | null | undefined;
-    sprintId: number | null | undefined;
+    workflowId: number | null | undefined;
     projectId: number | null | undefined;
     taskType: string | null | undefined;
     explicitAgentIdProvided: boolean;
@@ -61,7 +61,7 @@ export async function resolveManualUserUpdate(
     };
   }
 
-  const route = await resolveTaskRoutingRule(db, params.sprintId, params.projectId, params.taskType, params.nextStatus);
+  const route = await resolveTaskRoutingRule(db, params.workflowId, params.projectId, params.taskType, params.nextStatus);
   if (route.agentId != null) {
     return {
       emitted: true,

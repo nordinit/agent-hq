@@ -1,6 +1,6 @@
 import { notifyTelegram } from '../integrations/telegram';
 import { createNotificationRecord, readNotificationPreferences } from './notifications';
-import { canonicalTaskStatusEmoji, listSprintTaskStatuses, listSprintTypeTaskStatuses } from './sprintTaskPolicy';
+import { canonicalTaskStatusEmoji, listWorkflowTaskStatuses, listWorkflowTypeTaskStatuses } from './workflowTaskPolicy';
 import { getActiveTenantId } from './tenantContext';
 import { type Db } from "../db/adapter/types";
 
@@ -58,29 +58,29 @@ interface TaskContext {
   tenantId: number;
   title: string;
   projectName: string | null;
-  sprintName: string | null;
-  sprintId: number | null;
-  sprintType: string | null;
+  workflowName: string | null;
+  workflowId: number | null;
+  workflowType: string | null;
 }
 
 async function loadTaskContext(db: Db, taskId: number): Promise<TaskContext | null> {
-  // Use a resilient query: first try with project/sprint JOIN, fall back to
+  // Use a resilient query: first try with project/workflow JOIN, fall back to
   // title-only if those tables don't exist (e.g. in test environments).
   try {
     const row = await db.get(`
-      SELECT t.id, t.tenant_id, t.title, t.sprint_id, p.name as project_name, s.name as sprint_name, s.sprint_type
+      SELECT t.id, t.tenant_id, t.title, t.workflow_id, p.name as project_name, s.name as workflow_name, s.workflow_type
       FROM tasks t
       LEFT JOIN projects p ON p.id = t.project_id
-      LEFT JOIN sprints  s ON s.id = t.sprint_id
+      LEFT JOIN workflows  s ON s.id = t.workflow_id
       WHERE t.id = ?
     `, taskId) as {
       id: number;
       tenant_id: number | null;
       title: string;
-      sprint_id: number | null;
+      workflow_id: number | null;
       project_name: string | null;
-      sprint_name: string | null;
-      sprint_type: string | null;
+      workflow_name: string | null;
+      workflow_type: string | null;
     } | undefined;
 
     if (!row) return null;
@@ -89,22 +89,22 @@ async function loadTaskContext(db: Db, taskId: number): Promise<TaskContext | nu
       tenantId: rowId(row.tenant_id) ?? await getActiveTenantId(db),
       title: row.title,
       projectName: row.project_name ?? null,
-      sprintName: row.sprint_name ?? null,
-      sprintId: rowId(row.sprint_id),
-      sprintType: typeof row.sprint_type === 'string' && row.sprint_type.trim().length > 0 ? row.sprint_type : null,
+      workflowName: row.workflow_name ?? null,
+      workflowId: rowId(row.workflow_id),
+      workflowType: typeof row.workflow_type === 'string' && row.workflow_type.trim().length > 0 ? row.workflow_type : null,
     };
   } catch {
-    // Fallback: minimal query without optional JOINs (e.g. test DBs missing projects/sprints tables)
-    const row = await db.get(`SELECT id, title, sprint_id FROM tasks WHERE id = ?`, taskId) as { id: number; title: string; sprint_id?: number | null } | undefined;
+    // Fallback: minimal query without optional JOINs (e.g. test DBs missing projects/workflows tables)
+    const row = await db.get(`SELECT id, title, workflow_id FROM tasks WHERE id = ?`, taskId) as { id: number; title: string; workflow_id?: number | null } | undefined;
     if (!row) return null;
     return {
       id: row.id,
       tenantId: await getActiveTenantId(db),
       title: row.title,
       projectName: null,
-      sprintName: null,
-      sprintId: rowId(row.sprint_id),
-      sprintType: null,
+      workflowName: null,
+      workflowId: rowId(row.workflow_id),
+      workflowType: null,
     };
   }
 }
@@ -114,7 +114,7 @@ async function buildRecordBody(db: Db, ctx: TaskContext, fromStatus: string, toS
   const toEmoji = await resolveStatusEmoji(db, ctx, toStatus);
   const meta: string[] = [];
   if (ctx.projectName) meta.push(`Project: ${ctx.projectName}`);
-  if (ctx.sprintName) meta.push(`Workflow: ${ctx.sprintName}`);
+  if (ctx.workflowName) meta.push(`Workflow: ${ctx.workflowName}`);
   meta.push(`Source: ${source}`);
   return `${fromEmoji} ${fromStatus} -> ${toEmoji} ${toStatus}${meta.length ? `\n${meta.join(' · ')}` : ''}`;
 }
@@ -126,14 +126,14 @@ function statusEmoji(status: string): string {
 }
 
 async function resolveConfiguredStatusEmoji(db: Db, ctx: TaskContext, status: string): Promise<string | null> {
-  if (ctx.sprintId != null) {
-    const sprintStatus = (await listSprintTaskStatuses(db, ctx.sprintId)).find((candidate) => candidate.name === status);
-    if (sprintStatus?.emoji) return sprintStatus.emoji;
+  if (ctx.workflowId != null) {
+    const workflowStatus = (await listWorkflowTaskStatuses(db, ctx.workflowId)).find((candidate) => candidate.name === status);
+    if (workflowStatus?.emoji) return workflowStatus.emoji;
   }
 
-  if (ctx.sprintType) {
-    const sprintTypeStatus = (await listSprintTypeTaskStatuses(db, ctx.sprintType)).find((candidate) => candidate.name === status);
-    if (sprintTypeStatus?.emoji) return sprintTypeStatus.emoji;
+  if (ctx.workflowType) {
+    const workflowTypeStatus = (await listWorkflowTypeTaskStatuses(db, ctx.workflowType)).find((candidate) => candidate.name === status);
+    if (workflowTypeStatus?.emoji) return workflowTypeStatus.emoji;
   }
 
   return null;
@@ -164,7 +164,7 @@ async function buildMessage(
 
   const meta: string[] = [];
   if (ctx.projectName) meta.push(`Project: ${escapeHtml(ctx.projectName)}`);
-  if (ctx.sprintName) meta.push(`Sprint: ${escapeHtml(ctx.sprintName)}`);
+  if (ctx.workflowName) meta.push(`Workflow: ${escapeHtml(ctx.workflowName)}`);
   meta.push(`Source: ${escapeHtml(source)}`);
 
   lines.push(meta.join(' · '));
@@ -225,7 +225,7 @@ export async function notifyTaskStatusChange(
               fromStatus,
               toStatus,
               projectName: ctx.projectName,
-              sprintName: ctx.sprintName,
+              workflowName: ctx.workflowName,
             },
           });
     const preferences = await readNotificationPreferences(db, ctx.tenantId);

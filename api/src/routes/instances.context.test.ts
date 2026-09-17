@@ -37,7 +37,7 @@ async function seed(): Promise<void> {
   `);
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (90, 1, 'Agent HQ', '', '')`);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
+    INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status)
     VALUES (50, 1, 90, 'Viewer', 'Ship the viewer.', 'generic', 'active')
   `);
   await db.run(`
@@ -45,7 +45,7 @@ async function seed(): Promise<void> {
     VALUES (9, 1, 'Nova', 'Implementer', 'agent:nova:test', '/tmp/nova', 'idle', 'Implementer')
   `);
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, sprint_id, task_type, custom_fields_json)
+    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, workflow_id, task_type, custom_fields_json)
     VALUES (900, 1, 'Ship the context viewer', 'Build it.', 'in_progress', 'high', 90, 50, 'backend', '{}')
   `);
   for (const id of [800, 801]) {

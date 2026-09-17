@@ -2,7 +2,7 @@ import type { Db } from '../../db/adapter/types';
 import { getAgentHqBaseUrl } from '../../lib/agentHqBaseUrl';
 import {
   normalizeContractTemplateKey,
-  readSprintTypeContractTemplate,
+  readWorkflowTypeContractTemplate,
   renderLoadedContractTemplate,
   splitRenderedContract,
 } from './templateStore';
@@ -22,8 +22,8 @@ export interface TransportContext {
   taskId: number;
   taskStatus: string;
   taskType?: string | null;
-  sprintId?: number | null;
-  sprintType?: string | null;
+  workflowId?: number | null;
+  workflowType?: string | null;
   agentSlug: string;
   sessionKey: string;
   baseUrl?: string;
@@ -43,7 +43,7 @@ async function getConfiguredEvidenceRequirements(
   return resolveEvidenceRequirements({
     db: ctx.db,
     taskType: ctx.taskType,
-    sprintId: ctx.sprintId,
+    workflowId: ctx.workflowId,
     outcomes: promptOutcomes,
     suggestedOutcome: workflow.suggestedOutcome,
   });
@@ -69,7 +69,7 @@ async function buildTemplateValues(
   const promptOutcomeHelp = getPromptOutcomeHelp(workflow);
   const promptOutcomes = promptOutcomeHelp.map((entry) => entry.outcome);
   const evidence = await getConfiguredEvidenceRequirements(ctx, workflow, promptOutcomes);
-  const sprintType = normalizeContractTemplateKey(ctx.sprintType);
+  const workflowType = normalizeContractTemplateKey(ctx.workflowType);
   const pipelineStages = PIPELINE_STAGES.join(' -> ');
   const evidenceOutcomes = promptOutcomes
     .filter(outcome => !['blocked', 'failed', 'qa_fail', 'dev_deploy_queued'].includes(outcome))
@@ -82,7 +82,7 @@ async function buildTemplateValues(
     taskId: ctx.taskId,
     sessionKey: ctx.sessionKey,
     agentSlug: ctx.agentSlug,
-    sprintType,
+    workflowType,
     workflowTemplateKey: workflow.source,
     workflowSource: workflow.source,
     suggestedOutcome: workflow.suggestedOutcome,
@@ -116,7 +116,7 @@ export const CONTRACT_PLACEHOLDER_DEFINITIONS: ContractPlaceholderDefinition[] =
   { key: 'taskId', description: 'Current task ID, used when posting outcomes or attaching review, QA, or deploy evidence.' },
   { key: 'sessionKey', description: 'OpenClaw session key for this run, useful when a contract needs to reference or resume the active session.' },
   { key: 'agentSlug', description: 'Canonical slug of the assigned agent, typically used in changed_by fields and machine-authored records.' },
-  { key: 'sprintType', description: 'Normalized sprint type for the task, such as generic, dev, or ops.' },
+  { key: 'workflowType', description: 'Normalized workflow type for the task, such as generic, dev, or ops.' },
   { key: 'workflowTemplateKey', description: 'Workflow resolution source for this dispatch, useful when templates need to explain config-backed versus compatibility routing.' },
   { key: 'workflowSource', description: 'Alias for workflowTemplateKey.' },
   { key: 'suggestedOutcome', description: 'Recommended semantic outcome for the current workflow state when the happy path succeeds.' },
@@ -165,18 +165,18 @@ export async function buildContractInstructionsDetailed(
   const workflow = await resolveWorkflow({
       taskStatus: ctx.taskStatus,
       taskType: ctx.taskType,
-      sprintId: ctx.sprintId,
-      sprintType: ctx.sprintType,
+      workflowId: ctx.workflowId,
+      workflowType: ctx.workflowType,
       db: ctx.db,
     });
-  const template = readSprintTypeContractTemplate(ctx.sprintType);
+  const template = readWorkflowTypeContractTemplate(ctx.workflowType);
   const rendered = renderLoadedContractTemplate(template, await buildTemplateValues(ctx, workflow));
   const split = splitRenderedContract(rendered);
   return {
     text: rendered,
     procedure: split.procedure,
     runIdentifiers: split.runIdentifiers,
-    templateKey: normalizeContractTemplateKey(ctx.sprintType),
+    templateKey: normalizeContractTemplateKey(ctx.workflowType),
     templatePath: template.path,
     inheritedFrom: template.inheritedFrom,
     workflowSource: workflow.source,

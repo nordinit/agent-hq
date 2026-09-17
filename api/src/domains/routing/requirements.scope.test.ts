@@ -10,7 +10,7 @@ import {
 /**
  * A requirement request that names no scope must be refused.
  *
- * With no sprint_id, project_id or sprint_type these calls used to fall through to the legacy
+ * With no workflow_id, project_id or workflow_type these calls used to fall through to the legacy
  * global `transition_requirements` table — no project, no tenant, and consulted as the fallback
  * for every workflow in every project. Create silently gated all of them at once; update and
  * delete addressed a global row by an id the caller had taken from a scoped one, hitting an
@@ -44,7 +44,7 @@ describe('transition requirement scope guard', () => {
   test('the refusal names both ways to scope the write', async () => {
     // The message is the whole remedy — a bare 400 would just move the confusion.
     await expect(createTransitionRequirement(getDb(), { ...VALID }))
-      .rejects.toThrow(/project_id and sprint_type.*sprint_id/s);
+      .rejects.toThrow(/project_id and workflow_type.*workflow_id/s);
   });
 
   test('refuses to update a requirement with no scope', async () => {
@@ -72,12 +72,12 @@ describe('transition requirement scope guard', () => {
   test('a project and workflow type together are enough to pass the guard', async () => {
     // Proves the guard is about scope alone: this gets past it and fails later, on the scope
     // resolver, rather than being refused as unscoped.
-    await expect(createTransitionRequirement(getDb(), { ...VALID, project_id: 999999, sprint_type: 'dev' }))
+    await expect(createTransitionRequirement(getDb(), { ...VALID, project_id: 999999, workflow_type: 'dev' }))
       .rejects.not.toThrow(/no scope/i);
   });
 
   test('a workflow id alone is enough to pass the guard', async () => {
-    await expect(createTransitionRequirement(getDb(), { ...VALID, sprint_id: 999999 }))
+    await expect(createTransitionRequirement(getDb(), { ...VALID, workflow_id: 999999 }))
       .rejects.not.toThrow(/no scope/i);
   });
 });

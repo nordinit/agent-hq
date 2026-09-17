@@ -65,7 +65,7 @@ async function setupDb(): Promise<void> {
     INSERT INTO projects (id, tenant_id, name)
     VALUES (11, 1, 'One Project'), (22, 2, 'Two Project');
 
-    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+    INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
     VALUES (111, 1, 11, 'One Workflow', 'generic'), (222, 2, 22, 'Two Workflow', 'generic');
 
     INSERT INTO agents (id, tenant_id, name, job_title, session_key, project_id, runtime_type)
@@ -73,7 +73,7 @@ async function setupDb(): Promise<void> {
       (101, 1, 'One Agent', 'One Job', 'agent:one', 11, 'openclaw'),
       (202, 2, 'Two Agent', 'Two Job', 'agent:two', 22, 'openclaw');
 
-    INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id, agent_id)
+    INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id, agent_id)
     VALUES
       (1001, 1, 'Tenant one task', 'done', 11, 111, 101),
       (2002, 2, 'Tenant two task', 'done', 22, 222, 202);
@@ -99,12 +99,12 @@ async function setupDb(): Promise<void> {
       (2, 2, 602, 202, 'two private log', '2026-06-01T02:02:00Z'),
       (3, 1, NULL, 202, 'conflicting tenant log', '2026-06-01T03:02:00Z');
 
-    INSERT INTO task_creation_events (id, tenant_id, task_id, project_id, sprint_id, job_id, agent_id, source, confidence, scope_size, assumptions, open_questions, needs_split)
+    INSERT INTO task_creation_events (id, tenant_id, task_id, project_id, workflow_id, job_id, agent_id, source, confidence, scope_size, assumptions, open_questions, needs_split)
     VALUES
       (1, 1, 1001, 11, 111, 101, 101, 'manual', 'high', 'small', '[]', '[]', 0),
       (2, 2, 2002, 22, 222, 202, 202, 'manual', 'high', 'small', '[]', '[]', 0);
 
-    INSERT INTO task_outcome_metrics (id, tenant_id, task_id, project_id, sprint_id, job_id, agent_id, first_pass_qa, failure_reasons, outcome_quality)
+    INSERT INTO task_outcome_metrics (id, tenant_id, task_id, project_id, workflow_id, job_id, agent_id, first_pass_qa, failure_reasons, outcome_quality)
     VALUES
       (1, 1, 1001, 11, 111, 101, 101, 1, '[]', 'good'),
       (2, 2, 2002, 22, 222, 202, 202, 1, '[]', 'good');

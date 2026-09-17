@@ -2,7 +2,7 @@ import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import type { Db } from '../../db/adapter/types';
 import type { McpApiIdentity } from '../../lib/mcpApiAuth';
 import { postTaskOutcome } from './release';
-import { loadSprintTaskTransitionRequirements } from '../routing/policy/statuses';
+import { loadWorkflowTaskTransitionRequirements } from '../routing/policy/statuses';
 
 jest.mock('./readModel', () => ({ ...jest.requireActual('./readModel'), enrichTask: jest.fn(task => task) }));
 jest.mock('./mutations', () => ({ ...jest.requireActual('./mutations'), maybeTriggerDispatch: jest.fn() }));
@@ -17,26 +17,26 @@ beforeEach(async () => {
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agency')`);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name) VALUES (1, 'lead_generation', 'Lead Generation')`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (10, 1, 1, 'Leads', 'lead_generation')`);
-  await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'lead_generation', 'Lead Generation')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Leads', 'lead_generation')`);
+  await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
     VALUES (10, 'approved', 'Approved', 0, 0), (10, 'submitted', 'Submitted', 0, 1)`);
   await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (7, 1, 'Sales', 'sales')`);
-  await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id, task_type, agent_id, custom_fields_json)
+  await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id, task_type, agent_id, custom_fields_json)
     VALUES (417, 1, 'Proposal', 'approved', 1, 10, 'proposal', 7, ?)`, JSON.stringify({ retired_field: 'preserve', memo: 'old' }));
-  await db.run(`INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json) VALUES (1, 'lead_generation', NULL, ?)`, JSON.stringify({ fields: [
+  await db.run(`INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json) VALUES (1, 'lead_generation', NULL, ?)`, JSON.stringify({ fields: [
     { key: 'submission_proof_url', type: 'url' }, { key: 'platform_bid_id', type: 'text' },
     { key: 'amount', type: 'number' }, { key: 'checked', type: 'checkbox' },
     { key: 'outcome', type: 'select', options: ['Won', 'Lost'] }, { key: 'memo', type: 'textarea' },
     // Even a malformed schema cannot give a payload authority over task state.
     { key: 'status', type: 'text' },
   ] }));
-  await db.run(`INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+  await db.run(`INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
     VALUES (1, 10, 'proposal', 'approved', 'submit_external', 'submitted', 1)`);
-  await db.run(`INSERT INTO sprint_task_transition_requirements
-    (tenant_id, project_id, sprint_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, enabled)
+  await db.run(`INSERT INTO workflow_task_transition_requirements
+    (tenant_id, project_id, workflow_id, workflow_type, task_type, outcome, field_name, requirement_type, severity, enabled)
     VALUES (1, 1, 10, 'lead_generation', 'proposal', 'submit_external', 'submission_proof_url', 'required', 'block', 1)`);
-  expect(await loadSprintTaskTransitionRequirements(db, 10, 'submit_external', 'proposal')).toHaveLength(1);
+  expect(await loadWorkflowTaskTransitionRequirements(db, 10, 'submit_external', 'proposal')).toHaveLength(1);
 });
 
 afterEach(async () => { jest.restoreAllMocks(); await teardownTestDb(); });
@@ -68,7 +68,7 @@ it('persists payload-only proof, scalar values and the outcome field with the tr
 });
 
 it('uses task-type field overrides rather than only the workflow default', async () => {
-  await db.run(`INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json) VALUES (1, 'lead_generation', 'proposal', ?)`, JSON.stringify({ fields: [
+  await db.run(`INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json) VALUES (1, 'lead_generation', 'proposal', ?)`, JSON.stringify({ fields: [
     { key: 'amount', type: 'select', options: ['negotiated'] }, { key: 'proposal_only', type: 'text' },
   ] }));
   await expect(submit({ payload: { ...payload, amount: 0 } })).rejects.toMatchObject({ status: 400 });
@@ -78,7 +78,7 @@ it('uses task-type field overrides rather than only the workflow default', async
 
 it.each([
   ['unknown', 'value'], ['retired_field', 'changed'], ['status', 'submitted'], ['project_id', 99],
-  ['active_instance_id', 999], ['instance_id', 999], ['changed_by', 'admin'], ['dry_run', false], ['sprint_type', 'dev'],
+  ['active_instance_id', 999], ['instance_id', 999], ['changed_by', 'admin'], ['dry_run', false], ['workflow_type', 'dev'],
   ['constructor', 'bad'], ['__proto__', 'bad'], ['amount', '0'], ['amount', Infinity],
   ['checked', 'true'], ['outcome', 'submit_external'], ['submission_proof_url', 'not a url'],
   ['platform_bid_id', { id: 123 }], ['failure_detail', 123],
@@ -115,8 +115,8 @@ it('does not clear required proof or persist other fields when a null fails the 
 });
 
 it('accepts zero and false for required scalar fields in both preflight and release gates', async () => {
-  await db.run(`INSERT INTO sprint_task_transition_requirements
-    (tenant_id, project_id, sprint_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, enabled)
+  await db.run(`INSERT INTO workflow_task_transition_requirements
+    (tenant_id, project_id, workflow_id, workflow_type, task_type, outcome, field_name, requirement_type, severity, enabled)
     VALUES (1, 1, 10, 'lead_generation', 'proposal', 'submit_external', 'amount', 'required', 'block', 1),
            (1, 1, 10, 'lead_generation', 'proposal', 'submit_external', 'checked', 'required', 'block', 1)`);
   await submit({ payload: { ...payload, amount: 0, checked: false } });

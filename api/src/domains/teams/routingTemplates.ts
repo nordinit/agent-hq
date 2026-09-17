@@ -2,8 +2,8 @@
  * Stamping a team's routing template onto a workflow it owns.
  *
  * WHY MATERIALIZE RATHER THAN RESOLVE
- * Team rules expand into real `sprint_task_routing_rules` rows instead of becoming a new tier in
- * resolveRoutingRuleForSprint(). Routing precedence is consumed by scope, trace, preview, graph,
+ * Team rules expand into real `workflow_task_routing_rules` rows instead of becoming a new tier in
+ * resolveRoutingRuleForWorkflow(). Routing precedence is consumed by scope, trace, preview, graph,
  * audit, policy and the reconciler, each with its own tests; a new tier means touching all of
  * them, and the Routing UI would still show nothing until taught about it separately.
  * Materialization leaves every one of those paths byte-identical and puts team rules in the tool
@@ -27,11 +27,11 @@ import type { Db } from '../../db/adapter/types';
 
 /**
  * The physical workflow tables. Named here rather than resolved at runtime because the whole
- * application writes `sprint_*` today; the staged rename rewrites these along with every other
+ * application writes `workflow_*` today; the staged rename rewrites these along with every other
  * call site in one pass.
  */
-const WORKFLOW_TABLE = 'sprints';
-const ROUTING_RULE_TABLE = 'sprint_task_routing_rules';
+const WORKFLOW_TABLE = 'workflows';
+const ROUTING_RULE_TABLE = 'workflow_task_routing_rules';
 
 export type PlanAction = 'create' | 'update' | 'unchanged' | 'conflict' | 'skip';
 
@@ -73,7 +73,7 @@ export interface TeamRoutingPlan {
 interface WorkflowRow {
   id: number;
   project_id: number;
-  sprint_type: string | null;
+  workflow_type: string | null;
   team_id: number | null;
   tenant_id: number | null;
 }
@@ -140,7 +140,7 @@ function ruleKey(taskType: string | null, status: string): string {
 
 async function loadWorkflow(db: Db, workflowId: number, tenantId: number | null): Promise<WorkflowRow> {
   const workflow = await db.get(`
-    SELECT id, project_id, sprint_type, team_id, tenant_id
+    SELECT id, project_id, workflow_type, team_id, tenant_id
     FROM ${WORKFLOW_TABLE}
     WHERE id = ?
   `, workflowId) as WorkflowRow | undefined;
@@ -177,7 +177,7 @@ export async function planTeamRoutingApplication(
 
   // Template rows for this workflow type. A NULL workflow_type is a wildcard; a rule naming the
   // type is more specific and must win, so specific rules are ordered FIRST — the first rule to
-  // claim a (task_type, status) key takes it, matching how resolveRoutingRuleForSprint orders
+  // claim a (task_type, status) key takes it, matching how resolveRoutingRuleForWorkflow orders
   // its own candidates.
   const templateRules = await db.all(`
     SELECT id, workflow_type, task_type, status, agent_id, member_role, priority
@@ -186,7 +186,7 @@ export async function planTeamRoutingApplication(
       AND enabled = 1
       AND (workflow_type IS NULL OR workflow_type = ?)
     ORDER BY CASE WHEN workflow_type IS NULL THEN 1 ELSE 0 END, priority DESC, id ASC
-  `, team.id, workflow.sprint_type ?? null) as TeamRuleRow[];
+  `, team.id, workflow.workflow_type ?? null) as TeamRuleRow[];
 
   // Enabled members, used to validate agent targets and to resolve member_role targets.
   const members = await db.all(`
@@ -214,7 +214,7 @@ export async function planTeamRoutingApplication(
     SELECT id, task_type, status, agent_id, priority,
            source_team_id, source_team_rule_id, source_team_applied_json
     FROM ${ROUTING_RULE_TABLE}
-    WHERE sprint_id = ?
+    WHERE workflow_id = ?
   `, workflow.id) as ExistingRuleRow[];
   const existingByKey = new Map(existingRules.map((rule) => [ruleKey(rule.task_type, rule.status), rule]));
 
@@ -342,7 +342,7 @@ export async function planTeamRoutingApplication(
 
   return {
     workflow_id: Number(workflow.id),
-    workflow_type: workflow.sprint_type ?? null,
+    workflow_type: workflow.workflow_type ?? null,
     team_id: Number(team.id),
     team_name: team.name,
     entries,
@@ -389,11 +389,11 @@ export async function applyTeamRouting(
     if (entry.action === 'create') {
       const result = await db.run(`
         INSERT INTO ${ROUTING_RULE_TABLE}
-          (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority,
+          (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority,
            enabled, is_system, source_team_id, source_team_rule_id, source_team_applied_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)
       `,
-        tenantId, workflow.id, workflow.project_id, workflow.sprint_type ?? null,
+        tenantId, workflow.id, workflow.project_id, workflow.workflow_type ?? null,
         entry.task_type, entry.status, entry.agent_id, entry.priority,
         plan.team_id, entry.team_rule_id, snapshot,
       );
@@ -402,7 +402,7 @@ export async function applyTeamRouting(
       await writeRoutingAudit(db, {
         tenantId,
         projectId: workflow.project_id,
-        workflowType: workflow.sprint_type ?? '',
+        workflowType: workflow.workflow_type ?? '',
         workflowId: workflow.id,
         entityTable: ROUTING_RULE_TABLE,
         entityId: entry.existing_rule_id,
@@ -441,7 +441,7 @@ export async function applyTeamRouting(
     await writeRoutingAudit(db, {
       tenantId,
       projectId: workflow.project_id,
-      workflowType: workflow.sprint_type ?? '',
+      workflowType: workflow.workflow_type ?? '',
       workflowId: workflow.id,
       entityTable: ROUTING_RULE_TABLE,
       entityId: entry.existing_rule_id,

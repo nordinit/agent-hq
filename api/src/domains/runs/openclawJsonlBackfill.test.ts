@@ -13,19 +13,19 @@ import { setupTestDb, teardownTestDb } from "../../db/testDb";
  *
  * The real schema carries genuine foreign keys the hand-written fixture did not: the
  * instance's task_id lands in instance_artifacts.task_id, so task 491 has to exist, and a
- * task needs a sprint which needs a project. They are seeded for referential integrity only —
+ * task needs a workflow which needs a project. They are seeded for referential integrity only —
  * nothing in these tests reads them.
  */
 async function seedRun(db: Db): Promise<void> {
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (11, 'Backfill Tenant', 'backfill', 1)`);
   const project = await db.run(`INSERT INTO projects (tenant_id, name) VALUES (11, 'Backfill Project')`);
-  const sprint = await db.run(
-    `INSERT INTO sprints (tenant_id, project_id, name) VALUES (11, ?, 'Backfill Sprint')`,
+  const workflow = await db.run(
+    `INSERT INTO workflows (tenant_id, project_id, name) VALUES (11, ?, 'Backfill Workflow')`,
     project.lastInsertId,
   );
   await db.run(
-    `INSERT INTO tasks (id, tenant_id, title, sprint_id) VALUES (491, 11, 'Backfilled run', ?)`,
-    sprint.lastInsertId,
+    `INSERT INTO tasks (id, tenant_id, title, workflow_id) VALUES (491, 11, 'Backfilled run', ?)`,
+    workflow.lastInsertId,
   );
   await db.run(`
     INSERT INTO agents (id, tenant_id, name, runtime_type, session_key, openclaw_agent_id)

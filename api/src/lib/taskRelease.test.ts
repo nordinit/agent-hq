@@ -10,27 +10,27 @@ describe('taskRelease configurable outcome routing', () => {
     db = await setupTestDb();
     // Clear workflow tables so the explicitly built policy below is authoritative.
     await db.exec(`
-      DELETE FROM sprint_task_transitions;
-      DELETE FROM sprint_type_task_types;
-      DELETE FROM sprint_type_outcomes;
-      DELETE FROM sprint_types;
-      DELETE FROM sprints;
+      DELETE FROM workflow_task_transitions;
+      DELETE FROM workflow_type_task_types;
+      DELETE FROM workflow_type_outcomes;
+      DELETE FROM workflow_types;
+      DELETE FROM workflows;
       DELETE FROM tasks;
       DELETE FROM projects;
     `);
 
     // Nothing under test resolves a tenant globally; the routing helpers derive it from the
-    // sprint row, so an explicit non-default tenant keeps the fixture sufficient and unambiguous.
+    // workflow row, so an explicit non-default tenant keeps the fixture sufficient and unambiguous.
     tenantId = Number((await db.run(
       `INSERT INTO tenants (name, slug, is_default, created_at, updated_at)
        VALUES ('Task Release Test', 'task-release-test', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
     )).lastInsertId);
     await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md, created_at) VALUES (1, ?, 'Agent HQ', '', '', CURRENT_TIMESTAMP)`, tenantId);
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'enhancements', 'Enhancements', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at) VALUES (10, ?, 1, 'Configurable outcomes', '', 'enhancements', 'active', 'time', '2w', CURRENT_TIMESTAMP)`, tenantId);
-    await db.run(`INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES (?, 10, NULL, 'in_progress', 'ship_it', 'review', 1, 10, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), (?, 10, NULL, 'in_progress', 'blocked_custom', 'blocked_custom', 1, 5, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId, tenantId);
-    await db.run(`INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, 'enhancements', NULL, 'ship_it', 'Ship It', 'Move to review', 1, 'base', NULL, 0, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), (?, 'enhancements', NULL, 'blocked_custom', 'Blocked Custom', 'Custom blocked state', 1, 'base', NULL, 1, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId, tenantId);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, sprint_id, task_type, created_at, updated_at) VALUES (42, ?, 'Configurable outcome task', 'in_progress', 10, 'backend', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'enhancements', 'Enhancements', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value, created_at) VALUES (10, ?, 1, 'Configurable outcomes', '', 'enhancements', 'active', 'time', '2w', CURRENT_TIMESTAMP)`, tenantId);
+    await db.run(`INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES (?, 10, NULL, 'in_progress', 'ship_it', 'review', 1, 10, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), (?, 10, NULL, 'in_progress', 'blocked_custom', 'blocked_custom', 1, 5, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId, tenantId);
+    await db.run(`INSERT INTO workflow_type_outcomes (tenant_id, workflow_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES (?, 'enhancements', NULL, 'ship_it', 'Ship It', 'Move to review', 1, 'base', NULL, 0, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), (?, 'enhancements', NULL, 'blocked_custom', 'Blocked Custom', 'Custom blocked state', 1, 'base', NULL, 1, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId, tenantId);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, workflow_id, task_type, created_at, updated_at) VALUES (42, ?, 'Configurable outcome task', 'in_progress', 10, 'backend', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
   });
 
   afterEach(async () => {
@@ -42,7 +42,7 @@ describe('taskRelease configurable outcome routing', () => {
       id: 42,
       title: 'Configurable outcome task',
       status: 'in_progress',
-      sprint_id: 10,
+      workflow_id: 10,
       task_type: 'backend',
     } as never, 'review')).resolves.toBeUndefined();
   });
@@ -52,7 +52,7 @@ describe('taskRelease configurable outcome routing', () => {
       id: 42,
       title: 'Configurable outcome task',
       status: 'in_progress',
-      sprint_id: 10,
+      workflow_id: 10,
       task_type: 'backend',
     } as never, 'not_a_real_status')).rejects.toThrow('"not_a_real_status" is not a valid task status for this workflow');
   });
@@ -62,13 +62,13 @@ describe('taskRelease configurable outcome routing', () => {
       id: 42,
       title: 'Configurable outcome task',
       status: 'in_progress',
-      sprint_id: 10,
+      workflow_id: 10,
       task_type: 'backend',
     } as never, 'done')).resolves.toBeUndefined();
   });
 
-  it('does not resolve through legacy lifecycle_rules when no explicit sprint transition exists', async () => {
-    await db.run(`DELETE FROM sprint_task_transitions WHERE sprint_id = ? AND from_status = ? AND outcome = ?`, 10, 'review', 'qa_pass');
+  it('does not resolve through legacy lifecycle_rules when no explicit workflow transition exists', async () => {
+    await db.run(`DELETE FROM workflow_task_transitions WHERE workflow_id = ? AND from_status = ? AND outcome = ?`, 10, 'review', 'qa_pass');
     await db.run(`DELETE FROM lifecycle_rules WHERE from_status = ? AND outcome = ?`, 'review', 'qa_pass');
     await db.run(`
       INSERT INTO lifecycle_rules (task_type, from_status, outcome, to_status, enabled, priority)
@@ -82,7 +82,7 @@ describe('taskRelease configurable outcome routing', () => {
     // A design, PM, or configuration task reaches review with no branch or commit to cite. The
     // old unconditional check dated from a board where every task was development work.
     for (const task_type of ['backend', 'design', 'pm', 'configuration']) {
-      const result = await evaluateTaskIntegrity({ status: 'review', sprint_id: 10, task_type }, db);
+      const result = await evaluateTaskIntegrity({ status: 'review', workflow_id: 10, task_type }, db);
 
       expect({ task_type, warnings: result.integrity_warnings }).toEqual({ task_type, warnings: [] });
       expect({ task_type, state: result.integrity_state }).toEqual({ task_type, state: 'clean' });
@@ -93,12 +93,12 @@ describe('taskRelease configurable outcome routing', () => {
     // The integrity read no longer decides anything; requireReleaseGate does, per outcome and
     // task type, and it is the only place an evidence rule is written down.
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements
-        (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+      INSERT INTO workflow_task_transition_requirements
+        (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
       VALUES (?, 10, 1, 'enhancements', NULL, 'qa_pass', 'qa_verified_commit', 'required', NULL, 'block', 'qa_pass requires qa_verified_commit', 1, 10)
     `, tenantId);
 
-    const task = { id: 42, status: 'review', sprint_id: 10, task_type: 'backend' } as never;
+    const task = { id: 42, status: 'review', workflow_id: 10, task_type: 'backend' } as never;
 
     const blocked = await requireReleaseGate(db, task, 'qa_pass', 'backend');
     expect(blocked.errors).toContain('qa_pass requires qa_verified_commit');
@@ -110,13 +110,13 @@ describe('taskRelease configurable outcome routing', () => {
 
   it('does not mark configuration-style done tasks legacy/unverified when deploy evidence is not part of the workflow', async () => {
     await db.run(`
-      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
+      INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
       VALUES (?, 10, NULL, 'in_progress', 'completed', 'done', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, tenantId);
 
     const result = await evaluateTaskIntegrity({
           status: 'done',
-          sprint_id: 10,
+          workflow_id: 10,
           task_type: 'configuration',
         }, db);
 
@@ -130,7 +130,7 @@ describe('taskRelease configurable outcome routing', () => {
 
   it('uses task-type completion contracts over generic live-verification routes for done integrity', async () => {
     await db.run(`
-      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
+      INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
       VALUES
         (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 10, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
         (?, 10, 'configuration', 'in_progress', 'completed', 'done', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -138,7 +138,7 @@ describe('taskRelease configurable outcome routing', () => {
 
     const result = await evaluateTaskIntegrity({
           status: 'done',
-          sprint_id: 10,
+          workflow_id: 10,
           task_type: 'configuration',
         }, db);
 
@@ -154,13 +154,13 @@ describe('taskRelease configurable outcome routing', () => {
     // Whether done owes deploy and live evidence is the workflow's call, expressed as a gate on
     // the transition into done, not a verdict passed on every task that already got there.
     await db.run(`
-      INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
+      INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at)
       VALUES (?, 10, NULL, 'deployed', 'live_verified', 'done', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, tenantId);
 
     const result = await evaluateTaskIntegrity({
           status: 'done',
-          sprint_id: 10,
+          workflow_id: 10,
           task_type: 'backend',
         }, db);
 
@@ -174,14 +174,14 @@ describe('taskRelease configurable outcome routing', () => {
     // A task-type row used to REPLACE the whole all-types set for that outcome, so adding one
     // narrow gate silently switched off every default. It now adds to them.
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements
-        (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+      INSERT INTO workflow_task_transition_requirements
+        (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
       VALUES
         (?, 10, 1, 'enhancements', NULL,      'qa_pass', 'review_commit',      'required', NULL, 'block', 'default: review_commit', 1, 10),
         (?, 10, 1, 'enhancements', 'backend', 'qa_pass', 'qa_verified_commit', 'required', NULL, 'block', 'backend: qa_verified_commit', 1, 20)
     `, tenantId, tenantId);
 
-    const task = { id: 42, status: 'review', sprint_id: 10, task_type: 'backend' } as never;
+    const task = { id: 42, status: 'review', workflow_id: 10, task_type: 'backend' } as never;
 
     const backend = await requireReleaseGate(db, task, 'qa_pass', 'backend');
     expect(backend.errors).toEqual(expect.arrayContaining([
@@ -198,15 +198,15 @@ describe('taskRelease configurable outcome routing', () => {
     // Overriding one field is still possible — it just no longer takes the rest of the set with
     // it. Here backend softens review_commit to a warning while the other default still blocks.
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements
-        (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
+      INSERT INTO workflow_task_transition_requirements
+        (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority)
       VALUES
         (?, 10, 1, 'enhancements', NULL,      'qa_pass', 'review_commit', 'required', NULL, 'block', 'default: review_commit', 1, 10),
         (?, 10, 1, 'enhancements', NULL,      'qa_pass', 'qa_tested_url', 'required', NULL, 'block', 'default: qa_tested_url', 1, 10),
         (?, 10, 1, 'enhancements', 'backend', 'qa_pass', 'review_commit', 'required', NULL, 'warn',  'backend: review_commit is advisory', 1, 20)
     `, tenantId, tenantId, tenantId);
 
-    const task = { id: 42, status: 'review', sprint_id: 10, task_type: 'backend' } as never;
+    const task = { id: 42, status: 'review', workflow_id: 10, task_type: 'backend' } as never;
     const result = await requireReleaseGate(db, task, 'qa_pass', 'backend');
 
     expect(result.warnings).toEqual(['backend: review_commit is advisory']);
@@ -216,11 +216,11 @@ describe('taskRelease configurable outcome routing', () => {
 
   it('still restates the task status as a release badge', async () => {
     // The badge survives because it describes where the task is, rather than ruling on it.
-    const review = await evaluateTaskIntegrity({ status: 'review', sprint_id: 10, task_type: 'design' }, db);
+    const review = await evaluateTaskIntegrity({ status: 'review', workflow_id: 10, task_type: 'design' }, db);
     expect(review.release_state_badge).toBe('review build');
     expect(review.integrity_warnings).toEqual([]);
 
-    const deployed = await evaluateTaskIntegrity({ status: 'deployed', sprint_id: 10, task_type: 'backend' }, db);
+    const deployed = await evaluateTaskIntegrity({ status: 'deployed', workflow_id: 10, task_type: 'backend' }, db);
     expect(deployed.release_state_badge).toBe('live deployed');
     expect(deployed.integrity_warnings).toEqual([]);
   });

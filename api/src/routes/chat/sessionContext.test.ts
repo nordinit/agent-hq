@@ -11,8 +11,8 @@ describe('resolveSessionContext', () => {
     db = await setupTestDb();
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1)`);
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Test')`);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (1, 1, 1, 'Test')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title) VALUES (867, 1, 1, 1, 'Test task')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name) VALUES (1, 1, 1, 'Test')`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title) VALUES (867, 1, 1, 1, 'Test task')`);
   });
 
   afterEach(async () => {

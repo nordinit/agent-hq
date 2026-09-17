@@ -21,7 +21,7 @@ async function createDb(): Promise<Db> {
     VALUES (1, 2, 'Task stop')
   `);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name)
+    INSERT INTO workflows (id, tenant_id, project_id, name)
     VALUES (1, 2, 1, 'Task stop')
   `);
   await db.run(`
@@ -41,7 +41,7 @@ async function seedTask(db: Db, input: {
 }): Promise<void> {
   await db.run(`
     INSERT INTO tasks (
-      id, tenant_id, project_id, sprint_id, title, status,
+      id, tenant_id, project_id, workflow_id, title, status,
       active_instance_id, paused_at, pause_reason, manual_intervention_count
     )
     VALUES (486, 2, 1, 1, 'Stop an active task', ?, NULL, ?, ?, ?)

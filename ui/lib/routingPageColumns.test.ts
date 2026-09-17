@@ -50,7 +50,7 @@ test('task routing table omits workflow override shadowing indicators', () => {
   assert.ok(taskRoutingSection.includes('label="Scope"'));
   assert.ok(taskRoutingSection.includes('label="Assigned Agent"'));
   assert.ok(taskRoutingSection.includes('label="Priority"'));
-  assert.ok(taskRoutingSection.includes("ScopeBadge kind={rule.scope_kind === 'sprint_type_default' ? 'default_scope' : rule.scope_kind}"));
+  assert.ok(taskRoutingSection.includes("ScopeBadge kind={rule.scope_kind === 'workflow_type_default' ? 'default_scope' : rule.scope_kind}"));
   assert.ok(taskRoutingSection.includes("ScopeBadge"));
   assert.ok(workflowConfigSource.includes('>override</Badge>'));
   assert.ok(workflowConfigSource.includes('>default</Badge>'));
@@ -109,14 +109,14 @@ test('workflow events table keeps existing mapping management behavior', () => {
 });
 
 test('workflow events save mappings with the selected workflow context', () => {
-  assert.ok(routingPageSource.includes('sprintId={scopedSprintId}'));
-  assert.ok(routingPageSource.includes('sprintType={scopedSprintType}'));
-  assert.ok(workflowEventsSource.includes('buildPayload(form: MappingFormState, projectId: number | null, sprintId: number | null, sprintType: string | null)'));
-  assert.ok(workflowEventsSource.includes('sprint_id: sprintId'));
-  assert.ok(workflowEventsSource.includes('sprint_type: sprintId ? null : sprintType'));
-  assert.ok(workflowEventsSource.includes('buildPayload(newForm, projectId, sprintId, sprintType)'));
-  assert.ok(workflowEventsSource.includes('buildPayload(editForm, projectId, sprintId, sprintType)'));
-  assert.ok(workflowEventsSource.includes('api.getWorkflowMetadata(sprintId ? { sprint_id: sprintId } : { sprint_type: sprintType })'));
+  assert.ok(routingPageSource.includes('workflowId={scopedWorkflowId}'));
+  assert.ok(routingPageSource.includes('workflowType={scopedWorkflowType}'));
+  assert.ok(workflowEventsSource.includes('buildPayload(form: MappingFormState, projectId: number | null, workflowId: number | null, workflowType: string | null)'));
+  assert.ok(workflowEventsSource.includes('workflow_id: workflowId'));
+  assert.ok(workflowEventsSource.includes('workflow_type: workflowId ? null : workflowType'));
+  assert.ok(workflowEventsSource.includes('buildPayload(newForm, projectId, workflowId, workflowType)'));
+  assert.ok(workflowEventsSource.includes('buildPayload(editForm, projectId, workflowId, workflowType)'));
+  assert.ok(workflowEventsSource.includes('api.getWorkflowMetadata(workflowId ? { workflow_id: workflowId } : { workflow_type: workflowType })'));
 });
 
 test('workflow events table hides conflicts column', () => {

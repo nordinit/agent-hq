@@ -2,21 +2,21 @@ import type { PolicyRequirementSeed, RequirementSeedIdentity } from './types';
 import {
   buildCanonicalPolicyStatuses,
   canonicalTaskStatusEmoji,
-  getSprintSeedRow,
-  isSprintTypeStatusSeeded,
-  markSprintTaskPolicySeeded,
-  markSprintTypeStatusSeeded,
-  normalizeSprintType,
+  getWorkflowSeedRow,
+  isWorkflowTypeStatusSeeded,
+  markWorkflowTaskPolicySeeded,
+  markWorkflowTypeStatusSeeded,
+  normalizeWorkflowType,
   parseJsonArray,
   parseJsonObject,
-  policyTransitionsForSprintType,
-  policyRequirementsForSprintType,
-  starterSprintType,
-  sprintTypeTenantPredicate,
+  policyTransitionsForWorkflowType,
+  policyRequirementsForWorkflowType,
+  starterWorkflowType,
+  workflowTypeTenantPredicate,
   tableExists,
   tableHasColumn,
 } from './metadata';
-import { listSprintTypeTaskStatuses } from './statuses';
+import { listWorkflowTypeTaskStatuses } from './statuses';
 import { type Db } from "../../../db/adapter/types";
 
 export function normalizeRequirementKeyValue(value: string | null | undefined): string {
@@ -33,13 +33,13 @@ export function requirementSeedIdentityKey(row: RequirementSeedIdentity): string
   ].join('\u0000');
 }
 
-export async function loadRequirementTombstoneKeys(db: Db, sprintId: number): Promise<Set<string>> {
-  if (!await tableExists(db, 'sprint_task_transition_requirement_tombstones')) return new Set<string>();
+export async function loadRequirementTombstoneKeys(db: Db, workflowId: number): Promise<Set<string>> {
+  if (!await tableExists(db, 'workflow_task_transition_requirement_tombstones')) return new Set<string>();
   const rows = await db.all(`
     SELECT task_type_key, outcome, field_name, requirement_type, match_field_key
-    FROM sprint_task_transition_requirement_tombstones
-    WHERE sprint_id = ?
-  `, sprintId) as Array<{
+    FROM workflow_task_transition_requirement_tombstones
+    WHERE workflow_id = ?
+  `, workflowId) as Array<{
     task_type_key: string;
     outcome: string;
     field_name: string;
@@ -55,29 +55,29 @@ export async function loadRequirementTombstoneKeys(db: Db, sprintId: number): Pr
   ].join('\u0000')));
 }
 
-export async function isStarterRequirementSeedForSprint(
+export async function isStarterRequirementSeedForWorkflow(
   db: Db,
-  sprintId: number,
+  workflowId: number,
   row: RequirementSeedIdentity,
 ): Promise<boolean> {
-  const sprint = await getSprintSeedRow(db, sprintId);
-  if (!sprint) return false;
+  const workflow = await getWorkflowSeedRow(db, workflowId);
+  if (!workflow) return false;
   const defaultKeys = new Set(
-    policyRequirementsForSprintType(sprint.sprint_type).map((seed) => requirementSeedIdentityKey(seed)),
+    policyRequirementsForWorkflowType(workflow.workflow_type).map((seed) => requirementSeedIdentityKey(seed)),
   );
   return defaultKeys.has(requirementSeedIdentityKey(row));
 }
 
-export async function rememberDeletedSprintTaskTransitionRequirement(
+export async function rememberDeletedWorkflowTaskTransitionRequirement(
   db: Db,
-  sprintId: number,
+  workflowId: number,
   row: RequirementSeedIdentity,
 ): Promise<void> {
-  if (!await tableExists(db, 'sprint_task_transition_requirement_tombstones')) return;
-  if (!await isStarterRequirementSeedForSprint(db, sprintId, row)) return;
+  if (!await tableExists(db, 'workflow_task_transition_requirement_tombstones')) return;
+  if (!await isStarterRequirementSeedForWorkflow(db, workflowId, row)) return;
 
   const values = [
-    sprintId,
+    workflowId,
     normalizeRequirementKeyValue(row.task_type),
     row.outcome,
     row.field_name,
@@ -86,8 +86,8 @@ export async function rememberDeletedSprintTaskTransitionRequirement(
   ] as const;
   await db.withTransaction(async (db) => {
     await db.run(`
-      DELETE FROM sprint_task_transition_requirement_tombstones
-      WHERE sprint_id = ?
+      DELETE FROM workflow_task_transition_requirement_tombstones
+      WHERE workflow_id = ?
         AND task_type_key = ?
         AND outcome = ?
         AND field_name = ?
@@ -95,27 +95,27 @@ export async function rememberDeletedSprintTaskTransitionRequirement(
         AND match_field_key = ?
     `, ...values);
     await db.run(`
-      INSERT INTO sprint_task_transition_requirement_tombstones (
-        sprint_id, task_type_key, outcome, field_name, requirement_type, match_field_key, deleted_at
+      INSERT INTO workflow_task_transition_requirement_tombstones (
+        workflow_id, task_type_key, outcome, field_name, requirement_type, match_field_key, deleted_at
       ) VALUES (?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     `, ...values);
   });
 }
 
-export async function seedSprintTaskPolicy(
+export async function seedWorkflowTaskPolicy(
   db: Db,
-  sprintId: number,
+  workflowId: number,
   options?: { force?: boolean },
 ): Promise<void> {
-  if (!Number.isFinite(sprintId)) return;
-  if (!await tableExists(db, 'sprint_task_statuses')) return;
-  if (!await tableExists(db, 'sprint_task_transitions')) return;
+  if (!Number.isFinite(workflowId)) return;
+  if (!await tableExists(db, 'workflow_task_statuses')) return;
+  if (!await tableExists(db, 'workflow_task_transitions')) return;
 
-  const sprint = await getSprintSeedRow(db, sprintId);
-  if (!sprint) return;
+  const workflow = await getWorkflowSeedRow(db, workflowId);
+  if (!workflow) return;
 
   const force = options?.force === true;
-  const policySeeded = Boolean(sprint.task_policy_seeded_at);
+  const policySeeded = Boolean(workflow.task_policy_seeded_at);
 
   // Starter policy is installation data, not a desired-state template. Once installation has
   // completed, the persisted rows belong to the operator: missing rows may have been deleted
@@ -123,16 +123,16 @@ export async function seedSprintTaskPolicy(
   // forced install/migration is allowed to replace the policy after this marker is set.
   if (policySeeded && !force) return;
 
-  const statusCount = (await db.get(`SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, sprintId) as { n: number }).n;
-  const transitionCount = (await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transitions WHERE sprint_id = ?`, sprintId) as { n: number }).n;
-  const requirementCount = (await db.get(`SELECT COUNT(*) AS n FROM sprint_task_transition_requirements WHERE sprint_id = ?`, sprintId) as { n: number }).n;
+  const statusCount = (await db.get(`SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, workflowId) as { n: number }).n;
+  const transitionCount = (await db.get(`SELECT COUNT(*) AS n FROM workflow_task_transitions WHERE workflow_id = ?`, workflowId) as { n: number }).n;
+  const requirementCount = (await db.get(`SELECT COUNT(*) AS n FROM workflow_task_transition_requirements WHERE workflow_id = ?`, workflowId) as { n: number }).n;
   const shouldSeedStatuses = force || (!policySeeded && statusCount === 0);
   const shouldSeedTransitions = force || (!policySeeded && transitionCount === 0);
   const shouldSeedRequirements = force || (!policySeeded && requirementCount === 0);
 
   if (!shouldSeedStatuses && !shouldSeedTransitions && !shouldSeedRequirements) {
     if (!policySeeded && (statusCount > 0 || transitionCount > 0 || requirementCount > 0)) {
-      await markSprintTaskPolicySeeded(db, sprintId);
+      await markWorkflowTaskPolicySeeded(db, workflowId);
     }
     return;
   }
@@ -146,16 +146,16 @@ export async function seedSprintTaskPolicy(
       allowed_transitions: string;
       metadata_json: string;
     }>> => {
-    const sprintType = normalizeSprintType(sprint.sprint_type);
-    if (sprintType && await tableExists(db, 'sprint_type_task_statuses')) {
-      const tenant = await sprintTypeTenantPredicate(db, 'sprint_type_task_statuses', sprint.tenant_id);
+    const workflowType = normalizeWorkflowType(workflow.workflow_type);
+    if (workflowType && await tableExists(db, 'workflow_type_task_statuses')) {
+      const tenant = await workflowTypeTenantPredicate(db, 'workflow_type_task_statuses', workflow.tenant_id);
       const rows = await db.all(`
         SELECT status_key, label, color, terminal, is_system, allowed_transitions_json, metadata_json
-        FROM sprint_type_task_statuses
-        WHERE sprint_type_key = ?
+        FROM workflow_type_task_statuses
+        WHERE workflow_type_key = ?
           ${tenant.sql}
         ORDER BY stage_order ASC, id ASC
-      `, sprintType, ...tenant.params) as Array<{
+      `, workflowType, ...tenant.params) as Array<{
         status_key: string;
         label: string;
         color: string;
@@ -177,33 +177,33 @@ export async function seedSprintTaskPolicy(
       }
     }
 
-    return buildCanonicalPolicyStatuses(sprint.sprint_type).map((row) => ({
+    return buildCanonicalPolicyStatuses(workflow.workflow_type).map((row) => ({
       ...row,
       metadata_json: '{}',
     }));
   };
 
-  const loadPolicyRequirements = (): PolicyRequirementSeed[] => policyRequirementsForSprintType(sprint.sprint_type);
-  const loadPolicyTransitions = () => policyTransitionsForSprintType(sprint.sprint_type);
+  const loadPolicyRequirements = (): PolicyRequirementSeed[] => policyRequirementsForWorkflowType(workflow.workflow_type);
+  const loadPolicyTransitions = () => policyTransitionsForWorkflowType(workflow.workflow_type);
 
   await db.withTransaction(async (db) => {
-    const requirementTombstones = force ? new Set<string>() : await loadRequirementTombstoneKeys(db, sprintId);
-    if (force && await tableExists(db, 'sprint_task_transition_requirement_tombstones')) {
-      await db.run(`DELETE FROM sprint_task_transition_requirement_tombstones WHERE sprint_id = ?`, sprintId);
+    const requirementTombstones = force ? new Set<string>() : await loadRequirementTombstoneKeys(db, workflowId);
+    if (force && await tableExists(db, 'workflow_task_transition_requirement_tombstones')) {
+      await db.run(`DELETE FROM workflow_task_transition_requirement_tombstones WHERE workflow_id = ?`, workflowId);
     }
 
     if (shouldSeedStatuses) {
-      await db.run(`DELETE FROM sprint_task_statuses WHERE sprint_id = ?`, sprintId);
+      await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = ?`, workflowId);
       const insertSql = `
-        INSERT INTO sprint_task_statuses (
-          sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
+        INSERT INTO workflow_task_statuses (
+          workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       const policyStatuses = await loadPolicyStatuses(db);
       for (const [index, row] of policyStatuses.entries()) {
         await db.run(
           insertSql,
-          sprintId,
+          workflowId,
           row.name,
           row.label,
           row.color,
@@ -217,28 +217,28 @@ export async function seedSprintTaskPolicy(
       }
     }
 
-    const transitionScopeColumns = await tableHasColumn(db, 'sprint_task_transitions', 'project_id')
-      && await tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
-    const transitionTenantInsert = await tableHasColumn(db, 'sprint_task_transitions', 'tenant_id')
-      ? { columns: 'tenant_id, ', placeholders: '?, ', params: [sprint.tenant_id ?? null] }
+    const transitionScopeColumns = await tableHasColumn(db, 'workflow_task_transitions', 'project_id')
+      && await tableHasColumn(db, 'workflow_task_transitions', 'workflow_type');
+    const transitionTenantInsert = await tableHasColumn(db, 'workflow_task_transitions', 'tenant_id')
+      ? { columns: 'tenant_id, ', placeholders: '?, ', params: [workflow.tenant_id ?? null] }
       : { columns: '', placeholders: '', params: [] };
 
     if (shouldSeedTransitions) {
-      await db.run(`DELETE FROM sprint_task_transitions WHERE sprint_id = ?`, sprintId);
+      await db.run(`DELETE FROM workflow_task_transitions WHERE workflow_id = ?`, workflowId);
       const insertSql = transitionScopeColumns ? `
-        INSERT INTO sprint_task_transitions (
-          ${transitionTenantInsert.columns}sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
+        INSERT INTO workflow_task_transitions (
+          ${transitionTenantInsert.columns}workflow_id, project_id, workflow_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
         ) VALUES (${transitionTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ` : `
-        INSERT INTO sprint_task_transitions (
-          ${transitionTenantInsert.columns}sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
+        INSERT INTO workflow_task_transitions (
+          ${transitionTenantInsert.columns}workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
         ) VALUES (${transitionTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       for (const row of loadPolicyTransitions()) {
         await db.run(
           insertSql,
           ...transitionTenantInsert.params,
-          ...(transitionScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
+          ...(transitionScopeColumns ? [workflowId, workflow.project_id, workflow.workflow_type] : [workflowId]),
           row.task_type ?? null,
           row.from_status,
           row.outcome,
@@ -249,20 +249,20 @@ export async function seedSprintTaskPolicy(
       }
     } else {
       const insertMissingSql = transitionScopeColumns ? `
-        INSERT INTO sprint_task_transitions (
-          ${transitionTenantInsert.columns}sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
+        INSERT INTO workflow_task_transitions (
+          ${transitionTenantInsert.columns}workflow_id, project_id, workflow_type, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
         ) VALUES (${transitionTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ` : `
-        INSERT INTO sprint_task_transitions (
-          ${transitionTenantInsert.columns}sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
+        INSERT INTO workflow_task_transitions (
+          ${transitionTenantInsert.columns}workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at
         ) VALUES (${transitionTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, 0, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       const existingKeys = new Set(
         (await db.all(`
           SELECT COALESCE(task_type, '') AS task_type, from_status, outcome
-          FROM sprint_task_transitions
-          WHERE sprint_id = ?
-        `, sprintId) as Array<{ task_type: string; from_status: string; outcome: string }>)
+          FROM workflow_task_transitions
+          WHERE workflow_id = ?
+        `, workflowId) as Array<{ task_type: string; from_status: string; outcome: string }>)
           .map((row) => `${row.task_type}\u0000${row.from_status}\u0000${row.outcome}`),
       );
       for (const row of loadPolicyTransitions()) {
@@ -271,7 +271,7 @@ export async function seedSprintTaskPolicy(
         await db.run(
           insertMissingSql,
           ...transitionTenantInsert.params,
-          ...(transitionScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
+          ...(transitionScopeColumns ? [workflowId, workflow.project_id, workflow.workflow_type] : [workflowId]),
           row.task_type ?? null,
           row.from_status,
           row.outcome,
@@ -283,21 +283,21 @@ export async function seedSprintTaskPolicy(
       }
     }
 
-    const requirementScopeColumns = await tableHasColumn(db, 'sprint_task_transition_requirements', 'project_id')
-      && await tableHasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
-    const requirementTenantInsert = await tableHasColumn(db, 'sprint_task_transition_requirements', 'tenant_id')
-      ? { columns: 'tenant_id, ', placeholders: '?, ', params: [sprint.tenant_id ?? null] }
+    const requirementScopeColumns = await tableHasColumn(db, 'workflow_task_transition_requirements', 'project_id')
+      && await tableHasColumn(db, 'workflow_task_transition_requirements', 'workflow_type');
+    const requirementTenantInsert = await tableHasColumn(db, 'workflow_task_transition_requirements', 'tenant_id')
+      ? { columns: 'tenant_id, ', placeholders: '?, ', params: [workflow.tenant_id ?? null] }
       : { columns: '', placeholders: '', params: [] };
 
     if (shouldSeedRequirements) {
-      await db.run(`DELETE FROM sprint_task_transition_requirements WHERE sprint_id = ?`, sprintId);
+      await db.run(`DELETE FROM workflow_task_transition_requirements WHERE workflow_id = ?`, workflowId);
       const insertSql = requirementScopeColumns ? `
-        INSERT INTO sprint_task_transition_requirements (
-          ${requirementTenantInsert.columns}sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
+        INSERT INTO workflow_task_transition_requirements (
+          ${requirementTenantInsert.columns}workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
         ) VALUES (${requirementTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ` : `
-        INSERT INTO sprint_task_transition_requirements (
-          ${requirementTenantInsert.columns}sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
+        INSERT INTO workflow_task_transition_requirements (
+          ${requirementTenantInsert.columns}workflow_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
         ) VALUES (${requirementTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       for (const row of loadPolicyRequirements()) {
@@ -305,7 +305,7 @@ export async function seedSprintTaskPolicy(
         await db.run(
           insertSql,
           ...requirementTenantInsert.params,
-          ...(requirementScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
+          ...(requirementScopeColumns ? [workflowId, workflow.project_id, workflow.workflow_type] : [workflowId]),
           row.task_type ?? null,
           row.outcome,
           row.field_name,
@@ -319,20 +319,20 @@ export async function seedSprintTaskPolicy(
       }
     } else {
       const insertMissingSql = requirementScopeColumns ? `
-        INSERT INTO sprint_task_transition_requirements (
-          ${requirementTenantInsert.columns}sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
+        INSERT INTO workflow_task_transition_requirements (
+          ${requirementTenantInsert.columns}workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
         ) VALUES (${requirementTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       ` : `
-        INSERT INTO sprint_task_transition_requirements (
-          ${requirementTenantInsert.columns}sprint_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
+        INSERT INTO workflow_task_transition_requirements (
+          ${requirementTenantInsert.columns}workflow_id, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at
         ) VALUES (${requirementTenantInsert.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
       `;
       const existingKeys = new Set(
         (await db.all(`
           SELECT COALESCE(task_type, '') AS task_type, outcome, field_name, requirement_type, COALESCE(match_field, '') AS match_field
-          FROM sprint_task_transition_requirements
-          WHERE sprint_id = ?
-        `, sprintId) as Array<{ task_type: string; outcome: string; field_name: string; requirement_type: string; match_field: string }>)
+          FROM workflow_task_transition_requirements
+          WHERE workflow_id = ?
+        `, workflowId) as Array<{ task_type: string; outcome: string; field_name: string; requirement_type: string; match_field: string }>)
           .map((row) => `${row.task_type}\u0000${row.outcome}\u0000${row.field_name}\u0000${row.requirement_type}\u0000${row.match_field}`),
       );
       for (const row of loadPolicyRequirements()) {
@@ -342,7 +342,7 @@ export async function seedSprintTaskPolicy(
         await db.run(
           insertMissingSql,
           ...requirementTenantInsert.params,
-          ...(requirementScopeColumns ? [sprintId, sprint.project_id, sprint.sprint_type] : [sprintId]),
+          ...(requirementScopeColumns ? [workflowId, workflow.project_id, workflow.workflow_type] : [workflowId]),
           row.task_type ?? null,
           row.outcome,
           row.field_name,
@@ -358,23 +358,23 @@ export async function seedSprintTaskPolicy(
     }
 
     if (force) {
-      await db.run(`DELETE FROM sprint_task_routing_rules WHERE sprint_id = ?`, sprintId);
+      await db.run(`DELETE FROM workflow_task_routing_rules WHERE workflow_id = ?`, workflowId);
     }
   });
 
-  await markSprintTaskPolicySeeded(db, sprintId);
+  await markWorkflowTaskPolicySeeded(db, workflowId);
 }
 
-export async function backfillMissingSprintTypeStatusEmoji(db: Db, sprintType: string): Promise<void> {
-  if (!await tableExists(db, 'sprint_type_task_statuses')) return;
+export async function backfillMissingWorkflowTypeStatusEmoji(db: Db, workflowType: string): Promise<void> {
+  if (!await tableExists(db, 'workflow_type_task_statuses')) return;
   const rows = await db.all(`
     SELECT id, status_key, metadata_json
-    FROM sprint_type_task_statuses
-    WHERE sprint_type_key = ?
-  `, sprintType) as Array<{ id: number; status_key: string; metadata_json: string | null }>;
+    FROM workflow_type_task_statuses
+    WHERE workflow_type_key = ?
+  `, workflowType) as Array<{ id: number; status_key: string; metadata_json: string | null }>;
   if (rows.length === 0) return;
   const updateEmojiSql = `
-    UPDATE sprint_type_task_statuses
+    UPDATE workflow_type_task_statuses
     SET metadata_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
   `;
@@ -388,37 +388,37 @@ export async function backfillMissingSprintTypeStatusEmoji(db: Db, sprintType: s
   }
 }
 
-export async function pruneUnexpectedStarterSprintTypeTaskStatuses(
+export async function pruneUnexpectedStarterWorkflowTypeTaskStatuses(
   db: Db,
-  sprintType: string,
+  workflowType: string,
   options?: { tenantId?: number | null },
 ): Promise<void> {
-  const normalizedSprintType = normalizeSprintType(sprintType);
-  if (!normalizedSprintType || !starterSprintType(normalizedSprintType)) return;
-  if (!await tableExists(db, 'sprint_type_task_statuses')) return;
+  const normalizedWorkflowType = normalizeWorkflowType(workflowType);
+  if (!normalizedWorkflowType || !starterWorkflowType(normalizedWorkflowType)) return;
+  if (!await tableExists(db, 'workflow_type_task_statuses')) return;
 
-  const canonicalStatusKeys = buildCanonicalPolicyStatuses(normalizedSprintType).map((row) => row.name);
+  const canonicalStatusKeys = buildCanonicalPolicyStatuses(normalizedWorkflowType).map((row) => row.name);
   if (canonicalStatusKeys.length === 0) return;
-  const statusTenant = await sprintTypeTenantPredicate(db, 'sprint_type_task_statuses', options?.tenantId);
+  const statusTenant = await workflowTypeTenantPredicate(db, 'workflow_type_task_statuses', options?.tenantId);
   await db.run(`
-    DELETE FROM sprint_type_task_statuses
-    WHERE sprint_type_key = ?
+    DELETE FROM workflow_type_task_statuses
+    WHERE workflow_type_key = ?
       ${statusTenant.sql}
       AND COALESCE(is_system, 0) = 1
       AND status_key NOT IN (${canonicalStatusKeys.map(() => '?').join(', ')})
-  `, normalizedSprintType, ...statusTenant.params, ...canonicalStatusKeys);
+  `, normalizedWorkflowType, ...statusTenant.params, ...canonicalStatusKeys);
 }
 
 async function ensureOpsIntakeStarterStatus(
   db: Db,
   options?: { tenantId?: number | null },
 ): Promise<void> {
-  if (!await tableExists(db, 'sprint_type_task_statuses')) return;
-  const statusTenant = await sprintTypeTenantPredicate(db, 'sprint_type_task_statuses', options?.tenantId);
+  if (!await tableExists(db, 'workflow_type_task_statuses')) return;
+  const statusTenant = await workflowTypeTenantPredicate(db, 'workflow_type_task_statuses', options?.tenantId);
   const existing = await db.get(`
     SELECT status_key
-    FROM sprint_type_task_statuses
-    WHERE sprint_type_key = 'ops'
+    FROM workflow_type_task_statuses
+    WHERE workflow_type_key = 'ops'
       ${statusTenant.sql}
       AND status_key = 'intake'
     LIMIT 1
@@ -427,15 +427,15 @@ async function ensureOpsIntakeStarterStatus(
 
   const canonical = buildCanonicalPolicyStatuses('ops').find((row) => row.name === 'intake');
   if (!canonical) return;
-  const hasStatusTenantId = await tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
+  const hasStatusTenantId = await tableHasColumn(db, 'workflow_type_task_statuses', 'tenant_id');
   const insertSql = hasStatusTenantId
     ? `
-      INSERT INTO sprint_type_task_statuses (
-        tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
+      INSERT INTO workflow_type_task_statuses (
+        tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
       ) VALUES (?, 'ops', ?, ?, ?, ?, ?, ?, 0, 1, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`
     : `
-      INSERT INTO sprint_type_task_statuses (
-        sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
+      INSERT INTO workflow_type_task_statuses (
+        workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
       ) VALUES ('ops', ?, ?, ?, ?, ?, ?, 0, 1, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`;
   const params = [
     canonical.name,
@@ -450,10 +450,10 @@ async function ensureOpsIntakeStarterStatus(
   else await db.run(insertSql, ...params);
 }
 
-export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintType: string): Promise<void> {
-  if (!await tableExists(db, 'sprint_type_task_statuses')) return;
-  if (!starterSprintType(sprintType)) return;
-  const canonicalStatuses = buildCanonicalPolicyStatuses(sprintType).map((row, index) => ({
+export async function reconcileWorkflowTypeTaskStatusesToCanonical(db: Db, workflowType: string): Promise<void> {
+  if (!await tableExists(db, 'workflow_type_task_statuses')) return;
+  if (!starterWorkflowType(workflowType)) return;
+  const canonicalStatuses = buildCanonicalPolicyStatuses(workflowType).map((row, index) => ({
     ...row,
     stage_order: index,
     metadata_json: JSON.stringify(row.emoji ? { emoji: row.emoji } : {}),
@@ -462,14 +462,14 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
 
   const existingRows = await db.all(`
     SELECT id, status_key
-    FROM sprint_type_task_statuses
-    WHERE sprint_type_key = ?
-  `, sprintType) as Array<{ id: number; status_key: string }>;
+    FROM workflow_type_task_statuses
+    WHERE workflow_type_key = ?
+  `, workflowType) as Array<{ id: number; status_key: string }>;
 
   const existingStatuses = new Set(existingRows.map((row) => row.status_key));
-  const deleteSql = `DELETE FROM sprint_type_task_statuses WHERE sprint_type_key = ? AND status_key = ?`;
+  const deleteSql = `DELETE FROM workflow_type_task_statuses WHERE workflow_type_key = ? AND status_key = ?`;
   const updateSql = `
-    UPDATE sprint_type_task_statuses
+    UPDATE workflow_type_task_statuses
     SET label = ?,
         color = ?,
         terminal = ?,
@@ -479,17 +479,17 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
         is_default_entry = ?,
         metadata_json = ?,
         updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
-    WHERE sprint_type_key = ? AND status_key = ?
+    WHERE workflow_type_key = ? AND status_key = ?
   `;
   const insertSql = `
-    INSERT INTO sprint_type_task_statuses (
-      sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
+    INSERT INTO workflow_type_task_statuses (
+      workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
   `;
 
   for (const row of existingRows) {
     if (!canonicalByStatus.has(row.status_key)) {
-      await db.run(deleteSql, sprintType, row.status_key);
+      await db.run(deleteSql, workflowType, row.status_key);
     }
   }
 
@@ -505,7 +505,7 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
         status.stage_order,
         index === 0 ? 1 : 0,
         status.metadata_json,
-        sprintType,
+        workflowType,
         status.name,
       );
       continue;
@@ -513,7 +513,7 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
 
     await db.run(
       insertSql,
-      sprintType,
+      workflowType,
       status.name,
       status.label,
       status.color,
@@ -527,52 +527,52 @@ export async function reconcileSprintTypeTaskStatusesToCanonical(db: Db, sprintT
   }
 }
 
-export async function seedSprintTypeTaskStatuses(
+export async function seedWorkflowTypeTaskStatuses(
   db: Db,
-  sprintType: string | null | undefined,
-  options?: { force?: boolean; sourceSprintType?: string | null; tenantId?: number | null },
+  workflowType: string | null | undefined,
+  options?: { force?: boolean; sourceWorkflowType?: string | null; tenantId?: number | null },
 ): Promise<void> {
-  const normalizedSprintType = normalizeSprintType(sprintType);
-  if (!normalizedSprintType) return;
-  if (!await tableExists(db, 'sprint_types') || !await tableExists(db, 'sprint_type_task_statuses')) return;
+  const normalizedWorkflowType = normalizeWorkflowType(workflowType);
+  if (!normalizedWorkflowType) return;
+  if (!await tableExists(db, 'workflow_types') || !await tableExists(db, 'workflow_type_task_statuses')) return;
 
-  const typeTenant = await sprintTypeTenantPredicate(db, 'sprint_types', options?.tenantId);
-  const statusTenant = await sprintTypeTenantPredicate(db, 'sprint_type_task_statuses', options?.tenantId);
-  const sprintTypeRow = await db.get(`SELECT key FROM sprint_types WHERE key = ?${typeTenant.sql} LIMIT 1`, normalizedSprintType, ...typeTenant.params);
-  if (!sprintTypeRow) return;
+  const typeTenant = await workflowTypeTenantPredicate(db, 'workflow_types', options?.tenantId);
+  const statusTenant = await workflowTypeTenantPredicate(db, 'workflow_type_task_statuses', options?.tenantId);
+  const workflowTypeRow = await db.get(`SELECT key FROM workflow_types WHERE key = ?${typeTenant.sql} LIMIT 1`, normalizedWorkflowType, ...typeTenant.params);
+  if (!workflowTypeRow) return;
 
   const existingCount = (await db.get(`
     SELECT COUNT(*) AS n
-    FROM sprint_type_task_statuses
-    WHERE sprint_type_key = ?
+    FROM workflow_type_task_statuses
+    WHERE workflow_type_key = ?
       ${statusTenant.sql}
-  `, normalizedSprintType, ...statusTenant.params) as { n: number }).n;
+  `, normalizedWorkflowType, ...statusTenant.params) as { n: number }).n;
   const force = options?.force === true;
-  if (!starterSprintType(normalizedSprintType)) {
+  if (!starterWorkflowType(normalizedWorkflowType)) {
     if (existingCount > 0) {
-      await backfillMissingSprintTypeStatusEmoji(db, normalizedSprintType);
+      await backfillMissingWorkflowTypeStatusEmoji(db, normalizedWorkflowType);
     }
     return;
   }
-  const statusSeeded = await isSprintTypeStatusSeeded(db, normalizedSprintType, options?.tenantId);
+  const statusSeeded = await isWorkflowTypeStatusSeeded(db, normalizedWorkflowType, options?.tenantId);
   if (!force) {
     if (statusSeeded) {
-      await pruneUnexpectedStarterSprintTypeTaskStatuses(db, normalizedSprintType, { tenantId: options?.tenantId });
-      if (normalizedSprintType === 'ops') await ensureOpsIntakeStarterStatus(db, { tenantId: options?.tenantId });
-      await backfillMissingSprintTypeStatusEmoji(db, normalizedSprintType);
+      await pruneUnexpectedStarterWorkflowTypeTaskStatuses(db, normalizedWorkflowType, { tenantId: options?.tenantId });
+      if (normalizedWorkflowType === 'ops') await ensureOpsIntakeStarterStatus(db, { tenantId: options?.tenantId });
+      await backfillMissingWorkflowTypeStatusEmoji(db, normalizedWorkflowType);
       return;
     }
     if (existingCount > 0) {
-      await pruneUnexpectedStarterSprintTypeTaskStatuses(db, normalizedSprintType, { tenantId: options?.tenantId });
-      if (normalizedSprintType === 'ops') await ensureOpsIntakeStarterStatus(db, { tenantId: options?.tenantId });
-      await backfillMissingSprintTypeStatusEmoji(db, normalizedSprintType);
-      await markSprintTypeStatusSeeded(db, normalizedSprintType, options?.tenantId);
+      await pruneUnexpectedStarterWorkflowTypeTaskStatuses(db, normalizedWorkflowType, { tenantId: options?.tenantId });
+      if (normalizedWorkflowType === 'ops') await ensureOpsIntakeStarterStatus(db, { tenantId: options?.tenantId });
+      await backfillMissingWorkflowTypeStatusEmoji(db, normalizedWorkflowType);
+      await markWorkflowTypeStatusSeeded(db, normalizedWorkflowType, options?.tenantId);
       return;
     }
   }
 
-  const sourceSprintType = normalizeSprintType(options?.sourceSprintType) ?? (normalizedSprintType === 'generic' ? null : 'generic');
-  const sourceStatuses = buildCanonicalPolicyStatuses(normalizedSprintType).map((row, index) => ({
+  const sourceWorkflowType = normalizeWorkflowType(options?.sourceWorkflowType) ?? (normalizedWorkflowType === 'generic' ? null : 'generic');
+  const sourceStatuses = buildCanonicalPolicyStatuses(normalizedWorkflowType).map((row, index) => ({
     name: row.name,
     label: row.label,
     color: row.color,
@@ -584,27 +584,27 @@ export async function seedSprintTypeTaskStatuses(
     stage_order: index,
     is_default_entry: index === 0,
   }));
-  const fallbackStatuses = sourceSprintType ? await listSprintTypeTaskStatuses(db, sourceSprintType, { tenantId: options?.tenantId }) : [];
+  const fallbackStatuses = sourceWorkflowType ? await listWorkflowTypeTaskStatuses(db, sourceWorkflowType, { tenantId: options?.tenantId }) : [];
   const statusesToSeed = sourceStatuses.length > 0 ? sourceStatuses : fallbackStatuses;
   await db.withTransaction(async (db) => {
     if (force) {
-      await db.run(`DELETE FROM sprint_type_task_statuses WHERE sprint_type_key = ?${statusTenant.sql}`, normalizedSprintType, ...statusTenant.params);
+      await db.run(`DELETE FROM workflow_type_task_statuses WHERE workflow_type_key = ?${statusTenant.sql}`, normalizedWorkflowType, ...statusTenant.params);
     }
-    const hasStatusTenantId = await tableHasColumn(db, 'sprint_type_task_statuses', 'tenant_id');
+    const hasStatusTenantId = await tableHasColumn(db, 'workflow_type_task_statuses', 'tenant_id');
     const insertSql = hasStatusTenantId
       ? `
-        INSERT INTO sprint_type_task_statuses (
-          tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
+        INSERT INTO workflow_type_task_statuses (
+          tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`
       : `
-        INSERT INTO sprint_type_task_statuses (
-          sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
+        INSERT INTO workflow_type_task_statuses (
+          workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ON CONFLICT DO NOTHING`;
     for (const [index, status] of statusesToSeed.entries()) {
       await db.run(
         insertSql,
         ...(hasStatusTenantId ? [options?.tenantId ?? null] : []),
-        normalizedSprintType,
+        normalizedWorkflowType,
         status.name,
         status.label,
         status.color,
@@ -617,7 +617,7 @@ export async function seedSprintTypeTaskStatuses(
       );
     }
 
-    await backfillMissingSprintTypeStatusEmoji(db, normalizedSprintType);
+    await backfillMissingWorkflowTypeStatusEmoji(db, normalizedWorkflowType);
   });
-  await markSprintTypeStatusSeeded(db, normalizedSprintType, options?.tenantId);
+  await markWorkflowTypeStatusSeeded(db, normalizedWorkflowType, options?.tenantId);
 }

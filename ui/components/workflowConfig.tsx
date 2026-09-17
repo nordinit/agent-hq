@@ -102,9 +102,9 @@ export function RoutingWarningBanner({
 export function ScopeBadge({
   kind,
 }: {
-  kind?: 'default_scope' | 'sprint_type_default' | 'sprint_override';
+  kind?: 'default_scope' | 'workflow_type_default' | 'workflow_override';
 }) {
-  if (kind === 'sprint_override') {
+  if (kind === 'workflow_override') {
     return <Badge className="bg-purple-900/60 text-purple-200 text-[10px]">override</Badge>;
   }
   return <Badge className="bg-cyan-900/50 text-cyan-200 text-[10px]">default</Badge>;

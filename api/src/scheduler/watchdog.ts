@@ -197,12 +197,12 @@ export async function runWorktreePrunePass(db: Db = getDb()): Promise<void> {
       maxAgeHours: 24,
       getTaskRecord: async (taskId: number) => {
         const row = await db.get(`
-          SELECT status, ${await tableHasColumn(db, 'tasks', 'sprint_id') ? 'sprint_id' : 'NULL AS sprint_id'}, ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 'tenant_id' : 'NULL AS tenant_id'}
+          SELECT status, ${await tableHasColumn(db, 'tasks', 'workflow_id') ? 'workflow_id' : 'NULL AS workflow_id'}, ${await tableHasColumn(db, 'tasks', 'tenant_id') ? 'tenant_id' : 'NULL AS tenant_id'}
           FROM tasks
           WHERE id = ?
-        `, taskId) as { status: string; sprint_id: number | null; tenant_id: number | null } | undefined;
+        `, taskId) as { status: string; workflow_id: number | null; tenant_id: number | null } | undefined;
         return row
-          ? { exists: true, status: row.status, terminal: (await listConfiguredTerminalStatuses(db, { sprintId: row.sprint_id, tenantId: row.tenant_id })).includes(row.status) }
+          ? { exists: true, status: row.status, terminal: (await listConfiguredTerminalStatuses(db, { workflowId: row.workflow_id, tenantId: row.tenant_id })).includes(row.status) }
           : { exists: false, status: null };
       },
       hasLiveInstance: async (worktreePath: string, taskId: number | null) => {
@@ -331,8 +331,8 @@ export function evaluateWatchdogDecision(inst: WatchdogRow, now = new Date()): W
 interface WatchdogTaskRuntimeContext {
   task_status: string | null;
   task_type: string | null;
-  sprint_id: number | null;
-  sprint_type: string | null;
+  workflow_id: number | null;
+  workflow_type: string | null;
   custom_fields_json?: string | null;
 }
 
@@ -343,11 +343,11 @@ async function loadTaskRuntimeContext(db: Db, taskId: number | null): Promise<Wa
     const row = await db.get(`
       SELECT t.status AS task_status,
              t.task_type,
-             t.sprint_id,
-             s.sprint_type,
+             t.workflow_id,
+             s.workflow_type,
              ${hasCustomFields ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
       FROM tasks t
-      LEFT JOIN sprints s ON s.id = t.sprint_id
+      LEFT JOIN workflows s ON s.id = t.workflow_id
       WHERE t.id = ?
     `, taskId) as WatchdogTaskRuntimeContext | undefined;
     return row ? getCanonicalTaskRecord(row as unknown as Record<string, unknown>) as unknown as WatchdogTaskRuntimeContext : null;
@@ -370,8 +370,8 @@ async function safeResolveWorkflow(db: Db, task: WatchdogTaskRuntimeContext | nu
     return await resolveWorkflow({
           taskStatus: task.task_status,
           taskType: task.task_type,
-          sprintId: task.sprint_id,
-          sprintType: task.sprint_type,
+          workflowId: task.workflow_id,
+          workflowType: task.workflow_type,
           db,
         });
   } catch {

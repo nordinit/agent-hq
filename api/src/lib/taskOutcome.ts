@@ -1,11 +1,11 @@
 import { cleanupTaskExecutionLinkageForStatus } from './taskLifecycle';
-import { canonicalOutcomeRoute, requireReleaseGate, resolveSprintWorkflowOutcome } from './taskRelease';
+import { canonicalOutcomeRoute, requireReleaseGate, resolveWorkflowModelOutcome } from './taskRelease';
 import { notifyTaskStatusChange } from './taskNotifications';
 import { isTerminalOutcome, closeInstance } from '../domains/runs/instanceClose';
 import { emitIntegrityEvent, writeTaskLifecycleOutcomeHistory, writeTaskStatusChange } from '../domains/tasks/history';
 import { getCanonicalTaskRecord } from '../domains/tasks/evidence';
-import { resolveSprintTaskRoutingAssignment } from '../domains/routing/policy/statuses';
-import { resolveSprintOutcomeMap } from '../domains/sprint-definitions/outcomes';
+import { resolveWorkflowTaskRoutingAssignment } from '../domains/routing/policy/statuses';
+import { resolveWorkflowOutcomeMap } from '../domains/workflow-definitions/outcomes';
 import {
   isBlockerLikeOutcome,
   isFailureLikeOutcome,
@@ -57,9 +57,9 @@ type TaskOutcomeTaskRow = {
   id: number;
   status: string;
   project_id: number | null;
-  sprint_id: number | null;
+  workflow_id: number | null;
   task_type: string | null;
-  sprint_type: string | null;
+  workflow_type: string | null;
   agent_id: number | null;
   assigned_agent_id: number | null;
   active_instance_id: number | null;
@@ -194,16 +194,16 @@ export async function resolveRefusedTaskOutcome(
   await addAuditNote(db, input.taskId, input.changedBy, `Outcome refused: ${input.outcome} — ${input.reason}`);
 }
 
-function buildMissingRouteErrorMessage(priorStatus: string, outcome: string, taskType: string | null, sprintId: number | null): string {
+function buildMissingRouteErrorMessage(priorStatus: string, outcome: string, taskType: string | null, workflowId: number | null): string {
   const scope: string[] = [];
-  if (sprintId != null) scope.push(`sprint_id="${sprintId}"`);
+  if (workflowId != null) scope.push(`workflow_id="${workflowId}"`);
   scope.push(`task_type="${taskType ?? 'default'}"`);
-  return `Cannot apply outcome "${outcome}" from "${priorStatus}": no explicit sprint_task_transitions route is configured (${scope.join(', ')})`;
+  return `Cannot apply outcome "${outcome}" from "${priorStatus}": no explicit workflow_task_transitions route is configured (${scope.join(', ')})`;
 }
 
 async function resolveTaskRoutingAssignment(
   db: Db,
-  sprintId: number | null,
+  workflowId: number | null,
   _projectId: number | null,
   taskType: string | null,
   status: string,
@@ -211,7 +211,7 @@ async function resolveTaskRoutingAssignment(
   if (!taskType) return { agent_id: null };
 
   try {
-    return await resolveSprintTaskRoutingAssignment(db, sprintId, taskType, status);
+    return await resolveWorkflowTaskRoutingAssignment(db, workflowId, taskType, status);
   } catch {
     return { agent_id: null };
   }
@@ -309,9 +309,9 @@ async function reloadTaskOutcomeTaskRow(db: Db, taskId: number): Promise<TaskOut
       id,
       status,
       project_id,
-      sprint_id,
+      workflow_id,
       task_type,
-      (SELECT sprint_type FROM sprints WHERE id = tasks.sprint_id) as sprint_type,
+      (SELECT workflow_type FROM workflows WHERE id = tasks.workflow_id) as workflow_type,
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
@@ -331,9 +331,9 @@ async function loadOutcomeMeta(
   task: TaskOutcomeTaskRow,
   outcome: string,
 ) {
-  return (await resolveSprintOutcomeMap(db, {
-      sprintId: task.sprint_id,
-      sprintType: task.sprint_type,
+  return (await resolveWorkflowOutcomeMap(db, {
+      workflowId: task.workflow_id,
+      workflowType: task.workflow_type,
       taskType: task.task_type,
       fallbackOutcomes: [outcome],
     })).get(outcome) ?? null;
@@ -358,9 +358,9 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       id,
       status,
       project_id,
-      sprint_id,
+      workflow_id,
       task_type,
-      (SELECT sprint_type FROM sprints WHERE id = tasks.sprint_id) as sprint_type,
+      (SELECT workflow_type FROM workflows WHERE id = tasks.workflow_id) as workflow_type,
       agent_id,
       ${assignedAgentSelect},
       active_instance_id,
@@ -444,23 +444,23 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
   let routingOutcome = effectiveOutcome;
   const isUnsuccessfulOutcome = outcomeSemantics.failureLike || outcomeSemantics.blockedLike;
 
-  let sprintWorkflowRoute: Awaited<ReturnType<typeof resolveSprintWorkflowOutcome>> = null;
+  let workflowModelRoute: Awaited<ReturnType<typeof resolveWorkflowModelOutcome>> = null;
   try {
-    sprintWorkflowRoute = await resolveSprintWorkflowOutcome(db, {
+    workflowModelRoute = await resolveWorkflowModelOutcome(db, {
           status: routingBaseStatus,
           task_type: reloadedExisting.task_type,
-          sprint_id: reloadedExisting.sprint_id,
-          sprint_type: reloadedExisting.sprint_type,
+          workflow_id: reloadedExisting.workflow_id,
+          workflow_type: reloadedExisting.workflow_type,
         }, routingOutcome);
   } catch (error) {
-    let fallbackRoute: Awaited<ReturnType<typeof resolveSprintWorkflowOutcome>> = null;
+    let fallbackRoute: Awaited<ReturnType<typeof resolveWorkflowModelOutcome>> = null;
     for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
       try {
-        fallbackRoute = await resolveSprintWorkflowOutcome(db, {
+        fallbackRoute = await resolveWorkflowModelOutcome(db, {
                   status: routingBaseStatus,
                   task_type: reloadedExisting.task_type,
-                  sprint_id: reloadedExisting.sprint_id,
-                  sprint_type: reloadedExisting.sprint_type,
+                  workflow_id: reloadedExisting.workflow_id,
+                  workflow_type: reloadedExisting.workflow_type,
                 }, fallbackOutcome);
         if (fallbackRoute) {
           routingOutcome = fallbackOutcome;
@@ -471,7 +471,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       }
     }
     if (!fallbackRoute) throw error;
-    sprintWorkflowRoute = fallbackRoute;
+    workflowModelRoute = fallbackRoute;
   }
 
   const gateResult = await requireReleaseGate(db, { ...reloadedExisting, status: routingBaseStatus }, routingOutcome, reloadedExisting.task_type);
@@ -488,11 +488,11 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     throw new RefusedTaskOutcomeError(refusal);
   }
 
-  let canonicalNextStatus = (await sprintWorkflowRoute)?.nextStatus
-    ?? (await canonicalOutcomeRoute(db, routingBaseStatus, routingOutcome, reloadedExisting.task_type, reloadedExisting.sprint_id, reloadedExisting.sprint_type));
+  let canonicalNextStatus = (await workflowModelRoute)?.nextStatus
+    ?? (await canonicalOutcomeRoute(db, routingBaseStatus, routingOutcome, reloadedExisting.task_type, reloadedExisting.workflow_id, reloadedExisting.workflow_type));
   if (!canonicalNextStatus) {
     for (const fallbackOutcome of routeFallbackOutcomes(effectiveOutcome, outcomeSemantics)) {
-      const fallbackNextStatus = await canonicalOutcomeRoute(db, routingBaseStatus, fallbackOutcome, reloadedExisting.task_type, reloadedExisting.sprint_id, reloadedExisting.sprint_type);
+      const fallbackNextStatus = await canonicalOutcomeRoute(db, routingBaseStatus, fallbackOutcome, reloadedExisting.task_type, reloadedExisting.workflow_id, reloadedExisting.workflow_type);
       if (fallbackNextStatus) {
         canonicalNextStatus = fallbackNextStatus;
         routingOutcome = fallbackOutcome;
@@ -542,7 +542,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
   }
 
   if (!canonicalNextStatus && !route) {
-    const refusal = buildMissingRouteErrorMessage(routingBaseStatus, effectiveOutcome, reloadedExisting.task_type, reloadedExisting.sprint_id);
+    const refusal = buildMissingRouteErrorMessage(routingBaseStatus, effectiveOutcome, reloadedExisting.task_type, reloadedExisting.workflow_id);
     await resolveRefusedTaskOutcome(db, {
             taskId: input.taskId,
             outcome: input.outcome,
@@ -558,8 +558,8 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       attemptedValue: effectiveOutcome,
       allowedValues: [],
       scope: {
-        sprintId: reloadedExisting.sprint_id,
-        sprintType: reloadedExisting.sprint_type,
+        workflowId: reloadedExisting.workflow_id,
+        workflowType: reloadedExisting.workflow_type,
         taskType: reloadedExisting.task_type,
         fromStatus: routingBaseStatus,
       },
@@ -568,8 +568,8 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
 
   const nextStatus = canonicalNextStatus ?? route!.to_status;
   await assertTaskStatusDefinedForWorkflow(db, nextStatus, {
-        sprintId: reloadedExisting.sprint_id,
-        sprintType: reloadedExisting.sprint_type,
+        workflowId: reloadedExisting.workflow_id,
+        workflowType: reloadedExisting.workflow_type,
       });
   if (isUnsuccessfulOutcome) {
     autoRecovered = outcomeSemantics.failureLike && nextStatus !== 'failed' && nextStatus !== 'stalled' && nextStatus !== 'blocked';
@@ -580,7 +580,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
         : 'Failure-like outcome routed to failure triage';
   }
   const reviewOwnerAgentId = reloadedExisting.review_owner_agent_id ?? reloadedExisting.agent_id ?? null;
-  const routedAssignment = await resolveTaskRoutingAssignment(db, reloadedExisting.sprint_id, reloadedExisting.project_id, reloadedExisting.task_type, nextStatus);
+  const routedAssignment = await resolveTaskRoutingAssignment(db, reloadedExisting.workflow_id, reloadedExisting.project_id, reloadedExisting.task_type, nextStatus);
   const nextAssignedAgentId = routingOutcome === 'qa_fail' || effectiveOutcome === 'qa_fail'
     ? (reviewOwnerAgentId ?? reloadedExisting.assigned_agent_id ?? null)
     : (routedAssignment.agent_id ?? reloadedExisting.assigned_agent_id);
@@ -734,7 +734,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
     // every task was development work; a design, PM, or configuration task arrives at review with
     // nothing to cite, and counting that as a defect made the integrity feed a measure of task
     // type rather than of anything wrong. A workflow that wants the evidence requires it in
-    // sprint_task_transition_requirements, where requireReleaseGate blocks the transition outright.
+    // workflow_task_transition_requirements, where requireReleaseGate blocks the transition outright.
     if (effectiveOutcome === 'qa_pass' && !finalTaskState.qa_verified_commit) {
       await emitIntegrityEvent(db, {
               taskId: input.taskId, anomalyType: 'missing_qa_evidence',

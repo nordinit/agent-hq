@@ -132,7 +132,7 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
  * The capability policy the mobile profile is built against. Several of these exist for this
  * shape of client: `projects.read_project_board` makes a board legible to an identity that owns
  * no dispatched task, `tasks.write_project_notes` lets it comment on work it is not executing,
- * and the two `sprints.*_active_sprint` writes let it work the lifecycle controls of a workflow
+ * and the two `workflows.*_active_workflow` writes let it work the lifecycle controls of a workflow
  * it is not running — all of which resolve through the assigned project rather than a dispatched
  * task. The three routing grants do the same for assignment rules, transitions and gates. The
  * rest are existing project-scoped grants. Notably absent: every admin key, both cross-tenant
@@ -149,9 +149,9 @@ const MOBILE_PROFILE_CAPABILITIES: readonly string[] = [
   'discovery.read_catalog',
   'projects.read_project_board',
   'projects.read_active_project',
-  'sprints.read_active_sprint',
-  'sprints.pause_active_sprint',
-  'sprints.complete_active_sprint',
+  'workflows.read_active_workflow',
+  'workflows.pause_active_workflow',
+  'workflows.complete_active_workflow',
   'routing_rules.manage_project_scope',
   'routing_transitions.manage_project_scope',
   'transition_requirements.manage_project_scope',

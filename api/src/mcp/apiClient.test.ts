@@ -25,8 +25,8 @@ function installMoveTaskFetchMock() {
         task_type: 'backend',
         story_points: null,
         project_id: 1,
-        sprint_id: 10,
-        sprint_name: 'Configurable outcomes',
+        workflow_id: 10,
+        workflow_name: 'Configurable outcomes',
         agent_id: null,
         agent_name: null,
         active_instance_id: null,
@@ -38,12 +38,12 @@ function installMoveTaskFetchMock() {
       });
     }
 
-    if (method === 'GET' && url === 'http://agent-hq.test/api/v1/routing/transitions?sprint_id=10&project_id=1') {
+    if (method === 'GET' && url === 'http://agent-hq.test/api/v1/routing/transitions?workflow_id=10&project_id=1') {
       return jsonResponse({
         transitions: [
           {
             id: 1,
-            sprint_id: 10,
+            workflow_id: 10,
             project_id: 1,
             task_type: null,
             from_status: 'in_progress',
@@ -54,7 +54,7 @@ function installMoveTaskFetchMock() {
           },
           {
             id: 2,
-            sprint_id: 10,
+            workflow_id: 10,
             project_id: 1,
             task_type: 'backend',
             from_status: 'in_progress',
@@ -114,7 +114,7 @@ describe('AgentHqApiClient.createTask', () => {
     await client.createTask({
       title: 'Omitted status task',
       project_id: 1,
-      sprint_id: 10,
+      workflow_id: 10,
       task_type: 'backend',
     });
 
@@ -146,7 +146,7 @@ describe('AgentHqApiClient.createTask', () => {
     await client.createTask({
       title: 'Ready task',
       project_id: 1,
-      sprint_id: 10,
+      workflow_id: 10,
       status: 'ready',
       task_type: 'backend',
     });
@@ -162,7 +162,7 @@ describe('AgentHqApiClient.createTask', () => {
     await expect(client.createTask({
       title: 'Preview ready task',
       project_id: 1,
-      sprint_id: 10,
+      workflow_id: 10,
       status: 'ready',
       task_type: 'backend',
       dry_run: true,
@@ -262,7 +262,7 @@ describe('AgentHqApiClient.moveTask configured outcomes', () => {
     (global as typeof globalThis & { fetch: typeof fetch }).fetch = originalFetch;
   });
 
-  it('uses the configured sprint transition outcome for status-targeted moves', async () => {
+  it('uses the configured workflow transition outcome for status-targeted moves', async () => {
     const { postedBodies } = installMoveTaskFetchMock();
     const client = new AgentHqApiClient('http://agent-hq.test');
 
@@ -304,8 +304,8 @@ describe('AgentHqApiClient.moveTask configured outcomes', () => {
           task_type: 'backend',
           story_points: null,
           project_id: 1,
-          sprint_id: 10,
-          sprint_name: 'Field workflow',
+          workflow_id: 10,
+          workflow_name: 'Field workflow',
           agent_id: null,
           agent_name: null,
           active_instance_id: null,
@@ -317,12 +317,12 @@ describe('AgentHqApiClient.moveTask configured outcomes', () => {
         });
       }
 
-      if (method === 'GET' && url === 'http://agent-hq.test/api/v1/routing/transitions?sprint_id=10&project_id=1') {
+      if (method === 'GET' && url === 'http://agent-hq.test/api/v1/routing/transitions?workflow_id=10&project_id=1') {
         return jsonResponse({
           transitions: [
             {
               id: 9,
-              sprint_id: 10,
+              workflow_id: 10,
               project_id: 1,
               task_type: 'backend',
               from_status: 'todo',
@@ -361,7 +361,6 @@ describe('AgentHqApiClient.moveTask configured outcomes', () => {
     ]);
   });
 
-
   it('shows the configured outcome in dry-run previews', async () => {
     const { postedBodies } = installMoveTaskFetchMock();
     const client = new AgentHqApiClient('http://agent-hq.test');
@@ -388,8 +387,8 @@ describe('AgentHqApiClient.moveTask configured outcomes', () => {
       allowed_values: ['todo', 'field_reported'],
       metadata_tool: 'agent_hq_get_workflow_metadata',
       workflow: {
-        sprint_id: 10,
-        sprint_type: 'field_ops',
+        workflow_id: 10,
+        workflow_type: 'field_ops',
         task_type: 'backend',
         from_status: 'todo',
       },
@@ -407,8 +406,8 @@ describe('AgentHqApiClient.moveTask configured outcomes', () => {
           task_type: 'backend',
           story_points: null,
           project_id: 1,
-          sprint_id: 10,
-          sprint_name: 'Field workflow',
+          workflow_id: 10,
+          workflow_name: 'Field workflow',
           agent_id: null,
           agent_name: null,
           active_instance_id: null,
@@ -420,7 +419,7 @@ describe('AgentHqApiClient.moveTask configured outcomes', () => {
         });
       }
 
-      if (method === 'GET' && url === 'http://agent-hq.test/api/v1/routing/transitions?sprint_id=10&project_id=1') {
+      if (method === 'GET' && url === 'http://agent-hq.test/api/v1/routing/transitions?workflow_id=10&project_id=1') {
         return jsonResponse({ transitions: [] });
       }
 
@@ -618,24 +617,24 @@ describe('AgentHqApiClient workflow lifecycle helpers', () => {
 
     const client = new AgentHqApiClient('http://agent-hq.test');
 
-    await client.updateSprint(42, { status: 'paused', note: 'Holding for review capacity' });
-    await client.completeSprint(42, { note: 'Objectives met' });
-    await client.closeSprint(42);
+    await client.updateWorkflow(42, { status: 'paused', note: 'Holding for review capacity' });
+    await client.completeWorkflow(42, { note: 'Objectives met' });
+    await client.closeWorkflow(42);
 
     expect(calls).toEqual([
       {
         method: 'PUT',
-        url: 'http://agent-hq.test/api/v1/sprints/42',
+        url: 'http://agent-hq.test/api/v1/workflows/42',
         body: { status: 'paused', note: 'Holding for review capacity' },
       },
       {
         method: 'POST',
-        url: 'http://agent-hq.test/api/v1/sprints/42/complete',
+        url: 'http://agent-hq.test/api/v1/workflows/42/complete',
         body: { note: 'Objectives met' },
       },
       {
         method: 'POST',
-        url: 'http://agent-hq.test/api/v1/sprints/42/close',
+        url: 'http://agent-hq.test/api/v1/workflows/42/close',
         body: {},
       },
     ]);
@@ -959,7 +958,7 @@ describe('AgentHqApiClient admin MCP CRUD endpoints', () => {
     }) as unknown as typeof fetch;
 
     const client = new AgentHqApiClient('http://agent-hq.test');
-    const scope = { tenant_id: 4, project_id: 1, sprint_type: 'dev', sprint_id: 57, scope: 'sprint_override', status: 'ready', task_type: 'backend' };
+    const scope = { tenant_id: 4, project_id: 1, workflow_type: 'dev', workflow_id: 57, scope: 'workflow_override', status: 'ready', task_type: 'backend' };
 
     await client.listRoutingRules(scope);
     await client.getRoutingRule(9, scope);
@@ -968,13 +967,13 @@ describe('AgentHqApiClient admin MCP CRUD endpoints', () => {
     await client.deleteRoutingRule(9, { ...scope, dry_run: true });
 
     expect(calls.map(call => `${call.method} ${call.url}`)).toEqual([
-      'GET http://agent-hq.test/api/v1/routing/rules?tenant_id=4&project_id=1&sprint_type=dev&sprint_id=57&scope=sprint_override&status=ready&task_type=backend',
-      'GET http://agent-hq.test/api/v1/routing/rules/9?tenant_id=4&project_id=1&sprint_type=dev&sprint_id=57&scope=sprint_override&status=ready&task_type=backend',
+      'GET http://agent-hq.test/api/v1/routing/rules?tenant_id=4&project_id=1&workflow_type=dev&workflow_id=57&scope=workflow_override&status=ready&task_type=backend',
+      'GET http://agent-hq.test/api/v1/routing/rules/9?tenant_id=4&project_id=1&workflow_type=dev&workflow_id=57&scope=workflow_override&status=ready&task_type=backend',
       'POST http://agent-hq.test/api/v1/routing/rules?tenant_id=4',
       'PUT http://agent-hq.test/api/v1/routing/rules/9?tenant_id=4',
-      'DELETE http://agent-hq.test/api/v1/routing/rules/9?tenant_id=4&project_id=1&sprint_type=dev&sprint_id=57&scope=sprint_override&status=ready&task_type=backend&dry_run=true',
+      'DELETE http://agent-hq.test/api/v1/routing/rules/9?tenant_id=4&project_id=1&workflow_type=dev&workflow_id=57&scope=workflow_override&status=ready&task_type=backend&dry_run=true',
     ]);
-    expect(calls[2].body).toEqual({ project_id: 1, sprint_type: 'dev', sprint_id: 57, scope: 'sprint_override', status: 'ready', task_type: 'backend', agent_id: 7, dry_run: true });
+    expect(calls[2].body).toEqual({ project_id: 1, workflow_type: 'dev', workflow_id: 57, scope: 'workflow_override', status: 'ready', task_type: 'backend', agent_id: 7, dry_run: true });
     expect(calls[3].body).toEqual({ status: 'review', dry_run: true });
   });
 
@@ -986,7 +985,7 @@ describe('AgentHqApiClient admin MCP CRUD endpoints', () => {
     }) as unknown as typeof fetch;
 
     const client = new AgentHqApiClient('http://agent-hq.test');
-    const scope = { tenant_id: 4, project_id: 1, sprint_type: 'dev', sprint_id: 57, scope: 'sprint_override', status: 'ready', task_type: 'backend' };
+    const scope = { tenant_id: 4, project_id: 1, workflow_type: 'dev', workflow_id: 57, scope: 'workflow_override', status: 'ready', task_type: 'backend' };
 
     await client.listAssignmentRules(scope);
     await client.getAssignmentRule(9, scope);
@@ -995,13 +994,13 @@ describe('AgentHqApiClient admin MCP CRUD endpoints', () => {
     await client.deleteAssignmentRule(9, { ...scope, dry_run: true });
 
     expect(calls.map(call => `${call.method} ${call.url}`)).toEqual([
-      'GET http://agent-hq.test/api/v1/routing/assignment-rules?tenant_id=4&project_id=1&sprint_type=dev&sprint_id=57&scope=sprint_override&status=ready&task_type=backend',
-      'GET http://agent-hq.test/api/v1/routing/assignment-rules/9?tenant_id=4&project_id=1&sprint_type=dev&sprint_id=57&scope=sprint_override&status=ready&task_type=backend',
+      'GET http://agent-hq.test/api/v1/routing/assignment-rules?tenant_id=4&project_id=1&workflow_type=dev&workflow_id=57&scope=workflow_override&status=ready&task_type=backend',
+      'GET http://agent-hq.test/api/v1/routing/assignment-rules/9?tenant_id=4&project_id=1&workflow_type=dev&workflow_id=57&scope=workflow_override&status=ready&task_type=backend',
       'POST http://agent-hq.test/api/v1/routing/assignment-rules?tenant_id=4',
       'PUT http://agent-hq.test/api/v1/routing/assignment-rules/9?tenant_id=4',
-      'DELETE http://agent-hq.test/api/v1/routing/assignment-rules/9?tenant_id=4&project_id=1&sprint_type=dev&sprint_id=57&scope=sprint_override&status=ready&task_type=backend&dry_run=true',
+      'DELETE http://agent-hq.test/api/v1/routing/assignment-rules/9?tenant_id=4&project_id=1&workflow_type=dev&workflow_id=57&scope=workflow_override&status=ready&task_type=backend&dry_run=true',
     ]);
-    expect(calls[2].body).toEqual({ project_id: 1, sprint_type: 'dev', sprint_id: 57, scope: 'sprint_override', status: 'ready', task_type: 'backend', agent_id: 7, dry_run: true });
+    expect(calls[2].body).toEqual({ project_id: 1, workflow_type: 'dev', workflow_id: 57, scope: 'workflow_override', status: 'ready', task_type: 'backend', agent_id: 7, dry_run: true });
     expect(calls[3].body).toEqual({ status: 'review', dry_run: true });
   });
 
@@ -1040,30 +1039,30 @@ describe('AgentHqApiClient admin MCP CRUD endpoints', () => {
 
     const client = new AgentHqApiClient('http://agent-hq.test');
 
-    await client.listRoutingTransitions({ tenant_id: 4, project_id: 1, sprint_id: 57, sprint_type: 'dev' });
-    await client.getRoutingTransition(12, { tenant_id: 4, project_id: 1, sprint_id: 57 });
-    await client.createRoutingTransition({ tenant_id: 4, project_id: 1, sprint_id: 57, from_status: 'ready', outcome: 'start', to_status: 'in_progress', dry_run: true });
+    await client.listRoutingTransitions({ tenant_id: 4, project_id: 1, workflow_id: 57, workflow_type: 'dev' });
+    await client.getRoutingTransition(12, { tenant_id: 4, project_id: 1, workflow_id: 57 });
+    await client.createRoutingTransition({ tenant_id: 4, project_id: 1, workflow_id: 57, from_status: 'ready', outcome: 'start', to_status: 'in_progress', dry_run: true });
     await client.updateRoutingTransition(12, { tenant_id: 4, enabled: false, dry_run: true });
-    await client.deleteRoutingTransition(12, { tenant_id: 4, project_id: 1, sprint_id: 57, dry_run: true });
-    await client.listTransitionRequirements({ tenant_id: 4, project_id: 1, sprint_id: 57, sprint_type: 'dev', outcome: 'completed_for_review' });
-    await client.createTransitionRequirement({ tenant_id: 4, project_id: 1, sprint_id: 57, outcome: 'completed_for_review', field_name: 'review_commit', dry_run: true });
+    await client.deleteRoutingTransition(12, { tenant_id: 4, project_id: 1, workflow_id: 57, dry_run: true });
+    await client.listTransitionRequirements({ tenant_id: 4, project_id: 1, workflow_id: 57, workflow_type: 'dev', outcome: 'completed_for_review' });
+    await client.createTransitionRequirement({ tenant_id: 4, project_id: 1, workflow_id: 57, outcome: 'completed_for_review', field_name: 'review_commit', dry_run: true });
     await client.updateTransitionRequirement(17, { tenant_id: 4, severity: 'warn', dry_run: true });
-    await client.deleteTransitionRequirement(17, { tenant_id: 4, project_id: 1, sprint_id: 57, dry_run: true });
+    await client.deleteTransitionRequirement(17, { tenant_id: 4, project_id: 1, workflow_id: 57, dry_run: true });
 
     expect(calls.map(call => `${call.method} ${call.url}`)).toEqual([
-      'GET http://agent-hq.test/api/v1/routing/transitions?tenant_id=4&sprint_id=57&project_id=1&sprint_type=dev',
-      'GET http://agent-hq.test/api/v1/routing/transitions/12?tenant_id=4&sprint_id=57&project_id=1',
+      'GET http://agent-hq.test/api/v1/routing/transitions?tenant_id=4&workflow_id=57&project_id=1&workflow_type=dev',
+      'GET http://agent-hq.test/api/v1/routing/transitions/12?tenant_id=4&workflow_id=57&project_id=1',
       'POST http://agent-hq.test/api/v1/routing/transitions?tenant_id=4',
       'PUT http://agent-hq.test/api/v1/routing/transitions/12?tenant_id=4',
-      'DELETE http://agent-hq.test/api/v1/routing/transitions/12?tenant_id=4&sprint_id=57&project_id=1&dry_run=true',
-      'GET http://agent-hq.test/api/v1/routing/transition-requirements?tenant_id=4&project_id=1&sprint_id=57&sprint_type=dev&outcome=completed_for_review',
+      'DELETE http://agent-hq.test/api/v1/routing/transitions/12?tenant_id=4&workflow_id=57&project_id=1&dry_run=true',
+      'GET http://agent-hq.test/api/v1/routing/transition-requirements?tenant_id=4&project_id=1&workflow_id=57&workflow_type=dev&outcome=completed_for_review',
       'POST http://agent-hq.test/api/v1/routing/transition-requirements?tenant_id=4',
       'PUT http://agent-hq.test/api/v1/routing/transition-requirements/17?tenant_id=4',
-      'DELETE http://agent-hq.test/api/v1/routing/transition-requirements/17?tenant_id=4&project_id=1&sprint_id=57&dry_run=true',
+      'DELETE http://agent-hq.test/api/v1/routing/transition-requirements/17?tenant_id=4&project_id=1&workflow_id=57&dry_run=true',
     ]);
-    expect(calls[2].body).toEqual({ project_id: 1, sprint_id: 57, from_status: 'ready', outcome: 'start', to_status: 'in_progress', dry_run: true });
+    expect(calls[2].body).toEqual({ project_id: 1, workflow_id: 57, from_status: 'ready', outcome: 'start', to_status: 'in_progress', dry_run: true });
     expect(calls[3].body).toEqual({ enabled: false, dry_run: true });
-    expect(calls[6].body).toEqual({ project_id: 1, sprint_id: 57, outcome: 'completed_for_review', field_name: 'review_commit', dry_run: true });
+    expect(calls[6].body).toEqual({ project_id: 1, workflow_id: 57, outcome: 'completed_for_review', field_name: 'review_commit', dry_run: true });
     expect(calls[7].body).toEqual({ severity: 'warn', dry_run: true });
   });
 
@@ -1076,20 +1075,20 @@ describe('AgentHqApiClient admin MCP CRUD endpoints', () => {
 
     const client = new AgentHqApiClient('http://agent-hq.test');
 
-    await client.getAgentDispatchContract({ sprint_type: 'dev' });
-    await client.updateAgentDispatchContract({ sprint_type: 'dev', content: 'contract' });
+    await client.getAgentDispatchContract({ workflow_type: 'dev' });
+    await client.updateAgentDispatchContract({ workflow_type: 'dev', content: 'contract' });
     await client.getWorkflowConfig();
-    await client.getWorkflowMetadata({ tenant_id: 4, sprint_type: 'dev', task_type: 'backend' });
-    await client.listTransitionRequirementFields({ tenant_id: 4, sprint_type: 'dev', task_type: 'backend' });
+    await client.getWorkflowMetadata({ tenant_id: 4, workflow_type: 'dev', task_type: 'backend' });
+    await client.listTransitionRequirementFields({ tenant_id: 4, workflow_type: 'dev', task_type: 'backend' });
 
     expect(calls.map(call => `${call.method} ${call.url}`)).toEqual([
-      'GET http://agent-hq.test/api/v1/routing/agent-contract?sprint_type=dev',
+      'GET http://agent-hq.test/api/v1/routing/agent-contract?workflow_type=dev',
       'PUT http://agent-hq.test/api/v1/routing/agent-contract',
-      'GET http://agent-hq.test/api/v1/sprints/config',
-      'GET http://agent-hq.test/api/v1/sprints/workflow-metadata?tenant_id=4&sprint_type=dev&task_type=backend',
-      'GET http://agent-hq.test/api/v1/routing/transition-requirement-fields?tenant_id=4&sprint_type=dev&task_type=backend',
+      'GET http://agent-hq.test/api/v1/workflows/config',
+      'GET http://agent-hq.test/api/v1/workflows/workflow-metadata?tenant_id=4&workflow_type=dev&task_type=backend',
+      'GET http://agent-hq.test/api/v1/routing/transition-requirement-fields?tenant_id=4&workflow_type=dev&task_type=backend',
     ]);
-    expect(calls[1].body).toEqual({ sprint_type: 'dev', content: 'contract' });
+    expect(calls[1].body).toEqual({ workflow_type: 'dev', content: 'contract' });
   });
 
   it('passes super-admin tenant selectors on workflow metadata definition reads', async () => {
@@ -1101,32 +1100,32 @@ describe('AgentHqApiClient admin MCP CRUD endpoints', () => {
 
     const client = new AgentHqApiClient('http://agent-hq.test');
 
-    await client.listSprintTypes({ tenant_id: 4 });
-    await client.listSprintTypeTaskTypes('dev', { tenant_id: 4 });
-    await client.listSprintTypeStatuses('dev', { tenant_id: 4 });
-    await client.getSprintTypeStatus('dev', 'review', { tenant_id: 4 });
-    await client.listSprintTypeOutcomes('dev', { tenant_id: 4 });
-    await client.getSprintTypeOutcome('dev', 4, { tenant_id: 4 });
-    await client.listSprintTypeRelationshipTypes('dev', { tenant_id: 4 });
-    await client.getSprintTypeRelationshipType('dev', 5, { tenant_id: 4 });
+    await client.listWorkflowTypes({ tenant_id: 4 });
+    await client.listWorkflowTypeTaskTypes('dev', { tenant_id: 4 });
+    await client.listWorkflowTypeStatuses('dev', { tenant_id: 4 });
+    await client.getWorkflowTypeStatus('dev', 'review', { tenant_id: 4 });
+    await client.listWorkflowTypeOutcomes('dev', { tenant_id: 4 });
+    await client.getWorkflowTypeOutcome('dev', 4, { tenant_id: 4 });
+    await client.listWorkflowTypeRelationshipTypes('dev', { tenant_id: 4 });
+    await client.getWorkflowTypeRelationshipType('dev', 5, { tenant_id: 4 });
     await client.listTaskFieldSchemas('dev', { tenant_id: 4 });
     await client.getTaskFieldSchema('dev', 6, { tenant_id: 4 });
 
     expect(calls.map(call => `${call.method} ${call.url}`)).toEqual([
-      'GET http://agent-hq.test/api/v1/sprints/types/list?tenant_id=4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/task-types?tenant_id=4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/statuses?tenant_id=4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/statuses/review?tenant_id=4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/outcomes?tenant_id=4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/outcomes/4?tenant_id=4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/relationship-types?tenant_id=4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/relationship-types/5?tenant_id=4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/field-schemas?tenant_id=4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/field-schemas/6?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/list?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/task-types?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/statuses?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/statuses/review?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/outcomes?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/outcomes/4?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/relationship-types?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/relationship-types/5?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/field-schemas?tenant_id=4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/field-schemas/6?tenant_id=4',
     ]);
   });
 
-  it('uses typed CRUD paths for sprint definition statuses, outcomes, and relationship types', async () => {
+  it('uses typed CRUD paths for workflow definition statuses, outcomes, and relationship types', async () => {
     const calls: Array<{ method: string; url: string; body: unknown }> = [];
     (global as typeof globalThis & { fetch: typeof fetch }).fetch = jest.fn(async (input: string | URL, init?: RequestInit) => {
       calls.push({ method: String(init?.method ?? 'GET'), url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
@@ -1135,38 +1134,38 @@ describe('AgentHqApiClient admin MCP CRUD endpoints', () => {
 
     const client = new AgentHqApiClient('http://agent-hq.test');
 
-    await client.listSprintTypeStatuses('dev');
-    await client.getSprintTypeStatus('dev', 'review');
-    await client.createSprintTypeStatus('dev', { name: 'triage', label: 'Triage' });
-    await client.updateSprintTypeStatus('dev', 'triage', { label: 'Triage Updated' });
-    await client.deleteSprintTypeStatus('dev', 'triage');
-    await client.listSprintTypeOutcomes('dev');
-    await client.getSprintTypeOutcome('dev', 4);
-    await client.createSprintTypeOutcome('dev', { outcome_key: 'ship_it', label: 'Ship It' });
-    await client.updateSprintTypeOutcome('dev', 4, { label: 'Ship It Updated' });
-    await client.deleteSprintTypeOutcome('dev', 4);
-    await client.listSprintTypeRelationshipTypes('dev');
-    await client.getSprintTypeRelationshipType('dev', 5);
-    await client.createSprintTypeRelationshipType('dev', { key: 'blocks', label: 'Blocks' });
-    await client.updateSprintTypeRelationshipType('dev', 5, { label: 'Blocks Updated' });
-    await client.deleteSprintTypeRelationshipType('dev', 5);
+    await client.listWorkflowTypeStatuses('dev');
+    await client.getWorkflowTypeStatus('dev', 'review');
+    await client.createWorkflowTypeStatus('dev', { name: 'triage', label: 'Triage' });
+    await client.updateWorkflowTypeStatus('dev', 'triage', { label: 'Triage Updated' });
+    await client.deleteWorkflowTypeStatus('dev', 'triage');
+    await client.listWorkflowTypeOutcomes('dev');
+    await client.getWorkflowTypeOutcome('dev', 4);
+    await client.createWorkflowTypeOutcome('dev', { outcome_key: 'ship_it', label: 'Ship It' });
+    await client.updateWorkflowTypeOutcome('dev', 4, { label: 'Ship It Updated' });
+    await client.deleteWorkflowTypeOutcome('dev', 4);
+    await client.listWorkflowTypeRelationshipTypes('dev');
+    await client.getWorkflowTypeRelationshipType('dev', 5);
+    await client.createWorkflowTypeRelationshipType('dev', { key: 'blocks', label: 'Blocks' });
+    await client.updateWorkflowTypeRelationshipType('dev', 5, { label: 'Blocks Updated' });
+    await client.deleteWorkflowTypeRelationshipType('dev', 5);
 
     expect(calls.map(call => `${call.method} ${call.url}`)).toEqual([
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/statuses',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/statuses/review',
-      'POST http://agent-hq.test/api/v1/sprints/types/dev/statuses',
-      'PUT http://agent-hq.test/api/v1/sprints/types/dev/statuses/triage',
-      'DELETE http://agent-hq.test/api/v1/sprints/types/dev/statuses/triage',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/outcomes',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/outcomes/4',
-      'POST http://agent-hq.test/api/v1/sprints/types/dev/outcomes',
-      'PUT http://agent-hq.test/api/v1/sprints/types/dev/outcomes/4',
-      'DELETE http://agent-hq.test/api/v1/sprints/types/dev/outcomes/4',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/relationship-types',
-      'GET http://agent-hq.test/api/v1/sprints/types/dev/relationship-types/5',
-      'POST http://agent-hq.test/api/v1/sprints/types/dev/relationship-types',
-      'PUT http://agent-hq.test/api/v1/sprints/types/dev/relationship-types/5',
-      'DELETE http://agent-hq.test/api/v1/sprints/types/dev/relationship-types/5',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/statuses',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/statuses/review',
+      'POST http://agent-hq.test/api/v1/workflows/types/dev/statuses',
+      'PUT http://agent-hq.test/api/v1/workflows/types/dev/statuses/triage',
+      'DELETE http://agent-hq.test/api/v1/workflows/types/dev/statuses/triage',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/outcomes',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/outcomes/4',
+      'POST http://agent-hq.test/api/v1/workflows/types/dev/outcomes',
+      'PUT http://agent-hq.test/api/v1/workflows/types/dev/outcomes/4',
+      'DELETE http://agent-hq.test/api/v1/workflows/types/dev/outcomes/4',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/relationship-types',
+      'GET http://agent-hq.test/api/v1/workflows/types/dev/relationship-types/5',
+      'POST http://agent-hq.test/api/v1/workflows/types/dev/relationship-types',
+      'PUT http://agent-hq.test/api/v1/workflows/types/dev/relationship-types/5',
+      'DELETE http://agent-hq.test/api/v1/workflows/types/dev/relationship-types/5',
     ]);
   });
 });

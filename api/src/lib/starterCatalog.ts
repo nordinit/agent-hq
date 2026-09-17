@@ -1,6 +1,6 @@
 import type { TaskType } from './taskTypes';
 
-export type StarterSprintTypeKey = 'generic' | 'dev' | 'ops' | 'lead_generation';
+export type StarterWorkflowTypeKey = 'generic' | 'dev' | 'ops' | 'lead_generation';
 export type StarterFieldDefinition = {
   key: string;
   label: string;
@@ -15,9 +15,9 @@ export type StarterAgentDefinition = {
   role: string;
   jobTitle: string;
   systemRole: string;
-  workflowTypes: StarterSprintTypeKey[];
+  workflowTypes: StarterWorkflowTypeKey[];
   taskTypes: string[];
-  contractTypes: StarterSprintTypeKey[];
+  contractTypes: StarterWorkflowTypeKey[];
   mcpCapabilities: string[];
   mcpServerSlugs: string[];
   toolSlugs: string[];
@@ -31,16 +31,16 @@ export type StarterAgentDefinition = {
   identityDocs: Record<string, string>;
 };
 
-export const STARTER_BACKLOG_SPRINT_NAME = 'Backlog';
+export const STARTER_BACKLOG_WORKFLOW_NAME = 'Backlog';
 export const STARTER_ROUTING_PRIORITY = -100;
 export const DEFAULT_PROJECT_NAME = 'Default Project';
 export const LEGACY_STARTER_PROJECT_NAME = 'Agent HQ';
 export const STARTER_AGENT_SYSTEM_ROLE_PREFIX = 'default_package.starter_agent.';
 
-export const STARTER_SPRINT_TYPE_SEEDS: Array<{ key: StarterSprintTypeKey; name: string; description: string; repoRequired: boolean }> = [
-  { key: 'generic', name: 'Generic', description: 'Catch-all sprint profile for mixed delivery work and backlog management.', repoRequired: false },
-  { key: 'dev', name: 'Development', description: 'Implementation-focused sprint profile for product and software delivery work.', repoRequired: true },
-  { key: 'ops', name: 'Operations', description: 'Operational sprint profile for release, support, maintenance, and infra work.', repoRequired: false },
+export const STARTER_WORKFLOW_TYPE_SEEDS: Array<{ key: StarterWorkflowTypeKey; name: string; description: string; repoRequired: boolean }> = [
+  { key: 'generic', name: 'Generic', description: 'Catch-all workflow profile for mixed delivery work and backlog management.', repoRequired: false },
+  { key: 'dev', name: 'Development', description: 'Implementation-focused workflow profile for product and software delivery work.', repoRequired: true },
+  { key: 'ops', name: 'Operations', description: 'Operational workflow profile for release, support, maintenance, and infra work.', repoRequired: false },
   { key: 'lead_generation', name: 'Lead Generation', description: 'Prospect intake, qualification, research, outreach, approval, and follow-up workflow.', repoRequired: false },
 ];
 
@@ -73,9 +73,9 @@ export const INLINE_EVIDENCE_FIELD_KEYS = DEV_LIFECYCLE_FIELD_DEFINITIONS
     | 'live_verified_at'
   >;
 
-export const STARTER_FIELD_SCHEMA_SEEDS: Array<{ sprintType: StarterSprintTypeKey; schema: { fields: StarterFieldDefinition[] } }> = [
+export const STARTER_FIELD_SCHEMA_SEEDS: Array<{ workflowType: StarterWorkflowTypeKey; schema: { fields: StarterFieldDefinition[] } }> = [
   {
-    sprintType: 'generic',
+    workflowType: 'generic',
     schema: {
       fields: [
         { key: 'success_criteria', label: 'Success Criteria', type: 'textarea', required: false, help_text: 'What should be true when this work is finished.' },
@@ -83,7 +83,7 @@ export const STARTER_FIELD_SCHEMA_SEEDS: Array<{ sprintType: StarterSprintTypeKe
     },
   },
   {
-    sprintType: 'dev',
+    workflowType: 'dev',
     schema: {
       fields: [
         { key: 'target_surface', label: 'Target Surface', type: 'select', required: false, options: ['api', 'ui', 'fullstack', 'infra'] },
@@ -94,7 +94,7 @@ export const STARTER_FIELD_SCHEMA_SEEDS: Array<{ sprintType: StarterSprintTypeKe
     },
   },
   {
-    sprintType: 'ops',
+    workflowType: 'ops',
     schema: {
       fields: [
         { key: 'affected_system_client', label: 'Affected System/Client', type: 'text', required: false },
@@ -110,7 +110,7 @@ export const STARTER_FIELD_SCHEMA_SEEDS: Array<{ sprintType: StarterSprintTypeKe
     },
   },
   {
-    sprintType: 'lead_generation',
+    workflowType: 'lead_generation',
     schema: {
       fields: [
         { key: 'prospect_company', label: 'Prospect Company', type: 'text', required: false },
@@ -126,11 +126,11 @@ export const STARTER_FIELD_SCHEMA_SEEDS: Array<{ sprintType: StarterSprintTypeKe
   },
 ];
 
-export const STARTER_SPRINT_TYPE_TASK_TYPE_SEEDS: Array<{ sprintType: StarterSprintTypeKey; taskTypes: TaskType[] }> = [
-  { sprintType: 'generic', taskTypes: ['adhoc', 'backend', 'frontend', 'fullstack', 'qa', 'other'] },
-  { sprintType: 'dev', taskTypes: ['backend', 'frontend', 'fullstack', 'qa'] },
-  { sprintType: 'ops', taskTypes: ['ops', 'data', 'pm_operational', 'adhoc'] },
-  { sprintType: 'lead_generation', taskTypes: ['lead', 'research', 'outreach', 'proposal', 'follow_up'] },
+export const STARTER_WORKFLOW_TYPE_TASK_TYPE_SEEDS: Array<{ workflowType: StarterWorkflowTypeKey; taskTypes: TaskType[] }> = [
+  { workflowType: 'generic', taskTypes: ['adhoc', 'backend', 'frontend', 'fullstack', 'qa', 'other'] },
+  { workflowType: 'dev', taskTypes: ['backend', 'frontend', 'fullstack', 'qa'] },
+  { workflowType: 'ops', taskTypes: ['ops', 'data', 'pm_operational', 'adhoc'] },
+  { workflowType: 'lead_generation', taskTypes: ['lead', 'research', 'outreach', 'proposal', 'follow_up'] },
 ];
 
 const BASE_SCOPED_MCP_CAPABILITIES = [
@@ -139,7 +139,7 @@ const BASE_SCOPED_MCP_CAPABILITIES = [
   'tasks.write_active_lifecycle',
   'projects.read_active_project',
   'projects.manage_active_files',
-  'sprints.read_active_sprint',
+  'workflows.read_active_workflow',
   'workflow.read_active_configuration',
 ];
 
@@ -317,7 +317,7 @@ export const STARTER_AGENT_DEFINITIONS: StarterAgentDefinition[] = [
 ];
 
 export const STARTER_RELATIONSHIP_TYPE_SEEDS: Array<{
-  sprintTypes: StarterSprintTypeKey[];
+  workflowTypes: StarterWorkflowTypeKey[];
   key: string;
   label: string;
   inverse_label: string;
@@ -331,7 +331,7 @@ export const STARTER_RELATIONSHIP_TYPE_SEEDS: Array<{
   default_related_task_status: string | null;
 }> = [
   {
-    sprintTypes: ['generic', 'dev', 'ops', 'lead_generation'],
+    workflowTypes: ['generic', 'dev', 'ops', 'lead_generation'],
     key: 'blocked_by',
     label: 'Blocked by',
     inverse_label: 'Blocks',
@@ -345,7 +345,7 @@ export const STARTER_RELATIONSHIP_TYPE_SEEDS: Array<{
     default_related_task_status: null,
   },
   {
-    sprintTypes: ['dev'],
+    workflowTypes: ['dev'],
     key: 'blocks',
     label: 'Blocks',
     inverse_label: 'Blocked by',
@@ -359,7 +359,7 @@ export const STARTER_RELATIONSHIP_TYPE_SEEDS: Array<{
     default_related_task_status: null,
   },
   {
-    sprintTypes: ['dev'],
+    workflowTypes: ['dev'],
     key: 'defect_of',
     label: 'Defect of',
     inverse_label: 'Has defect',
@@ -373,7 +373,7 @@ export const STARTER_RELATIONSHIP_TYPE_SEEDS: Array<{
     default_related_task_status: 'todo',
   },
   {
-    sprintTypes: ['dev'],
+    workflowTypes: ['dev'],
     key: 'follow_up_to',
     label: 'Follow-up to',
     inverse_label: 'Has follow-up',
@@ -387,7 +387,7 @@ export const STARTER_RELATIONSHIP_TYPE_SEEDS: Array<{
     default_related_task_status: 'todo',
   },
   {
-    sprintTypes: ['dev'],
+    workflowTypes: ['dev'],
     key: 'duplicate_of',
     label: 'Duplicate of',
     inverse_label: 'Has duplicate',
@@ -402,8 +402,8 @@ export const STARTER_RELATIONSHIP_TYPE_SEEDS: Array<{
   },
 ];
 
-export const STARTER_SPRINT_OUTCOME_SEEDS: Array<{
-  sprintType: StarterSprintTypeKey;
+export const STARTER_WORKFLOW_OUTCOME_SEEDS: Array<{
+  workflowType: StarterWorkflowTypeKey;
   outcomes: Array<{
     task_type?: TaskType | null;
     outcome_key: string;
@@ -417,7 +417,7 @@ export const STARTER_SPRINT_OUTCOME_SEEDS: Array<{
   }>;
 }> = [
   {
-    sprintType: 'generic',
+    workflowType: 'generic',
     outcomes: [
       { outcome_key: 'completed', label: 'Completed', description: 'Task work is complete.', badge_variant: 'done', stage_order: 0, metadata: {} },
       { outcome_key: 'blocked', label: 'Blocked', description: 'Task cannot proceed because of an external blocker.', badge_variant: 'stalled', stage_order: 1, metadata: { blocked_like: true } },
@@ -428,7 +428,7 @@ export const STARTER_SPRINT_OUTCOME_SEEDS: Array<{
     ],
   },
   {
-    sprintType: 'dev',
+    workflowType: 'dev',
     outcomes: [
       { outcome_key: 'completed_for_review', label: 'Ready for Review', description: 'Implementation is ready for review or QA.', badge_variant: 'review', stage_order: 0, metadata: {} },
       { outcome_key: 'dev_deploy_queued', label: 'Dev Deploy Queued', description: 'Implementation is complete and queued for the shared dev environment.', badge_variant: 'queued', stage_order: 1, metadata: {} },
@@ -446,7 +446,7 @@ export const STARTER_SPRINT_OUTCOME_SEEDS: Array<{
     ],
   },
   {
-    sprintType: 'ops',
+    workflowType: 'ops',
     outcomes: [
       { outcome_key: 'completed', label: 'Completed', description: 'Operational work is complete.', badge_variant: 'done', stage_order: 0, metadata: {} },
       { outcome_key: 'blocked', label: 'Blocked', description: 'Operational work is blocked.', badge_variant: 'stalled', stage_order: 1, metadata: { blocked_like: true } },
@@ -457,7 +457,7 @@ export const STARTER_SPRINT_OUTCOME_SEEDS: Array<{
     ],
   },
   {
-    sprintType: 'lead_generation',
+    workflowType: 'lead_generation',
     outcomes: [
       { outcome_key: 'completed', label: 'Completed', description: 'Lead-generation work is complete.', badge_variant: 'done', stage_order: 0, metadata: {} },
       { outcome_key: 'blocked', label: 'Blocked', description: 'Lead-generation work is blocked.', badge_variant: 'stalled', stage_order: 1, metadata: { blocked_like: true } },
@@ -467,20 +467,20 @@ export const STARTER_SPRINT_OUTCOME_SEEDS: Array<{
   },
 ];
 
-export function isStarterSprintTypeKey(value: string | null | undefined): value is StarterSprintTypeKey {
+export function isStarterWorkflowTypeKey(value: string | null | undefined): value is StarterWorkflowTypeKey {
   return value === 'generic' || value === 'dev' || value === 'ops' || value === 'lead_generation';
 }
 
-export function starterSprintTypeBaseKey(value: string | null | undefined): StarterSprintTypeKey | null {
+export function starterWorkflowTypeBaseKey(value: string | null | undefined): StarterWorkflowTypeKey | null {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
-  if (isStarterSprintTypeKey(normalized)) return normalized;
+  if (isStarterWorkflowTypeKey(normalized)) return normalized;
   const suffix = normalized.match(/__(generic|dev|ops|lead_generation)$/)?.[1];
-  return isStarterSprintTypeKey(suffix) ? suffix : null;
+  return isStarterWorkflowTypeKey(suffix) ? suffix : null;
 }
 
-export function getStarterTaskTypesForSprintType(sprintType: string | null | undefined): TaskType[] {
-  const baseSprintType = starterSprintTypeBaseKey(sprintType);
-  const row = STARTER_SPRINT_TYPE_TASK_TYPE_SEEDS.find((entry) => entry.sprintType === baseSprintType);
+export function getStarterTaskTypesForWorkflowType(workflowType: string | null | undefined): TaskType[] {
+  const baseWorkflowType = starterWorkflowTypeBaseKey(workflowType);
+  const row = STARTER_WORKFLOW_TYPE_TASK_TYPE_SEEDS.find((entry) => entry.workflowType === baseWorkflowType);
   return row ? [...row.taskTypes] : [];
 }

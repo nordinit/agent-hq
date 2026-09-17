@@ -97,7 +97,7 @@ async function resolveWorkflowScope(
   if (!projectId || !workflowId) return undefined;
   return await db.get(`
     SELECT s.tenant_id, s.project_id, s.id AS workflow_id
-    FROM sprints s
+    FROM workflows s
     JOIN projects p ON p.id = s.project_id
     WHERE s.id = ? AND s.project_id = ? AND p.tenant_id = ? AND COALESCE(s.tenant_id, p.tenant_id) = p.tenant_id
   `, workflowId, projectId, tenantId) as WorkflowScope | undefined;

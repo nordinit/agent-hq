@@ -1,4 +1,4 @@
-import { normalizeSprintType, starterSprintType, tableExists } from './metadata';
+import { normalizeWorkflowType, starterWorkflowType, tableExists } from './metadata';
 import { type Db } from "../../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../../db/introspection";
 
@@ -6,20 +6,20 @@ async function tableHasColumn(db: Db, tableName: string, columnName: string): Pr
     return await sharedColumnExists(db, tableName, columnName);
 }
 
-export async function resolvedOutcomeKeysForSprint(
+export async function resolvedOutcomeKeysForWorkflow(
   db: Db,
-  sprintType: string | null | undefined,
+  workflowType: string | null | undefined,
   taskType: string | null,
 ): Promise<Set<string> | null> {
-  if (!await tableExists(db, 'sprint_type_outcomes')) return null;
-  const normalizedSprintType = normalizeSprintType(sprintType);
-  if (!starterSprintType(normalizedSprintType)) return null;
+  if (!await tableExists(db, 'workflow_type_outcomes')) return null;
+  const normalizedWorkflowType = normalizeWorkflowType(workflowType);
+  if (!starterWorkflowType(normalizedWorkflowType)) return null;
 
   const rows = await db.all(`
     SELECT task_type, outcome_key, enabled, behavior
-    FROM sprint_type_outcomes
-    WHERE sprint_type_key = ?
-  `, normalizedSprintType) as Array<{
+    FROM workflow_type_outcomes
+    WHERE workflow_type_key = ?
+  `, normalizedWorkflowType) as Array<{
     task_type: string | null;
     outcome_key: string;
     enabled: number;
@@ -45,120 +45,120 @@ export async function resolvedOutcomeKeysForSprint(
   return resolved;
 }
 
-export async function normalizeSprintTaskPolicyOutcomeRows(db: Db): Promise<void> {
-  if (!await tableExists(db, 'sprints') || !await tableExists(db, 'sprint_type_outcomes')) return;
+export async function normalizeWorkflowTaskPolicyOutcomeRows(db: Db): Promise<void> {
+  if (!await tableExists(db, 'workflows') || !await tableExists(db, 'workflow_type_outcomes')) return;
 
-  const sprints = await db.all(`
-    SELECT id, sprint_type
-    FROM sprints
+  const workflows = await db.all(`
+    SELECT id, workflow_type
+    FROM workflows
     ORDER BY id ASC
-  `) as Array<{ id: number; sprint_type: string | null }>;
-  const sprintTypes = new Map(sprints.map((sprint) => [sprint.id, sprint.sprint_type]));
+  `) as Array<{ id: number; workflow_type: string | null }>;
+  const workflowTypes = new Map(workflows.map((workflow) => [workflow.id, workflow.workflow_type]));
 
   await db.withTransaction(async (db) => {
-    if (await tableExists(db, 'sprint_task_transitions')) {
+    if (await tableExists(db, 'workflow_task_transitions')) {
       const rows = await db.all(`
-        SELECT id, sprint_id, task_type, outcome
-        FROM sprint_task_transitions
+        SELECT id, workflow_id, task_type, outcome
+        FROM workflow_task_transitions
         ORDER BY id ASC
-      `) as Array<{ id: number; sprint_id: number; task_type: string | null; outcome: string }>;
+      `) as Array<{ id: number; workflow_id: number; task_type: string | null; outcome: string }>;
       for (const row of rows) {
-        const allowed = await resolvedOutcomeKeysForSprint(db, sprintTypes.get(row.sprint_id), row.task_type ?? null);
+        const allowed = await resolvedOutcomeKeysForWorkflow(db, workflowTypes.get(row.workflow_id), row.task_type ?? null);
         if (!allowed || allowed.has(row.outcome)) continue;
-        await db.run(`DELETE FROM sprint_task_transitions WHERE id = ?`, row.id);
+        await db.run(`DELETE FROM workflow_task_transitions WHERE id = ?`, row.id);
       }
     }
 
-    if (await tableExists(db, 'sprint_task_transition_requirements')) {
+    if (await tableExists(db, 'workflow_task_transition_requirements')) {
       const rows = await db.all(`
-        SELECT id, sprint_id, task_type, outcome
-        FROM sprint_task_transition_requirements
+        SELECT id, workflow_id, task_type, outcome
+        FROM workflow_task_transition_requirements
         ORDER BY id ASC
-      `) as Array<{ id: number; sprint_id: number; task_type: string | null; outcome: string }>;
+      `) as Array<{ id: number; workflow_id: number; task_type: string | null; outcome: string }>;
       for (const row of rows) {
-        const allowed = await resolvedOutcomeKeysForSprint(db, sprintTypes.get(row.sprint_id), row.task_type ?? null);
+        const allowed = await resolvedOutcomeKeysForWorkflow(db, workflowTypes.get(row.workflow_id), row.task_type ?? null);
         if (!allowed || allowed.has(row.outcome)) continue;
-        await db.run(`DELETE FROM sprint_task_transition_requirements WHERE id = ?`, row.id);
+        await db.run(`DELETE FROM workflow_task_transition_requirements WHERE id = ?`, row.id);
       }
     }
   });
 }
 
-export async function normalizeSprintTaskRoutingRuleTaskTypes(db: Db): Promise<void> {
-  if (!await tableExists(db, 'sprint_task_routing_rules') || !await tableExists(db, 'sprint_type_task_types')) return;
-  if (!await tableExists(db, 'sprints')) return;
+export async function normalizeWorkflowTaskRoutingRuleTaskTypes(db: Db): Promise<void> {
+  if (!await tableExists(db, 'workflow_task_routing_rules') || !await tableExists(db, 'workflow_type_task_types')) return;
+  if (!await tableExists(db, 'workflows')) return;
 
-  const hasSprintRuleScope = await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_id');
-  const hasSprintTypeRuleScope = await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
-  const hasSprintTypeTaskType = await tableHasColumn(db, 'sprint_type_task_types', 'sprint_type_key')
-    && await tableHasColumn(db, 'sprint_type_task_types', 'task_type');
-  if (!hasSprintRuleScope || !hasSprintTypeTaskType) return;
+  const hasWorkflowRuleScope = await tableHasColumn(db, 'workflow_task_routing_rules', 'workflow_id');
+  const hasWorkflowTypeRuleScope = await tableHasColumn(db, 'workflow_task_routing_rules', 'workflow_type');
+  const hasWorkflowTypeTaskType = await tableHasColumn(db, 'workflow_type_task_types', 'workflow_type_key')
+    && await tableHasColumn(db, 'workflow_type_task_types', 'task_type');
+  if (!hasWorkflowRuleScope || !hasWorkflowTypeTaskType) return;
 
-  const deleteStrandedSprintRulesSql = `
-    DELETE FROM sprint_task_routing_rules
-    WHERE sprint_id IS NOT NULL
+  const deleteStrandedWorkflowRulesSql = `
+    DELETE FROM workflow_task_routing_rules
+    WHERE workflow_id IS NOT NULL
       AND task_type IS NOT NULL
       AND TRIM(task_type) != ''
       AND EXISTS (
         SELECT 1
-        FROM sprints sp
-        WHERE sp.id = sprint_task_routing_rules.sprint_id
+        FROM workflows sp
+        WHERE sp.id = workflow_task_routing_rules.workflow_id
       )
       AND EXISTS (
         SELECT 1
-        FROM sprint_type_task_types allowed
-        JOIN sprints sp ON sp.id = sprint_task_routing_rules.sprint_id
-        WHERE allowed.sprint_type_key = sp.sprint_type
+        FROM workflow_type_task_types allowed
+        JOIN workflows sp ON sp.id = workflow_task_routing_rules.workflow_id
+        WHERE allowed.workflow_type_key = sp.workflow_type
       )
       AND NOT EXISTS (
         SELECT 1
-        FROM sprint_type_task_types allowed
-        JOIN sprints sp ON sp.id = sprint_task_routing_rules.sprint_id
-        WHERE allowed.sprint_type_key = sp.sprint_type
-          AND allowed.task_type = sprint_task_routing_rules.task_type
+        FROM workflow_type_task_types allowed
+        JOIN workflows sp ON sp.id = workflow_task_routing_rules.workflow_id
+        WHERE allowed.workflow_type_key = sp.workflow_type
+          AND allowed.task_type = workflow_task_routing_rules.task_type
       )
   `;
 
   await db.withTransaction(async (db) => {
-    const sprintResult = await db.run(deleteStrandedSprintRulesSql);
-    let sprintTypeDefaultChanges = 0;
-    if (hasSprintTypeRuleScope) {
+    const workflowResult = await db.run(deleteStrandedWorkflowRulesSql);
+    let workflowTypeDefaultChanges = 0;
+    if (hasWorkflowTypeRuleScope) {
       const result = await db.run(`
-        DELETE FROM sprint_task_routing_rules
-        WHERE sprint_id IS NULL
-          AND sprint_type IS NOT NULL
+        DELETE FROM workflow_task_routing_rules
+        WHERE workflow_id IS NULL
+          AND workflow_type IS NOT NULL
           AND task_type IS NOT NULL
           AND TRIM(task_type) != ''
           AND EXISTS (
             SELECT 1
-            FROM sprint_type_task_types allowed
-            WHERE allowed.sprint_type_key = sprint_task_routing_rules.sprint_type
+            FROM workflow_type_task_types allowed
+            WHERE allowed.workflow_type_key = workflow_task_routing_rules.workflow_type
           )
           AND NOT EXISTS (
             SELECT 1
-            FROM sprint_type_task_types allowed
-            WHERE allowed.sprint_type_key = sprint_task_routing_rules.sprint_type
-              AND allowed.task_type = sprint_task_routing_rules.task_type
+            FROM workflow_type_task_types allowed
+            WHERE allowed.workflow_type_key = workflow_task_routing_rules.workflow_type
+              AND allowed.task_type = workflow_task_routing_rules.task_type
           )
       `);
-      sprintTypeDefaultChanges = result.changes;
+      workflowTypeDefaultChanges = result.changes;
     }
 
-    const total = sprintResult.changes + sprintTypeDefaultChanges;
+    const total = workflowResult.changes + workflowTypeDefaultChanges;
     if (total > 0) {
-      console.log(`[schema] Removed ${total} sprint_task_routing_rules row(s) with task_type outside sprint type definitions`);
+      console.log(`[schema] Removed ${total} workflow_task_routing_rules row(s) with task_type outside workflow type definitions`);
     }
   });
 }
 
-export function backfillAllSprintTaskPolicies(db: Db): void {
+export function backfillAllWorkflowTaskPolicies(db: Db): void {
   void db;
   // Intentionally disabled: broad runtime backfills must not re-apply default
-  // sprint policy to existing workflows. Use explicit bootstrap/new-sprint
+  // workflow policy to existing workflows. Use explicit bootstrap/new-workflow
   // setup or a targeted migration instead.
 }
 
-export function backfillAllSprintTypeTaskStatuses(db: Db): void {
+export function backfillAllWorkflowTypeTaskStatuses(db: Db): void {
   void db;
   // Intentionally disabled: broad runtime backfills must not re-apply default
   // status policy to existing workflow definitions. Use explicit bootstrap,

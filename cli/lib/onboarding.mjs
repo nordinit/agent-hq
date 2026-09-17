@@ -524,7 +524,7 @@ function printStarterPlan(plan) {
   console.log(`  Templates: ${(plan.templates || [plan.template]).map(template => template.label).join(', ')}`);
   console.log('\nWorkflows:');
   for (const workflow of plan.workflows || [{ workflow: plan.workflow, template: plan.template, statuses: [], task_types: [], fields: [], verification: { evidence_gates: [], sample_route_checks: [] } }]) {
-    console.log(`  - ${workflow.workflow.name} (${workflow.workflow.sprint_type}) from ${workflow.template.label}`);
+    console.log(`  - ${workflow.workflow.name} (${workflow.workflow.workflow_type}) from ${workflow.template.label}`);
     if (workflow.statuses?.length) console.log(`    Statuses: ${workflow.statuses.join(', ')}`);
     if (workflow.task_types?.length) console.log(`    Task types: ${workflow.task_types.join(', ')}`);
     if (workflow.fields?.length) console.log(`    Fields: ${workflow.fields.map(field => field.key).join(', ')}`);

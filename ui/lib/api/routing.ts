@@ -1,5 +1,4 @@
 import { apiFetch } from './http';
-import { withWorkflowAliases } from './workflowAliases';
 import type { HypotheticalTrace, RoutingPreview, RoutingPreviewOperation, ReconcilerConfig, RoutingConfig, RoutingScopeInfo, RoutingTransition, TaskRoutingRule, TaskStatusMeta, TransitionRequirement, TransitionRequirementFieldsResponse, WorkflowEventMapping, WorkflowGraph } from './types';
 
 export const routingClient = {
@@ -61,91 +60,91 @@ updateRoutingConfig: (id: number | null | undefined, data: Partial<RoutingConfig
   apiFetch<RoutingConfig>(`/api/v1/routing/config/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 deleteRoutingConfig: (id: number) =>
   apiFetch<{ ok: boolean }>(`/api/v1/routing-config/${id}`, { method: 'DELETE' }),
-getRoutingStatuses: (sprintId?: number) => {
-  const qs = sprintId ? `?sprint_id=${sprintId}` : '';
+getRoutingStatuses: (workflowId?: number) => {
+  const qs = workflowId ? `?workflow_id=${workflowId}` : '';
   return apiFetch<{ statuses: TaskStatusMeta[] }>(`/api/v1/routing/statuses${qs}`);
 },
-createRoutingStatus: (data: Partial<TaskStatusMeta> & { name: string; label: string; sprint_id?: number }) =>
+createRoutingStatus: (data: Partial<TaskStatusMeta> & { name: string; label: string; workflow_id?: number }) =>
   apiFetch<TaskStatusMeta>(`/api/v1/routing/statuses`, { method: 'POST', body: JSON.stringify(data) }),
-updateRoutingStatus: (name: string, data: Partial<TaskStatusMeta> & { sprint_id?: number }) =>
+updateRoutingStatus: (name: string, data: Partial<TaskStatusMeta> & { workflow_id?: number }) =>
   apiFetch<TaskStatusMeta>(`/api/v1/routing/statuses/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) }),
-deleteRoutingStatus: (name: string, sprintId?: number) =>
-  apiFetch<{ ok: boolean }>(`/api/v1/routing/statuses/${encodeURIComponent(name)}${sprintId ? `?sprint_id=${sprintId}` : ''}`, { method: 'DELETE' }),
-getRoutingTransitions: (projectId?: number, sprintId?: number, sprintType?: string) => {
+deleteRoutingStatus: (name: string, workflowId?: number) =>
+  apiFetch<{ ok: boolean }>(`/api/v1/routing/statuses/${encodeURIComponent(name)}${workflowId ? `?workflow_id=${workflowId}` : ''}`, { method: 'DELETE' }),
+getRoutingTransitions: (projectId?: number, workflowId?: number, workflowType?: string) => {
   const params = new URLSearchParams();
   if (projectId) params.set('project_id', String(projectId));
-  if (sprintId) params.set('workflow_id', String(sprintId));
-  if (sprintType) params.set('workflow_type', sprintType);
+  if (workflowId) params.set('workflow_id', String(workflowId));
+  if (workflowType) params.set('workflow_type', workflowType);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<{ transitions: RoutingTransition[]; scope?: RoutingScopeInfo }>(`/api/v1/routing/transitions${qs}`);
 },
 createRoutingTransition: (data: Partial<RoutingTransition>) =>
-  apiFetch<RoutingTransition>(`/api/v1/routing/transitions`, { method: 'POST', body: JSON.stringify(withWorkflowAliases(data)) }),
+  apiFetch<RoutingTransition>(`/api/v1/routing/transitions`, { method: 'POST', body: JSON.stringify(data) }),
 updateRoutingTransition: (id: number, data: Partial<RoutingTransition>) =>
-  apiFetch<RoutingTransition>(`/api/v1/routing/transitions/${id}`, { method: 'PUT', body: JSON.stringify(withWorkflowAliases(data)) }),
-deleteRoutingTransition: (id: number, sprintId?: number, projectId?: number, sprintType?: string) => {
+  apiFetch<RoutingTransition>(`/api/v1/routing/transitions/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+deleteRoutingTransition: (id: number, workflowId?: number, projectId?: number, workflowType?: string) => {
   const params = new URLSearchParams();
-  if (sprintId) params.set('workflow_id', String(sprintId));
+  if (workflowId) params.set('workflow_id', String(workflowId));
   if (projectId) params.set('project_id', String(projectId));
-  if (sprintType) params.set('workflow_type', sprintType);
+  if (workflowType) params.set('workflow_type', workflowType);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<{ ok: boolean }>(`/api/v1/routing/transitions/${id}${qs}`, { method: 'DELETE' });
 },
-getRoutingRules: (projectId?: number, sprintId?: number, sprintType?: string) => {
+getRoutingRules: (projectId?: number, workflowId?: number, workflowType?: string) => {
   const params = new URLSearchParams();
   if (projectId) params.set('project_id', String(projectId));
-  if (sprintId) params.set('workflow_id', String(sprintId));
-  if (sprintType) params.set('workflow_type', sprintType);
+  if (workflowId) params.set('workflow_id', String(workflowId));
+  if (workflowType) params.set('workflow_type', workflowType);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<{ rules: TaskRoutingRule[]; scope?: RoutingScopeInfo }>(`/api/v1/routing/rules${qs}`);
 },
 createRoutingRule: (data: Partial<TaskRoutingRule>) =>
-  apiFetch<TaskRoutingRule>(`/api/v1/routing/rules`, { method: 'POST', body: JSON.stringify(withWorkflowAliases(data)) }),
+  apiFetch<TaskRoutingRule>(`/api/v1/routing/rules`, { method: 'POST', body: JSON.stringify(data) }),
 updateRoutingRule: (id: number, data: Partial<TaskRoutingRule>) =>
-  apiFetch<TaskRoutingRule>(`/api/v1/routing/rules/${id}`, { method: 'PUT', body: JSON.stringify(withWorkflowAliases(data)) }),
-deleteRoutingRule: (id: number, sprintId?: number, projectId?: number) => {
+  apiFetch<TaskRoutingRule>(`/api/v1/routing/rules/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+deleteRoutingRule: (id: number, workflowId?: number, projectId?: number) => {
   const params = new URLSearchParams();
-  if (sprintId) params.set('workflow_id', String(sprintId));
+  if (workflowId) params.set('workflow_id', String(workflowId));
   if (projectId) params.set('project_id', String(projectId));
   const qs = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<{ ok: boolean }>(`/api/v1/routing/rules/${id}${qs}`, { method: 'DELETE' });
 },
 // Transition requirements (task #612)
-getTransitionRequirements: (taskType?: string, outcome?: string, sprintId?: number, projectId?: number, sprintType?: string) => {
+getTransitionRequirements: (taskType?: string, outcome?: string, workflowId?: number, projectId?: number, workflowType?: string) => {
   const params = new URLSearchParams();
   if (taskType) params.set('task_type', taskType);
   if (outcome) params.set('outcome', outcome);
-  if (sprintId) params.set('workflow_id', String(sprintId));
+  if (workflowId) params.set('workflow_id', String(workflowId));
   if (projectId) params.set('project_id', String(projectId));
-  if (sprintType) params.set('workflow_type', sprintType);
+  if (workflowType) params.set('workflow_type', workflowType);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<{ transition_requirements: TransitionRequirement[]; scope?: RoutingScopeInfo }>(`/api/v1/routing/transition-requirements${qs}`);
 },
-getTransitionRequirementFields: (sprintId?: number, taskType?: string, sprintType?: string) => {
+getTransitionRequirementFields: (workflowId?: number, taskType?: string, workflowType?: string) => {
   const params = new URLSearchParams();
-  if (sprintId) params.set('workflow_id', String(sprintId));
-  if (sprintType) params.set('workflow_type', sprintType);
+  if (workflowId) params.set('workflow_id', String(workflowId));
+  if (workflowType) params.set('workflow_type', workflowType);
   if (taskType) params.set('task_type', taskType);
   return apiFetch<TransitionRequirementFieldsResponse>(`/api/v1/routing/transition-requirement-fields?${params.toString()}`);
 },
 createTransitionRequirement: (data: Partial<TransitionRequirement>) =>
-  apiFetch<TransitionRequirement>(`/api/v1/routing/transition-requirements`, { method: 'POST', body: JSON.stringify(withWorkflowAliases(data)) }),
+  apiFetch<TransitionRequirement>(`/api/v1/routing/transition-requirements`, { method: 'POST', body: JSON.stringify(data) }),
 updateTransitionRequirement: (id: number, data: Partial<TransitionRequirement>) =>
-  apiFetch<TransitionRequirement>(`/api/v1/routing/transition-requirements/${id}`, { method: 'PUT', body: JSON.stringify(withWorkflowAliases(data)) }),
-deleteTransitionRequirement: (id: number, sprintId?: number, projectId?: number, sprintType?: string) => {
+  apiFetch<TransitionRequirement>(`/api/v1/routing/transition-requirements/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+deleteTransitionRequirement: (id: number, workflowId?: number, projectId?: number, workflowType?: string) => {
   const params = new URLSearchParams();
-  if (sprintId) params.set('workflow_id', String(sprintId));
+  if (workflowId) params.set('workflow_id', String(workflowId));
   if (projectId) params.set('project_id', String(projectId));
-  if (sprintType) params.set('workflow_type', sprintType);
+  if (workflowType) params.set('workflow_type', workflowType);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<{ ok: boolean }>(`/api/v1/routing/transition-requirements/${id}${qs}`, { method: 'DELETE' });
 },
 
-getWorkflowEventMappings: (projectId?: number, sprintId?: number, sprintType?: string) => {
+getWorkflowEventMappings: (projectId?: number, workflowId?: number, workflowType?: string) => {
   const params = new URLSearchParams();
   if (projectId) params.set('project_id', String(projectId));
-  if (sprintId) params.set('workflow_id', String(sprintId));
-  if (sprintType) params.set('workflow_type', sprintType);
+  if (workflowId) params.set('workflow_id', String(workflowId));
+  if (workflowType) params.set('workflow_type', workflowType);
   const qs = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<{ mappings: WorkflowEventMapping[] }>(`/api/v1/routing/workflow-event-mappings${qs}`);
 },

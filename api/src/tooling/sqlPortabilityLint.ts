@@ -234,7 +234,7 @@ export function analyzeSqlPortabilitySourceFile(sourceFile: SourceFile, apiRoot:
     const expression = call.getExpression();
     if (
       Node.isIdentifier(expression)
-      && ['seedSprintTaskPolicy', 'seedSprintTypeTaskStatuses'].includes(expression.getText())
+      && ['seedWorkflowTaskPolicy', 'seedWorkflowTypeTaskStatuses'].includes(expression.getText())
       && !POLICY_SEED_ALLOWED_SOURCES.has(relativeFile)
     ) {
       add(

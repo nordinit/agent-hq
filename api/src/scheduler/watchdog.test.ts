@@ -27,7 +27,7 @@ async function createDb(): Promise<Db> {
     VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
   `);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Test')`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (1, 1, 1, 'Test workflow', 'generic')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (1, 1, 1, 'Test workflow', 'generic')`);
   return db;
 }
 
@@ -59,7 +59,7 @@ async function seedRunningInstance(db: Db, params: {
     )
   `);
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title)
+    INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title)
     VALUES (?, 1, 1, 1, 'Task')
   `, taskId);
   await db.run(`

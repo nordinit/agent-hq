@@ -8,8 +8,8 @@ import { tableExists, columnExists } from '../../db/introspection';
  * increasing specificity:
  *
  *   1. `task_statuses.terminal`            — global default for the instance
- *   2. `sprint_type_task_statuses.terminal` — per sprint type (tenant row wins over the shared row)
- *   3. `sprint_task_statuses.terminal`      — per workflow
+ *   2. `workflow_type_task_statuses.terminal` — per workflow type (tenant row wins over the shared row)
+ *   3. `workflow_task_statuses.terminal`      — per workflow
  *
  * Nothing in the codebase may decide terminality from a hardcoded status name.
  * A status with no configuration anywhere is treated as non-terminal, which is
@@ -18,20 +18,20 @@ import { tableExists, columnExists } from '../../db/introspection';
  */
 export async function listConfiguredTerminalStatuses(
   db: Db,
-  options: { sprintId?: number | null; sprintType?: string | null; tenantId?: number | null } = {},
+  options: { workflowId?: number | null; workflowType?: string | null; tenantId?: number | null } = {},
 ): Promise<string[]> {
   const terminal = new Set<string>();
   const nonTerminal = new Set<string>();
 
   // Callers generally know the workflow, not its type; resolve it here so no
-  // call site can silently skip the sprint-type layer by omitting it.
-  let sprintType = options.sprintType ?? null;
-  if (!sprintType && options.sprintId != null && await tableExists(db, 'sprints')) {
-    const sprint = await db.get(
-      `SELECT sprint_type FROM sprints WHERE id = ?`,
-      options.sprintId,
-    ) as { sprint_type?: string | null } | undefined;
-    sprintType = sprint?.sprint_type ?? null;
+  // call site can silently skip the workflow-type layer by omitting it.
+  let workflowType = options.workflowType ?? null;
+  if (!workflowType && options.workflowId != null && await tableExists(db, 'workflows')) {
+    const workflow = await db.get(
+      `SELECT workflow_type FROM workflows WHERE id = ?`,
+      options.workflowId,
+    ) as { workflow_type?: string | null } | undefined;
+    workflowType = workflow?.workflow_type ?? null;
   }
 
   // Least specific first; more specific configuration overrides it below.
@@ -44,34 +44,34 @@ export async function listConfiguredTerminalStatuses(
   }
 
   if (
-    sprintType
-    && await tableExists(db, 'sprint_type_task_statuses')
-    && await columnExists(db, 'sprint_type_task_statuses', 'terminal')
+    workflowType
+    && await tableExists(db, 'workflow_type_task_statuses')
+    && await columnExists(db, 'workflow_type_task_statuses', 'terminal')
   ) {
-    const hasTenant = await columnExists(db, 'sprint_type_task_statuses', 'tenant_id');
+    const hasTenant = await columnExists(db, 'workflow_type_task_statuses', 'tenant_id');
     // Shared rows first so a tenant-specific row overrides them.
     const rows = hasTenant
       ? await db.all(`
           SELECT status_key, terminal
-          FROM sprint_type_task_statuses
-          WHERE sprint_type_key = ? AND (tenant_id IS NULL OR tenant_id = ?)
+          FROM workflow_type_task_statuses
+          WHERE workflow_type_key = ? AND (tenant_id IS NULL OR tenant_id = ?)
           ORDER BY CASE WHEN tenant_id IS NULL THEN 0 ELSE 1 END ASC, id ASC
-        `, sprintType, options.tenantId ?? null) as Array<{ status_key: string; terminal: unknown }>
+        `, workflowType, options.tenantId ?? null) as Array<{ status_key: string; terminal: unknown }>
       : await db.all(
-          `SELECT status_key, terminal FROM sprint_type_task_statuses WHERE sprint_type_key = ? ORDER BY id ASC`,
-          sprintType,
+          `SELECT status_key, terminal FROM workflow_type_task_statuses WHERE workflow_type_key = ? ORDER BY id ASC`,
+          workflowType,
         ) as Array<{ status_key: string; terminal: unknown }>;
     for (const row of rows) applyRow(row, terminal, nonTerminal);
   }
 
   if (
-    options.sprintId != null
-    && await tableExists(db, 'sprint_task_statuses')
-    && await columnExists(db, 'sprint_task_statuses', 'terminal')
+    options.workflowId != null
+    && await tableExists(db, 'workflow_task_statuses')
+    && await columnExists(db, 'workflow_task_statuses', 'terminal')
   ) {
     const rows = await db.all(
-      `SELECT status_key, terminal FROM sprint_task_statuses WHERE sprint_id = ? ORDER BY id ASC`,
-      options.sprintId,
+      `SELECT status_key, terminal FROM workflow_task_statuses WHERE workflow_id = ? ORDER BY id ASC`,
+      options.workflowId,
     ) as Array<{ status_key: string; terminal: unknown }>;
     for (const row of rows) applyRow(row, terminal, nonTerminal);
   }

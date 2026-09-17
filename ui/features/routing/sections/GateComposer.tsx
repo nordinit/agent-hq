@@ -19,7 +19,7 @@ import { AlertTriangle, Check, ShieldAlert, X } from 'lucide-react';
  * lint covers what remains.
  *
  * Note there is no `scope_kind` input for requirements the way there is for rules — scope is
- * derived from sprint_id/project_id/sprint_type alone. project_id and sprint_type must always
+ * derived from workflow_id/project_id/workflow_type alone. project_id and workflow_type must always
  * be sent: without them the API writes to the GLOBAL table instead, which would silently
  * change every project.
  */
@@ -72,11 +72,11 @@ export default function GateComposer({
     // Always sent. A requirement write with neither is rejected: there is no unscoped place
     // for one to land.
     project_id: context.projectId,
-    sprint_type: graph.scope.workflow_type,
+    workflow_type: graph.scope.workflow_type,
     // Scope follows the ROW on edit and the selection on create, as elsewhere on this canvas.
     ...(isCreate
-      ? (context.workflowId != null ? { sprint_id: context.workflowId } : {})
-      : (form.is_override ? { sprint_id: context.workflowId } : {})),
+      ? (context.workflowId != null ? { workflow_id: context.workflowId } : {})
+      : (form.is_override ? { workflow_id: context.workflowId } : {})),
     outcome: form.outcome,
     task_type: form.task_type,
     field_name: form.field_name.trim(),

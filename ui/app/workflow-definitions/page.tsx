@@ -1,1 +1,5 @@
-export { default } from '@/app/sprint-definitions/page';
+import WorkflowDefinitionsPage from '@/features/workflowDefinitions/WorkflowDefinitionsPage';
+
+export default function WorkflowDefinitionsRoute() {
+  return <WorkflowDefinitionsPage />;
+}

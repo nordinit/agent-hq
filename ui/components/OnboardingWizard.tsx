@@ -1067,7 +1067,7 @@ export default function OnboardingWizard({ onClose }: Props) {
                   {starterPlan.workflows.map(workflow => (
                     <div key={workflow.template.key} className="rounded-lg border border-slate-700 bg-slate-900/70 p-3">
                       <p className="text-sm font-medium text-slate-200">{workflow.workflow.name}</p>
-                      <p className="mt-1 text-xs text-slate-500">{workflow.template.label} · {workflow.workflow.sprint_type}</p>
+                      <p className="mt-1 text-xs text-slate-500">{workflow.template.label} · {workflow.workflow.workflow_type}</p>
                       <p className="mt-2 text-xs leading-5 text-slate-400">
                         {workflow.task_types.length} task types, {workflow.statuses.length} statuses, {workflow.routes.length} route rules
                       </p>

@@ -57,8 +57,8 @@ describe('task audit writer tenant ownership', () => {
         VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
       `);
       await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (9202, 2, 'Workspace Two Project')`);
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (9203, 2, 9202, 'Workspace Two Workflow')`);
-      await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title) VALUES (9204, 2, 9202, 9203, 'Workspace Two Task')`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name) VALUES (9203, 2, 9202, 'Workspace Two Workflow')`);
+      await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title) VALUES (9204, 2, 9202, 9203, 'Workspace Two Task')`);
 
       await writeTaskHistory(db, 9204, 'tenant-test', 'status', 'todo', 'ready');
       await addTaskNote(9204, 'tenant-test', 'Owned by the task workspace', db);

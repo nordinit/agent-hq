@@ -7,14 +7,13 @@ import {seedTelemetryScenario} from '../domains/telemetry/testScenario';
 import {numericRecipe,firstPassRecipe,milestoneRecipe,coreRuntimeRecipes} from '../domains/telemetry/recipes';
 import {runTelemetryQueryJobs} from '../domains/telemetry/queries';
 import {winningBinding} from '../domains/telemetry/definitions';
-import {normalizeWorkflowRequestAliases} from '../lib/workflowCompatibility';
 let db:Db;
 jest.mock('../db/client',()=>({getDb:()=>db}));
 import router from './telemetry-v2';
 let server:Server,base:string;
 beforeAll(async()=>{
   const app=express();app.use(express.json({limit:'10mb'}));
-  app.use('/api/v1',normalizeWorkflowRequestAliases);
+
   app.use((req,_res,next)=>{if(req.headers['x-test-project'])req.telemetryProjectId=Number(req.headers['x-test-project']);next();});
   app.use('/api/v1/telemetry/v2',router);
   server=app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));base=`http://127.0.0.1:${(server.address()as AddressInfo).port}/api/v1/telemetry/v2`;
@@ -110,7 +109,7 @@ test('six-task configurable first pass is 2/4 and runtime opt-in is 1/4',async()
 test('selected milestone is configuration and closed workflows stay in history',async()=>{
   const definition=milestoneRecipe({key:'submitted',name:'Submissions',milestone:{field:'event.to_status',op:'eq',value:'submitted'}});
   expect((await request('/queries/preview',{definition,scope:{project_id:12}})).body.value).toBe(1);
-  await db.run("UPDATE sprints SET status='closed' WHERE id=112");
+  await db.run("UPDATE workflows SET status='closed' WHERE id=112");
   expect((await request('/queries/preview',{definition,scope:{project_id:12}})).body.value).toBe(1);
 });
 test('revisions are optimistic and reports preserve their pinned definition',async()=>{
@@ -163,7 +162,7 @@ test('scoped access cannot widen catalog query resources or stored proofs',async
   expect((await request('/catalog?project_id=12',undefined,{project:11})).status).toBe(403);
   const result=await request('/queries',{definition:await amount(),scope:{project_id:11}},{project:11});expect(result.status).toBe(200);
   expect((await request(`/queries/${result.body.query_id}/contributors`,undefined,{project:12})).status).toBe(404);
-  await db.run('UPDATE tasks SET project_id=12,sprint_id=112 WHERE id=1001');
+  await db.run('UPDATE tasks SET project_id=12,workflow_id=112 WHERE id=1001');
   expect((await request(`/queries/${result.body.query_id}`,undefined,{project:11})).status).toBe(409);
 });
 test('unsafe unknown fields and unbounded formulas fail without SQL execution',async()=>{
@@ -228,8 +227,8 @@ test('profile references are pinned and aggregate component references enforce o
 });
 
 test('tenant-default definitions cannot expose another project through pinned dependencies',async()=>{
-  await db.exec(`INSERT INTO sprint_types(tenant_id,key,name,project_id) VALUES(1,'private_copy','Private project type',12);
-    INSERT INTO task_field_schemas(tenant_id,sprint_type_key,schema_json) VALUES(1,'private_copy','{"fields":[{"key":"secret_amount","label":"Private amount","type":"number"}]}');`);
+  await db.exec(`INSERT INTO workflow_types(tenant_id,key,name,project_id) VALUES(1,'private_copy','Private project type',12);
+    INSERT INTO task_field_schemas(tenant_id,workflow_type_key,schema_json) VALUES(1,'private_copy','{"fields":[{"key":"secret_amount","label":"Private amount","type":"number"}]}');`);
   const catalog=(await request('/catalog')).body;const secret=catalog.fields.find((field:any)=>field.key==='secret_amount');
   const metric=await saveMetric(numericRecipe({key:'private_default',name:'Private default',field:secret.id}),{});
   expect((await request(`/metrics/${metric.id}`,undefined,{project:11})).status).toBe(404);
@@ -288,7 +287,7 @@ test('project export preserves disabled workflow overrides and backfills validat
 });
 
 test('interactive population limits offer a working bounded background calculation',async()=>{
-  await db.run(`INSERT INTO tasks(tenant_id,title,sprint_id,project_id,status,task_type,custom_fields_json)
+  await db.run(`INSERT INTO tasks(tenant_id,title,workflow_id,project_id,status,task_type,custom_fields_json)
     SELECT 1,'Budget sample '||n,111,11,'draft','article','{"amount":1}' FROM generate_series(1,101) n`);
   expect((await request('/settings',{interactive_entities:100},{method:'PUT'})).status).toBe(200);
   const definition=await amount();

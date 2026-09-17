@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { api, apiFetch, type Project, type ProviderRecord, type Sprint, type SprintType } from '@/lib/api';
+import { api, apiFetch, type Project, type ProviderRecord, type Workflow, type WorkflowType } from '@/lib/api';
 import { getAgentProviderOptions, PROVIDER_LABELS } from '@/lib/providerOptions';
-import { formatSprintNumber } from '@/lib/sprintLabel';
+import { formatWorkflowNumber } from '@/lib/workflowLabel';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
 import { Button } from '@/components/ui/button';
 import { TableEnabledSwitch } from '@/components/TableEnabledSwitch';
@@ -37,14 +37,14 @@ interface ModelRoutingRule {
   enabled: boolean;
   provider: string | null;
   project_id: number | null;
-  sprint_id: number | null;
-  sprint_type: string | null;
+  workflow_id: number | null;
+  workflow_type: string | null;
   scope?: string;
   created_at: string;
   updated_at: string;
 }
 
-type RoutingScopeMode = 'sprint' | 'sprint_type' | 'project';
+type RoutingScopeMode = 'workflow' | 'workflow_type' | 'project';
 
 interface ProviderOption {
   value: string;
@@ -107,11 +107,11 @@ function formatFastMode(value: boolean | null | undefined) {
 
 function formatModelRoutingScope(scope: string | null | undefined) {
   switch (scope) {
-    case 'project_sprint':
+    case 'project_workflow':
       return 'Workflow override';
-    case 'project_sprint_type':
+    case 'project_workflow_type':
       return 'Project workflow-type default';
-    case 'sprint_type':
+    case 'workflow_type':
       return 'All-project workflow-type default';
     case 'project':
       return 'Project fallback';
@@ -122,11 +122,11 @@ function formatModelRoutingScope(scope: string | null | undefined) {
   }
 }
 
-function scopeForMode(scopeMode: RoutingScopeMode, projectId: number | null, sprintType: string | null) {
-  if (scopeMode === 'sprint') return 'project_sprint';
-  if (scopeMode === 'sprint_type') return projectId ? 'project_sprint_type' : 'sprint_type';
+function scopeForMode(scopeMode: RoutingScopeMode, projectId: number | null, workflowType: string | null) {
+  if (scopeMode === 'workflow') return 'project_workflow';
+  if (scopeMode === 'workflow_type') return projectId ? 'project_workflow_type' : 'workflow_type';
   if (scopeMode === 'project') return 'project';
-  return sprintType ? 'sprint_type' : 'project';
+  return workflowType ? 'workflow_type' : 'project';
 }
 
 function providerDisplayName(provider: ProviderRecord) {
@@ -298,17 +298,17 @@ function AddRuleForm({
   onCancel,
   providers,
   projectId,
-  sprintId,
+  workflowId,
   scopeMode,
-  sprintType,
+  workflowType,
 }: {
   onCreated: () => void;
   onCancel: () => void;
   providers: ProviderRecord[];
   projectId: number | null;
-  sprintId: number | null;
+  workflowId: number | null;
   scopeMode: RoutingScopeMode;
-  sprintType: string | null;
+  workflowType: string | null;
 }) {
   const defaultProvider: string = providers[0]?.slug ?? '';
   const [form, setForm] = useState({
@@ -347,8 +347,8 @@ function AddRuleForm({
           fast_mode: form.fast_mode === '' ? null : form.fast_mode === 'true',
           enabled: true,
           project_id: projectId,
-          workflow_id: scopeMode === 'sprint' ? sprintId : null,
-          workflow_type: scopeMode === 'sprint_type' ? sprintType : null,
+          workflow_id: scopeMode === 'workflow' ? workflowId : null,
+          workflow_type: scopeMode === 'workflow_type' ? workflowType : null,
         }),
       });
       onCreated();
@@ -369,7 +369,7 @@ function AddRuleForm({
       </td>
       <td className="px-3 py-3">
         <span className="inline-flex rounded-full border border-slate-600/60 bg-slate-700/50 px-2 py-0.5 text-xs text-slate-300">
-          {formatModelRoutingScope(scopeForMode(scopeMode, projectId, sprintType))}
+          {formatModelRoutingScope(scopeForMode(scopeMode, projectId, workflowType))}
         </span>
       </td>
       <td className="px-3 py-3">
@@ -476,18 +476,18 @@ function RuleRow({
   onDeleted,
   providers,
   projectId,
-  sprintId,
+  workflowId,
   scopeMode,
-  sprintType,
+  workflowType,
 }: {
   rule: ModelRoutingRule;
   onSaved: () => void;
   onDeleted: () => void;
   providers: ProviderRecord[];
   projectId: number | null;
-  sprintId: number | null;
+  workflowId: number | null;
   scopeMode: RoutingScopeMode;
-  sprintType: string | null;
+  workflowType: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
@@ -525,8 +525,8 @@ function RuleRow({
           thinking_level: form.thinking_level || null,
           fast_mode: form.fast_mode === '' ? null : form.fast_mode === 'true',
           project_id: projectId,
-          workflow_id: scopeMode === 'sprint' ? sprintId : null,
-          workflow_type: scopeMode === 'sprint_type' ? sprintType : null,
+          workflow_id: scopeMode === 'workflow' ? workflowId : null,
+          workflow_type: scopeMode === 'workflow_type' ? workflowType : null,
         }),
       });
       setEditing(false);
@@ -575,8 +575,8 @@ function RuleRow({
         body: JSON.stringify({
           enabled: !rule.enabled,
           project_id: projectId,
-          workflow_id: scopeMode === 'sprint' ? sprintId : null,
-          workflow_type: scopeMode === 'sprint_type' ? sprintType : null,
+          workflow_id: scopeMode === 'workflow' ? workflowId : null,
+          workflow_type: scopeMode === 'workflow_type' ? workflowType : null,
         }),
       });
       onSaved();
@@ -604,7 +604,7 @@ function RuleRow({
       {/* Scope */}
       <td className="px-3 py-3">
         <span className="inline-flex rounded-full border border-slate-600/60 bg-slate-700/50 px-2 py-0.5 text-xs text-slate-300">
-          {formatModelRoutingScope(rule.scope ?? scopeForMode(scopeMode, projectId, sprintType))}
+          {formatModelRoutingScope(rule.scope ?? scopeForMode(scopeMode, projectId, workflowType))}
         </span>
       </td>
 
@@ -809,13 +809,13 @@ function RuleRow({
 export default function ModelRoutingPage() {
   const [rules, setRules] = useState<ModelRoutingRule[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
-  const [sprintTypes, setSprintTypes] = useState<SprintType[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [workflowTypes, setWorkflowTypes] = useState<WorkflowType[]>([]);
   const validProjectIds = useMemo(() => projects.map(project => project.id), [projects]);
   const [selectedProjectId, setSelectedProjectId] = useProjectFilterPreference({ validProjectIds });
-  const [selectedSprintId, setSelectedSprintId] = useState<number | null>(null);
-  const [selectedSprintType, setSelectedSprintType] = useState<string | null>(null);
-  const [scopeMode, setScopeMode] = useState<RoutingScopeMode>('sprint');
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(null);
+  const [selectedWorkflowType, setSelectedWorkflowType] = useState<string | null>(null);
+  const [scopeMode, setScopeMode] = useState<RoutingScopeMode>('workflow');
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [referenceLoading, setReferenceLoading] = useState(true);
@@ -832,9 +832,9 @@ export default function ModelRoutingPage() {
   const [filterScopes, setFilterScopes] = useState<string[]>([]);
   const [filterStates, setFilterStates] = useState<string[]>([]);
   const selectedProject = projects.find(project => project.id === selectedProjectId) ?? null;
-  const selectedSprintTypeRecord = sprintTypes.find(type => type.key === selectedSprintType) ?? null;
-  const filteredSprints = selectedProjectId
-    ? sprints.filter(sprint => sprint.project_id === selectedProjectId)
+  const selectedWorkflowTypeRecord = workflowTypes.find(type => type.key === selectedWorkflowType) ?? null;
+  const filteredWorkflows = selectedProjectId
+    ? workflows.filter(workflow => workflow.project_id === selectedProjectId)
     : [];
   const labelOptions = useMemo(() => rules.map(rule => ({ value: rule.label, label: rule.label })), [rules]);
   const maxPointOptions = useMemo(() => rules.map(rule => ({ value: String(rule.max_points), label: String(rule.max_points) })), [rules]);
@@ -845,7 +845,7 @@ export default function ModelRoutingPage() {
   const maxBudgetOptions = useMemo(() => rules.map(rule => ({ value: rule.max_budget_usd != null ? String(rule.max_budget_usd) : '', label: rule.max_budget_usd != null ? `$${Number(rule.max_budget_usd).toFixed(2)}` : '—' })), [rules]);
   const fastModeOptions = useMemo(() => rules.map(rule => ({ value: rule.fast_mode == null ? '' : String(rule.fast_mode), label: formatFastMode(rule.fast_mode) })), [rules]);
   const scopeOptions = useMemo(() => rules.map(rule => {
-    const value = rule.scope ?? scopeForMode(scopeMode, rule.project_id, rule.sprint_type);
+    const value = rule.scope ?? scopeForMode(scopeMode, rule.project_id, rule.workflow_type);
     return { value, label: formatModelRoutingScope(value) };
   }), [rules, scopeMode]);
   const stateOptions = useMemo(() => ([
@@ -853,7 +853,7 @@ export default function ModelRoutingPage() {
     { value: 'disabled', label: 'Disabled' },
   ]), []);
   const filteredRules = useMemo(() => rules.filter(rule => (
-    matchesColumnFilter(filterScopes, rule.scope ?? scopeForMode(scopeMode, rule.project_id, rule.sprint_type))
+    matchesColumnFilter(filterScopes, rule.scope ?? scopeForMode(scopeMode, rule.project_id, rule.workflow_type))
     && matchesColumnFilter(filterLabels, rule.label)
     && matchesColumnFilter(filterMaxPoints, String(rule.max_points))
     && matchesColumnFilter(filterProviders, rule.provider ?? '')
@@ -869,23 +869,23 @@ export default function ModelRoutingPage() {
     setReferenceLoading(true);
     setError(null);
     try {
-      const [projectList, sprintList, sprintTypeList, providerResponse] = await Promise.all([
+      const [projectList, workflowList, workflowTypeList, providerResponse] = await Promise.all([
         api.getProjects(),
-        api.getSprints(undefined, true),
-        api.getSprintTypes(),
+        api.getWorkflows(undefined, true),
+        api.getWorkflowTypes(),
         api.getProviders(),
       ]);
       setProjects(projectList);
-      setSprints(sprintList);
-      setSprintTypes(sprintTypeList);
+      setWorkflows(workflowList);
+      setWorkflowTypes(workflowTypeList);
       setProviders(providerResponse.providers);
-      setSelectedSprintId(current => {
-        if (current && sprintList.some(sprint => sprint.id === current)) return current;
+      setSelectedWorkflowId(current => {
+        if (current && workflowList.some(workflow => workflow.id === current)) return current;
         return null;
       });
-      setSelectedSprintType(current => {
-        if (current && sprintTypeList.some(type => type.key === current)) return current;
-        return sprintTypeList.find(type => type.key === 'dev')?.key ?? sprintTypeList[0]?.key ?? null;
+      setSelectedWorkflowType(current => {
+        if (current && workflowTypeList.some(type => type.key === current)) return current;
+        return workflowTypeList.find(type => type.key === 'dev')?.key ?? workflowTypeList[0]?.key ?? null;
       });
     } catch (e) {
       setError(String(e));
@@ -895,7 +895,7 @@ export default function ModelRoutingPage() {
   }, []);
 
   const loadRules = useCallback(async () => {
-    if ((scopeMode !== 'sprint_type' && !selectedProjectId) || (scopeMode === 'sprint' && !selectedSprintId) || (scopeMode === 'sprint_type' && !selectedSprintType)) {
+    if ((scopeMode !== 'workflow_type' && !selectedProjectId) || (scopeMode === 'workflow' && !selectedWorkflowId) || (scopeMode === 'workflow_type' && !selectedWorkflowType)) {
       setRules([]);
       setLoading(false);
       return;
@@ -906,8 +906,8 @@ export default function ModelRoutingPage() {
     try {
       const params = new URLSearchParams();
       if (selectedProjectId) params.set('project_id', String(selectedProjectId));
-      if (scopeMode === 'sprint') params.set('workflow_id', String(selectedSprintId));
-      if (scopeMode === 'sprint_type' && selectedSprintType) params.set('workflow_type', selectedSprintType);
+      if (scopeMode === 'workflow') params.set('workflow_id', String(selectedWorkflowId));
+      if (scopeMode === 'workflow_type' && selectedWorkflowType) params.set('workflow_type', selectedWorkflowType);
       const data = await apiFetch<ModelRoutingRule[]>(`/api/v1/model-routing?${params.toString()}`);
       const sorted = [...data].sort((a, b) => a.max_points - b.max_points);
       setRules(sorted);
@@ -916,29 +916,29 @@ export default function ModelRoutingPage() {
     } finally {
       setLoading(false);
     }
-  }, [scopeMode, selectedProjectId, selectedSprintId, selectedSprintType]);
+  }, [scopeMode, selectedProjectId, selectedWorkflowId, selectedWorkflowType]);
 
   useEffect(() => { loadReferenceData(); }, [loadReferenceData]);
 
   useEffect(() => {
-    const scoped = selectedProjectId ? sprints.filter(sprint => sprint.project_id === selectedProjectId) : [];
-    setSelectedSprintId(current => {
-      if (current && scoped.some(sprint => sprint.id === current)) return current;
-      return scoped.find(sprint => sprint.status !== 'closed')?.id ?? scoped[0]?.id ?? null;
+    const scoped = selectedProjectId ? workflows.filter(workflow => workflow.project_id === selectedProjectId) : [];
+    setSelectedWorkflowId(current => {
+      if (current && scoped.some(workflow => workflow.id === current)) return current;
+      return scoped.find(workflow => workflow.status !== 'closed')?.id ?? scoped[0]?.id ?? null;
     });
     setShowAdd(false);
-  }, [selectedProjectId, sprints]);
+  }, [selectedProjectId, workflows]);
 
   useEffect(() => {
-    if (selectedProjectId || scopeMode === 'sprint_type') return;
-    setScopeMode('sprint_type');
+    if (selectedProjectId || scopeMode === 'workflow_type') return;
+    setScopeMode('workflow_type');
     setShowAdd(false);
   }, [scopeMode, selectedProjectId]);
 
   useEffect(() => {
-    if (selectedSprintType && sprintTypes.some(type => type.key === selectedSprintType)) return;
-    setSelectedSprintType(sprintTypes.find(type => type.key === 'dev')?.key ?? sprintTypes[0]?.key ?? null);
-  }, [selectedSprintType, sprintTypes]);
+    if (selectedWorkflowType && workflowTypes.some(type => type.key === selectedWorkflowType)) return;
+    setSelectedWorkflowType(workflowTypes.find(type => type.key === 'dev')?.key ?? workflowTypes[0]?.key ?? null);
+  }, [selectedWorkflowType, workflowTypes]);
 
   useEffect(() => { void loadRules(); }, [loadRules]);
 
@@ -997,39 +997,39 @@ export default function ModelRoutingPage() {
                   value={scopeMode}
                   onChange={e => { setScopeMode(e.target.value as RoutingScopeMode); setShowAdd(false); }}
                 >
-                  <option value="sprint">Specific workflow override</option>
-                  <option value="sprint_type">All workflows of a type</option>
+                  <option value="workflow">Specific workflow override</option>
+                  <option value="workflow_type">All workflows of a type</option>
                   <option value="project">Project fallback</option>
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
               </div>
             </div>
             <div>
-              <p className="mb-1 text-xs font-medium uppercase tracking-[0.16em] text-slate-500">{scopeMode === 'sprint_type' ? 'Workflow Type' : 'Workflow'}</p>
+              <p className="mb-1 text-xs font-medium uppercase tracking-[0.16em] text-slate-500">{scopeMode === 'workflow_type' ? 'Workflow Type' : 'Workflow'}</p>
               <div className="relative">
-                {scopeMode === 'sprint_type' ? (
+                {scopeMode === 'workflow_type' ? (
                   <select
                     className="appearance-none w-full bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-amber-500 disabled:opacity-60"
-                    value={selectedSprintType ?? ''}
-                    onChange={e => setSelectedSprintType(e.target.value || null)}
-                    disabled={sprintTypes.length === 0}
+                    value={selectedWorkflowType ?? ''}
+                    onChange={e => setSelectedWorkflowType(e.target.value || null)}
+                    disabled={workflowTypes.length === 0}
                   >
                     <option value="">Select workflow type...</option>
-                    {sprintTypes.map(type => (
+                    {workflowTypes.map(type => (
                       <option key={type.key} value={type.key}>{type.name || type.key} ({type.key})</option>
                     ))}
                   </select>
                 ) : (
                   <select
                     className="appearance-none w-full bg-slate-800 border border-slate-700 rounded-lg pl-3 pr-8 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-amber-500 disabled:opacity-60"
-                    value={selectedSprintId ?? ''}
-                    onChange={e => setSelectedSprintId(e.target.value ? Number(e.target.value) : null)}
-                    disabled={scopeMode === 'project' || filteredSprints.length === 0}
+                    value={selectedWorkflowId ?? ''}
+                    onChange={e => setSelectedWorkflowId(e.target.value ? Number(e.target.value) : null)}
+                    disabled={scopeMode === 'project' || filteredWorkflows.length === 0}
                   >
                     <option value="">{scopeMode === 'project' ? 'All project workflows fallback' : (selectedProject ? 'Select workflow...' : 'Select project first...')}</option>
-                    {scopeMode !== 'project' && filteredSprints.map(sprint => (
-                      <option key={sprint.id} value={sprint.id}>
-                        {formatSprintNumber(sprint.id)} · {sprint.name}
+                    {scopeMode !== 'project' && filteredWorkflows.map(workflow => (
+                      <option key={workflow.id} value={workflow.id}>
+                        {formatWorkflowNumber(workflow.id)} · {workflow.name}
                       </option>
                     ))}
                   </select>
@@ -1046,7 +1046,7 @@ export default function ModelRoutingPage() {
         <div className="flex items-start gap-3 bg-amber-900/20 border border-amber-700/40 rounded-xl p-4">
           <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
           <p className="text-amber-300 text-sm">
-            No model routing rules configured for this {scopeMode === 'sprint_type' ? `workflow type${selectedSprintTypeRecord ? ` (${selectedSprintTypeRecord.name})` : ''}` : scopeMode === 'project' ? 'project fallback' : 'workflow'}. Dispatch will use the next lower-precedence matching scope when available.
+            No model routing rules configured for this {scopeMode === 'workflow_type' ? `workflow type${selectedWorkflowTypeRecord ? ` (${selectedWorkflowTypeRecord.name})` : ''}` : scopeMode === 'project' ? 'project fallback' : 'workflow'}. Dispatch will use the next lower-precedence matching scope when available.
           </p>
         </div>
       )}
@@ -1060,7 +1060,7 @@ export default function ModelRoutingPage() {
           {loading ? 'Loading…' : `${filteredRules.length} of ${rules.length} rule${rules.length !== 1 ? 's' : ''}`}
         </p>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={loadRules} disabled={loading || (scopeMode !== 'sprint_type' && !selectedProjectId) || (scopeMode === 'sprint' && !selectedSprintId) || (scopeMode === 'sprint_type' && !selectedSprintType)}>
+          <Button variant="ghost" size="sm" onClick={loadRules} disabled={loading || (scopeMode !== 'workflow_type' && !selectedProjectId) || (scopeMode === 'workflow' && !selectedWorkflowId) || (scopeMode === 'workflow_type' && !selectedWorkflowType)}>
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -1068,7 +1068,7 @@ export default function ModelRoutingPage() {
             variant="secondary"
             size="sm"
             onClick={() => setShowAdd(s => !s)}
-            disabled={showAdd || loading || (scopeMode !== 'sprint_type' && !selectedProjectId) || (scopeMode === 'sprint' && !selectedSprintId) || (scopeMode === 'sprint_type' && !selectedSprintType)}
+            disabled={showAdd || loading || (scopeMode !== 'workflow_type' && !selectedProjectId) || (scopeMode === 'workflow' && !selectedWorkflowId) || (scopeMode === 'workflow_type' && !selectedWorkflowType)}
           >
             <Plus className="w-3.5 h-3.5" /> Add Rule
           </Button>
@@ -1116,9 +1116,9 @@ export default function ModelRoutingPage() {
                 <AddRuleForm
                   providers={providers}
                   projectId={selectedProjectId}
-                  sprintId={selectedSprintId}
+                  workflowId={selectedWorkflowId}
                   scopeMode={scopeMode}
-                  sprintType={selectedSprintType}
+                  workflowType={selectedWorkflowType}
                   onCreated={() => { setShowAdd(false); loadRules(); }}
                   onCancel={() => setShowAdd(false)}
                 />
@@ -1146,9 +1146,9 @@ export default function ModelRoutingPage() {
                     onDeleted={loadRules}
                     providers={providers}
                     projectId={selectedProjectId}
-                    sprintId={selectedSprintId}
+                    workflowId={selectedWorkflowId}
                     scopeMode={scopeMode}
-                    sprintType={selectedSprintType}
+                    workflowType={selectedWorkflowType}
                   />
                 ))
               )}

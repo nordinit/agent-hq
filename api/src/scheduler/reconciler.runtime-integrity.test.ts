@@ -10,7 +10,7 @@ describe('reconciler runtime integrity recovery', () => {
       VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')
     `);
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Test')`);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (1, 1, 1, 'Test workflow', 'generic')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (1, 1, 1, 'Test workflow', 'generic')`);
     return db;
   }
 
@@ -21,7 +21,7 @@ describe('reconciler runtime integrity recovery', () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (7, 1, 'Cinder', 'agent:cinder:main')`);
     await db.run(`INSERT INTO job_instances (id, agent_id, status, runtime_ended_at) VALUES (90, 7, 'failed', CURRENT_TIMESTAMP)`);
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id, paused_at, updated_at)
+      INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id, active_instance_id, paused_at, updated_at)
       VALUES (501, 1, 1, 1, 'Lost linkage task', 'in_progress', 7, 90, NULL, '2026-05-16T19:30:00.000Z')
     `);
 

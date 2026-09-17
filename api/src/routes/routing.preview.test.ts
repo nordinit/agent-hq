@@ -23,7 +23,7 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   return { server, baseUrl: `http://127.0.0.1:${address.port}` };
 }
 
-async function seedScope(): Promise<{ projectId: number; sprintId: number; agentId: number }> {
+async function seedScope(): Promise<{ projectId: number; workflowId: number; agentId: number }> {
   const db = getDb();
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Preview Tenant', 'preview', 1)`);
   await db.run(`
@@ -35,36 +35,36 @@ async function seedScope(): Promise<{ projectId: number; sprintId: number; agent
     VALUES ('ready', 'Ready', 0, 1)
   `);
   await db.run(`
-    INSERT INTO sprint_types (tenant_id, key, name, status_seeded_at, repo_required)
+    INSERT INTO workflow_types (tenant_id, key, name, status_seeded_at, repo_required)
     VALUES (1, 'dev', 'Development', '2026-08-05T00:00:00.000Z', 0)
   `);
   await db.run(`
-    INSERT INTO sprint_type_task_statuses
-      (tenant_id, sprint_type_key, status_key, label, terminal, is_system, stage_order, is_default_entry)
+    INSERT INTO workflow_type_task_statuses
+      (tenant_id, workflow_type_key, status_key, label, terminal, is_system, stage_order, is_default_entry)
     VALUES (1, 'dev', 'ready', 'Ready', 0, 1, 0, 1)
   `);
   const project = await db.run(`INSERT INTO projects (tenant_id, name, description, context_md) VALUES (1, 'Preview Project', '', '')`);
   const projectId = Number(project.lastInsertId);
-  const sprint = await db.run(
-    `INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+  const workflow = await db.run(
+    `INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
      VALUES (1, ?, 'Preview Workflow', '', 'dev', 'active', 'time', '2w')`,
     projectId,
   );
-  const sprintId = Number(sprint.lastInsertId);
+  const workflowId = Number(workflow.lastInsertId);
   await db.run(`
-    INSERT INTO sprint_task_statuses
-      (sprint_id, status_key, label, terminal, is_system, stage_order, is_default_entry)
+    INSERT INTO workflow_task_statuses
+      (workflow_id, status_key, label, terminal, is_system, stage_order, is_default_entry)
     VALUES (?, 'ready', 'Ready', 0, 1, 0, 1)
-  `, sprintId);
+  `, workflowId);
   const agent = await db.run(
     `INSERT INTO agents (tenant_id, name, session_key, enabled, project_id) VALUES (1, 'Preview Agent', 'preview-agent', 1, ?)`,
     projectId,
   );
-  return { projectId, sprintId, agentId: Number(agent.lastInsertId) };
+  return { projectId, workflowId, agentId: Number(agent.lastInsertId) };
 }
 
 async function countRules(): Promise<number> {
-  const row = await getDb().get(`SELECT COUNT(*) AS n FROM sprint_task_routing_rules`) as { n: number | string };
+  const row = await getDb().get(`SELECT COUNT(*) AS n FROM workflow_task_routing_rules`) as { n: number | string };
   return Number(row.n);
 }
 
@@ -109,18 +109,18 @@ describe('routing preview', () => {
   });
 
   it('does not persist the change it previews', async () => {
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
     const { status, body } = await preview(baseUrl, {
       project_id: projectId,
-      workflow_id: sprintId,
+      workflow_id: workflowId,
       workflow_type: 'dev',
       operations: [{
         entity: 'rule',
         action: 'create',
-        payload: { project_id: projectId, sprint_id: sprintId, sprint_type: 'dev', task_type: null, status: 'ready', agent_id: agentId },
+        payload: { project_id: projectId, workflow_id: workflowId, workflow_type: 'dev', task_type: null, status: 'ready', agent_id: agentId },
       }],
     });
 
@@ -131,22 +131,22 @@ describe('routing preview', () => {
 
   it('reports the rows a write would actually touch, not just the operation count', async () => {
     // Report actual table deltas rather than equating one requested operation with one row.
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
 
     const { body } = await preview(baseUrl, {
       project_id: projectId,
-      workflow_id: sprintId,
+      workflow_id: workflowId,
       workflow_type: 'dev',
       operations: [{
         entity: 'rule',
         action: 'create',
-        payload: { project_id: projectId, sprint_id: sprintId, sprint_type: 'dev', task_type: null, status: 'ready', agent_id: agentId },
+        payload: { project_id: projectId, workflow_id: workflowId, workflow_type: 'dev', task_type: null, status: 'ready', agent_id: agentId },
       }],
     });
 
     const written = body.rows_written ?? [];
-    const rules = written.find((entry) => entry.table === 'sprint_task_routing_rules');
+    const rules = written.find((entry) => entry.table === 'workflow_task_routing_rules');
     expect(rules?.delta).toBeGreaterThanOrEqual(1);
     expect(written.every((entry) => entry.delta !== 0)).toBe(true);
   });
@@ -156,7 +156,7 @@ describe('routing preview', () => {
     await primeRoutingRead(baseUrl, projectId);
     // A second workflow of the same type, so the count is meaningfully greater than one.
     await getDb().run(
-      `INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+      `INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
        VALUES (1, ?, 'Second Workflow', '', 'dev', 'active', 'time', '2w')`,
       projectId,
     );
@@ -167,7 +167,7 @@ describe('routing preview', () => {
       operations: [{
         entity: 'rule',
         action: 'create',
-        payload: { project_id: projectId, sprint_type: 'dev', scope_kind: 'sprint_type_default', task_type: null, status: 'ready', agent_id: agentId },
+        payload: { project_id: projectId, workflow_type: 'dev', scope_kind: 'workflow_type_default', task_type: null, status: 'ready', agent_id: agentId },
       }],
     });
 
@@ -176,18 +176,18 @@ describe('routing preview', () => {
   });
 
   it('surfaces a validation failure as an error, not an empty preview', async () => {
-    const { projectId, sprintId } = await seedScope();
+    const { projectId, workflowId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
     const before = await countRules();
 
     const { status, body } = await preview(baseUrl, {
       project_id: projectId,
-      workflow_id: sprintId,
+      workflow_id: workflowId,
       workflow_type: 'dev',
       operations: [{
         entity: 'rule',
         action: 'create',
-        payload: { project_id: projectId, sprint_id: sprintId, sprint_type: 'dev', task_type: null, status: 'ready', agent_id: 999999 },
+        payload: { project_id: projectId, workflow_id: workflowId, workflow_type: 'dev', task_type: null, status: 'ready', agent_id: 999999 },
       }],
     });
 
@@ -197,11 +197,11 @@ describe('routing preview', () => {
   });
 
   it('rejects an unknown operation rather than silently ignoring it', async () => {
-    const { projectId, sprintId } = await seedScope();
+    const { projectId, workflowId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
     const { status, body } = await preview(baseUrl, {
       project_id: projectId,
-      workflow_id: sprintId,
+      workflow_id: workflowId,
       workflow_type: 'dev',
       operations: [{ entity: 'status', action: 'delete', payload: {} }],
     });
@@ -210,10 +210,10 @@ describe('routing preview', () => {
   });
 
   it('requires at least one operation', async () => {
-    const { projectId, sprintId } = await seedScope();
+    const { projectId, workflowId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
     const { status } = await preview(baseUrl, {
-      project_id: projectId, workflow_id: sprintId, workflow_type: 'dev', operations: [],
+      project_id: projectId, workflow_id: workflowId, workflow_type: 'dev', operations: [],
     });
     expect(status).toBe(400);
   });
@@ -221,17 +221,17 @@ describe('routing preview', () => {
   it('leaves the connection usable afterwards', async () => {
     // A botched rollback leaves a PostgreSQL connection in the aborted-transaction state,
     // where the symptom is the NEXT request failing rather than this one.
-    const { projectId, sprintId, agentId } = await seedScope();
+    const { projectId, workflowId, agentId } = await seedScope();
     await primeRoutingRead(baseUrl, projectId);
 
     await preview(baseUrl, {
       project_id: projectId,
-      workflow_id: sprintId,
+      workflow_id: workflowId,
       workflow_type: 'dev',
       operations: [{
         entity: 'rule',
         action: 'create',
-        payload: { project_id: projectId, sprint_id: sprintId, sprint_type: 'dev', task_type: null, status: 'ready', agent_id: agentId },
+        payload: { project_id: projectId, workflow_id: workflowId, workflow_type: 'dev', task_type: null, status: 'ready', agent_id: agentId },
       }],
     });
 

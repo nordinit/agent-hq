@@ -17,7 +17,7 @@ const comparisons = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in', 'cont
 const aggregates = ['count', 'count_if', 'distinct_count', 'sum', 'mean', 'min', 'max', 'percentile', 'distribution'];
 const builtins: Record<string, string> = {
   id: 'text', title: 'text', name: 'text', status: 'text', priority: 'text', task_type: 'text', workflow_type: 'text',
-  project_id: 'number', workflow_id: 'number', sprint_id: 'number', agent_id: 'number', assigned_agent_id: 'number',
+  project_id: 'number', workflow_id: 'number',  agent_id: 'number', assigned_agent_id: 'number',
   executing_agent_id: 'number', outcome_agent_id: 'number', actor_agent_id: 'number', created_at: 'datetime', updated_at: 'datetime',
   started_at: 'datetime', ended_at: 'datetime', duration_ms: 'number', story_points: 'number', retry_count: 'number',
   tokens_in: 'number', tokens_out: 'number', tokens_total: 'number', input_tokens: 'number', output_tokens: 'number',

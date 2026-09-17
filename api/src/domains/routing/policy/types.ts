@@ -1,4 +1,4 @@
-export interface SprintTaskStatusMeta {
+export interface WorkflowTaskStatusMeta {
   name: string;
   label: string;
   color: string;
@@ -11,11 +11,11 @@ export interface SprintTaskStatusMeta {
   is_default_entry?: boolean;
 }
 
-export interface SprintTaskTransitionRow {
+export interface WorkflowTaskTransitionRow {
   id: number;
-  sprint_id: number | null;
+  workflow_id: number | null;
   project_id?: number | null;
-  sprint_type?: string | null;
+  workflow_type?: string | null;
   task_type: string | null;
   from_status: string;
   outcome: string;
@@ -27,9 +27,9 @@ export interface SprintTaskTransitionRow {
   updated_at?: string;
 }
 
-export interface SprintTaskTransitionRequirementRow {
+export interface WorkflowTaskTransitionRequirementRow {
   id: number;
-  sprint_id: number | null;
+  workflow_id: number | null;
   task_type: string | null;
   outcome: string;
   field_name: string;
@@ -43,9 +43,9 @@ export interface SprintTaskTransitionRequirementRow {
   updated_at?: string;
 }
 
-export interface SprintTaskRoutingRuleRow {
+export interface WorkflowTaskRoutingRuleRow {
   id: number;
-  sprint_id: number | null;
+  workflow_id: number | null;
   task_type: string | null;
   status: string;
   agent_id: number | null;
@@ -56,15 +56,15 @@ export interface SprintTaskRoutingRuleRow {
   updated_at?: string;
 }
 
-export type SprintSeedRow = {
+export type WorkflowSeedRow = {
   id: number;
   project_id: number | null;
-  sprint_type: string | null;
+  workflow_type: string | null;
   tenant_id?: number | null;
   task_policy_seeded_at?: string | null;
 };
 
-export type StarterSprintType = 'dev' | 'generic' | 'ops' | 'lead_generation';
+export type StarterWorkflowType = 'dev' | 'generic' | 'ops' | 'lead_generation';
 
 export type PolicyTransitionSeed = {
   task_type: string | null;

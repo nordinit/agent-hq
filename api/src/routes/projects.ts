@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../db/client';
 import { writeProjectAudit, diffFields, extractActor } from '../lib/projectAudit';
-import { ensureProjectBacklogSprint } from '../lib/starterSetup';
+import { ensureProjectBacklogWorkflow } from '../lib/starterSetup';
 import { getDefaultProjectId, setDefaultProjectId } from '../lib/defaultProject';
 import {
   requireTenantOwnedRow,
@@ -146,7 +146,7 @@ router.post('/', async (req: Request, res: Response) => {
         });
 
     const newId = Number(result.lastInsertId);
-    await ensureProjectBacklogSprint(db, newId);
+    await ensureProjectBacklogWorkflow(db, newId);
     const actor = extractActor(req);
     await writeProjectAudit(db, newId, 'project', newId, 'created', actor, {
             name,
@@ -353,14 +353,14 @@ router.get('/:id/cascade-check', async (req: Request, res: Response) => {
       WHERE a.project_id = ? AND a.tenant_id = ? AND ji.status IN ('queued', 'dispatched', 'running')
     `, req.params.id, tenantId) as { count: number };
 
-    const sprintCountRow = await db.get(`SELECT COUNT(*) as count FROM sprints WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
+    const workflowCountRow = await db.get(`SELECT COUNT(*) as count FROM workflows WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
     const taskCountRow = await db.get(`SELECT COUNT(*) as count FROM tasks WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
     const agentCountRow = await db.get(`SELECT COUNT(*) as count FROM agents WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
 
     return res.json({
       active_tasks: activeTasksRow.count ?? 0,
       running_instances: runningInstancesRow.count ?? 0,
-      dependent_sprints: sprintCountRow.count ?? 0,
+      dependent_workflows: workflowCountRow.count ?? 0,
       dependent_tasks: taskCountRow.count ?? 0,
       dependent_agents: agentCountRow.count ?? 0,
     });
@@ -391,26 +391,26 @@ router.delete('/:id', async (req: Request, res: Response) => {
       WHERE a.project_id = ? AND a.tenant_id = ? AND ji.status IN ('queued', 'dispatched', 'running')
     `, req.params.id, tenantId) as { count: number };
 
-    const sprintCountRow = await db.get(`SELECT COUNT(*) as count FROM sprints WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
+    const workflowCountRow = await db.get(`SELECT COUNT(*) as count FROM workflows WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
     const taskCountRow = await db.get(`SELECT COUNT(*) as count FROM tasks WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
     const agentCountRow = await db.get(`SELECT COUNT(*) as count FROM agents WHERE project_id = ? AND tenant_id = ?`, req.params.id, tenantId) as { count: number };
 
     const activeTasks = activeTasksRow.count ?? 0;
     const runningInstances = runningInstancesRow.count ?? 0;
-    const sprintCount = sprintCountRow.count ?? 0;
+    const workflowCount = workflowCountRow.count ?? 0;
     const taskCount = taskCountRow.count ?? 0;
     const agentCount = agentCountRow.count ?? 0;
 
-    if (!force && (activeTasks > 0 || runningInstances > 0 || sprintCount > 0 || taskCount > 0 || agentCount > 0)) {
+    if (!force && (activeTasks > 0 || runningInstances > 0 || workflowCount > 0 || taskCount > 0 || agentCount > 0)) {
       return res.status(409).json({
         error: 'Project delete requires confirmation',
         code: 'project_delete_requires_force',
         active_tasks: activeTasks,
         running_instances: runningInstances,
-        dependent_sprints: sprintCount,
+        dependent_workflows: workflowCount,
         dependent_tasks: taskCount,
         dependent_agents: agentCount,
-        message: `Project ${req.params.id} still owns ${sprintCount} sprint(s), ${taskCount} task(s), and ${agentCount} agent(s), with ${activeTasks} active task(s) and ${runningInstances} running instance(s). Pass ?force=true to delete this project and its dependents.`,
+        message: `Project ${req.params.id} still owns ${workflowCount} workflow(s), ${taskCount} task(s), and ${agentCount} agent(s), with ${activeTasks} active task(s) and ${runningInstances} running instance(s). Pass ?force=true to delete this project and its dependents.`,
       });
     }
 
@@ -427,7 +427,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/v1/projects/:id/metrics — aggregate metrics across all sprints
+// GET /api/v1/projects/:id/metrics — aggregate metrics across all workflows
 router.get('/:id/metrics', async (req: Request, res: Response) => {
   try {
     const db = getDb();
@@ -471,7 +471,7 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
       WHERE a.project_id = ? AND a.tenant_id = ?
     `, Number(req.params.id), tenantId) as { job_runs_total: number; job_runs_success: number; job_runs_failed: number };
 
-    const sprintCount = (await db.get('SELECT COUNT(*) as n FROM sprints WHERE project_id = ? AND tenant_id = ?', Number(req.params.id), tenantId) as { n: number }).n;
+    const workflowCount = (await db.get('SELECT COUNT(*) as n FROM workflows WHERE project_id = ? AND tenant_id = ?', Number(req.params.id), tenantId) as { n: number }).n;
 
     const tasks_total = taskRow.tasks_total ?? 0;
     const tasks_done = taskRow.tasks_done ?? 0;
@@ -485,7 +485,7 @@ router.get('/:id/metrics', async (req: Request, res: Response) => {
 
     return res.json({
       project_id: Number(req.params.id),
-      sprint_count: sprintCount,
+      workflow_count: workflowCount,
       tasks_total,
       tasks_done,
       completion_rate,
@@ -544,7 +544,7 @@ router.get('/:id/audit', async (req: Request, res: Response) => {
     `;
     const params: unknown[] = [projectId];
 
-    if (entityType && ['project', 'sprint', 'job_template'].includes(entityType)) {
+    if (entityType && ['project', 'workflow', 'job_template'].includes(entityType)) {
       query += ` AND entity_type = ?`;
       params.push(entityType);
     }

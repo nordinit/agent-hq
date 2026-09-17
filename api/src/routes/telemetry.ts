@@ -24,14 +24,14 @@ router.use(async (req: Request, res: Response, next) => {
     const db=getDb();
     const access=await telemetryAccess(db,req);
     const rawProject=req.query.project_id??req.body?.project_id;
-    const rawWorkflow=req.query.sprint_id??req.body?.sprint_id;
+    const rawWorkflow=req.query.workflow_id??req.body?.workflow_id;
     if(req.query.project_id!=null&&req.body?.project_id!=null&&Number(req.query.project_id)!==Number(req.body.project_id))
       return res.status(400).json({error:'Conflicting project scopes'});
     let scope=await resolveScope(db,access,{
       ...(rawProject==null?{}:{project_id:Number(rawProject)}),
     });
     if(rawWorkflow!=null){
-      const workflow=await db.get<{project_id:number}>('SELECT project_id FROM sprints WHERE id=? AND tenant_id=?',Number(rawWorkflow),access.tenantId);
+      const workflow=await db.get<{project_id:number}>('SELECT project_id FROM workflows WHERE id=? AND tenant_id=?',Number(rawWorkflow),access.tenantId);
       if(!workflow||(scope.project_id!=null&&scope.project_id!==Number(workflow.project_id)))
         return res.status(404).json({error:'Workflow not found in this scope'});
       scope=await resolveScope(db,access,{project_id:Number(workflow.project_id)});
@@ -64,13 +64,13 @@ function buildDateFilter(
   if (to)   { conditions.push(`${alias}.created_at <= ?`); params.push(to);   }
 }
 
-async function requireTaskTenant(db: ReturnType<typeof getDb>, taskId: number, tenantId: number, projectId: number | null = null): Promise<{ id: number; tenant_id: number; project_id: number | null; sprint_id: number | null; agent_id: number | null } | null> {
+async function requireTaskTenant(db: ReturnType<typeof getDb>, taskId: number, tenantId: number, projectId: number | null = null): Promise<{ id: number; tenant_id: number; project_id: number | null; workflow_id: number | null; agent_id: number | null } | null> {
   return await db.get(`
-    SELECT id, tenant_id, project_id, sprint_id, agent_id
+    SELECT id, tenant_id, project_id, workflow_id, agent_id
     FROM tasks
     WHERE id = ? AND tenant_id = ? AND (?::bigint IS NULL OR project_id = ?)
     LIMIT 1
-  `, taskId, tenantId, projectId, projectId) as { id: number; tenant_id: number; project_id: number | null; sprint_id: number | null; agent_id: number | null } | undefined ?? null;
+  `, taskId, tenantId, projectId, projectId) as { id: number; tenant_id: number; project_id: number | null; workflow_id: number | null; agent_id: number | null } | undefined ?? null;
 }
 
 function addTelemetryTenantFilter(tableAlias: string, conditions: string[], params: unknown[], tenantId: number, projectId: number | null = null): void {
@@ -81,12 +81,12 @@ function addTelemetryTenantFilter(tableAlias: string, conditions: string[], para
 
 // ── GET /api/v1/telemetry/overview ───────────────────────────────────────────
 // Overview metrics: counts, pass rates, avg cycle time, top failure reasons.
-// Query params: project_id, sprint_id, job_id, from, to
+// Query params: project_id, workflow_id, job_id, from, to
 router.get('/overview', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    const { project_id, sprint_id, job_id, from, to } = req.query as Record<string, string | undefined>;
+    const { project_id, workflow_id, job_id, from, to } = req.query as Record<string, string | undefined>;
 
     // Build WHERE clauses for creation events & outcome metrics
     const ceConditions: string[] = [];
@@ -100,9 +100,9 @@ router.get('/overview', async (req: Request, res: Response) => {
       ceConditions.push('tce.project_id = ?'); ceParams.push(Number(project_id));
       omConditions.push('tom.project_id = ?'); omParams.push(Number(project_id));
     }
-    if (sprint_id) {
-      ceConditions.push('tce.sprint_id = ?'); ceParams.push(Number(sprint_id));
-      omConditions.push('tom.sprint_id = ?'); omParams.push(Number(sprint_id));
+    if (workflow_id) {
+      ceConditions.push('tce.workflow_id = ?'); ceParams.push(Number(workflow_id));
+      omConditions.push('tom.workflow_id = ?'); omParams.push(Number(workflow_id));
     }
     if (job_id) {
       ceConditions.push('tce.job_id = ?'); ceParams.push(Number(job_id));
@@ -193,14 +193,14 @@ router.get('/overview', async (req: Request, res: Response) => {
 
 // ── GET /api/v1/telemetry/review ─────────────────────────────────────────────
 // Task review rows with creation + outcome data joined.
-// Query params: project_id, sprint_id, job_id, source, confidence, priority,
+// Query params: project_id, workflow_id, job_id, source, confidence, priority,
 //               date_from, date_to, outcome_quality, limit, offset
 router.get('/review', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const {
-      project_id, sprint_id, job_id, source, confidence, priority,
+      project_id, workflow_id, job_id, source, confidence, priority,
       date_from, date_to, outcome_quality,
       limit: rawLimit = '50', offset: rawOffset = '0',
     } = req.query as Record<string, string | undefined>;
@@ -214,7 +214,7 @@ router.get('/review', async (req: Request, res: Response) => {
     params.push(tenantId);
 
     if (project_id) { conditions.push('t.project_id = ?'); params.push(Number(project_id)); }
-    if (sprint_id)  { conditions.push('t.sprint_id = ?');  params.push(Number(sprint_id));  }
+    if (workflow_id)  { conditions.push('t.workflow_id = ?');  params.push(Number(workflow_id));  }
     if (job_id)     { conditions.push('t.agent_id = ?');    params.push(Number(job_id));     }
     if (priority)   { conditions.push('t.priority = ?');   params.push(priority);           }
 
@@ -231,7 +231,7 @@ router.get('/review', async (req: Request, res: Response) => {
       SELECT
         t.id, t.title, t.status, t.priority, t.created_at, t.updated_at,
         p.name as project_name,
-        s.name as sprint_name,
+        s.name as workflow_name,
         a.job_title as job_title,
         a.name as agent_name,
         -- creation event fields
@@ -245,7 +245,7 @@ router.get('/review', async (req: Request, res: Response) => {
         tom.failure_reasons, tom.outcome_summary, tom.recorded_at as outcome_recorded_at
       FROM tasks t
       LEFT JOIN projects p ON p.id = t.project_id AND p.tenant_id=t.tenant_id
-      LEFT JOIN sprints s ON s.id = t.sprint_id AND s.tenant_id=t.tenant_id
+      LEFT JOIN workflows s ON s.id = t.workflow_id AND s.tenant_id=t.tenant_id
       LEFT JOIN agents a ON a.id = t.agent_id AND a.tenant_id=t.tenant_id
       LEFT JOIN task_creation_events tce ON tce.task_id = t.id
       LEFT JOIN task_outcome_metrics tom ON tom.task_id = t.id
@@ -290,12 +290,12 @@ router.get('/review/:task_id', async (req: Request, res: Response) => {
     const task = await db.get(`
       SELECT t.*,
         p.name as project_name,
-        s.name as sprint_name,
+        s.name as workflow_name,
         a.job_title as job_title,
         a.name as agent_name
       FROM tasks t
       LEFT JOIN projects p ON p.id = t.project_id AND p.tenant_id=t.tenant_id
-      LEFT JOIN sprints s ON s.id = t.sprint_id AND s.tenant_id=t.tenant_id
+      LEFT JOIN workflows s ON s.id = t.workflow_id AND s.tenant_id=t.tenant_id
       LEFT JOIN agents a ON a.id = t.agent_id AND a.tenant_id=t.tenant_id
       WHERE t.id = ? AND t.tenant_id = ? AND (?::bigint IS NULL OR t.project_id = ?)
     `, taskId, tenantId, res.locals.legacyTelemetryProjectId, res.locals.legacyTelemetryProjectId) as Record<string, unknown> | undefined;
@@ -411,7 +411,7 @@ router.put('/schema-config', async (req: Request, res: Response) => {
 
 // ── POST /api/v1/telemetry/creation-events ───────────────────────────────────
 // Create a new creation event for a task.
-// Body: { task_id, project_id?, sprint_id?, job_id?, source, routing?, confidence?,
+// Body: { task_id, project_id?, workflow_id?, job_id?, source, routing?, confidence?,
 //         scope_size?, assumptions?, open_questions?, needs_split?, expected_artifact?,
 //         success_mode?, raw_input? }
 router.post('/creation-events', async (req: Request, res: Response) => {
@@ -419,7 +419,7 @@ router.post('/creation-events', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const {
-      task_id, project_id, sprint_id, job_id,
+      task_id, project_id, workflow_id, job_id,
       source = 'manual', routing = '', confidence = '', scope_size = '',
       assumptions = '', open_questions = '', needs_split = 0,
       expected_artifact = '', success_mode = '', raw_input = '',
@@ -435,10 +435,10 @@ router.post('/creation-events', async (req: Request, res: Response) => {
 
     const result = await db.run(`
       INSERT INTO task_creation_events
-        (${tenant.columnSql}task_id, project_id, sprint_id, job_id, source, routing, confidence, scope_size,
+        (${tenant.columnSql}task_id, project_id, workflow_id, job_id, source, routing, confidence, scope_size,
          assumptions, open_questions, needs_split, expected_artifact, success_mode, raw_input)
       VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, ...tenant.values, task_id, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, source, routing, confidence, scope_size, assumptionsStr, openQStr, needs_split ? 1 : 0, expected_artifact, success_mode, raw_input);
+    `, ...tenant.values, task_id, project_id ?? task.project_id ?? null, workflow_id ?? task.workflow_id ?? null, job_id ?? task.agent_id ?? null, source, routing, confidence, scope_size, assumptionsStr, openQStr, needs_split ? 1 : 0, expected_artifact, success_mode, raw_input);
 
     const created = await db.get(`SELECT * FROM task_creation_events WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
     res.status(201).json(created);
@@ -459,7 +459,7 @@ router.put('/creation-events/:task_id', async (req: Request, res: Response) => {
     const existing = await db.get(`SELECT id FROM task_creation_events WHERE task_id = ?`, taskId) as { id: number } | undefined;
 
     const {
-      project_id, sprint_id, job_id,
+      project_id, workflow_id, job_id,
       source, routing, confidence, scope_size,
       assumptions, open_questions, needs_split,
       expected_artifact, success_mode, raw_input,
@@ -473,10 +473,10 @@ router.put('/creation-events/:task_id', async (req: Request, res: Response) => {
       const tenant = await tenantInsertColumns(db, 'task_creation_events', task.tenant_id);
       const result = await db.run(`
         INSERT INTO task_creation_events
-          (${tenant.columnSql}task_id, project_id, sprint_id, job_id, source, routing, confidence, scope_size,
+          (${tenant.columnSql}task_id, project_id, workflow_id, job_id, source, routing, confidence, scope_size,
            assumptions, open_questions, needs_split, expected_artifact, success_mode, raw_input)
         VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, ...tenant.values, taskId, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, source ?? 'manual', routing ?? '', confidence ?? '', scope_size ?? '', assumptionsStr, openQStr, needs_split ? 1 : 0, expected_artifact ?? '', success_mode ?? '', raw_input ?? '');
+      `, ...tenant.values, taskId, project_id ?? task.project_id ?? null, workflow_id ?? task.workflow_id ?? null, job_id ?? task.agent_id ?? null, source ?? 'manual', routing ?? '', confidence ?? '', scope_size ?? '', assumptionsStr, openQStr, needs_split ? 1 : 0, expected_artifact ?? '', success_mode ?? '', raw_input ?? '');
       const created = await db.get(`SELECT * FROM task_creation_events WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
       return res.json(created);
     }
@@ -486,7 +486,7 @@ router.put('/creation-events/:task_id', async (req: Request, res: Response) => {
     const vals: unknown[] = [];
 
     const fields: Record<string, unknown> = {
-      project_id, sprint_id, job_id, source, routing, confidence, scope_size,
+      project_id, workflow_id, job_id, source, routing, confidence, scope_size,
       expected_artifact, success_mode, raw_input,
     };
     for (const [k, v] of Object.entries(fields)) {
@@ -521,7 +521,7 @@ router.put('/creation-events/:task_id', async (req: Request, res: Response) => {
 
 // ── POST /api/v1/telemetry/outcome-metrics ───────────────────────────────────
 // Create outcome metric record for a task.
-// Body: { task_id, project_id?, sprint_id?, job_id?, first_pass_qa?, reopened_count?,
+// Body: { task_id, project_id?, workflow_id?, job_id?, first_pass_qa?, reopened_count?,
 //         rerouted_count?, split_after_creation?, blocked_after_creation?,
 //         clarification_count?, notes_count?, cycle_time_hours?, outcome_quality?,
 //         failure_reasons?, outcome_summary? }
@@ -530,7 +530,7 @@ router.post('/outcome-metrics', async (req: Request, res: Response) => {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const {
-      task_id, project_id, sprint_id, job_id,
+      task_id, project_id, workflow_id, job_id,
       first_pass_qa = 0, reopened_count = 0, rerouted_count = 0,
       split_after_creation = 0, blocked_after_creation = 0,
       clarification_count = 0, notes_count = 0,
@@ -549,12 +549,12 @@ router.post('/outcome-metrics', async (req: Request, res: Response) => {
 
     const result = await db.run(`
       INSERT INTO task_outcome_metrics
-        (${tenant.columnSql}task_id, project_id, sprint_id, job_id, first_pass_qa, reopened_count,
+        (${tenant.columnSql}task_id, project_id, workflow_id, job_id, first_pass_qa, reopened_count,
          rerouted_count, split_after_creation, blocked_after_creation,
          clarification_count, notes_count, cycle_time_hours, outcome_quality,
          failure_reasons, outcome_summary)
       VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, ...tenant.values, task_id, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, first_pass_qa ? 1 : 0, reopened_count, rerouted_count, split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0, clarification_count, notes_count, cycle_time_hours, outcome_quality, failureReasonsStr, outcome_summary);
+    `, ...tenant.values, task_id, project_id ?? task.project_id ?? null, workflow_id ?? task.workflow_id ?? null, job_id ?? task.agent_id ?? null, first_pass_qa ? 1 : 0, reopened_count, rerouted_count, split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0, clarification_count, notes_count, cycle_time_hours, outcome_quality, failureReasonsStr, outcome_summary);
 
     const created = await db.get(`SELECT * FROM task_outcome_metrics WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
     res.status(201).json({
@@ -580,7 +580,7 @@ router.put('/outcome-metrics/:task_id', async (req: Request, res: Response) => {
     if (!existing) {
       // Create it
       const {
-        project_id, sprint_id, job_id,
+        project_id, workflow_id, job_id,
         first_pass_qa = 0, reopened_count = 0, rerouted_count = 0,
         split_after_creation = 0, blocked_after_creation = 0,
         clarification_count = 0, notes_count = 0,
@@ -593,12 +593,12 @@ router.put('/outcome-metrics/:task_id', async (req: Request, res: Response) => {
 
       const result = await db.run(`
         INSERT INTO task_outcome_metrics
-          (${tenant.columnSql}task_id, project_id, sprint_id, job_id, first_pass_qa, reopened_count,
+          (${tenant.columnSql}task_id, project_id, workflow_id, job_id, first_pass_qa, reopened_count,
            rerouted_count, split_after_creation, blocked_after_creation,
            clarification_count, notes_count, cycle_time_hours, outcome_quality,
            failure_reasons, outcome_summary)
         VALUES (${tenant.valueSql}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, ...tenant.values, taskId, project_id ?? task.project_id ?? null, sprint_id ?? task.sprint_id ?? null, job_id ?? task.agent_id ?? null, first_pass_qa ? 1 : 0, reopened_count, rerouted_count, split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0, clarification_count, notes_count, cycle_time_hours, outcome_quality, failureReasonsStr, outcome_summary);
+      `, ...tenant.values, taskId, project_id ?? task.project_id ?? null, workflow_id ?? task.workflow_id ?? null, job_id ?? task.agent_id ?? null, first_pass_qa ? 1 : 0, reopened_count, rerouted_count, split_after_creation ? 1 : 0, blocked_after_creation ? 1 : 0, clarification_count, notes_count, cycle_time_hours, outcome_quality, failureReasonsStr, outcome_summary);
       const created = await db.get(`SELECT * FROM task_outcome_metrics WHERE id = ?`, result.lastInsertId) as Record<string, unknown>;
       return res.json({
         ...created,
@@ -613,7 +613,7 @@ router.put('/outcome-metrics/:task_id', async (req: Request, res: Response) => {
 
     const numFields = ['reopened_count','rerouted_count','clarification_count','notes_count'];
     const boolFields = ['first_pass_qa','split_after_creation','blocked_after_creation'];
-    const strFields = ['project_id','sprint_id','job_id','cycle_time_hours','outcome_quality','outcome_summary'];
+    const strFields = ['project_id','workflow_id','job_id','cycle_time_hours','outcome_quality','outcome_summary'];
 
     for (const f of numFields) {
       if (req.body[f] !== undefined) { updates.push(`${f} = ?`); vals.push(Number(req.body[f])); }
@@ -677,15 +677,15 @@ function getDefaultSchemaConfig() {
 
 // ── GET /api/v1/telemetry/recommendations ────────────────────────────────────
 // Generate recommendations based on telemetry patterns.
-// Query params: project_id, sprint_id, job_id, from, to
+// Query params: project_id, workflow_id, job_id, from, to
 router.get('/recommendations', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { project_id, sprint_id, job_id, from, to } = req.query as Record<string, string | undefined>;
+    const { project_id, workflow_id, job_id, from, to } = req.query as Record<string, string | undefined>;
 
     const filters: Record<string, unknown> = {tenant_id:res.locals.legacyTelemetryTenantId};
     if (project_id) filters.project_id = Number(project_id);
-    if (sprint_id)  filters.sprint_id  = Number(sprint_id);
+    if (workflow_id)  filters.workflow_id  = Number(workflow_id);
     if (job_id)     filters.job_id     = Number(job_id);
     if (from)       filters.from       = from;
     if (to)         filters.to         = to;
@@ -842,11 +842,11 @@ router.get('/pipeline-health', async (req: Request, res: Response) => {
 router.get('/bottlenecks', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { project_id, sprint_id, task_type, story_points } = req.query as Record<string, string | undefined>;
+    const { project_id, workflow_id, task_type, story_points } = req.query as Record<string, string | undefined>;
     const conds: string[] = ['t.tenant_id = ?'];
     const params: unknown[] = [res.locals.legacyTelemetryTenantId];
     if (project_id)   { conds.push('t.project_id = ?');  params.push(Number(project_id)); }
-    if (sprint_id)    { conds.push('t.sprint_id = ?');   params.push(Number(sprint_id)); }
+    if (workflow_id)    { conds.push('t.workflow_id = ?');   params.push(Number(workflow_id)); }
     if (task_type)    { conds.push('t.task_type = ?');   params.push(task_type); }
     if (story_points) { conds.push('t.story_points = ?');params.push(Number(story_points)); }
     const w = `WHERE ${conds.join(' AND ')}`;
@@ -910,12 +910,12 @@ router.get('/bottlenecks', async (req: Request, res: Response) => {
 router.get('/failures', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { project_id, sprint_id, agent_id, job_id, outcome, from, to } = req.query as Record<string, string | undefined>;
+    const { project_id, workflow_id, agent_id, job_id, outcome, from, to } = req.query as Record<string, string | undefined>;
     const startDate = from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const endDate = to ?? new Date().toISOString();
     const c: string[] = ['t.tenant_id = ?', 't.dispatched_at >= ?', 't.dispatched_at <= ?']; const p: unknown[] = [res.locals.legacyTelemetryTenantId, startDate, endDate];
     if (project_id)  { c.push('t.project_id = ?');  p.push(Number(project_id)); }
-    if (sprint_id)   { c.push('t.sprint_id = ?');   p.push(Number(sprint_id)); }
+    if (workflow_id)   { c.push('t.workflow_id = ?');   p.push(Number(workflow_id)); }
     if (agent_id)    { c.push('t.agent_id = ?');    p.push(Number(agent_id)); }
     if (job_id)      { c.push('t.agent_id = ?');     p.push(Number(job_id)); }
     if (outcome) {
@@ -1072,50 +1072,50 @@ router.put('/integrity-events/:id/resolve', async (req: Request, res: Response) 
 router.get('/routing', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const { project_id, sprint_id, task_type, from, to } = req.query as Record<string, string | undefined>;
+    const { project_id, workflow_id, task_type, from, to } = req.query as Record<string, string | undefined>;
     const startDate = from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const endDate = to ?? new Date().toISOString();
     const c: string[] = ['t.tenant_id = ?', 't.dispatched_at >= ?', 't.dispatched_at <= ?']; const p: unknown[] = [res.locals.legacyTelemetryTenantId, startDate, endDate];
     if (project_id) { c.push('t.project_id = ?'); p.push(Number(project_id)); }
-    if (sprint_id)  { c.push('t.sprint_id = ?');  p.push(Number(sprint_id)); }
+    if (workflow_id)  { c.push('t.workflow_id = ?');  p.push(Number(workflow_id)); }
     if (task_type)  { c.push('t.task_type = ?');  p.push(task_type); }
     const w = `WHERE ${c.join(' AND ')} AND t.routing_reason IS NOT NULL`;
 
     const routingGroups = await db.all(`SELECT t.routing_reason, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as success, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, SUM(CASE WHEN t.status IN ('stalled','blocked') THEN 1 ELSE 0 END) as stalled, round((SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as success_pct, round((SUM(CASE WHEN t.status='failed' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as fail_pct FROM tasks t ${w} GROUP BY t.routing_reason ORDER BY dispatched DESC LIMIT 50`, ...p);
     const byAgent3 = await db.all(`SELECT t.agent_id, a.name as agent_name, COUNT(*) as dispatched, SUM(CASE WHEN t.status='done' THEN 1 ELSE 0 END) as done, SUM(CASE WHEN t.status='failed' THEN 1 ELSE 0 END) as failed, round((SUM(CASE WHEN t.status='done' THEN 1.0 ELSE 0 END)/COUNT(*)*100)::numeric, 1) as success_pct FROM tasks t LEFT JOIN agents a ON a.id=t.agent_id AND a.tenant_id=t.tenant_id WHERE ${c.join(' AND ')} GROUP BY t.agent_id, a.name ORDER BY dispatched DESC LIMIT 20`, ...p);
 
-    const sprintRuleFilters: string[] = ['trr.tenant_id = ?'];
-    const sprintRuleParams: unknown[] = [res.locals.legacyTelemetryTenantId];
-    if (sprint_id) {
-      sprintRuleFilters.push('trr.sprint_id = ?');
-      sprintRuleParams.push(Number(sprint_id));
+    const workflowRuleFilters: string[] = ['trr.tenant_id = ?'];
+    const workflowRuleParams: unknown[] = [res.locals.legacyTelemetryTenantId];
+    if (workflow_id) {
+      workflowRuleFilters.push('trr.workflow_id = ?');
+      workflowRuleParams.push(Number(workflow_id));
     } else if (project_id) {
-      sprintRuleFilters.push('s.project_id = ?');
-      sprintRuleParams.push(Number(project_id));
+      workflowRuleFilters.push('s.project_id = ?');
+      workflowRuleParams.push(Number(project_id));
     }
 
-    const sprintRules = await db.all(`
+    const workflowRules = await db.all(`
       SELECT
         trr.id,
         s.project_id,
         p.name AS project_name,
-        trr.sprint_id,
-        s.name AS sprint_name,
+        trr.workflow_id,
+        s.name AS workflow_name,
         trr.task_type,
         trr.status AS route_from_status,
         trr.agent_id,
         a.name AS agent_name,
         trr.priority,
-        'sprint' AS scope_type
-      FROM sprint_task_routing_rules trr
-      LEFT JOIN sprints s ON s.id = trr.sprint_id AND s.tenant_id=trr.tenant_id
+        'workflow' AS scope_type
+      FROM workflow_task_routing_rules trr
+      LEFT JOIN workflows s ON s.id = trr.workflow_id AND s.tenant_id=trr.tenant_id
       LEFT JOIN projects p ON p.id = s.project_id AND p.tenant_id=s.tenant_id
       LEFT JOIN agents a ON a.id = trr.agent_id AND a.tenant_id=trr.tenant_id
-      ${sprintRuleFilters.length > 0 ? `WHERE ${sprintRuleFilters.join(' AND ')}` : ''}
-      ORDER BY COALESCE(s.project_id, -1), trr.sprint_id, trr.task_type, trr.priority DESC
-    `, ...sprintRuleParams);
+      ${workflowRuleFilters.length > 0 ? `WHERE ${workflowRuleFilters.join(' AND ')}` : ''}
+      ORDER BY COALESCE(s.project_id, -1), trr.workflow_id, trr.task_type, trr.priority DESC
+    `, ...workflowRuleParams);
 
-    const rules = sprintRules;
+    const rules = workflowRules;
 
     res.json({ period: { from: startDate, to: endDate }, routing_reason_summary: routingGroups, by_agent: byAgent3, routing_rules: rules });
   } catch (err) { res.status(500).json({ error: String(err) }); }

@@ -51,25 +51,25 @@ async function seedWorkflowCatalog(): Promise<void> {
 
   for (const [key, name] of [['generic', 'Generic'], ['dev', 'Dev']]) {
     await ensureRow(
-      `SELECT id FROM sprint_types WHERE tenant_id = ? AND key = ?`, [DEFAULT_TENANT_ID, key],
-      `INSERT INTO sprint_types (tenant_id, key, name, description, is_system) VALUES (?, ?, ?, '', 1)`,
+      `SELECT id FROM workflow_types WHERE tenant_id = ? AND key = ?`, [DEFAULT_TENANT_ID, key],
+      `INSERT INTO workflow_types (tenant_id, key, name, description, is_system) VALUES (?, ?, ?, '', 1)`,
       [DEFAULT_TENANT_ID, key, name],
     );
   }
 
   for (const taskType of ['adhoc', 'backend', 'frontend', 'fullstack', 'qa', 'other']) {
     await ensureRow(
-      `SELECT id FROM sprint_type_task_types WHERE tenant_id = ? AND sprint_type_key = 'generic' AND task_type = ?`,
+      `SELECT id FROM workflow_type_task_types WHERE tenant_id = ? AND workflow_type_key = 'generic' AND task_type = ?`,
       [DEFAULT_TENANT_ID, taskType],
-      `INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system) VALUES (?, 'generic', ?, 1)`,
+      `INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system) VALUES (?, 'generic', ?, 1)`,
       [DEFAULT_TENANT_ID, taskType],
     );
   }
 
   await ensureRow(
-    `SELECT id FROM task_field_schemas WHERE tenant_id = ? AND sprint_type_key = 'generic' AND task_type IS NULL`,
+    `SELECT id FROM task_field_schemas WHERE tenant_id = ? AND workflow_type_key = 'generic' AND task_type IS NULL`,
     [DEFAULT_TENANT_ID],
-    `INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json, is_system) VALUES (?, 'generic', NULL, ?, 1)`,
+    `INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json, is_system) VALUES (?, 'generic', NULL, ?, 1)`,
     [DEFAULT_TENANT_ID, JSON.stringify({
       fields: [{ key: 'success_criteria', label: 'Success Criteria', type: 'textarea', required: false }],
     })],
@@ -84,16 +84,16 @@ async function seedWorkflowCatalog(): Promise<void> {
       JSON.stringify(['todo', 'ready', 'in_progress', 'review']), JSON.stringify(['done'])],
     ['dev', 'defect_of', 'Defect of', 'quality', 0, 'informational', '[]', '[]'],
   ];
-  for (const [sprintTypeKey, key, label, category, affects, semantics, active, resolved] of relationshipTypes) {
+  for (const [workflowTypeKey, key, label, category, affects, semantics, active, resolved] of relationshipTypes) {
     await ensureRow(
-      `SELECT id FROM sprint_type_relationship_types WHERE tenant_id = ? AND sprint_type_key = ? AND key = ?`,
-      [DEFAULT_TENANT_ID, sprintTypeKey, key],
-      `INSERT INTO sprint_type_relationship_types (
-         tenant_id, sprint_type_key, key, label, inverse_label, category,
+      `SELECT id FROM workflow_type_relationship_types WHERE tenant_id = ? AND workflow_type_key = ? AND key = ?`,
+      [DEFAULT_TENANT_ID, workflowTypeKey, key],
+      `INSERT INTO workflow_type_relationship_types (
+         tenant_id, workflow_type_key, key, label, inverse_label, category,
          affects_dispatch_eligibility, direction_semantics, active_statuses_json, resolved_statuses_json,
          is_system, metadata_json
        ) VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, 1, '{}')`,
-      [DEFAULT_TENANT_ID, sprintTypeKey, key, label, category, affects, semantics, active, resolved],
+      [DEFAULT_TENANT_ID, workflowTypeKey, key, label, category, affects, semantics, active, resolved],
     );
   }
 }
@@ -103,13 +103,13 @@ async function seedFixture(): Promise<void> {
   await seedWorkflowCatalog();
 
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (86, 1, 'Agent HQ', '', '')`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (42, 1, 86, 'Backend Domain Refactor', '', 'generic', 'active')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (42, 1, 86, 'Backend Domain Refactor', '', 'generic', 'active')`);
   await db.run(`
     INSERT INTO agents (id, tenant_id, project_id, name, role, session_key, workspace_path, status, preferred_provider)
     VALUES (7, 1, 86, 'Cinder', 'Backend Engineer', 'agent:cinder:test', '/tmp/cinder', 'idle', 'openai-codex')
   `);
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, sprint_id, agent_id, task_type, custom_fields_json)
+    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, workflow_id, agent_id, task_type, custom_fields_json)
     VALUES
       (101, 1, 'Existing blocker', '', 'todo', 'medium', 86, 42, 7, 'backend', '{}'),
       (102, 1, 'Editable task', '', 'todo', 'medium', 86, 42, 7, 'backend', '{}'),
@@ -147,7 +147,7 @@ describe('tasks route write-model handoff', () => {
         title: 'Thin route task',
         description: 'Created through tasks route',
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         agent_id: 7,
         task_type: 'backend',
         blockers: [101, 999],
@@ -160,7 +160,7 @@ describe('tasks route write-model handoff', () => {
     expect(body).toMatchObject({
       title: 'Thin route task',
       project_id: 86,
-      sprint_id: 42,
+      workflow_id: 42,
       agent_id: null,
       assigned_agent_id: 7,
       task_type: 'backend',
@@ -187,7 +187,7 @@ describe('tasks route write-model handoff', () => {
 
     expect(res.status).toBe(400);
     await expect(res.json()).resolves.toMatchObject({
-      error: 'sprint_id is required',
+      error: 'workflow_id is required',
     });
     const created = await getDb().get(`SELECT id FROM tasks WHERE title = 'Workflowless task'`);
     expect(created).toBeUndefined();
@@ -201,7 +201,7 @@ describe('tasks route write-model handoff', () => {
         title: 'Task with related work',
         description: 'Created with relationship selections from the new task modal',
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         task_type: 'backend',
         status: 'todo',
         relationships: [
@@ -215,7 +215,7 @@ describe('tasks route write-model handoff', () => {
     expect(body).toMatchObject({
       title: 'Task with related work',
       project_id: 86,
-      sprint_id: 42,
+      workflow_id: 42,
     });
     const relationships = Array.isArray(body.relationships) ? body.relationships as Array<Record<string, unknown>> : [];
     expect(relationships).toEqual([
@@ -248,7 +248,7 @@ describe('tasks route write-model handoff', () => {
         title: 'Invalid related task create',
         description: 'Should not persist without relationship validity',
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         task_type: 'backend',
         status: 'todo',
         relationships: [
@@ -273,7 +273,7 @@ describe('tasks route write-model handoff', () => {
         title: 'Todo routeable task',
         description: 'Created through tasks route',
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         task_type: 'backend',
         status: 'todo',
         changed_by: 'cinder-backend',
@@ -292,7 +292,7 @@ describe('tasks route write-model handoff', () => {
         title: 'Ready routeable task',
         description: 'Created through tasks route',
         project_id: 86,
-        sprint_id: 42,
+        workflow_id: 42,
         task_type: 'backend',
         status: 'ready',
         changed_by: 'cinder-backend',
@@ -305,12 +305,12 @@ describe('tasks route write-model handoff', () => {
 
   it('creates tasks with custom workflow-specific task types absent from legacy defaults', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`);
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`);
     await db.run(`
-      INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
+      INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system)
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
     `);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -318,7 +318,7 @@ describe('tasks route write-model handoff', () => {
       body: JSON.stringify({
         title: 'Permit review',
         project_id: 86,
-        sprint_id: 43,
+        workflow_id: 43,
         task_type: 'compliance',
         status: 'todo',
         changed_by: 'cinder-backend',
@@ -328,19 +328,19 @@ describe('tasks route write-model handoff', () => {
     expect(res.status).toBe(201);
     await expect(res.json()).resolves.toMatchObject({
       title: 'Permit review',
-      sprint_id: 43,
+      workflow_id: 43,
       task_type: 'compliance',
     });
   });
 
   it('rejects task creation when task_type is not allowed by the selected workflow type', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`);
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`);
     await db.run(`
-      INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
+      INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system)
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
     `);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks`, {
       method: 'POST',
@@ -348,7 +348,7 @@ describe('tasks route write-model handoff', () => {
       body: JSON.stringify({
         title: 'Frontend work in construction workflow',
         project_id: 86,
-        sprint_id: 43,
+        workflow_id: 43,
         task_type: 'frontend',
         status: 'todo',
         changed_by: 'cinder-backend',
@@ -357,24 +357,24 @@ describe('tasks route write-model handoff', () => {
 
     expect(res.status).toBe(500);
     await expect(res.json()).resolves.toMatchObject({
-      error: expect.stringContaining('task_type "frontend" is not allowed for sprint type "construction"'),
+      error: expect.stringContaining('task_type "frontend" is not allowed for workflow type "construction"'),
     });
   });
 
   it('updates tasks to custom workflow-specific task types absent from legacy defaults', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`);
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name, description) VALUES (1, 'construction', 'Construction', '')`);
     await db.run(`
-      INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
+      INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system)
       VALUES (1, 'construction', 'compliance', 0), (1, 'construction', 'finance', 0)
     `);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (43, 1, 86, 'Construction Workflow', '', 'construction', 'active')`);
 
     const res = await fetch(`${baseUrl}/api/v1/tasks/102`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        sprint_id: 43,
+        workflow_id: 43,
         task_type: 'finance',
         changed_by: 'cinder-backend',
       }),
@@ -383,7 +383,7 @@ describe('tasks route write-model handoff', () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
       id: 102,
-      sprint_id: 43,
+      workflow_id: 43,
       task_type: 'finance',
     });
   });
@@ -393,16 +393,16 @@ describe('tasks route write-model handoff', () => {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        sprint_id: null,
+        workflow_id: null,
         changed_by: 'cinder-backend',
       }),
     });
 
     expect(res.status).toBe(400);
     await expect(res.json()).resolves.toMatchObject({
-      error: 'sprint_id is required and cannot be cleared',
+      error: 'workflow_id is required and cannot be cleared',
     });
-    expect((await getDb().get(`SELECT sprint_id FROM tasks WHERE id = 102`) as { sprint_id: number }).sprint_id).toBe(42);
+    expect((await getDb().get(`SELECT workflow_id FROM tasks WHERE id = 102`) as { workflow_id: number }).workflow_id).toBe(42);
   });
 
   it('updates tasks through the route and replaces blockers without changing the response shape', async () => {
@@ -547,10 +547,10 @@ describe('tasks route write-model handoff', () => {
     const db = getDb();
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Workspace Two', 'workspace-two', 0)`);
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (287, 2, 'Workspace Two Project')`);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status) VALUES (242, 2, 287, 'Workspace Two Workflow', 'generic', 'active')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status) VALUES (242, 2, 287, 'Workspace Two Workflow', 'generic', 'active')`);
     await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key) VALUES (27, 2, 287, 'Workspace Two Agent', 'agent:workspace-two')`);
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, project_id, sprint_id, agent_id, assigned_agent_id, title, status, task_type)
+      INSERT INTO tasks (id, tenant_id, project_id, workflow_id, agent_id, assigned_agent_id, title, status, task_type)
       VALUES
         (201, 2, 287, 242, 27, 27, 'First origin', 'done', 'backend'),
         (202, 2, 287, 242, 27, 27, 'Second origin', 'done', 'backend')
@@ -560,7 +560,7 @@ describe('tasks route write-model handoff', () => {
       title: 'Workspace Two defect',
       status: 'todo',
       project_id: 287,
-      sprint_id: 242,
+      workflow_id: 242,
       agent_id: 27,
       task_type: 'backend',
       origin_task_id: 201,
@@ -636,9 +636,9 @@ describe('tasks route write-model handoff', () => {
 
   it('allows status-only updates while preserving retired custom field values', async () => {
     const db = getDb();
-    await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic' AND task_type IS NULL`);
+    await db.run(`DELETE FROM task_field_schemas WHERE workflow_type_key = 'generic' AND task_type IS NULL`);
     await db.run(`
-      INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
+      INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
       VALUES (1, 'generic', NULL, ?)
     `, JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text', required: true }] }));
     await db.run(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`, JSON.stringify({ target_surface: 'api' }));
@@ -661,9 +661,9 @@ describe('tasks route write-model handoff', () => {
 
   it('tolerates unchanged retired custom fields when editing active custom fields', async () => {
     const db = getDb();
-    await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic' AND task_type IS NULL`);
+    await db.run(`DELETE FROM task_field_schemas WHERE workflow_type_key = 'generic' AND task_type IS NULL`);
     await db.run(`
-      INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
+      INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
       VALUES (1, 'generic', NULL, ?)
     `, JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text', required: true }] }));
     await db.run(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`, JSON.stringify({ target_surface: 'api', active_text: 'old' }));
@@ -684,9 +684,9 @@ describe('tasks route write-model handoff', () => {
 
   it('allows editing workflow default and task-type-specific custom fields together', async () => {
     const db = getDb();
-    await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic'`);
+    await db.run(`DELETE FROM task_field_schemas WHERE workflow_type_key = 'generic'`);
     await db.run(`
-      INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
+      INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
       VALUES
         (1, 'generic', NULL, ?),
         (1, 'generic', 'backend', ?)
@@ -706,11 +706,11 @@ describe('tasks route write-model handoff', () => {
     expect(JSON.parse(stored.custom_fields_json)).toEqual({ active_text: 'default value', target_surface: 'api' });
   });
 
-  it('still rejects edits to custom fields outside the active sprint schema', async () => {
+  it('still rejects edits to custom fields outside the active workflow schema', async () => {
     const db = getDb();
-    await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'generic' AND task_type IS NULL`);
+    await db.run(`DELETE FROM task_field_schemas WHERE workflow_type_key = 'generic' AND task_type IS NULL`);
     await db.run(`
-      INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
+      INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
       VALUES (1, 'generic', NULL, ?)
     `, JSON.stringify({ fields: [{ key: 'active_text', label: 'Active Text', type: 'text' }] }));
     await db.run(`UPDATE tasks SET custom_fields_json = ? WHERE id = 102`, JSON.stringify({ target_surface: 'api', active_text: 'old' }));

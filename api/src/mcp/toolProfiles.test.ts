@@ -61,8 +61,8 @@ describe('MCP tool profiles', () => {
     const mobile = resolveMcpToolProfile('mobile');
     expect(mobile.toolNames).toContain('agent_hq_set_workflow_status');
     expect(mobile.capabilities).toEqual(expect.arrayContaining([
-      'sprints.pause_active_sprint',
-      'sprints.complete_active_sprint',
+      'workflows.pause_active_workflow',
+      'workflows.complete_active_workflow',
     ]));
 
     expect(mobile.toolNames).not.toContain('agent_hq_update_workflow');
@@ -70,7 +70,6 @@ describe('MCP tool profiles', () => {
     expect(mobile.toolNames).not.toContain('agent_hq_delete_workflow');
     expect(mobile.capabilities).not.toContain('workflow_definitions.manage_project_scope');
   });
-
 
   it('gives the mobile profile project agent CRUD but not agent provisioning or policy edits', () => {
     const mobile = resolveMcpToolProfile('mobile');

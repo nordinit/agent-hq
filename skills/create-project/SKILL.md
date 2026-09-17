@@ -44,9 +44,9 @@ This skill should activate for requests like:
 3. **Create the initial workflow / board**
    Unless the user says otherwise, create one active starter workflow so tasks have a home.
    Name it based on the project's first phase, for example:
-   - `Launch Sprint`
-   - `Sprint 1 — Setup`
-   - `Implementation Sprint`
+   - `Launch Workflow`
+   - `Workflow 1 — Setup`
+   - `Implementation Workflow`
 
 4. **Provision the jobs required to operate the project**
    Create only the roles the user asked for or that are clearly necessary.

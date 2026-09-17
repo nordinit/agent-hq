@@ -1,8 +1,8 @@
-import { STARTER_SPRINT_OUTCOME_SEEDS } from '../../lib/starterCatalog';
+import { STARTER_WORKFLOW_OUTCOME_SEEDS } from '../../lib/starterCatalog';
 import { isValidTaskType } from '../../lib/taskTypes';
 import { RUNTIME_FAILED_OUTCOME } from '../../lib/outcomeCatalog';
 import { WORKFLOW_EVENT_ACTION_KINDS } from '../../lib/workflowVocabulary';
-import { listSprintTaskStatuses, listSprintTypeTaskStatuses } from './policy';
+import { listWorkflowTaskStatuses, listWorkflowTypeTaskStatuses } from './policy';
 import { type Db } from "../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
@@ -50,8 +50,8 @@ type MappingRecord = {
   id: number;
   tenant_id?: number | null;
   project_id: number | null;
-  sprint_id?: number | null;
-  sprint_type?: string | null;
+  workflow_id?: number | null;
+  workflow_type?: string | null;
   source: string | null;
   event_name: string;
   task_type: string | null;
@@ -71,7 +71,7 @@ export type WorkflowEventMapping = Omit<MappingRecord, 'status_includes_json' | 
   status_includes: string[];
   status_excludes: string[];
   conflicts_with: number[];
-  scope_kind: 'sprint_type_default' | 'sprint_override';
+  scope_kind: 'workflow_type_default' | 'workflow_override';
   is_inherited: boolean;
   is_override: boolean;
   event_model: 'workflow_event';
@@ -86,8 +86,8 @@ export type WorkflowEventContext = {
   eventName: string;
   tenantId?: number | null;
   projectId: number | null;
-  sprintId?: number | null;
-  sprintType?: string | null;
+  workflowId?: number | null;
+  workflowType?: string | null;
   taskType: string | null;
   currentStatus: string;
 };
@@ -265,7 +265,6 @@ function parseJsonStringList(value: string | null | undefined): string[] {
   }
 }
 
-
 async function migrateAgentStartedWorkflowEventSource(db: Db): Promise<void> {
   const wildcardRows = await db.all(`
     SELECT id
@@ -391,16 +390,16 @@ function normalizeStatusList(value: unknown, fieldName: string): string[] {
   return [...new Set(normalized)];
 }
 
-function parseOptionalSprintId(value: unknown): number | null {
+function parseOptionalWorkflowId(value: unknown): number | null {
   if (value === undefined || value === null || value === '') return null;
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw withStatus('sprint_id must be a positive integer', 400);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw withStatus('workflow_id must be a positive integer', 400);
   return parsed;
 }
 
-function normalizeOptionalSprintType(value: unknown): string | null {
+function normalizeOptionalWorkflowType(value: unknown): string | null {
   if (value === undefined || value === null || value === '') return null;
-  if (typeof value !== 'string') throw withStatus('sprint_type must be a string', 400);
+  if (typeof value !== 'string') throw withStatus('workflow_type must be a string', 400);
   const normalized = value.trim().toLowerCase();
   return normalized.length > 0 ? normalized : null;
 }
@@ -416,19 +415,19 @@ function parseStatusListJson(raw: string | null | undefined): string[] {
 }
 
 async function listKnownStatusKeys(db: Db): Promise<Set<string>> {
-  const keys = new Set((await listSprintTaskStatuses(db)).map((status) => status.name));
+  const keys = new Set((await listWorkflowTaskStatuses(db)).map((status) => status.name));
 
   // both tables may be absent in isolated tests
-  if (await tableExists(db, 'sprint_task_statuses')) {
-    const sprintRows = await db.all(`SELECT DISTINCT status_key FROM sprint_task_statuses`) as Array<{ status_key: string }>;
-    for (const row of sprintRows) {
+  if (await tableExists(db, 'workflow_task_statuses')) {
+    const workflowRows = await db.all(`SELECT DISTINCT status_key FROM workflow_task_statuses`) as Array<{ status_key: string }>;
+    for (const row of workflowRows) {
       if (typeof row.status_key === 'string' && row.status_key.trim()) keys.add(row.status_key);
     }
   }
 
-  if (await tableExists(db, 'sprint_type_task_statuses')) {
-    const sprintTypeRows = await db.all(`SELECT DISTINCT status_key FROM sprint_type_task_statuses`) as Array<{ status_key: string }>;
-    for (const row of sprintTypeRows) {
+  if (await tableExists(db, 'workflow_type_task_statuses')) {
+    const workflowTypeRows = await db.all(`SELECT DISTINCT status_key FROM workflow_type_task_statuses`) as Array<{ status_key: string }>;
+    for (const row of workflowTypeRows) {
       if (typeof row.status_key === 'string' && row.status_key.trim()) keys.add(row.status_key);
     }
   }
@@ -438,24 +437,24 @@ async function listKnownStatusKeys(db: Db): Promise<Set<string>> {
 
 async function listWorkflowContextStatusKeys(
   db: Db,
-  context: { sprintId: number | null; sprintType: string | null; tenantId: number | null },
+  context: { workflowId: number | null; workflowType: string | null; tenantId: number | null },
 ): Promise<Set<string> | null> {
-  if (context.sprintId) {
-    if (context.tenantId != null && await tableHasColumn(db, 'sprints', 'tenant_id')) {
-      const sprint = await db.get(`SELECT id FROM sprints WHERE id = ? AND tenant_id = ? LIMIT 1`, context.sprintId, context.tenantId) as { id: number } | undefined;
-      if (!sprint) return new Set();
+  if (context.workflowId) {
+    if (context.tenantId != null && await tableHasColumn(db, 'workflows', 'tenant_id')) {
+      const workflow = await db.get(`SELECT id FROM workflows WHERE id = ? AND tenant_id = ? LIMIT 1`, context.workflowId, context.tenantId) as { id: number } | undefined;
+      if (!workflow) return new Set();
     }
-    return new Set((await listSprintTaskStatuses(db, context.sprintId)).map((status) => status.name));
+    return new Set((await listWorkflowTaskStatuses(db, context.workflowId)).map((status) => status.name));
   }
-  if (context.sprintType) {
-    return new Set((await listSprintTypeTaskStatuses(db, context.sprintType, { tenantId: context.tenantId })).map((status) => status.name));
+  if (context.workflowType) {
+    return new Set((await listWorkflowTypeTaskStatuses(db, context.workflowType, { tenantId: context.tenantId })).map((status) => status.name));
   }
   return null;
 }
 
 async function listKnownOutcomeKeys(db: Db): Promise<Set<string>> {
   const keys = new Set<string>([RUNTIME_FAILED_OUTCOME]);
-  for (const seed of STARTER_SPRINT_OUTCOME_SEEDS) {
+  for (const seed of STARTER_WORKFLOW_OUTCOME_SEEDS) {
     for (const outcome of seed.outcomes) {
       if ((outcome.enabled ?? 1) === 1 && outcome.behavior !== 'disable') {
         keys.add(outcome.outcome_key);
@@ -463,11 +462,11 @@ async function listKnownOutcomeKeys(db: Db): Promise<Set<string>> {
     }
   }
 
-  // sprint_type_outcomes is not available in every test/runtime path.
-  if (await tableExists(db, 'sprint_type_outcomes')) {
+  // workflow_type_outcomes is not available in every test/runtime path.
+  if (await tableExists(db, 'workflow_type_outcomes')) {
     const rows = await db.all(`
       SELECT DISTINCT outcome_key, enabled, behavior
-      FROM sprint_type_outcomes
+      FROM workflow_type_outcomes
     `) as Array<{ outcome_key: string; enabled: number; behavior: string | null }>;
     for (const row of rows) {
       if (row.enabled === 1 && row.behavior !== 'disable') keys.add(row.outcome_key);
@@ -498,51 +497,51 @@ async function resolveWorkflowEventScope(
   db: Db,
   input: Record<string, unknown>,
   existing?: MappingRecord | null,
-): Promise<{ projectId: number | null; sprintId: number | null; sprintType: string | null; tenantId: number | null }> {
+): Promise<{ projectId: number | null; workflowId: number | null; workflowType: string | null; tenantId: number | null }> {
   const inputProjectId = input.project_id !== undefined ? parseOptionalProjectId(input.project_id) : existing?.project_id ?? null;
-  const inputSprintId = input.sprint_id !== undefined || input.workflow_id !== undefined
-    ? parseOptionalSprintId(input.sprint_id ?? input.workflow_id)
-    : existing?.sprint_id ?? null;
-  const inputSprintType = input.sprint_type !== undefined || input.workflow_type !== undefined
-    ? normalizeOptionalSprintType(input.sprint_type ?? input.workflow_type)
-    : existing?.sprint_type ?? null;
+  const inputWorkflowId = input.workflow_id !== undefined
+    ? parseOptionalWorkflowId(input.workflow_id)
+    : existing?.workflow_id ?? null;
+  const inputWorkflowType = input.workflow_type !== undefined
+    ? normalizeOptionalWorkflowType(input.workflow_type)
+    : existing?.workflow_type ?? null;
   const inputTenantId = input.tenant_id !== undefined
     ? parseOptionalTenantId(input.tenant_id)
     : existing?.tenant_id ?? (await resolveTenantIdForProject(db, inputProjectId));
 
-  if (inputSprintId != null) {
-    const hasTenantId = await tableHasColumn(db, 'sprints', 'tenant_id');
-    const sprint = await db.get(`
-      SELECT id, project_id, sprint_type${hasTenantId ? ', tenant_id' : ''}
-      FROM sprints
+  if (inputWorkflowId != null) {
+    const hasTenantId = await tableHasColumn(db, 'workflows', 'tenant_id');
+    const workflow = await db.get(`
+      SELECT id, project_id, workflow_type${hasTenantId ? ', tenant_id' : ''}
+      FROM workflows
       WHERE id = ?${hasTenantId && inputTenantId != null ? ' AND tenant_id = ?' : ''}
       LIMIT 1
-    `, ...(hasTenantId && inputTenantId != null ? [inputSprintId, inputTenantId] : [inputSprintId])) as {
+    `, ...(hasTenantId && inputTenantId != null ? [inputWorkflowId, inputTenantId] : [inputWorkflowId])) as {
       id: number;
       project_id: number | null;
-      sprint_type: string | null;
+      workflow_type: string | null;
       tenant_id?: number | null;
     } | undefined;
-    if (!sprint) throw withStatus(`Workflow ${inputSprintId} not found`, 404);
-    if (inputProjectId != null && sprint.project_id !== inputProjectId) {
-      throw withStatus(`Workflow ${inputSprintId} belongs to project ${sprint.project_id}, not project ${inputProjectId}`, 400);
+    if (!workflow) throw withStatus(`Workflow ${inputWorkflowId} not found`, 404);
+    if (inputProjectId != null && workflow.project_id !== inputProjectId) {
+      throw withStatus(`Workflow ${inputWorkflowId} belongs to project ${workflow.project_id}, not project ${inputProjectId}`, 400);
     }
-    if (inputSprintType && sprint.sprint_type !== inputSprintType) {
-      throw withStatus(`Workflow ${inputSprintId} uses workflow_type ${sprint.sprint_type}, not ${inputSprintType}`, 400);
+    if (inputWorkflowType && workflow.workflow_type !== inputWorkflowType) {
+      throw withStatus(`Workflow ${inputWorkflowId} uses workflow_type ${workflow.workflow_type}, not ${inputWorkflowType}`, 400);
     }
     return {
-      projectId: sprint.project_id ?? inputProjectId,
-      sprintId: inputSprintId,
-      sprintType: sprint.sprint_type ?? inputSprintType,
-      tenantId: inputTenantId ?? sprint.tenant_id ?? null,
+      projectId: workflow.project_id ?? inputProjectId,
+      workflowId: inputWorkflowId,
+      workflowType: workflow.workflow_type ?? inputWorkflowType,
+      tenantId: inputTenantId ?? workflow.tenant_id ?? null,
     };
   }
 
   await validateProjectExists(db, inputProjectId);
   return {
     projectId: inputProjectId,
-    sprintId: null,
-    sprintType: inputSprintType,
+    workflowId: null,
+    workflowType: inputWorkflowType,
     tenantId: inputTenantId,
   };
 }
@@ -553,17 +552,17 @@ async function ensureMappingVisibleToTenant(db: Db, row: MappingRecord, tenantId
   throw withStatus('Workflow event mapping not found', 404);
 }
 
-function serializeMappingRow(row: MappingRecord, conflictsWith: number[] = [], selectedSprintId: number | null = null): WorkflowEventMapping {
-  const rowSprintId = row.sprint_id == null ? null : Number(row.sprint_id);
-  const scopeKind = rowSprintId == null ? 'sprint_type_default' : 'sprint_override';
+function serializeMappingRow(row: MappingRecord, conflictsWith: number[] = [], selectedWorkflowId: number | null = null): WorkflowEventMapping {
+  const rowWorkflowId = row.workflow_id == null ? null : Number(row.workflow_id);
+  const scopeKind = rowWorkflowId == null ? 'workflow_type_default' : 'workflow_override';
   return {
     ...row,
     status_includes: parseStatusListJson(row.status_includes_json),
     status_excludes: parseStatusListJson(row.status_excludes_json),
     conflicts_with: conflictsWith,
     scope_kind: scopeKind,
-    is_inherited: scopeKind === 'sprint_type_default',
-    is_override: selectedSprintId != null && rowSprintId === selectedSprintId,
+    is_inherited: scopeKind === 'workflow_type_default',
+    is_override: selectedWorkflowId != null && rowWorkflowId === selectedWorkflowId,
     ...describeWorkflowEventSource(row.source),
   };
 }
@@ -609,8 +608,8 @@ function buildConflictMap(rows: MappingRecord[]): Map<number, number[]> {
       if (!right.enabled) continue;
       if (left.priority !== right.priority) continue;
       if ((left.project_id ?? null) !== (right.project_id ?? null)) continue;
-      if ((left.sprint_id ?? null) !== (right.sprint_id ?? null)) continue;
-      if ((left.sprint_type ?? null) !== (right.sprint_type ?? null)) continue;
+      if ((left.workflow_id ?? null) !== (right.workflow_id ?? null)) continue;
+      if ((left.workflow_type ?? null) !== (right.workflow_type ?? null)) continue;
       if ((left.source ?? null) !== (right.source ?? null)) continue;
       if (left.event_name !== right.event_name) continue;
       if ((left.task_type ?? null) !== (right.task_type ?? null)) continue;
@@ -631,8 +630,8 @@ async function ensureNoConflicts(db: Db, candidate: {
   id?: number;
   tenant_id?: number | null;
   project_id: number | null;
-  sprint_id?: number | null;
-  sprint_type?: string | null;
+  workflow_id?: number | null;
+  workflow_type?: string | null;
   source: string | null;
   event_name: string;
   task_type: string | null;
@@ -643,22 +642,22 @@ async function ensureNoConflicts(db: Db, candidate: {
 }): Promise<void> {
   if (!candidate.enabled) return;
   const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
-  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'sprint_id')
-    && await tableHasColumn(db, 'external_event_mappings', 'sprint_type');
+  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'workflow_id')
+    && await tableHasColumn(db, 'external_event_mappings', 'workflow_type');
   const rows = await db.all(`
     SELECT *
     FROM external_event_mappings
     WHERE event_name = ?
       ${hasTenantId ? 'AND ((tenant_id IS NULL AND ?::text IS NULL) OR tenant_id = ?)' : ''}
       AND ((project_id IS NULL AND ?::text IS NULL) OR project_id = ?)
-      ${hasWorkflowScope ? 'AND ((sprint_id IS NULL AND ?::text IS NULL) OR sprint_id = ?)' : ''}
-      ${hasWorkflowScope ? 'AND ((sprint_type IS NULL AND ?::text IS NULL) OR sprint_type = ?)' : ''}
+      ${hasWorkflowScope ? 'AND ((workflow_id IS NULL AND ?::text IS NULL) OR workflow_id = ?)' : ''}
+      ${hasWorkflowScope ? 'AND ((workflow_type IS NULL AND ?::text IS NULL) OR workflow_type = ?)' : ''}
       AND ((source IS NULL AND ?::text IS NULL) OR source = ?)
       AND ((task_type IS NULL AND ?::text IS NULL) OR task_type = ?)
       AND priority = ?
       AND enabled = 1
       ${candidate.id ? 'AND id != ?' : ''}
-  `, candidate.event_name, ...(hasTenantId ? [candidate.tenant_id ?? null, candidate.tenant_id ?? null] : []), candidate.project_id, candidate.project_id, ...(hasWorkflowScope ? [candidate.sprint_id ?? null, candidate.sprint_id ?? null] : []), ...(hasWorkflowScope ? [candidate.sprint_type ?? null, candidate.sprint_type ?? null] : []), candidate.source, candidate.source, candidate.task_type, candidate.task_type, candidate.priority, ...(candidate.id ? [candidate.id] : [])) as MappingRecord[];
+  `, candidate.event_name, ...(hasTenantId ? [candidate.tenant_id ?? null, candidate.tenant_id ?? null] : []), candidate.project_id, candidate.project_id, ...(hasWorkflowScope ? [candidate.workflow_id ?? null, candidate.workflow_id ?? null] : []), ...(hasWorkflowScope ? [candidate.workflow_type ?? null, candidate.workflow_type ?? null] : []), candidate.source, candidate.source, candidate.task_type, candidate.task_type, candidate.priority, ...(candidate.id ? [candidate.id] : [])) as MappingRecord[];
 
   for (const row of rows) {
     if (statusesOverlap(
@@ -684,7 +683,7 @@ function normalizeActionKind(value: unknown): 'ignore' | 'outcome' | 'status' {
 }
 
 async function normalizePayload(db: Db, input: Record<string, unknown>, existing?: MappingRecord | null) {
-  const { projectId, sprintId, sprintType, tenantId } = await resolveWorkflowEventScope(db, input, existing);
+  const { projectId, workflowId, workflowType, tenantId } = await resolveWorkflowEventScope(db, input, existing);
   await validateTenantExists(db, tenantId);
 
   const source = input.source !== undefined
@@ -709,7 +708,7 @@ async function normalizePayload(db: Db, input: Record<string, unknown>, existing
     ? normalizeStatusList(input.status_excludes, 'status_excludes')
     : parseStatusListJson(existing?.status_excludes_json);
 
-  const contextualStatusKeys = await listWorkflowContextStatusKeys(db, { sprintId, sprintType, tenantId });
+  const contextualStatusKeys = await listWorkflowContextStatusKeys(db, { workflowId, workflowType, tenantId });
   const validStatusKeys = contextualStatusKeys ?? (await listKnownStatusKeys(db));
   const invalidGuardStatus = [...statusIncludes, ...statusExcludes].find((status) => !validStatusKeys.has(status));
   if (invalidGuardStatus) {
@@ -762,8 +761,8 @@ async function normalizePayload(db: Db, input: Record<string, unknown>, existing
   return {
     tenant_id: tenantId,
     project_id: projectId,
-    sprint_id: sprintId,
-    sprint_type: sprintType,
+    workflow_id: workflowId,
+    workflow_type: workflowType,
     source,
     event_name: eventName,
     task_type: taskType,
@@ -997,13 +996,13 @@ export async function removeDevEnvironmentLeaseManagerWorkflowEventDefaultsForNo
   return { deleted, tenants: tenants.length };
 }
 
-export async function listWorkflowEventMappings(db: Db, input: { tenant_id?: unknown; project_id?: unknown; sprint_id?: unknown; workflow_id?: unknown; sprint_type?: unknown; workflow_type?: unknown; source?: unknown; event_name?: unknown; task_type?: unknown }) {
+export async function listWorkflowEventMappings(db: Db, input: { tenant_id?: unknown; project_id?: unknown; workflow_id?: unknown;  workflow_type?: unknown;  source?: unknown; event_name?: unknown; task_type?: unknown }) {
   const tenantId = parseOptionalTenantId(input.tenant_id);
   const projectId = parseOptionalProjectId(input.project_id);
-  const sprintId = parseOptionalSprintId(input.sprint_id ?? input.workflow_id);
-  const sprintType = normalizeOptionalSprintType(input.sprint_type ?? input.workflow_type);
-  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'sprint_id')
-    && await tableHasColumn(db, 'external_event_mappings', 'sprint_type');
+  const workflowId = parseOptionalWorkflowId(input.workflow_id);
+  const workflowType = normalizeOptionalWorkflowType(input.workflow_type);
+  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'workflow_id')
+    && await tableHasColumn(db, 'external_event_mappings', 'workflow_type');
   const source = normalizeOptionalString(input.source);
   const eventName = normalizeOptionalString(input.event_name);
   const taskType = normalizeOptionalString(input.task_type);
@@ -1021,15 +1020,15 @@ export async function listWorkflowEventMappings(db: Db, input: { tenant_id?: unk
     clauses.push('(project_id = ? OR project_id IS NULL)');
     params.push(projectId);
   }
-  if (hasWorkflowScope && sprintType) {
-    clauses.push('(sprint_type = ? OR sprint_type IS NULL)');
-    params.push(sprintType);
+  if (hasWorkflowScope && workflowType) {
+    clauses.push('(workflow_type = ? OR workflow_type IS NULL)');
+    params.push(workflowType);
   }
-  if (hasWorkflowScope && sprintId) {
-    clauses.push('(sprint_id = ? OR sprint_id IS NULL)');
-    params.push(sprintId);
-  } else if (hasWorkflowScope && sprintType) {
-    clauses.push('sprint_id IS NULL');
+  if (hasWorkflowScope && workflowId) {
+    clauses.push('(workflow_id = ? OR workflow_id IS NULL)');
+    params.push(workflowId);
+  } else if (hasWorkflowScope && workflowType) {
+    clauses.push('workflow_id IS NULL');
   }
   if (source) {
     clauses.push('(source = ? OR source IS NULL)');
@@ -1047,18 +1046,18 @@ export async function listWorkflowEventMappings(db: Db, input: { tenant_id?: unk
   let query = 'SELECT * FROM external_event_mappings';
   if (clauses.length > 0) query += ` WHERE ${clauses.join(' AND ')}`;
   if (projectId) {
-    query += ` ORDER BY ${hasWorkflowScope ? 'CASE WHEN sprint_id = ? THEN 0 WHEN sprint_id IS NULL THEN 1 ELSE 2 END, ' : ''}CASE WHEN project_id = ? THEN 0 WHEN project_id IS NULL THEN 1 ELSE 2 END, event_name ASC, priority DESC, id ASC`;
-    if (hasWorkflowScope) params.push(sprintId);
+    query += ` ORDER BY ${hasWorkflowScope ? 'CASE WHEN workflow_id = ? THEN 0 WHEN workflow_id IS NULL THEN 1 ELSE 2 END, ' : ''}CASE WHEN project_id = ? THEN 0 WHEN project_id IS NULL THEN 1 ELSE 2 END, event_name ASC, priority DESC, id ASC`;
+    if (hasWorkflowScope) params.push(workflowId);
     params.push(projectId);
   } else {
-    query += ` ORDER BY ${hasWorkflowScope ? 'CASE WHEN sprint_id = ? THEN 0 WHEN sprint_id IS NULL THEN 1 ELSE 2 END, ' : ''}event_name ASC, priority DESC, id ASC`;
-    if (hasWorkflowScope) params.push(sprintId);
+    query += ` ORDER BY ${hasWorkflowScope ? 'CASE WHEN workflow_id = ? THEN 0 WHEN workflow_id IS NULL THEN 1 ELSE 2 END, ' : ''}event_name ASC, priority DESC, id ASC`;
+    if (hasWorkflowScope) params.push(workflowId);
   }
 
   const rows = await db.all(query, ...params) as MappingRecord[];
   const conflictMap = buildConflictMap(rows);
   return {
-    mappings: rows.map((row) => serializeMappingRow(row, conflictMap.get(row.id) ?? [], sprintId)),
+    mappings: rows.map((row) => serializeMappingRow(row, conflictMap.get(row.id) ?? [], workflowId)),
   };
 }
 
@@ -1090,11 +1089,11 @@ export async function createWorkflowEventMapping(db: Db, input: Record<string, u
     enabled: normalized.enabled ? 1 : 0,
     priority: normalized.priority,
   };
-  if (await tableHasColumn(db, 'external_event_mappings', 'sprint_id')) {
-    insertValues.sprint_id = normalized.sprint_id;
+  if (await tableHasColumn(db, 'external_event_mappings', 'workflow_id')) {
+    insertValues.workflow_id = normalized.workflow_id;
   }
-  if (await tableHasColumn(db, 'external_event_mappings', 'sprint_type')) {
-    insertValues.sprint_type = normalized.sprint_type;
+  if (await tableHasColumn(db, 'external_event_mappings', 'workflow_type')) {
+    insertValues.workflow_type = normalized.workflow_type;
   }
   if (await tableHasColumn(db, 'external_event_mappings', 'tenant_id')) {
     insertValues.tenant_id = normalized.tenant_id;
@@ -1120,14 +1119,14 @@ export async function updateWorkflowEventMapping(db: Db, input: Record<string, u
   await ensureNoConflicts(db, { id, ...normalized });
 
   const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
-  const hasSprintId = await tableHasColumn(db, 'external_event_mappings', 'sprint_id');
-  const hasSprintType = await tableHasColumn(db, 'external_event_mappings', 'sprint_type');
+  const hasWorkflowId = await tableHasColumn(db, 'external_event_mappings', 'workflow_id');
+  const hasWorkflowType = await tableHasColumn(db, 'external_event_mappings', 'workflow_type');
   await db.run(`
     UPDATE external_event_mappings
     SET ${hasTenantId ? 'tenant_id = ?,' : ''}
         project_id = ?,
-        ${hasSprintId ? 'sprint_id = ?,' : ''}
-        ${hasSprintType ? 'sprint_type = ?,' : ''}
+        ${hasWorkflowId ? 'workflow_id = ?,' : ''}
+        ${hasWorkflowType ? 'workflow_type = ?,' : ''}
         source = ?,
         event_name = ?,
         task_type = ?,
@@ -1141,7 +1140,7 @@ export async function updateWorkflowEventMapping(db: Db, input: Record<string, u
         priority = ?,
         updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
-  `, ...(hasTenantId ? [normalized.tenant_id] : []), normalized.project_id, ...(hasSprintId ? [normalized.sprint_id] : []), ...(hasSprintType ? [normalized.sprint_type] : []), normalized.source, normalized.event_name, normalized.task_type, JSON.stringify(normalized.status_includes), JSON.stringify(normalized.status_excludes), normalized.action_kind, normalized.action_target, normalized.apply_review_evidence ? 1 : 0, normalized.apply_failure_detail ? 1 : 0, normalized.enabled ? 1 : 0, normalized.priority, id);
+  `, ...(hasTenantId ? [normalized.tenant_id] : []), normalized.project_id, ...(hasWorkflowId ? [normalized.workflow_id] : []), ...(hasWorkflowType ? [normalized.workflow_type] : []), normalized.source, normalized.event_name, normalized.task_type, JSON.stringify(normalized.status_includes), JSON.stringify(normalized.status_excludes), normalized.action_kind, normalized.action_target, normalized.apply_review_evidence ? 1 : 0, normalized.apply_failure_detail ? 1 : 0, normalized.enabled ? 1 : 0, normalized.priority, id);
 
   const row = await db.get('SELECT * FROM external_event_mappings WHERE id = ?', id) as MappingRecord;
   return serializeMappingRow(row);
@@ -1159,8 +1158,8 @@ export async function deleteWorkflowEventMapping(db: Db, input: { id: unknown; t
 export async function resolveWorkflowEventMapping(db: Db, context: ExternalEventContext): Promise<ExternalEventMapping | null> {
   const tenantId = context.tenantId ?? (await resolveTenantIdForProject(db, context.projectId));
   const hasTenantId = await tableHasColumn(db, 'external_event_mappings', 'tenant_id');
-  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'sprint_id')
-    && await tableHasColumn(db, 'external_event_mappings', 'sprint_type');
+  const hasWorkflowScope = await tableHasColumn(db, 'external_event_mappings', 'workflow_id')
+    && await tableHasColumn(db, 'external_event_mappings', 'workflow_type');
   const rows = await db.all(`
     SELECT em.*
     FROM external_event_mappings em
@@ -1169,21 +1168,21 @@ export async function resolveWorkflowEventMapping(db: Db, context: ExternalEvent
       ${hasTenantId && tenantId != null ? 'AND em.tenant_id = ?' : ''}
       AND (em.source = ? OR em.source IS NULL)
       AND (em.project_id = ? OR em.project_id IS NULL)
-      ${hasWorkflowScope && context.sprintType ? 'AND (em.sprint_type = ? OR em.sprint_type IS NULL)' : ''}
-      ${hasWorkflowScope && context.sprintId != null ? 'AND (em.sprint_id = ? OR em.sprint_id IS NULL)' : hasWorkflowScope && context.sprintType ? 'AND em.sprint_id IS NULL' : ''}
+      ${hasWorkflowScope && context.workflowType ? 'AND (em.workflow_type = ? OR em.workflow_type IS NULL)' : ''}
+      ${hasWorkflowScope && context.workflowId != null ? 'AND (em.workflow_id = ? OR em.workflow_id IS NULL)' : hasWorkflowScope && context.workflowType ? 'AND em.workflow_id IS NULL' : ''}
       AND (em.task_type = ? OR em.task_type IS NULL)
     ORDER BY
       CASE WHEN em.source = ? THEN 1 ELSE 0 END DESC,
-      ${hasWorkflowScope ? 'CASE WHEN em.sprint_id = ? THEN 1 ELSE 0 END DESC,' : ''}
-      ${hasWorkflowScope ? 'CASE WHEN em.sprint_type = ? THEN 1 ELSE 0 END DESC,' : ''}
+      ${hasWorkflowScope ? 'CASE WHEN em.workflow_id = ? THEN 1 ELSE 0 END DESC,' : ''}
+      ${hasWorkflowScope ? 'CASE WHEN em.workflow_type = ? THEN 1 ELSE 0 END DESC,' : ''}
       CASE WHEN em.project_id = ? THEN 1 ELSE 0 END DESC,
       CASE WHEN em.task_type = ? THEN 1 ELSE 0 END DESC,
       em.priority DESC,
       em.id ASC
-  `, context.eventName, ...(hasTenantId && tenantId != null ? [tenantId] : []), context.source, context.projectId, ...(hasWorkflowScope && context.sprintType ? [context.sprintType] : []), ...(hasWorkflowScope && context.sprintId != null ? [context.sprintId] : []), context.taskType, context.source, ...(hasWorkflowScope ? [context.sprintId ?? null] : []), ...(hasWorkflowScope ? [context.sprintType ?? null] : []), context.projectId, context.taskType) as MappingRecord[];
+  `, context.eventName, ...(hasTenantId && tenantId != null ? [tenantId] : []), context.source, context.projectId, ...(hasWorkflowScope && context.workflowType ? [context.workflowType] : []), ...(hasWorkflowScope && context.workflowId != null ? [context.workflowId] : []), context.taskType, context.source, ...(hasWorkflowScope ? [context.workflowId ?? null] : []), ...(hasWorkflowScope ? [context.workflowType ?? null] : []), context.projectId, context.taskType) as MappingRecord[];
 
   for (const row of rows) {
-    const mapping = serializeMappingRow(row, [], context.sprintId ?? null);
+    const mapping = serializeMappingRow(row, [], context.workflowId ?? null);
     const included = mapping.status_includes.length === 0 || mapping.status_includes.includes(context.currentStatus);
     if (!included) continue;
     if (mapping.status_excludes.includes(context.currentStatus)) continue;
@@ -1192,7 +1191,6 @@ export async function resolveWorkflowEventMapping(db: Db, context: ExternalEvent
 
   return null;
 }
-
 
 export const DEFAULT_EXTERNAL_EVENT_MAPPINGS = DEFAULT_WORKFLOW_EVENT_MAPPINGS;
 export const EXTERNAL_EVENT_ACTION_KINDS = WORKFLOW_EVENT_ACTION_KINDS;

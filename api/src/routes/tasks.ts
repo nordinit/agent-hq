@@ -212,12 +212,12 @@ router.post('/project-search', async (req: Request, res: Response) => {
 router.get('/field-schema/resolve', async (req: Request, res: Response) => {
   try {
     const resolved = await resolveTaskFieldSchema(
-          req.query.sprint_id ?? null,
+          req.query.workflow_id ?? null,
           req.query.task_type ?? null,
-          req.query.sprint_type ?? null,
+          req.query.workflow_type ?? null,
         );
     res.json({
-      sprint_type: resolved.sprint_type,
+      workflow_type: resolved.workflow_type,
       allowed_task_types: resolved.allowed_task_types,
       fields: resolved.schema.fields,
       schema: resolved.schema,
@@ -566,8 +566,8 @@ router.put('/:id', async (req: Request, res: Response) => {
     if (message.includes('may change task status through the generic update endpoint')) {
       return res.status(403).json({ error: message });
     }
-    if (message.includes('task_type "') && message.includes('is not allowed for sprint type')) {
-      return res.status(400).json({ error: message, code: 'task_type_not_allowed_for_sprint_type' });
+    if (message.includes('task_type "') && message.includes('is not allowed for workflow type')) {
+      return res.status(400).json({ error: message, code: 'task_type_not_allowed_for_workflow_type' });
     }
     if (message.includes('is not in the same workspace') || message.includes('does not belong to project_id')) return res.status(400).json({ error: message });
     if (message.startsWith('Cannot move task from "') || message.startsWith('Cannot apply outcome "')) {
@@ -715,8 +715,8 @@ router.post('/:id/outcome', async (req: Request, res: Response) => {
     if (message.startsWith('No routing config found for')) {
       return res.status(422).json({ error: message });
     }
-    if (message.includes('task_type "') && message.includes('is not allowed for sprint type')) {
-      return res.status(400).json({ error: message, code: 'task_type_not_allowed_for_sprint_type' });
+    if (message.includes('task_type "') && message.includes('is not allowed for workflow type')) {
+      return res.status(400).json({ error: message, code: 'task_type_not_allowed_for_workflow_type' });
     }
     if (message.startsWith('Cannot move task from "') || message.startsWith('Cannot apply outcome "')) {
       return res.status(400).json({ error: message, code: 'transition_not_allowed_for_workflow' });
@@ -758,8 +758,8 @@ router.post('/:id/admin-outcome', async (req: Request, res: Response) => {
     if (message.startsWith('No routing config found for')) {
       return res.status(422).json({ error: message });
     }
-    if (message.includes('task_type "') && message.includes('is not allowed for sprint type')) {
-      return res.status(400).json({ error: message, code: 'task_type_not_allowed_for_sprint_type' });
+    if (message.includes('task_type "') && message.includes('is not allowed for workflow type')) {
+      return res.status(400).json({ error: message, code: 'task_type_not_allowed_for_workflow_type' });
     }
     if (message.startsWith('Cannot move task from "') || message.startsWith('Cannot apply outcome "')) {
       return res.status(400).json({ error: message, code: 'transition_not_allowed_for_workflow' });

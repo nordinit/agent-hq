@@ -150,9 +150,9 @@ describe('SQL portability lint', () => {
 
   it('rejects workflow policy seeding from ordinary config mutation paths', () => {
     const findings = analyze('src/domains/routing/transitions.ts', `
-      async function createTransition(db: unknown, sprintId: number) {
-        await seedSprintTaskPolicy(db, sprintId);
-        await seedSprintTypeTaskStatuses(db, 'dev');
+      async function createTransition(db: unknown, workflowId: number) {
+        await seedWorkflowTaskPolicy(db, workflowId);
+        await seedWorkflowTypeTaskStatuses(db, 'dev');
       }
     `);
     expect(findings.map((finding) => finding.construct)).toContain('implicit workflow policy seeding');
@@ -160,8 +160,8 @@ describe('SQL portability lint', () => {
 
   it('allows workflow policy seeding at an explicit workflow-creation boundary', () => {
     const findings = analyze('src/lib/starterTemplates.ts', `
-      async function insertWorkflow(db: unknown, sprintId: number) {
-        await seedSprintTaskPolicy(db, sprintId);
+      async function insertWorkflow(db: unknown, workflowId: number) {
+        await seedWorkflowTaskPolicy(db, workflowId);
       }
     `);
     expect(findings).toEqual([]);

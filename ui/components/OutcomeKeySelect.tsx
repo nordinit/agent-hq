@@ -1,7 +1,7 @@
 'use client';
 
-import type { OutcomeOption } from '@/lib/useSprintOutcomeCatalog';
-import { formatOutcomeOptionLabel } from '@/lib/useSprintOutcomeCatalog';
+import type { OutcomeOption } from '@/lib/useWorkflowOutcomeCatalog';
+import { formatOutcomeOptionLabel } from '@/lib/useWorkflowOutcomeCatalog';
 
 export function OutcomeKeySelect({
   id,

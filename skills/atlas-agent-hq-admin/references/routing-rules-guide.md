@@ -4,18 +4,18 @@ Assignment Rules control who owns dispatched work.
 
 Keep three concepts separate:
 
-- **Assignment rule**: assigns a task in a sprint for `task_type + status` to an agent.
+- **Assignment rule**: assigns a task in a workflow for `task_type + status` to an agent.
 - **Automatic transition**: maps an outcome from one status to the next status.
 - **Gate requirement**: requires evidence before a transition/outcome can proceed.
 
 ## Assignment Rule Design
 
-Create explicit sprint-scoped assignment rules for every routable lane.
+Create explicit workflow-scoped assignment rules for every routable lane.
 
 Typical pattern:
 
 ```text
-sprint_id + task_type + status -> agent_id
+workflow_id + task_type + status -> agent_id
 ```
 
 Examples:
@@ -63,7 +63,7 @@ Use gate requirements for truth and auditability. Do not use them for optional n
 
 ## Assignment Rule Checklist
 
-For each sprint:
+For each workflow:
 
 - List allowed task types.
 - Classify statuses as agent-actionable or intentionally waiting for a human, event, timer, or manual resume.

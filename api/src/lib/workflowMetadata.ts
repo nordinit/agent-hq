@@ -1,9 +1,9 @@
-// Compatibility export. New imports should prefer ../domains/sprint-definitions/workflowMetadata.
+// Compatibility export. New imports should prefer ../domains/workflow-definitions/workflowMetadata.
 
-export { resolveWorkflowMetadata } from '../domains/sprint-definitions/workflowMetadata';
+export { resolveWorkflowMetadata } from '../domains/workflow-definitions/workflowMetadata';
 export type {
   ResolvedWorkflowMetadata,
   WorkflowStatusMeta,
   WorkflowTaskTypeMeta,
   WorkflowTransitionMeta,
-} from '../domains/sprint-definitions/workflowMetadata';
+} from '../domains/workflow-definitions/workflowMetadata';

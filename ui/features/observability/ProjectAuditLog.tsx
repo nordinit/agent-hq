@@ -14,13 +14,13 @@ interface Props {
 
 const ENTITY_ICONS: Record<string, typeof FolderOpen> = {
   project: FolderOpen,
-  sprint: Rocket,
+  workflow: Rocket,
   job_template: Zap,
 };
 
 const ENTITY_LABELS: Record<string, string> = {
   project: 'Project',
-  sprint: 'Sprint',
+  workflow: 'Workflow',
   job_template: 'Job Template',
 };
 
@@ -155,7 +155,7 @@ function ProjectAuditLog({ projectId }: Props) {
         {/* Entity type filter */}
         <div className="flex items-center gap-1">
           <Filter className="w-3.5 h-3.5 text-slate-500" />
-          {[null, 'project', 'sprint', 'job_template'].map(type => (
+          {[null, 'project', 'workflow', 'job_template'].map(type => (
             <button
               key={type ?? 'all'}
               onClick={() => setFilter(type)}
@@ -174,7 +174,7 @@ function ProjectAuditLog({ projectId }: Props) {
       {entries.length === 0 ? (
         <Card>
           <div className="text-center py-8 text-slate-500 text-sm">
-            No audit history yet for this project. Changes to projects, sprints, and jobs will appear here once this environment has audit activity.
+            No audit history yet for this project. Changes to projects, workflows, and jobs will appear here once this environment has audit activity.
           </div>
         </Card>
       ) : (

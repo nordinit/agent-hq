@@ -42,8 +42,8 @@ type TaskRow = {
   status: string;
   task_type: string | null;
   project_id: number | null;
-  sprint_id: number | null;
-  sprint_type: string | null;
+  workflow_id: number | null;
+  workflow_type: string | null;
   agent_id: number | null;
   active_instance_id: number | null;
 };
@@ -410,12 +410,12 @@ async function loadTask(taskId: number): Promise<TaskRow> {
            tasks.status,
            tasks.task_type,
            tasks.project_id,
-           tasks.sprint_id,
-           s.sprint_type,
+           tasks.workflow_id,
+           s.workflow_type,
            tasks.agent_id,
            tasks.active_instance_id
     FROM tasks
-    LEFT JOIN sprints s ON s.id = tasks.sprint_id
+    LEFT JOIN workflows s ON s.id = tasks.workflow_id
     WHERE tasks.id = ?
   `, taskId) as TaskRow | undefined;
   if (!task) throw new Error('Task not found');
@@ -817,8 +817,8 @@ router.post('/task-events', async (req: Request, res: Response) => {
               eventName: normalized.event,
               tenantId: task.tenant_id,
               projectId: task.project_id,
-              sprintId: task.sprint_id,
-              sprintType: task.sprint_type,
+              workflowId: task.workflow_id,
+              workflowType: task.workflow_type,
               taskType: task.task_type,
               currentStatus: task.status,
             });

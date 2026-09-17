@@ -7,7 +7,7 @@ import type { TaskRelationship, TaskRelationshipTypeConfig } from '@/lib/api';
 import { getFailureSourceLabel, getFailureTone, isFailureBlocked } from '@/lib/taskFailure';
 import { formatFailureOutcomeBadgeLabel, type TaskOutcomeMetaMap } from '@/lib/taskOutcomeMeta';
 import { relationshipDispatchImpactLabel, relationshipTypeOptionLabel } from '@/lib/taskRelationshipDisplay';
-import { formatSprintLabel } from '@/lib/sprintLabel';
+import { formatWorkflowLabel } from '@/lib/workflowLabel';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 
@@ -24,8 +24,8 @@ export interface BoardTask {
   assigned_agent_name?: string | null;
   active_agent_name?: string | null;
   project_id: number | null;
-  sprint_id?: number | null;
-  sprint_name?: string | null;
+  workflow_id?: number | null;
+  workflow_name?: string | null;
   agent_name?: string;
   recurring?: number | boolean;
   story_points?: number | null;
@@ -287,12 +287,12 @@ interface TaskCardProps {
   onLinkTask: (taskId: number, targetTaskId: number, relationshipTypeKey: string) => Promise<void>;
   onRemoveBlocker: (taskId: number, blockerId: number) => Promise<void>;
   onPause: (taskId: number) => Promise<void>;
-  /** When true, shows sprint link badge on the card */
-  showSprint?: boolean;
+  /** When true, shows workflow link badge on the card */
+  showWorkflow?: boolean;
   outcomeMap: TaskOutcomeMetaMap;
 }
 
-export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTask, onRemoveBlocker, onPause, showSprint = false, outcomeMap }: TaskCardProps) {
+export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTask, onRemoveBlocker, onPause, showWorkflow = false, outcomeMap }: TaskCardProps) {
   const [pausing, setPausing] = useState(false);
   const blocked = isBlocked(task);
   const blockers = task.blockers ?? [];
@@ -398,14 +398,14 @@ export function TaskCard({ task, allTasks, onClick, relationshipTypes, onLinkTas
       </div>
 
       {/* Workflow badge — hidden on mobile by default to save space */}
-      {showSprint && task.sprint_name && task.sprint_id && (
+      {showWorkflow && task.workflow_name && task.workflow_id && (
         <div className="mb-2 hidden sm:block" onClick={e => e.stopPropagation()}>
           <a
-            href={`/workflows/${task.sprint_id}`}
+            href={`/workflows/${task.workflow_id}`}
             className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-violet-900/50 text-violet-300 hover:bg-violet-800/60 hover:text-violet-200 transition-colors"
-            title={formatSprintLabel({ id: task.sprint_id, name: task.sprint_name })}
+            title={formatWorkflowLabel({ id: task.workflow_id, name: task.workflow_name })}
           >
-            🏃 {formatSprintLabel({ id: task.sprint_id, name: task.sprint_name })}
+            🏃 {formatWorkflowLabel({ id: task.workflow_id, name: task.workflow_name })}
           </a>
         </div>
       )}
@@ -524,7 +524,7 @@ interface BoardColumnProps {
   onLinkTask: (taskId: number, targetTaskId: number, relationshipTypeKey: string) => Promise<void>;
   onRemoveBlocker: (taskId: number, blockerId: number) => Promise<void>;
   onPause: (taskId: number) => Promise<void>;
-  showSprint?: boolean;
+  showWorkflow?: boolean;
   /** Whether to show column header (hidden on mobile when tab bar is present) */
   showHeader?: boolean;
   /** Enable drag-and-drop on task cards */
@@ -541,7 +541,7 @@ interface BoardColumnProps {
 export function BoardColumn({
   col, tasks: colTasks, allTasks, onClickTask,
   relationshipTypes, onLinkTask, onRemoveBlocker, onPause,
-  showSprint = false, showHeader = true,
+  showWorkflow = false, showHeader = true,
   dragEnabled = false, isDropTarget = false, isInvalidTarget = false,
   droppableId,
   outcomeMap,
@@ -605,7 +605,7 @@ export function BoardColumn({
                   onLinkTask={onLinkTask}
                   onRemoveBlocker={onRemoveBlocker}
                   onPause={onPause}
-                  showSprint={showSprint}
+                  showWorkflow={showWorkflow}
                   outcomeMap={outcomeMap}
                   dragEnabled={dragEnabled}
                 />

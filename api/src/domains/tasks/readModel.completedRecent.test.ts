@@ -7,7 +7,7 @@ import { listRecentlyCompletedTasks } from './readModel';
  * Tenant isolation for the "recently completed" read model.
  *
  * The PostgreSQL fixture enforces the real parent relationships:
- * tasks.sprint_id is NOT NULL and tasks/sprints/projects all carry foreign keys to tenants.
+ * tasks.workflow_id is NOT NULL and tasks/workflows/projects all carry foreign keys to tenants.
  * The two tenants matter to the assertions themselves — they are what "isolation" means here —
  * and the fixture truncates them between tests, so they are seeded explicitly.
  */
@@ -16,8 +16,8 @@ const DEFAULT_TENANT_ID = 1;
 const ECOPOOL_TENANT_ID = 2;
 const DEFAULT_PROJECT_ID = 10;
 const ECOPOOL_PROJECT_ID = 20;
-const DEFAULT_SPRINT_ID = 100;
-const ECOPOOL_SPRINT_ID = 200;
+const DEFAULT_WORKFLOW_ID = 100;
+const ECOPOOL_WORKFLOW_ID = 200;
 
 /** A canonical-format timestamp N hours in the past, the same form the query's cutoff uses. */
 function hoursAgo(hours: number): string {
@@ -40,9 +40,9 @@ async function seedScope(): Promise<void> {
     ECOPOOL_PROJECT_ID, 'EcoPool Project', ECOPOOL_TENANT_ID,
   );
   await db.run(
-    `INSERT INTO sprints (id, project_id, name, tenant_id) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
-    DEFAULT_SPRINT_ID, DEFAULT_PROJECT_ID, 'Default Workflow', DEFAULT_TENANT_ID,
-    ECOPOOL_SPRINT_ID, ECOPOOL_PROJECT_ID, 'EcoPool Workflow', ECOPOOL_TENANT_ID,
+    `INSERT INTO workflows (id, project_id, name, tenant_id) VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+    DEFAULT_WORKFLOW_ID, DEFAULT_PROJECT_ID, 'Default Workflow', DEFAULT_TENANT_ID,
+    ECOPOOL_WORKFLOW_ID, ECOPOOL_PROJECT_ID, 'EcoPool Workflow', ECOPOOL_TENANT_ID,
   );
 }
 
@@ -51,13 +51,13 @@ async function insertTask(task: {
   tenantId: number;
   title: string;
   projectId: number;
-  sprintId: number;
+  workflowId: number;
   updatedAt: string;
 }): Promise<void> {
   await getDb().run(
-    `INSERT INTO tasks (id, tenant_id, title, status, priority, project_id, sprint_id, updated_at)
+    `INSERT INTO tasks (id, tenant_id, title, status, priority, project_id, workflow_id, updated_at)
      VALUES (?, ?, ?, 'done', 'medium', ?, ?, ?)`,
-    task.id, task.tenantId, task.title, task.projectId, task.sprintId, task.updatedAt,
+    task.id, task.tenantId, task.title, task.projectId, task.workflowId, task.updatedAt,
   );
 }
 
@@ -82,15 +82,15 @@ describe('listRecentlyCompletedTasks tenant isolation', () => {
   it('returns only recently completed tasks for the requested tenant', async () => {
     await insertTask({
       id: 1, tenantId: DEFAULT_TENANT_ID, title: 'Default completed task',
-      projectId: DEFAULT_PROJECT_ID, sprintId: DEFAULT_SPRINT_ID, updatedAt: hoursAgo(1),
+      projectId: DEFAULT_PROJECT_ID, workflowId: DEFAULT_WORKFLOW_ID, updatedAt: hoursAgo(1),
     });
     await insertTask({
       id: 2, tenantId: ECOPOOL_TENANT_ID, title: 'EcoPool completed task',
-      projectId: ECOPOOL_PROJECT_ID, sprintId: ECOPOOL_SPRINT_ID, updatedAt: hoursAgo(1),
+      projectId: ECOPOOL_PROJECT_ID, workflowId: ECOPOOL_WORKFLOW_ID, updatedAt: hoursAgo(1),
     });
     await insertTask({
       id: 3, tenantId: ECOPOOL_TENANT_ID, title: 'EcoPool stale task',
-      projectId: ECOPOOL_PROJECT_ID, sprintId: ECOPOOL_SPRINT_ID, updatedAt: hoursAgo(25),
+      projectId: ECOPOOL_PROJECT_ID, workflowId: ECOPOOL_WORKFLOW_ID, updatedAt: hoursAgo(25),
     });
     await insertDoneHistory(1, DEFAULT_TENANT_ID, hoursAgo(1));
     await insertDoneHistory(2, ECOPOOL_TENANT_ID, hoursAgo(1));
@@ -107,11 +107,11 @@ describe('listRecentlyCompletedTasks tenant isolation', () => {
   it('applies project and tenant scope together', async () => {
     await insertTask({
       id: 1, tenantId: DEFAULT_TENANT_ID, title: 'Default project task',
-      projectId: DEFAULT_PROJECT_ID, sprintId: DEFAULT_SPRINT_ID, updatedAt: hoursAgo(1),
+      projectId: DEFAULT_PROJECT_ID, workflowId: DEFAULT_WORKFLOW_ID, updatedAt: hoursAgo(1),
     });
     await insertTask({
       id: 2, tenantId: ECOPOOL_TENANT_ID, title: 'EcoPool project task',
-      projectId: ECOPOOL_PROJECT_ID, sprintId: ECOPOOL_SPRINT_ID, updatedAt: hoursAgo(1),
+      projectId: ECOPOOL_PROJECT_ID, workflowId: ECOPOOL_WORKFLOW_ID, updatedAt: hoursAgo(1),
     });
 
     const db = getDb();

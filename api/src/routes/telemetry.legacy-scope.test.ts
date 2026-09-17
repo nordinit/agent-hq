@@ -24,20 +24,20 @@ beforeEach(async()=>{
   await db.run(`INSERT INTO app_settings(key,value) VALUES('active_tenant_id','1'),('default_tenant_id','1')`);
   for(const [id,tenantId,label] of [[11,1,'OWN'],[12,1,'PRIVATE SAME TENANT'],[22,2,'PRIVATE TENANT']] as const){
     await db.run(`INSERT INTO projects(id,tenant_id,name) VALUES(?,?,?)`,id,tenantId,label);
-    await db.run(`INSERT INTO sprints(id,tenant_id,project_id,name) VALUES(?,?,?,?)`,id,tenantId,id,label);
+    await db.run(`INSERT INTO workflows(id,tenant_id,project_id,name) VALUES(?,?,?,?)`,id,tenantId,id,label);
     await db.run(`INSERT INTO agents(id,tenant_id,project_id,name,session_key) VALUES(?,?,?,?,?)`,id,tenantId,id,label,`session:${id}`);
-    await db.run(`INSERT INTO tasks(id,tenant_id,project_id,sprint_id,agent_id,title,status,dispatched_at,routing_reason)
+    await db.run(`INSERT INTO tasks(id,tenant_id,project_id,workflow_id,agent_id,title,status,dispatched_at,routing_reason)
       VALUES(?,?,?,?,?,?,'failed',to_char(now() AT TIME ZONE 'utc','YYYY-MM-DD HH24:MI:SS'),'test route')`,id,tenantId,id,id,id,label);
     await db.run(`INSERT INTO job_instances(id,tenant_id,task_id,agent_id,status,dispatched_at,failure_stage)
       VALUES(?,?,?,?,'failed',to_char(now() AT TIME ZONE 'utc','YYYY-MM-DD HH24:MI:SS'),'review')`,id,tenantId,id,id);
-    await db.run(`INSERT INTO task_creation_events(tenant_id,task_id,project_id,sprint_id,source) VALUES(?,?,?,?,'manual')`,tenantId,id,id,id);
-    await db.run(`INSERT INTO task_outcome_metrics(tenant_id,task_id,project_id,sprint_id,first_pass_qa) VALUES(?,?,?,?,1)`,tenantId,id,id,id);
+    await db.run(`INSERT INTO task_creation_events(tenant_id,task_id,project_id,workflow_id,source) VALUES(?,?,?,?,'manual')`,tenantId,id,id,id);
+    await db.run(`INSERT INTO task_outcome_metrics(tenant_id,task_id,project_id,workflow_id,first_pass_qa) VALUES(?,?,?,?,1)`,tenantId,id,id,id);
     await db.run(`INSERT INTO task_events(tenant_id,task_id,project_id,agent_id,from_status,to_status) VALUES(?,?,?,?,'draft','review'),(?,?,?,?,'changes','review')`,tenantId,id,id,id,tenantId,id,id,id);
     await db.run(`INSERT INTO integrity_events(id,tenant_id,task_id,project_id,agent_id,anomaly_type,detail)
       VALUES(?,?,?,?,?,'missing_lifecycle_handoff',?)`,id,tenantId,id,id,id,label);
     await db.run(`INSERT INTO sessions(id,tenant_id,external_key,runtime,agent_id,task_id,instance_id,project_id,status,title)
       VALUES(?,?,?,'openclaw',?,?,?,?,'failed',?)`,id,tenantId,`session:${id}`,id,id,id,id,label);
-    await db.run(`INSERT INTO sprint_task_routing_rules(tenant_id,sprint_id,project_id,status,agent_id) VALUES(?,?,?,'draft',?)`,tenantId,id,id,id);
+    await db.run(`INSERT INTO workflow_task_routing_rules(tenant_id,workflow_id,project_id,status,agent_id) VALUES(?,?,?,'draft',?)`,tenantId,id,id,id);
   }
 });
 afterEach(async()=>{await teardownTestDb();});
@@ -73,7 +73,7 @@ it('keeps tenant-wide compatibility reads inside the active tenant',async()=>{
 it('rejects foreign project/workflow filters and foreign task drilldowns',async()=>{
   expect((await request('/review?project_id=22')).status).toBe(404);
   expect((await request('/overview?project_id=12',{project:11})).status).toBe(403);
-  expect((await request('/overview?sprint_id=12',{project:11})).status).toBe(404);
+  expect((await request('/overview?workflow_id=12',{project:11})).status).toBe(404);
   expect((await request('/review/12',{project:11})).status).toBe(404);
 });
 

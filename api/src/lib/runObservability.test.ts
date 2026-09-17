@@ -15,7 +15,7 @@ interface SeededRun {
 
 /**
  * The real schema has the foreign keys the old hand-written one did not, so an instance needs a
- * task, a task needs a sprint, and a sprint needs a project — all of which recordRunCheckIn is
+ * task, a task needs a workflow, and a workflow needs a project — all of which recordRunCheckIn is
  * indifferent to beyond the row existing.
  */
 async function seedRun(): Promise<SeededRun> {
@@ -23,15 +23,15 @@ async function seedRun(): Promise<SeededRun> {
   const project = await db.run(
     `INSERT INTO projects (name, description, context_md) VALUES ('Observability Project', '', '')`,
   );
-  const sprint = await db.run(
-    `INSERT INTO sprints (project_id, name, goal, sprint_type, status, length_kind, length_value)
+  const workflow = await db.run(
+    `INSERT INTO workflows (project_id, name, goal, workflow_type, status, length_kind, length_value)
      VALUES (?, 'Observability Workflow', '', 'dev', 'active', 'time', '2w')`,
     Number(project.lastInsertId),
   );
   const task = await db.run(
-    `INSERT INTO tasks (title, status, project_id, sprint_id) VALUES ('Observability Task', 'review', ?, ?)`,
+    `INSERT INTO tasks (title, status, project_id, workflow_id) VALUES ('Observability Task', 'review', ?, ?)`,
     Number(project.lastInsertId),
-    Number(sprint.lastInsertId),
+    Number(workflow.lastInsertId),
   );
   const agent = await db.run(
     `INSERT INTO agents (name, session_key, project_id) VALUES ('Cinder (Backend)', 'cinder-backend', ?)`,

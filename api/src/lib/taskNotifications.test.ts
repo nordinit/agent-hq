@@ -11,28 +11,27 @@ jest.mock('../integrations/telegram', () => ({
 async function createDb(): Promise<Db> {
   const db = await setupTestDb();
 
-
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1), (5, 'Tenant 5', 'tenant-5', 0)`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (1, 'enhancements', 'Enhancements', 0)`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (10, 1, 1, 'Enhancements Sprint', 'enhancements')`);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (1, 'enhancements', 'Enhancements', 0)`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Enhancements Workflow', 'enhancements')`);
 
   return db;
 }
 
 async function seedTask(db: Db, taskId: number, tenantId = 1): Promise<void> {
-  await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (?, ?, 'Status emoji test', 1, 10)`, taskId, tenantId);
+  await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (?, ?, 'Status emoji test', 1, 10)`, taskId, tenantId);
 }
 
-async function seedSprintStatus(
+async function seedWorkflowStatus(
   db: Db,
   statusKey: string,
   metadataJson = '{}',
   stageOrder = 0,
 ): Promise<void> {
   await db.run(`
-    INSERT INTO sprint_task_statuses (
-      sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
+    INSERT INTO workflow_task_statuses (
+      workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
     ) VALUES (?, ?, ?, 'slate', 0, 0, '[]', ?, 0, ?)
   `, 10, statusKey, statusKey, stageOrder, metadataJson);
 }
@@ -45,12 +44,12 @@ describe('notifyTaskStatusChange', () => {
     notifyTelegramMock.mockResolvedValue(undefined as never);
   });
 
-  it('uses configured sprint-scoped emoji for system statuses when present', async () => {
+  it('uses configured workflow-scoped emoji for system statuses when present', async () => {
     const db = await createDb();
     try {
       await seedTask(db, 484);
-      await seedSprintStatus(db, 'in_progress', '{"emoji":"🏗️"}', 0);
-      await seedSprintStatus(db, 'blocked', '{"emoji":"🧱"}', 1);
+      await seedWorkflowStatus(db, 'in_progress', '{"emoji":"🏗️"}', 0);
+      await seedWorkflowStatus(db, 'blocked', '{"emoji":"🧱"}', 1);
 
       await notifyTaskStatusChange(db, {
                 taskId: 484,
@@ -66,12 +65,12 @@ describe('notifyTaskStatusChange', () => {
     }
   });
 
-  it('uses configured sprint-scoped emoji for custom sprint statuses', async () => {
+  it('uses configured workflow-scoped emoji for custom workflow statuses', async () => {
     const db = await createDb();
     try {
       await seedTask(db, 485);
-      await seedSprintStatus(db, 'review', '{}', 0);
-      await seedSprintStatus(db, 'review_ready', '{"emoji":"🧪"}', 1);
+      await seedWorkflowStatus(db, 'review', '{}', 0);
+      await seedWorkflowStatus(db, 'review_ready', '{"emoji":"🧪"}', 1);
 
       await notifyTaskStatusChange(db, {
                 taskId: 485,
@@ -91,8 +90,8 @@ describe('notifyTaskStatusChange', () => {
     const db = await createDb();
     try {
       await seedTask(db, 486);
-      await seedSprintStatus(db, 'ready', '{}', 0);
-      await seedSprintStatus(db, 'review', '{}', 1);
+      await seedWorkflowStatus(db, 'ready', '{}', 0);
+      await seedWorkflowStatus(db, 'review', '{}', 1);
 
       await notifyTaskStatusChange(db, {
                 taskId: 486,
@@ -112,8 +111,8 @@ describe('notifyTaskStatusChange', () => {
     const db = await createDb();
     try {
       await seedTask(db, 487);
-      await seedSprintStatus(db, 'dev_deploy_queued', '{}', 0);
-      await seedSprintStatus(db, 'blocked', '{}', 1);
+      await seedWorkflowStatus(db, 'dev_deploy_queued', '{}', 0);
+      await seedWorkflowStatus(db, 'blocked', '{}', 1);
 
       await notifyTaskStatusChange(db, {
                 taskId: 487,
@@ -133,8 +132,8 @@ describe('notifyTaskStatusChange', () => {
     const db = await createDb();
     try {
       await seedTask(db, 488);
-      await seedSprintStatus(db, 'ready', '{}', 0);
-      await seedSprintStatus(db, 'review', '{}', 1);
+      await seedWorkflowStatus(db, 'ready', '{}', 0);
+      await seedWorkflowStatus(db, 'review', '{}', 1);
 
       await notifyTaskStatusChange(db, {
                 taskId: 488,
@@ -151,8 +150,7 @@ describe('notifyTaskStatusChange', () => {
       };
       expect(row.title).toBe('🔍 Task #488 status changed');
       expect(row.body).toContain('🔵 ready -> 🔍 review');
-      expect(row.body).toContain('Workflow: Enhancements Sprint');
-      expect(row.body).not.toContain('Sprint: Enhancements Sprint');
+      expect(row.body).toContain('Workflow: Enhancements Workflow');
       expect(row.source).toBe('cinder-backend');
       expect(row.outlet).toBe('telegram');
       expect(notifyTelegramMock).toHaveBeenCalled();
@@ -166,8 +164,8 @@ describe('notifyTaskStatusChange', () => {
     try {
       await saveNotificationPreferences({ enabled: false }, db);
       await seedTask(db, 489);
-      await seedSprintStatus(db, 'ready', '{}', 0);
-      await seedSprintStatus(db, 'blocked', '{}', 1);
+      await seedWorkflowStatus(db, 'ready', '{}', 0);
+      await seedWorkflowStatus(db, 'blocked', '{}', 1);
 
       await notifyTaskStatusChange(db, {
                 taskId: 489,
@@ -189,8 +187,8 @@ describe('notifyTaskStatusChange', () => {
     try {
       await saveNotificationPreferences({ enabled: false }, db, 5);
       await seedTask(db, 490, 5);
-      await seedSprintStatus(db, 'ready', '{}', 0);
-      await seedSprintStatus(db, 'review', '{}', 1);
+      await seedWorkflowStatus(db, 'ready', '{}', 0);
+      await seedWorkflowStatus(db, 'review', '{}', 1);
 
       await notifyTaskStatusChange(db, {
                 taskId: 490,

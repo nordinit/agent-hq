@@ -1,52 +1,52 @@
 import {
   getGateRequirementFieldDefinitions,
-  resolveTaskFieldSchemaForSprint,
+  resolveTaskFieldSchemaForWorkflow,
   resolveTaskWorkflowContext,
   validateRequirementFieldExpression,
-} from '../sprint-definitions/config';
-import { listSprintTaskStatuses, listSprintTypeTaskStatuses } from './policy/statuses';
-import { SprintRecord, tableHasColumn, withStatus } from './scope';
+} from '../workflow-definitions/config';
+import { listWorkflowTaskStatuses, listWorkflowTypeTaskStatuses } from './policy/statuses';
+import { WorkflowRecord, tableHasColumn, withStatus } from './scope';
 import { type Db } from "../../db/adapter/types";
 
-export async function requireRoutingRuleStatusForSprint(db: Db, sprintId: number, status: string): Promise<void> {
-  const statuses = await listSprintTaskStatuses(db, sprintId);
+export async function requireRoutingRuleStatusForWorkflow(db: Db, workflowId: number, status: string): Promise<void> {
+  const statuses = await listWorkflowTaskStatuses(db, workflowId);
   if (statuses.some((entry) => entry.name === status)) return;
-  throw withStatus(`Status "${status}" is not configured for sprint ${sprintId}`, 400);
+  throw withStatus(`Status "${status}" is not configured for workflow ${workflowId}`, 400);
 }
 
-export async function requireRoutingRuleStatusForSprintType(db: Db, sprintType: string, status: string): Promise<void> {
-  const statuses = await listSprintTypeTaskStatuses(db, sprintType);
+export async function requireRoutingRuleStatusForWorkflowType(db: Db, workflowType: string, status: string): Promise<void> {
+  const statuses = await listWorkflowTypeTaskStatuses(db, workflowType);
   if (statuses.some((entry) => entry.name === status)) return;
-  throw withStatus(`Status "${status}" is not configured for sprint type "${sprintType}"`, 400);
+  throw withStatus(`Status "${status}" is not configured for workflow type "${workflowType}"`, 400);
 }
 
-export async function requireRoutingRuleTaskTypeForSprint(db: Db, sprintId: number, taskType: string): Promise<void> {
-  const workflow = await resolveTaskWorkflowContext(db, { sprintId, taskType });
+export async function requireRoutingRuleTaskTypeForWorkflow(db: Db, workflowId: number, taskType: string): Promise<void> {
+  const workflow = await resolveTaskWorkflowContext(db, { workflowId, taskType });
   if (workflow.allowedTaskTypes.length === 0 || workflow.allowedTaskTypes.includes(taskType)) return;
   throw withStatus(
-    `task_type "${taskType}" is not allowed for sprint type "${workflow.sprintType}". Allowed: ${workflow.allowedTaskTypes.join(', ')}`,
+    `task_type "${taskType}" is not allowed for workflow type "${workflow.workflowType}". Allowed: ${workflow.allowedTaskTypes.join(', ')}`,
     400,
   );
 }
 
-export async function requireRoutingRuleTaskTypeForSprintType(db: Db, sprintType: string, taskType: string): Promise<void> {
-  const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType });
+export async function requireRoutingRuleTaskTypeForWorkflowType(db: Db, workflowType: string, taskType: string): Promise<void> {
+  const workflow = await resolveTaskWorkflowContext(db, { workflowType, taskType });
   if (workflow.allowedTaskTypes.length === 0 || workflow.allowedTaskTypes.includes(taskType)) return;
   throw withStatus(
-    `task_type "${taskType}" is not allowed for sprint type "${workflow.sprintType}". Allowed: ${workflow.allowedTaskTypes.join(', ')}`,
+    `task_type "${taskType}" is not allowed for workflow type "${workflow.workflowType}". Allowed: ${workflow.allowedTaskTypes.join(', ')}`,
     400,
   );
 }
 
 export async function requireTransitionRequirementFieldsForScope(
   db: Db,
-  scope: { sprintId?: number | null; sprintType?: string | null },
+  scope: { workflowId?: number | null; workflowType?: string | null },
   taskType: unknown,
   fieldName: unknown,
   matchField: unknown,
   requirementType: unknown,
 ): Promise<void> {
-  const context = scope.sprintId != null ? { sprintId: scope.sprintId } : { sprintType: scope.sprintType };
+  const context = scope.workflowId != null ? { workflowId: scope.workflowId } : { workflowType: scope.workflowType };
   await validateRequirementFieldExpression(db, {
         ...context,
         taskType,
@@ -63,18 +63,18 @@ export async function requireTransitionRequirementFieldsForScope(
   }
 }
 
-export async function requireTransitionRequirementFieldsForSprint(
+export async function requireTransitionRequirementFieldsForWorkflow(
   db: Db,
-  sprintId: number,
+  workflowId: number,
   taskType: unknown,
   fieldName: unknown,
   matchField: unknown,
   requirementType: unknown,
 ): Promise<void> {
-  await requireTransitionRequirementFieldsForScope(db, { sprintId }, taskType, fieldName, matchField, requirementType);
+  await requireTransitionRequirementFieldsForScope(db, { workflowId }, taskType, fieldName, matchField, requirementType);
 }
 
-export async function requireAgentInSprintProject(db: Db, sprint: SprintRecord, agentId: number, tenantId?: number | null): Promise<void> {
+export async function requireAgentInWorkflowProject(db: Db, workflow: WorkflowRecord, agentId: number, tenantId?: number | null): Promise<void> {
   if (!await tableHasColumn(db, 'agents', 'project_id')) return;
 
   const hasTenant = await tableHasColumn(db, 'agents', 'tenant_id');
@@ -84,7 +84,7 @@ export async function requireAgentInSprintProject(db: Db, sprint: SprintRecord, 
   if (!agent) {
     throw withStatus(`Agent ${agentId} not found`, 404);
   }
-  if (!agent || agent.project_id === sprint.project_id) return;
+  if (!agent || agent.project_id === workflow.project_id) return;
 
-  throw withStatus(`Agent ${agentId} is not assigned to project ${sprint.project_id}`, 400);
+  throw withStatus(`Agent ${agentId} is not assigned to project ${workflow.project_id}`, 400);
 }

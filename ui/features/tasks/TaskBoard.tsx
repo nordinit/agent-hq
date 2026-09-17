@@ -36,10 +36,10 @@ export interface TaskBoardSection {
   key: string;
   title: string;
   tasks: BoardTask[];
-  sprintType?: string | null;
+  workflowType?: string | null;
   tone?: 'default' | 'muted';
   statusLabel?: string;
-  /** True when the sprint is active but has tasks outside the currently-loaded page */
+  /** True when the workflow is active but has tasks outside the currently-loaded page */
   hasUnloadedTasks?: boolean;
   /** True when this section is in the process of loading tasks (IntersectionObserver triggered) */
   isLoading?: boolean;
@@ -48,20 +48,20 @@ export interface TaskBoardSection {
 interface TaskBoardProps {
   tasks: BoardTask[];
   storageKey: string;
-  sprintId?: number | null;
+  workflowId?: number | null;
   workflowTypes?: string[];
   onTaskClick: (task: BoardTask) => void;
   onLinkTask: (taskId: number, targetTaskId: number, relationshipTypeKey: string) => Promise<void>;
   onRemoveBlocker: (taskId: number, blockerId: number) => Promise<void>;
   onPause: (taskId: number) => Promise<void>;
   onStatusChange?: (taskId: number, newStatus: string) => Promise<void>;
-  showSprint?: boolean;
+  showWorkflow?: boolean;
   sections?: TaskBoardSection[];
   columnsButtonAlign?: 'left' | 'right';
-  /** Called when a section key enters the viewport (for lazy loading sprint tasks) */
+  /** Called when a section key enters the viewport (for lazy loading workflow tasks) */
   onSectionVisible?: (sectionKey: string) => void;
   /**
-   * When true (search/filter is active), columns and sprint sections with zero matching
+   * When true (search/filter is active), columns and workflow sections with zero matching
    * tasks are hidden. Columns/sections reappear as soon as they have at least one match.
    * Has no effect when false/undefined (all columns visible as normal).
    */
@@ -243,14 +243,14 @@ function SortableColumnToggle({ scopeKey, column, checked, onToggle }: SortableC
 export function TaskBoard({
   tasks,
   storageKey,
-  sprintId = null,
+  workflowId = null,
   workflowTypes = [],
   onTaskClick,
   onLinkTask,
   onRemoveBlocker,
   onPause,
   onStatusChange,
-  showSprint = false,
+  showWorkflow = false,
   sections,
   columnsButtonAlign = 'right',
   onSectionVisible,
@@ -262,9 +262,9 @@ export function TaskBoard({
     allColumns: ALL_COLUMNS,
     defaultVisible: DEFAULT_VISIBLE,
     loading: statusesLoading,
-  } = useTaskStatuses(sprintId, { sprintType: sprintId ? null : singleWorkflowType });
-  const { metadata: boardWorkflowMetadata, outcomeMap } = useWorkflowMetadata(sprintId ?? null, {
-    sprintType: sprintId ? null : singleWorkflowType,
+  } = useTaskStatuses(workflowId, { workflowType: workflowId ? null : singleWorkflowType });
+  const { metadata: boardWorkflowMetadata, outcomeMap } = useWorkflowMetadata(workflowId ?? null, {
+    workflowType: workflowId ? null : singleWorkflowType,
   });
 
   const [mobileCol, setMobileCol] = useState<string>('');
@@ -276,7 +276,7 @@ export function TaskBoard({
   const [workflowCatalogsLoading, setWorkflowCatalogsLoading] = useState(false);
 
   useEffect(() => {
-    if (sprintId || normalizedWorkflowTypes.length <= 1) {
+    if (workflowId || normalizedWorkflowTypes.length <= 1) {
       setWorkflowCatalogs({});
       setWorkflowCatalogsLoading(false);
       return;
@@ -286,7 +286,7 @@ export function TaskBoard({
     setWorkflowCatalogsLoading(true);
     Promise.all(
       normalizedWorkflowTypes.map(async workflowType => {
-        const metadata = await api.getWorkflowMetadata({ sprint_type: workflowType });
+        const metadata = await api.getWorkflowMetadata({ workflow_type: workflowType });
         return [
           workflowType,
           {
@@ -311,10 +311,10 @@ export function TaskBoard({
       });
 
     return () => { cancelled = true; };
-  }, [sprintId, normalizedWorkflowTypes]);
+  }, [workflowId, normalizedWorkflowTypes]);
 
   const columnCatalogs = useMemo<ColumnCatalog[]>(() => {
-    if (!sprintId && normalizedWorkflowTypes.length > 1) {
+    if (!workflowId && normalizedWorkflowTypes.length > 1) {
       return normalizedWorkflowTypes
         .map(workflowType => workflowCatalogs[workflowType])
         .filter((catalog): catalog is ColumnCatalog => Boolean(catalog && catalog.columns.length > 0));
@@ -328,7 +328,7 @@ export function TaskBoard({
       defaultVisible: DEFAULT_VISIBLE,
       relationshipTypes: boardWorkflowMetadata.relationship_types,
     }];
-  }, [ALL_COLUMNS, DEFAULT_VISIBLE, boardWorkflowMetadata.relationship_types, normalizedWorkflowTypes, singleWorkflowType, sprintId, workflowCatalogs]);
+  }, [ALL_COLUMNS, DEFAULT_VISIBLE, boardWorkflowMetadata.relationship_types, normalizedWorkflowTypes, singleWorkflowType, workflowId, workflowCatalogs]);
 
   const catalogByScope = useMemo(
     () => new Map(columnCatalogs.map(catalog => [catalog.scopeKey, catalog])),
@@ -404,7 +404,7 @@ export function TaskBoard({
   const activeColumns = activeColumnsByScope[fallbackScopeKey] ?? [];
 
   const scopeForSection = useCallback((section?: TaskBoardSection) => {
-    const sectionType = section?.sprintType ?? null;
+    const sectionType = section?.workflowType ?? null;
     if (sectionType && catalogByScope.has(sectionType)) return sectionType;
     return fallbackScopeKey;
   }, [catalogByScope, fallbackScopeKey]);
@@ -420,7 +420,7 @@ export function TaskBoard({
     }
   }, [activeColumns, mobileCol]);
 
-  // ── IntersectionObserver: fire onSectionVisible when sprint section enters viewport ──
+  // ── IntersectionObserver: fire onSectionVisible when workflow section enters viewport ──
   const sectionRefs = useRef<Map<string, HTMLElement>>(new Map());
   const firedSections = useRef<Set<string>>(new Set());
 
@@ -462,7 +462,6 @@ export function TaskBoard({
   // Optimistic status overrides: taskId → newStatus. Applied immediately on drop,
   // cleared when the parent re-renders with updated task data from the API.
   const [optimisticMoves, setOptimisticMoves] = useState<Map<number, string>>(new Map());
-
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -672,7 +671,7 @@ export function TaskBoard({
   const isDragging = !!activeTask;
 
   const relationshipTypesForSection = useCallback((section?: TaskBoardSection): TaskRelationshipTypeConfig[] => {
-    if (section?.sprintType) return workflowCatalogs[section.sprintType]?.relationshipTypes ?? boardWorkflowMetadata.relationship_types;
+    if (section?.workflowType) return workflowCatalogs[section.workflowType]?.relationshipTypes ?? boardWorkflowMetadata.relationship_types;
     return catalogByScope.get(fallbackScopeKey)?.relationshipTypes ?? boardWorkflowMetadata.relationship_types;
   }, [boardWorkflowMetadata.relationship_types, catalogByScope, fallbackScopeKey, workflowCatalogs]);
 
@@ -686,7 +685,7 @@ export function TaskBoard({
       onLinkTask={onLinkTask}
       onRemoveBlocker={onRemoveBlocker}
       onPause={onPause}
-      showSprint={showSprint}
+      showWorkflow={showWorkflow}
       showHeader={showHeader}
       dragEnabled={dragEnabled}
       isDropTarget={isDragging && col.key !== activeTask?.status}
@@ -862,7 +861,7 @@ export function TaskBoard({
               onLinkTask={async () => {}}
               onRemoveBlocker={async () => {}}
               onPause={async () => {}}
-              showSprint={showSprint}
+              showWorkflow={showWorkflow}
               outcomeMap={outcomeMap}
             />
           </div>

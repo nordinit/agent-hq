@@ -1,9 +1,9 @@
-import { listSprintTaskStatuses } from '../routing/policy/statuses';
+import { listWorkflowTaskStatuses } from '../routing/policy/statuses';
 import { createTaskRecord } from '../tasks/writeModel';
 import { VALID_STORY_POINTS } from '../tasks/fields';
 import { isTaskStatus } from '../../lib/taskStatuses';
 import { isValidTaskType } from '../../lib/taskTypes';
-import { isTaskTypeAllowedForSprintType } from '../sprint-definitions/config';
+import { isTaskTypeAllowedForWorkflowType } from '../workflow-definitions/config';
 import type {
   RecurringTaskOverlapPolicy,
   RecurringTaskRunRecord,
@@ -17,8 +17,8 @@ import { type Db } from "../../db/adapter/types";
 export interface CreateRecurringTaskSeriesInput {
   tenant_id?: number | null;
   project_id: number;
-  sprint_id: number;
-  workflow_id?: number;
+  workflow_id: number;
+
   title_template: string;
   description_template?: string;
   task_type: string;
@@ -50,8 +50,8 @@ export interface RecordRecurringTaskRunInput {
 export interface RecurringTaskSeriesFilters {
   tenant_id?: unknown;
   project_id?: unknown;
-  sprint_id?: unknown;
   workflow_id?: unknown;
+
   enabled?: unknown;
   next_run_from?: unknown;
   next_run_to?: unknown;
@@ -68,11 +68,11 @@ export interface SchedulePreview {
   occurrences: string[];
 }
 
-type SprintValidationRow = {
+type WorkflowValidationRow = {
   id: number;
   tenant_id: number | null;
   project_id: number;
-  sprint_type: string | null;
+  workflow_type: string | null;
   status: string | null;
   name: string | null;
 };
@@ -89,7 +89,7 @@ const WEEKDAY_INDEX: Record<string, number> = {
 
 const MINUTE_INTERVAL_MIN = 5;
 const MINUTE_INTERVAL_MAX = 1440;
-const TERMINAL_SPRINT_STATUSES = new Set(['complete', 'closed', 'archived', 'deleted']);
+const TERMINAL_WORKFLOW_STATUSES = new Set(['complete', 'closed', 'archived', 'deleted']);
 
 function badRequest(message: string, code?: string): Error & { status?: number; code?: string } {
   const err = new Error(message) as Error & { status?: number; code?: string };
@@ -109,13 +109,6 @@ function parsePositiveInteger(raw: unknown, fieldName: string): number {
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) throw badRequest(`${fieldName} is required`, `${fieldName}_required`);
   return value;
-}
-
-function coalesceWorkflowId(input: { sprint_id?: unknown; workflow_id?: unknown }): unknown {
-  if (input.workflow_id !== undefined && input.sprint_id !== undefined && String(input.workflow_id) !== String(input.sprint_id)) {
-    throw badRequest('workflow_id conflicts with sprint_id', 'workflow_id_conflict');
-  }
-  return input.workflow_id !== undefined ? input.workflow_id : input.sprint_id;
 }
 
 function parseOptionalPositiveInteger(raw: unknown, fieldName: string): number | null {
@@ -300,22 +293,22 @@ async function requireProject(db: Db, projectId: number, tenantId: number | null
   return row.tenant_id ?? tenantId;
 }
 
-async function requireSprintForProject(db: Db, projectId: number, sprintId: number, enabled: number, tenantId: number | null): Promise<SprintValidationRow> {
+async function requireWorkflowForProject(db: Db, projectId: number, workflowId: number, enabled: number, tenantId: number | null): Promise<WorkflowValidationRow> {
   const row = await db.get(`
-    SELECT id, tenant_id, project_id, sprint_type, status, name
-    FROM sprints
+    SELECT id, tenant_id, project_id, workflow_type, status, name
+    FROM workflows
     WHERE id = ?
     LIMIT 1
-  `, sprintId) as SprintValidationRow | undefined;
-  if (!row) throw badRequest(`workflow_id ${sprintId} does not exist`, 'workflow_not_found');
+  `, workflowId) as WorkflowValidationRow | undefined;
+  if (!row) throw badRequest(`workflow_id ${workflowId} does not exist`, 'workflow_not_found');
   if (tenantId != null && row.tenant_id !== tenantId) {
-    throw badRequest(`workflow_id ${sprintId} is not available in this tenant`, 'workflow_not_found');
+    throw badRequest(`workflow_id ${workflowId} is not available in this tenant`, 'workflow_not_found');
   }
   if (row.project_id !== projectId) {
-    throw badRequest(`workflow_id ${sprintId} does not belong to project_id ${projectId}`, 'workflow_project_mismatch');
+    throw badRequest(`workflow_id ${workflowId} does not belong to project_id ${projectId}`, 'workflow_project_mismatch');
   }
-  if (enabled && row.status && TERMINAL_SPRINT_STATUSES.has(row.status)) {
-    throw badRequest(`workflow_id ${sprintId} is not available for enabled recurring series`, 'fixed_workflow_unavailable');
+  if (enabled && row.status && TERMINAL_WORKFLOW_STATUSES.has(row.status)) {
+    throw badRequest(`workflow_id ${workflowId} is not available for enabled recurring series`, 'fixed_workflow_unavailable');
   }
   return row;
 }
@@ -329,25 +322,25 @@ async function requireAgent(db: Db, agentId: number | null, tenantId: number | n
   }
 }
 
-async function validateWorkflowFields(db: Db, sprint: SprintValidationRow, taskType: string, statusOnCreate: string): Promise<void> {
+async function validateWorkflowFields(db: Db, workflow: WorkflowValidationRow, taskType: string, statusOnCreate: string): Promise<void> {
   if (!isValidTaskType(taskType)) {
     throw badRequest(`task_type "${taskType}" is not supported`, 'task_type_unsupported');
   }
-  if (!await isTaskTypeAllowedForSprintType(db, sprint.sprint_type ?? 'generic', taskType)) {
-    throw badRequest(`task_type "${taskType}" is not allowed for sprint type "${sprint.sprint_type ?? 'generic'}"`, 'task_type_not_allowed_for_sprint_type');
+  if (!await isTaskTypeAllowedForWorkflowType(db, workflow.workflow_type ?? 'generic', taskType)) {
+    throw badRequest(`task_type "${taskType}" is not allowed for workflow type "${workflow.workflow_type ?? 'generic'}"`, 'task_type_not_allowed_for_workflow_type');
   }
   if (!isTaskStatus(statusOnCreate)) {
     throw badRequest(`status_on_create "${statusOnCreate}" is not supported`, 'status_on_create_unsupported');
   }
-  const statuses = (await listSprintTaskStatuses(db, sprint.id)).map(status => status.name);
+  const statuses = (await listWorkflowTaskStatuses(db, workflow.id)).map(status => status.name);
   if (statuses.length > 0 && !statuses.includes(statusOnCreate)) {
-    throw badRequest(`status_on_create "${statusOnCreate}" is not valid for workflow_id ${sprint.id}`, 'status_on_create_not_allowed_for_workflow');
+    throw badRequest(`status_on_create "${statusOnCreate}" is not valid for workflow_id ${workflow.id}`, 'status_on_create_not_allowed_for_workflow');
   }
 }
 
 async function normalizeCreateInput(db: Db, input: CreateRecurringTaskSeriesInput): Promise<CreateRecurringTaskSeriesInput> {
   const projectId = parsePositiveInteger(input.project_id, 'project_id');
-  const sprintId = parsePositiveInteger(coalesceWorkflowId(input), 'workflow_id');
+  const workflowId = parsePositiveInteger(input.workflow_id, 'workflow_id');
   const titleTemplate = parseRequiredString(input.title_template, 'title_template');
   const taskType = parseRequiredString(input.task_type, 'task_type');
   const statusOnCreate = parseRequiredString(input.status_on_create, 'status_on_create');
@@ -360,15 +353,15 @@ async function normalizeCreateInput(db: Db, input: CreateRecurringTaskSeriesInpu
   parseSchedule(scheduleExpression);
   assertValidTimezone(timezone);
   const tenantId = await requireProject(db, projectId, requestedTenantId);
-  const sprint = await requireSprintForProject(db, projectId, sprintId, enabled, tenantId);
+  const workflow = await requireWorkflowForProject(db, projectId, workflowId, enabled, tenantId);
   await requireAgent(db, agentId, tenantId);
-  await validateWorkflowFields(db, sprint, taskType, statusOnCreate);
+  await validateWorkflowFields(db, workflow, taskType, statusOnCreate);
 
   return {
     ...input,
     tenant_id: tenantId,
     project_id: projectId,
-    sprint_id: sprintId,
+    workflow_id: workflowId,
     title_template: titleTemplate,
     description_template: parseOptionalString(input.description_template) ?? '',
     task_type: taskType,
@@ -388,10 +381,10 @@ function normalizeSeries(row: RecurringTaskSeriesListItem | RecurringTaskSeriesR
   const enriched = row as RecurringTaskSeriesListItem;
   return {
     ...row,
-    workflow_id: row.sprint_id,
-    workflow_name: enriched.sprint_name ?? null,
-    workflow_status: enriched.sprint_status ?? null,
-    workflow_type: enriched.sprint_type ?? null,
+    workflow_id: row.workflow_id,
+    workflow_name: enriched.workflow_name ?? null,
+    workflow_status: enriched.workflow_status ?? null,
+    workflow_type: enriched.workflow_type ?? null,
     enabled: Boolean(row.enabled),
     schedule: row.schedule_expression,
     agent_pin: row.agent_id == null ? null : {
@@ -409,12 +402,12 @@ export async function createRecurringTaskSeries(
   const normalized = await normalizeCreateInput(db, input);
   const result = await db.run(`
     INSERT INTO recurring_task_series (
-      tenant_id, project_id, sprint_id, title_template, description_template, task_type, priority,
+      tenant_id, project_id, workflow_id, title_template, description_template, task_type, priority,
       story_points, status_on_create, schedule_expression, timezone, enabled,
       next_run_at, last_run_at, overlap_policy, agent_id, created_by, updated_by
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `, normalized.tenant_id ?? null, normalized.project_id, normalized.sprint_id, normalized.title_template, normalized.description_template ?? '', normalized.task_type, normalized.priority, normalized.story_points, normalized.status_on_create, normalized.schedule_expression, normalized.timezone, normalized.enabled, normalized.next_run_at ?? null, normalized.last_run_at ?? null, normalized.overlap_policy ?? 'skip_if_active', normalized.agent_id ?? null, normalized.created_by ?? 'system', normalized.updated_by ?? normalized.created_by ?? 'system');
+  `, normalized.tenant_id ?? null, normalized.project_id, normalized.workflow_id, normalized.title_template, normalized.description_template ?? '', normalized.task_type, normalized.priority, normalized.story_points, normalized.status_on_create, normalized.schedule_expression, normalized.timezone, normalized.enabled, normalized.next_run_at ?? null, normalized.last_run_at ?? null, normalized.overlap_policy ?? 'skip_if_active', normalized.agent_id ?? null, normalized.created_by ?? 'system', normalized.updated_by ?? normalized.created_by ?? 'system');
 
   return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, result.lastInsertId) as RecurringTaskSeriesRecord;
 }
@@ -427,7 +420,7 @@ export async function listRecurringTaskSeries(
   const params: unknown[] = [];
   const tenantId = parseOptionalPositiveInteger(filters.tenant_id, 'tenant_id');
   const projectId = parseOptionalPositiveInteger(filters.project_id, 'project_id');
-  const sprintId = parseOptionalPositiveInteger(coalesceWorkflowId(filters), 'workflow_id');
+  const workflowId = parseOptionalPositiveInteger(filters.workflow_id, 'workflow_id');
   if (tenantId != null) {
     conditions.push('rts.tenant_id = ?');
     params.push(tenantId);
@@ -436,9 +429,9 @@ export async function listRecurringTaskSeries(
     conditions.push('rts.project_id = ?');
     params.push(projectId);
   }
-  if (sprintId != null) {
-    conditions.push('rts.sprint_id = ?');
-    params.push(sprintId);
+  if (workflowId != null) {
+    conditions.push('rts.workflow_id = ?');
+    params.push(workflowId);
   }
   if (filters.enabled !== undefined && filters.enabled !== '') {
     conditions.push('rts.enabled = ?');
@@ -459,9 +452,9 @@ export async function listRecurringTaskSeries(
     SELECT
       rts.*,
       p.name AS project_name,
-      s.name AS sprint_name,
-      s.status AS sprint_status,
-      s.sprint_type AS sprint_type,
+      s.name AS workflow_name,
+      s.status AS workflow_status,
+      s.workflow_type AS workflow_type,
       a.name AS agent_name,
       latest.id AS latest_run_id,
       latest.status AS latest_run_status,
@@ -475,7 +468,7 @@ export async function listRecurringTaskSeries(
       ) AS generated_task_count
     FROM recurring_task_series rts
     LEFT JOIN projects p ON p.id = rts.project_id
-    LEFT JOIN sprints s ON s.id = rts.sprint_id
+    LEFT JOIN workflows s ON s.id = rts.workflow_id
     LEFT JOIN agents a ON a.id = rts.agent_id
     LEFT JOIN recurring_task_runs latest ON latest.id = (
       SELECT rtr.id
@@ -499,9 +492,9 @@ export async function getRecurringTaskSeries(db: Db, seriesId: number, tenantId?
     SELECT
       rts.*,
       p.name AS project_name,
-      s.name AS sprint_name,
-      s.status AS sprint_status,
-      s.sprint_type AS sprint_type,
+      s.name AS workflow_name,
+      s.status AS workflow_status,
+      s.workflow_type AS workflow_type,
       a.name AS agent_name,
       latest.id AS latest_run_id,
       latest.status AS latest_run_status,
@@ -515,7 +508,7 @@ export async function getRecurringTaskSeries(db: Db, seriesId: number, tenantId?
       ) AS generated_task_count
     FROM recurring_task_series rts
     LEFT JOIN projects p ON p.id = rts.project_id
-    LEFT JOIN sprints s ON s.id = rts.sprint_id
+    LEFT JOIN workflows s ON s.id = rts.workflow_id
     LEFT JOIN agents a ON a.id = rts.agent_id
     LEFT JOIN recurring_task_runs latest ON latest.id = (
       SELECT rtr.id
@@ -543,12 +536,12 @@ export async function updateRecurringTaskSeries(
   const normalized = await normalizeCreateInput(db, merged);
   await db.run(`
     UPDATE recurring_task_series
-    SET project_id = ?, sprint_id = ?, title_template = ?, description_template = ?,
+    SET project_id = ?, workflow_id = ?, title_template = ?, description_template = ?,
         task_type = ?, priority = ?, story_points = ?, status_on_create = ?,
         schedule_expression = ?, timezone = ?, enabled = ?, next_run_at = ?,
         overlap_policy = ?, agent_id = ?, updated_by = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
-  `, normalized.project_id, normalized.sprint_id, normalized.title_template, normalized.description_template ?? '', normalized.task_type, normalized.priority, normalized.story_points, normalized.status_on_create, normalized.schedule_expression, normalized.timezone, normalized.enabled, normalized.next_run_at ?? null, normalized.overlap_policy ?? 'skip_if_active', normalized.agent_id ?? null, normalized.updated_by ?? normalized.created_by ?? existing.updated_by ?? 'system', seriesId);
+  `, normalized.project_id, normalized.workflow_id, normalized.title_template, normalized.description_template ?? '', normalized.task_type, normalized.priority, normalized.story_points, normalized.status_on_create, normalized.schedule_expression, normalized.timezone, normalized.enabled, normalized.next_run_at ?? null, normalized.overlap_policy ?? 'skip_if_active', normalized.agent_id ?? null, normalized.updated_by ?? normalized.created_by ?? existing.updated_by ?? 'system', seriesId);
   return await db.get(`SELECT * FROM recurring_task_series WHERE id = ?`, seriesId) as RecurringTaskSeriesRecord;
 }
 
@@ -679,7 +672,7 @@ export async function runRecurringTaskSeriesNow(
           status: series.status_on_create,
           priority: series.priority,
           project_id: series.project_id,
-          sprint_id: series.sprint_id,
+          workflow_id: series.workflow_id,
           agent_id: series.agent_id,
           task_type: series.task_type,
           story_points: series.story_points,

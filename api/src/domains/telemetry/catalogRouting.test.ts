@@ -10,15 +10,15 @@ beforeEach(async()=>{
   db=await setupTestDb();
   await db.run("INSERT INTO tenants(id,name,slug) VALUES(1,'One','one'),(2,'Private','private')");
   await db.run("INSERT INTO projects(id,tenant_id,name) VALUES(1,1,'One'),(2,1,'Other'),(3,2,'Private')");
-  await db.run("INSERT INTO sprint_types(tenant_id,key,name,project_id) VALUES(1,'article','Article',1),(1,'other','Other',2),(2,'secret','Private',3)");
-  await db.run("INSERT INTO sprints(id,tenant_id,project_id,name,sprint_type) VALUES(1,1,1,'One','article'),(2,1,1,'Sibling','article'),(3,1,2,'Other','other'),(4,2,3,'Private','secret')");
+  await db.run("INSERT INTO workflow_types(tenant_id,key,name,project_id) VALUES(1,'article','Article',1),(1,'other','Other',2),(2,'secret','Private',3)");
+  await db.run("INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(1,1,1,'One','article'),(2,1,1,'Sibling','article'),(3,1,2,'Other','other'),(4,2,3,'Private','secret')");
 });
 afterEach(teardownTestDb);
 async function transition(id:number,tenant:number,project:number|null,workflow:number|null,type:string,enabled=1){
-  await db.run("INSERT INTO sprint_task_transitions(id,tenant_id,project_id,sprint_id,sprint_type,from_status,outcome,to_status,enabled) VALUES(?,?,?,?,?,'draft','submitted','review',?)",id,tenant,project,workflow,type,enabled);
+  await db.run("INSERT INTO workflow_task_transitions(id,tenant_id,project_id,workflow_id,workflow_type,from_status,outcome,to_status,enabled) VALUES(?,?,?,?,?,'draft','submitted','review',?)",id,tenant,project,workflow,type,enabled);
 }
 async function mapping(id:number,tenant:number,project:number|null,workflow:number|null,type:string|null,event='article_received'){
-  await db.run("INSERT INTO external_event_mappings(id,tenant_id,project_id,sprint_id,sprint_type,source,event_name,action_kind,action_target,status_includes_json,status_excludes_json) VALUES(?,?,?,?,?,'webhook',?,'status','review','[\"draft\"]','[\"cancelled\"]')",id,tenant,project,workflow,type,event);
+  await db.run("INSERT INTO external_event_mappings(id,tenant_id,project_id,workflow_id,workflow_type,source,event_name,action_kind,action_target,status_includes_json,status_excludes_json) VALUES(?,?,?,?,?,'webhook',?,'status','review','[\"draft\"]','[\"cancelled\"]')",id,tenant,project,workflow,type,event);
 }
 it('discovers canonical scoped transitions with disabled overrides and excludes sibling/private routing',async()=>{
   await transition(1,1,1,null,'article');await transition(2,1,1,1,'article',0);await transition(3,1,1,2,'article');

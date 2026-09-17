@@ -1,5 +1,5 @@
 import { RELEASE_TASK_STATUSES, DEFAULT_TERMINAL_TASK_STATUS_SEEDS } from '../../../lib/taskStatuses';
-import type { PolicyRequirementSeed, PolicyTransitionSeed, SprintSeedRow, StarterSprintType } from './types';
+import type { PolicyRequirementSeed, PolicyTransitionSeed, WorkflowSeedRow, StarterWorkflowType } from './types';
 import { type Db } from "../../../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../../db/introspection";
 
@@ -99,7 +99,7 @@ export async function ensureRoutingMetadata(db: Db): Promise<void> {
   `);
   try {
     await db.run(`
-      UPDATE sprint_task_transitions
+      UPDATE workflow_task_transitions
       SET is_protected = 0
       WHERE COALESCE(is_protected, 0) != 0
     `);
@@ -119,7 +119,7 @@ export async function tenantPredicate(db: Db, tableName: string, alias: string, 
   return { sql: ` AND ${alias}.tenant_id = ?`, params: [tenantId] };
 }
 
-export async function sprintTypeTenantPredicate(db: Db, tableName: string, tenantId?: number | null): Promise<{ sql: string; params: unknown[] }> {
+export async function workflowTypeTenantPredicate(db: Db, tableName: string, tenantId?: number | null): Promise<{ sql: string; params: unknown[] }> {
   if (tenantId == null || !await tableHasColumn(db, tableName, 'tenant_id')) return { sql: '', params: [] };
   return { sql: ` AND tenant_id = ?`, params: [tenantId] };
 }
@@ -144,7 +144,7 @@ export function parseJsonObject(value: string | null | undefined): Record<string
   }
 }
 
-export function buildCanonicalPolicyStatuses(sprintType: string | null | undefined): Array<{
+export function buildCanonicalPolicyStatuses(workflowType: string | null | undefined): Array<{
   name: string;
   label: string;
   color: string;
@@ -153,9 +153,9 @@ export function buildCanonicalPolicyStatuses(sprintType: string | null | undefin
   allowed_transitions: string;
   emoji: string | null;
 }> {
-  const visibleStatuses = visibleWorkflowStatusesForSprintType(sprintType);
+  const visibleStatuses = visibleWorkflowStatusesForWorkflowType(workflowType);
   const allowedByStatus = new Map<string, Set<string>>();
-  for (const row of policyTransitionsForSprintType(sprintType)) {
+  for (const row of policyTransitionsForWorkflowType(workflowType)) {
     if (!row.enabled) continue;
     if (!allowedByStatus.has(row.from_status)) allowedByStatus.set(row.from_status, new Set());
     allowedByStatus.get(row.from_status)!.add(row.to_status);
@@ -174,8 +174,8 @@ export function buildCanonicalPolicyStatuses(sprintType: string | null | undefin
   }));
 }
 
-export function visibleWorkflowStatusesForSprintType(sprintType: string | null | undefined): string[] {
-  const type = starterSprintType(sprintType);
+export function visibleWorkflowStatusesForWorkflowType(workflowType: string | null | undefined): string[] {
+  const type = starterWorkflowType(workflowType);
   if (type === 'generic') return [...GENERIC_WORKFLOW_STATUSES];
   if (type === 'ops') return [...OPS_WORKFLOW_STATUSES];
   if (type === 'lead_generation') return [...LEAD_GENERATION_WORKFLOW_STATUSES];
@@ -204,18 +204,18 @@ export function colorForStatus(status: string): string {
   return 'slate';
 }
 
-export function normalizeSprintType(value: string | null | undefined): string | null {
+export function normalizeWorkflowType(value: string | null | undefined): string | null {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
   return normalized.length > 0 ? normalized : null;
 }
 
-export function starterSprintType(value: string | null | undefined): StarterSprintType | null {
-  const normalized = normalizeSprintType(value);
+export function starterWorkflowType(value: string | null | undefined): StarterWorkflowType | null {
+  const normalized = normalizeWorkflowType(value);
   return normalized === 'dev' || normalized === 'generic' || normalized === 'ops' || normalized === 'lead_generation' ? normalized : null;
 }
 
-export function isStarterPolicySprintType(value: string | null | undefined): boolean {
-  return starterSprintType(value) != null;
+export function isStarterPolicyWorkflowType(value: string | null | undefined): boolean {
+  return starterWorkflowType(value) != null;
 }
 
 export function genericWorkflowTransitions(): PolicyTransitionSeed[] {
@@ -311,46 +311,46 @@ export function devWorkflowTransitions(): PolicyTransitionSeed[] {
 
 async function removeQaPassFromDevelopmentStatusMetadata(db: Db): Promise<void> {
   try {
-    if (await tableExists(db, 'sprint_type_task_statuses')) {
+    if (await tableExists(db, 'workflow_type_task_statuses')) {
       await db.run(`
-        DELETE FROM sprint_type_task_statuses
-        WHERE sprint_type_key = 'dev'
+        DELETE FROM workflow_type_task_statuses
+        WHERE workflow_type_key = 'dev'
           AND status_key = 'qa_pass'
       `);
       const rows = await db.all(`
         SELECT id, allowed_transitions_json
-        FROM sprint_type_task_statuses
-        WHERE sprint_type_key = 'dev'
+        FROM workflow_type_task_statuses
+        WHERE workflow_type_key = 'dev'
       `) as Array<{ id: number; allowed_transitions_json: string | null }>;
       for (const row of rows) {
         const next = parseJsonArray(row.allowed_transitions_json)
           .map(status => status === 'qa_pass' ? 'ready_to_merge' : status);
         await db.run(`
-          UPDATE sprint_type_task_statuses
+          UPDATE workflow_type_task_statuses
           SET allowed_transitions_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
           WHERE id = ?
         `, JSON.stringify([...new Set(next)]), row.id);
       }
     }
 
-    if (await tableExists(db, 'sprint_task_statuses') && await tableExists(db, 'sprints')) {
+    if (await tableExists(db, 'workflow_task_statuses') && await tableExists(db, 'workflows')) {
       await db.run(`
-        DELETE FROM sprint_task_statuses
+        DELETE FROM workflow_task_statuses
         WHERE status_key = 'qa_pass'
-          AND sprint_id IN (SELECT id FROM sprints WHERE sprint_type = 'dev')
+          AND workflow_id IN (SELECT id FROM workflows WHERE workflow_type = 'dev')
       `);
       const rows = await db.all(`
         SELECT sts.id, sts.allowed_transitions_json
-        FROM sprint_task_statuses sts
-        JOIN sprints s ON s.id = sts.sprint_id
-        WHERE s.sprint_type = 'dev'
+        FROM workflow_task_statuses sts
+        JOIN workflows s ON s.id = sts.workflow_id
+        WHERE s.workflow_type = 'dev'
       `) as Array<{ id: number; allowed_transitions_json: string | null }>;
       for (const row of rows) {
         const next = parseJsonArray(row.allowed_transitions_json)
           .map(status => status === 'qa_pass' ? 'ready_to_merge' : status)
           .filter(status => status !== 'qa_pass');
         await db.run(`
-          UPDATE sprint_task_statuses
+          UPDATE workflow_task_statuses
           SET allowed_transitions_json = ?, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
           WHERE id = ?
         `, JSON.stringify([...new Set(next)]), row.id);
@@ -391,16 +391,16 @@ async function normalizeQaPassDevelopmentTransitions(db: Db): Promise<void> {
         WHERE from_status = 'qa_pass'
       `);
     }
-    if (await tableExists(db, 'sprint_task_transitions')) {
-      const hasSprintType = await tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
-      const hasSprintId = await tableHasColumn(db, 'sprint_task_transitions', 'sprint_id');
-      const scopeSql = hasSprintType
-        ? `sprint_type = 'dev'`
-        : hasSprintId && await tableExists(db, 'sprints')
-          ? `sprint_id IN (SELECT id FROM sprints WHERE sprint_type = 'dev')`
+    if (await tableExists(db, 'workflow_task_transitions')) {
+      const hasWorkflowType = await tableHasColumn(db, 'workflow_task_transitions', 'workflow_type');
+      const hasWorkflowId = await tableHasColumn(db, 'workflow_task_transitions', 'workflow_id');
+      const scopeSql = hasWorkflowType
+        ? `workflow_type = 'dev'`
+        : hasWorkflowId && await tableExists(db, 'workflows')
+          ? `workflow_id IN (SELECT id FROM workflows WHERE workflow_type = 'dev')`
           : `0`;
       await db.run(`
-        UPDATE sprint_task_transitions
+        UPDATE workflow_task_transitions
         SET to_status = 'ready_to_merge', updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE from_status = 'review'
           AND outcome = 'qa_pass'
@@ -408,7 +408,7 @@ async function normalizeQaPassDevelopmentTransitions(db: Db): Promise<void> {
           AND (${scopeSql})
       `);
       await db.run(`
-        UPDATE sprint_task_transitions
+        UPDATE workflow_task_transitions
         SET enabled = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE from_status = 'qa_pass'
           AND (${scopeSql})
@@ -419,8 +419,8 @@ async function normalizeQaPassDevelopmentTransitions(db: Db): Promise<void> {
   }
 }
 
-export function policyTransitionsForSprintType(sprintType: string | null | undefined): PolicyTransitionSeed[] {
-  const type = starterSprintType(sprintType);
+export function policyTransitionsForWorkflowType(workflowType: string | null | undefined): PolicyTransitionSeed[] {
+  const type = starterWorkflowType(workflowType);
   if (type === 'dev') return devWorkflowTransitions();
   if (type === 'generic') return genericWorkflowTransitions();
   if (type === 'ops') return opsWorkflowTransitions();
@@ -453,60 +453,60 @@ export function devWorkflowRequirements(): PolicyRequirementSeed[] {
   return rows;
 }
 
-export function policyRequirementsForSprintType(sprintType: string | null | undefined): PolicyRequirementSeed[] {
-  return starterSprintType(sprintType) === 'dev' ? devWorkflowRequirements() : [];
+export function policyRequirementsForWorkflowType(workflowType: string | null | undefined): PolicyRequirementSeed[] {
+  return starterWorkflowType(workflowType) === 'dev' ? devWorkflowRequirements() : [];
 }
 
-export async function getSprintSeedRow(db: Db, sprintId: number): Promise<SprintSeedRow | null> {
+export async function getWorkflowSeedRow(db: Db, workflowId: number): Promise<WorkflowSeedRow | null> {
   try {
-    const selectSeededAt = await tableHasColumn(db, 'sprints', 'task_policy_seeded_at') ? ', task_policy_seeded_at' : '';
-    const selectTenantId = await tableHasColumn(db, 'sprints', 'tenant_id') ? ', tenant_id' : '';
+    const selectSeededAt = await tableHasColumn(db, 'workflows', 'task_policy_seeded_at') ? ', task_policy_seeded_at' : '';
+    const selectTenantId = await tableHasColumn(db, 'workflows', 'tenant_id') ? ', tenant_id' : '';
     return await db.get(`
-      SELECT id, project_id, sprint_type${selectTenantId}${selectSeededAt}
-      FROM sprints
+      SELECT id, project_id, workflow_type${selectTenantId}${selectSeededAt}
+      FROM workflows
       WHERE id = ?
       LIMIT 1
-    `, sprintId) as SprintSeedRow | undefined ?? null;
+    `, workflowId) as WorkflowSeedRow | undefined ?? null;
   } catch {
     return null;
   }
 }
 
-export async function isSprintTaskPolicySeeded(db: Db, sprintId: number): Promise<boolean> {
-  if (!await tableHasColumn(db, 'sprints', 'task_policy_seeded_at')) return false;
-  const sprint = await getSprintSeedRow(db, sprintId);
-  return Boolean(sprint?.task_policy_seeded_at);
+export async function isWorkflowTaskPolicySeeded(db: Db, workflowId: number): Promise<boolean> {
+  if (!await tableHasColumn(db, 'workflows', 'task_policy_seeded_at')) return false;
+  const workflow = await getWorkflowSeedRow(db, workflowId);
+  return Boolean(workflow?.task_policy_seeded_at);
 }
 
-export async function markSprintTaskPolicySeeded(db: Db, sprintId: number): Promise<void> {
-  if (!await tableHasColumn(db, 'sprints', 'task_policy_seeded_at')) return;
+export async function markWorkflowTaskPolicySeeded(db: Db, workflowId: number): Promise<void> {
+  if (!await tableHasColumn(db, 'workflows', 'task_policy_seeded_at')) return;
   await db.run(`
-    UPDATE sprints
+    UPDATE workflows
     SET task_policy_seeded_at = COALESCE(task_policy_seeded_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     WHERE id = ?
-  `, sprintId);
+  `, workflowId);
 }
 
-export async function isSprintTypeStatusSeeded(db: Db, sprintType: string, tenantId?: number | null): Promise<boolean> {
-  if (!await tableHasColumn(db, 'sprint_types', 'status_seeded_at')) return false;
-  const tenant = await sprintTypeTenantPredicate(db, 'sprint_types', tenantId);
+export async function isWorkflowTypeStatusSeeded(db: Db, workflowType: string, tenantId?: number | null): Promise<boolean> {
+  if (!await tableHasColumn(db, 'workflow_types', 'status_seeded_at')) return false;
+  const tenant = await workflowTypeTenantPredicate(db, 'workflow_types', tenantId);
   const row = await db.get(`
     SELECT status_seeded_at
-    FROM sprint_types
+    FROM workflow_types
     WHERE key = ?
       ${tenant.sql}
     LIMIT 1
-  `, sprintType, ...tenant.params) as { status_seeded_at?: string | null } | undefined;
+  `, workflowType, ...tenant.params) as { status_seeded_at?: string | null } | undefined;
   return Boolean(row?.status_seeded_at);
 }
 
-export async function markSprintTypeStatusSeeded(db: Db, sprintType: string, tenantId?: number | null): Promise<void> {
-  if (!await tableHasColumn(db, 'sprint_types', 'status_seeded_at')) return;
-  const tenant = await sprintTypeTenantPredicate(db, 'sprint_types', tenantId);
+export async function markWorkflowTypeStatusSeeded(db: Db, workflowType: string, tenantId?: number | null): Promise<void> {
+  if (!await tableHasColumn(db, 'workflow_types', 'status_seeded_at')) return;
+  const tenant = await workflowTypeTenantPredicate(db, 'workflow_types', tenantId);
   await db.run(`
-    UPDATE sprint_types
+    UPDATE workflow_types
     SET status_seeded_at = COALESCE(status_seeded_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     WHERE key = ?
       ${tenant.sql}
-  `, sprintType, ...tenant.params);
+  `, workflowType, ...tenant.params);
 }

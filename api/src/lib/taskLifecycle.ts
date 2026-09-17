@@ -374,11 +374,11 @@ function resolveCleanupRepoContext(row: {
 }
 
 export async function taskHasConfiguredTerminalStatus(db: Db, taskId: number): Promise<boolean> {
-  const hasSprint = await sharedColumnExists(db, 'tasks', 'sprint_id');
+  const hasWorkflow = await sharedColumnExists(db, 'tasks', 'workflow_id');
   const hasTenant = await sharedColumnExists(db, 'tasks', 'tenant_id');
-  const task = await db.get(`SELECT status, ${hasSprint ? 'sprint_id' : 'NULL AS sprint_id'}, ${hasTenant ? 'tenant_id' : 'NULL AS tenant_id'} FROM tasks WHERE id = ?`, taskId) as { status: string; sprint_id: number | null; tenant_id: number | null } | undefined;
+  const task = await db.get(`SELECT status, ${hasWorkflow ? 'workflow_id' : 'NULL AS workflow_id'}, ${hasTenant ? 'tenant_id' : 'NULL AS tenant_id'} FROM tasks WHERE id = ?`, taskId) as { status: string; workflow_id: number | null; tenant_id: number | null } | undefined;
   if (!task) return false;
-  return (await listConfiguredTerminalStatuses(db, { sprintId: task.sprint_id, tenantId: task.tenant_id })).includes(task.status);
+  return (await listConfiguredTerminalStatuses(db, { workflowId: task.workflow_id, tenantId: task.tenant_id })).includes(task.status);
 }
 
 export async function cleanupTerminalTaskWorkspaces(db: Db, taskId: number): Promise<number> {

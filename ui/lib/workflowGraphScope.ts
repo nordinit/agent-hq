@@ -12,7 +12,7 @@
 /** The scope fields the graph endpoint puts on edges, assignments and gates. */
 export interface ScopeAnnotated {
   is_override?: boolean;
-  effective_for_sprint?: boolean;
+  effective_for_workflow?: boolean;
 }
 
 export type ScopePresentation =
@@ -29,7 +29,7 @@ export function scopePresentation(row: ScopeAnnotated, workflowSelected: boolean
   if (!workflowSelected) return 'not-applicable';
   // Superseded is checked first: a row can only be superseded if it is inherited, and that is
   // the more important fact about it — it is present in the config but does nothing.
-  if (row.effective_for_sprint === false) return 'superseded';
+  if (row.effective_for_workflow === false) return 'superseded';
   return row.is_override ? 'override' : 'inherited';
 }
 

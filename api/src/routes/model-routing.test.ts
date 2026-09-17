@@ -33,15 +33,15 @@ async function resetDb(): Promise<void> {
     VALUES (1, 1, 'Agent HQ'), (2, 1, 'Other')
   `);
   await db.run(`
-    INSERT INTO sprint_types (tenant_id, key, name)
+    INSERT INTO workflow_types (tenant_id, key, name)
     VALUES (1, 'dev', 'Development'), (1, 'generic', 'Generic')
   `);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+    INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
     VALUES
       (10, 1, 1, 'Enhancements', 'dev'),
       (11, 1, 1, 'Bugs', 'dev'),
-      (20, 1, 2, 'Other Sprint', 'generic')
+      (20, 1, 2, 'Other Workflow', 'generic')
   `);
 }
 
@@ -97,7 +97,7 @@ describe('model-routing aliases', () => {
   it('lists serialized story point aliases for existing rules', async () => {
     const db = getDb();
     await db.run(`
-      INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, max_points, provider, model, fallback_model, thinking_level, fast_mode, label)
+      INSERT INTO story_point_model_routing (tenant_id, project_id, workflow_id, max_points, provider, model, fallback_model, thinking_level, fast_mode, label)
       VALUES (1, 1, NULL, 3, 'anthropic', 'claude-sonnet-4-5', NULL, 'low', 0, 'small')
     `);
 
@@ -107,7 +107,7 @@ describe('model-routing aliases', () => {
       const body = await response.json();
       expect(response.status).toBe(200);
       expect(body).toEqual([
-        expect.objectContaining({ project_id: 1, sprint_id: null, max_points: 3, max_story_points: 3, min_story_points: 1, provider: 'anthropic', thinking_level: 'low', fast_mode: false, scope: 'project' }),
+        expect.objectContaining({ project_id: 1, workflow_id: null, max_points: 3, max_story_points: 3, min_story_points: 1, provider: 'anthropic', thinking_level: 'low', fast_mode: false, scope: 'project' }),
       ]);
     } finally {
       await stopTestServer(server);
@@ -238,7 +238,7 @@ describe('model-routing aliases', () => {
     }
   });
 
-  it('creates and lists model routing rules in a project sprint scope', async () => {
+  it('creates and lists model routing rules in a project workflow scope', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const create = await fetch(`${baseUrl}/api/v1/model-routing`, {
@@ -246,7 +246,7 @@ describe('model-routing aliases', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: 1,
-          sprint_id: 10,
+          workflow_id: 10,
           max_points: 5,
           provider: 'openai-codex',
           model: 'openai/gpt-5.5',
@@ -255,19 +255,19 @@ describe('model-routing aliases', () => {
       });
       expect(create.status).toBe(201);
 
-      const scoped = await fetch(`${baseUrl}/api/v1/model-routing?project_id=1&sprint_id=10`);
+      const scoped = await fetch(`${baseUrl}/api/v1/model-routing?project_id=1&workflow_id=10`);
       const scopedBody = await scoped.json();
       expect(scoped.status).toBe(200);
       expect(scopedBody).toEqual([
         expect.objectContaining({
           project_id: 1,
-          sprint_id: 10,
+          workflow_id: 10,
           max_points: 5,
           model: 'openai/gpt-5.5',
         }),
       ]);
 
-      const other = await fetch(`${baseUrl}/api/v1/model-routing?project_id=2&sprint_id=20`);
+      const other = await fetch(`${baseUrl}/api/v1/model-routing?project_id=2&workflow_id=20`);
       expect(await other.json()).toEqual([]);
     } finally {
       await stopTestServer(server);
@@ -290,24 +290,24 @@ describe('model-routing aliases', () => {
       });
       expect(create.status).toBe(201);
       await expect(create.json()).resolves.toEqual(expect.objectContaining({
-        sprint_id: 10,
         workflow_id: 10,
-        sprint_type: null,
+
         workflow_type: null,
-        scope: 'project_sprint',
+
+        scope: 'project_workflow',
       }));
 
       const scoped = await fetch(`${baseUrl}/api/v1/model-routing?project_id=1&workflow_id=10`);
       expect(scoped.status).toBe(200);
       await expect(scoped.json()).resolves.toEqual([
-        expect.objectContaining({ project_id: 1, sprint_id: 10, workflow_id: 10, max_points: 5 }),
+        expect.objectContaining({ project_id: 1, workflow_id: 10,  max_points: 5 }),
       ]);
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('creates, updates, and lists model routing rules in a project sprint-type scope', async () => {
+  it('creates, updates, and lists model routing rules in a project workflow-type scope', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const create = await fetch(`${baseUrl}/api/v1/model-routing`, {
@@ -315,7 +315,7 @@ describe('model-routing aliases', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: 1,
-          sprint_type: 'dev',
+          workflow_type: 'dev',
           max_points: 8,
           provider: null,
           model: 'openai/gpt-5.5',
@@ -326,23 +326,23 @@ describe('model-routing aliases', () => {
       expect(create.status).toBe(201);
       expect(created).toEqual(expect.objectContaining({
         project_id: 1,
-        sprint_id: null,
-        sprint_type: 'dev',
-        scope: 'project_sprint_type',
+        workflow_id: null,
+        workflow_type: 'dev',
+        scope: 'project_workflow_type',
       }));
 
       const update = await fetch(`${baseUrl}/api/v1/model-routing/${created.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_points: 13, sprint_type: 'dev' }),
+        body: JSON.stringify({ max_points: 13, workflow_type: 'dev' }),
       });
       expect(update.status).toBe(200);
-      await expect(update.json()).resolves.toEqual(expect.objectContaining({ max_points: 13, sprint_type: 'dev' }));
+      await expect(update.json()).resolves.toEqual(expect.objectContaining({ max_points: 13, workflow_type: 'dev' }));
 
-      const scoped = await fetch(`${baseUrl}/api/v1/model-routing?project_id=1&sprint_type=dev`);
+      const scoped = await fetch(`${baseUrl}/api/v1/model-routing?project_id=1&workflow_type=dev`);
       expect(scoped.status).toBe(200);
       await expect(scoped.json()).resolves.toEqual([
-        expect.objectContaining({ project_id: 1, sprint_id: null, sprint_type: 'dev', max_points: 13 }),
+        expect.objectContaining({ project_id: 1, workflow_id: null, workflow_type: 'dev', max_points: 13 }),
       ]);
     } finally {
       await stopTestServer(server);
@@ -367,11 +367,11 @@ describe('model-routing aliases', () => {
       expect(create.status).toBe(201);
       expect(created).toEqual(expect.objectContaining({
         project_id: 1,
-        sprint_id: null,
         workflow_id: null,
-        sprint_type: 'dev',
+
         workflow_type: 'dev',
-        scope: 'project_sprint_type',
+
+        scope: 'project_workflow_type',
       }));
 
       const update = await fetch(`${baseUrl}/api/v1/model-routing/${created.id}`, {
@@ -385,21 +385,21 @@ describe('model-routing aliases', () => {
       const scoped = await fetch(`${baseUrl}/api/v1/model-routing?project_id=1&workflow_type=dev`);
       expect(scoped.status).toBe(200);
       await expect(scoped.json()).resolves.toEqual([
-        expect.objectContaining({ project_id: 1, sprint_id: null, workflow_id: null, sprint_type: 'dev', workflow_type: 'dev', max_points: 13 }),
+        expect.objectContaining({ project_id: 1, workflow_id: null,  workflow_type: 'dev',  max_points: 13 }),
       ]);
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('creates and lists model routing rules in an all-project sprint-type scope', async () => {
+  it('creates and lists model routing rules in an all-project workflow-type scope', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const create = await fetch(`${baseUrl}/api/v1/model-routing`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sprint_type: 'dev',
+          workflow_type: 'dev',
           max_points: 8,
           provider: null,
           model: 'openai/gpt-5.5',
@@ -410,28 +410,28 @@ describe('model-routing aliases', () => {
       expect(create.status).toBe(201);
       expect(created).toEqual(expect.objectContaining({
         project_id: null,
-        sprint_id: null,
-        sprint_type: 'dev',
-        scope: 'sprint_type',
+        workflow_id: null,
+        workflow_type: 'dev',
+        scope: 'workflow_type',
       }));
 
-      const scoped = await fetch(`${baseUrl}/api/v1/model-routing?sprint_type=dev`);
+      const scoped = await fetch(`${baseUrl}/api/v1/model-routing?workflow_type=dev`);
       expect(scoped.status).toBe(200);
       await expect(scoped.json()).resolves.toEqual([
-        expect.objectContaining({ project_id: null, sprint_id: null, sprint_type: 'dev', max_points: 8, scope: 'sprint_type' }),
+        expect.objectContaining({ project_id: null, workflow_id: null, workflow_type: 'dev', max_points: 8, scope: 'workflow_type' }),
       ]);
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('rejects unknown sprint_type scopes', async () => {
+  it('rejects unknown workflow_type scopes', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/model-routing`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'missing', max_points: 5, model: 'openai/gpt-5.5' }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'missing', max_points: 5, model: 'openai/gpt-5.5' }),
       });
       const body = await response.json() as { error: string };
 
@@ -462,7 +462,7 @@ describe('model-routing aliases', () => {
   it('rejects include_fallback on list requests', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
-      const response = await fetch(`${baseUrl}/api/v1/model-routing?project_id=1&sprint_id=10&include_fallback=true`);
+      const response = await fetch(`${baseUrl}/api/v1/model-routing?project_id=1&workflow_id=10&include_fallback=true`);
       const body = await response.json() as { error: string };
 
       expect(response.status).toBe(400);
@@ -475,7 +475,7 @@ describe('model-routing aliases', () => {
   it('preserves nullable fields when updating only the provider', async () => {
     const db = getDb();
     const inserted = await db.run(`
-      INSERT INTO story_point_model_routing (tenant_id, project_id, sprint_id, max_points, provider, model, fallback_model, thinking_level, label)
+      INSERT INTO story_point_model_routing (tenant_id, project_id, workflow_id, max_points, provider, model, fallback_model, thinking_level, label)
       VALUES (1, 1, NULL, 4, 'openai', 'openai/gpt-5.5', 'openai/gpt-5.4', 'high', 'Medium - OpenAI GPT-5.5')
     `);
 
@@ -508,10 +508,10 @@ describe('model-routing aliases', () => {
       VALUES (2, 'Beta Tenant', 'beta-tenant', 0)
     `);
     await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
-    await db.run(`UPDATE sprints SET tenant_id = ? WHERE id = 20`, betaTenantId);
+    await db.run(`UPDATE workflows SET tenant_id = ? WHERE id = 20`, betaTenantId);
     const inserted = await db.run(`
       INSERT INTO story_point_model_routing
-        (tenant_id, project_id, sprint_id, max_points, provider, model, label)
+        (tenant_id, project_id, workflow_id, max_points, provider, model, label)
       VALUES (?, 2, 20, 8, 'openai', 'openai/gpt-5.5', 'Beta private rule')
     `, betaTenantId);
     const betaRuleId = Number(inserted.lastInsertId);

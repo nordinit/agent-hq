@@ -1,17 +1,17 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { formatSprintLabel } from '@/lib/sprintLabel';
+import { formatWorkflowLabel } from '@/lib/workflowLabel';
 import { Activity, Check, ChevronDown, Plus, Search, X } from 'lucide-react';
-import type { Project, Sprint, TaskTypeOption } from '@/features/tasks/useTasksPageState';
+import type { Project, Workflow, TaskTypeOption } from '@/features/tasks/useTasksPageState';
 
-interface MultiSprintFilterProps {
-  sprints: Sprint[];
+interface MultiWorkflowFilterProps {
+  workflows: Workflow[];
   selectedIds: number[];
   onChange: (ids: number[]) => void;
 }
 
-export function MultiSprintFilter({ sprints, selectedIds, onChange }: MultiSprintFilterProps) {
+export function MultiWorkflowFilter({ workflows, selectedIds, onChange }: MultiWorkflowFilterProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -34,7 +34,7 @@ export function MultiSprintFilter({ sprints, selectedIds, onChange }: MultiSprin
     selectedIds.length === 0
       ? 'All workflows'
       : selectedIds.length === 1
-        ? sprints.find(s => s.id === selectedIds[0])?.name ?? '1 workflow'
+        ? workflows.find(s => s.id === selectedIds[0])?.name ?? '1 workflow'
         : `${selectedIds.length} workflows`;
 
   return (
@@ -65,7 +65,7 @@ export function MultiSprintFilter({ sprints, selectedIds, onChange }: MultiSprin
 
       {open && (
         <div className="absolute z-50 mt-1 w-full min-w-[220px] max-h-64 overflow-y-auto bg-slate-800 border border-slate-600 rounded-lg shadow-xl">
-          {sprints.length === 0 ? (
+          {workflows.length === 0 ? (
             <div className="px-3 py-2 text-sm text-slate-500 italic">No workflows available</div>
           ) : (
             <>
@@ -78,13 +78,13 @@ export function MultiSprintFilter({ sprints, selectedIds, onChange }: MultiSprin
                   Clear all ({selectedIds.length} selected)
                 </button>
               )}
-              {sprints.map(sprint => {
-                const selected = selectedIds.includes(sprint.id);
+              {workflows.map(workflow => {
+                const selected = selectedIds.includes(workflow.id);
                 return (
                   <button
-                    key={sprint.id}
+                    key={workflow.id}
                     type="button"
-                    onClick={() => toggle(sprint.id)}
+                    onClick={() => toggle(workflow.id)}
                     className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
                       selected
                         ? 'bg-amber-900/30 text-amber-200 hover:bg-amber-900/50'
@@ -96,8 +96,8 @@ export function MultiSprintFilter({ sprints, selectedIds, onChange }: MultiSprin
                     }`}>
                       {selected && <Check className="w-3 h-3 text-black" />}
                     </span>
-                    <span className="truncate flex-1">{formatSprintLabel(sprint)}</span>
-                    <span className="text-[10px] text-slate-500 flex-shrink-0">{sprint.status}</span>
+                    <span className="truncate flex-1">{formatWorkflowLabel(workflow)}</span>
+                    <span className="text-[10px] text-slate-500 flex-shrink-0">{workflow.status}</span>
                   </button>
                 );
               })}
@@ -109,19 +109,19 @@ export function MultiSprintFilter({ sprints, selectedIds, onChange }: MultiSprin
       {selectedIds.length > 1 && (
         <div className="flex flex-wrap gap-1 mt-1.5">
           {selectedIds.map(id => {
-            const sprint = sprints.find(s => s.id === id);
-            if (!sprint) return null;
+            const workflow = workflows.find(s => s.id === id);
+            if (!workflow) return null;
             return (
               <span
                 key={id}
                 className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] bg-amber-900/40 text-amber-300 border border-amber-700/50 rounded-full"
               >
-                <span className="truncate max-w-[120px]">{formatSprintLabel(sprint)}</span>
+                <span className="truncate max-w-[120px]">{formatWorkflowLabel(workflow)}</span>
                 <button
                   type="button"
                   onClick={() => toggle(id)}
                   className="hover:text-white transition-colors"
-                  aria-label={`Remove ${formatSprintLabel(sprint)}`}
+                  aria-label={`Remove ${formatWorkflowLabel(workflow)}`}
                 >
                   <X className="w-3 h-3" />
                 </button>

@@ -12,8 +12,8 @@ export interface RuntimeFailureWorkflowEventParams {
   priorTaskStatus: string;
   tenantId?: number | null;
   projectId: number | null;
-  sprintId?: number | null;
-  sprintType?: string | null;
+  workflowId?: number | null;
+  workflowType?: string | null;
   taskType: string | null;
   agentId: number | null;
   summary: string | null;
@@ -30,8 +30,8 @@ export async function applyConfiguredRuntimeFailedEvent(
       eventName: RUNTIME_FAILED_EVENT,
       tenantId: params.tenantId ?? null,
       projectId: params.projectId,
-      sprintId: params.sprintId ?? null,
-      sprintType: params.sprintType ?? null,
+      workflowId: params.workflowId ?? null,
+      workflowType: params.workflowType ?? null,
       taskType: params.taskType,
       currentStatus: params.priorTaskStatus,
     });

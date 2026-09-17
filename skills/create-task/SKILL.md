@@ -10,7 +10,7 @@ Create tasks as if downstream execution quality depends on the brief - because i
 ## Workflow
 
 1. **Resolve placement before writing**
-   - Identify the target `project_id`, workflow id (`sprint_id` compatibility field), and `job_id`.
+   - Identify the target `project_id`, workflow id (`workflow_id` compatibility field), and `job_id`.
    - If the user names a board, map it explicitly.
    - If the correct board is unclear, inspect existing Agent HQ projects/workflows/jobs/tasks for matching patterns before asking.
    - Prefer assigning the task to the execution lane that will actually do the work:
@@ -40,7 +40,7 @@ Create tasks as if downstream execution quality depends on the brief - because i
 
 4. **Set assignment fields deliberately**
    - `project_id`: portfolio/project container
-   - `sprint_id`: compatibility field for the workflow/board the task should appear under
+   - `workflow_id`: compatibility field for the workflow/board the task should appear under
    - `task_type`: **required** - this is what assignment rules match on to assign the right agent. Never leave null. Use: `backend`, `frontend`, `fullstack`, `data`, `qa`, `ops`, `pm`, `other`
    - `status`: use `todo` when creating tasks for human review before work begins; use `ready` when the task should be picked up immediately by agents
    - `priority`: `high`, `medium`, or `low`

@@ -62,15 +62,15 @@ async function loadCandidateTeams(db: Db, agentId: number): Promise<TeamCandidat
  */
 export async function resolveDispatchTeamId(
   db: Db,
-  params: { agentId: number; sprintId?: number | null },
+  params: { agentId: number; workflowId?: number | null },
 ): Promise<number | null> {
   const candidates = await loadCandidateTeams(db, params.agentId);
   if (candidates.length === 0) return null;
 
-  if (params.sprintId != null) {
+  if (params.workflowId != null) {
     const workflow = await db.get(
-      `SELECT team_id FROM sprints WHERE id = ?`,
-      params.sprintId,
+      `SELECT team_id FROM workflows WHERE id = ?`,
+      params.workflowId,
     ) as { team_id?: number | null } | undefined;
     const owningTeamId = workflow?.team_id ?? null;
     if (owningTeamId != null) {
@@ -162,11 +162,11 @@ export async function renderTeamContextForAgent(
  */
 export async function resolveTeamContextForDispatch(
   db: Db,
-  params: { agentId: number | null | undefined; sprintId?: number | null },
+  params: { agentId: number | null | undefined; workflowId?: number | null },
 ): Promise<ResolvedTeamContext | null> {
   if (params.agentId == null) return null;
   try {
-    const teamId = await resolveDispatchTeamId(db, { agentId: params.agentId, sprintId: params.sprintId ?? null });
+    const teamId = await resolveDispatchTeamId(db, { agentId: params.agentId, workflowId: params.workflowId ?? null });
     if (teamId == null) return null;
     const resolved = await renderTeamContextForAgent(db, { teamId, agentId: params.agentId });
     if (!resolved || !resolved.section) return null;

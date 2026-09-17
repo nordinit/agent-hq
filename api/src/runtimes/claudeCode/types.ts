@@ -134,7 +134,7 @@ export interface NormalizedClaudeCodeRuntimeConfig {
 /**
  * Everything `buildClaudeArgs` needs. Modelled as one explicit payload rather
  * than a pile of positional parameters so that the runtime boundary for a
- * dispatched node is a single inspectable object (sprint 111 #906).
+ * dispatched node is a single inspectable object (workflow 111 #906).
  *
  * The prompt is NOT part of this payload — it is written to the child's stdin,
  * because `--print -` reads the prompt from stdin. Putting a multi-KB prompt in

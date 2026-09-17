@@ -70,12 +70,12 @@ async function loadTaskContext(
 ): Promise<DispatchStartupFailureTaskContext | null> {
   const taskTenantExpr = await tableHasColumn(db, 'tasks', 'tenant_id') ? 't.tenant_id' : 'NULL';
   const hasProjects = await tableExists(db, 'projects');
-  const hasSprints = await tableExists(db, 'sprints');
+  const hasWorkflows = await tableExists(db, 'workflows');
   const projectNameExpr = hasProjects ? 'p.name' : 'NULL';
-  const workflowNameExpr = hasSprints ? 's.name' : 'NULL';
-  const workflowTypeExpr = hasSprints && await tableHasColumn(db, 'sprints', 'sprint_type') ? 's.sprint_type' : 'NULL';
+  const workflowNameExpr = hasWorkflows ? 's.name' : 'NULL';
+  const workflowTypeExpr = hasWorkflows && await tableHasColumn(db, 'workflows', 'workflow_type') ? 's.workflow_type' : 'NULL';
   const projectJoin = hasProjects ? 'LEFT JOIN projects p ON p.id = t.project_id' : '';
-  const sprintJoin = hasSprints ? 'LEFT JOIN sprints s ON s.id = t.sprint_id' : '';
+  const workflowJoin = hasWorkflows ? 'LEFT JOIN workflows s ON s.id = t.workflow_id' : '';
 
   try {
     const row = await db.get(`
@@ -88,7 +88,7 @@ async function loadTaskContext(
         ${workflowTypeExpr} AS workflow_type
       FROM tasks t
       ${projectJoin}
-      ${sprintJoin}
+      ${workflowJoin}
       WHERE t.id = ?
       LIMIT 1
     `, taskId) as {

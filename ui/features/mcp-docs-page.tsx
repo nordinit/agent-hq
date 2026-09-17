@@ -381,7 +381,7 @@ export default function McpDocsPage() {
               <ol className="mt-4 grid gap-3 text-sm leading-6 text-slate-300 lg:grid-cols-2">
                 {[
                   'Resolve tenant, project, task, and workflow context from the MCP identity and current task.',
-                  'Call agent_hq_get_workflow_metadata with sprint_id, plus task_type when fields are task-type-specific.',
+                  'Call agent_hq_get_workflow_metadata with workflow_id, plus task_type when fields are task-type-specific.',
                   'Resolve custom fields with metadata or agent_hq_list_workflow_type_field_schemas before create/update.',
                   'Resolve dependency keys with agent_hq_get_task_relationship_types before creating task links.',
                   'Resolve outcome and gate evidence requirements before lifecycle writes.',

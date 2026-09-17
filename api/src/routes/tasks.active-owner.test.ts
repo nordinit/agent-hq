@@ -13,7 +13,6 @@ import {
 } from '../lib/mcpApiAuth';
 import tasksRouter from './tasks';
 
-
 function restoreDbPath(): void {
 }
 
@@ -32,7 +31,7 @@ describe('task active-owner endpoint', () => {
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
     await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Agent HQ')`);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (57, 1, 86, 'Development', 'dev')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (57, 1, 86, 'Development', 'dev')`);
 
     await db.run(`
       INSERT INTO agents (id, tenant_id, project_id, name, session_key, slug, enabled, system_role)
@@ -41,7 +40,7 @@ describe('task active-owner endpoint', () => {
         (95, 1, 86, 'Prism', 'agent:prism:main', 'prism-qa', 1, NULL)
     `);
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id, agent_id, active_instance_id)
+      INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id, agent_id, active_instance_id)
       VALUES
         (398, 1, 'Wrong task', 'review', 86, 57, 94, NULL),
         (551, 1, 'Routing rule fix', 'in_progress', 86, 57, 94, NULL),

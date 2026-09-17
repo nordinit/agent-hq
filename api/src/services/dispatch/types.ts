@@ -8,9 +8,9 @@ export interface CandidateTask {
   tenant_id: number | null;
   project_id: number | null;
   task_type: string | null;
-  sprint_id: number | null;
-  sprint_name: string | null;
-  sprint_type: string | null;
+  workflow_id: number | null;
+  workflow_name: string | null;
+  workflow_type: string | null;
   created_at: string;
   blocking_count: number;
   story_points: number | null;

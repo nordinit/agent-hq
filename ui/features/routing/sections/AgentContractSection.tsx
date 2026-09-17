@@ -7,8 +7,8 @@ import { AlertTriangle, Check, RefreshCw, Save } from 'lucide-react';
 import type { ContractPlaceholderDefinition } from '../workflowConfigShared';
 
 export default function AgentContractSection() {
-  const [sprintTypes, setSprintTypes] = useState<Array<{ key: string; name: string }>>([]);
-  const [selectedSprintType, setSelectedSprintType] = useState('generic');
+  const [workflowTypes, setWorkflowTypes] = useState<Array<{ key: string; name: string }>>([]);
+  const [selectedWorkflowType, setSelectedWorkflowType] = useState('generic');
   const [content, setContent] = useState('');
   const [placeholderDefinitions, setPlaceholderDefinitions] = useState<ContractPlaceholderDefinition[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22,12 +22,12 @@ export default function AgentContractSection() {
   };
 
   useEffect(() => {
-    apiFetch<{ sprint_types?: Array<{ key: string; name: string }> }>('/api/v1/sprints/config')
+    apiFetch<{ workflow_types?: Array<{ key: string; name: string }> }>('/api/v1/workflows/config')
       .then(data => {
-        const types = data.sprint_types ?? [];
-        setSprintTypes(types.map(type => ({ key: type.key, name: type.name })));
-        if (types.length > 0 && !types.some(type => type.key === selectedSprintType)) {
-          setSelectedSprintType(types[0]?.key ?? 'generic');
+        const types = data.workflow_types ?? [];
+        setWorkflowTypes(types.map(type => ({ key: type.key, name: type.name })));
+        if (types.length > 0 && !types.some(type => type.key === selectedWorkflowType)) {
+          setSelectedWorkflowType(types[0]?.key ?? 'generic');
         }
       })
       .catch(e => showToast('error', `Failed to load workflow types: ${e}`));
@@ -35,7 +35,7 @@ export default function AgentContractSection() {
 
   useEffect(() => {
     setLoading(true);
-    apiFetch<{ content: string; inherited_from?: string | null; placeholder_definitions?: ContractPlaceholderDefinition[] }>(`/api/v1/routing/agent-contract?sprint_type=${encodeURIComponent(selectedSprintType)}`)
+    apiFetch<{ content: string; inherited_from?: string | null; placeholder_definitions?: ContractPlaceholderDefinition[] }>(`/api/v1/routing/agent-contract?workflow_type=${encodeURIComponent(selectedWorkflowType)}`)
       .then(data => {
         setContent(data.content ?? '');
         setInheritedFrom(data.inherited_from ?? null);
@@ -43,7 +43,7 @@ export default function AgentContractSection() {
       })
       .catch(e => showToast('error', `Failed to load: ${e}`))
       .finally(() => setLoading(false));
-  }, [selectedSprintType]);
+  }, [selectedWorkflowType]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -51,14 +51,14 @@ export default function AgentContractSection() {
       const res = await fetch('/api/v1/routing/agent-contract', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sprint_type: selectedSprintType, content }),
+        body: JSON.stringify({ workflow_type: selectedWorkflowType, content }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         throw new Error(err.error ?? res.statusText);
       }
       setInheritedFrom(null);
-      showToast('success', `Agent contract saved for ${selectedSprintType}.`);
+      showToast('success', `Agent contract saved for ${selectedWorkflowType}.`);
     } catch (e) {
       showToast('error', `Save failed: ${e}`);
     } finally {
@@ -103,11 +103,11 @@ export default function AgentContractSection() {
         <label className="text-sm text-slate-300">
           Workflow type
           <select
-            value={selectedSprintType}
-            onChange={e => setSelectedSprintType(e.target.value)}
+            value={selectedWorkflowType}
+            onChange={e => setSelectedWorkflowType(e.target.value)}
             className="ml-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
           >
-            {sprintTypes.map(type => (
+            {workflowTypes.map(type => (
               <option key={type.key} value={type.key}>{type.name}</option>
             ))}
           </select>

@@ -14,13 +14,13 @@ beforeEach(async()=>{
   db=await setupTestDb();
   await db.exec(`INSERT INTO tenants(id,name,slug) VALUES(1,'One','one');
     INSERT INTO projects(id,tenant_id,name) VALUES(1,1,'Source'),(2,1,'Destination');
-    INSERT INTO sprint_types(tenant_id,key,name,project_id) VALUES(1,'source','Source',1),(1,'target','Target',2),(1,'other','Other target schema',2);
-    INSERT INTO sprints(id,tenant_id,project_id,name,sprint_type) VALUES(1,1,1,'Source','source'),(2,1,2,'Destination','target');
+    INSERT INTO workflow_types(tenant_id,key,name,project_id) VALUES(1,'source','Source',1),(1,'target','Target',2),(1,'other','Other target schema',2);
+    INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(1,1,1,'Source','source'),(2,1,2,'Destination','target');
     INSERT INTO agents(id,tenant_id,project_id,name,session_key) VALUES(1,1,1,'Source agent','source'),(2,1,2,'Destination agent','target');
-    INSERT INTO sprint_type_task_types(tenant_id,sprint_type_key,task_type) VALUES(1,'source','draft_article'),(1,'target','publish_article');
-    INSERT INTO sprint_type_task_statuses(tenant_id,sprint_type_key,status_key,label) VALUES(1,'source','approved_old','Old approval'),(1,'target','accepted_new','New acceptance');
-    INSERT INTO sprint_type_outcomes(tenant_id,sprint_type_key,outcome_key,label) VALUES(1,'source','handoff_old','Old handoff'),(1,'target','handoff_new','New handoff');`);
-  await db.run("INSERT INTO task_field_schemas(id,tenant_id,sprint_type_key,schema_json) VALUES(1,1,'source',?),(2,1,'target',?),(3,1,'other',?)",schema,schema,schema);
+    INSERT INTO workflow_type_task_types(tenant_id,workflow_type_key,task_type) VALUES(1,'source','draft_article'),(1,'target','publish_article');
+    INSERT INTO workflow_type_task_statuses(tenant_id,workflow_type_key,status_key,label) VALUES(1,'source','approved_old','Old approval'),(1,'target','accepted_new','New acceptance');
+    INSERT INTO workflow_type_outcomes(tenant_id,workflow_type_key,outcome_key,label) VALUES(1,'source','handoff_old','Old handoff'),(1,'target','handoff_new','New handoff');`);
+  await db.run("INSERT INTO task_field_schemas(id,tenant_id,workflow_type_key,schema_json) VALUES(1,1,'source',?),(2,1,'target',?),(3,1,'other',?)",schema,schema,schema);
 });
 afterEach(async()=>{await teardownTestDb();});
 async function pack(definition:MetricDefinition,scope=source){
@@ -42,7 +42,7 @@ it('remaps before/after field IDs using the mapped workflow schema rather than a
 });
 
 it('uses mapped task-type scope to select the corresponding custom-field override',async()=>{
-  await db.run("INSERT INTO task_field_schemas(id,tenant_id,sprint_type_key,task_type,schema_json) VALUES(4,1,'source','draft_article',?),(5,1,'target','publish_article',?)",schema,schema);
+  await db.run("INSERT INTO task_field_schemas(id,tenant_id,workflow_type_key,task_type,schema_json) VALUES(4,1,'source','draft_article',?),(5,1,'target','publish_article',?)",schema,schema);
   const old=(await getTelemetryCatalog(db,access,source)).fields.find(field=>field.source?.schema_id===4)!;
   const current=(await getTelemetryCatalog(db,access,target)).fields.find(field=>field.source?.schema_id===5)!;
   const {bundle}=await pack(numericRecipe({key:'typed_amount',name:'Typed amount',field:old.id}));
@@ -100,7 +100,7 @@ it('never silently maps a retired field generation onto a new same-key field',as
 });
 
 it('requires a scoped destination mapping for selected external event receipts',async()=>{
-  await db.run("INSERT INTO external_event_mappings(id,tenant_id,project_id,sprint_type,event_name,action_kind,action_target) VALUES(1,1,1,'source','submitted','status','approved_old'),(2,1,2,'target','submitted','status','accepted_new')");
+  await db.run("INSERT INTO external_event_mappings(id,tenant_id,project_id,workflow_type,event_name,action_kind,action_target) VALUES(1,1,1,'source','submitted','status','approved_old'),(2,1,2,'target','submitted','status','accepted_new')");
   const signal=(await getTelemetryCatalog(db,access,source)).event_mappings[0];
   const {bundle}=await pack(milestoneRecipe({key:'mapped_receipts',name:'Mapped receipts',milestone:signal.predicate}));
   expect(bundle.event_mappings?.[0]).toMatchObject({source:{id:1},event_name:'submitted'});
@@ -111,13 +111,13 @@ it('requires a scoped destination mapping for selected external event receipts',
 });
 
 it.each([
-  ['status','event.to_status','approved_old','sprint_type_task_statuses','status_key'],
-  ['outcome','event.outcome','handoff_old','sprint_type_outcomes','outcome_key'],
+  ['status','event.to_status','approved_old','workflow_type_task_statuses','status_key'],
+  ['outcome','event.outcome','handoff_old','workflow_type_outcomes','outcome_key'],
 ])('preserves pinned %s descriptors and requires explicit replacement of a retired generation',async(kind,field,key,table,column)=>{
   const {metric}=await pack(eventMetric(`retired_${kind}`,{field,op:'eq',value:key}));
   const before=(await db.value<any>('SELECT dependencies FROM telemetry_definition_revisions WHERE id=?',metric.latest_revision_id)).signals.find((signal:any)=>signal.kind===kind&&signal.source);
-  await db.run(`DELETE FROM ${table} WHERE tenant_id=1 AND sprint_type_key='source' AND ${column}=?`,key);
-  await db.run(`INSERT INTO ${table}(tenant_id,sprint_type_key,${column},label) VALUES(1,'source',?,'Replacement meaning')`,key);
+  await db.run(`DELETE FROM ${table} WHERE tenant_id=1 AND workflow_type_key='source' AND ${column}=?`,key);
+  await db.run(`INSERT INTO ${table}(tenant_id,workflow_type_key,${column},label) VALUES(1,'source',?,'Replacement meaning')`,key);
   const bundle=await exportTelemetry(db,access,{scope:source,metric_ids:[metric.id]});
   expect(bundle.signals?.find(signal=>signal.id===before.id)).toMatchObject({retired:true,identity:before.identity,label:before.label});
   expect(bundle.resources[0].revisions[0].dependencies.signals).toEqual(expect.arrayContaining([expect.objectContaining({id:before.id,retired:true})]));

@@ -95,7 +95,7 @@ export interface AgentHqWorkflowFileDownload {
   text: string | null;
 }
 
-export interface AgentHqSprintSummary {
+export interface AgentHqWorkflowSummary {
   id: number;
   project_id: number;
   project_name: string | null;
@@ -120,15 +120,15 @@ export interface AgentHqTaskSummary {
   task_type: string | null;
   story_points: number | null;
   project_id: number | null;
-  sprint_id: number | null;
-  sprint_name: string | null;
+  workflow_id: number | null;
+  workflow_name: string | null;
   agent_id: number | null;
   agent_name: string | null;
   active_instance_id: number | null;
   updated_at: string | null;
   custom_fields: Record<string, unknown>;
   resolved_custom_field_schema: Record<string, unknown>;
-  resolved_sprint_type: string | null;
+  resolved_workflow_type: string | null;
   blockers: Array<{ id: number; title: string; status: string | null }>;
   blocking: Array<{ id: number; title: string; status: string | null }>;
 }
@@ -139,8 +139,8 @@ export interface AgentHqProjectTaskSearchSummary {
   status: string | null;
   task_type: string | null;
   project_id: number | null;
-  sprint_id: number | null;
-  sprint_name: string | null;
+  workflow_id: number | null;
+  workflow_name: string | null;
   agent_id: number | null;
   agent_name: string | null;
   active_instance_id: number | null;
@@ -214,7 +214,7 @@ export type AgentHqRecurringTaskOverlapPolicy = 'skip_if_active' | 'create_anywa
 export interface AgentHqRecurringTaskSeriesInput {
   project_id: number;
   workflow_id?: number;
-  sprint_id?: number;
+
   title_template: string;
   description_template?: string;
   task_type: string;
@@ -232,7 +232,7 @@ export interface AgentHqRecurringTaskSeriesInput {
 export interface AgentHqRecurringTaskSeriesFilters {
   project_id?: number;
   workflow_id?: number;
-  sprint_id?: number;
+
   enabled?: boolean;
   next_run_from?: string;
   next_run_to?: string;
@@ -376,13 +376,13 @@ export function shapeWorkflowFileVersion(value: unknown): AgentHqWorkflowFileVer
   };
 }
 
-export function shapeSprintSummary(value: unknown): AgentHqSprintSummary {
+export function shapeWorkflowSummary(value: unknown): AgentHqWorkflowSummary {
   const row = asRecord(value);
   return {
     id: asNumber(row.id) ?? 0,
     project_id: asNumber(row.project_id) ?? 0,
     project_name: asString(row.project_name),
-    name: asString(row.name) ?? 'Untitled sprint',
+    name: asString(row.name) ?? 'Untitled workflow',
     goal: asString(row.goal),
     status: asString(row.status),
     task_count: asNumber(row.task_count) ?? 0,
@@ -406,15 +406,15 @@ export function shapeTaskSummary(value: unknown): AgentHqTaskSummary {
     task_type: asString(row.task_type),
     story_points: asNumber(row.story_points),
     project_id: asNumber(row.project_id),
-    sprint_id: asNumber(row.sprint_id),
-    sprint_name: asString(row.sprint_name),
+    workflow_id: asNumber(row.workflow_id),
+    workflow_name: asString(row.workflow_name),
     agent_id: asNumber(row.agent_id),
     agent_name: asString(row.agent_name),
     active_instance_id: asNumber(row.active_instance_id),
     updated_at: asString(row.updated_at),
     custom_fields: asRecord(row.custom_fields),
     resolved_custom_field_schema: asRecord(row.resolved_custom_field_schema),
-    resolved_sprint_type: asString(row.resolved_sprint_type),
+    resolved_workflow_type: asString(row.resolved_workflow_type),
     blockers: asArray(row.blockers).map(shapeTaskRef).filter((item): item is NonNullable<typeof item> => item !== null),
     blocking: asArray(row.blocking).map(shapeTaskRef).filter((item): item is NonNullable<typeof item> => item !== null),
   };
@@ -428,8 +428,8 @@ export function shapeProjectTaskSearchSummary(value: unknown): AgentHqProjectTas
     status: asString(row.status),
     task_type: asString(row.task_type),
     project_id: asNumber(row.project_id),
-    sprint_id: asNumber(row.sprint_id),
-    sprint_name: asString(row.sprint_name),
+    workflow_id: asNumber(row.workflow_id),
+    workflow_name: asString(row.workflow_name),
     agent_id: asNumber(row.agent_id),
     agent_name: asString(row.agent_name),
     active_instance_id: asNumber(row.active_instance_id),
@@ -758,49 +758,49 @@ export class AgentHqApiClient {
     return this.request<unknown>('DELETE', `/api/v1/projects/${projectId}/workflows/${workflowId}/files/${fileId}`);
   }
 
-  listSprints(params: { project_id?: number; include_closed?: boolean } = {}) {
+  listWorkflows(params: { project_id?: number; include_closed?: boolean } = {}) {
     const qs = new URLSearchParams();
     if (params.project_id !== undefined) qs.set('project_id', String(params.project_id));
     if (params.include_closed) qs.set('include_closed', 'true');
     const q = qs.toString();
-    return this.request<unknown[]>('GET', `/api/v1/sprints${q ? `?${q}` : ''}`).then((rows) => rows.map(shapeSprintSummary));
+    return this.request<unknown[]>('GET', `/api/v1/workflows${q ? `?${q}` : ''}`).then((rows) => rows.map(shapeWorkflowSummary));
   }
 
-  getSprint(id: number) {
-    return this.request<unknown>('GET', `/api/v1/sprints/${id}`).then(shapeSprintSummary);
+  getWorkflow(id: number) {
+    return this.request<unknown>('GET', `/api/v1/workflows/${id}`).then(shapeWorkflowSummary);
   }
 
-  updateSprint(id: number, data: Record<string, unknown>) {
-    return this.request<unknown>('PUT', `/api/v1/sprints/${id}`, data);
+  updateWorkflow(id: number, data: Record<string, unknown>) {
+    return this.request<unknown>('PUT', `/api/v1/workflows/${id}`, data);
   }
 
-  deleteSprint(id: number) {
-    return this.request<unknown>('DELETE', `/api/v1/sprints/${id}`);
+  deleteWorkflow(id: number) {
+    return this.request<unknown>('DELETE', `/api/v1/workflows/${id}`);
   }
 
   // Completing and closing are their own endpoints rather than a status field write on
-  // updateSprint: both stamp ended_at, and completing also stands down the workflow's agents.
+  // updateWorkflow: both stamp ended_at, and completing also stands down the workflow's agents.
   // A PUT that only sets status = 'complete' produces a workflow that reads as finished but
-  // never ended. Returned rows are the raw sprint record, so they are not run through
-  // shapeSprintSummary — that shape would report task_count 0 for metrics it was never given.
-  completeSprint(id: number, data: Record<string, unknown> = {}) {
-    return this.request<unknown>('POST', `/api/v1/sprints/${id}/complete`, data);
+  // never ended. Returned rows are the raw workflow record, so they are not run through
+  // shapeWorkflowSummary — that shape would report task_count 0 for metrics it was never given.
+  completeWorkflow(id: number, data: Record<string, unknown> = {}) {
+    return this.request<unknown>('POST', `/api/v1/workflows/${id}/complete`, data);
   }
 
-  closeSprint(id: number, data: Record<string, unknown> = {}) {
-    return this.request<unknown>('POST', `/api/v1/sprints/${id}/close`, data);
+  closeWorkflow(id: number, data: Record<string, unknown> = {}) {
+    return this.request<unknown>('POST', `/api/v1/workflows/${id}/close`, data);
   }
 
   listTasks(params: {
     project_id?: number;
-    sprint_id?: number;
+    workflow_id?: number;
     status?: string;
     limit?: number;
     offset?: number;
   } = {}) {
     const qs = new URLSearchParams();
     if (params.project_id !== undefined) qs.set('project_id', String(params.project_id));
-    if (params.sprint_id !== undefined) qs.set('sprint_id', String(params.sprint_id));
+    if (params.workflow_id !== undefined) qs.set('workflow_id', String(params.workflow_id));
     if (params.status) qs.set('status', params.status);
     qs.set('limit', String(Math.min(params.limit ?? 50, 100)));
     qs.set('offset', String(params.offset ?? 0));
@@ -819,7 +819,7 @@ export class AgentHqApiClient {
 
   searchProjectTasks(params: {
     workflow_id?: number;
-    sprint_id?: number;
+
     statuses?: string[];
     status?: string;
     active_only?: boolean;
@@ -923,7 +923,7 @@ export class AgentHqApiClient {
     title: string;
     project_id: number;
     description?: string;
-    sprint_id: number;
+    workflow_id: number;
     status?: string;
     priority?: string;
     task_type?: string;
@@ -944,7 +944,7 @@ export class AgentHqApiClient {
             title: data.title,
             project_id: data.project_id,
             description: data.description ?? '',
-            sprint_id: data.sprint_id,
+            workflow_id: data.workflow_id,
             ...(data.status === undefined ? {} : { status: data.status }),
             priority: data.priority ?? 'medium',
             task_type: data.task_type ?? 'backend',
@@ -961,7 +961,7 @@ export class AgentHqApiClient {
       title: data.title,
       project_id: data.project_id,
       description: data.description,
-      sprint_id: data.sprint_id,
+      workflow_id: data.workflow_id,
       status: data.status,
       priority: data.priority,
       task_type: data.task_type,
@@ -979,7 +979,7 @@ export class AgentHqApiClient {
       title?: string;
       description?: string;
       priority?: string;
-      sprint_id?: number;
+      workflow_id?: number;
       task_type?: string;
       story_points?: number | null;
       custom_fields?: Record<string, unknown>;
@@ -1134,12 +1134,12 @@ export class AgentHqApiClient {
     return this.request<unknown>('DELETE', `/api/v1/tasks/${taskId}/blockers/${blockerId}`);
   }
 
-  createSprint(data: {
+  createWorkflow(data: {
     project_id: number;
     name: string;
     goal?: string;
-    sprint_type?: string;
-    source_sprint_id?: number;
+    workflow_type?: string;
+    source_workflow_id?: number;
     status?: 'planning' | 'active' | 'paused' | 'complete' | 'closed';
     length_kind?: 'time' | 'runs';
     length_value?: string;
@@ -1155,13 +1155,13 @@ export class AgentHqApiClient {
         dry_run: true,
         preview: {
           method: 'POST',
-          path: '/api/v1/sprints',
+          path: '/api/v1/workflows',
           body: {
             project_id: data.project_id,
             name: data.name,
             goal: data.goal ?? '',
-            sprint_type: data.sprint_type,
-            source_sprint_id: data.source_sprint_id,
+            workflow_type: data.workflow_type,
+            source_workflow_id: data.source_workflow_id,
             status: data.status ?? 'planning',
             length_kind: data.length_kind ?? 'time',
             length_value: data.length_value ?? '',
@@ -1174,7 +1174,7 @@ export class AgentHqApiClient {
         },
       });
     }
-    return this.request<unknown>('POST', '/api/v1/sprints', data);
+    return this.request<unknown>('POST', '/api/v1/workflows', data);
   }
 
   private async resolveConfiguredOutcomeForStatus(taskId: number, targetStatus: string): Promise<string | null> {
@@ -1185,11 +1185,11 @@ export class AgentHqApiClient {
       return null;
     }
 
-    if (!task.status || task.project_id == null || task.sprint_id == null) return null;
+    if (!task.status || task.project_id == null || task.workflow_id == null) return null;
 
     let payload: unknown;
     try {
-      payload = await this.listRoutingTransitions({ project_id: task.project_id, sprint_id: task.sprint_id });
+      payload = await this.listRoutingTransitions({ project_id: task.project_id, workflow_id: task.workflow_id });
     } catch {
       return null;
     }
@@ -1227,7 +1227,7 @@ export class AgentHqApiClient {
   ) {
     // Compatibility bridge for status-targeted MCP moves.
     // The canonical backend truth is still outcome-driven. These aliases only
-    // cover the legacy/default lifecycle statuses, while sprint-type workflows
+    // cover the legacy/default lifecycle statuses, while workflow-type workflows
     // may expose different configured outcome keys.
     const statusToOutcome: Record<string, string> = {
       review: 'completed_for_review',
@@ -1551,11 +1551,11 @@ export class AgentHqApiClient {
   // The derived state machine and its analyses, so an agent reasons over the same
   // representation the canvas draws rather than re-deriving one from raw rows.
 
-  getRoutingGraph(params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; task_type?: string | null } = {}) {
+  getRoutingGraph(params: { tenant_id?: number; project_id?: number; workflow_id?: number; workflow_type?: string; task_type?: string | null } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/graph', params));
   }
 
-  traceRouting(params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; task_type?: string | null; from_status: string; outcome: string }) {
+  traceRouting(params: { tenant_id?: number; project_id?: number; workflow_id?: number; workflow_type?: string; task_type?: string | null; from_status: string; outcome: string }) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/trace', params));
   }
 
@@ -1566,8 +1566,8 @@ export class AgentHqApiClient {
   previewRoutingChange(body: {
     tenant_id?: number;
     project_id?: number;
-    sprint_type?: string;
-    sprint_id?: number;
+    workflow_type?: string;
+    workflow_id?: number;
     operations: Array<{ entity: string; action: string; payload: Record<string, unknown> }>;
   }) {
     return this.request<unknown>('POST', '/api/v1/routing/preview', body);
@@ -1576,27 +1576,27 @@ export class AgentHqApiClient {
   getRoutingAudit(params: {
     tenant_id?: number;
     project_id?: number;
-    sprint_id?: number;
-    sprint_type?: string;
+    workflow_id?: number;
+    workflow_type?: string;
     entity_table?: string;
     limit?: number;
   } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/audit', params));
   }
 
-  listRoutingRules(params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
+  listRoutingRules(params: { tenant_id?: number; project_id?: number; workflow_id?: number; workflow_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/rules', params));
   }
 
-  listAssignmentRules(params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
+  listAssignmentRules(params: { tenant_id?: number; project_id?: number; workflow_id?: number; workflow_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/assignment-rules', params));
   }
 
-  getRoutingRule(ruleId: number, params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
+  getRoutingRule(ruleId: number, params: { tenant_id?: number; project_id?: number; workflow_id?: number; workflow_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
     return this.request<unknown>('GET', appendQuery(`/api/v1/routing/rules/${ruleId}`, params));
   }
 
-  getAssignmentRule(ruleId: number, params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
+  getAssignmentRule(ruleId: number, params: { tenant_id?: number; project_id?: number; workflow_id?: number; workflow_type?: string; scope?: string; status?: string; task_type?: string | null } = {}) {
     return this.request<unknown>('GET', appendQuery(`/api/v1/routing/assignment-rules/${ruleId}`, params));
   }
 
@@ -1616,11 +1616,11 @@ export class AgentHqApiClient {
     return this.request<unknown>('PUT', appendQuery(`/api/v1/routing/assignment-rules/${ruleId}`, tenantSelectorQuery(data)), omitTenantSelector(data));
   }
 
-  deleteRoutingRule(ruleId: number, params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; scope?: string; status?: string; task_type?: string | null; dry_run?: boolean } = {}) {
+  deleteRoutingRule(ruleId: number, params: { tenant_id?: number; project_id?: number; workflow_id?: number; workflow_type?: string; scope?: string; status?: string; task_type?: string | null; dry_run?: boolean } = {}) {
     return this.request<unknown>('DELETE', appendQuery(`/api/v1/routing/rules/${ruleId}`, params));
   }
 
-  deleteAssignmentRule(ruleId: number, params: { tenant_id?: number; project_id?: number; sprint_id?: number; sprint_type?: string; scope?: string; status?: string; task_type?: string | null; dry_run?: boolean } = {}) {
+  deleteAssignmentRule(ruleId: number, params: { tenant_id?: number; project_id?: number; workflow_id?: number; workflow_type?: string; scope?: string; status?: string; task_type?: string | null; dry_run?: boolean } = {}) {
     return this.request<unknown>('DELETE', appendQuery(`/api/v1/routing/assignment-rules/${ruleId}`, params));
   }
 
@@ -1652,29 +1652,29 @@ export class AgentHqApiClient {
     return this.request<unknown>('GET', `/api/v1/external/task-events/receipts/${receiptId}`);
   }
 
-  getAgentDispatchContract(params: { sprint_type?: string; sprint_type_key?: string } = {}) {
+  getAgentDispatchContract(params: { workflow_type?: string; workflow_type_key?: string } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/agent-contract', params));
   }
 
-  updateAgentDispatchContract(data: { sprint_type?: string; sprint_type_key?: string; content: string }) {
+  updateAgentDispatchContract(data: { workflow_type?: string; workflow_type_key?: string; content: string }) {
     return this.request<unknown>('PUT', '/api/v1/routing/agent-contract', data);
   }
 
-  listRoutingTransitions(params: { tenant_id?: number; sprint_id?: number; project_id?: number; sprint_type?: string } = {}) {
+  listRoutingTransitions(params: { tenant_id?: number; workflow_id?: number; project_id?: number; workflow_type?: string } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/transitions', {
       ...(params.tenant_id !== undefined ? { tenant_id: params.tenant_id } : {}),
-      sprint_id: params.sprint_id,
+      workflow_id: params.workflow_id,
       project_id: params.project_id,
-      sprint_type: params.sprint_type,
+      workflow_type: params.workflow_type,
     }));
   }
 
-  getRoutingTransition(transitionId: number, params: { tenant_id?: number; sprint_id?: number; project_id?: number; sprint_type?: string } = {}) {
+  getRoutingTransition(transitionId: number, params: { tenant_id?: number; workflow_id?: number; project_id?: number; workflow_type?: string } = {}) {
     return this.request<unknown>('GET', appendQuery(`/api/v1/routing/transitions/${transitionId}`, {
       ...(params.tenant_id !== undefined ? { tenant_id: params.tenant_id } : {}),
-      sprint_id: params.sprint_id,
+      workflow_id: params.workflow_id,
       project_id: params.project_id,
-      sprint_type: params.sprint_type,
+      workflow_type: params.workflow_type,
     }));
   }
 
@@ -1686,137 +1686,137 @@ export class AgentHqApiClient {
     return this.request<unknown>('PUT', appendQuery(`/api/v1/routing/transitions/${transitionId}`, tenantSelectorQuery(data)), omitTenantSelector(data));
   }
 
-  deleteRoutingTransition(transitionId: number, data?: { tenant_id?: number; sprint_id?: number; project_id?: number; sprint_type?: string; dry_run?: boolean }) {
+  deleteRoutingTransition(transitionId: number, data?: { tenant_id?: number; workflow_id?: number; project_id?: number; workflow_type?: string; dry_run?: boolean }) {
     return this.request<unknown>('DELETE', appendQuery(`/api/v1/routing/transitions/${transitionId}`, {
       ...(data?.tenant_id !== undefined ? { tenant_id: data.tenant_id } : {}),
-      sprint_id: data?.sprint_id,
+      workflow_id: data?.workflow_id,
       project_id: data?.project_id,
-      sprint_type: data?.sprint_type,
+      workflow_type: data?.workflow_type,
       dry_run: data?.dry_run,
     }));
   }
 
-  listSprintTypes(params: { tenant_id?: number; project_id?: number } = {}) {
-    return this.request<unknown[]>('GET', appendQuery('/api/v1/sprints/types/list', params));
+  listWorkflowTypes(params: { tenant_id?: number; project_id?: number } = {}) {
+    return this.request<unknown[]>('GET', appendQuery('/api/v1/workflows/types/list', params));
   }
 
-  getSprintType(key: string, params: { tenant_id?: number; project_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(key)}`, params));
+  getWorkflowType(key: string, params: { tenant_id?: number; project_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(key)}`, params));
   }
 
-  createSprintType(data: Record<string, unknown>) {
-    return this.request<unknown>('POST', '/api/v1/sprints/types', data);
+  createWorkflowType(data: Record<string, unknown>) {
+    return this.request<unknown>('POST', '/api/v1/workflows/types', data);
   }
 
-  updateSprintType(key: string, data: Record<string, unknown>) {
-    return this.request<unknown>('PUT', `/api/v1/sprints/types/${encodeURIComponent(key)}`, data);
+  updateWorkflowType(key: string, data: Record<string, unknown>) {
+    return this.request<unknown>('PUT', `/api/v1/workflows/types/${encodeURIComponent(key)}`, data);
   }
 
-  deleteSprintType(key: string, params: { tenant_id?: number; project_id?: number } = {}) {
-    return this.request<unknown>('DELETE', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(key)}`, params));
+  deleteWorkflowType(key: string, params: { tenant_id?: number; project_id?: number } = {}) {
+    return this.request<unknown>('DELETE', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(key)}`, params));
   }
 
-  listSprintTypeTaskTypes(sprintTypeKey: string, params: { tenant_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/task-types`, params));
+  listWorkflowTypeTaskTypes(workflowTypeKey: string, params: { tenant_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/task-types`, params));
   }
 
-  updateSprintTypeTaskTypes(sprintTypeKey: string, taskTypes: string[]) {
-    return this.request<unknown>('PUT', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/task-types`, { task_types: taskTypes });
+  updateWorkflowTypeTaskTypes(workflowTypeKey: string, taskTypes: string[]) {
+    return this.request<unknown>('PUT', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/task-types`, { task_types: taskTypes });
   }
 
-  listTaskFieldSchemas(sprintTypeKey: string, params: { tenant_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/field-schemas`, params));
+  listTaskFieldSchemas(workflowTypeKey: string, params: { tenant_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/field-schemas`, params));
   }
 
-  getTaskFieldSchema(sprintTypeKey: string, schemaId: number, params: { tenant_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/field-schemas/${schemaId}`, params));
+  getTaskFieldSchema(workflowTypeKey: string, schemaId: number, params: { tenant_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/field-schemas/${schemaId}`, params));
   }
 
-  createTaskFieldSchema(sprintTypeKey: string, data: Record<string, unknown>) {
-    return this.request<unknown>('POST', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/field-schemas`, data);
+  createTaskFieldSchema(workflowTypeKey: string, data: Record<string, unknown>) {
+    return this.request<unknown>('POST', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/field-schemas`, data);
   }
 
-  updateTaskFieldSchema(sprintTypeKey: string, schemaId: number, data: Record<string, unknown>) {
-    return this.request<unknown>('PUT', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/field-schemas/${schemaId}`, data);
+  updateTaskFieldSchema(workflowTypeKey: string, schemaId: number, data: Record<string, unknown>) {
+    return this.request<unknown>('PUT', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/field-schemas/${schemaId}`, data);
   }
 
-  deleteTaskFieldSchema(sprintTypeKey: string, schemaId: number) {
-    return this.request<unknown>('DELETE', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/field-schemas/${schemaId}`);
+  deleteTaskFieldSchema(workflowTypeKey: string, schemaId: number) {
+    return this.request<unknown>('DELETE', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/field-schemas/${schemaId}`);
   }
 
   getWorkflowConfig(params: { tenant_id?: number; project_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery('/api/v1/sprints/config', params));
+    return this.request<unknown>('GET', appendQuery('/api/v1/workflows/config', params));
   }
 
-  getWorkflowMetadata(params: { tenant_id?: number; sprint_id?: number; sprint_type?: string; task_type?: string } = {}) {
-    return this.request<unknown>('GET', appendQuery('/api/v1/sprints/workflow-metadata', params));
+  getWorkflowMetadata(params: { tenant_id?: number; workflow_id?: number; workflow_type?: string; task_type?: string } = {}) {
+    return this.request<unknown>('GET', appendQuery('/api/v1/workflows/workflow-metadata', params));
   }
 
-  listTransitionRequirementFields(params: { tenant_id?: number; sprint_id?: number; sprint_type?: string; task_type?: string } = {}) {
+  listTransitionRequirementFields(params: { tenant_id?: number; workflow_id?: number; workflow_type?: string; task_type?: string } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/transition-requirement-fields', params));
   }
 
-  listSprintTypeStatuses(sprintTypeKey: string, params: { tenant_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/statuses`, params));
+  listWorkflowTypeStatuses(workflowTypeKey: string, params: { tenant_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/statuses`, params));
   }
 
-  getSprintTypeStatus(sprintTypeKey: string, statusKey: string, params: { tenant_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/statuses/${encodeURIComponent(statusKey)}`, params));
+  getWorkflowTypeStatus(workflowTypeKey: string, statusKey: string, params: { tenant_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/statuses/${encodeURIComponent(statusKey)}`, params));
   }
 
-  createSprintTypeStatus(sprintTypeKey: string, data: Record<string, unknown>) {
-    return this.request<unknown>('POST', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/statuses`, data);
+  createWorkflowTypeStatus(workflowTypeKey: string, data: Record<string, unknown>) {
+    return this.request<unknown>('POST', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/statuses`, data);
   }
 
-  updateSprintTypeStatus(sprintTypeKey: string, statusKey: string, data: Record<string, unknown>) {
-    return this.request<unknown>('PUT', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/statuses/${encodeURIComponent(statusKey)}`, data);
+  updateWorkflowTypeStatus(workflowTypeKey: string, statusKey: string, data: Record<string, unknown>) {
+    return this.request<unknown>('PUT', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/statuses/${encodeURIComponent(statusKey)}`, data);
   }
 
-  deleteSprintTypeStatus(sprintTypeKey: string, statusKey: string) {
-    return this.request<unknown>('DELETE', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/statuses/${encodeURIComponent(statusKey)}`);
+  deleteWorkflowTypeStatus(workflowTypeKey: string, statusKey: string) {
+    return this.request<unknown>('DELETE', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/statuses/${encodeURIComponent(statusKey)}`);
   }
 
-  listSprintTypeOutcomes(sprintTypeKey: string, params: { tenant_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/outcomes`, params));
+  listWorkflowTypeOutcomes(workflowTypeKey: string, params: { tenant_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/outcomes`, params));
   }
 
-  getSprintTypeOutcome(sprintTypeKey: string, outcomeId: number, params: { tenant_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/outcomes/${outcomeId}`, params));
+  getWorkflowTypeOutcome(workflowTypeKey: string, outcomeId: number, params: { tenant_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/outcomes/${outcomeId}`, params));
   }
 
-  createSprintTypeOutcome(sprintTypeKey: string, data: Record<string, unknown>) {
-    return this.request<unknown>('POST', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/outcomes`, data);
+  createWorkflowTypeOutcome(workflowTypeKey: string, data: Record<string, unknown>) {
+    return this.request<unknown>('POST', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/outcomes`, data);
   }
 
-  updateSprintTypeOutcome(sprintTypeKey: string, outcomeId: number, data: Record<string, unknown>) {
-    return this.request<unknown>('PUT', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/outcomes/${outcomeId}`, data);
+  updateWorkflowTypeOutcome(workflowTypeKey: string, outcomeId: number, data: Record<string, unknown>) {
+    return this.request<unknown>('PUT', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/outcomes/${outcomeId}`, data);
   }
 
-  deleteSprintTypeOutcome(sprintTypeKey: string, outcomeId: number) {
-    return this.request<unknown>('DELETE', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/outcomes/${outcomeId}`);
+  deleteWorkflowTypeOutcome(workflowTypeKey: string, outcomeId: number) {
+    return this.request<unknown>('DELETE', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/outcomes/${outcomeId}`);
   }
 
-  listSprintTypeRelationshipTypes(sprintTypeKey: string, params: { tenant_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/relationship-types`, params));
+  listWorkflowTypeRelationshipTypes(workflowTypeKey: string, params: { tenant_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/relationship-types`, params));
   }
 
-  getSprintTypeRelationshipType(sprintTypeKey: string, relationshipTypeId: number, params: { tenant_id?: number } = {}) {
-    return this.request<unknown>('GET', appendQuery(`/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/relationship-types/${relationshipTypeId}`, params));
+  getWorkflowTypeRelationshipType(workflowTypeKey: string, relationshipTypeId: number, params: { tenant_id?: number } = {}) {
+    return this.request<unknown>('GET', appendQuery(`/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/relationship-types/${relationshipTypeId}`, params));
   }
 
-  createSprintTypeRelationshipType(sprintTypeKey: string, data: Record<string, unknown>) {
-    return this.request<unknown>('POST', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/relationship-types`, data);
+  createWorkflowTypeRelationshipType(workflowTypeKey: string, data: Record<string, unknown>) {
+    return this.request<unknown>('POST', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/relationship-types`, data);
   }
 
-  updateSprintTypeRelationshipType(sprintTypeKey: string, relationshipTypeId: number, data: Record<string, unknown>) {
-    return this.request<unknown>('PUT', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/relationship-types/${relationshipTypeId}`, data);
+  updateWorkflowTypeRelationshipType(workflowTypeKey: string, relationshipTypeId: number, data: Record<string, unknown>) {
+    return this.request<unknown>('PUT', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/relationship-types/${relationshipTypeId}`, data);
   }
 
-  deleteSprintTypeRelationshipType(sprintTypeKey: string, relationshipTypeId: number) {
-    return this.request<unknown>('DELETE', `/api/v1/sprints/types/${encodeURIComponent(sprintTypeKey)}/relationship-types/${relationshipTypeId}`);
+  deleteWorkflowTypeRelationshipType(workflowTypeKey: string, relationshipTypeId: number) {
+    return this.request<unknown>('DELETE', `/api/v1/workflows/types/${encodeURIComponent(workflowTypeKey)}/relationship-types/${relationshipTypeId}`);
   }
 
-  listTransitionRequirements(params: { tenant_id?: number; sprint_id?: number; project_id?: number; sprint_type?: string; task_type?: string; outcome?: string } = {}) {
+  listTransitionRequirements(params: { tenant_id?: number; workflow_id?: number; project_id?: number; workflow_type?: string; task_type?: string; outcome?: string } = {}) {
     return this.request<unknown>('GET', appendQuery('/api/v1/routing/transition-requirements', params));
   }
 
@@ -1828,15 +1828,15 @@ export class AgentHqApiClient {
     return this.request<unknown>('PUT', appendQuery(`/api/v1/routing/transition-requirements/${requirementId}`, tenantSelectorQuery(data)), omitTenantSelector(data));
   }
 
-  deleteTransitionRequirement(requirementId: number, params: { tenant_id?: number; sprint_id?: number; project_id?: number; sprint_type?: string; dry_run?: boolean } = {}) {
+  deleteTransitionRequirement(requirementId: number, params: { tenant_id?: number; workflow_id?: number; project_id?: number; workflow_type?: string; dry_run?: boolean } = {}) {
     return this.request<unknown>('DELETE', appendQuery(`/api/v1/routing/transition-requirements/${requirementId}`, params));
   }
 
-  listModelRoutingRules(params?: { project_id?: number; sprint_id?: number; sprint_type?: string }) {
+  listModelRoutingRules(params?: { project_id?: number; workflow_id?: number; workflow_type?: string }) {
     const qs = new URLSearchParams();
     if (params?.project_id) qs.set('project_id', String(params.project_id));
-    if (params?.sprint_id) qs.set('sprint_id', String(params.sprint_id));
-    if (params?.sprint_type) qs.set('sprint_type', params.sprint_type);
+    if (params?.workflow_id) qs.set('workflow_id', String(params.workflow_id));
+    if (params?.workflow_type) qs.set('workflow_type', params.workflow_type);
     return this.request<unknown[]>('GET', `/api/v1/model-routing${qs.toString() ? `?${qs.toString()}` : ''}`);
   }
 

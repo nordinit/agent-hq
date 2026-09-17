@@ -78,10 +78,10 @@ async function registerFields(db: Db, access: TelemetryAccess, sourceFields: Arr
 
 async function buildTelemetryCatalog(db: Db, access: TelemetryAccess, scope: TelemetryScope = {}) {
   const project = scope.project_id ?? access.projectId;
-  const types = await db.all<any>(`SELECT key,name,project_id FROM sprint_types WHERE tenant_id = ?${access.projectId == null ? '' : ' AND (project_id IS NULL OR project_id = ?)'} ORDER BY name`,access.tenantId,...(access.projectId==null?[]:[access.projectId]));
+  const types = await db.all<any>(`SELECT key,name,project_id FROM workflow_types WHERE tenant_id = ?${access.projectId == null ? '' : ' AND (project_id IS NULL OR project_id = ?)'} ORDER BY name`,access.tenantId,...(access.projectId==null?[]:[access.projectId]));
   const typeMap = new Map(types.map(row=>[row.key,row]));
   // Read schema rows only through their canonical tenant/type ownership.
-  const schemas = await db.all<any>(`SELECT fs.id,fs.sprint_type_key,fs.task_type,fs.schema_json,st.project_id FROM task_field_schemas fs JOIN sprint_types st ON st.tenant_id = fs.tenant_id AND st.key = fs.sprint_type_key WHERE fs.tenant_id = ?${access.projectId==null?'':' AND (st.project_id IS NULL OR st.project_id = ?)'} ORDER BY fs.id`,access.tenantId,...(access.projectId==null?[]:[access.projectId]));
+  const schemas = await db.all<any>(`SELECT fs.id,fs.workflow_type_key,fs.task_type,fs.schema_json,st.project_id FROM task_field_schemas fs JOIN workflow_types st ON st.tenant_id = fs.tenant_id AND st.key = fs.workflow_type_key WHERE fs.tenant_id = ?${access.projectId==null?'':' AND (st.project_id IS NULL OR st.project_id = ?)'} ORDER BY fs.id`,access.tenantId,...(access.projectId==null?[]:[access.projectId]));
   const generations=schemas.length?await db.all<{schema_id:number;field_key:string;field_type:string;generation:string}>('SELECT schema_id,field_key,field_type,generation FROM telemetry_field_generations WHERE tenant_id=? AND active AND schema_id=ANY(?::bigint[])',access.tenantId,schemas.map(schema=>Number(schema.id))):[];
   const generationMap=new Map(generations.map(row=>[`${row.schema_id}:${row.field_key}:${row.field_type}`,row.generation]));
   const fields: Array<{source_key:string;descriptor:Omit<TelemetryField,'id'>}> = [];
@@ -91,7 +91,7 @@ async function buildTelemetryCatalog(db: Db, access: TelemetryAccess, scope: Tel
       if (!field || typeof field.key!=='string' || !['text','textarea','url','select','number','checkbox'].includes(field.type??'text')) continue;
       const generation=generationMap.get(`${schema.id}:${field.key}:${field.type??'text'}`);
       if(!generation)continue; // A disabled/missing schema producer cannot invent identity continuity.
-      const fieldScope: TelemetryScope = {workflow_type:schema.sprint_type_key,...(schema.project_id==null?{}:{project_id:Number(schema.project_id)}),...(schema.task_type?{task_type:schema.task_type}:{})};
+      const fieldScope: TelemetryScope = {workflow_type:schema.workflow_type_key,...(schema.project_id==null?{}:{project_id:Number(schema.project_id)}),...(schema.task_type?{task_type:schema.task_type}:{})};
       fields.push({source_key:`schema:${schema.id}:${field.key}:${field.type??'text'}:${generation}`,descriptor:{key:field.key,label:field.label||field.key,type:field.type??'text',scope:fieldScope,bases,value_bases:bases,supported_grains:taskGrains,source:{schema_id:Number(schema.id),field_key:field.key,generation},...(Array.isArray(field.options)?{options:field.options}: {})}});
     }
   }
@@ -99,22 +99,22 @@ async function buildTelemetryCatalog(db: Db, access: TelemetryAccess, scope: Tel
   const applicable = (s: TelemetryScope) => (project==null||s.project_id==null||s.project_id===project)&&(!scope.workflow_type||!s.workflow_type||s.workflow_type===scope.workflow_type)&&(!scope.task_type||!s.task_type||s.task_type===scope.task_type);
   const workflowTypes = types.filter(row=>applicable({project_id:row.project_id??undefined,workflow_type:row.key}));
   const allowedTypeKeys = new Set(workflowTypes.map(row=>row.key));
-  const workflows = await db.all<any>(`SELECT id,name,project_id,sprint_type AS workflow_type,status FROM sprints WHERE tenant_id = ?${project==null?'':' AND project_id = ?'}${scope.workflow_id?' AND id = ?':''}${scope.workflow_type?' AND sprint_type = ?':''} ORDER BY name`,access.tenantId,...(project==null?[]:[project]),...(scope.workflow_id?[scope.workflow_id]:[]),...(scope.workflow_type?[scope.workflow_type]:[]));
+  const workflows = await db.all<any>(`SELECT id,name,project_id,workflow_type AS workflow_type,status FROM workflows WHERE tenant_id = ?${project==null?'':' AND project_id = ?'}${scope.workflow_id?' AND id = ?':''}${scope.workflow_type?' AND workflow_type = ?':''} ORDER BY name`,access.tenantId,...(project==null?[]:[project]),...(scope.workflow_id?[scope.workflow_id]:[]),...(scope.workflow_type?[scope.workflow_type]:[]));
   const projects = await db.all<any>(`SELECT id,name FROM projects WHERE tenant_id = ?${project==null?'':' AND id = ?'} ORDER BY name`,access.tenantId,...(project==null?[]:[project]));
   const agents = await db.all<any>(`SELECT id,name,project_id FROM agents WHERE tenant_id = ?${project==null?'':' AND project_id = ?'} ORDER BY name`,access.tenantId,...(project==null?[]:[project]));
-  const taskTypes = await db.all<any>('SELECT task_type AS key, task_type AS label,sprint_type_key AS workflow_type FROM sprint_type_task_types WHERE tenant_id = ? ORDER BY task_type',access.tenantId);
-  const typeStatuses = await db.all<any>('SELECT id,status_key AS key,label,sprint_type_key AS workflow_type,terminal FROM sprint_type_task_statuses WHERE tenant_id = ? ORDER BY stage_order,id',access.tenantId);
-  const statusSources = typeStatuses.filter(row=>allowedTypeKeys.has(row.workflow_type)).map(row=>({kind:'status' as const,key:row.key,label:row.label,terminal:Number(row.terminal),source:{table:'sprint_type_task_statuses',id:String(row.id)},scope:{workflow_type:row.workflow_type,...(typeMap.get(row.workflow_type)?.project_id?{project_id:Number(typeMap.get(row.workflow_type).project_id)}:{})}} as any));
+  const taskTypes = await db.all<any>('SELECT task_type AS key, task_type AS label,workflow_type_key AS workflow_type FROM workflow_type_task_types WHERE tenant_id = ? ORDER BY task_type',access.tenantId);
+  const typeStatuses = await db.all<any>('SELECT id,status_key AS key,label,workflow_type_key AS workflow_type,terminal FROM workflow_type_task_statuses WHERE tenant_id = ? ORDER BY stage_order,id',access.tenantId);
+  const statusSources = typeStatuses.filter(row=>allowedTypeKeys.has(row.workflow_type)).map(row=>({kind:'status' as const,key:row.key,label:row.label,terminal:Number(row.terminal),source:{table:'workflow_type_task_statuses',id:String(row.id)},scope:{workflow_type:row.workflow_type,...(typeMap.get(row.workflow_type)?.project_id?{project_id:Number(typeMap.get(row.workflow_type).project_id)}:{})}} as any));
   if(workflows.length){
-    const instanceStatuses=await db.all<any>('SELECT id,sprint_id,status_key AS key,label,terminal FROM sprint_task_statuses WHERE sprint_id=ANY(?::bigint[])',workflows.map(row=>row.id));
+    const instanceStatuses=await db.all<any>('SELECT id,workflow_id,status_key AS key,label,terminal FROM workflow_task_statuses WHERE workflow_id=ANY(?::bigint[])',workflows.map(row=>row.id));
     const byId=new Map(workflows.map(row=>[Number(row.id),row]));
-    for(const row of instanceStatuses){const workflow=byId.get(Number(row.sprint_id))!;statusSources.push({kind:'status',key:row.key,label:row.label,terminal:Number(row.terminal),source:{table:'sprint_task_statuses',id:String(row.id)},scope:{workflow_id:Number(row.sprint_id),workflow_type:workflow.workflow_type,project_id:Number(workflow.project_id)}});}
+    for(const row of instanceStatuses){const workflow=byId.get(Number(row.workflow_id))!;statusSources.push({kind:'status',key:row.key,label:row.label,terminal:Number(row.terminal),source:{table:'workflow_task_statuses',id:String(row.id)},scope:{workflow_id:Number(row.workflow_id),workflow_type:workflow.workflow_type,project_id:Number(workflow.project_id)}});}
   }
   const globalStatuses=await db.all<any>('SELECT name AS key,label,terminal FROM task_statuses ORDER BY name');
   for(const row of globalStatuses)statusSources.push({kind:'status',key:row.key,label:row.label,terminal:Number(row.terminal),source:{table:'task_statuses',id:row.key},scope:{}});
-  const outcomeSources=(await db.all<any>("SELECT id,outcome_key AS key,label,sprint_type_key AS workflow_type,task_type FROM sprint_type_outcomes WHERE tenant_id=? AND enabled=1 AND behavior<>'disable' ORDER BY stage_order,id",access.tenantId))
+  const outcomeSources=(await db.all<any>("SELECT id,outcome_key AS key,label,workflow_type_key AS workflow_type,task_type FROM workflow_type_outcomes WHERE tenant_id=? AND enabled=1 AND behavior<>'disable' ORDER BY stage_order,id",access.tenantId))
     .filter(row=>allowedTypeKeys.has(row.workflow_type)&&(!scope.task_type||!row.task_type||scope.task_type===row.task_type))
-    .map(row=>({kind:'outcome' as const,key:row.key,label:row.label,source:{table:'sprint_type_outcomes',id:String(row.id)},scope:{workflow_type:row.workflow_type,...(typeMap.get(row.workflow_type)?.project_id?{project_id:Number(typeMap.get(row.workflow_type).project_id)}:{}),...(row.task_type?{task_type:row.task_type}:{})}}));
+    .map(row=>({kind:'outcome' as const,key:row.key,label:row.label,source:{table:'workflow_type_outcomes',id:String(row.id)},scope:{workflow_type:row.workflow_type,...(typeMap.get(row.workflow_type)?.project_id?{project_id:Number(typeMap.get(row.workflow_type).project_id)}:{}),...(row.task_type?{task_type:row.task_type}:{})}}));
   const signals=await registerTelemetrySignals(db,access,[...statusSources,...outcomeSources]);
   const statuses=signals.filter(signal=>signal.kind==='status'),outcomes=signals.filter(signal=>signal.kind==='outcome');
   const routingSignals=await getRoutingCatalogSignals(db,access,scope,allowedTypeKeys);

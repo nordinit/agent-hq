@@ -3,10 +3,10 @@ import type { CreateTaskPayload, HistoricalTrace, RecurringTaskRun, RecurringTas
 
 export const tasksClient = {
 // Tasks
-getTasks: (projectId?: number, sprintId?: number, filters?: { origin_task_id?: number; defect_type?: string; status?: string; include_closed?: boolean; live_instances_only?: boolean }) => {
+getTasks: (projectId?: number, workflowId?: number, filters?: { origin_task_id?: number; defect_type?: string; status?: string; include_closed?: boolean; live_instances_only?: boolean }) => {
   const qs = new URLSearchParams();
   if (projectId) qs.set('project_id', String(projectId));
-  if (sprintId) qs.set('sprint_id', String(sprintId));
+  if (workflowId) qs.set('workflow_id', String(workflowId));
   if (filters?.origin_task_id != null) qs.set('origin_task_id', String(filters.origin_task_id));
   if (filters?.defect_type) qs.set('defect_type', filters.defect_type);
   if (filters?.status) qs.set('status', filters.status);
@@ -15,11 +15,11 @@ getTasks: (projectId?: number, sprintId?: number, filters?: { origin_task_id?: n
   const q = qs.toString();
   return apiFetch<Task[]>(`/api/v1/tasks${q ? `?${q}` : ''}`);
 },
-searchTasks: (q: string, excludeId?: number, filters?: { project_id?: number | null; sprint_id?: number | null }) => {
+searchTasks: (q: string, excludeId?: number, filters?: { project_id?: number | null; workflow_id?: number | null }) => {
   const qs = new URLSearchParams({ q });
   if (excludeId != null) qs.set('exclude_id', String(excludeId));
   if (filters?.project_id != null) qs.set('project_id', String(filters.project_id));
-  if (filters?.sprint_id != null) qs.set('sprint_id', String(filters.sprint_id));
+  if (filters?.workflow_id != null) qs.set('workflow_id', String(filters.workflow_id));
   return apiFetch<{ id: number; title: string; status: string }[]>(`/api/v1/tasks/search?${qs}`);
 },
 getTask: (id: number) => apiFetch<Task>(`/api/v1/tasks/${id}`),
@@ -33,19 +33,19 @@ createTask: (data: Partial<Task> | CreateTaskPayload) =>
   apiFetch<Task>('/api/v1/tasks', { method: 'POST', body: JSON.stringify(data) }),
 updateTask: (id: number, data: Partial<Task>) =>
   apiFetch<Task>(`/api/v1/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-resolveTaskFieldSchema: (params: { sprint_id?: number | null; task_type?: string | null }) => {
+resolveTaskFieldSchema: (params: { workflow_id?: number | null; task_type?: string | null }) => {
   const qs = new URLSearchParams();
-  if (params.sprint_id !== undefined && params.sprint_id !== null) qs.set('sprint_id', String(params.sprint_id));
+  if (params.workflow_id !== undefined && params.workflow_id !== null) qs.set('workflow_id', String(params.workflow_id));
   if (params.task_type !== undefined && params.task_type !== null) qs.set('task_type', params.task_type);
   return apiFetch<ResolvedTaskFieldSchemaResponse>(`/api/v1/tasks/field-schema/resolve?${qs.toString()}`);
 },
 deleteTask: (id: number) =>
   apiFetch<{ ok: boolean }>(`/api/v1/tasks/${id}`, { method: 'DELETE' }),
-getRecurringTaskSeries: (params?: { project_id?: number | null; workflow_id?: number | null; sprint_id?: number | null; enabled?: boolean | null; limit?: number; offset?: number }) => {
+getRecurringTaskSeries: (params?: { project_id?: number | null; workflow_id?: number | null;  enabled?: boolean | null; limit?: number; offset?: number }) => {
   const qs = new URLSearchParams();
   if (params?.project_id) qs.set('project_id', String(params.project_id));
   if (params?.workflow_id) qs.set('workflow_id', String(params.workflow_id));
-  else if (params?.sprint_id) qs.set('sprint_id', String(params.sprint_id));
+  else if (params?.workflow_id) qs.set('workflow_id', String(params.workflow_id));
   if (params?.enabled !== undefined && params.enabled !== null) qs.set('enabled', String(params.enabled));
   if (params?.limit) qs.set('limit', String(params.limit));
   if (params?.offset) qs.set('offset', String(params.offset));

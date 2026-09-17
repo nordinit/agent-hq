@@ -56,7 +56,7 @@ export function parseRoutingRulePriority(value: string): number | null {
   return Number.isFinite(priority) ? priority : null;
 }
 
-export function formatSprintTypeLabel(value: string): string {
+export function formatWorkflowTypeLabel(value: string): string {
   return value
     .split(/[-_]/g)
     .filter(Boolean)

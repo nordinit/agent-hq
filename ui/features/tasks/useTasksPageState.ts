@@ -30,11 +30,11 @@ export interface ModalForm extends Partial<Task> {
   story_points?: number | null;
 }
 
-export interface Sprint {
+export interface Workflow {
   id: number;
   project_id: number;
   name: string;
-  sprint_type: string;
+  workflow_type: string;
   status: string;
 }
 
@@ -57,7 +57,7 @@ export function useTasksPageState() {
   const deepLinkTaskId = searchParams.get('id') ? Number(searchParams.get('id')) : null;
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const defaultProjectId = useMemo(() => projects.find(project => Boolean(project.is_default))?.id ?? projects[0]?.id ?? null, [projects]);
   const validProjectIds = useMemo(() => projects.map(project => project.id), [projects]);
   const [selectedProject, setSelectedProject] = useProjectFilterPreference({
@@ -73,10 +73,10 @@ export function useTasksPageState() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeInstanceOnly, setActiveInstanceOnly] = useState(false);
   const [selectedTaskType, setSelectedTaskType] = useState('');
-  const [selectedSprintIds, setSelectedSprintIds] = useState<number[]>([]);
-  const loadedSprintIds = useRef<Set<number>>(new Set());
-  const [loadingSprintIds, setLoadingSprintIds] = useState<Set<number>>(new Set());
-  const selectedSingleSprintId = selectedSprintIds.length === 1 ? selectedSprintIds[0] : null;
+  const [selectedWorkflowIds, setSelectedWorkflowIds] = useState<number[]>([]);
+  const loadedWorkflowIds = useRef<Set<number>>(new Set());
+  const [loadingWorkflowIds, setLoadingWorkflowIds] = useState<Set<number>>(new Set());
+  const selectedSingleWorkflowId = selectedWorkflowIds.length === 1 ? selectedWorkflowIds[0] : null;
   const loadedCountRef = useRef(PAGE_SIZE);
   const loadRunIdRef = useRef(0);
   const backgroundLoadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -89,20 +89,20 @@ export function useTasksPageState() {
     if (backgroundLoadTimeoutRef.current) clearTimeout(backgroundLoadTimeoutRef.current);
   }, []);
 
-  const selectedSprintType = useMemo(() => {
-    const visibleSprints = selectedSprintIds.length > 0
-      ? sprints.filter(sprint => selectedSprintIds.includes(sprint.id))
-      : sprints;
-    const types = [...new Set(visibleSprints.map(sprint => sprint.sprint_type).filter(Boolean))];
+  const selectedWorkflowType = useMemo(() => {
+    const visibleWorkflows = selectedWorkflowIds.length > 0
+      ? workflows.filter(workflow => selectedWorkflowIds.includes(workflow.id))
+      : workflows;
+    const types = [...new Set(visibleWorkflows.map(workflow => workflow.workflow_type).filter(Boolean))];
     return types.length === 1 ? types[0] : null;
-  }, [selectedSprintIds, sprints]);
-  const { statuses: taskStatusCatalog, definitions: taskStatusDefs } = useTaskStatuses(selectedSingleSprintId);
+  }, [selectedWorkflowIds, workflows]);
+  const { statuses: taskStatusCatalog, definitions: taskStatusDefs } = useTaskStatuses(selectedSingleWorkflowId);
   const { options: workflowTaskTypeOptions, loading: taskTypesLoading } = useTaskTypes(
-    selectedSingleSprintId,
-    { sprintType: selectedSingleSprintId ? null : selectedSprintType },
+    selectedSingleWorkflowId,
+    { workflowType: selectedSingleWorkflowId ? null : selectedWorkflowType },
   );
   const taskTypeOptions = useMemo<TaskTypeOption[]>(() => {
-    if ((selectedSingleSprintId || selectedSprintType) && workflowTaskTypeOptions.length > 0) {
+    if ((selectedSingleWorkflowId || selectedWorkflowType) && workflowTaskTypeOptions.length > 0) {
       return workflowTaskTypeOptions;
     }
 
@@ -117,7 +117,7 @@ export function useTasksPageState() {
       })
       .sort((a, b) => a.localeCompare(b))
       .map(taskType => ({ value: taskType, label: taskType }));
-  }, [selectedSingleSprintId, selectedSprintType, tasks, workflowTaskTypeOptions]);
+  }, [selectedSingleWorkflowId, selectedWorkflowType, tasks, workflowTaskTypeOptions]);
   const statusOptions = useMemo<StatusOption[]>(
     () => taskStatusDefs.map(d => ({ key: d.key, label: d.label })),
     [taskStatusDefs],
@@ -171,12 +171,12 @@ export function useTasksPageState() {
     if (selectedProject) params.set('project_id', String(selectedProject));
 
     const tasksFetch = fetch(`${base}/api/v1/tasks?${params.toString()}`).then(r => r.json());
-    const sprintsFetch = !selectedProject
+    const workflowsFetch = !selectedProject
       ? Promise.resolve(null)
-      : fetch(`${base}/api/v1/sprints?project_id=${selectedProject}`).then(r => r.json()).catch(() => []);
+      : fetch(`${base}/api/v1/workflows?project_id=${selectedProject}`).then(r => r.json()).catch(() => []);
 
-    Promise.all([tasksFetch, sprintsFetch])
-      .then(([taskData, sprintData]) => {
+    Promise.all([tasksFetch, workflowsFetch])
+      .then(([taskData, workflowData]) => {
         if (loadRunIdRef.current !== runId) return;
 
         const { tasks: newTasks, hasMore: more, total } = taskData as {
@@ -187,8 +187,8 @@ export function useTasksPageState() {
         setTasks(newTasks);
         setHasMore(more);
         setTotalTasks(total);
-        if (sprintData !== null) {
-          setSprints((sprintData as Sprint[]).filter(s => s.status === 'active' || s.status === 'planning'));
+        if (workflowData !== null) {
+          setWorkflows((workflowData as Workflow[]).filter(s => s.status === 'active' || s.status === 'planning'));
         }
       })
       .catch(console.error)
@@ -234,14 +234,14 @@ export function useTasksPageState() {
   }, [base, hasMore, isBackgroundLoading, loading, selectedProject, tasks.length]);
 
   const handleSectionVisible = useCallback((sectionKey: string) => {
-    if (!sectionKey.startsWith('sprint-')) return;
-    const sprintId = Number(sectionKey.replace('sprint-', ''));
-    if (!sprintId || loadedSprintIds.current.has(sprintId)) return;
-    loadedSprintIds.current.add(sprintId);
+    if (!sectionKey.startsWith('workflow-')) return;
+    const workflowId = Number(sectionKey.replace('workflow-', ''));
+    if (!workflowId || loadedWorkflowIds.current.has(workflowId)) return;
+    loadedWorkflowIds.current.add(workflowId);
 
-    setLoadingSprintIds(prev => new Set([...prev, sprintId]));
+    setLoadingWorkflowIds(prev => new Set([...prev, workflowId]));
 
-    const params = new URLSearchParams({ limit: '200', offset: '0', sprint_id: String(sprintId) });
+    const params = new URLSearchParams({ limit: '200', offset: '0', workflow_id: String(workflowId) });
     if (selectedProject) params.set('project_id', String(selectedProject));
 
     fetch(`${getApiBase()}/api/v1/tasks?${params.toString()}`)
@@ -257,21 +257,21 @@ export function useTasksPageState() {
       })
       .catch(console.error)
       .finally(() => {
-        setLoadingSprintIds(prev => {
+        setLoadingWorkflowIds(prev => {
           const next = new Set(prev);
-          next.delete(sprintId);
+          next.delete(workflowId);
           return next;
         });
       });
   }, [selectedProject]);
 
   useEffect(() => {
-    loadedSprintIds.current = new Set();
-    setLoadingSprintIds(new Set());
-    setSelectedSprintIds([]);
+    loadedWorkflowIds.current = new Set();
+    setLoadingWorkflowIds(new Set());
+    setSelectedWorkflowIds([]);
 
     if (selectedProject === null) {
-      setSprints([]);
+      setWorkflows([]);
     }
     loadTasks();
   }, [selectedProject, loadTasks]);
@@ -442,23 +442,23 @@ export function useTasksPageState() {
     if (activeInstanceOnly) {
       result = result.filter(hasLiveTaskInstance);
     }
-    if (selectedSprintIds.length > 0) {
-      const idSet = new Set(selectedSprintIds);
-      result = result.filter(t => t.sprint_id != null && idSet.has(t.sprint_id as number));
+    if (selectedWorkflowIds.length > 0) {
+      const idSet = new Set(selectedWorkflowIds);
+      result = result.filter(t => t.workflow_id != null && idSet.has(t.workflow_id as number));
     }
     if (selectedTaskType) {
       result = result.filter(t => t.task_type === selectedTaskType);
     }
     return result;
-  }, [tasks, searchQuery, activeInstanceOnly, selectedSprintIds, selectedTaskType]);
+  }, [tasks, searchQuery, activeInstanceOnly, selectedWorkflowIds, selectedTaskType]);
 
   const visibleTaskCount = filteredTasks.length;
-  const isFiltered = searchQuery.trim().length > 0 || activeInstanceOnly || selectedSprintIds.length > 0 || Boolean(selectedTaskType);
+  const isFiltered = searchQuery.trim().length > 0 || activeInstanceOnly || selectedWorkflowIds.length > 0 || Boolean(selectedTaskType);
 
   return {
     projects,
     tasks,
-    sprints,
+    workflows,
     selectedProject,
     setSelectedProject,
     loading,
@@ -475,10 +475,10 @@ export function useTasksPageState() {
     setActiveInstanceOnly,
     selectedTaskType,
     setSelectedTaskType,
-    selectedSprintIds,
-    setSelectedSprintIds,
-    loadingSprintIds,
-    selectedSingleSprintId,
+    selectedWorkflowIds,
+    setSelectedWorkflowIds,
+    loadingWorkflowIds,
+    selectedSingleWorkflowId,
     taskStatusCatalog,
     taskTypeOptions,
     statusOptions,
@@ -498,7 +498,7 @@ export function useTasksPageState() {
     filteredTasks,
     visibleTaskCount,
     isFiltered,
-    loadedSprintIds,
+    loadedWorkflowIds,
     loadTasks,
   };
 }

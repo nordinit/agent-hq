@@ -39,7 +39,7 @@ async function setupDb(): Promise<void> {
 async function seedProject(id: number, name: string): Promise<void> {
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (?, 1, ?)`, id, name);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+    INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
     VALUES (?, 1, ?, ?, 'generic')
   `, id, id, `${name} workflow`);
 }
@@ -127,7 +127,7 @@ describe('GET /api/v1/chat/sessions', () => {
     await seedProject(9, 'Backend Bugs');
     await seedProject(99, 'Wrong Agent Project');
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, project_id) VALUES (1, 1, 'Cinder', 'agent:cinder:main', 99)`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (22, 1, 'Fix chats API', 9, 9)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (22, 1, 'Fix chats API', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (id, tenant_id, task_id, agent_id, session_key, status, created_at)
       VALUES (33, 1, 22, 1, 'run:33', 'done', '2026-05-01T11:59:00Z')
@@ -161,7 +161,7 @@ describe('GET /api/v1/chat/sessions', () => {
   it('does not infer project metadata from a task when the canonical session is unassigned', async () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Atlas', 'agent:atlas:main')`);
     await seedProject(9, 'Backend Bugs');
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (22, 1, 'Fix chats API', 9, 9)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (22, 1, 'Fix chats API', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (id, tenant_id, task_id, agent_id, session_key, status, created_at)
       VALUES (33, 1, 22, 1, 'run:33', 'done', '2026-05-01T11:59:00Z')
@@ -194,7 +194,7 @@ describe('GET /api/v1/chat/sessions', () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Cinder', 'agent:cinder:main')`);
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (2, 1, 'Atlas', 'agent:atlas:main')`);
     await seedProject(9, 'Backend Bugs');
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (22, 1, 'Show starting chat', 9, 9)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (22, 1, 'Show starting chat', 9, 9)`);
     await db.run(`
       INSERT INTO sessions (id, tenant_id, external_key, runtime, agent_id, project_id, status, title, message_count)
       VALUES (1, 1, 'direct:atlas:web', 'openclaw', 2, NULL, 'active', 'Atlas direct', 1)
@@ -234,7 +234,7 @@ describe('GET /api/v1/chat/sessions', () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Cinder', 'agent:cinder:main')`);
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (2, 1, 'Atlas', 'agent:atlas:main')`);
     await seedProject(9, 'Backend Bugs');
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (22, 1, 'Show starting chat', 9, 9)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (22, 1, 'Show starting chat', 9, 9)`);
     await db.run(`
       INSERT INTO sessions (id, tenant_id, external_key, runtime, agent_id, project_id, status, title, message_count)
       VALUES (1, 1, 'direct:atlas:web', 'openclaw', 2, NULL, 'active', 'Atlas direct', 1)
@@ -272,8 +272,8 @@ describe('GET /api/v1/chat/sessions', () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key) VALUES (1, 1, 'Cinder', 'agent:cinder:main')`);
     await seedProject(9, 'Backend Bugs');
     await seedProject(10, 'Mobile UX');
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (22, 1, 'Backend run', 9, 9)`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (23, 1, 'Mobile run', 10, 10)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (22, 1, 'Backend run', 9, 9)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (23, 1, 'Mobile run', 10, 10)`);
     await db.run(`
       INSERT INTO job_instances (id, tenant_id, task_id, agent_id, session_key, status, created_at)
       VALUES

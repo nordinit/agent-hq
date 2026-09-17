@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, type CustomFieldDefinition, type TransitionRequirement } from '@/lib/api';
 import { getTaskTypeLabel, useTaskTypes } from '@/lib/taskTypes';
-import { firstOutcomeOptionValue, formatOutcomeOptionLabel, mergeOutcomeOptions, type SprintOutcomeCatalogState } from '@/lib/useSprintOutcomeCatalog';
+import { firstOutcomeOptionValue, formatOutcomeOptionLabel, mergeOutcomeOptions, type WorkflowOutcomeCatalogState } from '@/lib/useWorkflowOutcomeCatalog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -17,22 +17,22 @@ import { REQUIREMENT_COLUMN_HELP, ROUTING_TABLE_HELP } from '../workflowConfigSh
 
 export default function TransitionRequirementsSection({
   projectId,
-  sprintId,
-  sprintType,
-  sprintName,
+  workflowId,
+  workflowType,
+  workflowName,
   outcomeCatalog,
 }: {
   projectId: number | null;
-  sprintId: number | null;
-  sprintType: string | null;
-  sprintName: string | null;
-  outcomeCatalog: SprintOutcomeCatalogState;
+  workflowId: number | null;
+  workflowType: string | null;
+  workflowName: string | null;
+  outcomeCatalog: WorkflowOutcomeCatalogState;
 }) {
   const [reqs, setReqs] = useState<TransitionRequirement[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const { options: taskTypeOptions } = useTaskTypes(sprintId, {
-    sprintType: sprintId ? null : sprintType,
+  const { options: taskTypeOptions } = useTaskTypes(workflowId, {
+    workflowType: workflowId ? null : workflowType,
   });
   const [filterTypes, setFilterTypes] = useState<string[]>([]);
   const [filterScopes, setFilterScopes] = useState<string[]>([]);
@@ -86,17 +86,17 @@ export default function TransitionRequirementsSection({
   };
 
   const load = useCallback(() => {
-    if (!sprintType) {
+    if (!workflowType) {
       setReqs([]);
       setLoading(false);
       return;
     }
     setLoading(true);
-    api.getTransitionRequirements(undefined, undefined, sprintId ?? undefined, projectId ?? undefined, sprintType)
+    api.getTransitionRequirements(undefined, undefined, workflowId ?? undefined, projectId ?? undefined, workflowType)
       .then(data => setReqs(data.transition_requirements))
       .catch(e => console.error(e))
       .finally(() => setLoading(false));
-  }, [projectId, sprintId, sprintType]);
+  }, [projectId, workflowId, workflowType]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -119,12 +119,12 @@ export default function TransitionRequirementsSection({
 
   useEffect(() => {
     let cancelled = false;
-    if (!sprintId && !sprintType) {
+    if (!workflowId && !workflowType) {
       setRequirementFields([]);
       return;
     }
     setRequirementFieldsLoading(true);
-    api.getTransitionRequirementFields(sprintId ?? undefined, activeRequirementTaskType || undefined, sprintType ?? undefined)
+    api.getTransitionRequirementFields(workflowId ?? undefined, activeRequirementTaskType || undefined, workflowType ?? undefined)
       .then(data => {
         if (cancelled) return;
         setRequirementFields(data.fields);
@@ -146,10 +146,10 @@ export default function TransitionRequirementsSection({
         if (!cancelled) setRequirementFieldsLoading(false);
       });
     return () => { cancelled = true; };
-  }, [activeRequirementTaskType, editForm.field_name, editingRequirementId, newForm.field_name, sprintId, sprintType]);
+  }, [activeRequirementTaskType, editForm.field_name, editingRequirementId, newForm.field_name, workflowId, workflowType]);
 
   const handleAdd = async () => {
-    if (!projectId || !sprintType) return;
+    if (!projectId || !workflowType) return;
     const outcomeKey = newForm.outcome;
     if (!outcomeKey) {
       alert('Choose an outcome from the workflow type outcome catalog.');
@@ -170,8 +170,8 @@ export default function TransitionRequirementsSection({
     try {
       await api.createTransitionRequirement({
         project_id: projectId,
-        sprint_id: sprintId,
-        sprint_type: sprintType,
+        workflow_id: workflowId,
+        workflow_type: workflowType,
         task_type: newForm.task_type || null,
         outcome: outcomeKey,
         field_name: newForm.field_name,
@@ -207,7 +207,7 @@ export default function TransitionRequirementsSection({
   };
 
   const handleSaveEdit = async (id: number) => {
-    if (!projectId || !sprintType) return;
+    if (!projectId || !workflowType) return;
     if (!editForm.outcome || !editOutcomeOptions.some(option => option.value === editForm.outcome)) {
       alert('Outcome must be defined in the selected workflow type outcome catalog.');
       return;
@@ -223,8 +223,8 @@ export default function TransitionRequirementsSection({
     try {
       await api.updateTransitionRequirement(id, {
         project_id: projectId,
-        sprint_id: reqs.find(req => req.id === id)?.sprint_id ?? undefined,
-        sprint_type: sprintType,
+        workflow_id: reqs.find(req => req.id === id)?.workflow_id ?? undefined,
+        workflow_type: workflowType,
         task_type: editForm.task_type || null,
         outcome: editForm.outcome,
         field_name: editForm.field_name,
@@ -243,7 +243,7 @@ export default function TransitionRequirementsSection({
 
   const handleToggle = async (req: TransitionRequirement) => {
     try {
-      await api.updateTransitionRequirement(req.id, { project_id: projectId ?? undefined, sprint_id: req.sprint_id ?? undefined, sprint_type: req.sprint_type ?? sprintType ?? undefined, enabled: req.enabled ? 0 : 1 });
+      await api.updateTransitionRequirement(req.id, { project_id: projectId ?? undefined, workflow_id: req.workflow_id ?? undefined, workflow_type: req.workflow_type ?? workflowType ?? undefined, enabled: req.enabled ? 0 : 1 });
       load();
     } catch (e) {
       alert(String(e));
@@ -254,7 +254,7 @@ export default function TransitionRequirementsSection({
     if (!confirm('Delete this transition requirement? Starter defaults become workflow-managed rows here and will not be restored automatically after deletion.')) return;
     try {
       const req = reqs.find(row => row.id === id);
-      await api.deleteTransitionRequirement(id, req?.sprint_id ?? undefined, projectId ?? undefined, req?.sprint_type ?? sprintType ?? undefined);
+      await api.deleteTransitionRequirement(id, req?.workflow_id ?? undefined, projectId ?? undefined, req?.workflow_type ?? workflowType ?? undefined);
       load();
     } catch (e) {
       alert(String(e));
@@ -281,8 +281,8 @@ export default function TransitionRequirementsSection({
     })),
   ]), [reqs, taskTypeOptions]);
   const requirementScopeOptions = useMemo(() => ([
-    { value: 'sprint_type_default', label: 'default' },
-    { value: 'sprint_override', label: 'override' },
+    { value: 'workflow_type_default', label: 'default' },
+    { value: 'workflow_override', label: 'override' },
   ]), []);
   const requirementOutcomeOptions = useMemo(() => uniqueColumnOptions([
     ...filterOutcomeOptions.map(option => ({ value: option.value, label: formatOutcomeOptionLabel(option) })),
@@ -312,7 +312,7 @@ export default function TransitionRequirementsSection({
   const filteredReqs = useMemo(() => reqs.filter(req => {
     const enabledValue = req.enabled ? 'enabled' : 'disabled';
     return matchesColumnFilter(filterTypes, req.task_type ?? '')
-      && matchesColumnFilter(filterScopes, req.scope_kind === 'sprint_override' ? 'sprint_override' : 'sprint_type_default')
+      && matchesColumnFilter(filterScopes, req.scope_kind === 'workflow_override' ? 'workflow_override' : 'workflow_type_default')
       && matchesColumnFilter(filterOutcomes, req.outcome)
       && matchesColumnFilter(filterFields, req.field_name)
       && matchesColumnFilter(filterChecks, req.requirement_type)
@@ -328,7 +328,7 @@ export default function TransitionRequirementsSection({
     </div>
   );
 
-  if (!projectId || !sprintType) {
+  if (!projectId || !workflowType) {
     return (
       <Card className="bg-slate-900/50 border-slate-700/50 p-6 text-sm text-slate-400">
         Select a project and workflow type to edit shared gate requirements, then optionally pick a workflow for overrides.
@@ -407,7 +407,7 @@ export default function TransitionRequirementsSection({
                       {taskTypeOptions.map(taskType => <option key={taskType.value} value={taskType.value}>{taskType.label}</option>)}
                     </select>
                   </td>
-                  <td className="px-3 py-2 text-xs text-slate-400">{sprintId ? 'override' : 'default'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-400">{workflowId ? 'override' : 'default'}</td>
                   <td className="px-3 py-2">
                     <OutcomeKeySelect
                       id="new-requirement-outcome"
@@ -540,7 +540,7 @@ export default function TransitionRequirementsSection({
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      <ScopeBadge kind={req.scope_kind === 'sprint_override' ? 'sprint_override' : 'default_scope'} />
+                      <ScopeBadge kind={req.scope_kind === 'workflow_override' ? 'workflow_override' : 'default_scope'} />
                     </td>
                     <td className="px-3 py-2">
                       {editing ? (

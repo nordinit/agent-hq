@@ -5,9 +5,9 @@
 ## Current domain slices
 - `tasks/` — task read/write models, release semantics, task context, task history, request-actor helpers.
 - `routing/` — status policy, transitions, requirements, routing admin/config flows.
-- `sprint-definitions/` — sprint types, field schemas, configured outcomes, workflow metadata, sprint-type router helpers.
+- `workflow-definitions/` — workflow types, field schemas, configured outcomes, workflow metadata, workflow-type router helpers.
 - `runs/` — instance lifecycle helpers, transcript providers, token usage/backfill, runtime-end reconciliation.
-- `sprints/` — sprint CRUD/admin and sprint-specific lifecycle helpers.
+- `workflows/` — workflow CRUD/admin and workflow-specific lifecycle helpers.
 - `chat/` — canonical chat-session helpers.
 
 ## Placement rules

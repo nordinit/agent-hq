@@ -42,7 +42,7 @@ BACKUP_PATH="$BACKUP_DIR/$BACKUP_FILENAME"
 
 # Tables whose counts are compared source-to-restore under --verify. Operational
 # core first: a restore that loses routing config is as dead as one that loses tasks.
-VERIFY_TABLES=(tasks projects agents sprints sprint_task_transitions sprint_task_routing_rules sprint_task_transition_requirements)
+VERIFY_TABLES=(tasks projects agents workflows workflow_task_transitions workflow_task_routing_rules workflow_task_transition_requirements)
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 log() {

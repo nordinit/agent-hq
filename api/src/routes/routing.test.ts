@@ -6,7 +6,7 @@ import os from 'os';
 import path from 'path';
 import { getDb } from '../db/client';
 import { resolveWorkflowEventMapping, type ExternalEventMapping } from '../domains/routing/externalEventMappings';
-import { listSprintTaskRoutingRules, loadSprintTaskTransitionRequirements, resolveSprintTaskRoutingAssignment, resolveSprintTaskTransition, seedSprintTaskPolicy, seedSprintTypeTaskStatuses } from '../domains/routing/policy';
+import { listWorkflowTaskRoutingRules, loadWorkflowTaskTransitionRequirements, resolveWorkflowTaskRoutingAssignment, resolveWorkflowTaskTransition, seedWorkflowTaskPolicy, seedWorkflowTypeTaskStatuses } from '../domains/routing/policy';
 import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
 import routingRouter from './routing';
 
@@ -22,12 +22,11 @@ async function resetDb(): Promise<void> {
   dbPath = path.join(tempDir, 'agent-hq-test.db');
   process.env.AGENT_CONTRACT_ROOT = path.join(tempDir, 'agent-contracts');
   fs.mkdirSync(process.env.AGENT_CONTRACT_ROOT, { recursive: true });
-  fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'generic.md'), 'Sprint type: {{sprintType}}\n');
+  fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'generic.md'), 'Workflow type: {{workflowType}}\n');
   fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'bugs.md'), '## Agent HQ bug-fix contract for this dispatched instance\nREQUIRED OUTPUTS FOR BUGS\n');
   fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'enhancements.md'), '## Agent HQ enhancement contract for this dispatched instance\nREQUIRED OUTPUTS FOR ENHANCEMENTS\n');
 
   const db = getDb();
-
 
   await db.run(`
     INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
@@ -51,11 +50,11 @@ async function resetDb(): Promise<void> {
   await db.get(`SELECT setval(pg_get_serial_sequence('tenants', 'id'), 1, true)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ'), (2, 1, 'Other Project')`);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1), (1, 'bugs', 'Bugs', 1), (1, 'enhancements', 'Enhancements', 1), (1, 'dev', 'Development', 1)`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (10, 1, 1, 'Bugs', 'bugs')`);
-  await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type) VALUES (1, 'bugs', 'backend'), (1, 'bugs', 'qa')`);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (1, 'generic', 'Generic', 1), (1, 'bugs', 'Bugs', 1), (1, 'enhancements', 'Enhancements', 1), (1, 'dev', 'Development', 1)`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (10, 1, 1, 'Bugs', 'bugs')`);
+  await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type) VALUES (1, 'bugs', 'backend'), (1, 'bugs', 'qa')`);
   await db.run(`
-    INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
+    INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
     VALUES (1, 'bugs', NULL, ?)
   `, JSON.stringify({
         fields: [
@@ -67,8 +66,8 @@ async function resetDb(): Promise<void> {
       }));
   await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, project_id, enabled) VALUES (7, 1, 'Cinder', 'agent:cinder:main', 'Backend Engineer', 1, 1), (8, 1, 'Other', 'agent:other:main', 'Other Engineer', 2, 1)`);
   await db.run(`
-    INSERT INTO sprint_type_task_statuses (
-      tenant_id, sprint_type_key, status_key, label, color, terminal, is_system,
+    INSERT INTO workflow_type_task_statuses (
+      tenant_id, workflow_type_key, status_key, label, color, terminal, is_system,
       allowed_transitions_json, stage_order, is_default_entry, metadata_json
     )
     SELECT 1, 'bugs', name, label, color, terminal, is_system,
@@ -77,8 +76,8 @@ async function resetDb(): Promise<void> {
     FROM task_statuses
   `);
   await db.run(`
-    INSERT INTO sprint_task_statuses (
-      sprint_id, status_key, label, color, terminal, is_system,
+    INSERT INTO workflow_task_statuses (
+      workflow_id, status_key, label, color, terminal, is_system,
       allowed_transitions_json, stage_order, is_default_entry, metadata_json
     )
     SELECT 10, name, label, color, terminal, is_system,
@@ -88,7 +87,6 @@ async function resetDb(): Promise<void> {
   `);
 
 }
-
 
 function startTestServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
@@ -135,65 +133,65 @@ describe('routing rules API', () => {
       VALUES ('Beta Company', 'beta-company', 0)
     `)).lastInsertId);
     await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
-    await db.run(`UPDATE sprints SET tenant_id = ? WHERE id = 10`, defaultTenantId);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
+    await db.run(`UPDATE workflows SET tenant_id = ? WHERE id = 10`, defaultTenantId);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
     await db.run(`UPDATE agents SET tenant_id = ? WHERE id = 8`, betaTenantId);
 
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'ready', 8, 50)
     `, betaTenantId);
-    const betaRuleId = Number((await db.get(`SELECT id FROM sprint_task_routing_rules WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    const betaRuleId = Number((await db.get(`SELECT id FROM workflow_task_routing_rules WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
     await db.run(`
-      INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status, priority)
+      INSERT INTO workflow_task_transitions (tenant_id, project_id, workflow_type, workflow_id, task_type, from_status, outcome, to_status, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'ready', 'start_beta', 'in_progress', 10)
     `, betaTenantId);
-    const betaTransitionId = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    const betaTransitionId = Number((await db.get(`SELECT id FROM workflow_task_transitions WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements (tenant_id, project_id, sprint_type, sprint_id, task_type, outcome, field_name, requirement_type, severity, message, priority)
+      INSERT INTO workflow_task_transition_requirements (tenant_id, project_id, workflow_type, workflow_id, task_type, outcome, field_name, requirement_type, severity, message, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'start_beta', 'review_commit', 'required', 'block', 'Beta only', 10)
     `, betaTenantId);
-    const betaRequirementId = Number((await db.get(`SELECT id FROM sprint_task_transition_requirements WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    const betaRequirementId = Number((await db.get(`SELECT id FROM workflow_task_transition_requirements WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
 
     const { server, baseUrl } = await startTestServer();
     try {
       await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(defaultTenantId));
 
-      const alphaRules = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_id=10`);
+      const alphaRules = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&workflow_id=10`);
       expect(alphaRules.status).toBe(200);
       await expect(alphaRules.json()).resolves.toEqual(expect.objectContaining({ rules: [] }));
 
-      await expect(fetch(`${baseUrl}/api/v1/routing/rules/${betaRuleId}?project_id=1&sprint_id=10`)).resolves.toMatchObject({ status: 404 });
-      await expect(fetch(`${baseUrl}/api/v1/routing/rules/${betaRuleId}?project_id=1&sprint_id=20`)).resolves.toMatchObject({ status: 404 });
-      await expect(fetch(`${baseUrl}/api/v1/routing/transitions/${betaTransitionId}?project_id=1&sprint_id=10`)).resolves.toMatchObject({ status: 404 });
-      await expect(fetch(`${baseUrl}/api/v1/routing/transition-requirements/${betaRequirementId}?project_id=1&sprint_id=10`)).resolves.toMatchObject({ status: 404 });
+      await expect(fetch(`${baseUrl}/api/v1/routing/rules/${betaRuleId}?project_id=1&workflow_id=10`)).resolves.toMatchObject({ status: 404 });
+      await expect(fetch(`${baseUrl}/api/v1/routing/rules/${betaRuleId}?project_id=1&workflow_id=20`)).resolves.toMatchObject({ status: 404 });
+      await expect(fetch(`${baseUrl}/api/v1/routing/transitions/${betaTransitionId}?project_id=1&workflow_id=10`)).resolves.toMatchObject({ status: 404 });
+      await expect(fetch(`${baseUrl}/api/v1/routing/transition-requirements/${betaRequirementId}?project_id=1&workflow_id=10`)).resolves.toMatchObject({ status: 404 });
 
-      const alphaResolve = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
+      const alphaResolve = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=10&task_type=backend&status=ready`);
       expect(alphaResolve.status).toBe(200);
       await expect(alphaResolve.json()).resolves.toEqual(expect.objectContaining({ matched: false }));
-      expect(await resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: null });
+      expect(await resolveWorkflowTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: null });
 
       const alphaCreateForeign = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 2, sprint_id: 20, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 8 }),
+        body: JSON.stringify({ project_id: 2, workflow_id: 20, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 8 }),
       });
       expect(alphaCreateForeign.status).toBe(404);
 
       await db.run(`UPDATE app_settings SET value = ? WHERE key = 'active_tenant_id'`, String(betaTenantId));
-      const betaRules = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=2&sprint_id=20`);
+      const betaRules = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=2&workflow_id=20`);
       expect(betaRules.status).toBe(200);
       const betaRulesBody = await betaRules.json() as { rules: Array<{ id: number; tenant_id: number; agent_id: number }> };
       expect(betaRulesBody.rules).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: betaRuleId, tenant_id: betaTenantId, agent_id: 8 }),
       ]));
 
-      const betaRequirements = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=2&sprint_id=20&outcome=start_beta`);
+      const betaRequirements = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=2&workflow_id=20&outcome=start_beta`);
       expect(betaRequirements.status).toBe(200);
       await expect(betaRequirements.json()).resolves.toEqual(expect.objectContaining({
         transition_requirements: [expect.objectContaining({ id: betaRequirementId, tenant_id: betaTenantId })],
       }));
-      expect(await resolveSprintTaskRoutingAssignment(db, 20, 'backend', 'ready')).toEqual({ agent_id: 8 });
+      expect(await resolveWorkflowTaskRoutingAssignment(db, 20, 'backend', 'ready')).toEqual({ agent_id: 8 });
     } finally {
       await stopTestServer(server);
     }
@@ -208,24 +206,24 @@ describe('routing rules API', () => {
       VALUES ('Beta Company', 'beta-company', 0)
     `)).lastInsertId);
     await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
     await db.run(`UPDATE agents SET tenant_id = ? WHERE id = 8`, betaTenantId);
 
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'ready', 8, 50)
     `, betaTenantId);
-    const betaRuleId = Number((await db.get(`SELECT id FROM sprint_task_routing_rules WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    const betaRuleId = Number((await db.get(`SELECT id FROM workflow_task_routing_rules WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
     await db.run(`
-      INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status, priority)
+      INSERT INTO workflow_task_transitions (tenant_id, project_id, workflow_type, workflow_id, task_type, from_status, outcome, to_status, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'ready', 'start_beta', 'in_progress', 10)
     `, betaTenantId);
-    const betaTransitionId = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    const betaTransitionId = Number((await db.get(`SELECT id FROM workflow_task_transitions WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements (tenant_id, project_id, sprint_type, sprint_id, task_type, outcome, field_name, requirement_type, severity, message, priority)
+      INSERT INTO workflow_task_transition_requirements (tenant_id, project_id, workflow_type, workflow_id, task_type, outcome, field_name, requirement_type, severity, message, priority)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'start_beta', 'review_commit', 'required', 'block', 'Beta only', 10)
     `, betaTenantId);
-    const betaRequirementId = Number((await db.get(`SELECT id FROM sprint_task_transition_requirements WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    const betaRequirementId = Number((await db.get(`SELECT id FROM workflow_task_transition_requirements WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
 
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, project_id, enabled) VALUES (9, ?, 'Super Admin', 'agent:super-admin:main', 'Backend Engineer', 1, 1)`, defaultTenantId);
     const regularKey = (await issueMcpApiKeyForAgent(db, 7, 'regular tenant key')).apiKey;
@@ -235,13 +233,13 @@ describe('routing rules API', () => {
 
     const { server, baseUrl } = await startTestServer();
     try {
-      const browserSelector = await fetch(`${baseUrl}/api/v1/routing/rules?tenant_id=${betaTenantId}&project_id=2&sprint_id=20`);
+      const browserSelector = await fetch(`${baseUrl}/api/v1/routing/rules?tenant_id=${betaTenantId}&project_id=2&workflow_id=20`);
       expect(browserSelector.status).toBe(400);
       await expect(browserSelector.json()).resolves.toMatchObject({
         error: 'Explicit tenant selectors are not allowed for this request context',
       });
 
-      const regularSelector = await fetch(`${baseUrl}/api/v1/routing/rules?tenant_id=${betaTenantId}&project_id=2&sprint_id=20`, {
+      const regularSelector = await fetch(`${baseUrl}/api/v1/routing/rules?tenant_id=${betaTenantId}&project_id=2&workflow_id=20`, {
         headers: { Authorization: `Bearer ${regularKey}`, 'x-agent-hq-mcp-client': 'agent-hq-mcp' },
       });
       expect(regularSelector.status).toBe(403);
@@ -255,7 +253,7 @@ describe('routing rules API', () => {
       });
 
       const authHeaders = { Authorization: `Bearer ${superAdminKey}`, 'x-agent-hq-mcp-client': 'agent-hq-mcp' };
-      const rules = await fetch(`${baseUrl}/api/v1/routing/rules?tenant_id=${betaTenantId}&project_id=2&sprint_id=20`, { headers: authHeaders });
+      const rules = await fetch(`${baseUrl}/api/v1/routing/rules?tenant_id=${betaTenantId}&project_id=2&workflow_id=20`, { headers: authHeaders });
       const rulesBody = await rules.json();
       expect({ status: rules.status, body: rulesBody }).toEqual({
         status: 200,
@@ -264,13 +262,13 @@ describe('routing rules API', () => {
         }),
       });
 
-      const transitions = await fetch(`${baseUrl}/api/v1/routing/transitions?tenant_id=${betaTenantId}&project_id=2&sprint_id=20`, { headers: authHeaders });
+      const transitions = await fetch(`${baseUrl}/api/v1/routing/transitions?tenant_id=${betaTenantId}&project_id=2&workflow_id=20`, { headers: authHeaders });
       expect(transitions.status).toBe(200);
       await expect(transitions.json()).resolves.toEqual(expect.objectContaining({
-        transitions: expect.arrayContaining([expect.objectContaining({ id: betaTransitionId, project_id: 2, sprint_type: 'bugs' })]),
+        transitions: expect.arrayContaining([expect.objectContaining({ id: betaTransitionId, project_id: 2, workflow_type: 'bugs' })]),
       }));
 
-      const requirements = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?tenant_id=${betaTenantId}&project_id=2&sprint_id=20&outcome=start_beta`, { headers: authHeaders });
+      const requirements = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?tenant_id=${betaTenantId}&project_id=2&workflow_id=20&outcome=start_beta`, { headers: authHeaders });
       expect(requirements.status).toBe(200);
       await expect(requirements.json()).resolves.toEqual(expect.objectContaining({
         transition_requirements: expect.arrayContaining([expect.objectContaining({ id: betaRequirementId, tenant_id: betaTenantId })]),
@@ -280,14 +278,13 @@ describe('routing rules API', () => {
     }
   });
 
-
-  it('creates sprint-type default routing rules without requiring sprint_id', async () => {
+  it('creates workflow-type default routing rules without requiring workflow_id', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_type: 'backend', status: 'ready', agent_id: 7, project_id: 1, sprint_type: 'bugs' }),
+        body: JSON.stringify({ task_type: 'backend', status: 'ready', agent_id: 7, project_id: 1, workflow_type: 'bugs' }),
       });
 
       const body = await response.json() as { id: number };
@@ -296,9 +293,9 @@ describe('routing rules API', () => {
       }
       expect(body).toEqual(expect.objectContaining({
         project_id: 1,
-        sprint_type: 'bugs',
-        sprint_id: null,
-        scope_kind: 'sprint_type_default',
+        workflow_type: 'bugs',
+        workflow_id: null,
+        scope_kind: 'workflow_type_default',
         task_type: 'backend',
         status: 'ready',
       }));
@@ -313,7 +310,7 @@ describe('routing rules API', () => {
       const createResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_type: 'backend', status: 'ready', agent_id: 7, project_id: 1, sprint_type: 'bugs' }),
+        body: JSON.stringify({ task_type: 'backend', status: 'ready', agent_id: 7, project_id: 1, workflow_type: 'bugs' }),
       });
       expect(createResponse.status).toBe(201);
       const created = await createResponse.json() as { id: number; agent_id: number; task_type: string; status: string };
@@ -323,29 +320,29 @@ describe('routing rules API', () => {
         status: 'ready',
       }));
 
-      const listResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=1&sprint_type=bugs`);
+      const listResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules?project_id=1&workflow_type=bugs`);
       expect(listResponse.status).toBe(200);
       await expect(listResponse.json()).resolves.toEqual(expect.objectContaining({
         rules: expect.arrayContaining([expect.objectContaining({ id: created.id, agent_id: 7 })]),
       }));
 
-      const readResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/${created.id}?project_id=1&sprint_type=bugs`);
+      const readResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/${created.id}?project_id=1&workflow_type=bugs`);
       expect(readResponse.status).toBe(200);
       await expect(readResponse.json()).resolves.toEqual(expect.objectContaining({ id: created.id, agent_id: 7 }));
 
       const updateResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/${created.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 42 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 42 }),
       });
       expect(updateResponse.status).toBe(200);
       await expect(updateResponse.json()).resolves.toEqual(expect.objectContaining({ id: created.id, priority: 42 }));
 
-      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/resolve?sprint_id=10&task_type=backend&status=ready`);
+      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/resolve?workflow_id=10&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
       await expect(resolveResponse.json()).resolves.toEqual(expect.objectContaining({ rule: expect.objectContaining({ id: created.id, priority: 42 }) }));
 
-      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/${created.id}?project_id=1&sprint_type=bugs`, { method: 'DELETE' });
+      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/assignment-rules/${created.id}?project_id=1&workflow_type=bugs`, { method: 'DELETE' });
       expect(deleteResponse.status).toBe(200);
       await expect(deleteResponse.json()).resolves.toEqual(expect.objectContaining({ ok: true }));
     } finally {
@@ -356,9 +353,9 @@ describe('routing rules API', () => {
   it('previews high-blast-radius config writes without persisting rows', async () => {
     const db = getDb();
     const before = {
-      rules: (await db.get('SELECT COUNT(*) AS count FROM sprint_task_routing_rules') as { count: number }).count,
-      transitions: (await db.get('SELECT COUNT(*) AS count FROM sprint_task_transitions') as { count: number }).count,
-      requirements: (await db.get('SELECT COUNT(*) AS count FROM sprint_task_transition_requirements') as { count: number }).count,
+      rules: (await db.get('SELECT COUNT(*) AS count FROM workflow_task_routing_rules') as { count: number }).count,
+      transitions: (await db.get('SELECT COUNT(*) AS count FROM workflow_task_transitions') as { count: number }).count,
+      requirements: (await db.get('SELECT COUNT(*) AS count FROM workflow_task_transition_requirements') as { count: number }).count,
       mappings: (await db.get('SELECT COUNT(*) AS count FROM external_event_mappings') as { count: number }).count,
     };
     const { server, baseUrl } = await startTestServer();
@@ -367,17 +364,17 @@ describe('routing rules API', () => {
         fetch(`${baseUrl}/api/v1/routing/rules`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dry_run: true, task_type: 'backend', status: 'ready', agent_id: 7, project_id: 1, sprint_type: 'bugs' }),
+          body: JSON.stringify({ dry_run: true, task_type: 'backend', status: 'ready', agent_id: 7, project_id: 1, workflow_type: 'bugs' }),
         }),
         fetch(`${baseUrl}/api/v1/routing/transitions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dry_run: true, project_id: 1, sprint_type: 'bugs', from_status: 'ready', outcome: 'start_work', to_status: 'in_progress' }),
+          body: JSON.stringify({ dry_run: true, project_id: 1, workflow_type: 'bugs', from_status: 'ready', outcome: 'start_work', to_status: 'in_progress' }),
         }),
         fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dry_run: true, project_id: 1, sprint_type: 'bugs', outcome: 'completed_for_review', field_name: 'review_commit' }),
+          body: JSON.stringify({ dry_run: true, project_id: 1, workflow_type: 'bugs', outcome: 'completed_for_review', field_name: 'review_commit' }),
         }),
         fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings`, {
           method: 'POST',
@@ -394,22 +391,22 @@ describe('routing rules API', () => {
         expect(body.preview?.affected).toBeTruthy();
       }
 
-      expect((await db.get('SELECT COUNT(*) AS count FROM sprint_task_routing_rules') as { count: number }).count).toBe(before.rules);
-      expect((await db.get('SELECT COUNT(*) AS count FROM sprint_task_transitions') as { count: number }).count).toBe(before.transitions);
-      expect((await db.get('SELECT COUNT(*) AS count FROM sprint_task_transition_requirements') as { count: number }).count).toBe(before.requirements);
+      expect((await db.get('SELECT COUNT(*) AS count FROM workflow_task_routing_rules') as { count: number }).count).toBe(before.rules);
+      expect((await db.get('SELECT COUNT(*) AS count FROM workflow_task_transitions') as { count: number }).count).toBe(before.transitions);
+      expect((await db.get('SELECT COUNT(*) AS count FROM workflow_task_transition_requirements') as { count: number }).count).toBe(before.requirements);
       expect((await db.get('SELECT COUNT(*) AS count FROM external_event_mappings') as { count: number }).count).toBe(before.mappings);
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('creates and lists all-project sprint-type default routing rules', async () => {
+  it('creates and lists all-project workflow-type default routing rules', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_type: 'backend', status: 'ready', agent_id: 7, sprint_type: 'bugs' }),
+        body: JSON.stringify({ task_type: 'backend', status: 'ready', agent_id: 7, workflow_type: 'bugs' }),
       });
 
       const body = await response.json() as { id: number };
@@ -418,23 +415,23 @@ describe('routing rules API', () => {
       }
       expect(body).toEqual(expect.objectContaining({
         project_id: null,
-        sprint_type: 'bugs',
-        sprint_id: null,
-        scope_kind: 'sprint_type_default',
+        workflow_type: 'bugs',
+        workflow_id: null,
+        scope_kind: 'workflow_type_default',
         task_type: 'backend',
         status: 'ready',
       }));
 
-      const scopedProjectResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_type=bugs`);
+      const scopedProjectResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&workflow_type=bugs`);
       expect(scopedProjectResponse.status).toBe(200);
       const scopedProjectBody = await scopedProjectResponse.json() as { rules: Array<{ id: number }> };
       expect(scopedProjectBody.rules.some(rule => rule.id === body.id)).toBe(false);
 
-      const allProjectsResponse = await fetch(`${baseUrl}/api/v1/routing/rules?sprint_type=bugs`);
+      const allProjectsResponse = await fetch(`${baseUrl}/api/v1/routing/rules?workflow_type=bugs`);
       expect(allProjectsResponse.status).toBe(200);
       await expect(allProjectsResponse.json()).resolves.toEqual(expect.objectContaining({
-        rules: expect.arrayContaining([expect.objectContaining({ id: body.id, project_id: null, sprint_type: 'bugs', scope_kind: 'sprint_type_default' })]),
-        scope: expect.objectContaining({ project_id: null, sprint_type: 'bugs', sprint_id: null }),
+        rules: expect.arrayContaining([expect.objectContaining({ id: body.id, project_id: null, workflow_type: 'bugs', scope_kind: 'workflow_type_default' })]),
+        scope: expect.objectContaining({ project_id: null, workflow_type: 'bugs', workflow_id: null }),
       }));
     } finally {
       await stopTestServer(server);
@@ -456,16 +453,16 @@ describe('routing rules API', () => {
       }
       expect(body).toEqual(expect.objectContaining({
         project_id: null,
-        sprint_type: 'bugs',
-        sprint_id: null,
-        scope_kind: 'sprint_type_default',
+        workflow_type: 'bugs',
+        workflow_id: null,
+        scope_kind: 'workflow_type_default',
       }));
 
       const listResponse = await fetch(`${baseUrl}/api/v1/routing/rules?workflow_type=bugs`);
       expect(listResponse.status).toBe(200);
       await expect(listResponse.json()).resolves.toEqual(expect.objectContaining({
-        rules: expect.arrayContaining([expect.objectContaining({ id: body.id, sprint_type: 'bugs', scope_kind: 'sprint_type_default' })]),
-        scope: expect.objectContaining({ project_id: null, sprint_type: 'bugs', sprint_id: null }),
+        rules: expect.arrayContaining([expect.objectContaining({ id: body.id, workflow_type: 'bugs', scope_kind: 'workflow_type_default' })]),
+        scope: expect.objectContaining({ project_id: null, workflow_type: 'bugs', workflow_id: null }),
       }));
     } finally {
       await stopTestServer(server);
@@ -476,34 +473,34 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (56, 1, 2, 'Other Bugs', 'bugs')`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (56, 1, 2, 'Other Bugs', 'bugs')`);
 
       await db.run(`
-        INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+        INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, priority, is_system)
         VALUES (1, NULL, 'bugs', NULL, 'backend', 'ready', 7, 0, 0)
       `);
 
-      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=56&task_type=backend&status=ready`);
+      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=56&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
       await expect(resolveResponse.json()).resolves.toEqual(expect.objectContaining({
         matched: true,
-        rule: expect.objectContaining({ project_id: null, sprint_id: null, sprint_type: 'bugs', agent_id: 7, scope_kind: 'sprint_type_default' }),
+        rule: expect.objectContaining({ project_id: null, workflow_id: null, workflow_type: 'bugs', agent_id: 7, scope_kind: 'workflow_type_default' }),
       }));
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('creates Development sprint-type defaults without any existing sprint_id and resolves them for later matching sprints', async () => {
+  it('creates Development workflow-type defaults without any existing workflow_id and resolves them for later matching workflows', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type) VALUES (1, 'dev', 'backend')`);
+      await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type) VALUES (1, 'dev', 'backend')`);
 
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'dev', task_type: 'backend', status: 'ready', agent_id: 7, scope_kind: 'sprint_type_default' }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'dev', task_type: 'backend', status: 'ready', agent_id: 7, scope_kind: 'workflow_type_default' }),
       });
 
       const body = await response.json();
@@ -512,49 +509,48 @@ describe('routing rules API', () => {
       }
       expect(body).toEqual(expect.objectContaining({
         project_id: 1,
-        sprint_type: 'dev',
-        sprint_id: null,
-        scope_kind: 'sprint_type_default',
+        workflow_type: 'dev',
+        workflow_id: null,
+        scope_kind: 'workflow_type_default',
         task_type: 'backend',
         status: 'ready',
       }));
 
-      const listResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_type=dev`);
+      const listResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&workflow_type=dev`);
       expect(listResponse.status).toBe(200);
       await expect(listResponse.json()).resolves.toEqual(expect.objectContaining({
-        rules: expect.arrayContaining([expect.objectContaining({ sprint_id: null, sprint_type: 'dev', scope_kind: 'sprint_type_default' })]),
-        scope: expect.objectContaining({ project_id: 1, sprint_type: 'dev', sprint_id: null }),
+        rules: expect.arrayContaining([expect.objectContaining({ workflow_id: null, workflow_type: 'dev', scope_kind: 'workflow_type_default' })]),
+        scope: expect.objectContaining({ project_id: 1, workflow_type: 'dev', workflow_id: null }),
       }));
 
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (56, 1, 1, 'Development', 'dev')`);
-      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=56&task_type=backend&status=ready`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (56, 1, 1, 'Development', 'dev')`);
+      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=56&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
       await expect(resolveResponse.json()).resolves.toEqual(expect.objectContaining({
         matched: true,
-        rule: expect.objectContaining({ sprint_id: null, sprint_type: 'dev', agent_id: 7, scope_kind: 'sprint_type_default' }),
-        candidates: [expect.objectContaining({ sprint_id: null, sprint_type: 'dev', agent_id: 7, scope_kind: 'sprint_type_default' })],
+        rule: expect.objectContaining({ workflow_id: null, workflow_type: 'dev', agent_id: 7, scope_kind: 'workflow_type_default' }),
+        candidates: [expect.objectContaining({ workflow_id: null, workflow_type: 'dev', agent_id: 7, scope_kind: 'workflow_type_default' })],
       }));
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('requires sprint_id when creating an explicit sprint override routing rule', async () => {
+  it('requires workflow_id when creating an explicit workflow override routing rule', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, scope_kind: 'sprint_override' }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, scope_kind: 'workflow_override' }),
       });
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: 'sprint_id is required for sprint-specific routing rules' });
+      await expect(response.json()).resolves.toEqual({ error: 'workflow_id is required for workflow-specific routing rules' });
     } finally {
       await stopTestServer(server);
     }
   });
-
 
   it('creates all-task-types routing rules with null task_type scope', async () => {
     const { server, baseUrl } = await startTestServer();
@@ -562,7 +558,7 @@ describe('routing rules API', () => {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_type: null, status: 'ready', agent_id: 7, project_id: 1, sprint_type: 'bugs' }),
+        body: JSON.stringify({ task_type: null, status: 'ready', agent_id: 7, project_id: 1, workflow_type: 'bugs' }),
       });
 
       const body = await response.json();
@@ -571,9 +567,9 @@ describe('routing rules API', () => {
       }
       expect(body).toEqual(expect.objectContaining({
         project_id: 1,
-        sprint_type: 'bugs',
-        sprint_id: null,
-        scope_kind: 'sprint_type_default',
+        workflow_type: 'bugs',
+        workflow_id: null,
+        scope_kind: 'workflow_type_default',
         task_type: null,
         status: 'ready',
       }));
@@ -588,7 +584,7 @@ describe('routing rules API', () => {
       let response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: null, status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: null, status: 'ready', agent_id: 7, priority: 5 }),
       });
       expect(response.status).toBe(201);
 
@@ -597,28 +593,28 @@ describe('routing rules API', () => {
       response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 9, priority: 1 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 9, priority: 1 }),
       });
       expect(response.status).toBe(201);
 
-      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
+      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=10&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
       await expect(resolveResponse.json()).resolves.toEqual(expect.objectContaining({
         matched: true,
-        rule: expect.objectContaining({ sprint_id: null, task_type: 'backend', agent_id: 9, scope_kind: 'sprint_type_default' }),
+        rule: expect.objectContaining({ workflow_id: null, task_type: 'backend', agent_id: 9, scope_kind: 'workflow_type_default' }),
       }));
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('prefers sprint overrides over sprint-type defaults even when both are all-task-types rules', async () => {
+  it('prefers workflow overrides over workflow-type defaults even when both are all-task-types rules', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       let response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: null, status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: null, status: 'ready', agent_id: 7, priority: 5 }),
       });
       expect(response.status).toBe(201);
 
@@ -627,15 +623,15 @@ describe('routing rules API', () => {
       response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', sprint_id: 10, task_type: null, status: 'ready', agent_id: 9, priority: 10 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', workflow_id: 10, task_type: null, status: 'ready', agent_id: 9, priority: 10 }),
       });
       expect(response.status).toBe(201);
 
-      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=qa&status=ready`);
+      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=10&task_type=qa&status=ready`);
       expect(resolveResponse.status).toBe(200);
       await expect(resolveResponse.json()).resolves.toEqual(expect.objectContaining({
         matched: true,
-        rule: expect.objectContaining({ sprint_id: 10, task_type: null, agent_id: 9, scope_kind: 'sprint_override' }),
+        rule: expect.objectContaining({ workflow_id: 10, task_type: null, agent_id: 9, scope_kind: 'workflow_override' }),
       }));
     } finally {
       await stopTestServer(server);
@@ -654,16 +650,16 @@ describe('routing rules API', () => {
       });
       expect(response.status).toBe(201);
       await expect(response.json()).resolves.toEqual(expect.objectContaining({
-        sprint_id: 10,
-        sprint_type: 'bugs',
-        scope_kind: 'sprint_override',
+        workflow_id: 10,
+        workflow_type: 'bugs',
+        scope_kind: 'workflow_override',
       }));
 
       const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=10&task_type=qa&status=ready`);
       expect(resolveResponse.status).toBe(200);
       await expect(resolveResponse.json()).resolves.toEqual(expect.objectContaining({
         matched: true,
-        rule: expect.objectContaining({ sprint_id: 10, task_type: null, agent_id: 9, scope_kind: 'sprint_override' }),
+        rule: expect.objectContaining({ workflow_id: 10, task_type: null, agent_id: 9, scope_kind: 'workflow_override' }),
       }));
     } finally {
       await stopTestServer(server);
@@ -676,24 +672,24 @@ describe('routing rules API', () => {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: null, status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: null, status: 'ready', agent_id: 7, priority: 5 }),
       });
       expect(response.status).toBe(201);
 
-      const listResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_type=bugs`);
+      const listResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&workflow_type=bugs`);
       expect(listResponse.status).toBe(200);
       await expect(listResponse.json()).resolves.toEqual({
         rules: expect.arrayContaining([
           expect.objectContaining({
             project_id: 1,
-            sprint_type: 'bugs',
-            sprint_id: null,
+            workflow_type: 'bugs',
+            workflow_id: null,
             task_type: null,
             status: 'ready',
-            scope_kind: 'sprint_type_default',
+            scope_kind: 'workflow_type_default',
           }),
         ]),
-        scope: expect.objectContaining({ project_id: 1, sprint_type: 'bugs', sprint_id: null }),
+        scope: expect.objectContaining({ project_id: 1, workflow_type: 'bugs', workflow_id: null }),
       });
     } finally {
       await stopTestServer(server);
@@ -706,24 +702,24 @@ describe('routing rules API', () => {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'all-task-types', status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'all-task-types', status: 'ready', agent_id: 7, priority: 5 }),
       });
 
       expect(response.status).toBe(201);
       await expect(response.json()).resolves.toEqual(expect.objectContaining({
         project_id: 1,
-        sprint_type: 'bugs',
-        sprint_id: null,
+        workflow_type: 'bugs',
+        workflow_id: null,
         task_type: null,
         status: 'ready',
-        scope_kind: 'sprint_type_default',
+        scope_kind: 'workflow_type_default',
       }));
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('rejects creating a routing rule without sprint scope metadata', async () => {
+  it('rejects creating a routing rule without workflow scope metadata', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
@@ -733,16 +729,16 @@ describe('routing rules API', () => {
       });
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: 'sprint_type is required when sprint_id is not provided' });
+      await expect(response.json()).resolves.toEqual({ error: 'workflow_type is required when workflow_id is not provided' });
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('lists transition requirement fields from the sprint field schema', async () => {
+  it('lists transition requirement fields from the workflow field schema', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
-      const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirement-fields?sprint_id=10`);
+      const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirement-fields?workflow_id=10`);
       expect(response.status).toBe(200);
       const body = await response.json() as { field_names: string[] };
       expect(body.field_names).toEqual(['review_branch', 'review_commit', 'status', 'reproduction_steps']);
@@ -751,14 +747,14 @@ describe('routing rules API', () => {
     }
   });
 
-  it('rejects sprint transition requirements for fields outside the sprint schema gate fields', async () => {
+  it('rejects workflow transition requirements for fields outside the workflow schema gate fields', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sprint_id: 10,
+          workflow_id: 10,
           outcome: 'completed_for_review',
           field_name: 'qa_verified_commit',
           requirement_type: 'required',
@@ -766,25 +762,25 @@ describe('routing rules API', () => {
       });
       expect(response.status).toBe(400);
       const body = await response.json() as { error: string };
-      expect(body.error).toContain('not defined for sprint type "bugs"');
+      expect(body.error).toContain('not defined for workflow type "bugs"');
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('does not restore a deleted seeded sprint transition requirement on the next list read', async () => {
+  it('does not restore a deleted seeded workflow transition requirement on the next list read', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (11, 1, 1, 'Dev', 'dev')`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (11, 1, 1, 'Dev', 'dev')`);
 
       const createResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: 1,
-          sprint_type: 'dev',
-          sprint_id: 11,
+          workflow_type: 'dev',
+          workflow_id: 11,
           outcome: 'completed_for_review',
           field_name: 'review_branch',
           requirement_type: 'required',
@@ -797,25 +793,25 @@ describe('routing rules API', () => {
       expect(createResponse.status).toBe(201);
       const seeded = await createResponse.json() as { id: number };
 
-      const updateResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/${seeded.id}?project_id=1&sprint_type=dev&sprint_id=11`, {
+      const updateResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/${seeded.id}?project_id=1&workflow_type=dev&workflow_id=11`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: false }),
       });
       expect(updateResponse.status).toBe(200);
 
-      const afterDeleteResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&sprint_type=dev&sprint_id=11`);
+      const afterDeleteResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&workflow_type=dev&workflow_id=11`);
       expect(afterDeleteResponse.status).toBe(200);
       const afterDeleteBody = await afterDeleteResponse.json() as {
         transition_requirements: Array<{
           id: number;
-          sprint_id?: number | null;
+          workflow_id?: number | null;
           outcome: string;
           field_name: string;
           requirement_type: string;
           enabled: number;
         }>;
-        scope?: { project_id: number; sprint_type: string; sprint_id: number | null };
+        scope?: { project_id: number; workflow_type: string; workflow_id: number | null };
       };
 
       expect(afterDeleteBody.transition_requirements.find((row) => row.id === seeded.id)).toEqual(
@@ -826,11 +822,11 @@ describe('routing rules API', () => {
     }
   });
 
-  it('does not re-seed deleted starter gate requirements after all sprint requirements are removed', async () => {
+  it('does not re-seed deleted starter gate requirements after all workflow requirements are removed', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (11, 1, 1, 'Dev', 'dev')`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (11, 1, 1, 'Dev', 'dev')`);
 
       for (const field_name of ['review_branch', 'review_commit']) {
         const createResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements`, {
@@ -838,8 +834,8 @@ describe('routing rules API', () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             project_id: 1,
-            sprint_type: 'dev',
-            sprint_id: 11,
+            workflow_type: 'dev',
+            workflow_id: 11,
             outcome: 'completed_for_review',
             field_name,
             requirement_type: 'required',
@@ -852,40 +848,40 @@ describe('routing rules API', () => {
         expect(createResponse.status).toBe(201);
       }
 
-      const initialResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&sprint_type=dev&sprint_id=11`);
+      const initialResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&workflow_type=dev&workflow_id=11`);
       expect(initialResponse.status).toBe(200);
       const initialBody = await initialResponse.json() as {
-        transition_requirements: Array<{ id: number; sprint_id?: number | null }>;
-        scope?: { project_id: number; sprint_type: string; sprint_id: number | null };
+        transition_requirements: Array<{ id: number; workflow_id?: number | null }>;
+        scope?: { project_id: number; workflow_type: string; workflow_id: number | null };
       };
-      const sprintScopedRequirements = initialBody.transition_requirements.filter((requirement) => requirement.sprint_id === 11);
-      expect(sprintScopedRequirements.length).toBeGreaterThanOrEqual(2);
+      const workflowScopedRequirements = initialBody.transition_requirements.filter((requirement) => requirement.workflow_id === 11);
+      expect(workflowScopedRequirements.length).toBeGreaterThanOrEqual(2);
 
-      for (const requirement of sprintScopedRequirements) {
-        const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/${requirement.id}?project_id=1&sprint_type=dev&sprint_id=11`, {
+      for (const requirement of workflowScopedRequirements) {
+        const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements/${requirement.id}?project_id=1&workflow_type=dev&workflow_id=11`, {
           method: 'DELETE',
         });
         expect(deleteResponse.status).toBe(200);
       }
 
-      const afterDeleteResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&sprint_type=dev&sprint_id=11`);
+      const afterDeleteResponse = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&workflow_type=dev&workflow_id=11`);
       expect(afterDeleteResponse.status).toBe(200);
       await expect(afterDeleteResponse.json()).resolves.toEqual({
         transition_requirements: [],
-        scope: { project_id: 1, sprint_type: 'dev', sprint_id: 11 },
+        scope: { project_id: 1, workflow_type: 'dev', workflow_id: 11 },
       });
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('lists only sprint-owned automatic transitions for the selected sprint when sibling same-type sprints exist', async () => {
+  it('lists only workflow-owned automatic transitions for the selected workflow when sibling same-type workflows exist', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (56, 1, 1, 'Bugs 56', 'dev'), (57, 1, 1, 'Bugs 57', 'dev'), (65, 1, 1, 'Bugs 65', 'dev')`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (56, 1, 1, 'Bugs 56', 'dev'), (57, 1, 1, 'Bugs 57', 'dev'), (65, 1, 1, 'Bugs 65', 'dev')`);
       await db.run(`
-        INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
+        INSERT INTO workflow_task_transitions (tenant_id, project_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
         VALUES
           (1, 1, 56, 'backend', 'ready', 'start_work', 'in_progress', 1, 100, 0),
           (1, 1, 56, NULL, 'review', 'qa_pass', 'ready_to_merge', 1, 90, 0),
@@ -893,33 +889,33 @@ describe('routing rules API', () => {
           (1, 1, 65, NULL, 'review', 'ship_it', 'done', 1, 70, 0)
       `);
 
-      const response = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&sprint_type=dev&sprint_id=56`);
+      const response = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&workflow_type=dev&workflow_id=56`);
       expect(response.status).toBe(200);
       const body = await response.json() as {
-        transitions: Array<{ sprint_id: number | null; outcome: string; scope_kind: string; is_inherited: boolean; is_override: boolean }>;
-        scope: { project_id: number; sprint_type: string; sprint_id: number | null };
+        transitions: Array<{ workflow_id: number | null; outcome: string; scope_kind: string; is_inherited: boolean; is_override: boolean }>;
+        scope: { project_id: number; workflow_type: string; workflow_id: number | null };
       };
 
-      expect(body.scope).toEqual({ project_id: 1, sprint_type: 'dev', sprint_id: 56 });
+      expect(body.scope).toEqual({ project_id: 1, workflow_type: 'dev', workflow_id: 56 });
       expect(body.transitions).toHaveLength(2);
       expect(body.transitions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ sprint_id: 56, outcome: 'start_work', scope_kind: 'sprint_override', is_inherited: false, is_override: true }),
-        expect.objectContaining({ sprint_id: 56, outcome: 'qa_pass', scope_kind: 'sprint_override', is_inherited: false, is_override: true }),
+        expect.objectContaining({ workflow_id: 56, outcome: 'start_work', scope_kind: 'workflow_override', is_inherited: false, is_override: true }),
+        expect.objectContaining({ workflow_id: 56, outcome: 'qa_pass', scope_kind: 'workflow_override', is_inherited: false, is_override: true }),
       ]));
-      expect(body.transitions.some((row) => row.sprint_id === 57 || row.sprint_id === 65)).toBe(false);
+      expect(body.transitions.some((row) => row.workflow_id === 57 || row.workflow_id === 65)).toBe(false);
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('lists only sprint-owned transition requirements for the selected sprint when sibling same-type sprints exist', async () => {
+  it('lists only workflow-owned transition requirements for the selected workflow when sibling same-type workflows exist', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (56, 1, 1, 'Bugs 56', 'dev'), (57, 1, 1, 'Bugs 57', 'dev'), (65, 1, 1, 'Bugs 65', 'dev')`);
-      await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type) VALUES (1, 'dev', 'backend')`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (56, 1, 1, 'Bugs 56', 'dev'), (57, 1, 1, 'Bugs 57', 'dev'), (65, 1, 1, 'Bugs 65', 'dev')`);
+      await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type) VALUES (1, 'dev', 'backend')`);
       await db.run(`
-        INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
+        INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
         VALUES (1, 'dev', NULL, ?)
       `, JSON.stringify({
                 fields: [
@@ -929,7 +925,7 @@ describe('routing rules API', () => {
                 ],
               }));
       await db.run(`
-        INSERT INTO sprint_task_transition_requirements (tenant_id, project_id, sprint_id, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
+        INSERT INTO workflow_task_transition_requirements (tenant_id, project_id, workflow_id, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
         VALUES
           (1, 1, 56, NULL, 'completed_for_review', 'review_branch', 'required', 'block', 'review branch required', 1, 100),
           (1, 1, 56, NULL, 'completed_for_review', 'review_commit', 'required', 'block', 'review commit required', 1, 90),
@@ -937,33 +933,33 @@ describe('routing rules API', () => {
           (1, 1, 65, NULL, 'qa_pass', 'qa_verified_commit', 'required', 'block', 'wrong sibling row 2', 1, 70)
       `);
 
-      const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&sprint_type=dev&sprint_id=56`);
+      const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&workflow_type=dev&workflow_id=56`);
       expect(response.status).toBe(200);
       const body = await response.json() as {
-        transition_requirements: Array<{ sprint_id: number | null; field_name: string; outcome: string; scope_kind: string; is_inherited: boolean; is_override: boolean }>;
-        scope: { project_id: number; sprint_type: string; sprint_id: number | null };
+        transition_requirements: Array<{ workflow_id: number | null; field_name: string; outcome: string; scope_kind: string; is_inherited: boolean; is_override: boolean }>;
+        scope: { project_id: number; workflow_type: string; workflow_id: number | null };
       };
 
-      expect(body.scope).toEqual({ project_id: 1, sprint_type: 'dev', sprint_id: 56 });
+      expect(body.scope).toEqual({ project_id: 1, workflow_type: 'dev', workflow_id: 56 });
       expect(body.transition_requirements).toHaveLength(2);
       expect(body.transition_requirements).toEqual(expect.arrayContaining([
-        expect.objectContaining({ sprint_id: 56, field_name: 'review_branch', outcome: 'completed_for_review', scope_kind: 'sprint_override', is_inherited: false, is_override: true }),
-        expect.objectContaining({ sprint_id: 56, field_name: 'review_commit', outcome: 'completed_for_review', scope_kind: 'sprint_override', is_inherited: false, is_override: true }),
+        expect.objectContaining({ workflow_id: 56, field_name: 'review_branch', outcome: 'completed_for_review', scope_kind: 'workflow_override', is_inherited: false, is_override: true }),
+        expect.objectContaining({ workflow_id: 56, field_name: 'review_commit', outcome: 'completed_for_review', scope_kind: 'workflow_override', is_inherited: false, is_override: true }),
       ]));
-      expect(body.transition_requirements.some((row) => row.sprint_id === 57 || row.sprint_id === 65)).toBe(false);
+      expect(body.transition_requirements.some((row) => row.workflow_id === 57 || row.workflow_id === 65)).toBe(false);
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('creates and lists sprint-type default transition requirements with concrete sprint overrides only', async () => {
+  it('creates and lists workflow-type default transition requirements with concrete workflow overrides only', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, task_policy_seeded_at) VALUES (56, 1, 1, 'Bugs 56', 'dev', CURRENT_TIMESTAMP), (57, 1, 1, 'Bugs 57', 'dev', CURRENT_TIMESTAMP)`);
-      await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type) VALUES (1, 'dev', 'backend')`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, task_policy_seeded_at) VALUES (56, 1, 1, 'Bugs 56', 'dev', CURRENT_TIMESTAMP), (57, 1, 1, 'Bugs 57', 'dev', CURRENT_TIMESTAMP)`);
+      await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type) VALUES (1, 'dev', 'backend')`);
       await db.run(`
-        INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
+        INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
         VALUES (1, 'dev', NULL, ?)
       `, JSON.stringify({
                 fields: [
@@ -973,31 +969,31 @@ describe('routing rules API', () => {
                 ],
               }));
 
-      const createDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&sprint_type=dev`, {
+      const createDefault = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&workflow_type=dev`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ outcome: 'completed_for_review', field_name: 'review_branch', requirement_type: 'required', severity: 'block', message: 'default branch required', priority: 100 }),
       });
       expect(createDefault.status).toBe(201);
-      const defaultRow = await createDefault.json() as { id: number; sprint_id: number | null; project_id: number; sprint_type: string; field_name: string };
-      expect(defaultRow).toEqual(expect.objectContaining({ sprint_id: null, project_id: 1, sprint_type: 'dev', field_name: 'review_branch' }));
+      const defaultRow = await createDefault.json() as { id: number; workflow_id: number | null; project_id: number; workflow_type: string; field_name: string };
+      expect(defaultRow).toEqual(expect.objectContaining({ workflow_id: null, project_id: 1, workflow_type: 'dev', field_name: 'review_branch' }));
 
       await db.run(`
-        INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
+        INSERT INTO workflow_task_transition_requirements (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
         VALUES
-          (1, 56, 1, 'dev', NULL, 'completed_for_review', 'review_commit', 'required', 'block', 'sprint commit required', 1, 90),
+          (1, 56, 1, 'dev', NULL, 'completed_for_review', 'review_commit', 'required', 'block', 'workflow commit required', 1, 90),
           (1, 57, 1, 'dev', NULL, 'completed_for_review', 'qa_verified_commit', 'required', 'block', 'sibling should not leak', 1, 80)
       `);
 
-      const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&sprint_type=dev&sprint_id=56`);
+      const response = await fetch(`${baseUrl}/api/v1/routing/transition-requirements?project_id=1&workflow_type=dev&workflow_id=56`);
       expect(response.status).toBe(200);
       const body = await response.json() as {
-        transition_requirements: Array<{ sprint_id: number | null; field_name: string; scope_kind: string; is_inherited: boolean; is_override: boolean; effective_for_sprint: boolean }>;
+        transition_requirements: Array<{ workflow_id: number | null; field_name: string; scope_kind: string; is_inherited: boolean; is_override: boolean; effective_for_workflow: boolean }>;
       };
 
       expect(body.transition_requirements).toEqual(expect.arrayContaining([
-        expect.objectContaining({ sprint_id: null, field_name: 'review_branch', scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: true }),
-        expect.objectContaining({ sprint_id: 56, field_name: 'review_commit', scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true }),
+        expect.objectContaining({ workflow_id: null, field_name: 'review_branch', scope_kind: 'workflow_type_default', is_inherited: true, is_override: false, effective_for_workflow: true }),
+        expect.objectContaining({ workflow_id: 56, field_name: 'review_commit', scope_kind: 'workflow_override', is_inherited: false, is_override: true, effective_for_workflow: true }),
       ]));
       expect(body.transition_requirements.some((row) => row.field_name === 'qa_verified_commit')).toBe(false);
     } finally {
@@ -1005,21 +1001,21 @@ describe('routing rules API', () => {
     }
   });
 
-  it('uses sprint-type default transition requirements for outcome gates when a sprint has no override', async () => {
+  it('uses workflow-type default transition requirements for outcome gates when a workflow has no override', async () => {
     const { server } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, task_policy_seeded_at) VALUES (56, 1, 1, 'Bugs 56', 'dev', CURRENT_TIMESTAMP), (57, 1, 1, 'Bugs 57', 'dev', CURRENT_TIMESTAMP)`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, task_policy_seeded_at) VALUES (56, 1, 1, 'Bugs 56', 'dev', CURRENT_TIMESTAMP), (57, 1, 1, 'Bugs 57', 'dev', CURRENT_TIMESTAMP)`);
       await db.run(`
-        INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
+        INSERT INTO workflow_task_transition_requirements (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
         VALUES
           (1, NULL, 1, 'dev', NULL, 'completed_for_review', 'review_branch', 'required', 'block', 'default branch required', 1, 100),
           (1, 57, 1, 'dev', NULL, 'completed_for_review', 'review_commit', 'required', 'block', 'sibling should not leak', 1, 90)
       `);
 
-      const requirements = await loadSprintTaskTransitionRequirements(db, 56, 'completed_for_review', 'backend');
+      const requirements = await loadWorkflowTaskTransitionRequirements(db, 56, 'completed_for_review', 'backend');
       expect(requirements.map((row) => row.field_name)).toEqual(['review_branch']);
-      expect(requirements.every((row) => row.sprint_id === null)).toBe(true);
+      expect(requirements.every((row) => row.workflow_id === null)).toBe(true);
     } finally {
       await stopTestServer(server);
     }
@@ -1029,37 +1025,37 @@ describe('routing rules API', () => {
     const { server } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, task_policy_seeded_at) VALUES (56, 1, 1, 'Bugs 56', 'dev', CURRENT_TIMESTAMP)`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, task_policy_seeded_at) VALUES (56, 1, 1, 'Bugs 56', 'dev', CURRENT_TIMESTAMP)`);
       await db.run(`
-        INSERT INTO sprint_task_transitions (tenant_id, sprint_id, project_id, sprint_type, task_type, from_status, outcome, to_status, enabled, priority)
+        INSERT INTO workflow_task_transitions (tenant_id, workflow_id, project_id, workflow_type, task_type, from_status, outcome, to_status, enabled, priority)
         VALUES
           (1, 56, 1, 'dev', NULL, 'in_progress', 'completed_for_review', 'review', 0, 100),
           (1, 56, 1, 'dev', NULL, 'in_progress', 'completed_for_review', 'dev_deploy_queued', 1, 50)
       `);
       await db.run(`
-        INSERT INTO sprint_task_transition_requirements (tenant_id, sprint_id, project_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
+        INSERT INTO workflow_task_transition_requirements (tenant_id, workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, severity, message, enabled, priority)
         VALUES
           (1, 56, 1, 'dev', NULL, 'completed_for_review', 'disabled_field', 'required', 'block', '', 0, 100),
           (1, 56, 1, 'dev', NULL, 'completed_for_review', 'enabled_field', 'required', 'block', '', 1, 50)
       `);
 
-      expect(await resolveSprintTaskTransition(db, 56, 'in_progress', 'completed_for_review', null)).toEqual(expect.objectContaining({
+      expect(await resolveWorkflowTaskTransition(db, 56, 'in_progress', 'completed_for_review', null)).toEqual(expect.objectContaining({
         to_status: 'dev_deploy_queued',
         enabled: 1,
       }));
-      expect((await loadSprintTaskTransitionRequirements(db, 56, 'completed_for_review', null)).map((row) => row.field_name)).toEqual(['enabled_field']);
+      expect((await loadWorkflowTaskTransitionRequirements(db, 56, 'completed_for_review', null)).map((row) => row.field_name)).toEqual(['enabled_field']);
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('rejects creating a routing rule for an unknown sprint agent', async () => {
+  it('rejects creating a routing rule for an unknown workflow agent', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', sprint_id: 10, task_type: 'backend', status: 'ready', agent_id: 999, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', workflow_id: 10, task_type: 'backend', status: 'ready', agent_id: 999, priority: 5 }),
       });
 
       expect(response.status).toBe(404);
@@ -1069,13 +1065,13 @@ describe('routing rules API', () => {
     }
   });
 
-  it('rejects creating a routing rule for an agent outside the sprint project', async () => {
+  it('rejects creating a routing rule for an agent outside the workflow project', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', sprint_id: 10, task_type: 'backend', status: 'ready', agent_id: 8, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', workflow_id: 10, task_type: 'backend', status: 'ready', agent_id: 8, priority: 5 }),
       });
 
       expect(response.status).toBe(400);
@@ -1085,33 +1081,33 @@ describe('routing rules API', () => {
     }
   });
 
-  it('rejects creating a routing rule for a task type not allowed by the sprint type', async () => {
+  it('rejects creating a routing rule for a task type not allowed by the workflow type', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_id: 10, task_type: 'frontend', status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_id: 10, task_type: 'frontend', status: 'ready', agent_id: 7, priority: 5 }),
       });
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: 'task_type "frontend" is not allowed for sprint type "bugs". Allowed: backend, qa' });
+      await expect(response.json()).resolves.toEqual({ error: 'task_type "frontend" is not allowed for workflow type "bugs". Allowed: backend, qa' });
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('rejects creating a routing rule for a status not configured on the sprint', async () => {
+  it('rejects creating a routing rule for a status not configured on the workflow', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_id: 10, task_type: 'backend', status: 'not_real', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_id: 10, task_type: 'backend', status: 'not_real', agent_id: 7, priority: 5 }),
       });
 
       expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toEqual({ error: 'Status "not_real" is not configured for sprint 10' });
+      await expect(response.json()).resolves.toEqual({ error: 'Status "not_real" is not configured for workflow 10' });
     } finally {
       await stopTestServer(server);
     }
@@ -1123,27 +1119,27 @@ describe('routing rules API', () => {
       const response = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_id: 10, task_type: 'backend', task_status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_id: 10, task_type: 'backend', task_status: 'ready', agent_id: 7, priority: 5 }),
       });
 
       const body = await response.json();
       if (response.status !== 201) {
         throw new Error(`Expected 201, received ${response.status}: ${JSON.stringify(body)}`);
       }
-      expect(body).toEqual(expect.objectContaining({ sprint_id: 10, agent_id: 7, task_type: 'backend', status: 'ready' }));
+      expect(body).toEqual(expect.objectContaining({ workflow_id: 10, agent_id: 7, task_type: 'backend', status: 'ready' }));
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('creates sprint-type defaults, overlays sprint overrides, and resolves the effective sprint rule', async () => {
+  it('creates workflow-type defaults, overlays workflow overrides, and resolves the effective workflow rule', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
       const defaultResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
       });
       expect(defaultResponse.status).toBe(201);
 
@@ -1151,43 +1147,43 @@ describe('routing rules API', () => {
       const overrideResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', sprint_id: 10, task_type: 'backend', status: 'ready', agent_id: 9, priority: 10 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', workflow_id: 10, task_type: 'backend', status: 'ready', agent_id: 9, priority: 10 }),
       });
 
       const overrideBody = await overrideResponse.json();
       if (overrideResponse.status !== 201) {
         throw new Error(`Expected 201, received ${overrideResponse.status}: ${JSON.stringify(overrideBody)}`);
       }
-      expect(overrideBody).toEqual(expect.objectContaining({ sprint_id: 10, agent_id: 9, task_type: 'backend', status: 'ready', scope_kind: 'sprint_override' }));
+      expect(overrideBody).toEqual(expect.objectContaining({ workflow_id: 10, agent_id: 9, task_type: 'backend', status: 'ready', scope_kind: 'workflow_override' }));
 
-      const readResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_type=bugs&sprint_id=10`);
+      const readResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&workflow_type=bugs&workflow_id=10`);
       expect(readResponse.status).toBe(200);
-      const body = await readResponse.json() as { rules: Array<{ sprint_id: number | null; agent_id: number; scope_kind: string; effective_for_sprint: boolean }>; scope?: { project_id: number; sprint_type: string; sprint_id: number | null } };
+      const body = await readResponse.json() as { rules: Array<{ workflow_id: number | null; agent_id: number; scope_kind: string; effective_for_workflow: boolean }>; scope?: { project_id: number; workflow_type: string; workflow_id: number | null } };
       expect(body.rules).toEqual([
-        expect.objectContaining({ sprint_id: 10, agent_id: 9, scope_kind: 'sprint_override', effective_for_sprint: true }),
-        expect.objectContaining({ sprint_id: null, agent_id: 7, scope_kind: 'sprint_type_default', effective_for_sprint: false }),
+        expect.objectContaining({ workflow_id: 10, agent_id: 9, scope_kind: 'workflow_override', effective_for_workflow: true }),
+        expect.objectContaining({ workflow_id: null, agent_id: 7, scope_kind: 'workflow_type_default', effective_for_workflow: false }),
       ]);
 
-      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
+      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=10&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
-      const resolveBody = await resolveResponse.json() as { matched: boolean; rule: { sprint_id: number | null; agent_id: number; scope_kind: string } };
+      const resolveBody = await resolveResponse.json() as { matched: boolean; rule: { workflow_id: number | null; agent_id: number; scope_kind: string } };
       expect(resolveBody).toEqual(expect.objectContaining({
         matched: true,
-        rule: expect.objectContaining({ sprint_id: 10, agent_id: 9, scope_kind: 'sprint_override' }),
+        rule: expect.objectContaining({ workflow_id: 10, agent_id: 9, scope_kind: 'workflow_override' }),
       }));
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('filters sprint-type defaults separately from sprint overrides', async () => {
+  it('filters workflow-type defaults separately from workflow overrides', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
       const defaultResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
       });
       expect(defaultResponse.status).toBe(201);
 
@@ -1195,36 +1191,36 @@ describe('routing rules API', () => {
       const overrideResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', sprint_id: 10, task_type: 'backend', status: 'ready', agent_id: 9, priority: 10 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', workflow_id: 10, task_type: 'backend', status: 'ready', agent_id: 9, priority: 10 }),
       });
       expect(overrideResponse.status).toBe(201);
 
-      const defaultsResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_type=bugs&sprint_id=10&scope=defaults`);
+      const defaultsResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&workflow_type=bugs&workflow_id=10&scope=defaults`);
       expect(defaultsResponse.status).toBe(200);
-      const defaultsBody = await defaultsResponse.json() as { rules: Array<{ sprint_id: number | null; scope_kind: string; effective_for_sprint: boolean }> };
+      const defaultsBody = await defaultsResponse.json() as { rules: Array<{ workflow_id: number | null; scope_kind: string; effective_for_workflow: boolean }> };
       expect(defaultsBody.rules).toEqual([
-        expect.objectContaining({ sprint_id: null, scope_kind: 'sprint_type_default', effective_for_sprint: true }),
+        expect.objectContaining({ workflow_id: null, scope_kind: 'workflow_type_default', effective_for_workflow: true }),
       ]);
 
-      const overridesResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_type=bugs&sprint_id=10&scope=overrides`);
+      const overridesResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&workflow_type=bugs&workflow_id=10&scope=overrides`);
       expect(overridesResponse.status).toBe(200);
-      const overridesBody = await overridesResponse.json() as { rules: Array<{ sprint_id: number | null; scope_kind: string; effective_for_sprint: boolean }> };
+      const overridesBody = await overridesResponse.json() as { rules: Array<{ workflow_id: number | null; scope_kind: string; effective_for_workflow: boolean }> };
       expect(overridesBody.rules).toEqual([
-        expect.objectContaining({ sprint_id: 10, scope_kind: 'sprint_override', effective_for_sprint: true }),
+        expect.objectContaining({ workflow_id: 10, scope_kind: 'workflow_override', effective_for_workflow: true }),
       ]);
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('falls back to sprint-type defaults after deleting a sprint override', async () => {
+  it('falls back to workflow-type defaults after deleting a workflow override', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
       const defaultResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
       });
       expect(defaultResponse.status).toBe(201);
 
@@ -1232,42 +1228,42 @@ describe('routing rules API', () => {
       const overrideResponse = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', sprint_id: 10, task_type: 'backend', status: 'ready', agent_id: 9, priority: 10 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', workflow_id: 10, task_type: 'backend', status: 'ready', agent_id: 9, priority: 10 }),
       });
       const override = await overrideResponse.json() as { id: number };
       expect(overrideResponse.status).toBe(201);
 
-      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/rules/${override.id}?sprint_id=10`, {
+      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/rules/${override.id}?workflow_id=10`, {
         method: 'DELETE',
       });
       expect(deleteResponse.status).toBe(200);
 
-      const readResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_type=bugs&sprint_id=10`);
+      const readResponse = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&workflow_type=bugs&workflow_id=10`);
       expect(readResponse.status).toBe(200);
-      const body = await readResponse.json() as { rules: Array<{ sprint_id: number | null; agent_id: number; scope_kind: string; effective_for_sprint: boolean }> };
+      const body = await readResponse.json() as { rules: Array<{ workflow_id: number | null; agent_id: number; scope_kind: string; effective_for_workflow: boolean }> };
       expect(body.rules).toEqual([
-        expect.objectContaining({ sprint_id: null, agent_id: 7, scope_kind: 'sprint_type_default', effective_for_sprint: true }),
+        expect.objectContaining({ workflow_id: null, agent_id: 7, scope_kind: 'workflow_type_default', effective_for_workflow: true }),
       ]);
 
-      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
+      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=10&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
-      const resolveBody = await resolveResponse.json() as { matched: boolean; rule: { sprint_id: number | null; agent_id: number; scope_kind: string } };
+      const resolveBody = await resolveResponse.json() as { matched: boolean; rule: { workflow_id: number | null; agent_id: number; scope_kind: string } };
       expect(resolveBody).toEqual(expect.objectContaining({
         matched: true,
-        rule: expect.objectContaining({ sprint_id: null, agent_id: 7, scope_kind: 'sprint_type_default' }),
+        rule: expect.objectContaining({ workflow_id: null, agent_id: 7, scope_kind: 'workflow_type_default' }),
       }));
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('rejects creating exact duplicate sprint-type default routing candidates', async () => {
+  it('rejects creating exact duplicate workflow-type default routing candidates', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const createFirst = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
       });
       const firstBody = await createFirst.json();
       if (createFirst.status !== 201) {
@@ -1277,7 +1273,7 @@ describe('routing rules API', () => {
       const createSecond = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
       });
       expect(createSecond.status).toBe(409);
       await expect(createSecond.json()).resolves.toEqual({
@@ -1288,29 +1284,29 @@ describe('routing rules API', () => {
     }
   });
 
-  it('allows multiple sprint-type default candidates for the same scope and orders them by priority then id', async () => {
+  it('allows multiple workflow-type default candidates for the same scope and orders them by priority then id', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type) VALUES (1, 'dev', 'backend')`);
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (56, 1, 1, 'Development', 'dev')`);
+      await db.run(`INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type) VALUES (1, 'dev', 'backend')`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (56, 1, 1, 'Development', 'dev')`);
       await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, project_id, enabled) VALUES (108, 1, 'Vulcan', 'agent:vulcan:main', 'Backend Engineer', 1, 1)`);
 
       const createPrimary = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'dev', task_type: 'backend', status: 'ready', agent_id: 7, priority: 0 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'dev', task_type: 'backend', status: 'ready', agent_id: 7, priority: 0 }),
       });
       expect(createPrimary.status).toBe(201);
 
       const createFallback = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'dev', task_type: 'backend', status: 'ready', agent_id: 108, priority: -10 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'dev', task_type: 'backend', status: 'ready', agent_id: 108, priority: -10 }),
       });
       expect(createFallback.status).toBe(201);
 
-      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=56&task_type=backend&status=ready`);
+      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=56&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
       const resolveBody = await resolveResponse.json() as {
         matched: boolean;
@@ -1322,45 +1318,45 @@ describe('routing rules API', () => {
         { agent_id: 7, priority: 0 },
         { agent_id: 108, priority: -10 },
       ]);
-      expect(await resolveSprintTaskRoutingAssignment(db, 56, 'backend', 'ready')).toEqual({ agent_id: 7 });
+      expect(await resolveWorkflowTaskRoutingAssignment(db, 56, 'backend', 'ready')).toEqual({ agent_id: 7 });
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('allows multiple sprint override candidates for the same scope and keeps overrides above defaults', async () => {
+  it('allows multiple workflow override candidates for the same scope and keeps overrides above defaults', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
       await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, project_id, enabled) VALUES (9, 1, 'Override Primary', 'agent:override-primary:main', 'Backend Engineer', 1, 1), (108, 1, 'Vulcan', 'agent:vulcan:main', 'Backend Engineer', 1, 1)`);
-      await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+      await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, priority, is_system)
         VALUES (1, 1, 'bugs', NULL, 'backend', 'ready', 7, 100, 0)`);
 
       const createPrimary = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', sprint_id: 10, scope_kind: 'sprint_override', task_type: 'backend', status: 'ready', agent_id: 9, priority: 0 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', workflow_id: 10, scope_kind: 'workflow_override', task_type: 'backend', status: 'ready', agent_id: 9, priority: 0 }),
       });
       expect(createPrimary.status).toBe(201);
 
       const createFallback = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', sprint_id: 10, scope_kind: 'sprint_override', task_type: 'backend', status: 'ready', agent_id: 108, priority: -10 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', workflow_id: 10, scope_kind: 'workflow_override', task_type: 'backend', status: 'ready', agent_id: 108, priority: -10 }),
       });
       expect(createFallback.status).toBe(201);
 
-      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
+      const resolveResponse = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=10&task_type=backend&status=ready`);
       expect(resolveResponse.status).toBe(200);
       const resolveBody = await resolveResponse.json() as {
         rule: { agent_id: number; priority: number; scope_kind: string };
         candidates: Array<{ agent_id: number; priority: number; scope_kind: string }>;
       };
-      expect(resolveBody.rule).toEqual(expect.objectContaining({ agent_id: 9, priority: 0, scope_kind: 'sprint_override' }));
+      expect(resolveBody.rule).toEqual(expect.objectContaining({ agent_id: 9, priority: 0, scope_kind: 'workflow_override' }));
       expect(resolveBody.candidates.map((candidate) => ({ agent_id: candidate.agent_id, priority: candidate.priority, scope_kind: candidate.scope_kind }))).toEqual([
-        { agent_id: 9, priority: 0, scope_kind: 'sprint_override' },
-        { agent_id: 108, priority: -10, scope_kind: 'sprint_override' },
-        { agent_id: 7, priority: 100, scope_kind: 'sprint_type_default' },
+        { agent_id: 9, priority: 0, scope_kind: 'workflow_override' },
+        { agent_id: 108, priority: -10, scope_kind: 'workflow_override' },
+        { agent_id: 7, priority: 100, scope_kind: 'workflow_type_default' },
       ]);
     } finally {
       await stopTestServer(server);
@@ -1371,18 +1367,18 @@ describe('routing rules API', () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+      await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, priority, is_system)
         VALUES (1, 1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`);
 
-      const response = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&sprint_id=10&include_effective=1`);
+      const response = await fetch(`${baseUrl}/api/v1/routing/rules?project_id=1&workflow_id=10&include_effective=1`);
       expect(response.status).toBe(200);
-      const body = await response.json() as { rules: Array<{ sprint_id: number | null; task_type: string; status: string; scope_kind: string }> };
-      expect(body.rules.filter((rule) => rule.sprint_id == null && rule.task_type === 'backend' && rule.status === 'ready' && rule.scope_kind === 'sprint_type_default')).toHaveLength(1);
+      const body = await response.json() as { rules: Array<{ workflow_id: number | null; task_type: string; status: string; scope_kind: string }> };
+      expect(body.rules.filter((rule) => rule.workflow_id == null && rule.task_type === 'backend' && rule.status === 'ready' && rule.scope_kind === 'workflow_type_default')).toHaveLength(1);
 
       const createDuplicate = await fetch(`${baseUrl}/api/v1/routing/rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', task_type: 'backend', status: 'ready', agent_id: 7, priority: 5 }),
       });
       expect(createDuplicate.status).toBe(409);
       await expect(createDuplicate.json()).resolves.toEqual({
@@ -1393,120 +1389,120 @@ describe('routing rules API', () => {
     }
   });
 
-  it('policy helpers resolve sprint-type defaults for runtime routing decisions', async () => {
+  it('policy helpers resolve workflow-type defaults for runtime routing decisions', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+    await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, priority, is_system)
       VALUES (1, 1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`);
 
-    expect(await resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: 7 });
+    expect(await resolveWorkflowTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: 7 });
 
-    const listed = await listSprintTaskRoutingRules(db, 10);
-    expect(listed[0]).toEqual(expect.objectContaining({ sprint_id: null, task_type: 'backend', status: 'ready', agent_id: 7 }));
+    const listed = await listWorkflowTaskRoutingRules(db, 10);
+    expect(listed[0]).toEqual(expect.objectContaining({ workflow_id: null, task_type: 'backend', status: 'ready', agent_id: 7 }));
 
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, project_id, enabled) VALUES (9, 1, 'Override Agent', 'agent:override:main', 'Backend Engineer', 1, 1)`);
-    await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+    await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, priority, is_system)
       VALUES (1, 1, 'bugs', 10, 'backend', 'ready', 9, 10, 0)`);
 
-    expect(await resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: 9 });
+    expect(await resolveWorkflowTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: 9 });
   });
 
   it('keeps disabled routing rules visible but excludes them from runtime assignment', async () => {
     const db = getDb();
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, project_id, enabled) VALUES (9, 1, 'Disabled Route Agent', 'agent:disabled-route:main', 'Backend Engineer', 1, 1)`);
-    await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, enabled, priority, is_system)
+    await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, enabled, priority, is_system)
       VALUES (1, 1, 'bugs', NULL, 'backend', 'ready', 9, 0, 50, 0)`);
 
-    expect(await resolveSprintTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: null });
+    expect(await resolveWorkflowTaskRoutingAssignment(db, 10, 'backend', 'ready')).toEqual({ agent_id: null });
 
-    const listed = await listSprintTaskRoutingRules(db, 10);
+    const listed = await listWorkflowTaskRoutingRules(db, 10);
     expect(listed).toEqual(expect.arrayContaining([
       expect.objectContaining({ task_type: 'backend', status: 'ready', agent_id: 9, enabled: 0 }),
     ]));
   });
 
-  it('dispatcher runtime prefers sprint overrides but falls back to sprint-type defaults', async () => {
+  it('dispatcher runtime prefers workflow overrides but falls back to workflow-type defaults', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+      await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, priority, is_system)
         VALUES (1, 1, 'bugs', NULL, 'backend', 'ready', 7, 5, 0)`);
 
-      let response = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
+      let response = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=10&task_type=backend&status=ready`);
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual(expect.objectContaining({
         matched: true,
-        rule: expect.objectContaining({ sprint_id: null, agent_id: 7, scope_kind: 'sprint_type_default' }),
+        rule: expect.objectContaining({ workflow_id: null, agent_id: 7, scope_kind: 'workflow_type_default' }),
       }));
 
       await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, project_id, enabled) VALUES (9, 1, 'Override Agent', 'agent:override:main', 'Backend Engineer', 1, 1)`);
-      await db.run(`INSERT INTO sprint_task_routing_rules (tenant_id, project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, is_system)
+      await db.run(`INSERT INTO workflow_task_routing_rules (tenant_id, project_id, workflow_type, workflow_id, task_type, status, agent_id, priority, is_system)
         VALUES (1, 1, 'bugs', 10, 'backend', 'ready', 9, 10, 0)`);
 
-      response = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?sprint_id=10&task_type=backend&status=ready`);
+      response = await fetch(`${baseUrl}/api/v1/routing/rules/resolve?workflow_id=10&task_type=backend&status=ready`);
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual(expect.objectContaining({
         matched: true,
-        rule: expect.objectContaining({ sprint_id: 10, agent_id: 9, scope_kind: 'sprint_override' }),
+        rule: expect.objectContaining({ workflow_id: 10, agent_id: 9, scope_kind: 'workflow_override' }),
       }));
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('supports sprint-type default and sprint override transition reads and writes', async () => {
+  it('supports workflow-type default and workflow override transition reads and writes', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
-      const missingProjectList = await fetch(`${baseUrl}/api/v1/routing/transitions?sprint_id=10`);
+      const missingProjectList = await fetch(`${baseUrl}/api/v1/routing/transitions?workflow_id=10`);
       expect(missingProjectList.status).toBe(400);
 
       const defaultCreate = await fetch(`${baseUrl}/api/v1/routing/transitions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_type: 'bugs', from_status: 'in_progress', outcome: 'completed_for_review', to_status: 'review' }),
+        body: JSON.stringify({ project_id: 1, workflow_type: 'bugs', from_status: 'in_progress', outcome: 'completed_for_review', to_status: 'review' }),
       });
       expect(defaultCreate.status).toBe(201);
-      const defaultCreated = await defaultCreate.json() as { id: number; sprint_id: number | null; project_id: number; sprint_type: string; scope_kind: string };
-      expect(defaultCreated).toEqual(expect.objectContaining({ sprint_id: null, project_id: 1, sprint_type: 'bugs', scope_kind: 'sprint_type_default' }));
+      const defaultCreated = await defaultCreate.json() as { id: number; workflow_id: number | null; project_id: number; workflow_type: string; scope_kind: string };
+      expect(defaultCreated).toEqual(expect.objectContaining({ workflow_id: null, project_id: 1, workflow_type: 'bugs', scope_kind: 'workflow_type_default' }));
 
-      const defaultUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&sprint_type=bugs`, {
+      const defaultUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&workflow_type=bugs`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ priority: 12 }),
       });
       expect(defaultUpdate.status).toBe(200);
-      await expect(defaultUpdate.json()).resolves.toEqual(expect.objectContaining({ id: defaultCreated.id, priority: 12, sprint_id: null, project_id: 1, sprint_type: 'bugs' }));
+      await expect(defaultUpdate.json()).resolves.toEqual(expect.objectContaining({ id: defaultCreated.id, priority: 12, workflow_id: null, project_id: 1, workflow_type: 'bugs' }));
 
-      const defaultList = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&sprint_type=bugs&sprint_id=10`);
+      const defaultList = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&workflow_type=bugs&workflow_id=10`);
       expect(defaultList.status).toBe(200);
-      const defaultListBody = await defaultList.json() as { transitions: Array<{ id: number; sprint_id: number | null; scope_kind: string; is_inherited: boolean; effective_for_sprint: boolean }> };
+      const defaultListBody = await defaultList.json() as { transitions: Array<{ id: number; workflow_id: number | null; scope_kind: string; is_inherited: boolean; effective_for_workflow: boolean }> };
       expect(defaultListBody.transitions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: defaultCreated.id, sprint_id: null, scope_kind: 'sprint_type_default', is_inherited: true, effective_for_sprint: true }),
+        expect.objectContaining({ id: defaultCreated.id, workflow_id: null, scope_kind: 'workflow_type_default', is_inherited: true, effective_for_workflow: true }),
       ]));
 
       const createResponse = await fetch(`${baseUrl}/api/v1/routing/transitions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: 1, sprint_id: 10, from_status: 'in_progress', outcome: 'completed_for_review', to_status: 'review' }),
+        body: JSON.stringify({ project_id: 1, workflow_id: 10, from_status: 'in_progress', outcome: 'completed_for_review', to_status: 'review' }),
       });
       expect(createResponse.status).toBe(201);
-      const created = await createResponse.json() as { id: number; sprint_id: number; project_id: number };
-      expect(created).toEqual(expect.objectContaining({ sprint_id: 10, project_id: 1 }));
+      const created = await createResponse.json() as { id: number; workflow_id: number; project_id: number };
+      expect(created).toEqual(expect.objectContaining({ workflow_id: 10, project_id: 1 }));
 
-      const updateResponse = await fetch(`${baseUrl}/api/v1/routing/transitions/${created.id}?project_id=1&sprint_id=10`, {
+      const updateResponse = await fetch(`${baseUrl}/api/v1/routing/transitions/${created.id}?project_id=1&workflow_id=10`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: 0 }),
       });
       expect(updateResponse.status).toBe(200);
-      await expect(updateResponse.json()).resolves.toEqual(expect.objectContaining({ id: created.id, enabled: 0, sprint_id: 10, project_id: 1 }));
+      await expect(updateResponse.json()).resolves.toEqual(expect.objectContaining({ id: created.id, enabled: 0, workflow_id: 10, project_id: 1 }));
 
-      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/transitions/${created.id}?project_id=1&sprint_id=10`, {
+      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/transitions/${created.id}?project_id=1&workflow_id=10`, {
         method: 'DELETE',
       });
       expect(deleteResponse.status).toBe(200);
       await expect(deleteResponse.json()).resolves.toEqual({ ok: true });
 
-      const defaultDelete = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&sprint_type=bugs`, {
+      const defaultDelete = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&workflow_type=bugs`, {
         method: 'DELETE',
       });
       expect(defaultDelete.status).toBe(200);
@@ -1534,7 +1530,7 @@ describe('routing rules API', () => {
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: 1,
-          sprint_type: 'bugs',
+          workflow_type: 'bugs',
           task_type: 'backend',
           from_status: 'in_progress',
           outcome: 'completed_for_review',
@@ -1542,14 +1538,14 @@ describe('routing rules API', () => {
         }),
       });
       expect(defaultCreate.status).toBe(201);
-      const defaultCreated = await defaultCreate.json() as { id: number; project_id: number; sprint_id: number | null; scope_kind: string };
-      expect(defaultCreated).toEqual(expect.objectContaining({ project_id: 1, sprint_id: null, scope_kind: 'sprint_type_default' }));
+      const defaultCreated = await defaultCreate.json() as { id: number; project_id: number; workflow_id: number | null; scope_kind: string };
+      expect(defaultCreated).toEqual(expect.objectContaining({ project_id: 1, workflow_id: null, scope_kind: 'workflow_type_default' }));
 
-      const defaultGet = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&sprint_type=bugs`, { headers: authHeaders });
+      const defaultGet = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&workflow_type=bugs`, { headers: authHeaders });
       expect(defaultGet.status).toBe(200);
-      await expect(defaultGet.json()).resolves.toEqual(expect.objectContaining({ id: defaultCreated.id, project_id: 1, sprint_id: null }));
+      await expect(defaultGet.json()).resolves.toEqual(expect.objectContaining({ id: defaultCreated.id, project_id: 1, workflow_id: null }));
 
-      const defaultUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&sprint_type=bugs`, {
+      const defaultUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&workflow_type=bugs`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ priority: 14 }),
@@ -1562,17 +1558,17 @@ describe('routing rules API', () => {
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: 1,
-          sprint_id: 10,
+          workflow_id: 10,
           from_status: 'in_progress',
           outcome: 'blocked',
           to_status: 'blocked',
         }),
       });
       expect(overrideCreate.status).toBe(201);
-      const overrideCreated = await overrideCreate.json() as { id: number; project_id: number; sprint_id: number; scope_kind: string };
-      expect(overrideCreated).toEqual(expect.objectContaining({ project_id: 1, sprint_id: 10, scope_kind: 'sprint_override' }));
+      const overrideCreated = await overrideCreate.json() as { id: number; project_id: number; workflow_id: number; scope_kind: string };
+      expect(overrideCreated).toEqual(expect.objectContaining({ project_id: 1, workflow_id: 10, scope_kind: 'workflow_override' }));
 
-      const overrideUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${overrideCreated.id}?project_id=1&sprint_id=10`, {
+      const overrideUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${overrideCreated.id}?project_id=1&workflow_id=10`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: false }),
@@ -1580,22 +1576,22 @@ describe('routing rules API', () => {
       expect(overrideUpdate.status).toBe(200);
       await expect(overrideUpdate.json()).resolves.toEqual(expect.objectContaining({ id: overrideCreated.id, enabled: 0 }));
 
-      const list = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&sprint_type=bugs&sprint_id=10`, { headers: authHeaders });
+      const list = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&workflow_type=bugs&workflow_id=10`, { headers: authHeaders });
       expect(list.status).toBe(200);
-      const listBody = await list.json() as { transitions: Array<{ id: number; project_id: number; sprint_id: number | null }> };
+      const listBody = await list.json() as { transitions: Array<{ id: number; project_id: number; workflow_id: number | null }> };
       expect(listBody.transitions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: defaultCreated.id, project_id: 1, sprint_id: null }),
-        expect.objectContaining({ id: overrideCreated.id, project_id: 1, sprint_id: 10 }),
+        expect.objectContaining({ id: defaultCreated.id, project_id: 1, workflow_id: null }),
+        expect.objectContaining({ id: overrideCreated.id, project_id: 1, workflow_id: 10 }),
       ]));
 
-      const overrideDelete = await fetch(`${baseUrl}/api/v1/routing/transitions/${overrideCreated.id}?project_id=1&sprint_id=10`, {
+      const overrideDelete = await fetch(`${baseUrl}/api/v1/routing/transitions/${overrideCreated.id}?project_id=1&workflow_id=10`, {
         method: 'DELETE',
         headers: authHeaders,
       });
       expect(overrideDelete.status).toBe(200);
       await expect(overrideDelete.json()).resolves.toEqual({ ok: true });
 
-      const defaultDelete = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&sprint_type=bugs`, {
+      const defaultDelete = await fetch(`${baseUrl}/api/v1/routing/transitions/${defaultCreated.id}?project_id=1&workflow_type=bugs`, {
         method: 'DELETE',
         headers: authHeaders,
       });
@@ -1615,21 +1611,21 @@ describe('routing rules API', () => {
       VALUES ('Beta Company', 'beta-company', 0)
     `)).lastInsertId);
     await db.run(`UPDATE projects SET tenant_id = ? WHERE id = 2`, betaTenantId);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (20, ?, 2, 'Beta Bugs', 'bugs')`, betaTenantId);
     await db.run(`UPDATE agents SET tenant_id = ? WHERE id = 8`, betaTenantId);
     await db.run(`
-      INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status)
+      INSERT INTO workflow_task_transitions (tenant_id, project_id, workflow_type, workflow_id, task_type, from_status, outcome, to_status)
       VALUES (?, 2, 'bugs', NULL, 'backend', 'in_progress', 'completed_for_review', 'review')
     `, betaTenantId);
-    const betaTransitionId = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
+    const betaTransitionId = Number((await db.get(`SELECT id FROM workflow_task_transitions WHERE tenant_id = ?`, betaTenantId) as { id: number }).id);
 
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (3, ?, 'Same Tenant Other Project')`, defaultTenantId);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (30, ?, 3, 'Other Bugs', 'bugs')`, defaultTenantId);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (30, ?, 3, 'Other Bugs', 'bugs')`, defaultTenantId);
     await db.run(`
-      INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_type, sprint_id, task_type, from_status, outcome, to_status)
+      INSERT INTO workflow_task_transitions (tenant_id, project_id, workflow_type, workflow_id, task_type, from_status, outcome, to_status)
       VALUES (?, 3, 'bugs', NULL, 'backend', 'in_progress', 'completed_for_review', 'review')
     `, defaultTenantId);
-    const otherProjectTransitionId = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE project_id = 3`) as { id: number }).id);
+    const otherProjectTransitionId = Number((await db.get(`SELECT id FROM workflow_task_transitions WHERE project_id = 3`) as { id: number }).id);
 
     const apiKey = (await issueMcpApiKeyForAgent(db, 7, 'transition manager key')).apiKey;
     await replaceAgentMcpPermissionPolicy(db, 7, ['routing_transitions.manage_project_scope']);
@@ -1646,7 +1642,7 @@ describe('routing rules API', () => {
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: 3,
-          sprint_type: 'bugs',
+          workflow_type: 'bugs',
           from_status: 'in_progress',
           outcome: 'blocked',
           to_status: 'blocked',
@@ -1658,7 +1654,7 @@ describe('routing rules API', () => {
         details: { required_capability: 'routing_transitions.manage_project_scope' },
       });
 
-      const crossProjectUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${otherProjectTransitionId}?project_id=3&sprint_type=bugs`, {
+      const crossProjectUpdate = await fetch(`${baseUrl}/api/v1/routing/transitions/${otherProjectTransitionId}?project_id=3&workflow_type=bugs`, {
         method: 'PUT',
         headers: { ...authHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ priority: 99 }),
@@ -1669,7 +1665,7 @@ describe('routing rules API', () => {
         details: { required_capability: 'routing_transitions.manage_project_scope' },
       });
 
-      const crossTenantRead = await fetch(`${baseUrl}/api/v1/routing/transitions/${betaTransitionId}?tenant_id=${betaTenantId}&project_id=2&sprint_type=bugs`, {
+      const crossTenantRead = await fetch(`${baseUrl}/api/v1/routing/transitions/${betaTransitionId}?tenant_id=${betaTenantId}&project_id=2&workflow_type=bugs`, {
         headers: authHeaders,
       });
       expect(crossTenantRead.status).toBe(403);
@@ -1686,31 +1682,31 @@ describe('routing rules API', () => {
     }
   });
 
-  it('allows sprint transition rows to be disabled and deleted even when legacy protected flags exist', async () => {
+  it('allows workflow transition rows to be disabled and deleted even when legacy protected flags exist', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
       await db.run(`
-        INSERT INTO sprint_task_transitions (tenant_id, project_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
+        INSERT INTO workflow_task_transitions (tenant_id, project_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected)
         VALUES (1, 1, 10, NULL, 'in_progress', 'completed_for_review', 'review', 1, 0, 1)
       `);
-      const id = Number((await db.get(`SELECT id FROM sprint_task_transitions WHERE sprint_id = 10 LIMIT 1`) as { id: number }).id);
+      const id = Number((await db.get(`SELECT id FROM workflow_task_transitions WHERE workflow_id = 10 LIMIT 1`) as { id: number }).id);
 
-      const updateResponse = await fetch(`${baseUrl}/api/v1/routing/transitions/${id}?project_id=1&sprint_id=10`, {
+      const updateResponse = await fetch(`${baseUrl}/api/v1/routing/transitions/${id}?project_id=1&workflow_id=10`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: 0 }),
       });
       expect(updateResponse.status).toBe(200);
-      await expect(updateResponse.json()).resolves.toEqual(expect.objectContaining({ id, enabled: 0, sprint_id: 10, project_id: 1 }));
+      await expect(updateResponse.json()).resolves.toEqual(expect.objectContaining({ id, enabled: 0, workflow_id: 10, project_id: 1 }));
 
-      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/transitions/${id}?project_id=1&sprint_id=10`, {
+      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/transitions/${id}?project_id=1&workflow_id=10`, {
         method: 'DELETE',
       });
       expect(deleteResponse.status).toBe(200);
       await expect(deleteResponse.json()).resolves.toEqual({ ok: true });
 
-      const listResponse = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&sprint_id=10`);
+      const listResponse = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&workflow_id=10`);
       expect(listResponse.status).toBe(200);
       const listBody = await listResponse.json() as { transitions: Array<{ id: number; from_status: string; outcome: string; to_status: string }> };
       expect(listBody.transitions.find((row) => row.id === id)).toBeUndefined();
@@ -1720,30 +1716,30 @@ describe('routing rules API', () => {
     }
   });
 
-  it('does not seed legacy lifecycle transition rows when listing a sprint', async () => {
+  it('does not seed legacy lifecycle transition rows when listing a workflow', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (11, 1, 1, 'Dev', 'dev')`);
+      await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (11, 1, 1, 'Dev', 'dev')`);
 
-      const listResponse = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&sprint_id=11`);
+      const listResponse = await fetch(`${baseUrl}/api/v1/routing/transitions?project_id=1&workflow_id=11`);
       expect(listResponse.status).toBe(200);
       await expect(listResponse.json()).resolves.toEqual({
         transitions: [],
-        scope: { project_id: 1, sprint_type: 'dev', sprint_id: 11 },
+        scope: { project_id: 1, workflow_type: 'dev', workflow_id: 11 },
       });
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('persists sprint-scoped status emoji updates and returns them in the API response', async () => {
+  it('persists workflow-scoped status emoji updates and returns them in the API response', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const updateResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/blocked`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sprint_id: 10, emoji: '🟡' }),
+        body: JSON.stringify({ workflow_id: 10, emoji: '🟡' }),
       });
 
       if (updateResponse.status !== 200) {
@@ -1757,13 +1753,13 @@ describe('routing rules API', () => {
       const db = getDb();
       const row = await db.get(`
         SELECT metadata_json
-        FROM sprint_task_statuses
-        WHERE sprint_id = ? AND status_key = ?
+        FROM workflow_task_statuses
+        WHERE workflow_id = ? AND status_key = ?
       `, 10, 'blocked') as { metadata_json: string } | undefined;
       expect(row).toBeDefined();
       expect(JSON.parse(row?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🟡' }));
 
-      const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?sprint_id=10`);
+      const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?workflow_id=10`);
       expect(listResponse.status).toBe(200);
       const listBody = await listResponse.json() as { statuses: Array<{ name: string; emoji: string | null }> };
       expect(listBody.statuses.find((status) => status.name === 'blocked')).toEqual(expect.objectContaining({
@@ -1775,12 +1771,12 @@ describe('routing rules API', () => {
     }
   });
 
-  it('rejects unscoped status policy operations that omit sprint_id', async () => {
+  it('rejects unscoped status policy operations that omit workflow_id', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses`);
       expect(listResponse.status).toBe(400);
-      await expect(listResponse.json()).resolves.toEqual({ error: 'sprint_id is required for sprint task status policy operations' });
+      await expect(listResponse.json()).resolves.toEqual({ error: 'workflow_id is required for workflow task status policy operations' });
 
       const createResponse = await fetch(`${baseUrl}/api/v1/routing/statuses`, {
         method: 'POST',
@@ -1788,7 +1784,7 @@ describe('routing rules API', () => {
         body: JSON.stringify({ name: 'custom_waiting', label: 'Custom Waiting' }),
       });
       expect(createResponse.status).toBe(400);
-      await expect(createResponse.json()).resolves.toEqual({ error: 'sprint_id is required for sprint task status policy operations' });
+      await expect(createResponse.json()).resolves.toEqual({ error: 'workflow_id is required for workflow task status policy operations' });
 
       const updateResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/blocked`, {
         method: 'PUT',
@@ -1796,42 +1792,42 @@ describe('routing rules API', () => {
         body: JSON.stringify({ label: 'Blocked-ish' }),
       });
       expect(updateResponse.status).toBe(400);
-      await expect(updateResponse.json()).resolves.toEqual({ error: 'sprint_id is required for sprint task status policy operations' });
+      await expect(updateResponse.json()).resolves.toEqual({ error: 'workflow_id is required for workflow task status policy operations' });
 
       const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/blocked`, {
         method: 'DELETE',
       });
       expect(deleteResponse.status).toBe(400);
-      await expect(deleteResponse.json()).resolves.toEqual({ error: 'sprint_id is required for sprint task status policy operations' });
+      await expect(deleteResponse.json()).resolves.toEqual({ error: 'workflow_id is required for workflow task status policy operations' });
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('allows deleting seeded sprint-scoped statuses without recreating them on later reads', async () => {
-    await seedSprintTaskPolicy(getDb(), 10);
+  it('allows deleting seeded workflow-scoped statuses without recreating them on later reads', async () => {
+    await seedWorkflowTaskPolicy(getDb(), 10);
     const { server, baseUrl } = await startTestServer();
     try {
-      const initialListResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?sprint_id=10`);
+      const initialListResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?workflow_id=10`);
       expect(initialListResponse.status).toBe(200);
       const initialListBody = await initialListResponse.json() as { statuses: Array<{ name: string }> };
       expect(initialListBody.statuses.find((status) => status.name === 'review')).toBeDefined();
 
-      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/review?sprint_id=10`, {
+      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/review?workflow_id=10`, {
         method: 'DELETE',
       });
       expect(deleteResponse.status).toBe(200);
-      await expect(deleteResponse.json()).resolves.toEqual(expect.objectContaining({ ok: true, deleted: 'review', sprint_id: 10 }));
+      await expect(deleteResponse.json()).resolves.toEqual(expect.objectContaining({ ok: true, deleted: 'review', workflow_id: 10 }));
 
       const db = getDb();
       const deletedRow = await db.get(`
         SELECT id
-        FROM sprint_task_statuses
-        WHERE sprint_id = ? AND status_key = ?
+        FROM workflow_task_statuses
+        WHERE workflow_id = ? AND status_key = ?
       `, 10, 'review');
       expect(deletedRow).toBeUndefined();
 
-      const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?sprint_id=10`);
+      const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?workflow_id=10`);
       expect(listResponse.status).toBe(200);
       const listBody = await listResponse.json() as { statuses: Array<{ name: string }> };
       expect(listBody.statuses.find((status) => status.name === 'review')).toBeUndefined();
@@ -1842,51 +1838,51 @@ describe('routing rules API', () => {
 
   it('does not restore a deleted starter transition after policy installation', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (11, 1, 1, 'Development', 'dev')`);
-    await seedSprintTaskPolicy(db, 11);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (11, 1, 1, 'Development', 'dev')`);
+    await seedWorkflowTaskPolicy(db, 11);
 
     const starter = await db.get(`
       SELECT id, from_status, outcome
-      FROM sprint_task_transitions
-      WHERE sprint_id = ?
+      FROM workflow_task_transitions
+      WHERE workflow_id = ?
       ORDER BY id ASC
       LIMIT 1
     `, 11) as { id: number; from_status: string; outcome: string } | undefined;
     expect(starter).toBeDefined();
 
-    await db.run(`DELETE FROM sprint_task_transitions WHERE id = ?`, starter?.id);
+    await db.run(`DELETE FROM workflow_task_transitions WHERE id = ?`, starter?.id);
 
     // Routing mutations still call this initializer for compatibility with workflows created
     // before eager installation. The completed-install marker must make that call a no-op.
-    await seedSprintTaskPolicy(db, 11);
+    await seedWorkflowTaskPolicy(db, 11);
 
     const recreated = await db.get(`
       SELECT id
-      FROM sprint_task_transitions
-      WHERE sprint_id = ? AND from_status = ? AND outcome = ?
+      FROM workflow_task_transitions
+      WHERE workflow_id = ? AND from_status = ? AND outcome = ?
     `, 11, starter?.from_status, starter?.outcome);
     expect(recreated).toBeUndefined();
   });
 
-  it('does not seed sprint status policy while listing statuses', async () => {
+  it('does not seed workflow status policy while listing statuses', async () => {
     const db = getDb();
     await db.run(`
       INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions)
       VALUES ('legacy_global_only', 'Legacy Global Only', 'pink', 0, 0, '[]')
     `);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (11, 1, 1, 'Fresh Generic', 'generic')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (11, 1, 1, 'Fresh Generic', 'generic')`);
 
     const { server, baseUrl } = await startTestServer();
     try {
-      const response = await fetch(`${baseUrl}/api/v1/routing/statuses?sprint_id=11`);
+      const response = await fetch(`${baseUrl}/api/v1/routing/statuses?workflow_id=11`);
       expect(response.status).toBe(200);
       const body = await response.json() as { statuses: Array<{ name: string }> };
 
       expect(body.statuses.some((status) => status.name === 'legacy_global_only')).toBe(false);
       expect(body.statuses).toEqual([]);
 
-      const sprintRows = await db.all(`SELECT status_key FROM sprint_task_statuses WHERE sprint_id = ? ORDER BY stage_order ASC`, 11) as Array<{ status_key: string }>;
-      expect(sprintRows).toEqual([]);
+      const workflowRows = await db.all(`SELECT status_key FROM workflow_task_statuses WHERE workflow_id = ? ORDER BY stage_order ASC`, 11) as Array<{ status_key: string }>;
+      expect(workflowRows).toEqual([]);
     } finally {
       await stopTestServer(server);
     }
@@ -1894,46 +1890,46 @@ describe('routing rules API', () => {
 
   it('preserves custom workflow definition statuses during status backfill', async () => {
     const db = getDb();
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system, status_seeded_at) VALUES (1, 'custom_workflow', 'Custom Workflow', 0, CURRENT_TIMESTAMP)`);
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system, status_seeded_at) VALUES (1, 'custom_workflow', 'Custom Workflow', 0, CURRENT_TIMESTAMP)`);
     await db.run(`
-      INSERT INTO sprint_type_task_statuses (
-        tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
+      INSERT INTO workflow_type_task_statuses (
+        tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
       ) VALUES
         (1, 'custom_workflow', 'intake', 'Intake', 'slate', 0, 0, '["done"]', 0, 1, '{}'),
         (1, 'custom_workflow', 'done', 'Done', 'green', 1, 0, '[]', 1, 0, '{}')
     `);
 
-    await seedSprintTypeTaskStatuses(db, 'custom_workflow');
+    await seedWorkflowTypeTaskStatuses(db, 'custom_workflow');
 
     const rows = await db.all(`
       SELECT status_key
-      FROM sprint_type_task_statuses
-      WHERE sprint_type_key = ?
+      FROM workflow_type_task_statuses
+      WHERE workflow_type_key = ?
       ORDER BY stage_order ASC
     `, 'custom_workflow') as Array<{ status_key: string }>;
     expect(rows.map((row) => row.status_key)).toEqual(['intake', 'done']);
   });
 
-  it('keeps an initialized sprint empty after deleting its last sprint-scoped status', async () => {
+  it('keeps an initialized workflow empty after deleting its last workflow-scoped status', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
       await db.run(`
-        INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, task_policy_seeded_at)
-        VALUES (12, 1, 1, 'Custom Sprint', 'generic', CURRENT_TIMESTAMP)
+        INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, task_policy_seeded_at)
+        VALUES (12, 1, 1, 'Custom Workflow', 'generic', CURRENT_TIMESTAMP)
       `);
       await db.run(`
-        INSERT INTO sprint_task_statuses (
-          sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
+        INSERT INTO workflow_task_statuses (
+          workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
         ) VALUES (12, 'only_status', 'Only Status', 'amber', 0, 1, '[]', 0, 1, '{}')
       `);
 
-      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/only_status?sprint_id=12`, {
+      const deleteResponse = await fetch(`${baseUrl}/api/v1/routing/statuses/only_status?workflow_id=12`, {
         method: 'DELETE',
       });
       expect(deleteResponse.status).toBe(200);
 
-      const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?sprint_id=12`);
+      const listResponse = await fetch(`${baseUrl}/api/v1/routing/statuses?workflow_id=12`);
       expect(listResponse.status).toBe(200);
       await expect(listResponse.json()).resolves.toEqual({ statuses: [] });
     } finally {
@@ -1941,16 +1937,16 @@ describe('routing rules API', () => {
     }
   });
 
-  it('lists the default agent_started workflow event mapping, removes dispatched from seeded dev sprint statuses, and excludes approved_for_merge visible transitions', async () => {
+  it('lists the default agent_started workflow event mapping, removes dispatched from seeded dev workflow statuses, and excludes approved_for_merge visible transitions', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
       const db = getDb();
       await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Agent HQ')`);
-      await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (1, 'dev', 'Development', 1) ON CONFLICT DO NOTHING`);
+      await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (1, 'dev', 'Development', 1) ON CONFLICT DO NOTHING`);
 
       const policy = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
       const externalEvents = require('../domains/routing/externalEventMappings') as typeof import('../domains/routing/externalEventMappings');
-      await policy.seedSprintTypeTaskStatuses(db, 'dev', { force: true, tenantId: 1 });
+      await policy.seedWorkflowTypeTaskStatuses(db, 'dev', { force: true, tenantId: 1 });
       await externalEvents.seedDefaultExternalEventMappings(db);
 
       const mappingResponse = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings?project_id=86`);
@@ -2002,7 +1998,7 @@ describe('routing rules API', () => {
         }),
       ]));
 
-      const statusesBody = await policy.listSprintTypeTaskStatuses(db, 'dev') as Array<{ name: string; allowed_transitions: string[] }>;
+      const statusesBody = await policy.listWorkflowTypeTaskStatuses(db, 'dev') as Array<{ name: string; allowed_transitions: string[] }>;
       expect(statusesBody.map((status) => status.name)).not.toContain('dispatched');
       expect(statusesBody.find((status) => status.name === 'ready')).toEqual(expect.objectContaining({
         allowed_transitions: expect.not.arrayContaining(['dispatched']),
@@ -2014,12 +2010,12 @@ describe('routing rules API', () => {
         allowed_transitions: expect.arrayContaining(['blocked', 'failed']),
       }));
 
-      await policy.seedSprintTaskPolicy(db, 57, { force: true });
+      await policy.seedWorkflowTaskPolicy(db, 57, { force: true });
 
-      const sprintRows = await db.all(`SELECT status_key FROM sprint_task_statuses WHERE sprint_id = ? ORDER BY stage_order ASC`, 57) as Array<{ status_key: string }>;
-      expect(sprintRows.map((row) => row.status_key)).not.toContain('dispatched');
+      const workflowRows = await db.all(`SELECT status_key FROM workflow_task_statuses WHERE workflow_id = ? ORDER BY stage_order ASC`, 57) as Array<{ status_key: string }>;
+      expect(workflowRows.map((row) => row.status_key)).not.toContain('dispatched');
 
-      const rawTransitionRows = await db.all(`SELECT outcome FROM sprint_task_transitions WHERE sprint_id = ? ORDER BY id ASC`, 57) as Array<{ outcome: string }>;
+      const rawTransitionRows = await db.all(`SELECT outcome FROM workflow_task_transitions WHERE workflow_id = ? ORDER BY id ASC`, 57) as Array<{ outcome: string }>;
       expect(rawTransitionRows.map((row) => row.outcome)).not.toContain('approved_for_merge');
     } finally {
       await stopTestServer(server);
@@ -2241,10 +2237,10 @@ describe('routing rules API', () => {
 
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system, status_seeded_at) VALUES (1, 'elevation_build', 'Elevation Build', 0, CURRENT_TIMESTAMP)`);
+      await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system, status_seeded_at) VALUES (1, 'elevation_build', 'Elevation Build', 0, CURRENT_TIMESTAMP)`);
       await db.run(`
-        INSERT INTO sprint_type_task_statuses (
-          tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
+        INSERT INTO workflow_type_task_statuses (
+          tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
         )
         VALUES
           (1, 'elevation_build', 'intake', 'Intake', 'cyan', 0, 0, '["framing"]', 0, 1, '{}'),
@@ -2256,7 +2252,7 @@ describe('routing rules API', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sprint_type: 'elevation_build',
+          workflow_type: 'elevation_build',
           source: 'construction_events',
           event_name: 'estimate_received',
           status_includes: ['intake'],
@@ -2276,7 +2272,7 @@ describe('routing rules API', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sprint_type: 'elevation_build',
+          workflow_type: 'elevation_build',
           source: 'construction_events',
           event_name: 'legacy_dev_status',
           action_kind: 'status',
@@ -2292,7 +2288,7 @@ describe('routing rules API', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sprint_type: 'elevation_build',
+          workflow_type: 'elevation_build',
           source: 'construction_events',
           event_name: 'bad_guard',
           status_excludes: ['dev_deploying'],
@@ -2326,15 +2322,15 @@ describe('routing rules API', () => {
 
     try {
       const db = getDb();
-      await db.run(`INSERT INTO sprints (id, tenant_id, name, project_id, sprint_type) VALUES (501, 1, 'Scoped Workflow', 1, 'generic')`);
-      await seedSprintTaskPolicy(db, 501);
+      await db.run(`INSERT INTO workflows (id, tenant_id, name, project_id, workflow_type) VALUES (501, 1, 'Scoped Workflow', 1, 'generic')`);
+      await seedWorkflowTaskPolicy(db, 501);
 
       const defaultResponse = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           project_id: 1,
-          sprint_type: 'generic',
+          workflow_type: 'generic',
           source: 'construction_events',
           event_name: 'vendor_ready',
           task_type: null,
@@ -2346,9 +2342,9 @@ describe('routing rules API', () => {
       });
       expect(defaultResponse.status).toBe(201);
       const defaultMapping = await defaultResponse.json() as ExternalEventMapping;
-      expect(defaultMapping.scope_kind).toBe('sprint_type_default');
-      expect(defaultMapping.sprint_id).toBeNull();
-      expect(defaultMapping.sprint_type).toBe('generic');
+      expect(defaultMapping.scope_kind).toBe('workflow_type_default');
+      expect(defaultMapping.workflow_id).toBeNull();
+      expect(defaultMapping.workflow_type).toBe('generic');
 
       const overrideResponse = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings`, {
         method: 'POST',
@@ -2368,16 +2364,16 @@ describe('routing rules API', () => {
       const overrideBody = await overrideResponse.json() as ExternalEventMapping | { error?: string };
       expect({ status: overrideResponse.status, body: overrideBody }).toEqual(expect.objectContaining({ status: 201 }));
       const overrideMapping = overrideBody as ExternalEventMapping;
-      expect(overrideMapping.scope_kind).toBe('sprint_override');
-      expect(overrideMapping.sprint_id).toBe(501);
-      expect(overrideMapping.sprint_type).toBe('generic');
+      expect(overrideMapping.scope_kind).toBe('workflow_override');
+      expect(overrideMapping.workflow_id).toBe(501);
+      expect(overrideMapping.workflow_type).toBe('generic');
 
       const listResponse = await fetch(`${baseUrl}/api/v1/routing/workflow-event-mappings?project_id=1&workflow_id=501&workflow_type=generic`);
       expect(listResponse.status).toBe(200);
       const listBody = await listResponse.json() as { mappings: ExternalEventMapping[] };
       expect(listBody.mappings).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: defaultMapping.id, scope_kind: 'sprint_type_default', is_inherited: true, is_override: false }),
-        expect.objectContaining({ id: overrideMapping.id, scope_kind: 'sprint_override', is_inherited: false, is_override: true }),
+        expect.objectContaining({ id: defaultMapping.id, scope_kind: 'workflow_type_default', is_inherited: true, is_override: false }),
+        expect.objectContaining({ id: overrideMapping.id, scope_kind: 'workflow_override', is_inherited: false, is_override: true }),
       ]));
 
       const backendMatch = await resolveWorkflowEventMapping(db, {
@@ -2385,8 +2381,8 @@ describe('routing rules API', () => {
               eventName: 'vendor_ready',
               tenantId: null,
               projectId: 1,
-              sprintId: 501,
-              sprintType: 'generic',
+              workflowId: 501,
+              workflowType: 'generic',
               taskType: 'backend',
               currentStatus: 'ready',
             });
@@ -2397,8 +2393,8 @@ describe('routing rules API', () => {
               eventName: 'vendor_ready',
               tenantId: null,
               projectId: 1,
-              sprintId: 501,
-              sprintType: 'generic',
+              workflowId: 501,
+              workflowType: 'generic',
               taskType: 'frontend',
               currentStatus: 'ready',
             });
@@ -2408,52 +2404,52 @@ describe('routing rules API', () => {
     }
   });
 
-  it('reads and writes sprint-type-specific contract templates with fallback', async () => {
+  it('reads and writes workflow-type-specific contract templates with fallback', async () => {
     const { server, baseUrl } = await startTestServer();
     try {
-      const genericResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?sprint_type=generic`);
+      const genericResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?workflow_type=generic`);
       expect(genericResponse.status).toBe(200);
-      const genericBody = await genericResponse.json() as { sprint_type: string; content: string; inherited_from: string | null; placeholders: string[]; format: string };
-      expect(genericBody.sprint_type).toBe('generic');
+      const genericBody = await genericResponse.json() as { workflow_type: string; content: string; inherited_from: string | null; placeholders: string[]; format: string };
+      expect(genericBody.workflow_type).toBe('generic');
       expect(genericBody.inherited_from).toBeNull();
-      expect(genericBody.content).toContain('Sprint type: {{sprintType}}');
-      expect(genericBody.placeholders).toEqual(expect.arrayContaining(['sprintType', 'taskId', 'validOutcomes', 'evidenceFieldsBulleted']));
+      expect(genericBody.content).toContain('Workflow type: {{workflowType}}');
+      expect(genericBody.placeholders).toEqual(expect.arrayContaining(['workflowType', 'taskId', 'validOutcomes', 'evidenceFieldsBulleted']));
       expect(genericBody.format).toBe('plain_text_v1');
 
-      const bugsResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?sprint_type=bugs`);
+      const bugsResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?workflow_type=bugs`);
       expect(bugsResponse.status).toBe(200);
-      const bugsBody = await bugsResponse.json() as { sprint_type: string; content: string; inherited_from: string | null };
-      expect(bugsBody.sprint_type).toBe('bugs');
+      const bugsBody = await bugsResponse.json() as { workflow_type: string; content: string; inherited_from: string | null };
+      expect(bugsBody.workflow_type).toBe('bugs');
       expect(bugsBody.inherited_from).toBeNull();
       expect(bugsBody.content).toContain('## Agent HQ bug-fix contract for this dispatched instance');
       expect(bugsBody.content).toContain('REQUIRED OUTPUTS FOR BUGS');
 
-      const sprintSpecificResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?sprint_type=enhancements`);
-      expect(sprintSpecificResponse.status).toBe(200);
-      const sprintSpecificBody = await sprintSpecificResponse.json() as { sprint_type: string; content: string; inherited_from: string | null };
-      expect(sprintSpecificBody.sprint_type).toBe('enhancements');
-      expect(sprintSpecificBody.inherited_from).toBeNull();
-      expect(sprintSpecificBody.content.trim()).not.toHaveLength(0);
+      const workflowSpecificResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?workflow_type=enhancements`);
+      expect(workflowSpecificResponse.status).toBe(200);
+      const workflowSpecificBody = await workflowSpecificResponse.json() as { workflow_type: string; content: string; inherited_from: string | null };
+      expect(workflowSpecificBody.workflow_type).toBe('enhancements');
+      expect(workflowSpecificBody.inherited_from).toBeNull();
+      expect(workflowSpecificBody.content.trim()).not.toHaveLength(0);
 
       const savedContent = 'enhancements only {{taskId}}';
       const saveResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sprint_type: 'enhancements', content: savedContent }),
+        body: JSON.stringify({ workflow_type: 'enhancements', content: savedContent }),
       });
       expect(saveResponse.status).toBe(200);
 
-      const directResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?sprint_type=enhancements`);
+      const directResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?workflow_type=enhancements`);
       expect(directResponse.status).toBe(200);
       await expect(directResponse.json()).resolves.toEqual(expect.objectContaining({
-        sprint_type: 'enhancements',
+        workflow_type: 'enhancements',
         content: savedContent,
         inherited_from: null,
         format: 'plain_text_v1',
         placeholders: expect.arrayContaining(['agentSlug', 'taskStatus']),
       }));
 
-      const qaResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?sprint_type=qa`);
+      const qaResponse = await fetch(`${baseUrl}/api/v1/routing/agent-contract?workflow_type=qa`);
       expect(qaResponse.status).toBe(404);
     } finally {
       await stopTestServer(server);

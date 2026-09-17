@@ -18,7 +18,7 @@ async function bind(definition:MetricDefinition,scope:TelemetryScope){
   return {metric,binding:saved.binding};
 }
 async function move(){
-  await db.run("UPDATE tasks SET sprint_id=112,project_id=12,status='review' WHERE id=1001");
+  await db.run("UPDATE tasks SET workflow_id=112,project_id=12,status='review' WHERE id=1001");
   await db.run("UPDATE tasks SET status='submitted' WHERE id=1001");
 }
 const first=(key:string,success:string)=>firstPassRecipe({key,name:key,start:{field:'event.type',op:'eq',value:'task.created'},success:{field:'event.to_status',op:'eq',value:success}});
@@ -54,7 +54,7 @@ it('applies event-time overrides without counting later events in a broader hist
 it('keeps run inventories on current task context',async()=>{
   const run:MetricDefinition={version:1,key:'runs',name:'Runs',grain:'run',time_basis:'current',missing_policy:'exclude_and_report',measure:{kind:'aggregate',aggregate:'count'}};
   const old=await bind(run,{workflow_id:111}),current=await bind({...run,key:'new_runs'},{workflow_id:112});
-  await db.run("UPDATE tasks SET sprint_id=112,project_id=12 WHERE id=1003");
+  await db.run("UPDATE tasks SET workflow_id=112,project_id=12 WHERE id=1003");
   const result=await queryTelemetry(db,access,{family_key:'acceptance'}) as any;
   expect(result.results.find((row:any)=>row.binding_id===old.binding.id).value).toBe(0);
   expect(result.results.find((row:any)=>row.binding_id===current.binding.id).value).toBe(1);

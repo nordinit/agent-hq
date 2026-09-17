@@ -48,7 +48,7 @@ async function addMember(
 
 async function createWorkflow(name: string, teamId: number | null): Promise<number> {
   const result = await getDb().run(
-    `INSERT INTO sprints (tenant_id, project_id, name, team_id) VALUES (1, 1, ?, ?)`,
+    `INSERT INTO workflows (tenant_id, project_id, name, team_id) VALUES (1, 1, ?, ?)`,
     name, teamId,
   );
   return result.lastInsertId as number;
@@ -79,7 +79,7 @@ describe('dispatch team resolution', () => {
     await addMember(owningTeam, agentId);
     const workflowId = await createWorkflow('Billing migration', owningTeam);
 
-    expect(await resolveDispatchTeamId(getDb(), { agentId, sprintId: workflowId })).toBe(owningTeam);
+    expect(await resolveDispatchTeamId(getDb(), { agentId, workflowId: workflowId })).toBe(owningTeam);
   });
 
   it('does not claim a workflow\'s team for an agent that is not on it', async () => {
@@ -91,7 +91,7 @@ describe('dispatch team resolution', () => {
     await addMember(ownTeam, agentId);
     const workflowId = await createWorkflow('Billing migration', owningTeam);
 
-    expect(await resolveDispatchTeamId(getDb(), { agentId, sprintId: workflowId })).toBe(ownTeam);
+    expect(await resolveDispatchTeamId(getDb(), { agentId, workflowId: workflowId })).toBe(ownTeam);
   });
 
   it('falls back to the primary membership when several teams apply', async () => {
@@ -126,7 +126,7 @@ describe('dispatch team resolution', () => {
     await addMember(second, agentId, { isPrimary: 1 });
     const workflowId = await createWorkflow('Billing migration', stranger);
 
-    expect(await resolveDispatchTeamId(getDb(), { agentId, sprintId: workflowId })).toBe(second);
+    expect(await resolveDispatchTeamId(getDb(), { agentId, workflowId: workflowId })).toBe(second);
   });
 });
 

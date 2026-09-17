@@ -9,17 +9,17 @@ import {
 export type { ModelRoutingRule };
 export { resolveEffectiveModel, shortModelName };
 
-export function useModelRoutingRules(projectId: number | null | undefined, sprintId: number | null | undefined): ModelRoutingRule[] {
+export function useModelRoutingRules(projectId: number | null | undefined, workflowId: number | null | undefined): ModelRoutingRule[] {
   const [rules, setRules] = useState<ModelRoutingRule[]>([]);
   useEffect(() => {
     const params = new URLSearchParams();
     if (projectId) params.set('project_id', String(projectId));
-    if (sprintId) params.set('sprint_id', String(sprintId));
-    if (projectId || sprintId) params.set('include_fallback', 'true');
+    if (workflowId) params.set('workflow_id', String(workflowId));
+    if (projectId || workflowId) params.set('include_fallback', 'true');
     const query = params.toString();
     apiFetch<ModelRoutingRule[]>(`/api/v1/model-routing${query ? `?${query}` : ''}`)
       .then(setRules)
       .catch(() => {});
-  }, [projectId, sprintId]);
+  }, [projectId, workflowId]);
   return rules;
 }

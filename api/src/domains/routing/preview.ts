@@ -85,10 +85,10 @@ function findingKey(finding: LintFinding): string {
 }
 
 const COUNTED_TABLES = [
-  'sprint_task_transitions',
-  'sprint_task_routing_rules',
-  'sprint_task_transition_requirements',
-  'sprint_task_statuses',
+  'workflow_task_transitions',
+  'workflow_task_routing_rules',
+  'workflow_task_transition_requirements',
+  'workflow_task_statuses',
 ] as const;
 
 async function countRows(db: Db): Promise<Record<string, number>> {
@@ -104,8 +104,8 @@ export async function previewRoutingChange(
   db: Db,
   input: {
     project_id?: unknown;
-    sprint_id?: unknown;
-    sprint_type?: unknown;
+    workflow_id?: unknown;
+    workflow_type?: unknown;
     tenant_id?: unknown;
     operations?: unknown;
   },
@@ -122,8 +122,8 @@ export async function previewRoutingChange(
 
   const scopeInput = {
     project_id: input.project_id,
-    sprint_id: input.sprint_id,
-    sprint_type: input.sprint_type,
+    workflow_id: input.workflow_id,
+    workflow_type: input.workflow_type,
     tenant_id: input.tenant_id,
   };
 
@@ -184,7 +184,7 @@ async function countWorkflowsInScope(db: Db, scope: WorkflowGraph['scope']): Pro
   if (scope.workflow_id != null) return 1;
   if (scope.project_id == null || !scope.workflow_type) return 0;
   const row = await db.get(
-    `SELECT COUNT(*) AS n FROM sprints WHERE project_id = ? AND sprint_type = ?`,
+    `SELECT COUNT(*) AS n FROM workflows WHERE project_id = ? AND workflow_type = ?`,
     scope.project_id,
     scope.workflow_type,
   ) as { n: number | string } | undefined;

@@ -11,17 +11,17 @@ export async function seedTelemetryScenario(db:Db){
     INSERT INTO tenants(id,name,slug,is_default) VALUES(1,'Telemetry test','telemetry-test',1),(2,'Other tenant','other-telemetry',0);
     INSERT INTO app_settings(key,value) VALUES('default_tenant_id','1'),('active_tenant_id','1');
     INSERT INTO projects(id,tenant_id,name) VALUES(11,1,'Editorial'),(12,1,'Proposals'),(22,2,'Private project');
-    INSERT INTO sprint_types(tenant_id,key,name) VALUES(1,'content','Content review'),(2,'content','Private content');
-    INSERT INTO sprint_type_task_types(tenant_id,sprint_type_key,task_type) VALUES(1,'content','article'),(2,'content','article');
-    INSERT INTO task_field_schemas(id,tenant_id,sprint_type_key,schema_json) VALUES
+    INSERT INTO workflow_types(tenant_id,key,name) VALUES(1,'content','Content review'),(2,'content','Private content');
+    INSERT INTO workflow_type_task_types(tenant_id,workflow_type_key,task_type) VALUES(1,'content','article'),(2,'content','article');
+    INSERT INTO task_field_schemas(id,tenant_id,workflow_type_key,schema_json) VALUES
       (701,1,'content','{"fields":[{"key":"amount","label":"Proposal amount","type":"number"},{"key":"revisions","label":"Revision count","type":"number"},{"key":"needs_changes","label":"Needs changes","type":"checkbox"}]}'),
       (702,2,'content','{"fields":[{"key":"private_amount","label":"Private amount","type":"number"}]}');
-    INSERT INTO sprints(id,tenant_id,project_id,name,sprint_type) VALUES(111,1,11,'Content approval','content'),(112,1,12,'Proposal delivery','content'),(222,2,22,'Private workflow','content');
+    INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(111,1,11,'Content approval','content'),(112,1,12,'Proposal delivery','content'),(222,2,22,'Private workflow','content');
     INSERT INTO agents(id,tenant_id,name,job_title,session_key,project_id,runtime_type) VALUES(101,1,'Editor','Editor','telemetry:editor',11,'openclaw'),(102,1,'Proposal writer','Writer','telemetry:writer',12,'openclaw'),(202,2,'Private agent','Private','telemetry:private',22,'openclaw');
-    INSERT INTO sprint_type_task_statuses(tenant_id,sprint_type_key,status_key,label,terminal) VALUES
+    INSERT INTO workflow_type_task_statuses(tenant_id,workflow_type_key,status_key,label,terminal) VALUES
       (1,'content','review','Review',0),(1,'content','approved','Approved',1),(1,'content','done','Done',1),(1,'content','submitted','Submitted',1),(1,'content','rejected','Rejected',1),(1,'content','cancelled','Cancelled',1);
-    INSERT INTO sprint_type_outcomes(tenant_id,sprint_type_key,outcome_key,label) VALUES(1,'content','changes_requested','Changes requested');
-    INSERT INTO tasks(id,tenant_id,title,status,project_id,sprint_id,task_type,assigned_agent_id,custom_fields_json) VALUES
+    INSERT INTO workflow_type_outcomes(tenant_id,workflow_type_key,outcome_key,label) VALUES(1,'content','changes_requested','Changes requested');
+    INSERT INTO tasks(id,tenant_id,title,status,project_id,workflow_id,task_type,assigned_agent_id,custom_fields_json) VALUES
       (1001,1,'A — direct approval','review',11,111,'article',101,'{"amount":10,"revisions":0,"needs_changes":false}'),
       (1002,1,'B — revised approval','review',11,111,'article',101,'{"amount":20,"revisions":0,"needs_changes":false}'),
       (1003,1,'C — recovered runtime','review',11,111,'article',101,'{"amount":30,"revisions":0,"needs_changes":false}'),

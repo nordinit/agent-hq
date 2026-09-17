@@ -1,11 +1,11 @@
-import { listSprintTaskStatuses, listSprintTypeTaskStatuses } from '../domains/routing/policy/statuses';
-import { resolveSprintTypeForSprintId } from '../domains/sprint-definitions/config';
+import { listWorkflowTaskStatuses, listWorkflowTypeTaskStatuses } from '../domains/routing/policy/statuses';
+import { resolveWorkflowTypeForWorkflowId } from '../domains/workflow-definitions/config';
 import { RELEASE_TASK_STATUSES } from './taskStatuses';
 import { type Db } from "../db/adapter/types";
 
 export interface TaskStatusWorkflowScope {
-  sprintId?: number | null;
-  sprintType?: string | null;
+  workflowId?: number | null;
+  workflowType?: string | null;
   taskType?: string | null;
   fromStatus?: string | null;
 }
@@ -18,8 +18,8 @@ export class WorkflowAllowedValuesError extends Error {
   allowedValues: string[];
   metadataTool = 'agent_hq_get_workflow_metadata';
   workflow: {
-    sprint_id: number | null;
-    sprint_type: string | null;
+    workflow_id: number | null;
+    workflow_type: string | null;
     task_type?: string | null;
     from_status?: string | null;
   };
@@ -39,8 +39,8 @@ export class WorkflowAllowedValuesError extends Error {
     this.attemptedValue = input.attemptedValue;
     this.allowedValues = input.allowedValues;
     this.workflow = {
-      sprint_id: input.scope.sprintId ?? null,
-      sprint_type: input.scope.sprintType ?? null,
+      workflow_id: input.scope.workflowId ?? null,
+      workflow_type: input.scope.workflowType ?? null,
       task_type: input.scope.taskType ?? null,
       from_status: input.scope.fromStatus ?? null,
     };
@@ -67,14 +67,14 @@ export async function listAllowedTaskStatusesForWorkflow(
   db: Db,
   scope: TaskStatusWorkflowScope,
 ): Promise<string[]> {
-  const sprintStatuses = typeof scope.sprintId === 'number' && Number.isFinite(scope.sprintId)
-    ? (await listSprintTaskStatuses(db, scope.sprintId)).map((status) => status.name)
+  const workflowStatuses = typeof scope.workflowId === 'number' && Number.isFinite(scope.workflowId)
+    ? (await listWorkflowTaskStatuses(db, scope.workflowId)).map((status) => status.name)
     : [];
-  if (sprintStatuses.length > 0) return [...new Set([...sprintStatuses, ...RELEASE_TASK_STATUSES])];
+  if (workflowStatuses.length > 0) return [...new Set([...workflowStatuses, ...RELEASE_TASK_STATUSES])];
 
-  const sprintType = normalizeStatus(scope.sprintType) ?? (await resolveSprintTypeForSprintId(db, scope.sprintId ?? null));
-  const sprintTypeStatuses = (await listSprintTypeTaskStatuses(db, sprintType)).map((status) => status.name);
-  if (sprintTypeStatuses.length > 0) return [...new Set([...sprintTypeStatuses, ...RELEASE_TASK_STATUSES])];
+  const workflowType = normalizeStatus(scope.workflowType) ?? (await resolveWorkflowTypeForWorkflowId(db, scope.workflowId ?? null));
+  const workflowTypeStatuses = (await listWorkflowTypeTaskStatuses(db, workflowType)).map((status) => status.name);
+  if (workflowTypeStatuses.length > 0) return [...new Set([...workflowTypeStatuses, ...RELEASE_TASK_STATUSES])];
 
   return [...RELEASE_TASK_STATUSES];
 }

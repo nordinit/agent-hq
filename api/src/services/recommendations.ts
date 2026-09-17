@@ -25,7 +25,7 @@ export interface FailureTaxonomyEntry {
 
 export interface RecommendationResult {
   generated_at: string;
-  scope: { project_id?: number; sprint_id?: number; job_id?: number };
+  scope: { project_id?: number; workflow_id?: number; job_id?: number };
   task_count: number;
   outcome_count: number;
   recommendations: Recommendation[];
@@ -40,7 +40,7 @@ export const FAILURE_TAXONOMY: FailureTaxonomyEntry[] = [
     label: 'Misrouted',
     description: 'Task was assigned to the wrong job or agent role.',
     category: 'routing',
-    suggested_action: 'Review routing rules and job descriptions. Consider adding clearer project/sprint → job mappings.',
+    suggested_action: 'Review routing rules and job descriptions. Consider adding clearer project/workflow → job mappings.',
   },
   {
     reason: 'underspecified',
@@ -61,7 +61,7 @@ export const FAILURE_TAXONOMY: FailureTaxonomyEntry[] = [
     label: 'Hidden Dependency',
     description: 'Task had an undeclared blocker that wasn\'t discovered until execution.',
     category: 'process',
-    suggested_action: 'Run a dependency check before dispatching. Require explicit blocker declarations for tasks in active sprints.',
+    suggested_action: 'Run a dependency check before dispatching. Require explicit blocker declarations for tasks in active workflows.',
   },
   {
     reason: 'wrong_priority',
@@ -71,11 +71,11 @@ export const FAILURE_TAXONOMY: FailureTaxonomyEntry[] = [
     suggested_action: 'Review priority assignment criteria. Consider using confidence levels to gate high-priority dispatch.',
   },
   {
-    reason: 'wrong_sprint',
-    label: 'Wrong Sprint',
-    description: 'Task was placed in the wrong sprint, causing context mismatch or premature execution.',
+    reason: 'wrong_workflow',
+    label: 'Wrong Workflow',
+    description: 'Task was placed in the wrong workflow, causing context mismatch or premature execution.',
     category: 'routing',
-    suggested_action: 'Validate sprint assignment against task dependencies and project phase.',
+    suggested_action: 'Validate workflow assignment against task dependencies and project phase.',
   },
   {
     reason: 'env_issue',
@@ -98,7 +98,7 @@ export const FAILURE_TAXONOMY: FailureTaxonomyEntry[] = [
 interface QueryFilters {
   tenant_id?: number;
   project_id?: number;
-  sprint_id?: number;
+  workflow_id?: number;
   job_id?: number;
   from?: string;
   to?: string;
@@ -115,7 +115,7 @@ function buildWhere(
     params.push(filters.tenant_id);if(filters.project_id!=null)params.push(filters.project_id);
   }
   if (filters.project_id) { conditions.push(`${alias}.project_id = ?`); params.push(filters.project_id); }
-  if (filters.sprint_id)  { conditions.push(`${alias}.sprint_id = ?`);  params.push(filters.sprint_id);  }
+  if (filters.workflow_id)  { conditions.push(`${alias}.workflow_id = ?`);  params.push(filters.workflow_id);  }
   if (filters.job_id)     { conditions.push(`${alias}.job_id = ?`);     params.push(filters.job_id);     }
   if (filters.from)       { conditions.push(`${alias}.recorded_at >= ?`); params.push(filters.from); }
   if (filters.to)         { conditions.push(`${alias}.recorded_at <= ?`); params.push(filters.to);   }
@@ -137,7 +137,7 @@ export async function generateRecommendations(db: Db, filters: QueryFilters = {}
     ceParams.push(filters.tenant_id);if(filters.project_id!=null)ceParams.push(filters.project_id);
   }
   if (filters.project_id) { ceConds.push('tce.project_id = ?'); ceParams.push(filters.project_id); }
-  if (filters.sprint_id)  { ceConds.push('tce.sprint_id = ?');  ceParams.push(filters.sprint_id);  }
+  if (filters.workflow_id)  { ceConds.push('tce.workflow_id = ?');  ceParams.push(filters.workflow_id);  }
   if (filters.job_id)     { ceConds.push('tce.job_id = ?');     ceParams.push(filters.job_id);     }
   if (filters.from)       { ceConds.push('tce.created_at >= ?'); ceParams.push(filters.from); }
   if (filters.to)         { ceConds.push('tce.created_at <= ?'); ceParams.push(filters.to);   }
@@ -148,7 +148,7 @@ export async function generateRecommendations(db: Db, filters: QueryFilters = {}
   const tParams: unknown[] = [];
   if(filters.tenant_id!=null){tConds.push('t.tenant_id=?');tParams.push(filters.tenant_id);}
   if (filters.project_id) { tConds.push('t.project_id = ?'); tParams.push(filters.project_id); }
-  if (filters.sprint_id)  { tConds.push('t.sprint_id = ?');  tParams.push(filters.sprint_id);  }
+  if (filters.workflow_id)  { tConds.push('t.workflow_id = ?');  tParams.push(filters.workflow_id);  }
   if (filters.job_id)     { tConds.push('t.assigned_agent_id = ?');    tParams.push(filters.job_id);     }
   const tWhere = tConds.length ? `WHERE ${tConds.join(' AND ')}` : '';
 

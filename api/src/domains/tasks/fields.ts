@@ -1,17 +1,17 @@
 import { getDb } from '../../db/client';
 import {
   getCustomFieldDefinitions,
-  resolveSprintTypeForSprintId,
-  resolveTaskFieldSchemaForSprint,
+  resolveWorkflowTypeForWorkflowId,
+  resolveTaskFieldSchemaForWorkflow,
   type TaskFieldDefinition,
-} from '../sprint-definitions/config';
+} from '../workflow-definitions/config';
 
 export const VALID_STORY_POINTS = [1, 2, 3, 5, 8, 13, 21] as const;
 
 export type CustomFieldDefinition = TaskFieldDefinition;
 
 export interface ResolvedTaskFieldSchema {
-  sprint_type: string;
+  workflow_type: string;
   schema: { fields: CustomFieldDefinition[] };
   allowed_task_types: string[];
 }
@@ -40,14 +40,14 @@ export function parseCustomFields(raw: unknown): Record<string, unknown> {
   throw new Error('custom_fields must be an object');
 }
 
-export async function resolveSprintTypeForTask(sprintId: unknown): Promise<string> {
+export async function resolveWorkflowTypeForTask(workflowId: unknown): Promise<string> {
   const db = getDb();
-  return await resolveSprintTypeForSprintId(db, sprintId);
+  return await resolveWorkflowTypeForWorkflowId(db, workflowId);
 }
 
-export async function resolveTaskFieldSchema(sprintId: unknown, taskType: unknown, sprintType?: unknown): Promise<ResolvedTaskFieldSchema> {
+export async function resolveTaskFieldSchema(workflowId: unknown, taskType: unknown, workflowType?: unknown): Promise<ResolvedTaskFieldSchema> {
   const db = getDb();
-  return await resolveTaskFieldSchemaForSprint(db, { sprintId, sprintType, taskType });
+  return await resolveTaskFieldSchemaForWorkflow(db, { workflowId, workflowType, taskType });
 }
 
 function customFieldValuesEqual(left: unknown, right: unknown): boolean {

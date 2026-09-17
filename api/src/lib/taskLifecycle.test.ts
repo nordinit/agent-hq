@@ -63,7 +63,7 @@ async function createDb(): Promise<Db> {
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1')`);
   await db.run(`INSERT INTO task_statuses (name, label, color, terminal) VALUES ('done', 'Done', 'green', 1)`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Test Project')`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name) VALUES (1, 1, 1, 'Test Sprint')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name) VALUES (1, 1, 1, 'Test Workflow')`);
 
   return db;
 }
@@ -89,7 +89,7 @@ async function seedLinkedTask(db: Db, params: {
     nextAgentTitle,
   );
   await db.run(
-    `INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id)
+    `INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id, active_instance_id)
      VALUES (1, 1, 1, 1, 'Lifecycle task', ?, 1, NULL)`,
     taskStatus,
   );
@@ -174,7 +174,7 @@ describe('task lifecycle worktree cleanup', () => {
   it('removes all known repo task workspaces when the task becomes done', async () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, repo_path, repo_access_mode) VALUES (1, 1, 'Agent', 'agent:test-1:main', 'Builder', '/repo', 'worktree')`);
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, repo_path, repo_access_mode) VALUES (2, 1, 'Agent 2', 'agent:test-2:main', 'Builder', NULL, 'clone')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id) VALUES (1, 1, 1, 1, 'Lifecycle task', 'done', 1, NULL)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id, active_instance_id) VALUES (1, 1, 1, 1, 'Lifecycle task', 'done', 1, NULL)`);
     await db.run(`
       INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, worktree_path)
       VALUES
@@ -196,7 +196,7 @@ describe('task lifecycle worktree cleanup', () => {
 
   it('removes clone-backed task workspaces with removeTaskClone', async () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, repo_path, repo_access_mode) VALUES (3, 1, 'Clone Agent', 'agent:test-3:main', 'Builder', NULL, 'clone')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id) VALUES (77, 1, 1, 1, 'Clone cleanup', 'done', 3, NULL)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id, active_instance_id) VALUES (77, 1, 1, 1, 'Clone cleanup', 'done', 3, NULL)`);
     await db.run(`INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, worktree_path) VALUES (77, 1, 3, 77, 'done', '/tmp/task-77')`);
 
     await cleanupTaskExecutionLinkageForStatus(db, 77, 'done');
@@ -206,7 +206,7 @@ describe('task lifecycle worktree cleanup', () => {
 
   it('cleans worktree-backed runs from payload repo metadata when agent repo fields are empty', async () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, job_title, repo_path, repo_access_mode) VALUES (4, 1, 'Project Repo Agent', 'agent:test-4:main', 'Builder', NULL, NULL)`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id, active_instance_id) VALUES (88, 1, 1, 1, 'Payload cleanup', 'done', 4, NULL)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id, active_instance_id) VALUES (88, 1, 1, 1, 'Payload cleanup', 'done', 4, NULL)`);
     await db.run(`
       INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, worktree_path, payload_sent)
       VALUES (88, 1, 4, 88, 'done', '/tmp/task-88', ?)
@@ -235,22 +235,22 @@ describe('task lifecycle worktree cleanup', () => {
   it('uses workflow terminal flags dynamically, including overrides back to non-terminal', async () => {
     await seedLinkedTask(db, { taskStatus: 'custom_closed', activeInstanceId: null, instanceStatus: 'done' });
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(0);
-    await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, color, terminal) VALUES (1, 'custom_closed', 'Closed', 'green', 1)`);
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal) VALUES (1, 'custom_closed', 'Closed', 'green', 1)`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(1);
-    await db.run(`UPDATE sprint_task_statuses SET terminal = 0 WHERE sprint_id = 1 AND status_key = 'custom_closed'`);
+    await db.run(`UPDATE workflow_task_statuses SET terminal = 0 WHERE workflow_id = 1 AND status_key = 'custom_closed'`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(0);
     await db.run(`UPDATE tasks SET status = 'done' WHERE id = 1`);
-    await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, color, terminal) VALUES (1, 'done', 'Done but retained', 'green', 0)`);
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal) VALUES (1, 'done', 'Done but retained', 'green', 0)`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(0);
   });
 
   it('uses the owning tenant workflow-type terminal flags below workflow overrides', async () => {
     await seedLinkedTask(db, { taskStatus: 'archived_by_customer', activeInstanceId: null, instanceStatus: 'done' });
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name) VALUES (1, 'customer_work', 'Customer work')`);
-    await db.run(`UPDATE sprints SET sprint_type = 'customer_work' WHERE id = 1`);
-    await db.run(`INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, color, terminal) VALUES (1, 'customer_work', 'archived_by_customer', 'Archived', 'green', 1)`);
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'customer_work', 'Customer work')`);
+    await db.run(`UPDATE workflows SET workflow_type = 'customer_work' WHERE id = 1`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal) VALUES (1, 'customer_work', 'archived_by_customer', 'Archived', 'green', 1)`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(1);
-    await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, color, terminal) VALUES (1, 'archived_by_customer', 'Keep', 'green', 0)`);
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal) VALUES (1, 'archived_by_customer', 'Keep', 'green', 0)`);
     expect(await cleanupTerminalTaskWorkspaces(db, 1)).toBe(0);
   });
 

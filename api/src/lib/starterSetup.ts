@@ -1,32 +1,32 @@
-import { STARTER_BACKLOG_SPRINT_NAME } from './starterCatalog';
+import { STARTER_BACKLOG_WORKFLOW_NAME } from './starterCatalog';
 import { type Db } from "../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
 
-type SprintRow = {
+type WorkflowRow = {
   id: number;
   project_id: number;
-  sprint_type: string | null;
+  workflow_type: string | null;
 };
 
 async function tableHasColumn(db: Db, tableName: string, columnName: string): Promise<boolean> {
     return await sharedColumnExists(db, tableName, columnName);
 }
 
-async function loadSprintRow(db: Db, sprintId: number): Promise<SprintRow | null> {
+async function loadWorkflowRow(db: Db, workflowId: number): Promise<WorkflowRow | null> {
   return await db.get(`
-    SELECT id, project_id, sprint_type
-    FROM sprints
+    SELECT id, project_id, workflow_type
+    FROM workflows
     WHERE id = ?
     LIMIT 1
-  `, sprintId) as SprintRow | undefined ?? null;
+  `, workflowId) as WorkflowRow | undefined ?? null;
 }
 
-export async function ensureProjectBacklogSprint(db: Db, projectId: number): Promise<number> {
+export async function ensureProjectBacklogWorkflow(db: Db, projectId: number): Promise<number> {
   const project = await db.get(`SELECT tenant_id FROM projects WHERE id = ?`, projectId) as { tenant_id: number | null } | undefined;
-  const tenantSprintType = project?.tenant_id != null
+  const tenantWorkflowType = project?.tenant_id != null
     ? (await db.get(`
       SELECT key
-      FROM sprint_types
+      FROM workflow_types
       WHERE tenant_id = ? AND (key = 'generic' OR key LIKE ?)
       ORDER BY CASE WHEN key = 'generic' THEN 0 ELSE 1 END, key ASC
       LIMIT 1
@@ -34,23 +34,23 @@ export async function ensureProjectBacklogSprint(db: Db, projectId: number): Pro
     : 'generic';
   const existing = await db.get(`
     SELECT id
-    FROM sprints
+    FROM workflows
     WHERE project_id = ?
-      AND (lower(name) = lower(?) OR sprint_type = ?)
+      AND (lower(name) = lower(?) OR workflow_type = ?)
     ORDER BY CASE WHEN lower(name) = lower(?) THEN 0 ELSE 1 END, id ASC
     LIMIT 1
-  `, projectId, STARTER_BACKLOG_SPRINT_NAME, tenantSprintType, STARTER_BACKLOG_SPRINT_NAME) as { id: number } | undefined;
+  `, projectId, STARTER_BACKLOG_WORKFLOW_NAME, tenantWorkflowType, STARTER_BACKLOG_WORKFLOW_NAME) as { id: number } | undefined;
   if (existing) return existing.id;
 
   const result = await db.run(`
-    INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+    INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
     VALUES (?, ?, ?, '', ?, 'active', 'time', 'ongoing')
-  `, project?.tenant_id ?? null, projectId, STARTER_BACKLOG_SPRINT_NAME, tenantSprintType);
+  `, project?.tenant_id ?? null, projectId, STARTER_BACKLOG_WORKFLOW_NAME, tenantWorkflowType);
 
   return Number(result.lastInsertId);
 }
 
-export async function resolveDefaultProjectSprintId(db: Db, projectId: number | null | undefined): Promise<number | null> {
+export async function resolveDefaultProjectWorkflowId(db: Db, projectId: number | null | undefined): Promise<number | null> {
   if (!projectId || !Number.isFinite(projectId)) return null;
-  return await ensureProjectBacklogSprint(db, projectId);
+  return await ensureProjectBacklogWorkflow(db, projectId);
 }

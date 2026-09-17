@@ -3,13 +3,13 @@ import test from 'node:test';
 import { resolveEffectiveModel, shortModelName, type ModelRoutingRule } from './modelRouting.ts';
 
 const rules: ModelRoutingRule[] = [
-  { id: 1, max_points: 2, provider: 'openai', model: 'openai/gpt-4.1-mini', label: null, project_id: null, sprint_id: null },
-  { id: 2, max_points: 8, provider: 'openai', model: 'openai/gpt-5', label: null, project_id: null, sprint_id: null },
-  { id: 3, max_points: 3, provider: 'anthropic', model: 'anthropic/claude-sonnet-4-6', label: null, project_id: 10, sprint_id: null },
-  { id: 4, max_points: 5, provider: 'anthropic', model: 'anthropic/claude-opus-4-1', label: null, project_id: 10, sprint_id: 20 },
+  { id: 1, max_points: 2, provider: 'openai', model: 'openai/gpt-4.1-mini', label: null, project_id: null, workflow_id: null },
+  { id: 2, max_points: 8, provider: 'openai', model: 'openai/gpt-5', label: null, project_id: null, workflow_id: null },
+  { id: 3, max_points: 3, provider: 'anthropic', model: 'anthropic/claude-sonnet-4-6', label: null, project_id: 10, workflow_id: null },
+  { id: 4, max_points: 5, provider: 'anthropic', model: 'anthropic/claude-opus-4-1', label: null, project_id: 10, workflow_id: 20 },
 ];
 
-test('resolveEffectiveModel prefers sprint-scoped rules over project and fallback rules', () => {
+test('resolveEffectiveModel prefers workflow-scoped rules over project and fallback rules', () => {
   assert.equal(resolveEffectiveModel(5, rules, 10, 20), 'anthropic/claude-opus-4-1');
 });
 
@@ -23,8 +23,8 @@ test('resolveEffectiveModel uses the highest rule in scope when points exceed co
 
 test('resolveEffectiveModel ignores disabled rules', () => {
   assert.equal(resolveEffectiveModel(2, [
-    { id: 10, max_points: 2, provider: 'openai', model: 'openai/disabled', label: null, project_id: 10, sprint_id: null, enabled: false },
-    { id: 11, max_points: 5, provider: 'openai', model: 'openai/enabled', label: null, project_id: 10, sprint_id: null, enabled: true },
+    { id: 10, max_points: 2, provider: 'openai', model: 'openai/disabled', label: null, project_id: 10, workflow_id: null, enabled: false },
+    { id: 11, max_points: 5, provider: 'openai', model: 'openai/enabled', label: null, project_id: 10, workflow_id: null, enabled: true },
   ], 10, null), 'openai/enabled');
 });
 

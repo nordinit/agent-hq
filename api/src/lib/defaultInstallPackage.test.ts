@@ -72,15 +72,15 @@ describe('applyDefaultInstallPackage', () => {
     await applyDefaultInstallPackage(db, tenantId);
 
     const rules = await db.all(`
-      SELECT r.sprint_type, r.task_type, r.status, a.system_role
-      FROM sprint_task_routing_rules r
+      SELECT r.workflow_type, r.task_type, r.status, a.system_role
+      FROM workflow_task_routing_rules r
       JOIN agents a ON a.id = r.agent_id
       WHERE a.tenant_id = ?
-    `, tenantId) as Array<{ sprint_type: string; task_type: string; status: string; system_role: string }>;
+    `, tenantId) as Array<{ workflow_type: string; task_type: string; status: string; system_role: string }>;
 
     expect(rules.length).toBeGreaterThan(0);
     // Implementation work goes to the declared developer, never to any other seed.
-    const devReady = rules.filter(r => r.sprint_type === 'dev' && r.status === 'ready'
+    const devReady = rules.filter(r => r.workflow_type === 'dev' && r.status === 'ready'
       && ['backend', 'frontend', 'fullstack'].includes(r.task_type));
     expect(devReady.length).toBe(3);
     expect([...new Set(devReady.map(r => r.system_role))]).toEqual(['default_developer']);

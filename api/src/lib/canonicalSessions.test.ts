@@ -32,7 +32,7 @@ async function resetDb(): Promise<void> {
   const db = getDb();
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (56, 1, 'Agent HQ Bugs')`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (56, 1, 56, 'Agent HQ Bugs', 'generic')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (56, 1, 56, 'Agent HQ Bugs', 'generic')`);
 }
 
 describe('ensureCanonicalSessionForInstance failure placeholders', () => {
@@ -53,7 +53,7 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
   it('creates a visible failed-run session when startup failed before transcript output', async () => {
     const db = getDb();
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (94, 1, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (715, 1, 'Anchor recovery', 56, 56)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (715, 1, 'Anchor recovery', 56, 56)`);
     await db.run(`
       INSERT INTO job_instances (
         id, agent_id, task_id, status, session_key, created_at, completed_at,
@@ -100,7 +100,7 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
   it('repairs a completed instance whose canonical session stayed active with zero messages', async () => {
     const db = getDb();
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (94, 1, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (732, 1, 'Fix live transcript handoff after Task #719', 56, 56)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (732, 1, 'Fix live transcript handoff after Task #719', 56, 56)`);
     await db.run(`
       INSERT INTO job_instances (
         id, agent_id, task_id, status, session_key, created_at, dispatched_at, started_at,
@@ -160,7 +160,7 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
   it('uses the transcript provider for completed OpenClaw sessions with only a dispatch prompt in chat_messages', async () => {
     const db = getDb();
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (94, 1, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (738, 1, 'Fix completed OpenClaw transcripts that import only the dispatch prompt', 56, 56)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (738, 1, 'Fix completed OpenClaw transcripts that import only the dispatch prompt', 56, 56)`);
     await db.run(`
       INSERT INTO job_instances (
         id, agent_id, task_id, status, session_key, created_at, dispatched_at, started_at,
@@ -231,7 +231,7 @@ describe('ensureCanonicalSessionForInstance failure placeholders', () => {
   it('keeps active OpenClaw prompt-only sessions visible while runtime output is pending', async () => {
     const db = getDb();
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (94, 1, 'Cinder', 'agent:cinder-backend:main', 'openclaw')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (739, 1, 'Pending OpenClaw run', 56, 56)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (739, 1, 'Pending OpenClaw run', 56, 56)`);
     await db.run(`
       INSERT INTO job_instances (
         id, agent_id, task_id, status, session_key, created_at, dispatched_at, started_at

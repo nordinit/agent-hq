@@ -6,7 +6,7 @@ import {
   validateDeployEvidence,
   type GateRequirement,
 } from '../../lib/evidenceValidation';
-import { loadSprintTaskTransitionRequirements } from '../routing/policy/statuses';
+import { loadWorkflowTaskTransitionRequirements } from '../routing/policy/statuses';
 import type { McpApiIdentity, ProjectTaskLifecycleAuthorization } from '../../lib/mcpApiAuth';
 import { extractTaskOutcomeEvidence, outcomePayload, OUTCOME_PAYLOAD_METADATA_KEYS } from './outcomeEvidence';
 import { getCanonicalTaskRecord } from './evidence';
@@ -265,12 +265,12 @@ async function applyPostedTaskOutcome(
   const normalizedBody = normalizeOutcomeBody(body);
   const dryRun = normalizedBody.dry_run === true || normalizedBody.dry_run === 'true';
   const customFieldsSelect = await taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
-  const existing = await db.get(`SELECT id, status, task_type, sprint_id, ${customFieldsSelect}
+  const existing = await db.get(`SELECT id, status, task_type, workflow_id, ${customFieldsSelect}
      FROM tasks WHERE id = ?`, taskId) as {
     id: number;
     status: string;
     task_type: string | null;
-    sprint_id: number | null;
+    workflow_id: number | null;
     custom_fields_json: string | null;
   } | undefined;
   if (!existing) {
@@ -290,7 +290,7 @@ async function applyPostedTaskOutcome(
 
   const inlineEvidence = await extractTaskOutcomeEvidence(db, existing, outcomePayload(body));
   const hasInline = Object.keys(inlineEvidence).length > 0;
-  const transitionRequirements = (await loadSprintTaskTransitionRequirements(db, existing.sprint_id ?? null, outcome, existing.task_type ?? null))
+  const transitionRequirements = (await loadWorkflowTaskTransitionRequirements(db, existing.workflow_id ?? null, outcome, existing.task_type ?? null))
     .map((row): GateRequirement => ({
       field_name: row.field_name,
       requirement_type: row.requirement_type,
@@ -373,7 +373,7 @@ async function applyPostedTaskOutcome(
   const writeValidatedEvidence = async (tx: Db): Promise<void> => {
     // Serialize evidence+outcome writes and validate against the state actually
     // being updated, not the earlier preview snapshot.
-    const current = await tx.get(`SELECT id, status, task_type, sprint_id, ${customFieldsSelect}
+    const current = await tx.get(`SELECT id, status, task_type, workflow_id, ${customFieldsSelect}
       FROM tasks WHERE id = ? FOR UPDATE`, taskId) as typeof existing | undefined;
     if (!current) throw errorWithBody(404, { error: 'Task not found' });
     if (options.mcpIdentity) {
@@ -388,7 +388,7 @@ async function applyPostedTaskOutcome(
       if (failure) throw errorWithBody(failure.status, failure.body);
     }
     const evidence = await extractTaskOutcomeEvidence(tx, current, outcomePayload(body));
-    const requirements = await loadSprintTaskTransitionRequirements(tx, current.sprint_id, outcome, current.task_type);
+    const requirements = await loadWorkflowTaskTransitionRequirements(tx, current.workflow_id, outcome, current.task_type);
     const validation = validateInlineEvidenceForOutcome(outcome, evidence, {
       ...getCanonicalTaskRecord(current), status: current.status,
     }, requirements);

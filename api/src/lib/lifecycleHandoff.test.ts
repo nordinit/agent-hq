@@ -13,35 +13,35 @@ interface SeedInput {
 }
 
 /**
- * The real schema declares tasks.sprint_id and job_instances.agent_id NOT NULL with genuine
+ * The real schema declares tasks.workflow_id and job_instances.agent_id NOT NULL with genuine
  * foreign keys, so a task and an instance cannot stand on their own the way they did against a
  * hand-written minimal schema — each needs a project, workflow and agent behind it.
  *
  * Task and instance ids stay explicit because the assertions read them back out of the operator
  * note and the workflow-event history ("instance_id=2029"), so they have to be known up front.
  */
-async function seed(input: SeedInput): Promise<{ projectId: number; agentId: number; sprintId: number }> {
+async function seed(input: SeedInput): Promise<{ projectId: number; agentId: number; workflowId: number }> {
   const db = getDb();
   const project = await db.run(`INSERT INTO projects (name) VALUES ('Lifecycle Handoff Project')`);
   const projectId = Number(project.lastInsertId);
-  const sprint = await db.run(
-    `INSERT INTO sprints (project_id, name) VALUES (?, 'Lifecycle Handoff Workflow')`,
+  const workflow = await db.run(
+    `INSERT INTO workflows (project_id, name) VALUES (?, 'Lifecycle Handoff Workflow')`,
     projectId,
   );
-  const sprintId = Number(sprint.lastInsertId);
+  const workflowId = Number(workflow.lastInsertId);
   const agent = await db.run(
     `INSERT INTO agents (name, session_key) VALUES ('Lifecycle Handoff Agent', 'lifecycle-handoff-agent')`,
   );
   const agentId = Number(agent.lastInsertId);
 
   await db.run(
-    `INSERT INTO tasks (id, title, status, task_type, sprint_id, project_id, agent_id)
+    `INSERT INTO tasks (id, title, status, task_type, workflow_id, project_id, agent_id)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     input.taskId,
     `Task ${input.taskId}`,
     input.status,
     input.taskType ?? null,
-    sprintId,
+    workflowId,
     input.scoped ? projectId : null,
     input.scoped ? agentId : null,
   );
@@ -53,7 +53,7 @@ async function seed(input: SeedInput): Promise<{ projectId: number; agentId: num
     input.runtimeEndedAt,
   );
 
-  return { projectId, agentId, sprintId };
+  return { projectId, agentId, workflowId };
 }
 
 describe('markTaskNeedsAttentionForMissingSemanticHandoff', () => {

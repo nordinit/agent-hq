@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, type RoutingTransition, type TaskStatusMeta } from '@/lib/api';
 import { getTaskTypeLabel, useTaskTypes } from '@/lib/taskTypes';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
-import { firstOutcomeOptionValue, formatOutcomeOptionLabel, mergeOutcomeOptions, type SprintOutcomeCatalogState } from '@/lib/useSprintOutcomeCatalog';
+import { firstOutcomeOptionValue, formatOutcomeOptionLabel, mergeOutcomeOptions, type WorkflowOutcomeCatalogState } from '@/lib/useWorkflowOutcomeCatalog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -18,23 +18,23 @@ import { ROUTING_TABLE_HELP, TRANSITION_COLUMN_HELP } from '../workflowConfigSha
 
 export default function TransitionsSection({
   projectId,
-  sprintId,
-  sprintName,
-  sprintType,
+  workflowId,
+  workflowName,
+  workflowType,
   outcomeCatalog,
 }: {
   projectId: number | null;
-  sprintId: number | null;
-  sprintName: string | null;
-  sprintType: string | null;
-  outcomeCatalog: SprintOutcomeCatalogState;
+  workflowId: number | null;
+  workflowName: string | null;
+  workflowType: string | null;
+  outcomeCatalog: WorkflowOutcomeCatalogState;
 }) {
   const [transitions, setTransitions] = useState<RoutingTransition[]>([]);
   const [statusCatalog, setStatusCatalog] = useState<TaskStatusMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const { taskTypes } = useTaskTypes(sprintId, {
-    sprintType: sprintId ? null : sprintType,
+  const { taskTypes } = useTaskTypes(workflowId, {
+    workflowType: workflowId ? null : workflowType,
   });
   const [filterTaskTypes, setFilterTaskTypes] = useState<string[]>([]);
   const [filterFromStatuses, setFilterFromStatuses] = useState<string[]>([]);
@@ -57,8 +57,8 @@ export default function TransitionsSection({
     to_status: '',
     priority: 0,
   });
-  const { metadata: workflowMetadata } = useWorkflowMetadata(sprintId ?? undefined, {
-    sprintType: sprintId ? null : sprintType,
+  const { metadata: workflowMetadata } = useWorkflowMetadata(workflowId ?? undefined, {
+    workflowType: workflowId ? null : workflowType,
   });
 
   const statusOptions = useMemo(() => Array.from(new Set([
@@ -75,8 +75,8 @@ export default function TransitionsSection({
     () => mergeOutcomeOptions(outcomeCatalog, null),
     [outcomeCatalog],
   );
-  const outcomeCatalogLabel = sprintType
-    ? `workflow outcomes for ${sprintType}`
+  const outcomeCatalogLabel = workflowType
+    ? `workflow outcomes for ${workflowType}`
     : 'the selected workflow type outcome catalog';
 
   const statusBadgeClass: Record<string, string> = {
@@ -106,7 +106,7 @@ export default function TransitionsSection({
     { value: 'disabled', label: 'Disabled' },
   ]), []);
   const load = useCallback(async () => {
-    if (!sprintType) {
+    if (!workflowType) {
       setTransitions([]);
       setStatusCatalog([]);
       setLoading(false);
@@ -115,8 +115,8 @@ export default function TransitionsSection({
     setLoading(true);
     try {
       const [transitionResponse, workflowMetadataResponse] = await Promise.all([
-        api.getRoutingTransitions(projectId ?? undefined, sprintId ?? undefined, sprintType),
-        api.getWorkflowMetadata(sprintId ? { sprint_id: sprintId } : { sprint_type: sprintType }),
+        api.getRoutingTransitions(projectId ?? undefined, workflowId ?? undefined, workflowType),
+        api.getWorkflowMetadata(workflowId ? { workflow_id: workflowId } : { workflow_type: workflowType }),
       ]);
       setTransitions(transitionResponse.transitions);
       setStatusCatalog(workflowMetadataResponse.statuses);
@@ -125,7 +125,7 @@ export default function TransitionsSection({
     } finally {
       setLoading(false);
     }
-  }, [projectId, sprintId, sprintType]);
+  }, [projectId, workflowId, workflowType]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -148,7 +148,7 @@ export default function TransitionsSection({
   }, [outcomeOptions, statusOptions]);
 
   const handleAdd = async () => {
-    if (!sprintType) return;
+    if (!workflowType) return;
     const outcomeKey = newForm.outcome;
     if (!outcomeKey) {
       alert('Choose an outcome from the workflow type outcome catalog.');
@@ -161,8 +161,8 @@ export default function TransitionsSection({
     try {
       await api.createRoutingTransition({
         project_id: projectId,
-        sprint_id: sprintId,
-        sprint_type: sprintType,
+        workflow_id: workflowId,
+        workflow_type: workflowType,
         task_type: newForm.task_type || null,
         from_status: newForm.from_status,
         outcome: outcomeKey,
@@ -192,7 +192,7 @@ export default function TransitionsSection({
   };
 
   const handleSaveEdit = async (id: number) => {
-    if (!projectId || !sprintType) return;
+    if (!projectId || !workflowType) return;
     const editOutcomeOptions = mergeOutcomeOptions(outcomeCatalog, editForm.task_type || null);
     if (!editForm.outcome || !editOutcomeOptions.some(option => option.value === editForm.outcome)) {
       alert('Outcome must be defined in the selected workflow type outcome catalog.');
@@ -202,8 +202,8 @@ export default function TransitionsSection({
       const transition = transitions.find(row => row.id === id);
       await api.updateRoutingTransition(id, {
         project_id: projectId,
-        sprint_id: transition?.sprint_id ?? undefined,
-        sprint_type: transition?.sprint_type ?? sprintType,
+        workflow_id: transition?.workflow_id ?? undefined,
+        workflow_type: transition?.workflow_type ?? workflowType,
         task_type: editForm.task_type || null,
         from_status: editForm.from_status,
         outcome: editForm.outcome,
@@ -219,7 +219,7 @@ export default function TransitionsSection({
 
   const handleToggle = async (t: RoutingTransition) => {
     try {
-      await api.updateRoutingTransition(t.id, { project_id: projectId ?? undefined, sprint_id: t.sprint_id ?? sprintId ?? undefined, sprint_type: t.sprint_type ?? sprintType ?? undefined, enabled: t.enabled ? 0 : 1 });
+      await api.updateRoutingTransition(t.id, { project_id: projectId ?? undefined, workflow_id: t.workflow_id ?? workflowId ?? undefined, workflow_type: t.workflow_type ?? workflowType ?? undefined, enabled: t.enabled ? 0 : 1 });
       await load();
     } catch (e) {
       alert(String(e));
@@ -230,14 +230,14 @@ export default function TransitionsSection({
     if (!confirm('Delete this transition rule? Workflow-scoped transitions are user-managed and will not be restored automatically.')) return;
     try {
       const transition = transitions.find(row => row.id === id);
-      await api.deleteRoutingTransition(id, transition?.sprint_id ?? sprintId ?? undefined, projectId ?? undefined, transition?.sprint_type ?? sprintType ?? undefined);
+      await api.deleteRoutingTransition(id, transition?.workflow_id ?? workflowId ?? undefined, projectId ?? undefined, transition?.workflow_type ?? workflowType ?? undefined);
       await load();
     } catch (e) {
       alert(String(e));
     }
   };
 
-  if (!projectId || !sprintType) {
+  if (!projectId || !workflowType) {
     return (
       <Card className="bg-slate-900/50 border-slate-700/50 p-6 text-sm text-slate-400">
         Select a project and workflow type to edit shared outcome transitions, then optionally pick a workflow for overrides.
@@ -263,7 +263,7 @@ export default function TransitionsSection({
 
   return (
     <div className="space-y-4">
-      <RoutingWarningBanner warnings={routingWarnings} scopeLabel={sprintName ?? 'This workflow'} />
+      <RoutingWarningBanner warnings={routingWarnings} scopeLabel={workflowName ?? 'This workflow'} />
       <SectionHeader
         label="Automatic Transitions"
         help={`${ROUTING_TABLE_HELP.transitions} Outcome options come from ${outcomeCatalogLabel}.`}
@@ -331,7 +331,7 @@ export default function TransitionsSection({
                       {taskTypes.map(taskType => <option key={taskType} value={taskType}>{getTaskTypeLabel(taskType)}</option>)}
                     </select>
                   </td>
-                  <td className="px-3 py-2.5 text-xs text-slate-400">{sprintId ? 'New workflow override' : 'New workflow-type default'}</td>
+                  <td className="px-3 py-2.5 text-xs text-slate-400">{workflowId ? 'New workflow override' : 'New workflow-type default'}</td>
                   <td className="px-3 py-2.5">
                     <select
                       value={newForm.from_status}

@@ -4,10 +4,10 @@ import {
   detectDuplicateRoutingRule,
   normalizeRoutingRuleTaskType,
   normalizeOptionalEnabled,
-  parseSprintId,
+  parseWorkflowId,
   readRoutingRuleScopeRows,
-  requireProjectSprintTypeScope,
-  requireSprint,
+  requireProjectWorkflowTypeScope,
+  requireWorkflow,
   resolveRoutingRuleTarget,
   selectScopedRoutingRuleRowSql,
   tableHasColumn,
@@ -19,31 +19,31 @@ import {
   RoutingRuleRow,
 } from './scope';
 import {
-  requireAgentInSprintProject,
-  requireRoutingRuleStatusForSprint,
-  requireRoutingRuleStatusForSprintType,
-  requireRoutingRuleTaskTypeForSprint,
-  requireRoutingRuleTaskTypeForSprintType,
+  requireAgentInWorkflowProject,
+  requireRoutingRuleStatusForWorkflow,
+  requireRoutingRuleStatusForWorkflowType,
+  requireRoutingRuleTaskTypeForWorkflow,
+  requireRoutingRuleTaskTypeForWorkflowType,
 } from './validation';
 import { type Db } from "../../db/adapter/types";
 
-export async function listRoutingRulesForSprint(db: Db, input: { sprint_id?: unknown; scope?: unknown; tenant_id?: unknown }) {
-  const scope = await requireProjectSprintTypeScope(db, input as { project_id?: unknown; sprint_id?: unknown; sprint_type?: unknown; tenant_id?: unknown });
+export async function listRoutingRulesForWorkflow(db: Db, input: { workflow_id?: unknown; scope?: unknown; tenant_id?: unknown }) {
+  const scope = await requireProjectWorkflowTypeScope(db, input as { project_id?: unknown; workflow_id?: unknown; workflow_type?: unknown; tenant_id?: unknown });
   return {
-    rules: annotateRoutingRuleScope(await readRoutingRuleScopeRows(db, scope, { scopeKind: input.scope }), scope.sprintId, { scopeKind: input.scope }),
+    rules: annotateRoutingRuleScope(await readRoutingRuleScopeRows(db, scope, { scopeKind: input.scope }), scope.workflowId, { scopeKind: input.scope }),
     scope: {
       project_id: scope.projectId,
-      sprint_type: scope.sprintType,
-      sprint_id: scope.sprintId,
+      workflow_type: scope.workflowType,
+      workflow_id: scope.workflowId,
     },
   };
 }
 
-export async function resolveRoutingRuleForSprint(
+export async function resolveRoutingRuleForWorkflow(
   db: Db,
-  input: { sprint_id?: unknown; task_type?: unknown; status?: unknown; tenant_id?: unknown },
+  input: { workflow_id?: unknown; task_type?: unknown; status?: unknown; tenant_id?: unknown },
 ) {
-  const sprintId = parseSprintId(input.sprint_id);
+  const workflowId = parseWorkflowId(input.workflow_id);
   const normalizedTaskType = normalizeRoutingRuleTaskType(input.task_type);
   if (normalizedTaskType !== undefined && normalizedTaskType !== null && typeof normalizedTaskType !== 'string') {
     throw withStatus('task_type must be a string or null, and status must be a string', 400);
@@ -51,60 +51,60 @@ export async function resolveRoutingRuleForSprint(
   const taskType: string | null = normalizedTaskType ?? null;
   const status = typeof input.status === 'string' ? input.status.trim() : input.status;
 
-  if (!status || !sprintId) {
-    throw withStatus('sprint_id and status are required', 400);
+  if (!status || !workflowId) {
+    throw withStatus('workflow_id and status are required', 400);
   }
 
   const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-  const sprint = await requireSprint(db, sprintId, tenantId);
+  const workflow = await requireWorkflow(db, workflowId, tenantId);
   const hasScopedColumns = await tableHasRoutingRuleScopeColumns(db);
-  const enabledPredicate = await tableHasColumn(db, 'sprint_task_routing_rules', 'enabled') ? 'AND trr.enabled = 1' : '';
-  const tenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'trr', tenantId);
+  const enabledPredicate = await tableHasColumn(db, 'workflow_task_routing_rules', 'enabled') ? 'AND trr.enabled = 1' : '';
+  const tenant = await tenantPredicateFor(db, 'workflow_task_routing_rules', 'trr', tenantId);
   const rules = hasScopedColumns
     ? await db.all(`
         ${await selectScopedRoutingRuleRowSql(db)}
         WHERE (trr.project_id = ? OR trr.project_id IS NULL)
-          AND trr.sprint_type = ?
-          AND (trr.sprint_id IS NULL OR trr.sprint_id = ?)
+          AND trr.workflow_type = ?
+          AND (trr.workflow_id IS NULL OR trr.workflow_id = ?)
           AND (trr.task_type = ? OR trr.task_type IS NULL)
           AND trr.status = ?
           ${enabledPredicate}
           ${tenant.sql}
-        ORDER BY CASE WHEN trr.sprint_id = ? THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN trr.workflow_id = ? THEN 0 ELSE 1 END,
                  CASE WHEN trr.project_id = ? THEN 0 ELSE 1 END,
                  CASE WHEN trr.task_type = ? THEN 0 ELSE 1 END,
                  trr.priority DESC, trr.id ASC
-      `, sprint.project_id, sprint.sprint_type ?? null, sprintId, taskType ?? null, status, ...tenant.params, sprintId, sprint.project_id, taskType ?? null) as RoutingRuleRow[]
+      `, workflow.project_id, workflow.workflow_type ?? null, workflowId, taskType ?? null, status, ...tenant.params, workflowId, workflow.project_id, taskType ?? null) as RoutingRuleRow[]
     : await db.all(`
         ${await selectScopedRoutingRuleRowSql(db)}
-        WHERE trr.sprint_id = ? AND (trr.task_type = ? OR trr.task_type IS NULL) AND trr.status = ?
+        WHERE trr.workflow_id = ? AND (trr.task_type = ? OR trr.task_type IS NULL) AND trr.status = ?
           ${enabledPredicate}
         ORDER BY CASE WHEN trr.task_type = ? THEN 0 ELSE 1 END, trr.priority DESC, trr.id ASC
-      `, sprintId, taskType ?? null, status, taskType ?? null) as RoutingRuleRow[];
+      `, workflowId, taskType ?? null, status, taskType ?? null) as RoutingRuleRow[];
   if (rules.length === 0) {
-    return { matched: false, rule: null, candidates: [], reason: `No rule for ${taskType ?? '*'}/${status} in sprint ${sprintId}` };
+    return { matched: false, rule: null, candidates: [], reason: `No rule for ${taskType ?? '*'}/${status} in workflow ${workflowId}` };
   }
 
-  const candidates = annotateRoutingRuleScope(rules, sprintId);
+  const candidates = annotateRoutingRuleScope(rules, workflowId);
   return { matched: true, rule: candidates[0], candidates };
 }
 
-export async function getRoutingRule(db: Db, input: { id: unknown; sprint_id?: unknown; tenant_id?: unknown }) {
+export async function getRoutingRule(db: Db, input: { id: unknown; workflow_id?: unknown; tenant_id?: unknown }) {
   const id = Number(input.id);
-  const sprintId = parseSprintId(input.sprint_id);
+  const workflowId = parseWorkflowId(input.workflow_id);
 
   if (!Number.isFinite(id) || id <= 0) {
     throw withStatus('Valid routing rule id is required', 400);
   }
 
   const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-  const tenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'trr', tenantId);
+  const tenant = await tenantPredicateFor(db, 'workflow_task_routing_rules', 'trr', tenantId);
   let query = `${await selectScopedRoutingRuleRowSql(db)} WHERE trr.id = ?`;
   const params: Array<number> = [id];
-  if (sprintId) {
-    await requireSprint(db, sprintId, tenantId);
-    query += ' AND COALESCE(trr.sprint_id, ?) = ?';
-    params.push(sprintId, sprintId);
+  if (workflowId) {
+    await requireWorkflow(db, workflowId, tenantId);
+    query += ' AND COALESCE(trr.workflow_id, ?) = ?';
+    params.push(workflowId, workflowId);
   }
   query += tenant.sql;
 
@@ -113,12 +113,12 @@ export async function getRoutingRule(db: Db, input: { id: unknown; sprint_id?: u
     throw withStatus('Routing rule not found', 404);
   }
 
-  return annotateRoutingRuleScope([rule], sprintId ?? null)[0];
+  return annotateRoutingRuleScope([rule], workflowId ?? null)[0];
 }
 
 export async function createRoutingRule(db: Db, input: Record<string, unknown>) {
-  const scope = await requireProjectSprintTypeScope(db, input as { project_id?: unknown; sprint_id?: unknown; sprint_type?: unknown; tenant_id?: unknown });
-  const sprintId = parseSprintId(input.sprint_id);
+  const scope = await requireProjectWorkflowTypeScope(db, input as { project_id?: unknown; workflow_id?: unknown; workflow_type?: unknown; tenant_id?: unknown });
+  const workflowId = parseWorkflowId(input.workflow_id);
   const normalizedTaskType = normalizeRoutingRuleTaskType(input.task_type);
   const status = typeof (input.status ?? input.task_status) === 'string'
     ? String(input.status ?? input.task_status).trim()
@@ -129,13 +129,13 @@ export async function createRoutingRule(db: Db, input: Record<string, unknown>) 
   const normalizedPriority = Number(priority);
   const enabled = normalizeOptionalEnabled(input.enabled, 1);
   const scopeKind = typeof input.scope_kind === 'string' ? input.scope_kind.trim() : null;
-  if (scopeKind === 'sprint_override' && sprintId == null) {
-    throw withStatus('sprint_id is required for sprint-specific routing rules', 400);
+  if (scopeKind === 'workflow_override' && workflowId == null) {
+    throw withStatus('workflow_id is required for workflow-specific routing rules', 400);
   }
-  const isSprintTypeDefault = scopeKind === 'sprint_type_default' || sprintId == null;
+  const isWorkflowTypeDefault = scopeKind === 'workflow_type_default' || workflowId == null;
 
   if (!status || (jobId == null && agentId == null)) {
-    throw withStatus('status, project_id, sprint_type, and either job_id or agent_id are required', 400);
+    throw withStatus('status, project_id, workflow_type, and either job_id or agent_id are required', 400);
   }
   if ((normalizedTaskType !== null && normalizedTaskType !== undefined && typeof normalizedTaskType !== 'string') || typeof status !== 'string') {
     throw withStatus('task_type must be a string or null, and status must be a string', 400);
@@ -151,33 +151,33 @@ export async function createRoutingRule(db: Db, input: Record<string, unknown>) 
   const taskType: string | null = normalizedTaskType ?? null;
 
   const target = await resolveRoutingRuleTarget(db, { job_id: jobId, agent_id: agentId, tenant_id: input.tenant_id });
-  if (isSprintTypeDefault) {
-    if (typeof taskType === 'string') await requireRoutingRuleTaskTypeForSprintType(db, scope.sprintType, taskType);
-    await requireRoutingRuleStatusForSprintType(db, scope.sprintType, status);
+  if (isWorkflowTypeDefault) {
+    if (typeof taskType === 'string') await requireRoutingRuleTaskTypeForWorkflowType(db, scope.workflowType, taskType);
+    await requireRoutingRuleStatusForWorkflowType(db, scope.workflowType, status);
   } else {
-    const validationSprintId = scope.sprintId;
-    if (!validationSprintId) {
-      throw withStatus('sprint_id is required for sprint-specific routing rules', 400);
+    const validationWorkflowId = scope.workflowId;
+    if (!validationWorkflowId) {
+      throw withStatus('workflow_id is required for workflow-specific routing rules', 400);
     }
-    if (typeof taskType === 'string') await requireRoutingRuleTaskTypeForSprint(db, validationSprintId, taskType);
-    await requireRoutingRuleStatusForSprint(db, validationSprintId, status);
+    if (typeof taskType === 'string') await requireRoutingRuleTaskTypeForWorkflow(db, validationWorkflowId, taskType);
+    await requireRoutingRuleStatusForWorkflow(db, validationWorkflowId, status);
   }
-  if (scope.sprintId) {
-    const sprint = await requireSprint(db, scope.sprintId, scope.tenantId);
-    await requireAgentInSprintProject(db, sprint, target.agent_id, scope.tenantId);
+  if (scope.workflowId) {
+    const workflow = await requireWorkflow(db, scope.workflowId, scope.tenantId);
+    await requireAgentInWorkflowProject(db, workflow, target.agent_id, scope.tenantId);
   }
 
   const hasScopedColumns = await tableHasRoutingRuleScopeColumns(db);
-  if (!hasScopedColumns && isSprintTypeDefault) {
-    throw withStatus('Sprint-type default routing rules require the scoped routing-rule schema migration', 400);
+  if (!hasScopedColumns && isWorkflowTypeDefault) {
+    throw withStatus('Workflow-type default routing rules require the scoped routing-rule schema migration', 400);
   }
-  const persistedSprintId = hasScopedColumns
-    ? (isSprintTypeDefault ? null : scope.sprintId)
-    : scope.sprintId;
+  const persistedWorkflowId = hasScopedColumns
+    ? (isWorkflowTypeDefault ? null : scope.workflowId)
+    : scope.workflowId;
   const duplicate = await detectDuplicateRoutingRule(db, {
       projectId: scope.projectId,
-      sprintType: scope.sprintType,
-      sprintId: persistedSprintId ?? null,
+      workflowType: scope.workflowType,
+      workflowId: persistedWorkflowId ?? null,
       taskType,
       status,
       agentId: target.agent_id,
@@ -185,41 +185,41 @@ export async function createRoutingRule(db: Db, input: Record<string, unknown>) 
       tenantId: scope.tenantId,
     });
   if (duplicate) {
-    throw withStatus(`Routing rule already exists for ${scope.sprintType} ${persistedSprintId == null ? 'default' : `sprint ${persistedSprintId}`} scope ${taskType ?? '*'}/${status} agent ${target.agent_id} priority ${normalizedPriority}`, 409);
+    throw withStatus(`Routing rule already exists for ${scope.workflowType} ${persistedWorkflowId == null ? 'default' : `workflow ${persistedWorkflowId}`} scope ${taskType ?? '*'}/${status} agent ${target.agent_id} priority ${normalizedPriority}`, 409);
   }
-  const tenant = await tenantInsertFragment(db, 'sprint_task_routing_rules', scope.tenantId);
+  const tenant = await tenantInsertFragment(db, 'workflow_task_routing_rules', scope.tenantId);
   const result = hasScopedColumns
     ? await db.run(`
-        INSERT INTO sprint_task_routing_rules (${tenant.columns}project_id, sprint_type, sprint_id, task_type, status, agent_id, priority, enabled, is_system)
+        INSERT INTO workflow_task_routing_rules (${tenant.columns}project_id, workflow_type, workflow_id, task_type, status, agent_id, priority, enabled, is_system)
         VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, 0)
-      `, ...tenant.params, scope.projectId, scope.sprintType, persistedSprintId, taskType, status, target.agent_id, normalizedPriority, enabled)
+      `, ...tenant.params, scope.projectId, scope.workflowType, persistedWorkflowId, taskType, status, target.agent_id, normalizedPriority, enabled)
     : await db.run(`
-        INSERT INTO sprint_task_routing_rules (${tenant.columns}sprint_id, task_type, status, agent_id, priority, enabled, is_system)
+        INSERT INTO workflow_task_routing_rules (${tenant.columns}workflow_id, task_type, status, agent_id, priority, enabled, is_system)
         VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, 0)
-      `, ...tenant.params, scope.sprintId, taskType, status, target.agent_id, normalizedPriority, enabled);
+      `, ...tenant.params, scope.workflowId, taskType, status, target.agent_id, normalizedPriority, enabled);
 
-  const readTenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'trr', scope.tenantId);
+  const readTenant = await tenantPredicateFor(db, 'workflow_task_routing_rules', 'trr', scope.tenantId);
   const created = await db.get(`${await selectScopedRoutingRuleRowSql(db)} WHERE trr.id = ?${readTenant.sql}`, result.lastInsertId, ...readTenant.params) as RoutingRuleRow;
-  return annotateRoutingRuleScope([created], scope.sprintId)[0];
+  return annotateRoutingRuleScope([created], scope.workflowId)[0];
 }
 
 export async function updateRoutingRule(db: Db, input: Record<string, unknown> & { id: unknown }) {
   const id = Number(input.id);
   const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-  const initialTenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'sprint_task_routing_rules', tenantId);
-  const existing = await db.get(`SELECT * FROM sprint_task_routing_rules WHERE id = ?${initialTenant.sql}`, id, ...initialTenant.params) as RoutingRuleRecord | undefined;
+  const initialTenant = await tenantPredicateFor(db, 'workflow_task_routing_rules', 'workflow_task_routing_rules', tenantId);
+  const existing = await db.get(`SELECT * FROM workflow_task_routing_rules WHERE id = ?${initialTenant.sql}`, id, ...initialTenant.params) as RoutingRuleRecord | undefined;
   if (!existing) throw withStatus('Routing rule not found', 404);
 
-  const scope = await requireProjectSprintTypeScope(db, {
+  const scope = await requireProjectWorkflowTypeScope(db, {
       project_id: input.project_id ?? existing.project_id,
-      sprint_id: input.sprint_id ?? input.sprintId ?? existing.sprint_id,
-      sprint_type: input.sprint_type ?? existing.sprint_type,
+      workflow_id: input.workflow_id ?? input.workflowId ?? existing.workflow_id,
+      workflow_type: input.workflow_type ?? existing.workflow_type,
       tenant_id: tenantId,
     });
   const requestedScopeKind = typeof input.scope_kind === 'string' ? input.scope_kind.trim() : null;
-  const isSprintTypeDefault = requestedScopeKind === 'sprint_type_default' || scope.sprintId == null;
-  if (requestedScopeKind === 'sprint_override' && scope.sprintId == null) {
-    throw withStatus('sprint_id is required for sprint-specific routing rules', 400);
+  const isWorkflowTypeDefault = requestedScopeKind === 'workflow_type_default' || scope.workflowId == null;
+  if (requestedScopeKind === 'workflow_override' && scope.workflowId == null) {
+    throw withStatus('workflow_id is required for workflow-specific routing rules', 400);
   }
 
   const { status, job_id, agent_id, priority } = input;
@@ -244,28 +244,28 @@ export async function updateRoutingRule(db: Db, input: Record<string, unknown> &
   if (!nextStatus) {
     throw withStatus('status is required', 400);
   }
-  if (isSprintTypeDefault) {
-    if (typeof nextTaskType === 'string') await requireRoutingRuleTaskTypeForSprintType(db, scope.sprintType, nextTaskType);
-    await requireRoutingRuleStatusForSprintType(db, scope.sprintType, nextStatus);
+  if (isWorkflowTypeDefault) {
+    if (typeof nextTaskType === 'string') await requireRoutingRuleTaskTypeForWorkflowType(db, scope.workflowType, nextTaskType);
+    await requireRoutingRuleStatusForWorkflowType(db, scope.workflowType, nextStatus);
   } else {
-    const validationSprintId = scope.sprintId;
-    if (!validationSprintId) {
-      throw withStatus('sprint_id is required for sprint-specific routing rules', 400);
+    const validationWorkflowId = scope.workflowId;
+    if (!validationWorkflowId) {
+      throw withStatus('workflow_id is required for workflow-specific routing rules', 400);
     }
-    if (typeof nextTaskType === 'string') await requireRoutingRuleTaskTypeForSprint(db, validationSprintId, nextTaskType);
-    await requireRoutingRuleStatusForSprint(db, validationSprintId, nextStatus);
+    if (typeof nextTaskType === 'string') await requireRoutingRuleTaskTypeForWorkflow(db, validationWorkflowId, nextTaskType);
+    await requireRoutingRuleStatusForWorkflow(db, validationWorkflowId, nextStatus);
   }
-  if (scope.sprintId) {
-    const sprint = await requireSprint(db, scope.sprintId, scope.tenantId);
-    await requireAgentInSprintProject(db, sprint, target.agent_id, scope.tenantId);
+  if (scope.workflowId) {
+    const workflow = await requireWorkflow(db, scope.workflowId, scope.tenantId);
+    await requireAgentInWorkflowProject(db, workflow, target.agent_id, scope.tenantId);
   }
 
   if (await tableHasRoutingRuleScopeColumns(db)) {
-    const nextSprintId = (requestedScopeKind === 'sprint_type_default' || scope.sprintId == null) ? null : scope.sprintId;
+    const nextWorkflowId = (requestedScopeKind === 'workflow_type_default' || scope.workflowId == null) ? null : scope.workflowId;
     const duplicate = await detectDuplicateRoutingRule(db, {
           projectId: scope.projectId,
-          sprintType: scope.sprintType,
-          sprintId: nextSprintId,
+          workflowType: scope.workflowType,
+          workflowId: nextWorkflowId,
           taskType: nextTaskType,
           status: nextStatus,
           agentId: target.agent_id,
@@ -274,19 +274,19 @@ export async function updateRoutingRule(db: Db, input: Record<string, unknown> &
           excludeId: id,
         });
     if (duplicate) {
-      throw withStatus(`Routing rule already exists for ${scope.sprintType} ${nextSprintId == null ? 'default' : `sprint ${nextSprintId}`} scope ${nextTaskType ?? '*'}${'/' + nextStatus} agent ${target.agent_id} priority ${nextPriority}`, 409);
+      throw withStatus(`Routing rule already exists for ${scope.workflowType} ${nextWorkflowId == null ? 'default' : `workflow ${nextWorkflowId}`} scope ${nextTaskType ?? '*'}${'/' + nextStatus} agent ${target.agent_id} priority ${nextPriority}`, 409);
     }
     await db.run(`
-      UPDATE sprint_task_routing_rules
-      SET project_id = ?, sprint_type = ?, sprint_id = ?, task_type = ?, status = ?, agent_id = ?, priority = ?, enabled = ?, is_system = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+      UPDATE workflow_task_routing_rules
+      SET project_id = ?, workflow_type = ?, workflow_id = ?, task_type = ?, status = ?, agent_id = ?, priority = ?, enabled = ?, is_system = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?${initialTenant.sql}
-    `, scope.projectId, scope.sprintType, nextSprintId, nextTaskType, nextStatus, target.agent_id, nextPriority, nextEnabled, id, ...initialTenant.params);
+    `, scope.projectId, scope.workflowType, nextWorkflowId, nextTaskType, nextStatus, target.agent_id, nextPriority, nextEnabled, id, ...initialTenant.params);
   } else {
-    if (!scope.sprintId) throw withStatus('sprint_id is required', 400);
+    if (!scope.workflowId) throw withStatus('workflow_id is required', 400);
     const duplicate = await detectDuplicateRoutingRule(db, {
           projectId: scope.projectId,
-          sprintType: scope.sprintType,
-          sprintId: scope.sprintId,
+          workflowType: scope.workflowType,
+          workflowId: scope.workflowId,
           taskType: nextTaskType,
           status: nextStatus,
           agentId: target.agent_id,
@@ -295,60 +295,60 @@ export async function updateRoutingRule(db: Db, input: Record<string, unknown> &
           excludeId: id,
         });
     if (duplicate) {
-      throw withStatus(`Routing rule already exists for sprint ${scope.sprintId} scope ${nextTaskType ?? '*'}${'/' + nextStatus} agent ${target.agent_id} priority ${nextPriority}`, 409);
+      throw withStatus(`Routing rule already exists for workflow ${scope.workflowId} scope ${nextTaskType ?? '*'}${'/' + nextStatus} agent ${target.agent_id} priority ${nextPriority}`, 409);
     }
     await db.run(`
-      UPDATE sprint_task_routing_rules
-      SET sprint_id = ?, task_type = ?, status = ?, agent_id = ?, priority = ?, enabled = ?, is_system = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
+      UPDATE workflow_task_routing_rules
+      SET workflow_id = ?, task_type = ?, status = ?, agent_id = ?, priority = ?, enabled = ?, is_system = 0, updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
       WHERE id = ?${initialTenant.sql}
-    `, scope.sprintId, nextTaskType, nextStatus, target.agent_id, nextPriority, nextEnabled, id, ...initialTenant.params);
+    `, scope.workflowId, nextTaskType, nextStatus, target.agent_id, nextPriority, nextEnabled, id, ...initialTenant.params);
   }
 
-  const readTenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'trr', scope.tenantId);
+  const readTenant = await tenantPredicateFor(db, 'workflow_task_routing_rules', 'trr', scope.tenantId);
   const updated = await db.get(`${await selectScopedRoutingRuleRowSql(db)} WHERE trr.id = ?${readTenant.sql}`, id, ...readTenant.params) as RoutingRuleRow;
-  return annotateRoutingRuleScope([updated], scope.sprintId)[0];
+  return annotateRoutingRuleScope([updated], scope.workflowId)[0];
 }
 
 export async function deleteRoutingRule(db: Db, input: Record<string, unknown> & { id: unknown }) {
   const id = Number(input.id);
   const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
-  const tenant = await tenantPredicateFor(db, 'sprint_task_routing_rules', 'sprint_task_routing_rules', tenantId);
-  const existing = await db.get(`SELECT * FROM sprint_task_routing_rules WHERE id = ?${tenant.sql}`, id, ...tenant.params) as RoutingRuleRecord | undefined;
+  const tenant = await tenantPredicateFor(db, 'workflow_task_routing_rules', 'workflow_task_routing_rules', tenantId);
+  const existing = await db.get(`SELECT * FROM workflow_task_routing_rules WHERE id = ?${tenant.sql}`, id, ...tenant.params) as RoutingRuleRecord | undefined;
   if (!existing) throw withStatus('Routing rule not found', 404);
 
-  // Scope guard. Previously this parsed sprintId, called requireSprint for its side
+  // Scope guard. Previously this parsed workflowId, called requireWorkflow for its side
   // effect, then DELETEd on `id` alone — so any rule in the tenant could be removed
   // regardless of which project or workflow the caller was addressing, and deleting a
   // workflow-type default while viewing one workflow silently removed it from every
   // workflow of that type. Mirrors the guard deleteRoutingTransition already applies.
   const requestedProjectId = Number.isFinite(Number(input.project_id)) ? Number(input.project_id) : null;
-  const requestedSprintType = typeof input.sprint_type === 'string' && input.sprint_type.trim().length > 0
-    ? input.sprint_type.trim()
+  const requestedWorkflowType = typeof input.workflow_type === 'string' && input.workflow_type.trim().length > 0
+    ? input.workflow_type.trim()
     : null;
-  const requestedSprintId = parseSprintId(input.sprint_id);
+  const requestedWorkflowId = parseWorkflowId(input.workflow_id);
   if (requestedProjectId != null && existing.project_id != null && Number(existing.project_id) !== requestedProjectId) {
     throw withStatus('Routing rule not found', 404);
   }
-  if (requestedSprintType != null && existing.sprint_type != null && String(existing.sprint_type) !== requestedSprintType) {
+  if (requestedWorkflowType != null && existing.workflow_type != null && String(existing.workflow_type) !== requestedWorkflowType) {
     throw withStatus('Routing rule not found', 404);
   }
   // A caller addressing a specific workflow must not delete the shared default: the
-  // row's own sprint_id has to match what was asked for, NULL included.
-  if (input.sprint_id !== undefined) {
-    const existingSprintId = existing.sprint_id == null ? null : Number(existing.sprint_id);
-    if (existingSprintId !== requestedSprintId) {
+  // row's own workflow_id has to match what was asked for, NULL included.
+  if (input.workflow_id !== undefined) {
+    const existingWorkflowId = existing.workflow_id == null ? null : Number(existing.workflow_id);
+    if (existingWorkflowId !== requestedWorkflowId) {
       throw withStatus('Routing rule not found', 404);
     }
   }
 
-  const sprintId = parseSprintId(input.sprint_id ?? existing.sprint_id);
-  if (sprintId) await requireSprint(db, sprintId, tenantId);
-  await db.run(`DELETE FROM sprint_task_routing_rules WHERE id = ?${tenant.sql}`, id, ...tenant.params);
+  const workflowId = parseWorkflowId(input.workflow_id ?? existing.workflow_id);
+  if (workflowId) await requireWorkflow(db, workflowId, tenantId);
+  await db.run(`DELETE FROM workflow_task_routing_rules WHERE id = ?${tenant.sql}`, id, ...tenant.params);
   return {
     ok: true,
     deleted: true,
     rule_id: id,
-    sprint_id: sprintId ?? null,
-    scope_kind: existing.sprint_id == null ? 'sprint_type_default' : 'sprint_override',
+    workflow_id: workflowId ?? null,
+    scope_kind: existing.workflow_id == null ? 'workflow_type_default' : 'workflow_override',
   };
 }

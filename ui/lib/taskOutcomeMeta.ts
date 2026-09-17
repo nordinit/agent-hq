@@ -5,7 +5,7 @@ export type TaskOutcomeMetaMap = Record<string, WorkflowOutcomeMeta>;
 
 export function getTaskOutcomeMeta(outcomeKey: string, outcomeMap?: TaskOutcomeMetaMap) {
   return outcomeMap?.[outcomeKey] ?? {
-    sprint_type_key: '',
+    workflow_type_key: '',
     task_type: null,
     outcome_key: outcomeKey,
     label: outcomeKey,

@@ -12,7 +12,7 @@ import NotificationToasts from './NotificationToasts';
 // Routes that should fill the full height without padding wrapper
 const FULL_HEIGHT_ROUTES = ['/chat', '/tasks', API_DOCS_ROUTE];
 // Route prefixes that should also fill full height
-const FULL_HEIGHT_PREFIXES = ['/sprints/', '/workflows/'];
+const FULL_HEIGHT_PREFIXES = ['/workflows/'];
 const WIDE_CONTENT_ROUTES = ['/routing'];
 
 export default function MainContent({ children }: { children: React.ReactNode }) {

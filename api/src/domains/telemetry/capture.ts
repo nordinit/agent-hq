@@ -5,10 +5,10 @@ import type { Db } from '../../db/adapter/types';
 export const TELEMETRY_CAPTURE_SOURCES = [
   'tasks', 'job_instances', 'runtime_executions', 'task_history',
   'external_task_event_receipts', 'task_relationships', 'task_dependencies',
-  'task_field_schemas', 'routing_config_audit_log', 'agents', 'projects', 'sprints',
-  'sprint_types', 'sprint_task_routing_rules', 'sprint_task_statuses',
-  'sprint_task_transition_requirements', 'sprint_task_transitions', 'sprint_type_outcomes',
-  'sprint_type_relationship_types', 'sprint_type_task_statuses', 'sprint_type_task_types',
+  'task_field_schemas', 'routing_config_audit_log', 'agents', 'projects', 'workflows',
+  'workflow_types', 'workflow_task_routing_rules', 'workflow_task_statuses',
+  'workflow_task_transition_requirements', 'workflow_task_transitions', 'workflow_type_outcomes',
+  'workflow_type_relationship_types', 'workflow_type_task_statuses', 'workflow_type_task_types',
   'external_event_mappings', 'story_point_model_routing',
   'routing_config', 'routing_transitions', 'task_statuses',
 ] as const;
@@ -300,7 +300,7 @@ export async function backfillTelemetry(db: Db, options: { tenantId: number; sou
       const result=await tx.run(`INSERT INTO telemetry_outbox(tenant_id,source,source_key,entity_type,entity_id,task_id,project_id,workflow_id,
         agent_id,kind,occurred_at,provenance,payload) VALUES(?,?,?,?,?,?,?,?,?,?,telemetry_timestamp(?,clock_timestamp()),?,?::jsonb)
         ON CONFLICT(tenant_id,source_key) DO NOTHING`,options.tenantId,source,`backfill:${source}:${id}`,entityType,entityId,taskId,
-        task?.project_id ?? row.project_id ?? agentProjectId ?? null,task?.sprint_id ?? row.workflow_id ?? null,agentId,kind,occurredAt,provenance,JSON.stringify(payload));
+        task?.project_id ?? row.project_id ?? agentProjectId ?? null,task?.workflow_id ?? row.workflow_id ?? null,agentId,kind,occurredAt,provenance,JSON.stringify(payload));
       queued+=result.changes;
     }
     const nextCursor=rows.length ? Number(rows[rows.length-1].id):cursor;

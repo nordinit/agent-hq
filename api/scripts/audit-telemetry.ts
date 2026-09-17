@@ -15,8 +15,7 @@ import { getDb } from '../src/db/client';
 import telemetryRouter from '../src/routes/telemetry';
 import { listTasks, listTaskHistory } from '../src/domains/tasks/readModel';
 import { createTaskRecord } from '../src/domains/tasks/writeModel';
-import { resolveTaskFieldSchemaForSprint } from '../src/domains/sprint-definitions/config';
-import { normalizeWorkflowRequestAliases } from '../src/lib/workflowCompatibility';
+import { resolveTaskFieldSchemaForWorkflow } from '../src/domains/workflow-definitions/config';
 
 async function main() {
   await setupTestDb();
@@ -30,7 +29,7 @@ async function main() {
   const observations: Record<string, unknown> = {};
   const app = express();
   app.use(express.json());
-  app.use('/api/v1', normalizeWorkflowRequestAliases);
+
   app.use('/api/v1/telemetry', telemetryRouter);
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
@@ -48,12 +47,12 @@ async function main() {
         (1, 'Audit One', 'audit-one', 1), (2, 'Audit Two', 'audit-two', 0);
       INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '2');
       INSERT INTO projects (id, tenant_id, name) VALUES (11, 1, 'Audit Project One'), (22, 2, 'Audit Project Two');
-      INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES
+      INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES
         (111, 1, 11, 'Audit Workflow One', 'generic'), (222, 2, 22, 'Audit Workflow Two', 'generic');
       INSERT INTO agents (id, tenant_id, name, job_title, session_key, project_id, runtime_type) VALUES
         (101, 1, 'Audit Agent One', 'One', 'audit:one', 11, 'openclaw'),
         (202, 2, 'Audit Agent Two', 'Two', 'audit:two', 22, 'openclaw');
-      INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id, agent_id, assigned_agent_id, dispatched_at, routing_reason, custom_fields_json) VALUES
+      INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id, agent_id, assigned_agent_id, dispatched_at, routing_reason, custom_fields_json) VALUES
         (1001, 1, 'Audit Task One', 'done', 11, 111, 101, 101, '2026-09-09 08:00:00', 'audit-route-one', '{"amount":10}'),
         (2002, 2, 'Audit Task Two', 'done', 22, 222, 202, 202, '2026-09-09 08:00:00', 'audit-route-two', '{"amount":20}');
       INSERT INTO sessions (tenant_id, external_key, runtime, agent_id, task_id, project_id, status, message_count) VALUES
@@ -62,16 +61,16 @@ async function main() {
       INSERT INTO job_instances (tenant_id, task_id, agent_id, status, dispatched_at, failure_stage) VALUES
         (1, 1001, 101, 'failed', '2026-09-09 08:00:00', 'audit-stage-one'),
         (2, 2002, 202, 'failed', '2026-09-09 08:00:00', 'audit-stage-two');
-      INSERT INTO task_creation_events (tenant_id, task_id, project_id, sprint_id, job_id, source) VALUES
+      INSERT INTO task_creation_events (tenant_id, task_id, project_id, workflow_id, job_id, source) VALUES
         (1, 1001, 11, 111, 101, 'manual'), (2, 2002, 22, 222, 202, 'manual');
-      INSERT INTO task_outcome_metrics (tenant_id, task_id, project_id, sprint_id, job_id, first_pass_qa, cycle_time_hours) VALUES
+      INSERT INTO task_outcome_metrics (tenant_id, task_id, project_id, workflow_id, job_id, first_pass_qa, cycle_time_hours) VALUES
         (1, 1001, 11, 111, 101, 0, 10), (2, 2002, 22, 222, 202, 1, 2);
       INSERT INTO integrity_events (tenant_id, task_id, project_id, agent_id, anomaly_type, detail) VALUES
         (1, 1001, 11, 101, 'missing_review_evidence', 'Audit tenant one detail'),
         (2, 2002, 22, 202, 'missing_review_evidence', 'Audit tenant two detail');
       INSERT INTO task_history (tenant_id, task_id, field, old_value, new_value) VALUES
         (2, 2002, 'status', 'review', 'done');
-      INSERT INTO task_field_schemas (tenant_id, sprint_type_key, schema_json) VALUES
+      INSERT INTO task_field_schemas (tenant_id, workflow_type_key, schema_json) VALUES
         (2, 'generic', '{"fields":[{"key":"amount","type":"number","source":"custom_fields"}]}');
     `);
     for (const [taskId, tenantId, projectId, agentId] of [[1001, 1, 11, 101], [2002, 2, 22, 202]]) {
@@ -102,7 +101,7 @@ async function main() {
 
     const schemaField = { key: 'revenue', label: 'Revenue', type: 'number', required: true, enabled: true, analytics_enabled: true };
     observations.schema_save = await request('/schema-config', 'PUT', { fields: [schemaField] });
-    observations.canonical_fields_after_telemetry_save = (await resolveTaskFieldSchemaForSprint(db, { sprintId: 222 })).schema.fields;
+    observations.canonical_fields_after_telemetry_save = (await resolveTaskFieldSchemaForWorkflow(db, { workflowId: 222 })).schema.fields;
     await db.run("UPDATE app_settings SET value = '1' WHERE key = 'active_tenant_id'");
     observations.schema_read_other_tenant = await request('/schema-config');
     await db.run("UPDATE app_settings SET value = '2' WHERE key = 'active_tenant_id'");
@@ -123,13 +122,13 @@ async function main() {
     observations.timestamp_formats = { iso_midnight_total: iso.body.total, sql_midnight_total: sql.body.total };
 
     const beforeClosed = await listTasks(db, { tenant_id: 2 });
-    await db.run("UPDATE sprints SET status = 'closed' WHERE id = 222");
+    await db.run("UPDATE workflows SET status = 'closed' WHERE id = 222");
     observations.closed_workflow_task_list = {
       before: Array.isArray(beforeClosed) ? beforeClosed.length : beforeClosed,
       after: await listTasks(db, { tenant_id: 2 }),
       explicit_include_closed: (await listTasks(db, { tenant_id: 2, include_closed: 'true' }) as unknown[]).length,
     };
-    await db.run("UPDATE sprints SET status = 'planning' WHERE id = 222");
+    await db.run("UPDATE workflows SET status = 'planning' WHERE id = 222");
     await db.run('DELETE FROM task_creation_events WHERE task_id = 2002');
     await db.run('UPDATE tasks SET agent_id = NULL, assigned_agent_id = 202 WHERE id = 2002');
     observations.assigned_agent_creation = await request('/creation-events', 'POST', { task_id: 2002 });
@@ -137,9 +136,9 @@ async function main() {
     observations.history_contract = await listTaskHistory(db, 2002);
 
     // Exercise the production task-create path without starting dispatch services.
-    await db.run(`INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label)
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label)
       VALUES (2, 'generic', 'audit_pending', 'Audit Pending')`);
-    const created = await createTaskRecord(db, { title: 'Audit ordinary creation', status: 'audit_pending', tenant_id: 2, project_id: 22, sprint_id: 222, custom_fields: { amount: 30 } }, 'audit');
+    const created = await createTaskRecord(db, { title: 'Audit ordinary creation', status: 'audit_pending', tenant_id: 2, project_id: 22, workflow_id: 222, custom_fields: { amount: 30 } }, 'audit');
     observations.ordinary_task_creation = {
       task_id: created.id,
       stored_custom_fields: created.custom_fields,

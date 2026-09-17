@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { SprintType } from './api/types.ts';
+import type { WorkflowType } from './api/types.ts';
 import { getRoutingWorkflowTypeOptions } from './routingWorkflowTypes.ts';
 
-function sprintType(key: string, name: string): SprintType {
+function workflowType(key: string, name: string): WorkflowType {
   return {
     key,
     name,
@@ -16,10 +16,10 @@ function sprintType(key: string, name: string): SprintType {
 
 test('routing workflow type options come from workflow definitions without requiring workflow instances', () => {
   const options = getRoutingWorkflowTypeOptions([
-    sprintType('dev', 'Development'),
-    sprintType('generic', 'Generic'),
-    sprintType('ops', 'Operations'),
-    sprintType('trading', 'Trading'),
+    workflowType('dev', 'Development'),
+    workflowType('generic', 'Generic'),
+    workflowType('ops', 'Operations'),
+    workflowType('trading', 'Trading'),
   ]);
 
   assert.deepEqual(options, [
@@ -32,10 +32,10 @@ test('routing workflow type options come from workflow definitions without requi
 
 test('routing workflow type options ignore blank and duplicate definitions', () => {
   const options = getRoutingWorkflowTypeOptions([
-    sprintType('dev', 'Development'),
-    sprintType('ops', ''),
-    sprintType('dev', 'Duplicate Development'),
-    sprintType(' ', 'Blank'),
+    workflowType('dev', 'Development'),
+    workflowType('ops', ''),
+    workflowType('dev', 'Duplicate Development'),
+    workflowType(' ', 'Blank'),
   ]);
 
   assert.deepEqual(options, [

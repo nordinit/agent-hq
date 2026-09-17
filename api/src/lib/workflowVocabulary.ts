@@ -3,5 +3,5 @@ export const RELATIONSHIP_DIRECTION_SEMANTICS = ['target_blocks_source', 'source
 export const TRANSITION_REQUIREMENT_TYPES = ['required', 'match', 'from_status'] as const;
 export const TRANSITION_REQUIREMENT_SEVERITIES = ['block', 'warn'] as const;
 export const WORKFLOW_EVENT_ACTION_KINDS = ['ignore', 'outcome', 'status'] as const;
-export const SPRINT_TYPE_OUTCOME_BEHAVIORS = ['base', 'extend', 'override', 'disable'] as const;
+export const WORKFLOW_TYPE_OUTCOME_BEHAVIORS = ['base', 'extend', 'override', 'disable'] as const;
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'adaptive'] as const;

@@ -1,10 +1,10 @@
 import {
-  resolveSprintWorkflow,
-  type ResolvedSprintWorkflow,
-  type ResolvedSprintWorkflowTransition,
-} from '../../lib/sprintWorkflow';
-import { resolveSprintOutcomeMap, getLegacyOutcomeMeta, type SprintOutcomeDefinition } from '../../domains/sprint-definitions/outcomes';
-import { loadSprintTaskTransitionRequirements } from '../../domains/routing/policy/statuses';
+  resolveWorkflowModel,
+  type ResolvedWorkflowModel,
+  type ResolvedWorkflowModelTransition,
+} from '../../lib/workflowModel';
+import { resolveWorkflowOutcomeMap, getLegacyOutcomeMeta, type WorkflowOutcomeDefinition } from '../../domains/workflow-definitions/outcomes';
+import { loadWorkflowTaskTransitionRequirements } from '../../domains/routing/policy/statuses';
 import { isBackendSystemOutcome, isBlockerLikeOutcome, isFailureLikeOutcome } from '../../lib/outcomeCatalog';
 import { type Db } from "../../db/adapter/types";
 
@@ -18,8 +18,8 @@ export interface ResolvedWorkflow {
   validOutcomes: string[];
   outcomeHelp: OutcomeHelpEntry[];
   requiresSemanticOutcome: boolean;
-  source: 'sprint_type_config' | 'compatibility';
-  sprintType?: string | null;
+  source: 'workflow_type_config' | 'compatibility';
+  workflowType?: string | null;
 }
 
 export interface OutcomeHelpEntry {
@@ -30,13 +30,13 @@ export interface OutcomeHelpEntry {
 export interface WorkflowResolutionContext {
   taskStatus: string;
   taskType?: string | null;
-  sprintId?: number | null;
-  sprintType?: string | null;
+  workflowId?: number | null;
+  workflowType?: string | null;
   db?: Db | null;
-  resolvedWorkflow?: ResolvedSprintWorkflow | null;
+  resolvedWorkflow?: ResolvedWorkflowModel | null;
 }
 
-function normalizeSprintType(value: string | null | undefined): string | null {
+function normalizeWorkflowType(value: string | null | undefined): string | null {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
   return normalized.length > 0 ? normalized : null;
 }
@@ -45,13 +45,13 @@ function buildResolvedWorkflow(
   workflowPhase: WorkflowPhase,
   source: ResolvedWorkflow['source'],
   options: {
-    sprintType?: string | null;
+    workflowType?: string | null;
     suggestedOutcome?: string;
     validOutcomes?: string[];
     outcomeHelp?: OutcomeHelpEntry[];
   } = {},
 ): ResolvedWorkflow {
-  const sprintType = options.sprintType ?? null;
+  const workflowType = options.workflowType ?? null;
 
   switch (workflowPhase) {
     case 'review': {
@@ -64,7 +64,7 @@ function buildResolvedWorkflow(
         outcomeHelp: options.outcomeHelp ?? validOutcomes.map((outcome) => buildOutcomeHelp(outcome)),
         requiresSemanticOutcome: true,
         source,
-        sprintType,
+        workflowType,
       };
     }
     case 'release': {
@@ -77,7 +77,7 @@ function buildResolvedWorkflow(
         outcomeHelp: options.outcomeHelp ?? validOutcomes.map((outcome) => buildOutcomeHelp(outcome)),
         requiresSemanticOutcome: true,
         source,
-        sprintType,
+        workflowType,
       };
     }
     case 'pm': {
@@ -90,7 +90,7 @@ function buildResolvedWorkflow(
         outcomeHelp: options.outcomeHelp ?? validOutcomes.map((outcome) => buildOutcomeHelp(outcome)),
         requiresSemanticOutcome: true,
         source,
-        sprintType,
+        workflowType,
       };
     }
     default: {
@@ -103,13 +103,13 @@ function buildResolvedWorkflow(
         outcomeHelp: options.outcomeHelp ?? validOutcomes.map((outcome) => buildOutcomeHelp(outcome)),
         requiresSemanticOutcome: true,
         source,
-        sprintType,
+        workflowType,
       };
     }
   }
 }
 
-function buildOutcomeHelp(outcome: string, transition?: ResolvedSprintWorkflowTransition, resolvedDescription?: string): OutcomeHelpEntry {
+function buildOutcomeHelp(outcome: string, transition?: ResolvedWorkflowModelTransition, resolvedDescription?: string): OutcomeHelpEntry {
   const toStatus = transition?.toStatus;
   const fallback = getLegacyOutcomeMeta(outcome);
   return {
@@ -121,15 +121,15 @@ function buildOutcomeHelp(outcome: string, transition?: ResolvedSprintWorkflowTr
 function legacyResolveWorkflow(
   taskStatus: string,
   _taskType?: string | null,
-  sprintType?: string | null,
+  workflowType?: string | null,
 ): ResolvedWorkflow {
-  const normalizedSprintType = normalizeSprintType(sprintType);
+  const normalizedWorkflowType = normalizeWorkflowType(workflowType);
   const isReviewLane = taskStatus === 'review';
   const isReleaseLane = taskStatus === 'ready_to_merge' || taskStatus === 'deployed';
 
   if (isReviewLane) {
     return buildResolvedWorkflow('review', 'compatibility', {
-      sprintType: normalizedSprintType,
+      workflowType: normalizedWorkflowType,
       suggestedOutcome: 'qa_pass',
       validOutcomes: ['qa_pass', 'qa_fail', 'blocked', 'failed'],
     });
@@ -138,27 +138,27 @@ function legacyResolveWorkflow(
   if (isReleaseLane) {
     if (taskStatus === 'deployed') {
       return buildResolvedWorkflow('release', 'compatibility', {
-        sprintType: normalizedSprintType,
+        workflowType: normalizedWorkflowType,
         suggestedOutcome: 'live_verified',
         validOutcomes: ['live_verified', 'blocked', 'failed'],
       });
     }
-    return buildResolvedWorkflow('release', 'compatibility', { sprintType: normalizedSprintType });
+    return buildResolvedWorkflow('release', 'compatibility', { workflowType: normalizedWorkflowType });
   }
 
-  return buildResolvedWorkflow('implementation', 'compatibility', { sprintType: normalizedSprintType });
+  return buildResolvedWorkflow('implementation', 'compatibility', { workflowType: normalizedWorkflowType });
 }
 
 function getApplicableWorkflowTransitions(
-  workflow: ResolvedSprintWorkflow,
+  workflow: ResolvedWorkflowModel,
   taskStatus: string,
   taskType?: string | null,
-): ResolvedSprintWorkflowTransition[] {
+): ResolvedWorkflowModelTransition[] {
   const normalizedTaskType = typeof taskType === 'string' ? taskType.trim() : '';
   const matchesStatus = workflow.transitions.filter((transition) => transition.fromStatus === taskStatus);
   if (matchesStatus.length === 0) return [];
 
-  const byOutcome = new Map<string, ResolvedSprintWorkflowTransition[]>();
+  const byOutcome = new Map<string, ResolvedWorkflowModelTransition[]>();
   for (const transition of matchesStatus) {
     if (transition.taskType && transition.taskType !== normalizedTaskType) continue;
     const bucket = byOutcome.get(transition.outcome) ?? [];
@@ -215,7 +215,7 @@ async function resolveWorkflowFromResolvedWorkflow(
   db: Db | null | undefined,
   taskStatus: string,
   taskType: string | null | undefined,
-  workflow: ResolvedSprintWorkflow,
+  workflow: ResolvedWorkflowModel,
 ): Promise<ResolvedWorkflow | null> {
   const transitions = getApplicableWorkflowTransitions(workflow, taskStatus, taskType);
   if (transitions.length === 0) return null;
@@ -225,9 +225,9 @@ async function resolveWorkflowFromResolvedWorkflow(
   const transitionByOutcome = new Map(transitions.map((transition) => [transition.outcome, transition]));
   const hasBlockedRoute = validOutcomeSet.has('blocked');
   const hasFailedRoute = validOutcomeSet.has('failed');
-  const outcomeMeta: Map<string, SprintOutcomeDefinition> = db
-    ? await resolveSprintOutcomeMap(db, { sprintType: workflow.sprintType, taskType, fallbackOutcomes: transitionOutcomes })
-    : new Map<string, SprintOutcomeDefinition>();
+  const outcomeMeta: Map<string, WorkflowOutcomeDefinition> = db
+    ? await resolveWorkflowOutcomeMap(db, { workflowType: workflow.workflowType, taskType, fallbackOutcomes: transitionOutcomes })
+    : new Map<string, WorkflowOutcomeDefinition>();
 
   if (hasBlockedRoute || hasFailedRoute) {
     const extras = [...outcomeMeta.values()]
@@ -247,8 +247,8 @@ async function resolveWorkflowFromResolvedWorkflow(
   if (!suggestedOutcome) return null;
 
   const workflowPhase = inferWorkflowPhase(taskStatus, taskType, suggestedOutcome);
-  return buildResolvedWorkflow(workflowPhase, 'sprint_type_config', {
-    sprintType: workflow.sprintType,
+  return buildResolvedWorkflow(workflowPhase, 'workflow_type_config', {
+    workflowType: workflow.workflowType,
     suggestedOutcome,
     validOutcomes,
     outcomeHelp: validOutcomes.map((outcome) => buildOutcomeHelp(outcome, transitionByOutcome.get(outcome), outcomeMeta.get(outcome)?.description)),
@@ -274,16 +274,16 @@ export async function resolveWorkflow(
     ? { taskStatus: taskStatusOrContext, taskType }
     : taskStatusOrContext;
 
-  const normalizedSprintType = normalizeSprintType(ctx.sprintType);
+  const normalizedWorkflowType = normalizeWorkflowType(ctx.workflowType);
   const resolvedWorkflow = ctx.resolvedWorkflow
-    ?? (ctx.db ? await resolveSprintWorkflow(ctx.db, ctx.sprintId ?? null, normalizedSprintType) : null);
+    ?? (ctx.db ? await resolveWorkflowModel(ctx.db, ctx.workflowId ?? null, normalizedWorkflowType) : null);
 
   if (resolvedWorkflow) {
     const workflowResolved = await resolveWorkflowFromResolvedWorkflow(ctx.db ?? null, ctx.taskStatus, ctx.taskType, resolvedWorkflow);
     if (workflowResolved) return workflowResolved;
   }
 
-  return legacyResolveWorkflow(ctx.taskStatus, ctx.taskType, normalizedSprintType);
+  return legacyResolveWorkflow(ctx.taskStatus, ctx.taskType, normalizedWorkflowType);
 }
 
 // ── Pipeline reference ───────────────────────────────────────────────────────
@@ -352,14 +352,14 @@ function formatFieldExpression(fieldName: string): string {
 async function loadConfiguredGateRequirements(
   db: Db,
   outcome: string,
-  sprintId?: number | null,
+  workflowId?: number | null,
   taskType?: string | null,
 ): Promise<ContractGateRequirement[]> {
   // Mirrors loadTransitionRequirements in lib/taskRelease.ts: workflow-scoped rows only. The
   // global `transition_requirements` fallback this used to consult was dropped by migration 15
   // — see the note there for why a replace-not-accumulate fallback was worth removing.
-  const sprintRows = await loadSprintTaskTransitionRequirements(db, sprintId ?? null, outcome, taskType);
-  return sprintRows.map((row) => ({
+  const workflowRows = await loadWorkflowTaskTransitionRequirements(db, workflowId ?? null, outcome, taskType);
+  return workflowRows.map((row) => ({
     outcome,
     field_name: row.field_name,
     requirement_type: row.requirement_type,
@@ -372,7 +372,7 @@ async function loadConfiguredGateRequirements(
 export async function resolveEvidenceRequirements(options: {
   db?: Db | null;
   taskType?: string | null;
-  sprintId?: number | null;
+  workflowId?: number | null;
   outcomes?: string[];
   suggestedOutcome?: string | null;
 }): Promise<EvidenceRequirements> {
@@ -392,7 +392,7 @@ export async function resolveEvidenceRequirements(options: {
   const requirementGroups = await Promise.all(outcomes.map((outcome) => loadConfiguredGateRequirements(
       options.db as Db,
       outcome,
-      options.sprintId ?? null,
+      options.workflowId ?? null,
       options.taskType ?? null,
     )));
   const requirements = requirementGroups.flat();
@@ -436,20 +436,20 @@ export async function resolveEvidenceRequirements(options: {
   };
 }
 
-export async function getAllowedTaskTypesForSprintType(
+export async function getAllowedTaskTypesForWorkflowType(
   db: Db,
-  sprintType: string | null | undefined,
+  workflowType: string | null | undefined,
 ): Promise<string[]> {
-  const normalizedSprintType = normalizeSprintType(sprintType);
-  if (!normalizedSprintType) return [];
+  const normalizedWorkflowType = normalizeWorkflowType(workflowType);
+  if (!normalizedWorkflowType) return [];
 
   try {
     const rows = await db.all(`
       SELECT task_type
-      FROM sprint_type_task_types
-      WHERE sprint_type_key = ?
+      FROM workflow_type_task_types
+      WHERE workflow_type_key = ?
       ORDER BY task_type ASC
-    `, normalizedSprintType) as Array<{ task_type: string | null }>;
+    `, normalizedWorkflowType) as Array<{ task_type: string | null }>;
 
     return rows
       .map(row => typeof row.task_type === 'string' ? row.task_type.trim() : '')
@@ -459,17 +459,17 @@ export async function getAllowedTaskTypesForSprintType(
   }
 }
 
-export async function isTaskTypeAllowedForSprintType(
+export async function isTaskTypeAllowedForWorkflowType(
   db: Db,
-  sprintType: string | null | undefined,
+  workflowType: string | null | undefined,
   taskType: string | null | undefined,
 ): Promise<boolean> {
-  const normalizedSprintType = normalizeSprintType(sprintType);
+  const normalizedWorkflowType = normalizeWorkflowType(workflowType);
   const normalizedTaskType = typeof taskType === 'string' ? taskType.trim() : '';
 
-  if (!normalizedSprintType || !normalizedTaskType) return true;
+  if (!normalizedWorkflowType || !normalizedTaskType) return true;
 
-  const allowedTaskTypes = await getAllowedTaskTypesForSprintType(db, normalizedSprintType);
+  const allowedTaskTypes = await getAllowedTaskTypesForWorkflowType(db, normalizedWorkflowType);
   if (allowedTaskTypes.length === 0) return true;
 
   return allowedTaskTypes.includes(normalizedTaskType);

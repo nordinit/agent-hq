@@ -6,10 +6,10 @@ import type { TaskTypeOption } from '@/lib/taskTypeSelection';
 export { shouldClearInvalidTaskType, type TaskTypeOption } from '@/lib/taskTypeSelection';
 
 export function useTaskTypes(
-  sprintId?: number | null,
-  metadataOptions?: { sprintType?: string | null; taskType?: string | null },
+  workflowId?: number | null,
+  metadataOptions?: { workflowType?: string | null; taskType?: string | null },
 ) {
-  const { metadata, loading, error } = useWorkflowMetadata(sprintId, metadataOptions);
+  const { metadata, loading, error } = useWorkflowMetadata(workflowId, metadataOptions);
   const options = useMemo<TaskTypeOption[]>(() => metadata.task_types, [metadata.task_types]);
   const taskTypes = useMemo(() => options.map(option => option.value), [options]);
 

@@ -8,7 +8,7 @@ import { AlertTriangle, Trash2, X } from 'lucide-react';
 interface CascadeInfo {
   active_tasks: number;
   running_instances: number;
-  dependent_sprints?: number;
+  dependent_workflows?: number;
   dependent_tasks?: number;
   dependent_agents?: number;
 }
@@ -43,7 +43,7 @@ export function DeleteProjectModal({
     ? cascade.active_tasks > 0 || cascade.running_instances > 0
     : false;
   const hasDependents = cascade
-    ? (cascade.dependent_sprints ?? 0) > 0 || (cascade.dependent_tasks ?? 0) > 0 || (cascade.dependent_agents ?? 0) > 0
+    ? (cascade.dependent_workflows ?? 0) > 0 || (cascade.dependent_tasks ?? 0) > 0 || (cascade.dependent_agents ?? 0) > 0
     : false;
 
   const nameMatches = confirmText.trim() === projectName.trim();
@@ -123,7 +123,7 @@ export function DeleteProjectModal({
             </p>
             {hasDependents ? (
               <p className="text-amber-200/70 text-xs">
-                This project still owns {cascade?.dependent_sprints ?? 0} workflow{(cascade?.dependent_sprints ?? 0) !== 1 ? 's' : ''}, {cascade?.dependent_tasks ?? 0} task{(cascade?.dependent_tasks ?? 0) !== 1 ? 's' : ''}, and {cascade?.dependent_agents ?? 0} agent{(cascade?.dependent_agents ?? 0) !== 1 ? 's' : ''}.
+                This project still owns {cascade?.dependent_workflows ?? 0} workflow{(cascade?.dependent_workflows ?? 0) !== 1 ? 's' : ''}, {cascade?.dependent_tasks ?? 0} task{(cascade?.dependent_tasks ?? 0) !== 1 ? 's' : ''}, and {cascade?.dependent_agents ?? 0} agent{(cascade?.dependent_agents ?? 0) !== 1 ? 's' : ''}.
               </p>
             ) : null}
           </div>

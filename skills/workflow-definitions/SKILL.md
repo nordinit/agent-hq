@@ -20,9 +20,9 @@ The product surface is **Workflow Definitions**. MCP tool names have completed t
 machine-readable payload fields have not:
 
 - MCP tools are named `agent_hq_*_workflow_type*` (for example `agent_hq_list_workflow_types`).
-  Each tool has exactly one name — the `sprint_type` spellings and the `atlas_*` names are gone.
-- Payload and response fields still use `sprint_type`, `sprint_id`, and similar keys.
-- Do not invent `workflow_type` payload keys where the tool contract says `sprint_type`.
+  Each tool has exactly one name — the `workflow_type` spellings and the `atlas_*` names are gone.
+- Payload and response fields still use `workflow_type`, `workflow_id`, and similar keys.
+- Do not invent `workflow_type` payload keys where the tool contract says `workflow_type`.
 
 ## Core Rules
 

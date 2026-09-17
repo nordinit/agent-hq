@@ -13,7 +13,7 @@ import { verifyStartupSchema } from './db/startupVerifier';
 import tasksRouter from './domains/tasks';
 import routingRouter, { dispatchRouter, modelRoutingRouter } from './domains/routing';
 import agentsRouter from './routes/agents';
-import sprintsRouter, { checkSprintCompletion } from './routes/sprints';
+import workflowsRouter, { checkWorkflowCompletion } from './routes/workflows';
 import skillsRouter from './routes/skills';
 import logsRouter from './routes/logs';
 import projectsRouter from './routes/projects';
@@ -24,7 +24,7 @@ import externalTaskEventsRouter from './routes/external-task-events';
 import { WebSocketServer } from 'ws';
 import * as http from 'http';
 import { startScheduler } from './scheduler';
-import { startSprintScheduler } from './scheduler/sprintScheduler';
+import { startWorkflowScheduler } from './scheduler/workflowScheduler';
 import { startWatchdog } from './scheduler/watchdog';
 import { startReconciler } from './scheduler/reconciler';
 import projectFilesRouter from './routes/project-files';
@@ -58,7 +58,6 @@ import { createMcpOAuthRouter, resolveMcpOAuthConfigFromEnv } from './mcp/oauth/
 import { authenticateMcpApiKeyIfPresent, authorizeMcpApiRequestIfPresent } from './lib/mcpApiAuth';
 import { handleJsonRequestErrors } from './lib/jsonRequestErrors';
 import openApiRouter from './openapi/router';
-import { normalizeWorkflowRequestAliases, workflowAliasResponseMiddleware } from './lib/workflowCompatibility';
 import { getDashboardTokenUsageLast24h } from './domains/dashboard/stats';
 import { resolveTenantIdFromRequest } from './lib/tenantContext';
 
@@ -71,19 +70,19 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(handleJsonRequestErrors);
-app.use('/api/v1', normalizeWorkflowRequestAliases);
+
 app.use('/api/v1', authenticateMcpApiKeyIfPresent);
 app.use('/api/v1', authorizeMcpApiRequestIfPresent);
 
-function dispatchToSprintsAlias(req: express.Request, res: express.Response, targetUrl: string): void {
+function dispatchToWorkflowsAlias(req: express.Request, res: express.Response, targetUrl: string): void {
   const originalUrl = req.url;
   req.url = targetUrl;
-  sprintsRouter(req, res, () => {
+  workflowsRouter(req, res, () => {
     req.url = originalUrl;
   });
 }
 
-function resolveSprintTypeKey(value: unknown): string {
+function resolveWorkflowTypeKey(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
@@ -187,8 +186,7 @@ app.get('/api/v1/external-task-events/definitions', (req, res) => {
 app.get('/api/v1/external-task-events/mappings', (req, res) => {
   res.redirect(307, `/api/v1/routing/workflow-event-mappings${buildWorkflowEventMappingSuffix(req)}`);
 });
-app.use('/api/v1/sprints', sprintsRouter);
-app.use('/api/v1/workflows', workflowAliasResponseMiddleware, sprintsRouter);
+app.use('/api/v1/workflows', workflowsRouter);
 app.get('/api/v1/workflow-types', (_req, res) => {
   res.redirect(307, '/api/v1/workflows/types/list');
 });
@@ -225,50 +223,14 @@ app.put('/api/v1/workflow-types/:key/field-schemas/:schemaId', (req, res) => {
 app.delete('/api/v1/workflow-types/:key/field-schemas/:schemaId', (req, res) => {
   res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
 });
-app.get('/api/v1/sprint-types', (_req, res) => {
-  res.redirect(307, '/api/v1/sprints/types/list');
-});
-app.post('/api/v1/sprint-types', (_req, res) => {
-  res.redirect(307, '/api/v1/sprints/types');
-});
-app.get('/api/v1/sprint-types/:key', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}`);
-});
-app.put('/api/v1/sprint-types/:key', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}`);
-});
-app.delete('/api/v1/sprint-types/:key', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}`);
-});
-app.get('/api/v1/sprint-types/:key/task-types', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/task-types`);
-});
-app.put('/api/v1/sprint-types/:key/task-types', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/task-types`);
-});
-app.get('/api/v1/sprint-types/:key/field-schemas', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas`);
-});
-app.post('/api/v1/sprint-types/:key/field-schemas', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas`);
-});
-app.get('/api/v1/sprint-types/:key/field-schemas/:schemaId', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
-});
-app.put('/api/v1/sprint-types/:key/field-schemas/:schemaId', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
-});
-app.delete('/api/v1/sprint-types/:key/field-schemas/:schemaId', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
-});
 app.get('/api/v1/task-definitions', (_req, res) => {
-  res.redirect(307, '/api/v1/sprints/config');
+  res.redirect(307, '/api/v1/workflows/config');
 });
 app.get('/api/v1/workflow-definitions', (req, res) => {
   res.redirect(307, redirectPreservingQuery(req, '/api/v1/workflows/config'));
 });
 app.get('/api/v1/task-definitions/config', (_req, res) => {
-  res.redirect(307, '/api/v1/sprints/config');
+  res.redirect(307, '/api/v1/workflows/config');
 });
 app.get('/api/v1/workflow-definitions/config', (req, res) => {
   res.redirect(307, redirectPreservingQuery(req, '/api/v1/workflows/config'));
@@ -309,157 +271,157 @@ app.put('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req,
 app.delete('/api/v1/workflow-definitions/types/:key/field-schemas/:schemaId', (req, res) => {
   res.redirect(307, redirectPreservingQuery(req, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`));
 });
-app.get('/api/v1/task-definitions/sprint-types', (_req, res) => {
-  res.redirect(307, '/api/v1/sprints/types/list');
+app.get('/api/v1/task-definitions/workflow-types', (_req, res) => {
+  res.redirect(307, '/api/v1/workflows/types/list');
 });
-app.post('/api/v1/task-definitions/sprint-types', (_req, res) => {
-  res.redirect(307, '/api/v1/sprints/types');
+app.post('/api/v1/task-definitions/workflow-types', (_req, res) => {
+  res.redirect(307, '/api/v1/workflows/types');
 });
-app.get('/api/v1/task-definitions/sprint-types/:key', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}`);
+app.get('/api/v1/task-definitions/workflow-types/:key', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}`);
 });
-app.put('/api/v1/task-definitions/sprint-types/:key', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}`);
+app.put('/api/v1/task-definitions/workflow-types/:key', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}`);
 });
-app.delete('/api/v1/task-definitions/sprint-types/:key', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}`);
+app.delete('/api/v1/task-definitions/workflow-types/:key', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}`);
 });
-app.get('/api/v1/task-definitions/sprint-types/:key/task-types', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/task-types`);
+app.get('/api/v1/task-definitions/workflow-types/:key/task-types', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/task-types`);
 });
-app.put('/api/v1/task-definitions/sprint-types/:key/task-types', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/task-types`);
+app.put('/api/v1/task-definitions/workflow-types/:key/task-types', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/task-types`);
 });
-app.get('/api/v1/task-definitions/sprint-types/:key/field-schemas', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas`);
+app.get('/api/v1/task-definitions/workflow-types/:key/field-schemas', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas`);
 });
-app.post('/api/v1/task-definitions/sprint-types/:key/field-schemas', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas`);
+app.post('/api/v1/task-definitions/workflow-types/:key/field-schemas', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas`);
 });
-app.get('/api/v1/task-definitions/sprint-types/:key/field-schemas/:schemaId', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
+app.get('/api/v1/task-definitions/workflow-types/:key/field-schemas/:schemaId', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
 });
-app.put('/api/v1/task-definitions/sprint-types/:key/field-schemas/:schemaId', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
+app.put('/api/v1/task-definitions/workflow-types/:key/field-schemas/:schemaId', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
 });
-app.delete('/api/v1/task-definitions/sprint-types/:key/field-schemas/:schemaId', (req, res) => {
-  res.redirect(307, `/api/v1/sprints/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
+app.delete('/api/v1/task-definitions/workflow-types/:key/field-schemas/:schemaId', (req, res) => {
+  res.redirect(307, `/api/v1/workflows/types/${encodeURIComponent(req.params.key)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
 });
 app.get('/api/v1/task-field-schemas', (req, res) => {
-  const sprintTypeKey = typeof req.query.sprint_type_key === 'string'
-    ? req.query.sprint_type_key
-    : typeof req.query.sprint_type === 'string'
-      ? req.query.sprint_type
+  const workflowTypeKey = typeof req.query.workflow_type_key === 'string'
+    ? req.query.workflow_type_key
+    : typeof req.query.workflow_type === 'string'
+      ? req.query.workflow_type
       : '';
-  if (!sprintTypeKey.trim()) {
+  if (!workflowTypeKey.trim()) {
     return res.status(400).json({
-      error: 'sprint_type_key is required',
-      supported_query_params: ['sprint_type_key', 'sprint_type'],
-      canonical_path_template: '/api/v1/sprints/types/:key/field-schemas',
+      error: 'workflow_type_key is required',
+      supported_query_params: ['workflow_type_key', 'workflow_type'],
+      canonical_path_template: '/api/v1/workflows/types/:key/field-schemas',
     });
   }
-  dispatchToSprintsAlias(req, res, `/types/${encodeURIComponent(sprintTypeKey)}/field-schemas`);
+  dispatchToWorkflowsAlias(req, res, `/types/${encodeURIComponent(workflowTypeKey)}/field-schemas`);
 });
 app.post('/api/v1/task-field-schemas', (req, res) => {
-  const sprintTypeKey = typeof req.body?.sprint_type_key === 'string'
-    ? req.body.sprint_type_key
-    : typeof req.body?.sprint_type === 'string'
-      ? req.body.sprint_type
+  const workflowTypeKey = typeof req.body?.workflow_type_key === 'string'
+    ? req.body.workflow_type_key
+    : typeof req.body?.workflow_type === 'string'
+      ? req.body.workflow_type
       : '';
-  if (!sprintTypeKey.trim()) {
+  if (!workflowTypeKey.trim()) {
     return res.status(400).json({
-      error: 'sprint_type_key is required',
-      supported_body_fields: ['sprint_type_key', 'sprint_type', 'task_type', 'schema'],
-      canonical_path_template: '/api/v1/sprints/types/:key/field-schemas',
+      error: 'workflow_type_key is required',
+      supported_body_fields: ['workflow_type_key', 'workflow_type', 'task_type', 'schema'],
+      canonical_path_template: '/api/v1/workflows/types/:key/field-schemas',
     });
   }
-  req.url = `/types/${encodeURIComponent(sprintTypeKey)}/field-schemas`;
-  sprintsRouter(req, res, () => undefined);
+  req.url = `/types/${encodeURIComponent(workflowTypeKey)}/field-schemas`;
+  workflowsRouter(req, res, () => undefined);
 });
 app.get('/api/v1/task-field-schemas/:schemaId', (req, res) => {
-  const sprintTypeKey = typeof req.query.sprint_type_key === 'string'
-    ? req.query.sprint_type_key
-    : typeof req.query.sprint_type === 'string'
-      ? req.query.sprint_type
+  const workflowTypeKey = typeof req.query.workflow_type_key === 'string'
+    ? req.query.workflow_type_key
+    : typeof req.query.workflow_type === 'string'
+      ? req.query.workflow_type
       : '';
-  if (!sprintTypeKey.trim()) {
+  if (!workflowTypeKey.trim()) {
     return res.status(400).json({
-      error: 'sprint_type_key is required',
-      supported_query_params: ['sprint_type_key', 'sprint_type'],
-      canonical_path_template: '/api/v1/sprints/types/:key/field-schemas/:schemaId',
+      error: 'workflow_type_key is required',
+      supported_query_params: ['workflow_type_key', 'workflow_type'],
+      canonical_path_template: '/api/v1/workflows/types/:key/field-schemas/:schemaId',
     });
   }
-  dispatchToSprintsAlias(req, res, `/types/${encodeURIComponent(sprintTypeKey)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
+  dispatchToWorkflowsAlias(req, res, `/types/${encodeURIComponent(workflowTypeKey)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
 });
 app.put('/api/v1/task-field-schemas/:schemaId', (req, res) => {
-  const sprintTypeKey = typeof req.body?.sprint_type_key === 'string'
-    ? req.body.sprint_type_key
-    : typeof req.body?.sprint_type === 'string'
-      ? req.body.sprint_type
-      : typeof req.query.sprint_type_key === 'string'
-        ? req.query.sprint_type_key
-        : typeof req.query.sprint_type === 'string'
-          ? req.query.sprint_type
+  const workflowTypeKey = typeof req.body?.workflow_type_key === 'string'
+    ? req.body.workflow_type_key
+    : typeof req.body?.workflow_type === 'string'
+      ? req.body.workflow_type
+      : typeof req.query.workflow_type_key === 'string'
+        ? req.query.workflow_type_key
+        : typeof req.query.workflow_type === 'string'
+          ? req.query.workflow_type
           : '';
-  if (!sprintTypeKey.trim()) {
+  if (!workflowTypeKey.trim()) {
     return res.status(400).json({
-      error: 'sprint_type_key is required',
-      supported_fields: ['sprint_type_key', 'sprint_type', 'task_type', 'schema'],
-      canonical_path_template: '/api/v1/sprints/types/:key/field-schemas/:schemaId',
+      error: 'workflow_type_key is required',
+      supported_fields: ['workflow_type_key', 'workflow_type', 'task_type', 'schema'],
+      canonical_path_template: '/api/v1/workflows/types/:key/field-schemas/:schemaId',
     });
   }
-  req.url = `/types/${encodeURIComponent(sprintTypeKey)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`;
-  sprintsRouter(req, res, () => undefined);
+  req.url = `/types/${encodeURIComponent(workflowTypeKey)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`;
+  workflowsRouter(req, res, () => undefined);
 });
 app.delete('/api/v1/task-field-schemas/:schemaId', (req, res) => {
-  const sprintTypeKey = typeof req.body?.sprint_type_key === 'string'
-    ? req.body.sprint_type_key
-    : typeof req.body?.sprint_type === 'string'
-      ? req.body.sprint_type
-      : typeof req.query.sprint_type_key === 'string'
-        ? req.query.sprint_type_key
-        : typeof req.query.sprint_type === 'string'
-          ? req.query.sprint_type
+  const workflowTypeKey = typeof req.body?.workflow_type_key === 'string'
+    ? req.body.workflow_type_key
+    : typeof req.body?.workflow_type === 'string'
+      ? req.body.workflow_type
+      : typeof req.query.workflow_type_key === 'string'
+        ? req.query.workflow_type_key
+        : typeof req.query.workflow_type === 'string'
+          ? req.query.workflow_type
           : '';
-  if (!sprintTypeKey.trim()) {
+  if (!workflowTypeKey.trim()) {
     return res.status(400).json({
-      error: 'sprint_type_key is required',
-      supported_fields: ['sprint_type_key', 'sprint_type'],
-      canonical_path_template: '/api/v1/sprints/types/:key/field-schemas/:schemaId',
+      error: 'workflow_type_key is required',
+      supported_fields: ['workflow_type_key', 'workflow_type'],
+      canonical_path_template: '/api/v1/workflows/types/:key/field-schemas/:schemaId',
     });
   }
-  req.url = `/types/${encodeURIComponent(sprintTypeKey)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`;
-  sprintsRouter(req, res, () => undefined);
+  req.url = `/types/${encodeURIComponent(workflowTypeKey)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`;
+  workflowsRouter(req, res, () => undefined);
 });
 app.get('/api/v1/task-field-definitions', (req, res) => {
-  const sprintTypeKey = resolveSprintTypeKey(req.query.sprint_type_key)
-    || resolveSprintTypeKey(req.query.sprint_type);
-  if (!sprintTypeKey) {
+  const workflowTypeKey = resolveWorkflowTypeKey(req.query.workflow_type_key)
+    || resolveWorkflowTypeKey(req.query.workflow_type);
+  if (!workflowTypeKey) {
     return res.status(400).json({
-      error: 'sprint_type_key is required',
-      supported_query_params: ['sprint_type_key', 'sprint_type'],
-      canonical_path_template: '/api/v1/sprints/types/:key/field-schemas',
+      error: 'workflow_type_key is required',
+      supported_query_params: ['workflow_type_key', 'workflow_type'],
+      canonical_path_template: '/api/v1/workflows/types/:key/field-schemas',
       alias_of: '/api/v1/task-field-schemas',
     });
   }
-  dispatchToSprintsAlias(req, res, `/types/${encodeURIComponent(sprintTypeKey)}/field-schemas`);
+  dispatchToWorkflowsAlias(req, res, `/types/${encodeURIComponent(workflowTypeKey)}/field-schemas`);
 });
 app.post('/api/v1/task-field-definitions', (req, res) => {
   req.url = `/task-field-schemas`;
   app._router.handle(req, res, () => undefined);
 });
 app.get('/api/v1/task-field-definitions/:schemaId', (req, res) => {
-  const sprintTypeKey = resolveSprintTypeKey(req.query.sprint_type_key)
-    || resolveSprintTypeKey(req.query.sprint_type);
-  if (!sprintTypeKey) {
+  const workflowTypeKey = resolveWorkflowTypeKey(req.query.workflow_type_key)
+    || resolveWorkflowTypeKey(req.query.workflow_type);
+  if (!workflowTypeKey) {
     return res.status(400).json({
-      error: 'sprint_type_key is required',
-      supported_query_params: ['sprint_type_key', 'sprint_type'],
-      canonical_path_template: '/api/v1/sprints/types/:key/field-schemas/:schemaId',
+      error: 'workflow_type_key is required',
+      supported_query_params: ['workflow_type_key', 'workflow_type'],
+      canonical_path_template: '/api/v1/workflows/types/:key/field-schemas/:schemaId',
       alias_of: '/api/v1/task-field-schemas/:schemaId',
     });
   }
-  dispatchToSprintsAlias(req, res, `/types/${encodeURIComponent(sprintTypeKey)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
+  dispatchToWorkflowsAlias(req, res, `/types/${encodeURIComponent(workflowTypeKey)}/field-schemas/${encodeURIComponent(req.params.schemaId)}`);
 });
 app.put('/api/v1/task-field-definitions/:schemaId', (req, res) => {
   req.url = `/task-field-schemas/${encodeURIComponent(req.params.schemaId)}`;
@@ -530,7 +492,6 @@ app.use('/api/v1/agents/:id/effective-capabilities', agentEffectiveCapabilitiesR
 // Team ownership hangs off the workflow, not the team: "which team runs this workflow" is a
 // property of the workflow. Mounted under both vocabularies like the workflow router itself.
 app.use('/api/v1/workflows/:workflowId/team', workflowTeamRouter);
-app.use('/api/v1/sprints/:workflowId/team', workflowTeamRouter);
 app.use('/api/v1/providers', providersRouter);
 app.use('/api/v1/provider-connections', providerConnectionsRouter);
 app.use('/api/v1/github-identities', githubIdentitiesRouter);
@@ -626,14 +587,14 @@ async function startServer(): Promise<void> {
     console.warn('[boot] Background automation disabled by AGENT_HQ_DISABLE_AUTOMATION=1');
   } else {
     startScheduler();
-    startSprintScheduler();
+    startWorkflowScheduler();
     startWatchdog();
     startReconciler();
   }
 
-  // Sprint heartbeat: check every 5 min for time/run-limit exceeded sprints
+  // Workflow heartbeat: check every 5 min for time/run-limit exceeded workflows
   setInterval(async () => {
-    try { await checkSprintCompletion(); } catch (err) { console.error('[sprints] Heartbeat error:', err); }
+    try { await checkWorkflowCompletion(); } catch (err) { console.error('[workflows] Heartbeat error:', err); }
   }, 5 * 60 * 1000);
 
   const server = http.createServer(app);

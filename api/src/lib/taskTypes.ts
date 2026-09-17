@@ -2,7 +2,7 @@
  * Legacy/default task-type seed list.
  *
  * Runtime task-type validation is workflow-specific and comes from
- * sprint_type_task_types / workflow definition config. Do not use this list as
+ * workflow_type_task_types / workflow definition config. Do not use this list as
  * a global source of truth for allowed task_type values.
  */
 export const VALID_TASK_TYPES = [

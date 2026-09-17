@@ -3,11 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { X, ChevronDown, Link2, Search, Plus, Trash2 } from 'lucide-react';
 import { api, type CustomFieldDefinition, type ResolvedTaskFieldSchemaResponse, type TaskRelationshipTypeConfig } from '@/lib/api';
-import { formatSprintLabel } from '@/lib/sprintLabel';
+import { formatWorkflowLabel } from '@/lib/workflowLabel';
 import { getTaskStatusMaps } from '@/lib/taskStatuses';
 import { shouldClearInvalidTaskType, useTaskTypes } from '@/lib/taskTypes';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
-import type { ModalForm, Project, Sprint, Task } from '@/features/tasks/useTasksPageState';
+import type { ModalForm, Project, Workflow, Task } from '@/features/tasks/useTasksPageState';
 import { AutoGrowTextarea } from '@/components/AutoGrowTextarea';
 
 export interface RelatedTaskCreateContext {
@@ -61,13 +61,13 @@ function customFieldValue(form: ModalForm, field: CustomFieldDefinition): unknow
 
 function CreateRelatedTasksField({
   projectId,
-  sprintId,
+  workflowId,
   relationshipTypes,
   selected,
   onChange,
 }: {
   projectId?: number | null;
-  sprintId?: number | null;
+  workflowId?: number | null;
   relationshipTypes: TaskRelationshipTypeConfig[];
   selected: PendingRelatedTask[];
   onChange: (next: PendingRelatedTask[]) => void;
@@ -100,7 +100,7 @@ function CreateRelatedTasksField({
     setSearchError(null);
     try {
       const selectedIds = new Set(selected.map(task => task.target_task_id));
-      const rows = await api.searchTasks(trimmed, undefined, { project_id: projectId ?? null, sprint_id: sprintId ?? null });
+      const rows = await api.searchTasks(trimmed, undefined, { project_id: projectId ?? null, workflow_id: workflowId ?? null });
       setResults(rows.filter(row => !selectedIds.has(row.id)));
     } catch (err) {
       setResults([]);
@@ -231,23 +231,23 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [projects, setProjects] = useState<Project[]>(providedProjects ?? []);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
-  const [loadingSprints, setLoadingSprints] = useState(false);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [loadingWorkflows, setLoadingWorkflows] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [resolvedFieldSchema, setResolvedFieldSchema] = useState<ResolvedTaskFieldSchemaResponse | null>(null);
 
-  const selectedSprint = useMemo(
-    () => sprints.find(sprint => sprint.id === form.sprint_id) ?? null,
-    [form.sprint_id, sprints],
+  const selectedWorkflow = useMemo(
+    () => workflows.find(workflow => workflow.id === form.workflow_id) ?? null,
+    [form.workflow_id, workflows],
   );
-  const taskTypeSprintType = form.sprint_id
-    ? selectedSprint?.sprint_type ?? task.resolved_sprint_type ?? null
-    : task.resolved_sprint_type ?? null;
-  const { options: taskTypeOptions, loading: taskTypesLoading, error: taskTypesError } = useTaskTypes(form.sprint_id ?? null, {
-    sprintType: form.sprint_id ? null : taskTypeSprintType,
+  const taskTypeWorkflowType = form.workflow_id
+    ? selectedWorkflow?.workflow_type ?? task.resolved_workflow_type ?? null
+    : task.resolved_workflow_type ?? null;
+  const { options: taskTypeOptions, loading: taskTypesLoading, error: taskTypesError } = useTaskTypes(form.workflow_id ?? null, {
+    workflowType: form.workflow_id ? null : taskTypeWorkflowType,
   });
-  const { metadata: taskWorkflowMetadata } = useWorkflowMetadata(form.sprint_id ?? null, {
-    sprintType: form.sprint_id ? null : taskTypeSprintType,
+  const { metadata: taskWorkflowMetadata } = useWorkflowMetadata(form.workflow_id ?? null, {
+    workflowType: form.workflow_id ? null : taskTypeWorkflowType,
     taskType: form.task_type ?? null,
   });
   const { definitions: taskStatuses } = getTaskStatusMaps(taskWorkflowMetadata.statuses);
@@ -286,33 +286,33 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
 
   useEffect(() => {
     let cancelled = false;
-    api.resolveTaskFieldSchema({ sprint_id: form.sprint_id ?? null, task_type: form.task_type ?? null })
+    api.resolveTaskFieldSchema({ workflow_id: form.workflow_id ?? null, task_type: form.task_type ?? null })
       .then(schema => { if (!cancelled) setResolvedFieldSchema(schema); })
       .catch(() => { if (!cancelled) setResolvedFieldSchema(null); });
     return () => { cancelled = true; };
-  }, [form.sprint_id, form.task_type]);
+  }, [form.workflow_id, form.task_type]);
 
   useEffect(() => {
     let cancelled = false;
     if (!form.project_id) {
-      setSprints([]);
+      setWorkflows([]);
       return;
     }
 
-    setLoadingSprints(true);
-    api.getSprints(form.project_id, true)
-      .then(projectSprints => {
+    setLoadingWorkflows(true);
+    api.getWorkflows(form.project_id, true)
+      .then(projectWorkflows => {
         if (cancelled) return;
-        setSprints(projectSprints);
-        if (form.sprint_id != null && !projectSprints.some(sprint => sprint.id === form.sprint_id)) {
-          setForm(current => current.sprint_id == null ? current : ({ ...current, sprint_id: null, sprint_name: null }));
+        setWorkflows(projectWorkflows);
+        if (form.workflow_id != null && !projectWorkflows.some(workflow => workflow.id === form.workflow_id)) {
+          setForm(current => current.workflow_id == null ? current : ({ ...current, workflow_id: null, workflow_name: null }));
         }
       })
-      .catch(() => { if (!cancelled) setSprints([]); })
-      .finally(() => { if (!cancelled) setLoadingSprints(false); });
+      .catch(() => { if (!cancelled) setWorkflows([]); })
+      .finally(() => { if (!cancelled) setLoadingWorkflows(false); });
 
     return () => { cancelled = true; };
-  }, [form.project_id, form.sprint_id]);
+  }, [form.project_id, form.workflow_id]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -401,7 +401,7 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
             <div className="relative">
               <select className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8" value={form.project_id ?? ''} onChange={e => {
                 const nextProjectId = e.target.value ? Number(e.target.value) : null;
-                setForm(current => ({ ...current, project_id: nextProjectId, sprint_id: current.project_id === nextProjectId ? current.sprint_id : null, sprint_name: current.project_id === nextProjectId ? current.sprint_name : null, task_type: current.project_id === nextProjectId ? current.task_type : null }));
+                setForm(current => ({ ...current, project_id: nextProjectId, workflow_id: current.project_id === nextProjectId ? current.workflow_id : null, workflow_name: current.project_id === nextProjectId ? current.workflow_name : null, task_type: current.project_id === nextProjectId ? current.task_type : null }));
               }}>
                 <option value="">— No project —</option>
                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -413,13 +413,13 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
           <div>
             <label className="text-xs font-medium text-slate-400 uppercase tracking-wide block mb-1">Workflow</label>
             <div className="relative">
-              <select className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8 disabled:opacity-60" value={form.sprint_id ?? ''} onChange={e => setForm(current => ({ ...current, sprint_id: e.target.value ? Number(e.target.value) : null, sprint_name: e.target.value ? (sprints.find(sprint => sprint.id === Number(e.target.value))?.name ?? current.sprint_name ?? null) : null, task_type: null }))} disabled={!form.project_id || loadingSprints}>
+              <select className="w-full appearance-none bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400 pr-8 disabled:opacity-60" value={form.workflow_id ?? ''} onChange={e => setForm(current => ({ ...current, workflow_id: e.target.value ? Number(e.target.value) : null, workflow_name: e.target.value ? (workflows.find(workflow => workflow.id === Number(e.target.value))?.name ?? current.workflow_name ?? null) : null, task_type: null }))} disabled={!form.project_id || loadingWorkflows}>
                 <option value="">{form.project_id ? '— No workflow —' : 'Select a project first'}</option>
-                {sprints.map(sprint => <option key={sprint.id} value={sprint.id}>{formatSprintLabel(sprint)}{sprint.status ? ` (${sprint.status})` : ''}</option>)}
+                {workflows.map(workflow => <option key={workflow.id} value={workflow.id}>{formatWorkflowLabel(workflow)}{workflow.status ? ` (${workflow.status})` : ''}</option>)}
               </select>
               <ChevronDown className="absolute right-2 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
             </div>
-            <p className="text-[10px] text-slate-600 mt-0.5">{loadingSprints ? 'Loading workflows...' : form.project_id ? 'Choose a workflow for this project or leave it unassigned' : 'Assign a project before choosing a workflow'}</p>
+            <p className="text-[10px] text-slate-600 mt-0.5">{loadingWorkflows ? 'Loading workflows...' : form.project_id ? 'Choose a workflow for this project or leave it unassigned' : 'Assign a project before choosing a workflow'}</p>
           </div>
 
           <div>
@@ -496,7 +496,7 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
           {!form.id && (
             <CreateRelatedTasksField
               projectId={form.project_id ?? null}
-              sprintId={form.sprint_id ?? null}
+              workflowId={form.workflow_id ?? null}
               relationshipTypes={taskWorkflowMetadata.relationship_types ?? []}
               selected={pendingRelatedTasks}
               onChange={setPendingRelatedTasks}

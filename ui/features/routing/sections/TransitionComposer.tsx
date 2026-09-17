@@ -87,12 +87,12 @@ export default function TransitionComposer({
   const payload = useCallback((): Record<string, unknown> => ({
     ...(form.id != null ? { id: form.id } : {}),
     project_id: context.projectId,
-    sprint_type: graph.scope.workflow_type,
+    workflow_type: graph.scope.workflow_type,
     // Scope follows the row itself on edit, and the selected workflow on create. Sending the
     // page selection for an existing row is how a shared default gets silently narrowed.
     ...(isCreate
-      ? (context.workflowId != null ? { sprint_id: context.workflowId } : { scope_kind: 'sprint_type_default' })
-      : (form.is_override ? { sprint_id: context.workflowId } : {})),
+      ? (context.workflowId != null ? { workflow_id: context.workflowId } : { scope_kind: 'workflow_type_default' })
+      : (form.is_override ? { workflow_id: context.workflowId } : {})),
     from_status: form.from,
     outcome: form.outcome,
     to_status: form.to,

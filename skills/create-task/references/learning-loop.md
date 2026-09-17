@@ -20,7 +20,7 @@ Suggested fields:
 - `task_id`
 - `title`
 - `project_id`
-- `sprint_id`
+- `workflow_id`
 - `job_id`
 - `priority`
 - `request_summary`
@@ -44,7 +44,7 @@ When the task finishes or stalls, enrich the same record with:
 
 ### 3. Review for patterns
 Look for failure modes such as:
-- wrong board or sprint selected
+- wrong board or workflow selected
 - wrong job assigned
 - tasks too large and later split
 - missing acceptance criteria

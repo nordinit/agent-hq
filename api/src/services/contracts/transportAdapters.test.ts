@@ -27,8 +27,8 @@ beforeEach(() => {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'transport-contracts-'));
   process.env.AGENT_CONTRACT_ROOT = tempDir;
 
-  fs.writeFileSync(path.join(tempDir, 'generic.md'), '## Agent HQ run contract for this dispatched instance\nSprint type: {{sprintType}}\nAgent: {{agentSlug}}\nTask ID: {{taskId}}\nBase URL: {{baseUrl}}\nUse ONE of these outcomes: {{validOutcomes}}\nConfigured gate fields for {{evidenceOutcomes}}:\n{{evidenceFieldsBulleted}}\n', 'utf-8');
-  fs.writeFileSync(path.join(tempDir, 'enhancements.md'), '## Agent HQ enhancement contract for this dispatched instance\nSprint type: {{sprintType}}\nUse ONE of these outcomes: {{validOutcomes}}\nREQUIRED OUTPUTS FOR ENHANCEMENTS\nagent_hq_post_task_outcome task_id={{taskId}}\nchanged_by={{agentSlug}}\n', 'utf-8');
+  fs.writeFileSync(path.join(tempDir, 'generic.md'), '## Agent HQ run contract for this dispatched instance\nWorkflow type: {{workflowType}}\nAgent: {{agentSlug}}\nTask ID: {{taskId}}\nBase URL: {{baseUrl}}\nUse ONE of these outcomes: {{validOutcomes}}\nConfigured gate fields for {{evidenceOutcomes}}:\n{{evidenceFieldsBulleted}}\n', 'utf-8');
+  fs.writeFileSync(path.join(tempDir, 'enhancements.md'), '## Agent HQ enhancement contract for this dispatched instance\nWorkflow type: {{workflowType}}\nUse ONE of these outcomes: {{validOutcomes}}\nREQUIRED OUTPUTS FOR ENHANCEMENTS\nagent_hq_post_task_outcome task_id={{taskId}}\nchanged_by={{agentSlug}}\n', 'utf-8');
 
   ({
     buildContractInstructions,
@@ -69,7 +69,7 @@ async function createGateDb(): Promise<Db> {
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status)
+    INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status)
     VALUES (1, 1, 1, 'Generic workflow', 'generic', 'active')
   `);
 
@@ -83,7 +83,7 @@ function buildContext(overrides: Partial<TransportContext> = {}): TransportConte
     taskId: 369,
     taskStatus: 'in_progress',
     taskType: 'backend',
-    sprintType: 'enhancements',
+    workflowType: 'enhancements',
     agentSlug: 'cinder-backend',
     sessionKey: 'hook:atlas:jobrun:1667',
     baseUrl: 'http://localhost:3501',
@@ -96,17 +96,17 @@ function buildContext(overrides: Partial<TransportContext> = {}): TransportConte
 describe('dispatch contract template renderer', () => {
   const repoContractRoot = path.resolve(__dirname, '../../../../agent-contracts');
 
-  it('uses the sprint-type text template for remote-direct dispatches', async () => {
+  it('uses the workflow-type text template for remote-direct dispatches', async () => {
     const contract = await buildContractInstructions(buildContext());
 
     expect(contract).toContain('## Agent HQ enhancement contract for this dispatched instance');
-    expect(contract).toContain('Sprint type: enhancements');
+    expect(contract).toContain('Workflow type: enhancements');
     expect(contract).toContain('REQUIRED OUTPUTS FOR ENHANCEMENTS');
     expect(contract).toContain('completed_for_review, dev_deploy_queued, blocked, failed');
     expect(contract).toContain('agent_hq_post_task_outcome task_id=369');
   });
 
-  it('renders the placeholders used by the sprint template fixture', async () => {
+  it('renders the placeholders used by the workflow template fixture', async () => {
     const contract = await buildContractInstructions(buildContext());
 
     expect(contract).toContain('cinder-backend');
@@ -121,18 +121,18 @@ describe('dispatch contract template renderer', () => {
     expect(contract).not.toContain('{{validOutcomes}}');
   });
 
-  it('falls back to the generic text template for unknown sprint types', async () => {
-    const contract = await buildContractInstructions(buildContext({ sprintType: 'qa' }));
+  it('falls back to the generic text template for unknown workflow types', async () => {
+    const contract = await buildContractInstructions(buildContext({ workflowType: 'qa' }));
 
     expect(contract).toContain('## Agent HQ run contract for this dispatched instance');
-    expect(contract).toContain('Sprint type: qa');
+    expect(contract).toContain('Workflow type: qa');
     expect(contract).toContain('Use ONE of these outcomes: completed_for_review, dev_deploy_queued, blocked, failed');
   });
 
-  it('falls back to generic when a sprint type has no dedicated template yet', async () => {
-    const devContract = await buildContractInstructions(buildContext({ sprintType: 'dev' }));
+  it('falls back to generic when a workflow type has no dedicated template yet', async () => {
+    const devContract = await buildContractInstructions(buildContext({ workflowType: 'dev' }));
     expect(devContract).toContain('## Agent HQ run contract for this dispatched instance');
-    expect(devContract).toContain('Sprint type: dev');
+    expect(devContract).toContain('Workflow type: dev');
     expect(devContract).not.toContain('Workflow lane');
     expect(devContract).not.toContain('Workflow Category');
     expect(devContract).not.toContain('workflow category');
@@ -140,7 +140,7 @@ describe('dispatch contract template renderer', () => {
 
   it('does not inject later release outcomes that are not valid from the current route', async () => {
     const contract = await buildContractInstructions(buildContext({
-      sprintType: 'generic',
+      workflowType: 'generic',
       taskStatus: 'ready_to_merge',
       transportMode: 'remote-direct',
     }));
@@ -153,7 +153,7 @@ describe('dispatch contract template renderer', () => {
     const contract = await buildContractInstructions(buildContext({
       taskStatus: 'review',
       transportMode: 'local',
-      sprintType: 'generic',
+      workflowType: 'generic',
     }));
 
     expect(contract).not.toContain('"qa_verified_commit":"<sha>"');
@@ -165,16 +165,16 @@ describe('dispatch contract template renderer', () => {
   it('renders configured gate fields from the template placeholders', async () => {
     const db = await createGateDb();
     await db.run(`
-      INSERT INTO sprint_task_transition_requirements
-        (tenant_id, sprint_id, project_id, sprint_type, outcome, field_name, requirement_type, severity, message)
+      INSERT INTO workflow_task_transition_requirements
+        (tenant_id, workflow_id, project_id, workflow_type, outcome, field_name, requirement_type, severity, message)
       VALUES (1, 1, 1, 'generic', 'qa_pass', 'qa_verified_commit', 'required', 'block', 'qa_pass requires qa_verified_commit')
     `);
 
     const contract = await buildContractInstructions(buildContext({
       taskStatus: 'review',
       transportMode: 'local',
-      sprintType: 'generic',
-      sprintId: 1,
+      workflowType: 'generic',
+      workflowId: 1,
       db,
     }));
 
@@ -187,7 +187,7 @@ describe('dispatch contract template renderer', () => {
     const contract = await buildContractInstructions(buildContext({
       taskStatus: 'in_progress',
       transportMode: 'local',
-      sprintType: 'dev',
+      workflowType: 'dev',
     }));
 
     expect(contract).toContain('Critical implementation rule');
@@ -208,7 +208,7 @@ describe('dispatch contract template renderer', () => {
     const contract = await buildContractInstructions(buildContext({
       taskStatus: 'review',
       transportMode: 'local',
-      sprintType: 'dev',
+      workflowType: 'dev',
     }));
 
     expect(contract).toContain('Critical QA rule');
@@ -223,7 +223,7 @@ describe('dispatch contract template renderer', () => {
     const contract = await buildContractInstructions(buildContext({
       taskStatus: 'ready_to_merge',
       transportMode: 'local',
-      sprintType: 'dev',
+      workflowType: 'dev',
     }));
 
     expect(contract).toContain('- Valid outcomes: `deployed_live, blocked, failed`');
@@ -240,9 +240,9 @@ describe('dispatch contract template renderer', () => {
     reloadWithoutFileTemplates();
 
     await expect(buildContractInstructions(buildContext({
-      sprintType: 'generic',
+      workflowType: 'generic',
       transportMode: 'local',
-    }))).rejects.toThrow('No contract template found for sprint type "generic"');
+    }))).rejects.toThrow('No contract template found for workflow type "generic"');
   });
 
   it('ships dev as the explicit software-delivery contract', () => {

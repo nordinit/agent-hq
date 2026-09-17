@@ -3,8 +3,8 @@ import { formatDateTime, formatDate, formatTime, timeAgo } from '@/lib/date';
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { api, Project, Agent, Sprint } from '@/lib/api';
-import { formatSprintLabel, formatSprintNumber } from '@/lib/sprintLabel';
+import { api, Project, Agent, Workflow } from '@/lib/api';
+import { formatWorkflowLabel, formatWorkflowNumber } from '@/lib/workflowLabel';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -22,9 +22,9 @@ import ProjectAuditLog from '@/features/observability/ProjectAuditLog';
 import { AgentDeleteNotice, buildAgentDeleteNotice, type AgentDeleteNoticeData } from '@/components/AgentDeleteNotice';
 
 type TabMode = 'preview' | 'edit';
-type PageTab = 'agents' | 'files' | 'sprints' | 'audit';
+type PageTab = 'agents' | 'files' | 'workflows' | 'audit';
 
-const SPRINT_STATUS_BADGE: Record<string, 'done' | 'running' | 'queued' | 'info'> = {
+const WORKFLOW_STATUS_BADGE: Record<string, 'done' | 'running' | 'queued' | 'info'> = {
   planning: 'queued',
   active: 'running',
   paused: 'info',
@@ -39,7 +39,7 @@ export default function ProjectDetailPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [projectAgents, setProjectAgents] = useState<Agent[]>([]);
   const [allAgents, setAllAgents] = useState<Agent[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -69,7 +69,7 @@ export default function ProjectDetailPage() {
       api.getProject(projectId),
       api.getAgents(projectId),
       api.getAgents(),
-      api.getSprints(projectId),
+      api.getWorkflows(projectId),
     ])
       .then(([p, pAgents, allAg, sp]) => {
         setProject(p);
@@ -78,7 +78,7 @@ export default function ProjectDetailPage() {
         setEditContext(p.context_md);
         setProjectAgents(pAgents);
         setAllAgents(allAg);
-        setSprints(sp);
+        setWorkflows(sp);
       })
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false));
@@ -384,16 +384,16 @@ export default function ProjectDetailPage() {
           )}
         </button>
         <button
-          onClick={() => setPageTab('sprints')}
+          onClick={() => setPageTab('workflows')}
           className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 ${
-            pageTab === 'sprints'
+            pageTab === 'workflows'
               ? 'text-amber-300 border-amber-400 bg-amber-500/10'
               : 'text-slate-400 border-transparent hover:text-slate-300'
           }`}
         >
           <Rocket className="w-3.5 h-3.5" /> Workflows
-          {sprints.length > 0 && (
-            <span className="ml-1 text-xs bg-slate-700 rounded-full px-1.5 py-0.5">{sprints.length}</span>
+          {workflows.length > 0 && (
+            <span className="ml-1 text-xs bg-slate-700 rounded-full px-1.5 py-0.5">{workflows.length}</span>
           )}
         </button>
         <button
@@ -419,7 +419,7 @@ export default function ProjectDetailPage() {
       </div>
 
       {/* Workflows Tab */}
-      {pageTab === 'sprints' && (
+      {pageTab === 'workflows' && (
         <div className="space-y-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="font-semibold text-white">Project Workflows</h2>
@@ -430,7 +430,7 @@ export default function ProjectDetailPage() {
             </Link>
           </div>
 
-          {sprints.length === 0 ? (
+          {workflows.length === 0 ? (
             <Card>
               <div className="text-center py-8 text-slate-500 text-sm">
                 No workflows for this project yet.
@@ -438,41 +438,41 @@ export default function ProjectDetailPage() {
             </Card>
           ) : (
             <div className="space-y-2">
-              {sprints.map(sprint => {
-                const progress = sprint.task_count
-                  ? Math.round(((sprint.tasks_done ?? 0) / sprint.task_count) * 100)
+              {workflows.map(workflow => {
+                const progress = workflow.task_count
+                  ? Math.round(((workflow.tasks_done ?? 0) / workflow.task_count) * 100)
                   : 0;
                 return (
-                  <Link key={sprint.id} href={`/workflows/${sprint.id}`}>
+                  <Link key={workflow.id} href={`/workflows/${workflow.id}`}>
                     <Card className="hover:border-slate-600 transition-colors cursor-pointer">
                       <div className="flex items-start gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1 flex-wrap">
                             <Rocket className="w-4 h-4 text-amber-400 shrink-0" />
                             <span className="font-semibold text-white hover:text-amber-300 transition-colors">
-                              {formatSprintLabel(sprint)}
+                              {formatWorkflowLabel(workflow)}
                             </span>
-                            <Badge variant={SPRINT_STATUS_BADGE[sprint.status] ?? 'default'}>
-                              {sprint.status}
+                            <Badge variant={WORKFLOW_STATUS_BADGE[workflow.status] ?? 'default'}>
+                              {workflow.status}
                             </Badge>
-                            {sprint.length_value && (
+                            {workflow.length_value && (
                               <span className="text-xs text-slate-500">
-                                {sprint.length_value} {sprint.length_kind === 'runs' ? 'runs' : ''}
+                                {workflow.length_value} {workflow.length_kind === 'runs' ? 'runs' : ''}
                               </span>
                             )}
                           </div>
-                          {sprint.goal && (
-                            <p className="text-slate-400 text-sm mt-1 line-clamp-2">{sprint.goal}</p>
+                          {workflow.goal && (
+                            <p className="text-slate-400 text-sm mt-1 line-clamp-2">{workflow.goal}</p>
                           )}
                           <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
-                            <span>{formatSprintNumber(sprint.id)}</span>
+                            <span>{formatWorkflowNumber(workflow.id)}</span>
                             <span className="flex items-center gap-1">
                               <Target className="w-3 h-3" />
-                              {sprint.tasks_done ?? 0}/{sprint.task_count ?? 0} tasks done
+                              {workflow.tasks_done ?? 0}/{workflow.task_count ?? 0} tasks done
                             </span>
-                            <span>Created {timeAgo(sprint.created_at)}</span>
+                            <span>Created {timeAgo(workflow.created_at)}</span>
                           </div>
-                          {sprint.task_count != null && sprint.task_count > 0 && (
+                          {workflow.task_count != null && workflow.task_count > 0 && (
                             <div className="mt-2 w-full bg-slate-700 rounded-full h-1.5">
                               <div
                                 className="bg-amber-400 h-1.5 rounded-full transition-all"

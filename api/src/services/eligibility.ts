@@ -18,7 +18,7 @@ interface TaskRow {
   agent_id: number | null;
   assigned_agent_id?: number | null;
   project_id: number | null;
-  sprint_id: number | null;
+  workflow_id: number | null;
   claimed_at: string | null;
   dispatched_at: string | null;
   retry_count: number;
@@ -48,7 +48,6 @@ async function getRoutingConfig(db: Db, agentId: number | null): Promise<Routing
     return { stall_threshold_min: 30, max_retries: 3 };
   }
 }
-
 
 // ── Main pass ────────────────────────────────────────────────────────────────
 

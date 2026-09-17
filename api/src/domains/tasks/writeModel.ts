@@ -4,11 +4,11 @@ import { assertAtlasDirectStatusGate, assertTaskStatusUpdateAllowed } from '../.
 import { notifyTaskStatusChange } from '../../lib/taskNotifications';
 import { createRelationshipFromBlockedBy, createTaskRelationship, deleteTaskRelationshipByTuple } from './relationships';
 import { assertTaskStatusDefinedForWorkflow } from '../../lib/taskStatusValidation';
-import { isTaskTypeAllowedForSprintType, normalizeConfigKey } from '../sprint-definitions/config';
+import { isTaskTypeAllowedForWorkflowType, normalizeConfigKey } from '../workflow-definitions/config';
 import {
   normalizeStoryPoints,
   parseCustomFields,
-  resolveSprintTypeForTask,
+  resolveWorkflowTypeForTask,
   resolveTaskFieldSchema,
   validateTaskCustomFields,
 } from './fields';
@@ -37,7 +37,7 @@ export interface CreateTaskInput {
   job_id?: number | null;
   agent_id?: number | null;
   project_id?: number | null;
-  sprint_id?: number | null;
+  workflow_id?: number | null;
   recurring?: number | boolean;
   task_type?: string | null;
   story_points?: number | string | null;
@@ -69,7 +69,7 @@ export interface UpdateTaskInput {
   job_id?: number | null;
   agent_id?: number | null;
   project_id?: number | null;
-  sprint_id?: number | null;
+  workflow_id?: number | null;
   recurring?: number | boolean;
   branch_url?: string | null;
   task_type?: string | null;
@@ -193,7 +193,7 @@ export async function createTaskRecord(
     job_id,
     agent_id,
     project_id,
-    sprint_id,
+    workflow_id,
     recurring = 0,
     task_type,
     story_points,
@@ -212,13 +212,13 @@ export async function createTaskRecord(
   const normalizedTaskType = normalizeOptionalTaskType(task_type);
   const normalizedCustomFields = parseCustomFields(custom_fields);
   let resolvedProjectId = project_id ?? null;
-  let resolvedSprintId = sprint_id ?? null;
+  let resolvedWorkflowId = workflow_id ?? null;
   const resolvedAgentId = agent_id ?? job_id ?? null;
   let resolvedTenantId = input.tenant_id ?? null;
 
   if (!title) throw new Error('title is required');
-  if (resolvedSprintId == null) {
-    throw Object.assign(new Error('sprint_id is required'), { status: 400 });
+  if (resolvedWorkflowId == null) {
+    throw Object.assign(new Error('workflow_id is required'), { status: 400 });
   }
   if (origin_task_id != null) {
     const originExists = await db.get('SELECT id, tenant_id FROM tasks WHERE id = ?', origin_task_id) as { id: number; tenant_id: number | null } | undefined;
@@ -231,13 +231,13 @@ export async function createTaskRecord(
     resolvedTenantId = resolvedTenantId ?? projectExists.tenant_id ?? null;
     requireSameTenant(projectExists.tenant_id, resolvedTenantId, `project_id ${resolvedProjectId} is not in the same workspace`);
   }
-  const sprintExists = await db.get('SELECT id, project_id, tenant_id FROM sprints WHERE id = ?', resolvedSprintId) as { id: number; project_id: number | null; tenant_id: number | null } | undefined;
-  if (!sprintExists) throw new Error(`sprint_id ${resolvedSprintId} does not exist`);
-  resolvedTenantId = resolvedTenantId ?? sprintExists.tenant_id ?? null;
-  requireSameTenant(sprintExists.tenant_id, resolvedTenantId, `sprint_id ${resolvedSprintId} is not in the same workspace`);
-  resolvedProjectId = resolvedProjectId ?? sprintExists.project_id;
-  if (resolvedProjectId != null && sprintExists.project_id !== resolvedProjectId) {
-    throw new Error(`sprint_id ${resolvedSprintId} does not belong to project_id ${resolvedProjectId}`);
+  const workflowExists = await db.get('SELECT id, project_id, tenant_id FROM workflows WHERE id = ?', resolvedWorkflowId) as { id: number; project_id: number | null; tenant_id: number | null } | undefined;
+  if (!workflowExists) throw new Error(`workflow_id ${resolvedWorkflowId} does not exist`);
+  resolvedTenantId = resolvedTenantId ?? workflowExists.tenant_id ?? null;
+  requireSameTenant(workflowExists.tenant_id, resolvedTenantId, `workflow_id ${resolvedWorkflowId} is not in the same workspace`);
+  resolvedProjectId = resolvedProjectId ?? workflowExists.project_id;
+  if (resolvedProjectId != null && workflowExists.project_id !== resolvedProjectId) {
+    throw new Error(`workflow_id ${resolvedWorkflowId} does not belong to project_id ${resolvedProjectId}`);
   }
   if (resolvedAgentId != null) {
     const agentExists = await db.get('SELECT id, tenant_id FROM agents WHERE id = ?', resolvedAgentId) as { id: number; tenant_id: number | null } | undefined;
@@ -260,12 +260,12 @@ export async function createTaskRecord(
     requireSameTenant(runExists.tenant_id, resolvedTenantId, `schedule_run_id ${schedule_run_id} is not in the same workspace`);
   }
 
-  const resolvedFieldSchema = await resolveTaskFieldSchema(resolvedSprintId, normalizedTaskType ?? null);
-  if (typeof normalizedTaskType === 'string' && !await isTaskTypeAllowedForSprintType(db, resolvedFieldSchema.sprint_type, normalizedTaskType)) {
-    throw new Error(`task_type "${normalizedTaskType}" is not allowed for sprint type "${resolvedFieldSchema.sprint_type}"`);
+  const resolvedFieldSchema = await resolveTaskFieldSchema(resolvedWorkflowId, normalizedTaskType ?? null);
+  if (typeof normalizedTaskType === 'string' && !await isTaskTypeAllowedForWorkflowType(db, resolvedFieldSchema.workflow_type, normalizedTaskType)) {
+    throw new Error(`task_type "${normalizedTaskType}" is not allowed for workflow type "${resolvedFieldSchema.workflow_type}"`);
   }
   if (status !== undefined && status !== null) {
-    await assertTaskStatusDefinedForWorkflow(db, status, { sprintId: resolvedSprintId, sprintType: resolvedFieldSchema.sprint_type });
+    await assertTaskStatusDefinedForWorkflow(db, status, { workflowId: resolvedWorkflowId, workflowType: resolvedFieldSchema.workflow_type });
   }
   validateTaskCustomFields(normalizedCustomFields, resolvedFieldSchema.schema);
 
@@ -296,13 +296,13 @@ export async function createTaskRecord(
   const { taskId, legacyBlockerWarnings } = await db.withTransaction(async (db) => {
     const result = await db.run(`
       INSERT INTO tasks (
-        tenant_id, title, description, status, priority, project_id, assigned_agent_id, sprint_id, recurring,
+        tenant_id, title, description, status, priority, project_id, assigned_agent_id, workflow_id, recurring,
         task_type, story_points, origin_task_id, defect_type,
         recurring_series_id, scheduled_for, schedule_run_id, generated_from,
         custom_fields_json
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, resolvedTenantId, title, description, status, priority, resolvedProjectId, resolvedAgentId, resolvedSprintId, recurring ? 1 : 0, normalizedTaskType ?? null, normalizedStoryPoints ?? null, origin_task_id ?? null, defect_type ?? null, recurring_series_id ?? null, scheduled_for ?? null, schedule_run_id ?? null, generated_from ?? null, JSON.stringify(normalizedCustomFields));
+    `, resolvedTenantId, title, description, status, priority, resolvedProjectId, resolvedAgentId, resolvedWorkflowId, recurring ? 1 : 0, normalizedTaskType ?? null, normalizedStoryPoints ?? null, origin_task_id ?? null, defect_type ?? null, recurring_series_id ?? null, scheduled_for ?? null, schedule_run_id ?? null, generated_from ?? null, JSON.stringify(normalizedCustomFields));
 
     const taskId = Number(result.lastInsertId);
 
@@ -374,7 +374,7 @@ export async function updateTaskRecord(
     job_id,
     agent_id,
     project_id,
-    sprint_id,
+    workflow_id,
     recurring,
     branch_url,
     task_type,
@@ -426,7 +426,7 @@ export async function updateTaskRecord(
       ? (agent_id ?? job_id ?? null)
       : (job_id !== undefined ? (job_id ?? null) : existing.assigned_agent_id),
     project_id: project_id !== undefined ? (project_id ?? null) : existing.project_id,
-    sprint_id: sprint_id !== undefined ? (sprint_id ?? null) : existing.sprint_id,
+    workflow_id: workflow_id !== undefined ? (workflow_id ?? null) : existing.workflow_id,
     recurring: recurring !== undefined ? (recurring ? 1 : 0) : existing.recurring,
     branch_url: branch_url !== undefined ? (branch_url ?? null) : existing.branch_url,
     task_type: normalizedTaskType !== undefined ? normalizedTaskType : existing.task_type,
@@ -436,20 +436,20 @@ export async function updateTaskRecord(
     custom_fields_json: JSON.stringify(normalizedCustomFields),
   };
 
-  if (updated.sprint_id == null) {
-    throw Object.assign(new Error('sprint_id is required and cannot be cleared'), { status: 400 });
+  if (updated.workflow_id == null) {
+    throw Object.assign(new Error('workflow_id is required and cannot be cleared'), { status: 400 });
   }
   if (updated.project_id != null) {
     const projectExists = await db.get('SELECT id, tenant_id FROM projects WHERE id = ?', updated.project_id) as { id: number; tenant_id: number | null } | undefined;
     if (!projectExists) throw new Error(`project_id ${updated.project_id} does not exist`);
     requireSameTenant(projectExists.tenant_id, existing.tenant_id as number | null | undefined, `project_id ${updated.project_id} is not in the same workspace`);
   }
-  if (updated.sprint_id != null) {
-    const sprintExists = await db.get('SELECT id, project_id, tenant_id FROM sprints WHERE id = ?', updated.sprint_id) as { id: number; project_id: number | null; tenant_id: number | null } | undefined;
-    if (!sprintExists) throw new Error(`sprint_id ${updated.sprint_id} does not exist`);
-    requireSameTenant(sprintExists.tenant_id, existing.tenant_id as number | null | undefined, `sprint_id ${updated.sprint_id} is not in the same workspace`);
-    if (updated.project_id != null && sprintExists.project_id !== updated.project_id) {
-      throw new Error(`sprint_id ${updated.sprint_id} does not belong to project_id ${updated.project_id}`);
+  if (updated.workflow_id != null) {
+    const workflowExists = await db.get('SELECT id, project_id, tenant_id FROM workflows WHERE id = ?', updated.workflow_id) as { id: number; project_id: number | null; tenant_id: number | null } | undefined;
+    if (!workflowExists) throw new Error(`workflow_id ${updated.workflow_id} does not exist`);
+    requireSameTenant(workflowExists.tenant_id, existing.tenant_id as number | null | undefined, `workflow_id ${updated.workflow_id} is not in the same workspace`);
+    if (updated.project_id != null && workflowExists.project_id !== updated.project_id) {
+      throw new Error(`workflow_id ${updated.workflow_id} does not belong to project_id ${updated.project_id}`);
     }
   }
   if (updated.assigned_agent_id != null) {
@@ -458,18 +458,18 @@ export async function updateTaskRecord(
     requireSameTenant(agentExists.tenant_id, existing.tenant_id as number | null | undefined, `agent_id ${updated.assigned_agent_id} is not in the same workspace`);
   }
 
-  const resolvedFieldSchema = await resolveTaskFieldSchema(updated.sprint_id, updated.task_type);
-  const resolvedSprintType = await resolveSprintTypeForTask(updated.sprint_id);
-  if (typeof updated.task_type === 'string' && !await isTaskTypeAllowedForSprintType(db, resolvedSprintType, updated.task_type)) {
-    throw new Error(`task_type "${updated.task_type}" is not allowed for sprint type "${resolvedFieldSchema.sprint_type}"`);
+  const resolvedFieldSchema = await resolveTaskFieldSchema(updated.workflow_id, updated.task_type);
+  const resolvedWorkflowType = await resolveWorkflowTypeForTask(updated.workflow_id);
+  if (typeof updated.task_type === 'string' && !await isTaskTypeAllowedForWorkflowType(db, resolvedWorkflowType, updated.task_type)) {
+    throw new Error(`task_type "${updated.task_type}" is not allowed for workflow type "${resolvedFieldSchema.workflow_type}"`);
   }
   if (status !== undefined && status !== null) {
     await assertTaskStatusDefinedForWorkflow(db, status, {
-            sprintId: (updated.sprint_id as number | null | undefined) ?? null,
-            sprintType: resolvedSprintType,
+            workflowId: (updated.workflow_id as number | null | undefined) ?? null,
+            workflowType: resolvedWorkflowType,
           });
   }
-  const shouldValidateCustomFields = customFieldsProvided || sprint_id !== undefined || task_type !== undefined;
+  const shouldValidateCustomFields = customFieldsProvided || workflow_id !== undefined || task_type !== undefined;
   if (shouldValidateCustomFields) {
     validateTaskCustomFields(normalizedCustomFields, resolvedFieldSchema.schema, {
       existingCustomFields,
@@ -492,7 +492,7 @@ export async function updateTaskRecord(
     await assertAtlasDirectStatusGate(db, {
             id: taskId,
             status: String(existing.status),
-            sprint_id: (updated.sprint_id as number | null | undefined) ?? null,
+            workflow_id: (updated.workflow_id as number | null | undefined) ?? null,
             task_type: (updated.task_type as string | null | undefined) ?? null,
             review_branch: (existingFieldValues.review_branch as string | null | undefined) ?? null,
             review_commit: (existingFieldValues.review_commit as string | null | undefined) ?? null,
@@ -509,7 +509,7 @@ export async function updateTaskRecord(
           }, status);
   }
 
-  const trackedFields: Array<keyof typeof updated> = ['status', 'priority', 'title', 'sprint_id', 'assigned_agent_id', 'branch_url', 'task_type', 'story_points', 'origin_task_id', 'defect_type', 'custom_fields_json'];
+  const trackedFields: Array<keyof typeof updated> = ['status', 'priority', 'title', 'workflow_id', 'assigned_agent_id', 'branch_url', 'task_type', 'story_points', 'origin_task_id', 'defect_type', 'custom_fields_json'];
   for (const field of trackedFields) {
     const oldValue = existing[field];
     const newValue = updated[field];
@@ -523,12 +523,12 @@ export async function updateTaskRecord(
   await db.run(`
     UPDATE tasks SET
       title = ?, description = ?, status = ?, priority = ?,
-      project_id = ?, assigned_agent_id = ?, sprint_id = ?, recurring = ?,
+      project_id = ?, assigned_agent_id = ?, workflow_id = ?, recurring = ?,
       branch_url = ?, task_type = ?, story_points = ?,
       origin_task_id = ?, defect_type = ?, custom_fields_json = ?,
       updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     WHERE id = ?
-  `, updated.title, updated.description, updated.status, updated.priority, updated.project_id, updated.assigned_agent_id, updated.sprint_id, updated.recurring, updated.branch_url, updated.task_type, updated.story_points, updated.origin_task_id, updated.defect_type, updated.custom_fields_json, taskId);
+  `, updated.title, updated.description, updated.status, updated.priority, updated.project_id, updated.assigned_agent_id, updated.workflow_id, updated.recurring, updated.branch_url, updated.task_type, updated.story_points, updated.origin_task_id, updated.defect_type, updated.custom_fields_json, taskId);
 
   const originRelationshipChanged = origin_task_id !== undefined && String(existing.origin_task_id ?? '') !== String(updated.origin_task_id ?? '');
   const defectMetadataChanged = defect_type !== undefined && String(existing.defect_type ?? '') !== String(updated.defect_type ?? '');

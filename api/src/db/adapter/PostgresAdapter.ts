@@ -33,7 +33,7 @@ import { toPostgresParams } from './postgresParams';
  * schema declares no numeric column anywhere — 554 text, 323 bigint, 2 double precision — so
  * every numeric value the driver ever sees is the result of an aggregate. PostgreSQL widens
  * SUM(bigint) to numeric to avoid overflow and AVG() likewise, so leaving it as a string turned
- * sprints.total_story_points into "13" and telemetry's first_pass_rate_pct into "0.0" while the
+ * workflows.total_story_points into "13" and telemetry's first_pass_rate_pct into "0.0" while the
  * SQLite build returned numbers. Since no column carries the type, there is no column precision
  * to protect by keeping the string form.
  */

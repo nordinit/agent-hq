@@ -52,7 +52,7 @@ const DEV_BACKEND_SCHEMA = JSON.stringify({
   ],
 });
 
-async function seedFieldSchemaFixture(): Promise<{ sprintId: number }> {
+async function seedFieldSchemaFixture(): Promise<{ workflowId: number }> {
   const db = getDb();
   const tenantId = await resolveTenantId();
 
@@ -60,40 +60,40 @@ async function seedFieldSchemaFixture(): Promise<{ sprintId: number }> {
     `INSERT INTO projects (tenant_id, name, description, context_md) VALUES (?, 'Agent HQ', '', '')`,
     tenantId,
   );
-  const sprint = await db.run(
-    `INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status)
+  const workflow = await db.run(
+    `INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status)
      VALUES (?, ?, 'Backend Domain Refactor', '', 'dev', 'active')`,
     tenantId, Number(project.lastInsertId),
   );
 
   // The DELETEs make this fixture authoritative rather than additive if setup added definitions.
-  await db.run(`DELETE FROM sprint_type_task_types WHERE sprint_type_key = 'dev'`);
+  await db.run(`DELETE FROM workflow_type_task_types WHERE workflow_type_key = 'dev'`);
   await db.run(
-    `INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type)
+    `INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type)
      VALUES (?, 'dev', 'backend'), (?, 'dev', 'frontend'), (?, 'dev', 'qa')`,
     tenantId, tenantId, tenantId,
   );
-  await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key IN ('generic', 'dev') AND task_type IS NULL`);
-  await db.run(`DELETE FROM task_field_schemas WHERE sprint_type_key = 'dev' AND task_type = 'backend'`);
+  await db.run(`DELETE FROM task_field_schemas WHERE workflow_type_key IN ('generic', 'dev') AND task_type IS NULL`);
+  await db.run(`DELETE FROM task_field_schemas WHERE workflow_type_key = 'dev' AND task_type = 'backend'`);
   await db.run(`
-    INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
+    INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
     VALUES
       (?, 'generic', NULL, ?),
       (?, 'dev', NULL, ?),
       (?, 'dev', 'backend', ?)
   `, tenantId, GENERIC_SCHEMA, tenantId, DEV_SCHEMA, tenantId, DEV_BACKEND_SCHEMA);
 
-  return { sprintId: Number(sprint.lastInsertId) };
+  return { workflowId: Number(workflow.lastInsertId) };
 }
 
 describe('GET /api/v1/tasks/field-schema/resolve', () => {
   let server: Server;
   let baseUrl: string;
-  let sprintId: number;
+  let workflowId: number;
 
   beforeEach(async () => {
     await setupTestDb();
-    ({ sprintId } = await seedFieldSchemaFixture());
+    ({ workflowId } = await seedFieldSchemaFixture());
     ({ server, baseUrl } = await startServer());
   });
 
@@ -102,17 +102,17 @@ describe('GET /api/v1/tasks/field-schema/resolve', () => {
     await teardownTestDb();
   });
 
-  it('resolves the sprint-type schema when sprint_type is provided directly', async () => {
-    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?sprint_type=dev&task_type=backend`);
+  it('resolves the workflow-type schema when workflow_type is provided directly', async () => {
+    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?workflow_type=dev&task_type=backend`);
     expect(res.status).toBe(200);
     const body = await res.json() as {
-      sprint_type: string;
+      workflow_type: string;
       allowed_task_types: string[];
       fields: Array<{ key: string }>;
       schema: { fields: Array<{ key: string }> };
     };
 
-    expect(body.sprint_type).toBe('dev');
+    expect(body.workflow_type).toBe('dev');
     expect(body.allowed_task_types).toEqual(['backend', 'frontend', 'qa']);
     expect(body.fields.map((field) => field.key)).toEqual(['review_branch', 'review_commit', 'qa_verified_commit', 'target_surface']);
     expect(body.fields.find((field) => field.key === 'review_commit')).toEqual(expect.objectContaining({
@@ -122,27 +122,27 @@ describe('GET /api/v1/tasks/field-schema/resolve', () => {
     expect(body.schema.fields.map((field) => field.key)).toEqual(['review_branch', 'review_commit', 'qa_verified_commit', 'target_surface']);
   });
 
-  it('still resolves the sprint-type schema when sprint_id is provided', async () => {
-    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?sprint_id=${sprintId}&task_type=backend`);
+  it('still resolves the workflow-type schema when workflow_id is provided', async () => {
+    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?workflow_id=${workflowId}&task_type=backend`);
     expect(res.status).toBe(200);
     const body = await res.json() as {
-      sprint_type: string;
+      workflow_type: string;
       fields: Array<{ key: string }>;
     };
 
-    expect(body.sprint_type).toBe('dev');
+    expect(body.workflow_type).toBe('dev');
     expect(body.fields.map((field) => field.key)).toEqual(['review_branch', 'review_commit', 'qa_verified_commit', 'target_surface']);
   });
 
   it('returns only workflow default fields when no task-type schema is configured', async () => {
-    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?sprint_id=${sprintId}&task_type=qa`);
+    const res = await fetch(`${baseUrl}/api/v1/tasks/field-schema/resolve?workflow_id=${workflowId}&task_type=qa`);
     expect(res.status).toBe(200);
     const body = await res.json() as {
-      sprint_type: string;
+      workflow_type: string;
       fields: Array<{ key: string }>;
     };
 
-    expect(body.sprint_type).toBe('dev');
+    expect(body.workflow_type).toBe('dev');
     expect(body.fields.map((field) => field.key)).toEqual(['review_branch', 'review_commit', 'qa_verified_commit']);
   });
 });

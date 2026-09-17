@@ -97,7 +97,7 @@ router.get('/', async (req: Request, res: Response) => {
     const rows = await db.all(`
       SELECT t.*,
              (SELECT COUNT(*) FROM team_members tm WHERE tm.team_id = t.id AND tm.enabled = 1) AS member_count,
-             (SELECT COUNT(*) FROM sprints s WHERE s.team_id = t.id) AS workflow_count
+             (SELECT COUNT(*) FROM workflows s WHERE s.team_id = t.id) AS workflow_count
       FROM teams t
       WHERE t.tenant_id = ? AND t.deleted_at IS NULL
       ORDER BY t.name ASC
@@ -665,14 +665,14 @@ workflowTeamRouter.put('/', async (req: Request, res: Response) => {
     const { team_id } = req.body as Record<string, unknown>;
 
     const workflow = await db.get(
-      `SELECT id, tenant_id FROM sprints WHERE id = ?`, workflowId,
+      `SELECT id, tenant_id FROM workflows WHERE id = ?`, workflowId,
     ) as { id: number; tenant_id: number | null } | undefined;
     if (!workflow || (workflow.tenant_id != null && Number(workflow.tenant_id) !== tenantId)) {
       return res.status(404).json({ error: 'Workflow not found' });
     }
     if (team_id != null) await requireTeam(team_id, tenantId);
 
-    await db.run(`UPDATE sprints SET team_id = ? WHERE id = ?`, team_id == null ? null : Number(team_id), workflowId);
+    await db.run(`UPDATE workflows SET team_id = ? WHERE id = ?`, team_id == null ? null : Number(team_id), workflowId);
     // Assigning a team changes context injection immediately. Routing is deliberately NOT
     // touched here: rewriting routing configuration as a side effect of setting a dropdown is
     // not something an operator can undo.

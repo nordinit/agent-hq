@@ -15,16 +15,16 @@ Use this directory for:
 | `instanceStop.ts` | `domains/runs/instanceStop` |
 | `lifecycleHandoff.ts` | `domains/runs/lifecycleHandoff` |
 | `runObservability.ts` | `domains/runs/observability` |
-| `sprintOutcomes.ts` | `domains/sprint-definitions/outcomes` |
-| `sprintTaskPolicy.ts` | `domains/routing/policy` |
-| `sprintTypeConfig.ts` | `domains/sprint-definitions/config` |
+| `workflowOutcomes.ts` | `domains/workflow-definitions/outcomes` |
+| `workflowTaskPolicy.ts` | `domains/routing/policy` |
+| `workflowTypeConfig.ts` | `domains/workflow-definitions/config` |
 | `stopInstanceExecution.ts` | `domains/runs/stopInstanceExecution` |
 | `taskContext.ts` | `domains/tasks/context` |
 | `taskHistory.ts` | `domains/tasks/history` |
 | `tokenBackfill.ts` | `domains/runs/tokenBackfill` |
 | `tokenUsage.ts` | `domains/runs/tokenUsage` |
 | `transcriptProvider.ts` | `domains/runs/transcriptProvider` |
-| `workflowMetadata.ts` | `domains/sprint-definitions/workflowMetadata` |
+| `workflowMetadata.ts` | `domains/workflow-definitions/workflowMetadata` |
 
 ## Generic/shared utilities retained in `lib`
 
@@ -70,9 +70,9 @@ Use this directory for:
 | --- | --- |
 | `canonicalSessions.ts` | `domains/chat` or `domains/runs` |
 | `gatewayTranscriptCapture.ts` | `domains/runs` |
-| `projectAudit.ts` | `domains/sprints` or a future `domains/projects` |
+| `projectAudit.ts` | `domains/workflows` or a future `domains/projects` |
 | `reflectionContext.ts` | `domains/runs` or a future `domains/sessions` |
-| `sprintWorkflow.ts` | `domains/sprint-definitions` |
+| `workflowModel.ts` | `domains/workflow-definitions` |
 | `starterSetup.ts` | `domains/tasks` or a future starter/provisioning slice |
 | `taskLifecycle.ts` | `domains/tasks` and `domains/runs` boundary cleanup |
 | `taskNotifications.ts` | `domains/tasks` |

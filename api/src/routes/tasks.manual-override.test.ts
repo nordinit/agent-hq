@@ -20,30 +20,30 @@ describe('manual MCP/admin task moves', () => {
     `, String(tenantId), String(tenantId));
 
     await db.exec(`
-      DELETE FROM sprint_task_transitions;
-      DELETE FROM sprint_type_task_types;
-      DELETE FROM sprint_type_outcomes;
-      DELETE FROM sprint_types;
-      DELETE FROM sprints;
+      DELETE FROM workflow_task_transitions;
+      DELETE FROM workflow_type_task_types;
+      DELETE FROM workflow_type_outcomes;
+      DELETE FROM workflow_types;
+      DELETE FROM workflows;
       DELETE FROM tasks;
       DELETE FROM projects;
       DELETE FROM agents;
     `);
 
     await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md, created_at) VALUES (1, ?, 'Agent HQ', '', '', CURRENT_TIMESTAMP)`, tenantId);
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'bugs', 'Bugs', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value, created_at) VALUES (56, ?, 1, 'Bugs', '', 'bugs', 'active', 'time', '2w', CURRENT_TIMESTAMP)`, tenantId);
-    await db.run(`INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name, description, is_system, created_at, updated_at) VALUES (?, 'bugs', 'Bugs', '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, tenantId);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value, created_at) VALUES (56, ?, 1, 'Bugs', '', 'bugs', 'active', 'time', '2w', CURRENT_TIMESTAMP)`, tenantId);
+    await db.run(`INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled, priority, is_protected, created_at, updated_at) VALUES
       (?, 56, NULL, 'dev_deploy_queued', 'completed_for_review', 'review', 1, 30, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       (?, 56, NULL, 'dev_deploy_queued', 'blocked', 'blocked', 1, 20, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       (?, 56, NULL, 'dev_deploy_queued', 'failed', 'failed', 1, 10, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, tenantId, tenantId, tenantId);
-    await db.run(`INSERT INTO sprint_type_outcomes (tenant_id, sprint_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES
+    await db.run(`INSERT INTO workflow_type_outcomes (tenant_id, workflow_type_key, task_type, outcome_key, label, description, enabled, behavior, badge_variant, stage_order, is_system, metadata_json, created_at, updated_at) VALUES
       (?, 'bugs', NULL, 'completed_for_review', 'Completed for Review', '', 1, 'base', NULL, 0, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       (?, 'bugs', NULL, 'blocked', 'Blocked', '', 1, 'base', NULL, 1, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       (?, 'bugs', NULL, 'failed', 'Failed', '', 1, 'base', NULL, 2, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, tenantId, tenantId, tenantId);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, sprint_id, task_type, created_at, updated_at) VALUES
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, workflow_id, task_type, created_at, updated_at) VALUES
       (455, ?, 'Queued task', 'dev_deploy_queued', 56, 'backend', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
       (456, ?, 'Blocked task', 'blocked', 56, 'backend', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, tenantId, tenantId);

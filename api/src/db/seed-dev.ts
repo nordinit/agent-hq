@@ -118,11 +118,11 @@ async function main(): Promise<void> {
   }
   console.log(`[seed-dev] Agents: ${agentsAdded} added (existing skipped).`);
 
-  // ── Sprints ─────────────────────────────────────────────────────────────────
+  // ── Workflows ─────────────────────────────────────────────────────────────────
   await seedIfEmpty(
     db,
-    'sprints',
-    `SELECT COUNT(*) AS cnt FROM sprints WHERE tenant_id = ${defaultTenantId} AND name IN ('Dev Sprint 1', 'Agent HQ Enhancements (dev)')`,
+    'workflows',
+    `SELECT COUNT(*) AS cnt FROM workflows WHERE tenant_id = ${defaultTenantId} AND name IN ('Dev Workflow 1', 'Agent HQ Enhancements (dev)')`,
     async () => {
       // We need a project id — get first agency project
       const agencyProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId);
@@ -130,13 +130,13 @@ async function main(): Promise<void> {
 
       if (agencyProject) {
         await db.run(`
-          INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value) VALUES
-            (?, ?, 'Dev Sprint 1', 'Validate dev environment isolation and seed data', 'dev', 'active', 'time', '2w')
+          INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value) VALUES
+            (?, ?, 'Dev Workflow 1', 'Validate dev environment isolation and seed data', 'dev', 'active', 'time', '2w')
         `, defaultTenantId, agencyProject.id);
       }
       if (atlasProject) {
         await db.run(`
-          INSERT INTO sprints (tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value) VALUES
+          INSERT INTO workflows (tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value) VALUES
             (?, ?, 'Agent HQ Enhancements (dev)', 'Test Agent HQ feature work in isolation', 'dev', 'active', 'time', '2w')
         `, defaultTenantId, atlasProject.id);
       }
@@ -157,16 +157,16 @@ async function main(): Promise<void> {
     `SELECT COUNT(*) AS cnt FROM tasks WHERE tenant_id = ${defaultTenantId}`,
     async () => {
       const agencyProject = await db.get<{ id: number }>(`SELECT id FROM projects WHERE tenant_id = ? AND name = 'Agency' LIMIT 1`, defaultTenantId);
-      const sprint = await db.get<{ id: number }>(`SELECT id FROM sprints WHERE tenant_id = ? AND name = 'Dev Sprint 1' LIMIT 1`, defaultTenantId);
+      const workflow = await db.get<{ id: number }>(`SELECT id FROM workflows WHERE tenant_id = ? AND name = 'Dev Workflow 1' LIMIT 1`, defaultTenantId);
       const forgeAgent = await db.get<{ id: number }>(`SELECT id FROM agents WHERE tenant_id = ? AND session_key = 'agent:agency-backend:main' LIMIT 1`, defaultTenantId);
 
       if (agencyProject) {
         await db.run(`
-          INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, sprint_id, assigned_agent_id) VALUES
+          INSERT INTO tasks (tenant_id, title, description, status, priority, project_id, workflow_id, assigned_agent_id) VALUES
             (?, 'Sample dev task — todo', 'A representative task in todo state for dev/test use', 'todo', 'medium', ?, ?, ?),
             (?, 'Sample dev task — in_progress', 'A representative task in in_progress state for dev/test use', 'in_progress', 'high', ?, ?, ?),
             (?, 'Sample dev task — review', 'A representative task in review state for dev/test use', 'review', 'low', ?, ?, ?)
-        `, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, sprint?.id ?? null, forgeAgent?.id ?? null);
+        `, defaultTenantId, agencyProject.id, workflow?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, workflow?.id ?? null, forgeAgent?.id ?? null, defaultTenantId, agencyProject.id, workflow?.id ?? null, forgeAgent?.id ?? null);
       }
     }
   );

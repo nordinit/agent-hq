@@ -33,14 +33,14 @@ describe('GET /api/v1/instances', () => {
     `);
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (7, 1, 'Seven'), (8, 1, 'Eight')`);
     await db.run(`
-      INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+      INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
       VALUES (70, 1, 7, 'Seven workflow', 'generic'), (80, 1, 8, 'Eight workflow', 'generic')
     `);
     await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, session_key) VALUES (1, 1, 'Cinder', 'Backend', 'agent:cinder:main')`);
     await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, session_key) VALUES (2, 1, 'Atlas', 'Assistant', 'agent:atlas:main')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id) VALUES (10, 1, 'Backend one', 'ready', 7, 70)`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id) VALUES (11, 1, 'Backend two', 'ready', 7, 70)`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, sprint_id) VALUES (12, 1, 'Mobile', 'ready', 8, 80)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id) VALUES (10, 1, 'Backend one', 'ready', 7, 70)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id) VALUES (11, 1, 'Backend two', 'ready', 7, 70)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, status, project_id, workflow_id) VALUES (12, 1, 'Mobile', 'ready', 8, 80)`);
     await db.run(`
       INSERT INTO job_instances (id, task_id, agent_id, session_key, status, created_at)
       VALUES

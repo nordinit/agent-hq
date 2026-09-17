@@ -67,7 +67,7 @@ it('seeds dev fixtures into the default tenant without leaking into another tena
   expect(result.stderr).toBe('');
 
   const db = getDb();
-  for (const table of ['projects', 'agents', 'sprints', 'tasks']) {
+  for (const table of ['projects', 'agents', 'workflows', 'tasks']) {
     const nullCount = await db.get(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id IS NULL`) as { n: number | string };
     // Coerce defensively at the assertion boundary in case a driver parser is overridden.
     expect(Number(nullCount.n)).toBe(0);

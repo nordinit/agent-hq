@@ -11,7 +11,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     () => wrap(() => api.listProjects())(),
     { domain: 'projects', rest_paths: ['/api/v1/projects'] },
   );
-  
+
   registerTool(
     ['agent_hq_get_project'],
     'Get a project by ID, including metrics.',
@@ -19,7 +19,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     ({ project_id }) => wrap(() => api.getProject(project_id))(),
     { domain: 'projects', rest_paths: ['/api/v1/projects/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_create_project'],
     'Create a project in Agent HQ.',
@@ -31,7 +31,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     ({ name, description, context_md }) => wrap(() => api.createProject({ name, description, context_md }))(),
     { domain: 'projects', rest_paths: ['/api/v1/projects'] },
   );
-  
+
   registerTool(
     ['agent_hq_update_project'],
     'Update a project in Agent HQ.',
@@ -44,7 +44,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     ({ project_id, name, description, context_md }) => wrap(() => api.updateProject(project_id, { name, description, context_md }))(),
     { domain: 'projects', rest_paths: ['/api/v1/projects/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_delete_project'],
     'Delete a project. Returns truthful validation errors when active work blocks deletion unless force=true is passed.',
@@ -55,7 +55,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     ({ project_id, force }) => wrap(() => api.deleteProject(project_id, force))(),
     { domain: 'projects', rest_paths: ['/api/v1/projects/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_list_project_files'],
     'List files uploaded to a project. Scoped through the Agent HQ project-file API.',
@@ -63,7 +63,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     ({ project_id }) => wrap(() => api.listProjectFiles(project_id))(),
     { domain: 'project_files', rest_paths: ['/api/v1/projects/:id/files'] },
   );
-  
+
   registerTool(
     ['agent_hq_get_project_file'],
     'Read project-file metadata by project and file ID.',
@@ -85,7 +85,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     ({ project_id, file_id }) => wrap(() => api.listProjectFileVersions(project_id, file_id))(),
     { domain: 'project_files', rest_paths: ['/api/v1/projects/:id/files/:fileId/versions'] },
   );
-  
+
   registerTool(
     ['agent_hq_download_project_file'],
     'Download a project file as agent-usable base64 content, with UTF-8 text included for text-like MIME types by default.',
@@ -97,7 +97,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     ({ project_id, file_id, include_text }) => wrap(() => api.downloadProjectFile(project_id, file_id, include_text ?? true))(),
     { domain: 'project_files', rest_paths: ['/api/v1/projects/:id/files/:fileId/download'] },
   );
-  
+
   registerTool(
     ['agent_hq_upload_project_file'],
     'Upload/create a project file through a typed MCP JSON/base64 input. The MCP bridge builds multipart/form-data server-side for the existing REST route.',
@@ -111,7 +111,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     ({ project_id, filename, content_base64, mime_type, uploaded_by }) => wrap(() => api.uploadProjectFile(project_id, { filename, content_base64, mime_type, uploaded_by }))(),
     { domain: 'project_files', rest_paths: ['/api/v1/projects/:id/files'] },
   );
-  
+
   registerTool(
     ['agent_hq_delete_project_file'],
     'Delete a project file by project and file ID.',
@@ -122,7 +122,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     ({ project_id, file_id }) => wrap(() => api.deleteProjectFile(project_id, file_id))(),
     { domain: 'project_files', rest_paths: ['/api/v1/projects/:id/files/:fileId'] },
   );
-  
+
   registerTool(
     ['agent_hq_replace_project_file'],
     'Replace the current content for a project file in place. The current file ID is retained and a new version-history entry is recorded.',
@@ -143,7 +143,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     'List files uploaded to one workflow. Results include scope=workflow plus tenant, project, workflow, file, version, size/type, and timestamps.',
     {
       project_id: z.number().int().positive().describe('Project ID that owns the workflow'),
-      workflow_id: z.number().int().positive().describe('Workflow ID (legacy sprint_id)'),
+      workflow_id: z.number().int().positive().describe('Workflow ID (legacy workflow_id)'),
     },
     ({ project_id, workflow_id }) => wrap(() => api.listWorkflowFiles(project_id, workflow_id))(),
     { domain: 'workflow_files', rest_paths: ['/api/v1/projects/:projectId/workflows/:workflowId/files'] },
@@ -154,7 +154,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     'Read workflow-file metadata by project, workflow, and file ID.',
     {
       project_id: z.number().int().positive().describe('Project ID that owns the workflow'),
-      workflow_id: z.number().int().positive().describe('Workflow ID (legacy sprint_id)'),
+      workflow_id: z.number().int().positive().describe('Workflow ID (legacy workflow_id)'),
       file_id: z.number().int().positive().describe('Workflow file ID'),
     },
     ({ project_id, workflow_id, file_id }) => wrap(() => api.getWorkflowFile(project_id, workflow_id, file_id))(),
@@ -166,7 +166,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     'List version history for a workflow file, preserving canonical file identity across replacements.',
     {
       project_id: z.number().int().positive().describe('Project ID that owns the workflow'),
-      workflow_id: z.number().int().positive().describe('Workflow ID (legacy sprint_id)'),
+      workflow_id: z.number().int().positive().describe('Workflow ID (legacy workflow_id)'),
       file_id: z.number().int().positive().describe('Workflow file ID'),
     },
     ({ project_id, workflow_id, file_id }) => wrap(() => api.listWorkflowFileVersions(project_id, workflow_id, file_id))(),
@@ -178,7 +178,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     'Download a workflow file as agent-usable base64 content, with UTF-8 text included for text-like MIME types by default.',
     {
       project_id: z.number().int().positive().describe('Project ID that owns the workflow'),
-      workflow_id: z.number().int().positive().describe('Workflow ID (legacy sprint_id)'),
+      workflow_id: z.number().int().positive().describe('Workflow ID (legacy workflow_id)'),
       file_id: z.number().int().positive().describe('Workflow file ID'),
       include_text: z.boolean().optional().describe('Include UTF-8 text when the MIME type is text-like; defaults to true'),
     },
@@ -191,7 +191,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     'Upload/create a file scoped to a workflow through typed MCP JSON/base64 input.',
     {
       project_id: z.number().int().positive().describe('Project ID that owns the workflow'),
-      workflow_id: z.number().int().positive().describe('Workflow ID (legacy sprint_id)'),
+      workflow_id: z.number().int().positive().describe('Workflow ID (legacy workflow_id)'),
       filename: z.string().min(1).describe('Original filename to store'),
       content_base64: z.string().min(1).describe('File content encoded as base64'),
       mime_type: z.string().optional().describe('MIME type; defaults to application/octet-stream'),
@@ -206,7 +206,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     'Delete a workflow file by project, workflow, and file ID.',
     {
       project_id: z.number().int().positive().describe('Project ID that owns the workflow'),
-      workflow_id: z.number().int().positive().describe('Workflow ID (legacy sprint_id)'),
+      workflow_id: z.number().int().positive().describe('Workflow ID (legacy workflow_id)'),
       file_id: z.number().int().positive().describe('Workflow file ID'),
     },
     ({ project_id, workflow_id, file_id }) => wrap(() => api.deleteWorkflowFile(project_id, workflow_id, file_id))(),
@@ -218,7 +218,7 @@ export function registerProjectsTools(ctx: McpDomainContext) {
     'Replace the current content for a workflow file in place. The workflow file ID is retained and a new version-history entry is recorded.',
     {
       project_id: z.number().int().positive().describe('Project ID that owns the workflow'),
-      workflow_id: z.number().int().positive().describe('Workflow ID (legacy sprint_id)'),
+      workflow_id: z.number().int().positive().describe('Workflow ID (legacy workflow_id)'),
       file_id: z.number().int().positive().describe('Existing workflow file ID to replace'),
       filename: z.string().min(1).describe('Original filename for the replacement file'),
       content_base64: z.string().min(1).describe('Replacement file content encoded as base64'),

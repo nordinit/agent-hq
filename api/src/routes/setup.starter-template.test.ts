@@ -5,7 +5,7 @@ import { setupTestDb, teardownTestDb } from '../db/testDb';
 import { getDefaultTenantId } from '../lib/tenantContext';
 import { saveRuntimeConnectionConfig } from '../lib/runtimeOnboarding';
 import setupRouter from './setup';
-import sprintsRouter from './sprints';
+import workflowsRouter from './workflows';
 
 async function seedInstalledTenant(): Promise<void> {
   const db = getDb();
@@ -27,7 +27,7 @@ async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(express.json());
   app.use('/api/v1/setup', setupRouter);
-  app.use('/api/v1/sprints', sprintsRouter);
+  app.use('/api/v1/workflows', workflowsRouter);
   const server = await new Promise<Server>((resolve) => {
     const bound = app.listen(0, '127.0.0.1', () => resolve(bound));
   });
@@ -127,36 +127,36 @@ describe('starter template setup API', () => {
       const db = getDb();
       const workflowStatuses = await db.all(`
         SELECT status_key
-        FROM sprint_task_statuses
-        WHERE sprint_id = ?
+        FROM workflow_task_statuses
+        WHERE workflow_id = ?
         ORDER BY stage_order ASC
       `, applied.workflow_id) as Array<{ status_key: string }>;
       expect(workflowStatuses.map(row => row.status_key)).not.toContain('qa_pass');
       expect(workflowStatuses.map(row => row.status_key)).toEqual(expect.arrayContaining(['review', 'ready_to_merge']));
       expect(await db.get(`
         SELECT to_status
-        FROM sprint_task_transitions
-        WHERE sprint_id = ? AND from_status = 'review' AND outcome = 'qa_pass'
+        FROM workflow_task_transitions
+        WHERE workflow_id = ? AND from_status = 'review' AND outcome = 'qa_pass'
       `, applied.workflow_id)).toEqual({ to_status: 'ready_to_merge' });
       expect(await db.get(`
         SELECT outcome_key
-        FROM sprint_type_outcomes
-        WHERE sprint_type_key = 'dev' AND outcome_key = 'qa_pass'
+        FROM workflow_type_outcomes
+        WHERE workflow_type_key = 'dev' AND outcome_key = 'qa_pass'
       `)).toEqual({ outcome_key: 'qa_pass' });
       const agentCount = (await db.get(`SELECT COUNT(*) AS n FROM agents WHERE project_id = ?`, applied.project_id) as { n: number }).n;
       expect(agentCount).toBe(4);
       const disabledRoute = await db.get(`
         SELECT tenant_id, enabled
-        FROM sprint_task_routing_rules
-        WHERE sprint_id = ? AND task_type = 'frontend' AND status = 'ready'
+        FROM workflow_task_routing_rules
+        WHERE workflow_id = ? AND task_type = 'frontend' AND status = 'ready'
       `, applied.workflow_id) as { tenant_id: number; enabled: number } | undefined;
       expect(disabledRoute?.tenant_id).toBe(await tenantId());
       expect(disabledRoute?.enabled).toBe(0);
       const docsRoute = await db.get(`
         SELECT rr.agent_id, a.name
-        FROM sprint_task_routing_rules rr
+        FROM workflow_task_routing_rules rr
         JOIN agents a ON a.id = rr.agent_id
-        WHERE rr.sprint_id = ? AND rr.task_type = 'docs' AND rr.status = 'ready'
+        WHERE rr.workflow_id = ? AND rr.task_type = 'docs' AND rr.status = 'ready'
       `, applied.workflow_id) as { name: string } | undefined;
       expect(docsRoute?.name).toBe('Atlas PM');
     } finally {
@@ -247,22 +247,22 @@ describe('starter template setup API', () => {
       expect(Object.keys(applied.workflow_ids).sort()).toEqual(['development', 'lead-generation', 'ops']);
       const db = getDb();
       // Template identity is asserted through applied.workflow_ids above;
-      // sprints no longer stores a template key.
-      const workflows = await db.all(`SELECT sprint_type FROM sprints WHERE project_id = ? ORDER BY sprint_type`, applied.project_id) as Array<{ sprint_type: string }>;
+      // workflows no longer stores a template key.
+      const workflows = await db.all(`SELECT workflow_type FROM workflows WHERE project_id = ? ORDER BY workflow_type`, applied.project_id) as Array<{ workflow_type: string }>;
       expect(workflows).toEqual([
-        { sprint_type: 'dev' },
-        { sprint_type: 'lead_generation' },
-        { sprint_type: 'ops' },
+        { workflow_type: 'dev' },
+        { workflow_type: 'lead_generation' },
+        { workflow_type: 'ops' },
       ]);
       const leadRoute = await db.get(`
         SELECT a.name
-        FROM sprint_task_routing_rules rr
+        FROM workflow_task_routing_rules rr
         JOIN agents a ON a.id = rr.agent_id
-        WHERE rr.sprint_id = ? AND rr.task_type = 'proposal' AND rr.status = 'human_approval'
+        WHERE rr.workflow_id = ? AND rr.task_type = 'proposal' AND rr.status = 'human_approval'
       `, applied.workflow_ids['lead-generation']) as { name: string } | undefined;
       expect(leadRoute?.name).toBe('Approval Owner');
 
-      const opsTypeRes = await fetch(`${baseUrl}/api/v1/sprints/types/ops`);
+      const opsTypeRes = await fetch(`${baseUrl}/api/v1/workflows/types/ops`);
       expect(opsTypeRes.status).toBe(200);
       const opsType = await opsTypeRes.json() as Record<string, any>;
       expect(opsType.task_types.map((row: any) => row.task_type).sort()).toEqual(['adhoc', 'data', 'ops', 'pm_operational']);
@@ -291,7 +291,7 @@ describe('starter template setup API', () => {
         'supporting_docs',
       ]);
 
-      const leadTypeRes = await fetch(`${baseUrl}/api/v1/sprints/types/lead_generation`);
+      const leadTypeRes = await fetch(`${baseUrl}/api/v1/workflows/types/lead_generation`);
       expect(leadTypeRes.status).toBe(200);
       const leadType = await leadTypeRes.json() as Record<string, any>;
       expect(leadType.task_types.map((row: any) => row.task_type).sort()).toEqual(['follow_up', 'lead', 'outreach', 'proposal', 'research']);
@@ -327,11 +327,11 @@ describe('starter template setup API', () => {
     // tenant-scoped — seeded under any other tenant they survive, and the assertions below pass
     // without reconciliation ever having run.
     await db.run(`
-      INSERT INTO sprint_type_task_types (tenant_id, sprint_type_key, task_type, is_system)
+      INSERT INTO workflow_type_task_types (tenant_id, workflow_type_key, task_type, is_system)
       VALUES (?, 'ops', 'backend', 1), (?, 'ops', 'qa', 1)
     `, tenant, tenant);
     await db.run(`
-      INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json, is_system)
+      INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json, is_system)
       VALUES (?, 'ops', NULL, ?, 1)
     `, tenant, JSON.stringify({ fields: [
             { key: 'environment', label: 'Environment', type: 'text', required: false },
@@ -356,12 +356,12 @@ describe('starter template setup API', () => {
       });
       expect(applyRes.status).toBe(201);
 
-      const opsTaskTypesRes = await fetch(`${baseUrl}/api/v1/sprints/types/ops/task-types`);
+      const opsTaskTypesRes = await fetch(`${baseUrl}/api/v1/workflows/types/ops/task-types`);
       expect(opsTaskTypesRes.status).toBe(200);
       const opsTaskTypes = await opsTaskTypesRes.json() as Record<string, any>;
       expect(opsTaskTypes.task_types.map((row: any) => row.task_type).sort()).toEqual(['adhoc', 'data', 'ops', 'pm_operational']);
 
-      const opsFieldSchemasRes = await fetch(`${baseUrl}/api/v1/sprints/types/ops/field-schemas`);
+      const opsFieldSchemasRes = await fetch(`${baseUrl}/api/v1/workflows/types/ops/field-schemas`);
       expect(opsFieldSchemasRes.status).toBe(200);
       const opsFieldSchemas = await opsFieldSchemasRes.json() as Record<string, any>;
       expect(opsFieldSchemas.field_schemas[0].schema.fields.map((field: any) => field.key)).toEqual(expect.arrayContaining([

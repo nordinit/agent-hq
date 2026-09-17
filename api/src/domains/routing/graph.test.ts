@@ -430,8 +430,8 @@ describe('buildWorkflowGraph', () => {
         transitions: [
           // The inherited default is superseded, so it must not shadow the override
           // and must not make 'review' look reachable.
-          transition(1, 'todo', 'review', 'completed', { priority: 99, effective_for_sprint: false, is_inherited: true }),
-          transition(2, 'todo', 'done', 'completed', { priority: 0, effective_for_sprint: true, is_override: true }),
+          transition(1, 'todo', 'review', 'completed', { priority: 99, effective_for_workflow: false, is_inherited: true }),
+          transition(2, 'todo', 'done', 'completed', { priority: 0, effective_for_workflow: true, is_override: true }),
         ],
         rules: [rule(1, 'todo', 1), rule(2, 'review', 1)],
       });
@@ -450,26 +450,26 @@ describe('buildWorkflowGraph', () => {
         ],
         transitions: [
           transition(1, 'todo', 'review', 'completed', {
-            scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+            scope_kind: 'workflow_type_default', is_inherited: true, is_override: false, effective_for_workflow: false,
           }),
           transition(2, 'todo', 'done', 'completed', {
-            scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+            scope_kind: 'workflow_override', is_inherited: false, is_override: true, effective_for_workflow: true,
           }),
         ],
         rules: [rule(1, 'todo', 1), rule(2, 'review', 1)],
       });
       expect(graph.edges.find((edge) => edge.transition_id === 1)).toMatchObject({
-        scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+        scope_kind: 'workflow_type_default', is_inherited: true, is_override: false, effective_for_workflow: false,
       });
       expect(graph.edges.find((edge) => edge.transition_id === 2)).toMatchObject({
-        scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+        scope_kind: 'workflow_override', is_inherited: false, is_override: true, effective_for_workflow: true,
       });
     });
 
     it('defaults an unannotated edge to a live workflow-type default', () => {
       // No workflow is selected, so nothing is superseded and every row participates.
       expect(healthy().edges[0]).toMatchObject({
-        scope_kind: 'sprint_type_default', is_inherited: false, is_override: false, effective_for_sprint: true,
+        scope_kind: 'workflow_type_default', is_inherited: false, is_override: false, effective_for_workflow: true,
       });
     });
 
@@ -482,19 +482,19 @@ describe('buildWorkflowGraph', () => {
         transitions: [transition(1, 'todo', 'done', 'completed')],
         rules: [
           rule(1, 'todo', 1, {
-            scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+            scope_kind: 'workflow_type_default', is_inherited: true, is_override: false, effective_for_workflow: false,
           }),
           rule(2, 'todo', 1, {
-            scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+            scope_kind: 'workflow_override', is_inherited: false, is_override: true, effective_for_workflow: true,
           }),
         ],
       });
       const todo = graph.nodes.find((node) => node.id === 'todo');
       expect(todo?.assignments.find((assignment) => assignment.rule_id === 1)).toMatchObject({
-        scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+        scope_kind: 'workflow_type_default', is_inherited: true, is_override: false, effective_for_workflow: false,
       });
       expect(todo?.assignments.find((assignment) => assignment.rule_id === 2)).toMatchObject({
-        scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+        scope_kind: 'workflow_override', is_inherited: false, is_override: true, effective_for_workflow: true,
       });
     });
 
@@ -508,20 +508,20 @@ describe('buildWorkflowGraph', () => {
         rules: [rule(1, 'todo', 1)],
         requirements: [
           requirement(1, 'completed', {
-            scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+            scope_kind: 'workflow_type_default', is_inherited: true, is_override: false, effective_for_workflow: false,
           }),
           requirement(2, 'completed', {
             field_name: 'notes',
-            scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+            scope_kind: 'workflow_override', is_inherited: false, is_override: true, effective_for_workflow: true,
           }),
         ],
       });
       const gates = graph.edges[0].gates;
       expect(gates.find((gate) => gate.requirement_id === 1)).toMatchObject({
-        scope_kind: 'sprint_type_default', is_inherited: true, is_override: false, effective_for_sprint: false,
+        scope_kind: 'workflow_type_default', is_inherited: true, is_override: false, effective_for_workflow: false,
       });
       expect(gates.find((gate) => gate.requirement_id === 2)).toMatchObject({
-        scope_kind: 'sprint_override', is_inherited: false, is_override: true, effective_for_sprint: true,
+        scope_kind: 'workflow_override', is_inherited: false, is_override: true, effective_for_workflow: true,
       });
     });
 
@@ -536,7 +536,7 @@ describe('buildWorkflowGraph', () => {
         requirements: [requirement(1, 'completed')],
       });
       expect(graph.edges[0].gates[0]).toMatchObject({
-        scope_kind: 'sprint_type_default', is_inherited: false, is_override: false, effective_for_sprint: true,
+        scope_kind: 'workflow_type_default', is_inherited: false, is_override: false, effective_for_workflow: true,
       });
     });
 
@@ -552,7 +552,7 @@ describe('buildWorkflowGraph', () => {
         eventMappings: [eventMapping(27, { status_includes: ['ready'] })],
       });
       expect(graph.edges.find((edge) => edge.kind === 'event')).toMatchObject({
-        scope_kind: 'workflow_event', is_inherited: false, is_override: false, effective_for_sprint: true,
+        scope_kind: 'workflow_event', is_inherited: false, is_override: false, effective_for_workflow: true,
       });
     });
   });
@@ -806,7 +806,7 @@ test('an unused-gate finding is anchored to its outcome too', () => {
 
 // ── Task-type gate resolution ─────────────────────────────────────────────────
 //
-// loadSprintTaskTransitionRequirements tries loadRows(taskType) first and, if it returns
+// loadWorkflowTaskTransitionRequirements tries loadRows(taskType) first and, if it returns
 // anything, never loads the task_type IS NULL rows. A task-type gate therefore SUBSTITUTES the
 // whole set for that type rather than adding a requirement on top of the all-types ones.
 
@@ -921,19 +921,19 @@ test('a task type whose only gates are disabled falls back to the all-types set'
 });
 
 test('a superseded default is still listed, but only the override actually gates', () => {
-  // effective_for_sprint=false means a workflow-scoped override with the same identity won the
+  // effective_for_workflow=false means a workflow-scoped override with the same identity won the
   // dedupe. The row stays visible — that is how an operator sees what the override replaced —
   // but it is flagged, exactly as a superseded node assignment is.
   const graph = build({
     statuses: [status('review'), status('done')],
     transitions: [transition(1, 'review', 'done', 'qa_pass')],
     requirements: [
-      requirement(1, 'qa_pass', { field_name: 'pr_url', severity: 'block', effective_for_sprint: false }),
+      requirement(1, 'qa_pass', { field_name: 'pr_url', severity: 'block', effective_for_workflow: false }),
       requirement(2, 'qa_pass', { field_name: 'pr_url', severity: 'warn', is_override: true }),
     ],
   });
   expect(graph.edges[0].gates.map(g => g.severity)).toEqual(['block', 'warn']);
-  expect(graph.edges[0].gates.filter(g => g.effective_for_sprint).map(g => g.severity)).toEqual(['warn']);
+  expect(graph.edges[0].gates.filter(g => g.effective_for_workflow).map(g => g.severity)).toEqual(['warn']);
 });
 
 test('a superseded task-type gate does not override the all-types gate it names', () => {
@@ -942,7 +942,7 @@ test('a superseded task-type gate does not override the all-types gate it names'
     transitions: [transition(1, 'review', 'done', 'qa_pass', { task_type: 'qa' })],
     requirements: [
       requirement(1, 'qa_pass', { task_type: null, field_name: 'pr_url' }),
-      requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit', effective_for_sprint: false }),
+      requirement(2, 'qa_pass', { task_type: 'qa', field_name: 'qa_commit', effective_for_workflow: false }),
     ],
   });
   // The superseded row is still listed so the operator can see what an override replaced, but it

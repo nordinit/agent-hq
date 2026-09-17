@@ -181,18 +181,18 @@ router.get('/status', async (_req: Request, res: Response) => {
         AND updated_at >= to_char(date_trunc('day', now() AT TIME ZONE 'utc'), 'YYYY-MM-DD HH24:MI:SS')
     `) as { n: number }).n;
 
-    // Starved jobs: enabled agents that currently own an explicit sprint routing rule
+    // Starved jobs: enabled agents that currently own an explicit workflow routing rule
     // for ready tasks but have no active dispatch. Legacy task.agent_id ownership is
     // intentionally ignored here so the status view reflects the explicit routing model.
     const starvedJobs = await db.all(`
       SELECT a.id, a.job_title as title, a.name as agent_name,
              COUNT(DISTINCT t.id) as ready_task_count
       FROM agents a
-      INNER JOIN sprint_task_routing_rules rr
+      INNER JOIN workflow_task_routing_rules rr
         ON rr.agent_id = a.id
        AND rr.status = 'ready'
       INNER JOIN tasks t
-        ON t.sprint_id = rr.sprint_id
+        ON t.workflow_id = rr.workflow_id
        AND t.status = 'ready'
        AND (
          rr.task_type IS NULL

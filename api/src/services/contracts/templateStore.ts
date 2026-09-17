@@ -21,26 +21,26 @@ export function normalizeContractTemplateKey(raw: string | null | undefined, fal
   return normalized.length > 0 ? normalized : fallback;
 }
 
-export function getSprintTypeContractPath(sprintTypeKey: string): string {
-  return path.join(getAgentContractRoot(), `${normalizeContractTemplateKey(sprintTypeKey)}.md`);
+export function getWorkflowTypeContractPath(workflowTypeKey: string): string {
+  return path.join(getAgentContractRoot(), `${normalizeContractTemplateKey(workflowTypeKey)}.md`);
 }
 
-export function writeSprintTypeContractTemplate(sprintTypeKey: string, content: string): string {
-  const targetPath = getSprintTypeContractPath(sprintTypeKey);
+export function writeWorkflowTypeContractTemplate(workflowTypeKey: string, content: string): string {
+  const targetPath = getWorkflowTypeContractPath(workflowTypeKey);
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, content, 'utf-8');
   return targetPath;
 }
 
-export function readSprintTypeContractTemplate(sprintTypeKey: string | null | undefined): LoadedContractTemplate {
-  const normalizedSprintType = normalizeContractTemplateKey(sprintTypeKey);
-  const directPath = getSprintTypeContractPath(normalizedSprintType);
+export function readWorkflowTypeContractTemplate(workflowTypeKey: string | null | undefined): LoadedContractTemplate {
+  const normalizedWorkflowType = normalizeContractTemplateKey(workflowTypeKey);
+  const directPath = getWorkflowTypeContractPath(normalizedWorkflowType);
   if (fs.existsSync(directPath)) {
     return { content: fs.readFileSync(directPath, 'utf-8'), path: directPath, inheritedFrom: null };
   }
 
-  const genericPath = getSprintTypeContractPath('generic');
-  if (normalizedSprintType !== 'generic' && fs.existsSync(genericPath)) {
+  const genericPath = getWorkflowTypeContractPath('generic');
+  if (normalizedWorkflowType !== 'generic' && fs.existsSync(genericPath)) {
     return {
       content: fs.readFileSync(genericPath, 'utf-8'),
       path: genericPath,
@@ -48,7 +48,7 @@ export function readSprintTypeContractTemplate(sprintTypeKey: string | null | un
     };
   }
 
-  throw new Error(`No contract template found for sprint type "${normalizedSprintType}"`);
+  throw new Error(`No contract template found for workflow type "${normalizedWorkflowType}"`);
 }
 
 /**

@@ -35,14 +35,14 @@ function traceDb(db:Db,traces:Trace[]):Db{
 async function seed(db:Db,count:number){
   await db.run(`INSERT INTO tenants(id,name,slug) VALUES(1,'Benchmark','telemetry-benchmark')`);
   await db.run(`INSERT INTO projects(id,tenant_id,name) VALUES(1,1,'Benchmark')`);
-  await db.run(`INSERT INTO sprint_types(tenant_id,key,name) VALUES(1,'benchmark','Benchmark')`);
-  await db.run(`INSERT INTO sprints(id,tenant_id,project_id,name,sprint_type) VALUES(1,1,1,'Benchmark','benchmark')`);
-  await db.run(`INSERT INTO task_field_schemas(tenant_id,sprint_type_key,schema_json)
+  await db.run(`INSERT INTO workflow_types(tenant_id,key,name) VALUES(1,'benchmark','Benchmark')`);
+  await db.run(`INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(1,1,1,'Benchmark','benchmark')`);
+  await db.run(`INSERT INTO task_field_schemas(tenant_id,workflow_type_key,schema_json)
     VALUES(1,'benchmark','{"fields":[{"key":"amount","label":"Amount","type":"number"}]}')`);
   await db.run(`INSERT INTO agents(id,tenant_id,project_id,name,session_key,model)
     SELECT n,1,1,'Agent '||n,'benchmark-'||n,'benchmark' FROM generate_series(1,10) n`);
   const start=performance.now();
-  await db.run(`INSERT INTO tasks(tenant_id,title,sprint_id,project_id,status,task_type,assigned_agent_id,custom_fields_json)
+  await db.run(`INSERT INTO tasks(tenant_id,title,workflow_id,project_id,status,task_type,assigned_agent_id,custom_fields_json)
     SELECT 1,'Task '||n,1,1,'draft','benchmark',(n%10)+1,jsonb_build_object('amount',(n%100)+1)::text FROM generate_series(1,?) n`,count);
   await db.run(`UPDATE tasks SET status='in_progress' WHERE tenant_id=1`);
   await db.run(`UPDATE tasks SET status='submitted' WHERE tenant_id=1`);

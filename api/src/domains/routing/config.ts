@@ -3,8 +3,8 @@ import {
   CONTRACT_PLACEHOLDER_DEFINITIONS,
   getAvailableContractPlaceholders,
   normalizeContractTemplateKey,
-  readSprintTypeContractTemplate,
-  writeSprintTypeContractTemplate,
+  readWorkflowTypeContractTemplate,
+  writeWorkflowTypeContractTemplate,
 } from '../../services/contracts';
 import { type Db } from "../../db/adapter/types";
 
@@ -107,25 +107,25 @@ export async function updateAgentRoutingConfig(
   return await getAgentRoutingConfig(db, agent.id);
 }
 
-export function normalizeSprintTypeKey(raw: unknown): string {
+export function normalizeWorkflowTypeKey(raw: unknown): string {
   return normalizeContractTemplateKey(typeof raw === 'string' ? raw : null);
 }
 
-export async function ensureSprintTypeExists(db: Db, sprintTypeKey: string): Promise<void> {
-  const row = await db.get(`SELECT key FROM sprint_types WHERE key = ? LIMIT 1`, sprintTypeKey) as { key: string } | undefined;
+export async function ensureWorkflowTypeExists(db: Db, workflowTypeKey: string): Promise<void> {
+  const row = await db.get(`SELECT key FROM workflow_types WHERE key = ? LIMIT 1`, workflowTypeKey) as { key: string } | undefined;
   if (!row) {
-    const error = new Error(`Unknown sprint type "${sprintTypeKey}"`) as Error & { status?: number };
+    const error = new Error(`Unknown workflow type "${workflowTypeKey}"`) as Error & { status?: number };
     error.status = 404;
     throw error;
   }
 }
 
-export async function readAgentContract(db: Db, rawSprintTypeKey: unknown) {
-  const sprintTypeKey = normalizeSprintTypeKey(rawSprintTypeKey);
-  await ensureSprintTypeExists(db, sprintTypeKey);
-  const contract = readSprintTypeContractTemplate(sprintTypeKey);
+export async function readAgentContract(db: Db, rawWorkflowTypeKey: unknown) {
+  const workflowTypeKey = normalizeWorkflowTypeKey(rawWorkflowTypeKey);
+  await ensureWorkflowTypeExists(db, workflowTypeKey);
+  const contract = readWorkflowTypeContractTemplate(workflowTypeKey);
   return {
-    sprint_type: sprintTypeKey,
+    workflow_type: workflowTypeKey,
     content: contract.content,
     path: contract.path,
     inherited_from: contract.inheritedFrom,
@@ -137,17 +137,17 @@ export async function readAgentContract(db: Db, rawSprintTypeKey: unknown) {
 
 export async function writeAgentContract(
   db: Db,
-  rawSprintTypeKey: unknown,
+  rawWorkflowTypeKey: unknown,
   content: unknown,
 ) {
-  const sprintTypeKey = normalizeSprintTypeKey(rawSprintTypeKey);
-  await ensureSprintTypeExists(db, sprintTypeKey);
+  const workflowTypeKey = normalizeWorkflowTypeKey(rawWorkflowTypeKey);
+  await ensureWorkflowTypeExists(db, workflowTypeKey);
   if (typeof content !== 'string') {
     const error = new Error('`content` (string) is required') as Error & { status?: number };
     error.status = 400;
     throw error;
   }
 
-  const targetPath = writeSprintTypeContractTemplate(sprintTypeKey, content);
-  return { ok: true, sprint_type: sprintTypeKey, path: targetPath };
+  const targetPath = writeWorkflowTypeContractTemplate(workflowTypeKey, content);
+  return { ok: true, workflow_type: workflowTypeKey, path: targetPath };
 }

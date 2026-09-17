@@ -5,8 +5,8 @@ import { columnExists as sharedColumnExists } from "../../../db/introspection";
 interface StoryPointRoutingRule {
   max_points: number;
   project_id?: number | null;
-  sprint_id?: number | null;
-  sprint_type?: string | null;
+  workflow_id?: number | null;
+  workflow_type?: string | null;
   model: string;
   max_turns: number | null;
   max_budget_usd: number | null;
@@ -31,9 +31,9 @@ export interface ResolvedStoryPointModel {
  * given story_points value and preferred_provider.
  *
  * Precedence rule (highest wins):
- *   1. Explicit sprint-scoped rule for the task's sprint
- *   2. Workflow-type-scoped rule for the task's project + resolved legacy sprint type
- *   3. Global workflow-type-scoped rule for the resolved legacy sprint type
+ *   1. Explicit workflow-scoped rule for the task's workflow
+ *   2. Workflow-type-scoped rule for the task's project + resolved legacy workflow type
+ *   3. Global workflow-type-scoped rule for the resolved legacy workflow type
  *   4. Explicit project-scoped rule for the task's project
  *
  * Within each tier, provider-specific rules win over NULL-provider rules, and
@@ -47,28 +47,28 @@ export async function resolveModelFromStoryPoints(
   db: Db,
   story_points: number | null | undefined,
   preferred_provider?: string | null,
-  scope?: { projectId?: number | null; sprintId?: number | null; sprintType?: string | null; tenantId?: number | null },
+  scope?: { projectId?: number | null; workflowId?: number | null; workflowType?: string | null; tenantId?: number | null },
 ): Promise<ResolvedStoryPointModel | null> {
   if (story_points == null) return null;
 
   try {
     const provider = preferred_provider ?? null;
     let projectId = scope?.projectId ?? null;
-    const sprintId = scope?.sprintId ?? null;
-    let sprintType = scope?.sprintType ?? null;
+    const workflowId = scope?.workflowId ?? null;
+    let workflowType = scope?.workflowType ?? null;
     const tenantId = scope?.tenantId ?? null;
-    if (projectId == null && sprintId == null && sprintType == null) return null;
+    if (projectId == null && workflowId == null && workflowType == null) return null;
 
-    if (sprintId != null && (sprintType == null || projectId == null)) {
+    if (workflowId != null && (workflowType == null || projectId == null)) {
       try {
-        const sprintHasTenant = await tableHasColumn(db, 'sprints', 'tenant_id');
-        const sprintTenantPredicate = sprintHasTenant && tenantId != null ? 'AND tenant_id = ?' : '';
-        const sprintParams = sprintHasTenant && tenantId != null ? [sprintId, tenantId] : [sprintId];
-        const sprint = await db.get(`SELECT project_id, sprint_type FROM sprints WHERE id = ? ${sprintTenantPredicate} LIMIT 1`, ...sprintParams) as { project_id?: number | null; sprint_type?: string | null } | undefined;
-        projectId = projectId ?? sprint?.project_id ?? null;
-        sprintType = sprintType ?? (sprint?.sprint_type ? String(sprint.sprint_type).trim() : null);
+        const workflowHasTenant = await tableHasColumn(db, 'workflows', 'tenant_id');
+        const workflowTenantPredicate = workflowHasTenant && tenantId != null ? 'AND tenant_id = ?' : '';
+        const workflowParams = workflowHasTenant && tenantId != null ? [workflowId, tenantId] : [workflowId];
+        const workflow = await db.get(`SELECT project_id, workflow_type FROM workflows WHERE id = ? ${workflowTenantPredicate} LIMIT 1`, ...workflowParams) as { project_id?: number | null; workflow_type?: string | null } | undefined;
+        projectId = projectId ?? workflow?.project_id ?? null;
+        workflowType = workflowType ?? (workflow?.workflow_type ? String(workflow.workflow_type).trim() : null);
       } catch {
-        sprintType = sprintType ?? null;
+        workflowType = workflowType ?? null;
       }
     }
 
@@ -76,83 +76,83 @@ export async function resolveModelFromStoryPoints(
     const params: unknown[] = [story_points, provider];
     const orderParams: unknown[] = [];
     let scopeOrderCase = '';
-    const hasSprintTypeRoutingScope = await (async () => {
+    const hasWorkflowTypeRoutingScope = await (async () => {
       try {
-        return await sharedColumnExists(db, 'story_point_model_routing', 'sprint_type');
+        return await sharedColumnExists(db, 'story_point_model_routing', 'workflow_type');
       } catch {
         return false;
       }
     })();
-    const sprintTypeBlankPredicate = hasSprintTypeRoutingScope ? `(sprint_type IS NULL OR sprint_type = '')` : '1 = 1';
-    const sprintTypeSelect = hasSprintTypeRoutingScope ? 'sprint_type' : 'NULL as sprint_type';
+    const workflowTypeBlankPredicate = hasWorkflowTypeRoutingScope ? `(workflow_type IS NULL OR workflow_type = '')` : '1 = 1';
+    const workflowTypeSelect = hasWorkflowTypeRoutingScope ? 'workflow_type' : 'NULL as workflow_type';
     const hasFastModeRouting = await tableHasColumn(db, 'story_point_model_routing', 'fast_mode');
     const fastModeSelect = hasFastModeRouting ? 'fast_mode' : 'NULL as fast_mode';
     const enabledPredicate = await tableHasColumn(db, 'story_point_model_routing', 'enabled') ? 'AND enabled = 1' : '';
     const hasTenantRoutingScope = await tableHasColumn(db, 'story_point_model_routing', 'tenant_id');
     const tenantPredicate = hasTenantRoutingScope && tenantId != null ? 'AND tenant_id = ?' : '';
 
-    if (projectId != null && sprintId != null) {
-      if (hasSprintTypeRoutingScope && sprintType != null) {
+    if (projectId != null && workflowId != null) {
+      if (hasWorkflowTypeRoutingScope && workflowType != null) {
         whereClauses.push(`(
-          (project_id = ? AND sprint_id = ? AND ${sprintTypeBlankPredicate})
-          OR (project_id = ? AND sprint_id IS NULL AND sprint_type = ?)
-          OR (project_id IS NULL AND sprint_id IS NULL AND sprint_type = ?)
-          OR (project_id = ? AND sprint_id IS NULL AND ${sprintTypeBlankPredicate})
+          (project_id = ? AND workflow_id = ? AND ${workflowTypeBlankPredicate})
+          OR (project_id = ? AND workflow_id IS NULL AND workflow_type = ?)
+          OR (project_id IS NULL AND workflow_id IS NULL AND workflow_type = ?)
+          OR (project_id = ? AND workflow_id IS NULL AND ${workflowTypeBlankPredicate})
         )`);
-        orderParams.push(projectId, sprintId, projectId, sprintType, sprintType, projectId);
+        orderParams.push(projectId, workflowId, projectId, workflowType, workflowType, projectId);
         scopeOrderCase = `
           CASE
-            WHEN project_id = ? AND sprint_id = ? THEN 0
-            WHEN project_id = ? AND sprint_id IS NULL AND sprint_type = ? THEN 1
-            WHEN project_id IS NULL AND sprint_id IS NULL AND sprint_type = ? THEN 2
-            WHEN project_id = ? AND sprint_id IS NULL THEN 3
+            WHEN project_id = ? AND workflow_id = ? THEN 0
+            WHEN project_id = ? AND workflow_id IS NULL AND workflow_type = ? THEN 1
+            WHEN project_id IS NULL AND workflow_id IS NULL AND workflow_type = ? THEN 2
+            WHEN project_id = ? AND workflow_id IS NULL THEN 3
             ELSE 4
           END ASC,
         `;
-        params.push(projectId, sprintId, projectId, sprintType, sprintType, projectId);
+        params.push(projectId, workflowId, projectId, workflowType, workflowType, projectId);
       } else {
-        whereClauses.push(`((project_id = ? AND sprint_id = ?) OR (project_id = ? AND sprint_id IS NULL AND ${sprintTypeBlankPredicate}))`);
-        orderParams.push(projectId, sprintId, projectId);
+        whereClauses.push(`((project_id = ? AND workflow_id = ?) OR (project_id = ? AND workflow_id IS NULL AND ${workflowTypeBlankPredicate}))`);
+        orderParams.push(projectId, workflowId, projectId);
         scopeOrderCase = `
           CASE
-            WHEN project_id = ? AND sprint_id = ? THEN 0
-            WHEN project_id = ? AND sprint_id IS NULL THEN 1
+            WHEN project_id = ? AND workflow_id = ? THEN 0
+            WHEN project_id = ? AND workflow_id IS NULL THEN 1
             ELSE 2
           END ASC,
         `;
-        params.push(projectId, sprintId, projectId);
+        params.push(projectId, workflowId, projectId);
       }
     } else if (projectId != null) {
-      if (hasSprintTypeRoutingScope && sprintType != null) {
+      if (hasWorkflowTypeRoutingScope && workflowType != null) {
         whereClauses.push(`(
-          (project_id = ? AND sprint_id IS NULL AND sprint_type = ?)
-          OR (project_id IS NULL AND sprint_id IS NULL AND sprint_type = ?)
-          OR (project_id = ? AND sprint_id IS NULL AND ${sprintTypeBlankPredicate})
+          (project_id = ? AND workflow_id IS NULL AND workflow_type = ?)
+          OR (project_id IS NULL AND workflow_id IS NULL AND workflow_type = ?)
+          OR (project_id = ? AND workflow_id IS NULL AND ${workflowTypeBlankPredicate})
         )`);
-        orderParams.push(projectId, sprintType, sprintType, projectId);
+        orderParams.push(projectId, workflowType, workflowType, projectId);
         scopeOrderCase = `
           CASE
-            WHEN project_id = ? AND sprint_id IS NULL AND sprint_type = ? THEN 0
-            WHEN project_id IS NULL AND sprint_id IS NULL AND sprint_type = ? THEN 1
-            WHEN project_id = ? AND sprint_id IS NULL THEN 2
+            WHEN project_id = ? AND workflow_id IS NULL AND workflow_type = ? THEN 0
+            WHEN project_id IS NULL AND workflow_id IS NULL AND workflow_type = ? THEN 1
+            WHEN project_id = ? AND workflow_id IS NULL THEN 2
             ELSE 3
           END ASC,
         `;
-        params.push(projectId, sprintType, sprintType, projectId);
+        params.push(projectId, workflowType, workflowType, projectId);
       } else {
-        whereClauses.push(`(project_id = ? AND sprint_id IS NULL AND ${sprintTypeBlankPredicate})`);
+        whereClauses.push(`(project_id = ? AND workflow_id IS NULL AND ${workflowTypeBlankPredicate})`);
         params.push(projectId);
       }
-    } else if (hasSprintTypeRoutingScope && sprintType != null) {
-      whereClauses.push(`(project_id IS NULL AND sprint_id IS NULL AND sprint_type = ?)`);
-      params.push(sprintType);
+    } else if (hasWorkflowTypeRoutingScope && workflowType != null) {
+      whereClauses.push(`(project_id IS NULL AND workflow_id IS NULL AND workflow_type = ?)`);
+      params.push(workflowType);
     } else {
-      whereClauses.push(`(project_id IS NULL AND sprint_id = ? AND ${sprintTypeBlankPredicate})`);
-      params.push(sprintId);
+      whereClauses.push(`(project_id IS NULL AND workflow_id = ? AND ${workflowTypeBlankPredicate})`);
+      params.push(workflowId);
     }
 
     const row = await db.get(`
-      SELECT max_points, project_id, sprint_id, ${sprintTypeSelect}, model, max_turns, max_budget_usd, thinking_level, ${fastModeSelect}, label
+      SELECT max_points, project_id, workflow_id, ${workflowTypeSelect}, model, max_turns, max_budget_usd, thinking_level, ${fastModeSelect}, label
       FROM story_point_model_routing
       WHERE max_points >= ?
         AND (provider = ? OR provider IS NULL)

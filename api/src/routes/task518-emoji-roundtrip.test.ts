@@ -5,7 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { getDb } from '../db/client';
-import sprintsRouter from './sprints';
+import workflowsRouter from './workflows';
 
 let tempDir: string;
 let dbPath: string;
@@ -19,19 +19,18 @@ async function resetDb(): Promise<void> {
   dbPath = path.join(tempDir, 'agent-hq-test.db');
   process.env.AGENT_CONTRACT_ROOT = path.join(tempDir, 'agent-contracts');
   fs.mkdirSync(process.env.AGENT_CONTRACT_ROOT, { recursive: true });
-  fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'generic.md'), 'Sprint type: {{sprintType}}\n');
+  fs.writeFileSync(path.join(process.env.AGENT_CONTRACT_ROOT, 'generic.md'), 'Workflow type: {{workflowType}}\n');
 
   const db = getDb();
-
 
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, is_system) VALUES (1, 'enhancements', 'Enhancements', 1)`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type, status) VALUES (10, 1, 1, 'Enhancements', 'enhancements', 'active')`);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name, is_system) VALUES (1, 'enhancements', 'Enhancements', 1)`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type, status) VALUES (10, 1, 1, 'Enhancements', 'enhancements', 'active')`);
   await db.run(`INSERT INTO task_statuses (name, label, color, terminal, is_system, allowed_transitions) VALUES ('review', 'Review', 'purple', 0, 1, '[]')`);
-  await db.run(`INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES (1, 'enhancements', 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`);
-  await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES (10, 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`);
+  await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES (1, 'enhancements', 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`);
+  await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json) VALUES (10, 'review', 'Review', 'purple', 0, 1, '[]', 0, 1, '{}')`);
 }
 
 beforeEach(async () => {
@@ -52,7 +51,7 @@ afterAll(() => {
 async function startServer(): Promise<{ server: Server; baseUrl: string }> {
   const app = express();
   app.use(express.json());
-  app.use('/api/v1/sprints', sprintsRouter);
+  app.use('/api/v1/workflows', workflowsRouter);
   const server = await new Promise<Server>((resolve) => {
     const instance = app.listen(0, () => resolve(instance));
   });
@@ -65,10 +64,10 @@ async function stopServer(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
 }
 
-test('sprint type status emoji persists and round-trips on repeated reload fetches', async () => {
+test('workflow type status emoji persists and round-trips on repeated reload fetches', async () => {
   const { server, baseUrl } = await startServer();
   try {
-    const updateResponse = await fetch(`${baseUrl}/api/v1/sprints/types/enhancements/statuses/review`, {
+    const updateResponse = await fetch(`${baseUrl}/api/v1/workflows/types/enhancements/statuses/review`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ emoji: '🚦' }),
@@ -81,7 +80,7 @@ test('sprint type status emoji persists and round-trips on repeated reload fetch
     }));
 
     for (let i = 0; i < 3; i += 1) {
-      const listResponse = await fetch(`${baseUrl}/api/v1/sprints/types/enhancements/statuses`);
+      const listResponse = await fetch(`${baseUrl}/api/v1/workflows/types/enhancements/statuses`);
       expect(listResponse.status).toBe(200);
       const listBody = await listResponse.json() as { statuses: Array<{ name: string; emoji?: string | null; metadata?: Record<string, unknown> }> };
       expect(listBody.statuses.find((status) => status.name === 'review')).toEqual(expect.objectContaining({
@@ -92,12 +91,12 @@ test('sprint type status emoji persists and round-trips on repeated reload fetch
     }
 
     const db = getDb();
-    const sprintTypeRow = await db.get(`SELECT metadata_json FROM sprint_type_task_statuses WHERE sprint_type_key = ? AND status_key = ?`, 'enhancements', 'review') as { metadata_json: string } | undefined;
-    const sprintRow = await db.get(`SELECT metadata_json FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`, 10, 'review') as { metadata_json: string } | undefined;
-    expect(JSON.parse(sprintTypeRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🚦' }));
-    expect(JSON.parse(sprintRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🚦' }));
+    const workflowTypeRow = await db.get(`SELECT metadata_json FROM workflow_type_task_statuses WHERE workflow_type_key = ? AND status_key = ?`, 'enhancements', 'review') as { metadata_json: string } | undefined;
+    const workflowRow = await db.get(`SELECT metadata_json FROM workflow_task_statuses WHERE workflow_id = ? AND status_key = ?`, 10, 'review') as { metadata_json: string } | undefined;
+    expect(JSON.parse(workflowTypeRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🚦' }));
+    expect(JSON.parse(workflowRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ emoji: '🚦' }));
 
-    const workflowResponse = await fetch(`${baseUrl}/api/v1/sprints/workflow-metadata?sprint_type=enhancements`);
+    const workflowResponse = await fetch(`${baseUrl}/api/v1/workflows/workflow-metadata?workflow_type=enhancements`);
     expect(workflowResponse.status).toBe(200);
     const workflowBody = await workflowResponse.json() as { statuses: Array<{ name: string; emoji?: string | null; metadata?: Record<string, unknown> }> };
     expect(workflowBody.statuses.find((status) => status.name === 'review')).toEqual(expect.objectContaining({
@@ -110,14 +109,14 @@ test('sprint type status emoji persists and round-trips on repeated reload fetch
   }
 });
 
-test('seedSprintTaskPolicy preserves sprint-type metadata when cloning statuses into a sprint', async () => {
+test('seedWorkflowTaskPolicy preserves workflow-type metadata when cloning statuses into a workflow', async () => {
   const db = getDb();
-  await db.run(`UPDATE sprint_type_task_statuses SET metadata_json = ? WHERE sprint_type_key = ? AND status_key = ?`, '{"source":"legacy-seed"}', 'enhancements', 'review');
-  await db.run(`DELETE FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`, 10, 'review');
+  await db.run(`UPDATE workflow_type_task_statuses SET metadata_json = ? WHERE workflow_type_key = ? AND status_key = ?`, '{"source":"legacy-seed"}', 'enhancements', 'review');
+  await db.run(`DELETE FROM workflow_task_statuses WHERE workflow_id = ? AND status_key = ?`, 10, 'review');
 
-  const { seedSprintTaskPolicy } = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
-  await seedSprintTaskPolicy(db, 10, { force: true });
+  const { seedWorkflowTaskPolicy } = require('../domains/routing/policy') as typeof import('../domains/routing/policy');
+  await seedWorkflowTaskPolicy(db, 10, { force: true });
 
-  const sprintSeedRow = await db.get(`SELECT metadata_json FROM sprint_task_statuses WHERE sprint_id = ? AND status_key = ?`, 10, 'review') as { metadata_json: string } | undefined;
-  expect(JSON.parse(sprintSeedRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ source: 'legacy-seed' }));
+  const workflowSeedRow = await db.get(`SELECT metadata_json FROM workflow_task_statuses WHERE workflow_id = ? AND status_key = ?`, 10, 'review') as { metadata_json: string } | undefined;
+  expect(JSON.parse(workflowSeedRow?.metadata_json ?? '{}')).toEqual(expect.objectContaining({ source: 'legacy-seed' }));
 });

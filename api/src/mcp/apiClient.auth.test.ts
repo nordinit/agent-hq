@@ -57,27 +57,27 @@ async function seedAtlasTask(): Promise<{ agentId: number; taskId: number }> {
 
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (9101, ?, 'MCP Auth Test', '', '')`, tenantId);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status, length_kind, length_value)
+    INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status, length_kind, length_value)
     VALUES (9103, ?, 9101, 'MCP Auth Workflow', '', 'dev', 'active', 'time', '2w')
   `, tenantId);
   await db.run(`
-    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, sprint_id, agent_id, task_type, custom_fields_json)
+    INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, workflow_id, agent_id, task_type, custom_fields_json)
     VALUES (9102, ?, 'MCP auth task', '', 'todo', 'medium', 9101, 9103, ?, 'backend', '{}')
   `, tenantId, atlasId);
 
   return { agentId: atlasId, taskId: 9102 };
 }
 
-async function seedCustomFieldWorkflow(): Promise<{ projectId: number; sprintId: number }> {
+async function seedCustomFieldWorkflow(): Promise<{ projectId: number; workflowId: number }> {
   const db = getDb();
   const tenantId = await getDefaultTenantId(db);
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (9201, ?, 'Custom Field Workflow Test', '', '')`, tenantId);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
+    INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status)
     VALUES (9202, ?, 9201, 'Configurable Workflow', '', 'custom_mcp', 'active')
   `, tenantId);
   await db.run(`
-    INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json)
+    INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json)
     VALUES (?, 'custom_mcp', NULL, ?)
   `, tenantId, JSON.stringify({
         fields: [
@@ -87,26 +87,26 @@ async function seedCustomFieldWorkflow(): Promise<{ projectId: number; sprintId:
         ],
       }));
 
-  return { projectId: 9201, sprintId: 9202 };
+  return { projectId: 9201, workflowId: 9202 };
 }
 
-async function seedCustomStatusWorkflow(): Promise<{ projectId: number; sprintId: number }> {
+async function seedCustomStatusWorkflow(): Promise<{ projectId: number; workflowId: number }> {
   const db = getDb();
   const tenantId = await getDefaultTenantId(db);
   await db.run(`INSERT INTO projects (id, tenant_id, name, description, context_md) VALUES (9301, ?, 'Custom Status Workflow Test', '', '')`, tenantId);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name, description) VALUES (?, 'custom_status_mcp', 'Custom Status MCP', '')`, tenantId);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name, description) VALUES (?, 'custom_status_mcp', 'Custom Status MCP', '')`, tenantId);
   await db.run(`
-    INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, stage_order, is_default_entry)
+    INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, stage_order, is_default_entry)
     VALUES
       (?, 'custom_status_mcp', 'todo', 'To Do', 0, 1),
       (?, 'custom_status_mcp', 'ready', 'Ready', 1, 0),
       (?, 'custom_status_mcp', 'field_reported', 'Field Reported', 2, 0)
   `, tenantId, tenantId, tenantId);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status)
+    INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status)
     VALUES (9302, ?, 9301, 'Custom Status Workflow', '', 'custom_status_mcp', 'active')
   `, tenantId);
-  return { projectId: 9301, sprintId: 9302 };
+  return { projectId: 9301, workflowId: 9302 };
 }
 
 describe('Agent HQ MCP API identity propagation', () => {
@@ -114,9 +114,9 @@ describe('Agent HQ MCP API identity propagation', () => {
     const db = await setupTestDb();
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
     await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
-    await db.run(`INSERT INTO sprint_types (tenant_id, key, name) VALUES (1, 'dev', 'Development'), (1, 'generic', 'Generic')`);
+    await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'dev', 'Development'), (1, 'generic', 'Generic')`);
     await db.run(`
-      INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, stage_order, is_default_entry)
+      INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, stage_order, is_default_entry)
       VALUES
         (1, 'dev', 'todo', 'To Do', 0, 1),
         (1, 'dev', 'ready', 'Ready', 1, 0)
@@ -174,7 +174,7 @@ describe('Agent HQ MCP API identity propagation', () => {
 
   it('creates and updates tasks with workflow custom fields through the MCP API client', async () => {
     const { agentId } = await seedAtlasTask();
-    const { projectId, sprintId } = await seedCustomFieldWorkflow();
+    const { projectId, workflowId } = await seedCustomFieldWorkflow();
     const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'custom field create/update key');
     const { server, baseUrl } = await startTestServer();
 
@@ -183,7 +183,7 @@ describe('Agent HQ MCP API identity propagation', () => {
       const created = await client.createTask({
         title: 'Task with required custom field',
         project_id: projectId,
-        sprint_id: sprintId,
+        workflow_id: workflowId,
         task_type: 'backend',
         custom_fields: {
           target_surface: 'api',
@@ -215,7 +215,7 @@ describe('Agent HQ MCP API identity propagation', () => {
 
   it('returns structured validation errors for invalid workflow custom fields', async () => {
     const { agentId } = await seedAtlasTask();
-    const { projectId, sprintId } = await seedCustomFieldWorkflow();
+    const { projectId, workflowId } = await seedCustomFieldWorkflow();
     const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'custom field validation key');
     const { server, baseUrl } = await startTestServer();
 
@@ -224,7 +224,7 @@ describe('Agent HQ MCP API identity propagation', () => {
       await expect(client.createTask({
         title: 'Task missing custom fields',
         project_id: projectId,
-        sprint_id: sprintId,
+        workflow_id: workflowId,
         task_type: 'backend',
         custom_fields: {
           target_surface: 'mobile',
@@ -246,7 +246,7 @@ describe('Agent HQ MCP API identity propagation', () => {
       await expect(client.createTask({
         title: 'Task missing required custom field',
         project_id: projectId,
-        sprint_id: sprintId,
+        workflow_id: workflowId,
         task_type: 'backend',
       })).rejects.toMatchObject({
         status: 400,
@@ -271,7 +271,7 @@ describe('Agent HQ MCP API identity propagation', () => {
       const created = await client.createTask({
         title: 'Default workflow compatible task',
         project_id: 9101,
-        sprint_id: 9103,
+        workflow_id: 9103,
         task_type: 'backend',
       }) as { id: number; title: string; custom_fields?: Record<string, unknown> };
 
@@ -286,7 +286,7 @@ describe('Agent HQ MCP API identity propagation', () => {
 
   it('creates tasks with omitted, todo, ready, and custom initial statuses through the MCP API client', async () => {
     const { agentId } = await seedAtlasTask();
-    const { projectId, sprintId } = await seedCustomStatusWorkflow();
+    const { projectId, workflowId } = await seedCustomStatusWorkflow();
     const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'initial status create key');
     const { server, baseUrl } = await startTestServer();
 
@@ -295,27 +295,27 @@ describe('Agent HQ MCP API identity propagation', () => {
       const omitted = await client.createTask({
         title: 'Omitted initial status',
         project_id: projectId,
-        sprint_id: sprintId,
+        workflow_id: workflowId,
         task_type: 'backend',
       }) as { id: number; status: string };
       const todo = await client.createTask({
         title: 'Explicit todo initial status',
         project_id: projectId,
-        sprint_id: sprintId,
+        workflow_id: workflowId,
         task_type: 'backend',
         status: 'todo',
       }) as { id: number; status: string };
       const ready = await client.createTask({
         title: 'Explicit ready initial status',
         project_id: projectId,
-        sprint_id: sprintId,
+        workflow_id: workflowId,
         task_type: 'backend',
         status: 'ready',
       }) as { id: number; status: string };
       const custom = await client.createTask({
         title: 'Custom initial status',
         project_id: projectId,
-        sprint_id: sprintId,
+        workflow_id: workflowId,
         task_type: 'backend',
         status: 'field_reported',
       }) as { id: number; status: string };
@@ -344,7 +344,7 @@ describe('Agent HQ MCP API identity propagation', () => {
 
   it('rejects invalid initial statuses without creating a partial task through the MCP API client', async () => {
     const { agentId } = await seedAtlasTask();
-    const { projectId, sprintId } = await seedCustomStatusWorkflow();
+    const { projectId, workflowId } = await seedCustomStatusWorkflow();
     const { apiKey } = await issueMcpApiKeyForAgentAdmin(getDb(), agentId, 'invalid initial status key');
     const { server, baseUrl } = await startTestServer();
 
@@ -353,7 +353,7 @@ describe('Agent HQ MCP API identity propagation', () => {
       await expect(client.createTask({
         title: 'Invalid initial status',
         project_id: projectId,
-        sprint_id: sprintId,
+        workflow_id: workflowId,
         task_type: 'backend',
         status: 'not_in_workflow',
       })).rejects.toMatchObject({

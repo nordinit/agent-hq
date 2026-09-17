@@ -89,7 +89,7 @@ async function planQuery(db:Db,access:TelemetryAccess,input:TelemetryQuery):Prom
     const historicalWhere=[...sourceWhere,'o.tenant_id=t.tenant_id','o.task_id=t.id','o.occurred_at<=?::timestamptz'],historicalParams=[...sourceParams,temporalQuery(input).as_of];
     const recorded=(field:string)=>`COALESCE(o.payload->'context'->>'${field}',o.payload->'after'->>'${field}')`;
     if(access.projectId!=null){historicalWhere.push(`${recorded('project_id')}=?`);historicalParams.push(String(access.projectId));}
-    for(const [field,column] of [['project_id','t.project_id'],['workflow_id','t.sprint_id'],['workflow_type','s.sprint_type'],['task_type','t.task_type']] as const){
+    for(const [field,column] of [['project_id','t.project_id'],['workflow_id','t.workflow_id'],['workflow_type','s.workflow_type'],['task_type','t.task_type']] as const){
       if(scope[field]===undefined)continue;
       currentWhere.push(`${column}=?`);currentParams.push(scope[field]);
       historicalWhere.push(`${recorded(field)}=?`);historicalParams.push(String(scope[field]));
@@ -97,11 +97,11 @@ async function planQuery(db:Db,access:TelemetryAccess,input:TelemetryQuery):Prom
     // A task can have several historical contexts; task IDs alone cannot select
     // the correct formula after it moves. Context predicates below keep its
     // event or entry cohort in exactly one winning binding partition.
-    const contexts=await db.all<any>(`SELECT t.id,t.project_id,t.sprint_id AS workflow_id,s.sprint_type AS workflow_type,t.task_type,true AS is_current
-      FROM tasks t JOIN sprints s ON s.id=t.sprint_id AND s.tenant_id=t.tenant_id WHERE ${currentWhere.join(' AND ')}
+    const contexts=await db.all<any>(`SELECT t.id,t.project_id,t.workflow_id AS workflow_id,s.workflow_type AS workflow_type,t.task_type,true AS is_current
+      FROM tasks t JOIN workflows s ON s.id=t.workflow_id AND s.tenant_id=t.tenant_id WHERE ${currentWhere.join(' AND ')}
       UNION SELECT t.id,(${recorded('project_id')})::bigint AS project_id,(${recorded('workflow_id')})::bigint AS workflow_id,
         ${recorded('workflow_type')} AS workflow_type,${recorded('task_type')} AS task_type,false AS is_current
-      FROM tasks t JOIN sprints s ON s.id=t.sprint_id AND s.tenant_id=t.tenant_id JOIN telemetry_observations o ON o.task_id=t.id
+      FROM tasks t JOIN workflows s ON s.id=t.workflow_id AND s.tenant_id=t.tenant_id JOIN telemetry_observations o ON o.task_id=t.id
       WHERE ${historicalWhere.join(' AND ')} ORDER BY id,is_current DESC LIMIT 100001`,...currentParams,...historicalParams);
     if(contexts.length>100000)throw new TelemetryError('query_limit_exceeded','Family resolution exceeds 100,000 task contexts. Narrow the scope.');
     const partitions=new Map<string,{binding:any;revision:any;ids:Set<number>}>(),revisions=new Map<string,any>();

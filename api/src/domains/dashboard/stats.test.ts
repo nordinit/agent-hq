@@ -16,14 +16,14 @@ describe('getDashboardTokenUsageLast24h', () => {
       sessionKey, sessionKey, projectId,
     )).lastInsertId);
 
-  // tasks.sprint_id is NOT NULL and references sprints, so a task cannot be seeded on its own —
+  // tasks.workflow_id is NOT NULL and references workflows, so a task cannot be seeded on its own —
   // it needs a workflow, which in turn needs the project. The scope test only cares about
   // tasks.project_id; the workflow exists solely to satisfy the constraint.
   const seedTask = async (title: string, projectId: number): Promise<number> => {
-    const sprint = await db.run(`INSERT INTO sprints (project_id, name) VALUES (?, ?)`, projectId, `${title} workflow`);
+    const workflow = await db.run(`INSERT INTO workflows (project_id, name) VALUES (?, ?)`, projectId, `${title} workflow`);
     return Number((await db.run(
-      `INSERT INTO tasks (title, project_id, sprint_id) VALUES (?, ?, ?)`,
-      title, projectId, Number(sprint.lastInsertId),
+      `INSERT INTO tasks (title, project_id, workflow_id) VALUES (?, ?, ?)`,
+      title, projectId, Number(workflow.lastInsertId),
     )).lastInsertId);
   };
 

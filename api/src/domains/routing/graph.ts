@@ -12,16 +12,16 @@
 //
 // Precedence note: everywhere in routing, higher priority wins and ties break toward
 // the LOWER row id (ORDER BY priority DESC, id ASC). The shadowing rule below must
-// stay consistent with resolveRoutingRuleForSprint and the dispatcher, or the canvas
+// stay consistent with resolveRoutingRuleForWorkflow and the dispatcher, or the canvas
 // will confidently draw the wrong winner.
 
 import { type Db } from '../../db/adapter/types';
-import { listSprintTypeTaskStatuses } from './policy/statuses';
+import { listWorkflowTypeTaskStatuses } from './policy/statuses';
 import { listRoutingTransitions } from './transitions';
-import { listRoutingRulesForSprint } from './rules';
+import { listRoutingRulesForWorkflow } from './rules';
 import { listTransitionRequirements } from './requirements';
 import { listWorkflowEventMappings } from './externalEventMappings';
-import { requireProjectSprintTypeScope, withStatus } from './scope';
+import { requireProjectWorkflowTypeScope, withStatus } from './scope';
 import { tableExists } from './policy/metadata';
 
 // ── Inputs to the pure builder ────────────────────────────────────────────────
@@ -39,7 +39,7 @@ export type GraphScopeAnnotation = {
   scope_kind?: string | null;
   is_inherited?: boolean;
   is_override?: boolean;
-  effective_for_sprint?: boolean;
+  effective_for_workflow?: boolean;
 };
 
 export type GraphTransitionInput = GraphScopeAnnotation & {
@@ -147,7 +147,7 @@ export type GraphAssignment = {
   is_inherited: boolean;
   is_override: boolean;
   /** False when a workflow-scoped override supersedes this inherited row. */
-  effective_for_sprint: boolean;
+  effective_for_workflow: boolean;
 };
 
 /** An ambient event mapping that can drop a task into this status from many others. */
@@ -188,7 +188,7 @@ export type GraphGate = {
   scope_kind: string;
   is_inherited: boolean;
   is_override: boolean;
-  effective_for_sprint: boolean;
+  effective_for_workflow: boolean;
 };
 
 /** A workflow event that can also fire this edge, alongside an agent reporting it. */
@@ -217,7 +217,7 @@ export type GraphEdge = {
   is_inherited: boolean;
   is_override: boolean;
   /** False when a workflow-scoped override supersedes this inherited row. */
-  effective_for_sprint: boolean;
+  effective_for_workflow: boolean;
   /** Key for collapsing parallel edges between the same node pair in the UI. */
   parallel_group: string;
   /** True when to_status sits at or before from_status — a rework loop. */
@@ -260,10 +260,10 @@ export type WorkflowGraph = {
 
 /** Rows that are shadowed by a higher-precedence row are still returned, but flagged. */
 function isLive(row: GraphScopeAnnotation & { enabled: boolean }): boolean {
-  // effective_for_sprint is undefined when no workflow is selected, in which case
+  // effective_for_workflow is undefined when no workflow is selected, in which case
   // every enabled row participates. When a workflow IS selected, an inherited row
   // that a workflow-scoped override supersedes must not count toward reachability.
-  return row.enabled && row.effective_for_sprint !== false;
+  return row.enabled && row.effective_for_workflow !== false;
 }
 
 /**
@@ -386,7 +386,7 @@ export function buildWorkflowGraph(input: {
    * theirs too, and hiding them would take away the operator's view of what an override
    * replaced — but they must not be mistaken for gates when deciding which set applies.
    */
-  const gateRuns = (requirement: GraphRequirementInput): boolean => requirement.effective_for_sprint !== false;
+  const gateRuns = (requirement: GraphRequirementInput): boolean => requirement.effective_for_workflow !== false;
 
   /**
    * Resolve a workflow's gates for one outcome and task type.
@@ -396,7 +396,7 @@ export function buildWorkflowGraph(input: {
    * all-types gate, which overrides that single row — that is how a type softens or retargets an
    * individual gate without switching off the rest.
    *
-   * Mirrors loadSprintTaskTransitionRequirements, which is authoritative; keep them in step. Both
+   * Mirrors loadWorkflowTaskTransitionRequirements, which is authoritative; keep them in step. Both
    * key on (field, requirement type, match field) — match_field included because it is the second
    * operand of a 'match' or 'from_status' rule, so leaving it out let one gate hide another that
    * still ran.
@@ -446,10 +446,10 @@ export function buildWorkflowGraph(input: {
         message: requirement.message,
         task_type: requirement.task_type,
         enabled: requirement.enabled,
-        scope_kind: requirement.scope_kind ?? 'sprint_type_default',
+        scope_kind: requirement.scope_kind ?? 'workflow_type_default',
         is_inherited: Boolean(requirement.is_inherited),
         is_override: Boolean(requirement.is_override),
-        effective_for_sprint: requirement.effective_for_sprint !== false,
+        effective_for_workflow: requirement.effective_for_workflow !== false,
       }));
 
     if (!statusByKey.has(transition.from_status)) {
@@ -473,10 +473,10 @@ export function buildWorkflowGraph(input: {
       priority: transition.priority,
       enabled: transition.enabled,
       is_protected: Boolean(transition.is_protected),
-      scope_kind: transition.scope_kind ?? 'sprint_type_default',
+      scope_kind: transition.scope_kind ?? 'workflow_type_default',
       is_inherited: Boolean(transition.is_inherited),
       is_override: Boolean(transition.is_override),
-      effective_for_sprint: transition.effective_for_sprint !== false,
+      effective_for_workflow: transition.effective_for_workflow !== false,
       parallel_group: `${transition.from_status}->${transition.to_status}`,
       is_back_edge: stageOf(transition.to_status) <= stageOf(transition.from_status),
       shadowed_by: shadowedBy.get(`t${transition.id}`) ?? null,
@@ -518,7 +518,7 @@ export function buildWorkflowGraph(input: {
         // from or be superseded by: it always applies at the scope it was read at.
         is_inherited: false,
         is_override: false,
-        effective_for_sprint: true,
+        effective_for_workflow: true,
         parallel_group: `${from}->${entry.target}`,
         is_back_edge: stageOf(entry.target) <= stageOf(from),
         shadowed_by: null,
@@ -602,10 +602,10 @@ export function buildWorkflowGraph(input: {
         agent_enabled: Boolean(agent?.enabled),
         priority: rule.priority,
         enabled: rule.enabled,
-        scope_kind: rule.scope_kind ?? 'sprint_type_default',
+        scope_kind: rule.scope_kind ?? 'workflow_type_default',
         is_inherited: Boolean(rule.is_inherited),
         is_override: Boolean(rule.is_override),
-        effective_for_sprint: rule.effective_for_sprint !== false,
+        effective_for_workflow: rule.effective_for_workflow !== false,
       };
     });
 
@@ -735,14 +735,14 @@ export async function getWorkflowGraph(
   db: Db,
   input: {
     project_id?: unknown;
-    sprint_id?: unknown;
-    sprint_type?: unknown;
+    workflow_id?: unknown;
+    workflow_type?: unknown;
     task_type?: unknown;
     tenant_id?: unknown;
   },
 ): Promise<WorkflowGraph> {
-  const scope = await requireProjectSprintTypeScope(db, input);
-  if (!scope.sprintType) {
+  const scope = await requireProjectWorkflowTypeScope(db, input);
+  if (!scope.workflowType) {
     throw withStatus('workflow_type is required to build a routing graph', 400);
   }
   const taskTypeLens = asNullableString(input.task_type);
@@ -755,9 +755,9 @@ export async function getWorkflowGraph(
   // pg@9. The preview endpoint builds the graph inside its non-committing transaction, so
   // this path is reached in both modes.
   const loaders = [
-    () => listSprintTypeTaskStatuses(db, scope.sprintType, { tenantId: scope.tenantId }),
+    () => listWorkflowTypeTaskStatuses(db, scope.workflowType, { tenantId: scope.tenantId }),
     () => listRoutingTransitions(db, input),
-    () => listRoutingRulesForSprint(db, input),
+    () => listRoutingRulesForWorkflow(db, input),
     () => listTransitionRequirements(db, input),
     () => db.all(`SELECT id, name, enabled FROM agents`) as Promise<Array<Record<string, unknown>>>,
     () => listWorkflowEventMappings(db, { ...input, tenant_id: scope.tenantId }),
@@ -771,9 +771,9 @@ export async function getWorkflowGraph(
     loaded = await Promise.all(loaders.map((load) => load()));
   }
   const [statuses, transitionsResult, rulesResult, requirementsResult, agentRows, eventResult] = loaded as [
-    Awaited<ReturnType<typeof listSprintTypeTaskStatuses>>,
+    Awaited<ReturnType<typeof listWorkflowTypeTaskStatuses>>,
     Awaited<ReturnType<typeof listRoutingTransitions>>,
-    Awaited<ReturnType<typeof listRoutingRulesForSprint>>,
+    Awaited<ReturnType<typeof listRoutingRulesForWorkflow>>,
     Awaited<ReturnType<typeof listTransitionRequirements>>,
     Array<Record<string, unknown>>,
     Awaited<ReturnType<typeof listWorkflowEventMappings>>,
@@ -794,8 +794,8 @@ export async function getWorkflowGraph(
   return buildWorkflowGraph({
     scope: {
       project_id: scope.projectId ?? null,
-      workflow_type: scope.sprintType,
-      workflow_id: scope.sprintId ?? null,
+      workflow_type: scope.workflowType,
+      workflow_id: scope.workflowId ?? null,
       task_type: taskTypeLens,
     },
     statuses: statuses.map((status) => ({
@@ -818,7 +818,7 @@ export async function getWorkflowGraph(
       scope_kind: asNullableString(row.scope_kind),
       is_inherited: asBool(row.is_inherited),
       is_override: asBool(row.is_override),
-      effective_for_sprint: row.effective_for_sprint === undefined ? undefined : asBool(row.effective_for_sprint),
+      effective_for_workflow: row.effective_for_workflow === undefined ? undefined : asBool(row.effective_for_workflow),
     })),
     rules: rawRules.filter((row) => matchesLens(row.task_type)).map((row) => ({
       id: asNumber(row.id),
@@ -830,7 +830,7 @@ export async function getWorkflowGraph(
       scope_kind: asNullableString(row.scope_kind),
       is_inherited: asBool(row.is_inherited),
       is_override: asBool(row.is_override),
-      effective_for_sprint: row.effective_for_sprint === undefined ? undefined : asBool(row.effective_for_sprint),
+      effective_for_workflow: row.effective_for_workflow === undefined ? undefined : asBool(row.effective_for_workflow),
     })),
     requirements: rawRequirements.filter((row) => matchesLens(row.task_type)).map((row) => ({
       id: asNumber(row.id),
@@ -845,7 +845,7 @@ export async function getWorkflowGraph(
       scope_kind: asNullableString(row.scope_kind),
       is_inherited: asBool(row.is_inherited),
       is_override: asBool(row.is_override),
-      effective_for_sprint: row.effective_for_sprint === undefined ? undefined : asBool(row.effective_for_sprint),
+      effective_for_workflow: row.effective_for_workflow === undefined ? undefined : asBool(row.effective_for_workflow),
     })),
     agents: agentRows.map((row) => ({
       id: asNumber(row.id),

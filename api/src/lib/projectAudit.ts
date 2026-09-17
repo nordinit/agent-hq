@@ -1,6 +1,6 @@
 import { type Db } from "../db/adapter/types";
 
-export type AuditEntityType = 'project' | 'sprint' | 'job_template';
+export type AuditEntityType = 'project' | 'workflow' | 'job_template';
 export type AuditAction = 'created' | 'updated' | 'deleted';
 
 export interface AuditChanges {

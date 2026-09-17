@@ -9,7 +9,7 @@ export interface RecurringTaskSeriesRecord {
   id: number;
   tenant_id: number | null;
   project_id: number;
-  sprint_id: number;
+  workflow_id: number;
   title_template: string;
   description_template: string;
   task_type: TaskType | string;
@@ -52,9 +52,9 @@ export interface GeneratedTaskRecurrenceMetadata {
 
 export interface RecurringTaskSeriesListItem extends RecurringTaskSeriesRecord {
   project_name: string | null;
-  sprint_name: string | null;
-  sprint_status: string | null;
-  sprint_type: string | null;
+  workflow_name: string | null;
+  workflow_status: string | null;
+  workflow_type: string | null;
   agent_name: string | null;
   latest_run_id: number | null;
   latest_run_status: RecurringTaskRunStatus | null;

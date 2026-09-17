@@ -21,40 +21,40 @@ describe('annotateRoutingRuleScope', () => {
 
   it('marks the default superseded when an ENABLED override shares its key', () => {
     const [override, fallback] = annotateRoutingRuleScope([
-      rule({ id: 1, sprint_id: WORKFLOW_ID, rule_scope_kind: 'sprint_override', enabled: 1 }),
-      rule({ id: 2, sprint_id: null, rule_scope_kind: 'sprint_type_default' }),
+      rule({ id: 1, workflow_id: WORKFLOW_ID, rule_scope_kind: 'workflow_override', enabled: 1 }),
+      rule({ id: 2, workflow_id: null, rule_scope_kind: 'workflow_type_default' }),
     ], WORKFLOW_ID);
-    expect(override.effective_for_sprint).toBe(true);
-    expect(fallback.overridden_by_sprint).toBe(true);
-    expect(fallback.effective_for_sprint).toBe(false);
+    expect(override.effective_for_workflow).toBe(true);
+    expect(fallback.overridden_by_workflow).toBe(true);
+    expect(fallback.effective_for_workflow).toBe(false);
   });
 
   it('leaves the default EFFECTIVE when the override sharing its key is disabled', () => {
     const [override, fallback] = annotateRoutingRuleScope([
-      rule({ id: 1, sprint_id: WORKFLOW_ID, rule_scope_kind: 'sprint_override', enabled: 0 }),
-      rule({ id: 2, sprint_id: null, rule_scope_kind: 'sprint_type_default' }),
+      rule({ id: 1, workflow_id: WORKFLOW_ID, rule_scope_kind: 'workflow_override', enabled: 0 }),
+      rule({ id: 2, workflow_id: null, rule_scope_kind: 'workflow_type_default' }),
     ], WORKFLOW_ID);
     // The disabled override is skipped by the resolver and the default does the work.
-    expect(fallback.overridden_by_sprint).toBe(false);
-    expect(fallback.effective_for_sprint).toBe(true);
+    expect(fallback.overridden_by_workflow).toBe(false);
+    expect(fallback.effective_for_workflow).toBe(true);
     expect(override.is_override).toBe(true);
   });
 
   it('still supersedes when one of several overrides for the key is enabled', () => {
     const [, , fallback] = annotateRoutingRuleScope([
-      rule({ id: 1, sprint_id: WORKFLOW_ID, rule_scope_kind: 'sprint_override', enabled: 0 }),
-      rule({ id: 3, sprint_id: WORKFLOW_ID, rule_scope_kind: 'sprint_override', enabled: 1 }),
-      rule({ id: 2, sprint_id: null, rule_scope_kind: 'sprint_type_default' }),
+      rule({ id: 1, workflow_id: WORKFLOW_ID, rule_scope_kind: 'workflow_override', enabled: 0 }),
+      rule({ id: 3, workflow_id: WORKFLOW_ID, rule_scope_kind: 'workflow_override', enabled: 1 }),
+      rule({ id: 2, workflow_id: null, rule_scope_kind: 'workflow_type_default' }),
     ], WORKFLOW_ID);
-    expect(fallback.effective_for_sprint).toBe(false);
+    expect(fallback.effective_for_workflow).toBe(false);
   });
 
   it('does not let an override for one key affect a default for another', () => {
     const [, fallback] = annotateRoutingRuleScope([
-      rule({ id: 1, sprint_id: WORKFLOW_ID, rule_scope_kind: 'sprint_override', status: 'review', enabled: 0 }),
-      rule({ id: 2, sprint_id: null, rule_scope_kind: 'sprint_type_default', status: 'ready' }),
+      rule({ id: 1, workflow_id: WORKFLOW_ID, rule_scope_kind: 'workflow_override', status: 'review', enabled: 0 }),
+      rule({ id: 2, workflow_id: null, rule_scope_kind: 'workflow_type_default', status: 'ready' }),
     ], WORKFLOW_ID);
-    expect(fallback.effective_for_sprint).toBe(true);
+    expect(fallback.effective_for_workflow).toBe(true);
   });
 });
 
@@ -66,21 +66,21 @@ describe('annotateRequirementScope', () => {
 
   it('marks the default superseded when an ENABLED override shares its key', () => {
     const [, fallback] = annotateRequirementScope([
-      requirement({ id: 1, sprint_id: WORKFLOW_ID, enabled: 1 }),
-      requirement({ id: 2, sprint_id: null }),
+      requirement({ id: 1, workflow_id: WORKFLOW_ID, enabled: 1 }),
+      requirement({ id: 2, workflow_id: null }),
     ], WORKFLOW_ID);
-    expect(fallback.effective_for_sprint).toBe(false);
+    expect(fallback.effective_for_workflow).toBe(false);
   });
 
   it('leaves the default EFFECTIVE when the override sharing its key is disabled', () => {
     const [, fallback] = annotateRequirementScope([
-      requirement({ id: 1, sprint_id: WORKFLOW_ID, enabled: 0 }),
-      requirement({ id: 2, sprint_id: null }),
+      requirement({ id: 1, workflow_id: WORKFLOW_ID, enabled: 0 }),
+      requirement({ id: 2, workflow_id: null }),
     ], WORKFLOW_ID);
-    // loadSprintTaskTransitionRequirements filters enabled=1 before dedupe, so the default
+    // loadWorkflowTaskTransitionRequirements filters enabled=1 before dedupe, so the default
     // survives and still gates. The graph must say the same.
-    expect(fallback.overridden_by_sprint).toBe(false);
-    expect(fallback.effective_for_sprint).toBe(true);
+    expect(fallback.overridden_by_workflow).toBe(false);
+    expect(fallback.effective_for_workflow).toBe(true);
   });
 });
 

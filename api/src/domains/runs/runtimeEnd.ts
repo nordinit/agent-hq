@@ -201,12 +201,12 @@ export async function applyRuntimeEndToJobInstance(
              t.project_id,
              t.agent_id AS task_agent_id,
              t.task_type,
-             t.sprint_id,
-             s.sprint_type,
+             t.workflow_id,
+             s.workflow_type,
              ${hasTaskCustomFields ? 't.custom_fields_json' : 'NULL AS custom_fields_json'}
       FROM job_instances ji
       LEFT JOIN tasks t ON t.id = ji.task_id
-      LEFT JOIN sprints s ON s.id = t.sprint_id
+      LEFT JOIN workflows s ON s.id = t.workflow_id
       WHERE ji.id = ?
     `, params.instanceId) as {
       task_id: number | null;
@@ -215,8 +215,8 @@ export async function applyRuntimeEndToJobInstance(
       project_id: number | null;
       task_agent_id: number | null;
       task_type: string | null;
-      sprint_id: number | null;
-      sprint_type: string | null;
+      workflow_id: number | null;
+      workflow_type: string | null;
       custom_fields_json: string | null;
     } | undefined;
 
@@ -225,8 +225,8 @@ export async function applyRuntimeEndToJobInstance(
       const resolvedWorkflow = taskRow.task_status ? await resolveWorkflow({
               taskStatus: taskRow.task_status,
               taskType: taskRow.task_type,
-              sprintId: taskRow.sprint_id,
-              sprintType: taskRow.sprint_type,
+              workflowId: taskRow.workflow_id,
+              workflowType: taskRow.workflow_type,
               db,
             }) : null;
       const changedBy = params.changedBy ?? (taskRow.agent_id ? `agent:${taskRow.agent_id}` : `${params.event.source ?? params.runtimeName.toLowerCase()}-runtime`);

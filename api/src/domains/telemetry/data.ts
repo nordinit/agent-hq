@@ -28,8 +28,8 @@ function normalize(snapshot:Record<string,any>,fields:TelemetryField[]):Record<s
 function taskWhere(access:TelemetryAccess,scope:TelemetryScope,alias='t') {
   const conditions=[`${alias}.tenant_id = ?`],params:unknown[]=[access.tenantId];
   if(scope.project_id!=null){conditions.push(`${alias}.project_id = ?`);params.push(scope.project_id);}
-  if(scope.workflow_id!=null){conditions.push(`${alias}.sprint_id = ?`);params.push(scope.workflow_id);}
-  if(scope.workflow_type){conditions.push('s.sprint_type = ?');params.push(scope.workflow_type);}
+  if(scope.workflow_id!=null){conditions.push(`${alias}.workflow_id = ?`);params.push(scope.workflow_id);}
+  if(scope.workflow_type){conditions.push('s.workflow_type = ?');params.push(scope.workflow_type);}
   if(scope.task_type){conditions.push(`${alias}.task_type = ?`);params.push(scope.task_type);}
   if(scope.include_archived===false)conditions.push("s.status <> 'closed'");
   return {sql:conditions.join(' AND '),params};
@@ -59,7 +59,7 @@ export function requiredMetricSources(definition:MetricDefinition):string[] {
     if(row.field==='event.outcome'||row.field==='event.outcome_identity')sources.add('task_history');
     if(typeof row.field==='string'&&/(?:^|\.)(?:status|from_status|to_status|outcome)_identity$/.test(row.field))sources.add('telemetry_signals');
     if(typeof row.field==='string'&&(/event\.(runtime|semantic)/.test(row.field))){sources.add('runtime_executions');sources.add('job_instances');}
-    if(typeof row.field==='string'&&row.field.includes('unresolved_dependencies'))['tasks','task_dependencies','task_relationships','task_statuses','sprint_task_statuses','sprint_type_task_statuses'].forEach(source=>sources.add(source));
+    if(typeof row.field==='string'&&row.field.includes('unresolved_dependencies'))['tasks','task_dependencies','task_relationships','task_statuses','workflow_task_statuses','workflow_type_task_statuses'].forEach(source=>sources.add(source));
     for(const child of Object.values(row))visit(child);
   };
   visit(definition);
@@ -116,7 +116,7 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   const where=historical?historicalTaskWhere(access,scope,asOf):taskWhere(access,scope);
   if(allowedTaskIds){where.sql+=' AND t.id=ANY(?::bigint[])';where.params.push(allowedTaskIds);}
   const taskRows=['task','event','journey','run','runtime_execution'].includes(grain)?await db.all<{id:number;snapshot:Record<string,any>;workflow_status:string}>(`SELECT t.id,telemetry_task_snapshot(to_jsonb(t)) AS snapshot,s.status AS workflow_status
-    FROM tasks t JOIN sprints s ON s.id=t.sprint_id AND s.tenant_id=t.tenant_id
+    FROM tasks t JOIN workflows s ON s.id=t.workflow_id AND s.tenant_id=t.tenant_id
     WHERE ${where.sql} ORDER BY t.id LIMIT ?`,...where.params,entityLimit+1):[];
   if(taskRows.length>entityLimit) throw new TelemetryError('query_limit_exceeded',`This population exceeds ${entityLimit} tasks. Narrow the scope or use a background query.`,413);
   const taskIds=taskRows.map(row=>Number(row.id));
@@ -126,9 +126,9 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   const dependencyRows=taskIds.length?await db.all<any>(`SELECT d.blocked_id,b.project_id,b.id IS NOT NULL AS visible,
     COALESCE(ws.terminal,ts.terminal,gs.terminal,0) AS terminal
     FROM task_dependencies d LEFT JOIN tasks b ON b.id=d.blocker_id AND b.tenant_id=?
-    LEFT JOIN sprints bs ON bs.id=b.sprint_id AND bs.tenant_id=b.tenant_id
-    LEFT JOIN sprint_task_statuses ws ON ws.sprint_id=b.sprint_id AND ws.status_key=b.status
-    LEFT JOIN sprint_type_task_statuses ts ON ts.tenant_id=b.tenant_id AND ts.sprint_type_key=bs.sprint_type AND ts.status_key=b.status
+    LEFT JOIN workflows bs ON bs.id=b.workflow_id AND bs.tenant_id=b.tenant_id
+    LEFT JOIN workflow_task_statuses ws ON ws.workflow_id=b.workflow_id AND ws.status_key=b.status
+    LEFT JOIN workflow_type_task_statuses ts ON ts.tenant_id=b.tenant_id AND ts.workflow_type_key=bs.workflow_type AND ts.status_key=b.status
     LEFT JOIN task_statuses gs ON gs.name=b.status WHERE d.blocked_id = ANY(?::bigint[])`,access.tenantId,taskIds):[];
   const dependenciesByTask=new Map<number,any[]>();
   for(const dependency of dependencyRows){const id=Number(dependency.blocked_id);const rows=dependenciesByTask.get(id)??[];rows.push(dependency);dependenciesByTask.set(id,rows);}
@@ -145,11 +145,11 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   const entities:TelemetryEntity[]=[];
   if(['task','event','journey'].includes(grain)) for(const [id,snapshot] of taskSnapshots) entities.push({id,kind:'task',fields:normalize(snapshot,fields),coverage:baseCoverage});
   if(grain==='run'||grain==='runtime_execution') {
-    const joins='LEFT JOIN tasks t ON t.id=j.task_id AND t.tenant_id=j.tenant_id LEFT JOIN sprints s ON s.id=t.sprint_id AND s.tenant_id=t.tenant_id JOIN agents a ON a.id=j.agent_id AND a.tenant_id=j.tenant_id';
+    const joins='LEFT JOIN tasks t ON t.id=j.task_id AND t.tenant_id=j.tenant_id LEFT JOIN workflows s ON s.id=t.workflow_id AND s.tenant_id=t.tenant_id JOIN agents a ON a.id=j.agent_id AND a.tenant_id=j.tenant_id';
     const conditions=['j.tenant_id=?'],params:unknown[]=[access.tenantId];
     if(scope.project_id!=null){conditions.push('COALESCE(t.project_id,a.project_id)=?');params.push(scope.project_id);}
-    if(scope.workflow_id!=null){conditions.push('t.sprint_id=?');params.push(scope.workflow_id);}
-    if(scope.workflow_type){conditions.push('s.sprint_type=?');params.push(scope.workflow_type);}
+    if(scope.workflow_id!=null){conditions.push('t.workflow_id=?');params.push(scope.workflow_id);}
+    if(scope.workflow_type){conditions.push('s.workflow_type=?');params.push(scope.workflow_type);}
     if(scope.task_type){conditions.push('t.task_type=?');params.push(scope.task_type);}
     if(scope.include_archived===false)conditions.push("(s.id IS NULL OR s.status <> 'closed')");
     if(allowedTaskIds){conditions.push('j.task_id=ANY(?::bigint[])');params.push(allowedTaskIds);}
@@ -168,7 +168,7 @@ export async function loadMetricData(db:Db,access:TelemetryAccess,scope:Telemetr
   if(grain==='project'||grain==='workflow'||grain==='agent') {
     let rows:any[]=[];
     if(grain==='project') rows=await db.all(`SELECT id,name AS title,id AS project_id,created_at FROM projects WHERE tenant_id=?${scope.project_id==null?'':' AND id=?'} ORDER BY id LIMIT ?`,access.tenantId,...(scope.project_id==null?[]:[scope.project_id]),entityLimit+1);
-    else if(grain==='workflow') rows=await db.all(`SELECT id,name AS title,id AS workflow_id,project_id,sprint_type AS workflow_type,status,created_at FROM sprints WHERE tenant_id=?${scope.project_id==null?'':' AND project_id=?'}${scope.workflow_id==null?'':' AND id=?'}${scope.workflow_type?' AND sprint_type=?':''} ORDER BY id LIMIT ?`,access.tenantId,...(scope.project_id==null?[]:[scope.project_id]),...(scope.workflow_id==null?[]:[scope.workflow_id]),...(scope.workflow_type?[scope.workflow_type]:[]),entityLimit+1);
+    else if(grain==='workflow') rows=await db.all(`SELECT id,name AS title,id AS workflow_id,project_id,workflow_type AS workflow_type,status,created_at FROM workflows WHERE tenant_id=?${scope.project_id==null?'':' AND project_id=?'}${scope.workflow_id==null?'':' AND id=?'}${scope.workflow_type?' AND workflow_type=?':''} ORDER BY id LIMIT ?`,access.tenantId,...(scope.project_id==null?[]:[scope.project_id]),...(scope.workflow_id==null?[]:[scope.workflow_id]),...(scope.workflow_type?[scope.workflow_type]:[]),entityLimit+1);
     else rows=await db.all(`SELECT id,name AS title,id AS agent_id,project_id,runtime_type,created_at FROM agents WHERE tenant_id=?${scope.project_id==null?'':' AND project_id=?'} ORDER BY id LIMIT ?`,access.tenantId,...(scope.project_id==null?[]:[scope.project_id]),entityLimit+1);
     if(rows.length>entityLimit)throw new TelemetryError('query_limit_exceeded','Entity limit exceeded.',413);
     for(const row of rows)entities.push({id:row.id,kind:grain,fields:normalize(row,fields),coverage:baseCoverage});

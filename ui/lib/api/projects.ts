@@ -47,7 +47,7 @@ deleteProject: (id: number, options?: { force?: boolean; confirm?: boolean }) =>
   return apiFetch<{ ok: boolean }>(`/api/v1/projects/${id}${query ? `?${query}` : ''}`, { method: 'DELETE' });
 },
 checkProjectCascade: (id: number) =>
-  apiFetch<{ active_tasks: number; running_instances: number; dependent_sprints: number; dependent_tasks: number; dependent_agents: number }>(`/api/v1/projects/${id}/cascade-check`),
+  apiFetch<{ active_tasks: number; running_instances: number; dependent_workflows: number; dependent_tasks: number; dependent_agents: number }>(`/api/v1/projects/${id}/cascade-check`),
 // Project Audit History
 getProjectAudit: (id: number, params?: { entity_type?: string; limit?: number; offset?: number }) => {
   const qs = new URLSearchParams();

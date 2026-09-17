@@ -116,7 +116,7 @@ const AGENT_REFERENCE_CHECKS: AgentReferenceCheck[] = [
   { table: 'canonical_chat_sessions', column: 'agent_id', label: 'canonical chat sessions', historical: true },
   { table: 'integrity_events', column: 'agent_id', label: 'integrity events', historical: true },
   { table: 'security_events', column: 'agent_id', label: 'security events', historical: true },
-  { table: 'sprint_task_routing_rules', column: 'agent_id', label: 'routing rules', historical: false },
+  { table: 'workflow_task_routing_rules', column: 'agent_id', label: 'routing rules', historical: false },
   { table: 'agent_tool_assignments', column: 'agent_id', label: 'tool assignments', historical: false },
   { table: 'agent_mcp_assignments', column: 'agent_id', label: 'MCP assignments', historical: false },
 ];
@@ -181,8 +181,8 @@ async function archiveAgentForDeletion(db: ReturnType<typeof getDb>, agent: Reco
     if (await tableHasColumn(db, 'agent_mcp_assignments', 'agent_id')) {
       await db.run('DELETE FROM agent_mcp_assignments WHERE agent_id = ?', agentId);
     }
-    if (await tableHasColumn(db, 'sprint_task_routing_rules', 'agent_id')) {
-      await db.run('DELETE FROM sprint_task_routing_rules WHERE agent_id = ?', agentId);
+    if (await tableHasColumn(db, 'workflow_task_routing_rules', 'agent_id')) {
+      await db.run('DELETE FROM workflow_task_routing_rules WHERE agent_id = ?', agentId);
     }
     await db.run(`
       UPDATE agents
@@ -350,7 +350,7 @@ interface ProvisionFullRequest {
   sort_rules?: string[];
   openclaw_agent_id?: string;
   routing_rules?: Array<{
-    sprint_id?: number | null;
+    workflow_id?: number | null;
     task_type: string;
     status: string;
     priority?: number;
@@ -633,8 +633,8 @@ function validateRoutingRules(routingRules: ProvisionFullRequest['routing_rules'
       errors.push('Each routing rule requires task_type and status');
       continue;
     }
-    if (rule.sprint_id !== undefined && rule.sprint_id !== null && (!Number.isInteger(rule.sprint_id) || rule.sprint_id <= 0)) {
-      errors.push(`Invalid sprint_id "${String(rule.sprint_id)}"`);
+    if (rule.workflow_id !== undefined && rule.workflow_id !== null && (!Number.isInteger(rule.workflow_id) || rule.workflow_id <= 0)) {
+      errors.push(`Invalid workflow_id "${String(rule.workflow_id)}"`);
     }
     if (!isValidTaskType(rule.task_type)) {
       errors.push(`Invalid task_type "${rule.task_type}"`);
@@ -1024,27 +1024,27 @@ router.post('/provision-full', async (req: Request, res: Response) => {
           };
         }
 
-        const sprintRoutingSql = `
-          INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, task_type, status, agent_id, priority)
+        const workflowRoutingSql = `
+          INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, task_type, status, agent_id, priority)
           VALUES (?, ?, ?, ?, ?, ?)
         `;
-        const activeProjectSprintIds = body.project_id == null
+        const activeProjectWorkflowIds = body.project_id == null
           ? []
           : (await db.all(`
               SELECT id
-              FROM sprints
+              FROM workflows
               WHERE project_id = ?
                 AND status IN ('planning', 'active', 'paused')
             `, body.project_id)).map((row: any) => Number(row.id));
         for (const rule of body.routing_rules ?? []) {
-          const targetSprintIds = rule.sprint_id != null
-            ? [Number(rule.sprint_id)]
-            : activeProjectSprintIds;
-          if (targetSprintIds.length === 0) {
-            throw new Error('routing_rules entries must include sprint_id or the agent project must have at least one non-closed sprint');
+          const targetWorkflowIds = rule.workflow_id != null
+            ? [Number(rule.workflow_id)]
+            : activeProjectWorkflowIds;
+          if (targetWorkflowIds.length === 0) {
+            throw new Error('routing_rules entries must include workflow_id or the agent project must have at least one non-closed workflow');
           }
-          for (const sprintId of targetSprintIds) {
-            const result = await db.run(sprintRoutingSql, tenantId, sprintId, rule.task_type, rule.status, agentId, rule.priority ?? 0);
+          for (const workflowId of targetWorkflowIds) {
+            const result = await db.run(workflowRoutingSql, tenantId, workflowId, rule.task_type, rule.status, agentId, rule.priority ?? 0);
             createdRoutingRuleIds.push(Number(result.lastInsertId));
           }
         }
@@ -2984,8 +2984,8 @@ export function parseAgentRuntimeConfig(agent: Record<string, unknown>): Record<
   delete result.job_title;
   // Task #605: agents are project-scoped. The DB column may exist as a
   // legacy/internal migration artifact, but API consumers should use routing
-  // rules for sprint-specific dispatch.
-  delete result.sprint_id;
+  // rules for workflow-specific dispatch.
+  delete result.workflow_id;
   return result;
 }
 

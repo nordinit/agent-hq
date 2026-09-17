@@ -46,8 +46,8 @@ interface TaskRelationRef {
   task_type: string | null;
   agent_id: number | null;
   agent_name: string | null;
-  sprint_id: number | null;
-  sprint_name: string | null;
+  workflow_id: number | null;
+  workflow_name: string | null;
   project_id: number | null;
 }
 
@@ -97,7 +97,7 @@ const LIFECYCLE_FIELDS = new Set([
   'project_lifecycle_outcome',
 ]);
 const OWNERSHIP_FIELDS = new Set(['agent_id']);
-const PLACEMENT_FIELDS = new Set(['project_id', 'sprint_id']);
+const PLACEMENT_FIELDS = new Set(['project_id', 'workflow_id']);
 
 const TASK_CONTEXT_SELECT = `
   SELECT
@@ -105,8 +105,8 @@ const TASK_CONTEXT_SELECT = `
     p.name AS project_name,
     a.name AS agent_name,
     a.job_title AS agent_job_title,
-    s.name AS sprint_name,
-    s.status AS sprint_status,
+    s.name AS workflow_name,
+    s.status AS workflow_status,
     ji.id AS active_instance_id,
     ji.status AS active_instance_status,
     ji.session_key AS active_instance_session_key,
@@ -139,7 +139,7 @@ const TASK_CONTEXT_SELECT = `
   FROM tasks t
   LEFT JOIN projects p ON p.id = t.project_id
   LEFT JOIN agents a ON a.id = t.agent_id
-  LEFT JOIN sprints s ON s.id = t.sprint_id
+  LEFT JOIN workflows s ON s.id = t.workflow_id
   LEFT JOIN job_instances ji ON ji.id = t.active_instance_id
   LEFT JOIN instance_artifacts ia ON ia.instance_id = ji.id
 `;
@@ -258,8 +258,8 @@ function formatTaskRef(row: RecordLike): TaskRelationRef {
     task_type: asString(row.task_type),
     agent_id: asNumber(row.agent_id),
     agent_name: asString(row.agent_name),
-    sprint_id: asNumber(row.sprint_id),
-    sprint_name: asString(row.sprint_name),
+    workflow_id: asNumber(row.workflow_id),
+    workflow_name: asString(row.workflow_name),
     project_id: asNumber(row.project_id),
   };
 }
@@ -273,19 +273,19 @@ async function loadTask(taskId: number): Promise<RecordLike | null> {
   const publicTask = stripTaskLifecycleEvidenceFields(stripRetiredTaskColumns(canonicalTask));
 
   const blockers = await db.all(`
-    SELECT t.id, t.title, t.status, t.priority, t.task_type, t.agent_id, a.name AS agent_name, t.sprint_id, s.name AS sprint_name, t.project_id
+    SELECT t.id, t.title, t.status, t.priority, t.task_type, t.agent_id, a.name AS agent_name, t.workflow_id, s.name AS workflow_name, t.project_id
     FROM tasks t
     LEFT JOIN agents a ON a.id = t.agent_id
-    LEFT JOIN sprints s ON s.id = t.sprint_id
+    LEFT JOIN workflows s ON s.id = t.workflow_id
     WHERE t.id IN (SELECT blocker_id FROM task_dependencies WHERE blocked_id = ?)
     ORDER BY t.id ASC
   `, taskId) as RecordLike[];
 
   const blocking = await db.all(`
-    SELECT t.id, t.title, t.status, t.priority, t.task_type, t.agent_id, a.name AS agent_name, t.sprint_id, s.name AS sprint_name, t.project_id
+    SELECT t.id, t.title, t.status, t.priority, t.task_type, t.agent_id, a.name AS agent_name, t.workflow_id, s.name AS workflow_name, t.project_id
     FROM tasks t
     LEFT JOIN agents a ON a.id = t.agent_id
-    LEFT JOIN sprints s ON s.id = t.sprint_id
+    LEFT JOIN workflows s ON s.id = t.workflow_id
     WHERE t.id IN (SELECT blocked_id FROM task_dependencies WHERE blocker_id = ?)
     ORDER BY t.id ASC
   `, taskId) as RecordLike[];
@@ -550,7 +550,7 @@ function formatHistoryGroupSummary(group: ClassifiedHistoryGroup): string {
     case 'ownership_change':
       return `Ownership changed`;
     case 'placement_change':
-      return `Project or sprint placement changed`;
+      return `Project or workflow placement changed`;
     case 'task_record_change':
       return group.fields.includes('created') ? 'Task created' : 'Task deleted';
     default:
@@ -814,10 +814,10 @@ function buildServerSummary(task: RecordLike, blockerContext: RecordLike | null,
   parts.push(`Task #${asNumber(task.id) ?? '?'} is ${status}`);
 
   const assignee = asString(task.agent_name);
-  const sprint = asString(task.sprint_name);
+  const workflow = asString(task.workflow_name);
   const project = asString(task.project_name);
   if (assignee) parts.push(`assigned to ${assignee}`);
-  if (sprint) parts.push(`in sprint ${sprint}`);
+  if (workflow) parts.push(`in workflow ${workflow}`);
   if (project) parts.push(`for project ${project}`);
 
   const blockerDetail = asString(blockerContext?.failure_detail)

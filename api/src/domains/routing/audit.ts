@@ -10,7 +10,7 @@ export interface RoutingAuditEntry {
   projectId?: number | null;
   workflowType: string;
   workflowId?: number | null;
-  /** Physical table the changed row lives in, e.g. 'sprint_task_transitions'. */
+  /** Physical table the changed row lives in, e.g. 'workflow_task_transitions'. */
   entityTable: string;
   entityId?: number | null;
   /** Natural key for rows identified by something other than an id (a status name, an outcome). */
@@ -133,8 +133,8 @@ export function readAuditActor(input: Record<string, unknown>): RoutingAuditActo
 interface ScopedRow {
   id?: unknown;
   project_id?: unknown;
-  sprint_type?: unknown;
-  sprint_id?: unknown;
+  workflow_type?: unknown;
+  workflow_id?: unknown;
 }
 
 function asNumberOrNull(value: unknown): number | null {
@@ -182,9 +182,9 @@ export async function auditedRoutingWrite<T>(
 
     // Prefer the surviving row for scope; on a delete only the before-image is left.
     const scopeRow = (after ?? before ?? {}) as ScopedRow;
-    const workflowType = typeof scopeRow.sprint_type === 'string' && scopeRow.sprint_type
-      ? scopeRow.sprint_type
-      : String(spec.input.sprint_type ?? '');
+    const workflowType = typeof scopeRow.workflow_type === 'string' && scopeRow.workflow_type
+      ? scopeRow.workflow_type
+      : String(spec.input.workflow_type ?? '');
 
     const tenantId = asNumberOrNull(spec.input.tenant_id);
     if (tenantId == null) {
@@ -196,7 +196,7 @@ export async function auditedRoutingWrite<T>(
       tenantId,
       projectId: asNumberOrNull(scopeRow.project_id) ?? asNumberOrNull(spec.input.project_id),
       workflowType,
-      workflowId: asNumberOrNull(scopeRow.sprint_id) ?? asNumberOrNull(spec.input.sprint_id),
+      workflowId: asNumberOrNull(scopeRow.workflow_id) ?? asNumberOrNull(spec.input.workflow_id),
       entityTable: spec.table,
       entityId: rowId,
       action: spec.action,
@@ -221,8 +221,8 @@ export async function listRoutingAudit(
   db: Db,
   input: {
     project_id?: unknown;
-    sprint_id?: unknown;
-    sprint_type?: unknown;
+    workflow_id?: unknown;
+    workflow_type?: unknown;
     entity_table?: unknown;
     limit?: unknown;
     tenant_id?: unknown;
@@ -234,12 +234,12 @@ export async function listRoutingAudit(
   const projectId = asNumberOrNull(input.project_id);
   if (projectId != null) { where.push('project_id = ?'); params.push(projectId); }
 
-  const sprintId = asNumberOrNull(input.sprint_id);
-  if (sprintId != null) { where.push('workflow_id = ?'); params.push(sprintId); }
+  const workflowId = asNumberOrNull(input.workflow_id);
+  if (workflowId != null) { where.push('workflow_id = ?'); params.push(workflowId); }
 
-  if (typeof input.sprint_type === 'string' && input.sprint_type.trim()) {
+  if (typeof input.workflow_type === 'string' && input.workflow_type.trim()) {
     where.push('workflow_type = ?');
-    params.push(input.sprint_type.trim());
+    params.push(input.workflow_type.trim());
   }
   if (typeof input.entity_table === 'string' && input.entity_table.trim()) {
     where.push('entity_table = ?');

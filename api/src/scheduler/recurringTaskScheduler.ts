@@ -8,8 +8,8 @@ import type { RecurringTaskRunRecord, RecurringTaskSeriesRecord } from '../domai
 import { isTaskStatus } from '../lib/taskStatuses';
 import { listConfiguredTerminalStatuses } from '../domains/tasks/terminality';
 import { isValidTaskType } from '../lib/taskTypes';
-import { isTaskTypeAllowedForSprintType } from '../domains/sprint-definitions/config';
-import { listSprintTaskStatuses } from '../domains/routing/policy/statuses';
+import { isTaskTypeAllowedForWorkflowType } from '../domains/workflow-definitions/config';
+import { listWorkflowTaskStatuses } from '../domains/routing/policy/statuses';
 import { type Db } from "../db/adapter/types";
 
 const DEFAULT_LIMIT = 25;
@@ -22,10 +22,10 @@ type Weekday = typeof WEEKDAYS[number];
 
 interface DueSeriesRow extends RecurringTaskSeriesRecord {}
 
-interface SprintRow {
+interface WorkflowRow {
   id: number;
   project_id: number;
-  sprint_type: string | null;
+  workflow_type: string | null;
   status: string;
 }
 
@@ -158,17 +158,17 @@ async function loadDueSeries(db: Db, nowIso: string, limit: number): Promise<Due
   `, nowIso, limit) as DueSeriesRow[];
 }
 
-async function loadSprint(db: Db, sprintId: number): Promise<SprintRow | null> {
+async function loadWorkflow(db: Db, workflowId: number): Promise<WorkflowRow | null> {
   return await db.get(`
-    SELECT id, project_id, sprint_type, status
-    FROM sprints
+    SELECT id, project_id, workflow_type, status
+    FROM workflows
     WHERE id = ?
     LIMIT 1
-  `, sprintId) as SprintRow | undefined ?? null;
+  `, workflowId) as WorkflowRow | undefined ?? null;
 }
 
 async function activeGeneratedTaskId(db: Db, series: RecurringTaskSeriesRecord): Promise<number | null> {
-  const terminalStatuses = await listConfiguredTerminalStatuses(db, { sprintId: series.sprint_id });
+  const terminalStatuses = await listConfiguredTerminalStatuses(db, { workflowId: series.workflow_id });
   const exclusion = terminalStatuses.length > 0
     ? `AND status NOT IN (${terminalStatuses.map(() => '?').join(', ')})`
     : '';
@@ -184,19 +184,19 @@ async function activeGeneratedTaskId(db: Db, series: RecurringTaskSeriesRecord):
   return row?.id ?? null;
 }
 
-async function validateSeriesForCreation(db: Db, series: RecurringTaskSeriesRecord, sprint: SprintRow): Promise<void> {
+async function validateSeriesForCreation(db: Db, series: RecurringTaskSeriesRecord, workflow: WorkflowRow): Promise<void> {
   if (!isValidTaskType(series.task_type)) {
     throw new Error(`invalid_task_type: "${series.task_type}" is not a valid task type`);
   }
   if (!isTaskStatus(series.status_on_create)) {
     throw new Error(`invalid_status_on_create: "${series.status_on_create}" is not a valid task status`);
   }
-  if (!await isTaskTypeAllowedForSprintType(db, sprint.sprint_type ?? 'generic', series.task_type)) {
-    throw new Error(`invalid_task_type: "${series.task_type}" is not allowed for sprint type "${sprint.sprint_type ?? 'generic'}"`);
+  if (!await isTaskTypeAllowedForWorkflowType(db, workflow.workflow_type ?? 'generic', series.task_type)) {
+    throw new Error(`invalid_task_type: "${series.task_type}" is not allowed for workflow type "${workflow.workflow_type ?? 'generic'}"`);
   }
-  const sprintStatuses = await listSprintTaskStatuses(db, series.sprint_id);
-  if (sprintStatuses.length > 0 && !sprintStatuses.some(status => status.name === series.status_on_create)) {
-    throw new Error(`invalid_status_on_create: "${series.status_on_create}" is not configured for sprint ${series.sprint_id}`);
+  const workflowStatuses = await listWorkflowTaskStatuses(db, series.workflow_id);
+  if (workflowStatuses.length > 0 && !workflowStatuses.some(status => status.name === series.status_on_create)) {
+    throw new Error(`invalid_status_on_create: "${series.status_on_create}" is not configured for workflow ${series.workflow_id}`);
   }
 }
 
@@ -267,9 +267,9 @@ async function processDueSeries(db: Db, series: RecurringTaskSeriesRecord): Prom
     const run = await createStartedRun(db, fresh, scheduledFor);
     if (!run) return 'duplicate' as const;
 
-    const sprint = await loadSprint(db, fresh.sprint_id);
-    if (!sprint || sprint.status === 'closed' || sprint.status === 'complete') {
-      await finishAndAdvance(db, fresh, run.id, scheduledFor, 'failed', `fixed_sprint_unavailable: sprint ${fresh.sprint_id} is ${sprint?.status ?? 'missing'}`, true);
+    const workflow = await loadWorkflow(db, fresh.workflow_id);
+    if (!workflow || workflow.status === 'closed' || workflow.status === 'complete') {
+      await finishAndAdvance(db, fresh, run.id, scheduledFor, 'failed', `fixed_workflow_unavailable: workflow ${fresh.workflow_id} is ${workflow?.status ?? 'missing'}`, true);
       return 'failed' as const;
     }
 
@@ -281,14 +281,14 @@ async function processDueSeries(db: Db, series: RecurringTaskSeriesRecord): Prom
       return 'failed' as const;
     }
 
-    if (sprint.status === 'paused') {
-      await finishRecurringTaskRun(db, run.id, { status: 'skipped', error_message: `sprint_paused: sprint ${fresh.sprint_id} is paused` });
+    if (workflow.status === 'paused') {
+      await finishRecurringTaskRun(db, run.id, { status: 'skipped', error_message: `workflow_paused: workflow ${fresh.workflow_id} is paused` });
       await advanceSeries(db, fresh, scheduledFor, { nextRunAt });
       return 'skipped' as const;
     }
 
     try {
-      await validateSeriesForCreation(db, fresh, sprint);
+      await validateSeriesForCreation(db, fresh, workflow);
     } catch (err) {
       await finishAndAdvance(db, fresh, run.id, scheduledFor, 'failed', err instanceof Error ? err.message : String(err), true);
       return 'failed' as const;
@@ -310,7 +310,7 @@ async function processDueSeries(db: Db, series: RecurringTaskSeriesRecord): Prom
               status: fresh.status_on_create,
               priority: fresh.priority,
               project_id: fresh.project_id,
-              sprint_id: fresh.sprint_id,
+              workflow_id: fresh.workflow_id,
               agent_id: fresh.agent_id,
               task_type: fresh.task_type,
               story_points: fresh.story_points,

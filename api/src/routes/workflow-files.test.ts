@@ -40,7 +40,7 @@ describe('workflow file versions', () => {
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (?, ?, ?, 0), (?, ?, ?, 0) ON CONFLICT DO NOTHING`, 101, 'Tenant One', 'tenant-one', 202, 'Tenant Two', 'tenant-two');
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (?, ?, ?), (?, ?, ?)`, 700, 101, 'Tenant One Project', 800, 202, 'Tenant Two Project');
     await db.run(`
-      INSERT INTO sprints (id, tenant_id, project_id, name, goal, status)
+      INSERT INTO workflows (id, tenant_id, project_id, name, goal, status)
       VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)
     `, 900, 101, 700, 'Tenant One Workflow', '', 'active', 901, 101, 700, 'Other Tenant One Workflow', '', 'active', 902, 202, 800, 'Tenant Two Workflow', '', 'active');
 

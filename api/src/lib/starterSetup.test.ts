@@ -1,9 +1,9 @@
 import { getDb } from '../db/client';
 import { setupTestDb, teardownTestDb } from '../db/testDb';
 import type { Db } from '../db/adapter/types';
-import { ensureProjectBacklogSprint } from './starterSetup';
+import { ensureProjectBacklogWorkflow } from './starterSetup';
 
-// A fixed explicit tenant keeps the project/sprint/agent foreign keys below deterministic.
+// A fixed explicit tenant keeps the project/workflow/agent foreign keys below deterministic.
 const TENANT_ID = 9000;
 
 async function seedTenant(db: Db): Promise<number> {
@@ -12,7 +12,7 @@ async function seedTenant(db: Db): Promise<number> {
     INSERT INTO tenants (id, name, slug, is_default)
     VALUES (?, 'Starter Setup Test', 'starter-setup-test', 0)
   `, TENANT_ID);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name) VALUES (?, 'generic', 'Generic')`, TENANT_ID);
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (?, 'generic', 'Generic')`, TENANT_ID);
   return TENANT_ID;
 }
 
@@ -34,13 +34,13 @@ describe('starter workspace setup', () => {
         (?, 990, 'Scout', 'QA and validation', 'QA Engineer', 'agent:scout', '', 'idle')
     `, tenantId, tenantId);
 
-    const sprintId = await ensureProjectBacklogSprint(db, 990);
+    const workflowId = await ensureProjectBacklogWorkflow(db, 990);
 
     const statusCount = Number((await db.get(
-      `SELECT COUNT(*) AS n FROM sprint_task_statuses WHERE sprint_id = ?`, sprintId,
+      `SELECT COUNT(*) AS n FROM workflow_task_statuses WHERE workflow_id = ?`, workflowId,
     ) as { n: number | string }).n);
     const ruleCount = Number((await db.get(
-      `SELECT COUNT(*) AS n FROM sprint_task_routing_rules WHERE sprint_id = ?`, sprintId,
+      `SELECT COUNT(*) AS n FROM workflow_task_routing_rules WHERE workflow_id = ?`, workflowId,
     ) as { n: number | string }).n);
 
     // Configuration is install-owned. Creating a project backlog must not seed or repair it.
@@ -64,11 +64,11 @@ describe('starter workspace setup', () => {
         (7702, ?, 991, 'Kepler', 'Backend Engineer', '', 'agent:kepler', '', 'idle')
     `, tenantId, tenantId);
 
-    await ensureProjectBacklogSprint(db, 991);
+    await ensureProjectBacklogWorkflow(db, 991);
 
     const salesRules = await db.all(`
       SELECT task_type, status
-      FROM sprint_task_routing_rules
+      FROM workflow_task_routing_rules
       WHERE agent_id = 7701
     `) as Array<{ task_type: string; status: string }>;
 

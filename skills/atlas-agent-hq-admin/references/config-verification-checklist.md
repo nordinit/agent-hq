@@ -2,11 +2,11 @@
 
 Use this before telling the user Agent HQ is configured.
 
-## Project And Sprint
+## Project And Workflow
 
 - Project exists and is active.
-- At least one active sprint exists if the workflow needs a board.
-- Sprint is linked to the correct project.
+- At least one active workflow exists if the workflow needs a board.
+- Workflow is linked to the correct project.
 - Workflow type is correct.
 
 ## Workflow Definition
@@ -72,7 +72,7 @@ Create or dry-run one sample task path:
 ```text
 Task:
 - project:
-- sprint:
+- workflow:
 - task_type:
 - story_points:
 - status:

@@ -23,23 +23,23 @@ beforeEach(async () => {
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Test', 'test', 1), (2, 'Other', 'other', 0)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agency'), (2, 1, 'Other project'), (3, 2, 'Other tenant')`);
-  await db.run(`INSERT INTO sprint_types (tenant_id, key, name) VALUES (1, 'lead_generation', 'Lead Generation')`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+  await db.run(`INSERT INTO workflow_types (tenant_id, key, name) VALUES (1, 'lead_generation', 'Lead Generation')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
     VALUES (10, 1, 1, 'Leads', 'lead_generation'), (11, 1, 2, 'Other leads', 'lead_generation'), (12, 2, 3, 'Tenant leads', 'lead_generation')`);
-  await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal, stage_order)
+  await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal, stage_order)
     VALUES (10, 'in_progress', 'In Progress', 0, 0), (10, 'done', 'Done', 1, 1)`);
   await db.run(`INSERT INTO agents (id, tenant_id, project_id, name, session_key)
     VALUES (7, 1, 1, 'Supervisor', 'supervisor'), (8, 1, 1, 'Worker', 'worker')`);
-  await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, task_type, assigned_agent_id)
+  await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, task_type, assigned_agent_id)
     VALUES (101, 1, 1, 10, 'Stuck occurrence', 'in_progress', 'proposal', 8),
            (102, 1, 2, 11, 'Other project task', 'in_progress', NULL, NULL),
            (103, 2, 3, 12, 'Other tenant task', 'in_progress', NULL, NULL)`);
-  await db.run(`INSERT INTO task_field_schemas (tenant_id, sprint_type_key, task_type, schema_json) VALUES (1, 'lead_generation', NULL, ?)`,
+  await db.run(`INSERT INTO task_field_schemas (tenant_id, workflow_type_key, task_type, schema_json) VALUES (1, 'lead_generation', NULL, ?)`,
     JSON.stringify({ fields: [{ key: 'crm_evidence', type: 'url' }] }));
-  await db.run(`INSERT INTO sprint_task_transitions (tenant_id, sprint_id, task_type, from_status, outcome, to_status, enabled)
+  await db.run(`INSERT INTO workflow_task_transitions (tenant_id, workflow_id, task_type, from_status, outcome, to_status, enabled)
     VALUES (1, 10, 'proposal', 'in_progress', 'closed_completed', 'done', 1)`);
-  await db.run(`INSERT INTO sprint_task_transition_requirements
-    (tenant_id, project_id, sprint_id, sprint_type, task_type, outcome, field_name, requirement_type, severity, enabled)
+  await db.run(`INSERT INTO workflow_task_transition_requirements
+    (tenant_id, project_id, workflow_id, workflow_type, task_type, outcome, field_name, requirement_type, severity, enabled)
     VALUES (1, 1, 10, 'lead_generation', 'proposal', 'closed_completed', 'crm_evidence', 'required', 'block', 1)`);
   apiKey = (await issueMcpApiKeyForAgent(db, 7)).apiKey;
   await replaceAgentMcpPermissionPolicy(db, 7, ['tasks.write_project_lifecycle', 'tasks.manage_project_tasks']);
@@ -141,7 +141,7 @@ it('preserves evidence gates and audits a refused supervisory outcome', async ()
 });
 
 it('requires a configured transition and rolls back inline evidence on refusal', async () => {
-  await db.run(`DELETE FROM sprint_task_transitions WHERE sprint_id = 10`);
+  await db.run(`DELETE FROM workflow_task_transitions WHERE workflow_id = 10`);
   const before = await snapshot();
   expect(await outcome()).toMatchObject({ status: 400, body: { code: 'task_outcome_not_allowed_for_workflow' } });
   expect((await snapshot()).task).toEqual(before.task);
@@ -195,7 +195,7 @@ it('keeps the narrower active-run path when both lifecycle capabilities are gran
 it('rechecks project scope under the task lock without leaving audit writes in a different project', async () => {
   const transaction = db.withTransaction.bind(db);
   jest.spyOn(db, 'withTransaction').mockImplementationOnce(async fn => {
-    await db.run(`UPDATE tasks SET project_id = 2, sprint_id = 11 WHERE id = 101`);
+    await db.run(`UPDATE tasks SET project_id = 2, workflow_id = 11 WHERE id = 101`);
     return transaction(fn);
   });
   await expect(projectOutcomeDirect()).rejects.toMatchObject({ status: 403 });

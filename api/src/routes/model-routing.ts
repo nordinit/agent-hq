@@ -119,46 +119,24 @@ function normalizeScopeId(value: unknown): number | null | undefined {
   return num;
 }
 
-function normalizeSprintType(value: unknown): string | null | undefined {
+function normalizeWorkflowType(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
   const text = typeof value === 'string' ? value.trim() : String(value).trim();
   return text.length > 0 ? text : null;
 }
 
-function coalesceAlias<T>(
-  canonicalValue: T | undefined,
-  aliasValue: T | undefined,
-  canonicalName: string,
-  aliasName: string,
-): T | undefined {
-  if (canonicalValue !== undefined && aliasValue !== undefined && canonicalValue !== aliasValue) {
-    throw badRequest(`${aliasName} conflicts with ${canonicalName}`);
-  }
-  return canonicalValue !== undefined ? canonicalValue : aliasValue;
-}
-
 function normalizeWorkflowScopeInput(input: Record<string, unknown>): {
   project_id: number | null | undefined;
-  sprint_id: number | null | undefined;
-  sprint_type: string | null | undefined;
+  workflow_id: number | null | undefined;
+  workflow_type: string | null | undefined;
 } {
-  const sprintId = coalesceAlias(
-    normalizeScopeId(input.sprint_id),
-    normalizeScopeId(input.workflow_id),
-    'sprint_id',
-    'workflow_id',
-  );
-  const sprintType = coalesceAlias(
-    normalizeSprintType(input.sprint_type),
-    normalizeSprintType(input.workflow_type),
-    'sprint_type',
-    'workflow_type',
-  );
+  const workflowId = normalizeScopeId(input.workflow_id);
+  const workflowType = normalizeWorkflowType(input.workflow_type);
   return {
     project_id: normalizeScopeId(input.project_id),
-    sprint_id: sprintId,
-    sprint_type: sprintType,
+    workflow_id: workflowId,
+    workflow_type: workflowType,
   };
 }
 
@@ -166,16 +144,16 @@ async function resolveScope(
   db: ReturnType<typeof getDb>,
   tenantId: number,
   projectId: number | null | undefined,
-  sprintId: number | null | undefined,
-  sprintType: string | null | undefined,
-): Promise<{ project_id: number | null; sprint_id: number | null; sprint_type: string | null }> {
-  if (projectId == null && sprintId == null && sprintType == null) {
-    return { project_id: null, sprint_id: null, sprint_type: null };
+  workflowId: number | null | undefined,
+  workflowType: string | null | undefined,
+): Promise<{ project_id: number | null; workflow_id: number | null; workflow_type: string | null }> {
+  if (projectId == null && workflowId == null && workflowType == null) {
+    return { project_id: null, workflow_id: null, workflow_type: null };
   }
 
   let resolvedProjectId = projectId ?? null;
-  let resolvedSprintId = sprintId ?? null;
-  let resolvedSprintType = sprintType ?? null;
+  let resolvedWorkflowId = workflowId ?? null;
+  let resolvedWorkflowType = workflowType ?? null;
 
   if (resolvedProjectId != null) {
     const project = await hasColumn(db, 'projects', 'tenant_id')
@@ -184,28 +162,28 @@ async function resolveScope(
     if (!project) throw badRequest('project_id must reference an existing project');
   }
 
-  if (resolvedSprintId != null) {
-    const sprint = await hasColumn(db, 'sprints', 'tenant_id')
-      ? await db.get(`SELECT id, project_id, sprint_type FROM sprints WHERE id = ? AND tenant_id = ?`, resolvedSprintId, tenantId) as { id: number; project_id: number | null; sprint_type?: string | null } | undefined
-      : await db.get(`SELECT id, project_id, sprint_type FROM sprints WHERE id = ?`, resolvedSprintId) as { id: number; project_id: number | null; sprint_type?: string | null } | undefined;
-    if (!sprint) throw badRequest('workflow_id must reference an existing workflow');
-    if (resolvedProjectId != null && sprint.project_id !== resolvedProjectId) {
+  if (resolvedWorkflowId != null) {
+    const workflow = await hasColumn(db, 'workflows', 'tenant_id')
+      ? await db.get(`SELECT id, project_id, workflow_type FROM workflows WHERE id = ? AND tenant_id = ?`, resolvedWorkflowId, tenantId) as { id: number; project_id: number | null; workflow_type?: string | null } | undefined
+      : await db.get(`SELECT id, project_id, workflow_type FROM workflows WHERE id = ?`, resolvedWorkflowId) as { id: number; project_id: number | null; workflow_type?: string | null } | undefined;
+    if (!workflow) throw badRequest('workflow_id must reference an existing workflow');
+    if (resolvedProjectId != null && workflow.project_id !== resolvedProjectId) {
       throw badRequest('workflow_id must belong to project_id');
     }
-    const sprintTypeFromSprint = sprint.sprint_type ? String(sprint.sprint_type).trim() : null;
-    if (resolvedSprintType != null && sprintTypeFromSprint !== resolvedSprintType) {
-      throw badRequest(`workflow_id must use workflow_type "${resolvedSprintType}"`);
+    const workflowTypeFromWorkflow = workflow.workflow_type ? String(workflow.workflow_type).trim() : null;
+    if (resolvedWorkflowType != null && workflowTypeFromWorkflow !== resolvedWorkflowType) {
+      throw badRequest(`workflow_id must use workflow_type "${resolvedWorkflowType}"`);
     }
-    resolvedProjectId = resolvedProjectId ?? sprint.project_id ?? null;
-    resolvedSprintType = resolvedSprintType ?? sprintTypeFromSprint;
+    resolvedProjectId = resolvedProjectId ?? workflow.project_id ?? null;
+    resolvedWorkflowType = resolvedWorkflowType ?? workflowTypeFromWorkflow;
   }
 
-  if (resolvedSprintType != null) {
-    const sprintTypeRow = await db.get(`SELECT key FROM sprint_types WHERE key = ? LIMIT 1`, resolvedSprintType) as { key?: string } | undefined;
-    if (!sprintTypeRow) throw badRequest(`workflow_type must reference an existing workflow type; "${resolvedSprintType}" was not found`);
+  if (resolvedWorkflowType != null) {
+    const workflowTypeRow = await db.get(`SELECT key FROM workflow_types WHERE key = ? LIMIT 1`, resolvedWorkflowType) as { key?: string } | undefined;
+    if (!workflowTypeRow) throw badRequest(`workflow_type must reference an existing workflow type; "${resolvedWorkflowType}" was not found`);
   }
 
-  return { project_id: resolvedProjectId, sprint_id: resolvedSprintId, sprint_type: resolvedSprintType };
+  return { project_id: resolvedProjectId, workflow_id: resolvedWorkflowId, workflow_type: resolvedWorkflowType };
 }
 
 async function providerConfigTableExists(db: ReturnType<typeof getDb>): Promise<boolean> {
@@ -248,7 +226,7 @@ function normalizeModelRoutingPayload(body: Record<string, unknown>, mode: 'crea
     : (body.enabled === undefined ? undefined : normalizeOptionalEnabled(body.enabled, true));
   const label = normalizeOptionalNullableText(body.label);
   const priority = normalizeOptionalPositiveInt(body.priority);
-  const { project_id: projectId, sprint_id: sprintId, sprint_type: sprintType } = normalizeWorkflowScopeInput(body);
+  const { project_id: projectId, workflow_id: workflowId, workflow_type: workflowType } = normalizeWorkflowScopeInput(body);
 
   if (maxStoryPoints != null && minStoryPoints != null && maxStoryPoints < minStoryPoints) {
     throw badRequest('max_story_points must be greater than or equal to min_story_points');
@@ -274,13 +252,13 @@ function normalizeModelRoutingPayload(body: Record<string, unknown>, mode: 'crea
     label,
     priority,
     project_id: projectId,
-    sprint_id: sprintId,
-    sprint_type: sprintType,
+    workflow_id: workflowId,
+    workflow_type: workflowType,
   };
 }
 
-function requireExplicitScope(scope: { project_id: number | null; sprint_id: number | null; sprint_type: string | null }): { project_id: number | null; sprint_id: number | null; sprint_type: string | null } {
-  if (scope.project_id == null && scope.sprint_id == null && scope.sprint_type == null) {
+function requireExplicitScope(scope: { project_id: number | null; workflow_id: number | null; workflow_type: string | null }): { project_id: number | null; workflow_id: number | null; workflow_type: string | null } {
+  if (scope.project_id == null && scope.workflow_id == null && scope.workflow_type == null) {
     throw badRequest('Explicit project_id, workflow_id, or workflow_type scope is required; legacy global model routing rules are no longer supported');
   }
   return scope;
@@ -294,16 +272,14 @@ function serializeRule(rule: Record<string, unknown>) {
   } as Record<string, unknown>;
   if (!('min_story_points' in payload) || payload.min_story_points == null) payload.min_story_points = 1;
   if (!('project_id' in payload)) payload.project_id = null;
-  if (!('sprint_id' in payload)) payload.sprint_id = null;
-  if (!('sprint_type' in payload)) payload.sprint_type = null;
+  if (!('workflow_id' in payload)) payload.workflow_id = null;
+  if (!('workflow_type' in payload)) payload.workflow_type = null;
   if ('fast_mode' in payload && payload.fast_mode != null) payload.fast_mode = Boolean(payload.fast_mode);
   if ('enabled' in payload && payload.enabled != null) payload.enabled = Boolean(payload.enabled);
   if (!('enabled' in payload)) payload.enabled = true;
-  payload.workflow_id = payload.sprint_id;
-  payload.workflow_type = payload.sprint_type;
-  payload.scope = payload.sprint_id
-    ? 'project_sprint'
-    : (payload.sprint_type ? (payload.project_id ? 'project_sprint_type' : 'sprint_type') : (payload.project_id ? 'project' : 'legacy_global'));
+  payload.scope = payload.workflow_id
+    ? 'project_workflow'
+    : (payload.workflow_type ? (payload.project_id ? 'project_workflow_type' : 'workflow_type') : (payload.project_id ? 'project' : 'legacy_global'));
   return payload;
 }
 
@@ -314,24 +290,24 @@ async function readRuleById(db: ReturnType<typeof getDb>, id: number, tenantId: 
   return await db.get(`SELECT * FROM story_point_model_routing WHERE id = ?`, id);
 }
 
-// GET /api/v1/model-routing — list rules, optionally filtered by project+sprint scope
+// GET /api/v1/model-routing — list rules, optionally filtered by project+workflow scope
 router.get('/', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
     const hasProjectScope = await hasColumn(db, 'story_point_model_routing', 'project_id');
-    const hasSprintScope = await hasColumn(db, 'story_point_model_routing', 'sprint_id');
-    const hasSprintTypeScope = await hasColumn(db, 'story_point_model_routing', 'sprint_type');
+    const hasWorkflowScope = await hasColumn(db, 'story_point_model_routing', 'workflow_id');
+    const hasWorkflowTypeScope = await hasColumn(db, 'story_point_model_routing', 'workflow_type');
     const {
       project_id: queryProjectId,
-      sprint_id: querySprintId,
-      sprint_type: querySprintType,
+      workflow_id: queryWorkflowId,
+      workflow_type: queryWorkflowType,
     } = normalizeWorkflowScopeInput(req.query as Record<string, unknown>);
-    const hasScopeQuery = queryProjectId !== undefined || querySprintId !== undefined || querySprintType !== undefined;
+    const hasScopeQuery = queryProjectId !== undefined || queryWorkflowId !== undefined || queryWorkflowType !== undefined;
     if (req.query.include_fallback === 'true' || req.query.include_fallback === '1') {
       throw badRequest('include_fallback is no longer supported; configure explicit scoped model routing rules instead');
     }
-    const scope = hasScopeQuery ? await resolveScope(db, tenantId, queryProjectId, querySprintId, querySprintType) : null;
+    const scope = hasScopeQuery ? await resolveScope(db, tenantId, queryProjectId, queryWorkflowId, queryWorkflowType) : null;
     const params: unknown[] = [];
     const where: string[] = [];
     if (await hasColumn(db, 'story_point_model_routing', 'tenant_id')) {
@@ -339,31 +315,31 @@ router.get('/', async (req: Request, res: Response) => {
       params.push(tenantId);
     }
 
-    if (hasScopeQuery && hasProjectScope && hasSprintScope && scope) {
+    if (hasScopeQuery && hasProjectScope && hasWorkflowScope && scope) {
       if (scope.project_id == null) {
         where.push('project_id IS NULL');
       } else {
         where.push('project_id = ?');
         params.push(scope.project_id);
       }
-      if (scope.sprint_id == null) {
-        where.push('sprint_id IS NULL');
+      if (scope.workflow_id == null) {
+        where.push('workflow_id IS NULL');
       } else {
-        where.push('sprint_id = ?');
-        params.push(scope.sprint_id);
+        where.push('workflow_id = ?');
+        params.push(scope.workflow_id);
       }
-      if (hasSprintTypeScope) {
-        if (scope.sprint_id != null || scope.sprint_type == null) {
-          where.push('sprint_type IS NULL');
+      if (hasWorkflowTypeScope) {
+        if (scope.workflow_id != null || scope.workflow_type == null) {
+          where.push('workflow_type IS NULL');
         } else {
-          where.push('sprint_type = ?');
-          params.push(scope.sprint_type);
+          where.push('workflow_type = ?');
+          params.push(scope.workflow_type);
         }
       }
     }
 
-    const scopeOrder = hasProjectScope && hasSprintScope
-      ? `project_id IS NULL ASC, sprint_id IS NULL ASC, ${hasSprintTypeScope ? 'sprint_type IS NULL ASC, sprint_type ASC,' : ''} project_id ASC, sprint_id ASC,`
+    const scopeOrder = hasProjectScope && hasWorkflowScope
+      ? `project_id IS NULL ASC, workflow_id IS NULL ASC, ${hasWorkflowTypeScope ? 'workflow_type IS NULL ASC, workflow_type ASC,' : ''} project_id ASC, workflow_id ASC,`
       : '';
     const rules = await db.all(`
       SELECT * FROM story_point_model_routing
@@ -399,22 +375,22 @@ router.post('/', async (req: Request, res: Response) => {
     const payload = normalizeModelRoutingPayload((req.body ?? {}) as Record<string, unknown>, 'create');
     const provider = payload.provider !== undefined ? payload.provider : null;
     await assertConfiguredProvider(db, tenantId, provider);
-    const supportsScope = await hasColumn(db, 'story_point_model_routing', 'project_id') && await hasColumn(db, 'story_point_model_routing', 'sprint_id');
-    const supportsSprintTypeScope = await hasColumn(db, 'story_point_model_routing', 'sprint_type');
+    const supportsScope = await hasColumn(db, 'story_point_model_routing', 'project_id') && await hasColumn(db, 'story_point_model_routing', 'workflow_id');
+    const supportsWorkflowTypeScope = await hasColumn(db, 'story_point_model_routing', 'workflow_type');
     if (!supportsScope) {
       throw badRequest('Scoped model routing columns are required; legacy global-only model routing is no longer supported');
     }
-    if (payload.sprint_type !== undefined && !supportsSprintTypeScope) {
-      throw badRequest('workflow_type scoped model routing requires the sprint_type schema migration');
+    if (payload.workflow_type !== undefined && !supportsWorkflowTypeScope) {
+      throw badRequest('workflow_type scoped model routing requires the workflow_type schema migration');
     }
-    const scope = requireExplicitScope(await resolveScope(db, tenantId, payload.project_id, payload.sprint_id, payload.sprint_type));
+    const scope = requireExplicitScope(await resolveScope(db, tenantId, payload.project_id, payload.workflow_id, payload.workflow_type));
 
-    const result = supportsScope && supportsSprintTypeScope
+    const result = supportsScope && supportsWorkflowTypeScope
       ? await db.run(`
           INSERT INTO story_point_model_routing
-            (tenant_id, project_id, sprint_id, sprint_type, max_points, provider, model, fallback_model, max_turns, max_budget_usd, thinking_level, fast_mode, enabled, label)
+            (tenant_id, project_id, workflow_id, workflow_type, max_points, provider, model, fallback_model, max_turns, max_budget_usd, thinking_level, fast_mode, enabled, label)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, tenantId, scope.project_id, scope.sprint_id, scope.sprint_id == null ? scope.sprint_type : null, payload.max_points, provider, payload.model, payload.fallback_model ?? null, payload.max_turns ?? null, payload.max_budget_usd ?? null, payload.thinking_level ?? null, payload.fast_mode == null ? null : (payload.fast_mode ? 1 : 0), payload.enabled ? 1 : 0, payload.label ?? null)
+        `, tenantId, scope.project_id, scope.workflow_id, scope.workflow_id == null ? scope.workflow_type : null, payload.max_points, provider, payload.model, payload.fallback_model ?? null, payload.max_turns ?? null, payload.max_budget_usd ?? null, payload.thinking_level ?? null, payload.fast_mode == null ? null : (payload.fast_mode ? 1 : 0), payload.enabled ? 1 : 0, payload.label ?? null)
       : await db.run(`
           INSERT INTO story_point_model_routing
             (max_points, provider, model, fallback_model, max_turns, max_budget_usd, thinking_level, fast_mode, enabled, label)
@@ -442,28 +418,28 @@ router.put('/:id', async (req: Request, res: Response) => {
       ? payload.provider
       : (existing.provider as string | null | undefined) ?? null;
     await assertConfiguredProvider(db, tenantId, provider);
-    const supportsScope = await hasColumn(db, 'story_point_model_routing', 'project_id') && await hasColumn(db, 'story_point_model_routing', 'sprint_id');
-    const supportsSprintTypeScope = await hasColumn(db, 'story_point_model_routing', 'sprint_type');
+    const supportsScope = await hasColumn(db, 'story_point_model_routing', 'project_id') && await hasColumn(db, 'story_point_model_routing', 'workflow_id');
+    const supportsWorkflowTypeScope = await hasColumn(db, 'story_point_model_routing', 'workflow_type');
     if (!supportsScope) {
       throw badRequest('Scoped model routing columns are required; legacy global-only model routing is no longer supported');
     }
-    if (payload.sprint_type !== undefined && !supportsSprintTypeScope) {
-      throw badRequest('workflow_type scoped model routing requires the sprint_type schema migration');
+    if (payload.workflow_type !== undefined && !supportsWorkflowTypeScope) {
+      throw badRequest('workflow_type scoped model routing requires the workflow_type schema migration');
     }
     const scope = requireExplicitScope(await resolveScope(
               db,
               tenantId,
               payload.project_id !== undefined ? payload.project_id : (existing.project_id as number | null | undefined) ?? null,
-              payload.sprint_id !== undefined ? payload.sprint_id : (existing.sprint_id as number | null | undefined) ?? null,
-              payload.sprint_type !== undefined ? payload.sprint_type : (existing.sprint_type as string | null | undefined) ?? null,
+              payload.workflow_id !== undefined ? payload.workflow_id : (existing.workflow_id as number | null | undefined) ?? null,
+              payload.workflow_type !== undefined ? payload.workflow_type : (existing.workflow_type as string | null | undefined) ?? null,
             ));
 
-    if (supportsScope && supportsSprintTypeScope) {
+    if (supportsScope && supportsWorkflowTypeScope) {
       await db.run(`
         UPDATE story_point_model_routing SET
           project_id     = ?,
-          sprint_id      = ?,
-          sprint_type    = ?,
+          workflow_id      = ?,
+          workflow_type    = ?,
           max_points     = ?,
           provider       = ?,
           model          = ?,
@@ -476,7 +452,7 @@ router.put('/:id', async (req: Request, res: Response) => {
           label          = ?,
           updated_at     = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
-      `, scope.project_id, scope.sprint_id, scope.sprint_id == null ? scope.sprint_type : null, payload.max_points     !== undefined ? payload.max_points     : existing.max_points, provider, payload.model          !== undefined ? payload.model          : existing.model, payload.fallback_model !== undefined ? payload.fallback_model : existing.fallback_model, payload.max_turns      !== undefined ? payload.max_turns      : existing.max_turns, payload.max_budget_usd !== undefined ? payload.max_budget_usd : existing.max_budget_usd, payload.thinking_level !== undefined ? payload.thinking_level : existing.thinking_level, payload.fast_mode      !== undefined ? (payload.fast_mode == null ? null : (payload.fast_mode ? 1 : 0)) : existing.fast_mode, payload.enabled        !== undefined ? (payload.enabled ? 1 : 0) : existing.enabled ?? 1, payload.label          !== undefined ? payload.label          : existing.label, req.params.id);
+      `, scope.project_id, scope.workflow_id, scope.workflow_id == null ? scope.workflow_type : null, payload.max_points     !== undefined ? payload.max_points     : existing.max_points, provider, payload.model          !== undefined ? payload.model          : existing.model, payload.fallback_model !== undefined ? payload.fallback_model : existing.fallback_model, payload.max_turns      !== undefined ? payload.max_turns      : existing.max_turns, payload.max_budget_usd !== undefined ? payload.max_budget_usd : existing.max_budget_usd, payload.thinking_level !== undefined ? payload.thinking_level : existing.thinking_level, payload.fast_mode      !== undefined ? (payload.fast_mode == null ? null : (payload.fast_mode ? 1 : 0)) : existing.fast_mode, payload.enabled        !== undefined ? (payload.enabled ? 1 : 0) : existing.enabled ?? 1, payload.label          !== undefined ? payload.label          : existing.label, req.params.id);
     } else {
       await db.run(`
         UPDATE story_point_model_routing SET

@@ -1,6 +1,6 @@
 import {
   STARTER_RELATIONSHIP_TYPE_SEEDS,
-  STARTER_SPRINT_TYPE_SEEDS,
+  STARTER_WORKFLOW_TYPE_SEEDS,
 } from './starterCatalog';
 import { type Db } from "../db/adapter/types";
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../db/introspection";
@@ -15,55 +15,55 @@ async function tableHasColumn(db: Db, table: string, column: string): Promise<bo
 
 async function pruneUnexpectedStarterRelationshipTypes(
   db: Db,
-  sprintTypeKey: string,
+  workflowTypeKey: string,
   options: { tenantId?: number | null; relationshipTypesHasTenantId: boolean },
 ): Promise<void> {
   const allowedKeys = STARTER_RELATIONSHIP_TYPE_SEEDS
-    .filter((seed) => seed.sprintTypes.includes(sprintTypeKey as typeof seed.sprintTypes[number]))
+    .filter((seed) => seed.workflowTypes.includes(workflowTypeKey as typeof seed.workflowTypes[number]))
     .map((seed) => seed.key);
   if (allowedKeys.length === 0) return;
 
   const tenantSql = options.relationshipTypesHasTenantId ? ' AND tenant_id = ?' : '';
   const tenantParams = options.relationshipTypesHasTenantId ? [options.tenantId] : [];
   await db.run(`
-    DELETE FROM sprint_type_relationship_types
-    WHERE sprint_type_key = ?
+    DELETE FROM workflow_type_relationship_types
+    WHERE workflow_type_key = ?
       ${tenantSql}
       AND COALESCE(is_system, 0) = 1
       AND key NOT IN (${allowedKeys.map(() => '?').join(', ')})
-  `, sprintTypeKey, ...tenantParams, ...allowedKeys);
+  `, workflowTypeKey, ...tenantParams, ...allowedKeys);
 }
 
 export async function pruneUnexpectedStarterWorkflowRelationshipTypes(
   db: Db,
   options: { tenantId?: number | null } = {},
 ): Promise<void> {
-  if (!await tableExists(db, 'sprint_type_relationship_types') || !await tableExists(db, 'sprint_types')) return;
+  if (!await tableExists(db, 'workflow_type_relationship_types') || !await tableExists(db, 'workflow_types')) return;
 
-  const relationshipTypesHasTenantId = await tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
-  const sprintTypesHasTenantId = await tableHasColumn(db, 'sprint_types', 'tenant_id');
+  const relationshipTypesHasTenantId = await tableHasColumn(db, 'workflow_type_relationship_types', 'tenant_id');
+  const workflowTypesHasTenantId = await tableHasColumn(db, 'workflow_types', 'tenant_id');
   const tenantId = options.tenantId ?? null;
   if (relationshipTypesHasTenantId && (!Number.isInteger(tenantId) || Number(tenantId) <= 0)) return;
 
-  const starterKeys = STARTER_SPRINT_TYPE_SEEDS.map((starter) => starter.key);
-  const sprintTypes = sprintTypesHasTenantId && Number.isInteger(tenantId) && Number(tenantId) > 0
+  const starterKeys = STARTER_WORKFLOW_TYPE_SEEDS.map((starter) => starter.key);
+  const workflowTypes = workflowTypesHasTenantId && Number.isInteger(tenantId) && Number(tenantId) > 0
     ? await db.all(`
       SELECT key
-      FROM sprint_types
+      FROM workflow_types
       WHERE tenant_id = ?
         AND key IN (${starterKeys.map(() => '?').join(', ')})
       ORDER BY key ASC
     `, tenantId, ...starterKeys) as Array<{ key: string }>
     : await db.all(`
       SELECT key
-      FROM sprint_types
+      FROM workflow_types
       WHERE key IN (${starterKeys.map(() => '?').join(', ')})
       ORDER BY key ASC
     `, ...starterKeys) as Array<{ key: string }>;
 
   await db.withTransaction(async (db) => {
-    for (const sprintType of sprintTypes) {
-      await pruneUnexpectedStarterRelationshipTypes(db, sprintType.key, {
+    for (const workflowType of workflowTypes) {
+      await pruneUnexpectedStarterRelationshipTypes(db, workflowType.key, {
                 tenantId,
                 relationshipTypesHasTenantId,
               });
@@ -75,53 +75,53 @@ export async function seedStarterWorkflowRelationshipTypes(
   db: Db,
   options: { tenantId?: number | null } = {},
 ): Promise<void> {
-  if (!await tableExists(db, 'sprint_type_relationship_types') || !await tableExists(db, 'sprint_types')) return;
+  if (!await tableExists(db, 'workflow_type_relationship_types') || !await tableExists(db, 'workflow_types')) return;
 
-  const relationshipTypesHasTenantId = await tableHasColumn(db, 'sprint_type_relationship_types', 'tenant_id');
-  const sprintTypesHasTenantId = await tableHasColumn(db, 'sprint_types', 'tenant_id');
+  const relationshipTypesHasTenantId = await tableHasColumn(db, 'workflow_type_relationship_types', 'tenant_id');
+  const workflowTypesHasTenantId = await tableHasColumn(db, 'workflow_types', 'tenant_id');
   const tenantId = options.tenantId ?? null;
   if (relationshipTypesHasTenantId && (!Number.isInteger(tenantId) || Number(tenantId) <= 0)) return;
 
-  const starterKeys = STARTER_SPRINT_TYPE_SEEDS.map((starter) => starter.key);
-  const sprintTypes = sprintTypesHasTenantId && Number.isInteger(tenantId) && Number(tenantId) > 0
+  const starterKeys = STARTER_WORKFLOW_TYPE_SEEDS.map((starter) => starter.key);
+  const workflowTypes = workflowTypesHasTenantId && Number.isInteger(tenantId) && Number(tenantId) > 0
     ? await db.all(`
       SELECT key
-      FROM sprint_types
+      FROM workflow_types
       WHERE tenant_id = ?
         AND key IN (${starterKeys.map(() => '?').join(', ')})
       ORDER BY key ASC
     `, tenantId, ...starterKeys) as Array<{ key: string }>
     : await db.all(`
       SELECT key
-      FROM sprint_types
+      FROM workflow_types
       WHERE key IN (${starterKeys.map(() => '?').join(', ')})
       ORDER BY key ASC
     `, ...starterKeys) as Array<{ key: string }>;
 
   const insertRelationshipTypeSql = relationshipTypesHasTenantId
     ? `
-      INSERT INTO sprint_type_relationship_types (
-        tenant_id, sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
+      INSERT INTO workflow_type_relationship_types (
+        tenant_id, workflow_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
         direction_semantics, active_statuses_json, resolved_statuses_json, allow_create_related_task,
         default_related_task_type, default_related_task_status, is_system, metadata_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '{}') ON CONFLICT DO NOTHING`
     : `
-      INSERT INTO sprint_type_relationship_types (
-        sprint_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
+      INSERT INTO workflow_type_relationship_types (
+        workflow_type_key, key, label, inverse_label, category, affects_dispatch_eligibility,
         direction_semantics, active_statuses_json, resolved_statuses_json, allow_create_related_task,
         default_related_task_type, default_related_task_status, is_system, metadata_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '{}') ON CONFLICT DO NOTHING`;
 
   await db.withTransaction(async (db) => {
-    for (const sprintType of sprintTypes) {
-      await pruneUnexpectedStarterRelationshipTypes(db, sprintType.key, {
+    for (const workflowType of workflowTypes) {
+      await pruneUnexpectedStarterRelationshipTypes(db, workflowType.key, {
                 tenantId,
                 relationshipTypesHasTenantId,
               });
       for (const seed of STARTER_RELATIONSHIP_TYPE_SEEDS) {
-        if (!seed.sprintTypes.includes(sprintType.key as typeof seed.sprintTypes[number])) continue;
+        if (!seed.workflowTypes.includes(workflowType.key as typeof seed.workflowTypes[number])) continue;
         const params = [
-          sprintType.key,
+          workflowType.key,
           seed.key,
           seed.label,
           seed.inverse_label,

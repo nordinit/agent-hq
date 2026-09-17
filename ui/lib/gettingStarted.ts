@@ -62,14 +62,14 @@ export const GETTING_STARTED_STEPS: GettingStartedStep[] = [
   {
     id: 'workflows',
     route: '/workflows',
-    selector: '[data-tour-target="sprints-list"]',
+    selector: '[data-tour-target="workflows-list"]',
     title: 'Workflows organize current work',
     description: 'Workflows focus a batch of tasks for a project. Use them to separate backlog work from active execution and to give assignment rules a concrete workflow context.',
   },
   {
     id: 'workflow-definitions',
     route: '/workflow-definitions',
-    selector: '[data-tour-target="sprint-definitions-main"]',
+    selector: '[data-tour-target="workflow-definitions-main"]',
     title: 'Workflow Definitions set workflow defaults',
     description: 'Workflow Definitions define reusable workflow types, task types, statuses, outcomes, gates, and task fields. Base installs can seed a starter workflow; customize it before relying on automation.',
   },

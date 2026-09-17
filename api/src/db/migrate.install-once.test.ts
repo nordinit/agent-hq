@@ -34,14 +34,14 @@ describe('PostgreSQL initial configuration install boundary', () => {
     const starterTransition = await db.get<{
       id: number;
       tenant_id: number;
-      sprint_id: number;
+      workflow_id: number;
       task_type: string | null;
       from_status: string;
       outcome: string;
       to_status: string;
     }>(`
-      SELECT id, tenant_id, sprint_id, task_type, from_status, outcome, to_status
-      FROM sprint_task_transitions
+      SELECT id, tenant_id, workflow_id, task_type, from_status, outcome, to_status
+      FROM workflow_task_transitions
       ORDER BY id ASC
       LIMIT 1
     `);
@@ -55,26 +55,26 @@ describe('PostgreSQL initial configuration install boundary', () => {
     }>(`
       SELECT
         (SELECT COUNT(*)
-         FROM sprint_task_transitions) AS transition_count,
+         FROM workflow_task_transitions) AS transition_count,
         (SELECT COUNT(*)
-         FROM sprint_task_transitions transition
-         JOIN sprints sprint ON sprint.id = transition.sprint_id
-         WHERE transition.tenant_id IS DISTINCT FROM sprint.tenant_id) AS transition_mismatches,
+         FROM workflow_task_transitions transition
+         JOIN workflows workflow ON workflow.id = transition.workflow_id
+         WHERE transition.tenant_id IS DISTINCT FROM workflow.tenant_id) AS transition_mismatches,
         (SELECT COUNT(*)
-         FROM sprint_task_transition_requirements) AS requirement_count,
+         FROM workflow_task_transition_requirements) AS requirement_count,
         (SELECT COUNT(*)
-         FROM sprint_task_transition_requirements requirement
-         JOIN sprints sprint ON sprint.id = requirement.sprint_id
-         WHERE requirement.tenant_id IS DISTINCT FROM sprint.tenant_id) AS requirement_mismatches
+         FROM workflow_task_transition_requirements requirement
+         JOIN workflows workflow ON workflow.id = requirement.workflow_id
+         WHERE requirement.tenant_id IS DISTINCT FROM workflow.tenant_id) AS requirement_mismatches
     `);
     expect(Number(tenantOwnership?.transition_count)).toBeGreaterThan(0);
     expect(Number(tenantOwnership?.transition_mismatches)).toBe(0);
     expect(Number(tenantOwnership?.requirement_count)).toBeGreaterThan(0);
     expect(Number(tenantOwnership?.requirement_mismatches)).toBe(0);
 
-    await db.run(`DELETE FROM sprint_task_transitions WHERE id = ?`, starterTransition!.id);
+    await db.run(`DELETE FROM workflow_task_transitions WHERE id = ?`, starterTransition!.id);
     const transitionCountAfterDelete = Number(await db.value(
-      `SELECT COUNT(*) FROM sprint_task_transitions`,
+      `SELECT COUNT(*) FROM workflow_task_transitions`,
     ));
 
     const operatorStatus = {
@@ -98,13 +98,13 @@ describe('PostgreSQL initial configuration install boundary', () => {
     const secondInstall = await installInitialConfiguration(db);
 
     expect(secondInstall).toEqual({ installed: false });
-    expect(Number(await db.value(`SELECT COUNT(*) FROM sprint_task_transitions`)))
+    expect(Number(await db.value(`SELECT COUNT(*) FROM workflow_task_transitions`)))
       .toBe(transitionCountAfterDelete);
     expect(await db.get(`
       SELECT id
-      FROM sprint_task_transitions
+      FROM workflow_task_transitions
       WHERE tenant_id = ?
-        AND sprint_id = ?
+        AND workflow_id = ?
         AND task_type IS NOT DISTINCT FROM ?
         AND from_status = ?
         AND outcome = ?
@@ -112,7 +112,7 @@ describe('PostgreSQL initial configuration install boundary', () => {
       LIMIT 1
     `,
     starterTransition!.tenant_id,
-    starterTransition!.sprint_id,
+    starterTransition!.workflow_id,
     starterTransition!.task_type,
     starterTransition!.from_status,
     starterTransition!.outcome,

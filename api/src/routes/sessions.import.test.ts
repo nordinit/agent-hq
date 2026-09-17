@@ -95,7 +95,7 @@ async function setupDb(): Promise<void> {
     VALUES (9, 1, 'Backend Bugs')
   `);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name)
+    INSERT INTO workflows (id, tenant_id, project_id, name)
     VALUES (9, 1, 9, 'Backend Bugs')
   `);
 }
@@ -113,7 +113,7 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
 
   it('creates a canonical active session and backfills prompt-only chat_messages for a dispatched OpenClaw run', async () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (97, 1, 'Cinder', 'agent:cinder:main', 'openclaw')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (
         id, tenant_id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
@@ -180,7 +180,7 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
     ];
 
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (97, 1, 'Cinder', 'agent:cinder:main', 'openclaw')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (
         id, tenant_id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
@@ -219,7 +219,7 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
 
   it('imports a dispatched prompt-only run from chat_messages when job_instances has no session_key yet', async () => {
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (97, 1, 'Cinder', 'agent:cinder:main', 'openclaw')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (
         id, tenant_id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id
@@ -276,7 +276,7 @@ describe('POST /api/v1/sessions/import/instance/:instanceId', () => {
     }];
 
     await db.run(`INSERT INTO agents (id, tenant_id, name, session_key, runtime_type) VALUES (97, 1, 'Cinder', 'agent:cinder:main', 'openclaw')`);
-    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id) VALUES (679, 1, 'Prompt-only run', 9, 9)`);
     await db.run(`
       INSERT INTO job_instances (
         id, tenant_id, task_id, agent_id, session_key, status, started_at, completed_at, dispatched_at, created_at, run_id

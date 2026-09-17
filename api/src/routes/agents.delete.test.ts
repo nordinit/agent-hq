@@ -22,7 +22,7 @@ async function resetDb(): Promise<void> {
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (1, 1, 'Agent HQ')`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type) VALUES (1, 1, 1, 'Default Workflow', 'generic')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type) VALUES (1, 1, 1, 'Default Workflow', 'generic')`);
   await db.run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command) VALUES (30, 1, 'Agent HQ', 'agent-hq', 'node')`);
 }
 
@@ -65,10 +65,10 @@ describe('agents delete', () => {
       INSERT INTO agents (id, tenant_id, name, session_key, status, enabled)
       VALUES (98, 1, 'Repo Mode Smoke Agent', 'agent:repo-mode-smoke:main', 'idle', 0)
     `);
-    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, agent_id) VALUES (394, 1, 1, 1, 'Live clone mode smoke', 98)`);
+    await db.run(`INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, agent_id) VALUES (394, 1, 1, 1, 'Live clone mode smoke', 98)`);
     await db.run(`INSERT INTO job_instances (id, tenant_id, task_id, agent_id, status) VALUES (1849, 1, 394, 98, 'done')`);
     await db.run(`INSERT INTO dispatch_log (id, task_id, agent_id) VALUES (1, 394, 98)`);
-    await db.run(`INSERT INTO sprint_task_routing_rules (id, tenant_id, project_id, sprint_id, task_type, status, agent_id) VALUES (1, 1, 1, 1, 'backend', 'ready', 98)`);
+    await db.run(`INSERT INTO workflow_task_routing_rules (id, tenant_id, project_id, workflow_id, task_type, status, agent_id) VALUES (1, 1, 1, 1, 'backend', 'ready', 98)`);
     await db.run(`INSERT INTO agent_mcp_assignments (id, agent_id, mcp_server_id) VALUES (1, 98, 30)`);
     fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({
       mcp: {
@@ -128,7 +128,7 @@ describe('agents delete', () => {
 
       const task = await db.get(`SELECT agent_id FROM tasks WHERE id = 394`) as { agent_id: number };
       const instance = await db.get(`SELECT agent_id FROM job_instances WHERE id = 1849`) as { agent_id: number };
-      const routing = await db.get(`SELECT COUNT(*) AS n FROM sprint_task_routing_rules WHERE agent_id = 98`) as { n: number };
+      const routing = await db.get(`SELECT COUNT(*) AS n FROM workflow_task_routing_rules WHERE agent_id = 98`) as { n: number };
       const mcpAssignments = await db.get(`SELECT COUNT(*) AS n FROM agent_mcp_assignments WHERE agent_id = 98`) as { n: number };
       const openClawConfig = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH!, 'utf8'));
       expect(task.agent_id).toBe(98);

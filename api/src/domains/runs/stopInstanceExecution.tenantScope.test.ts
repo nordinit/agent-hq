@@ -30,7 +30,7 @@ async function createDb(): Promise<Db> {
     INSERT INTO projects (id, tenant_id, name)
     VALUES (2, 2, 'Foreign task project');
 
-    INSERT INTO sprints (id, tenant_id, project_id, name)
+    INSERT INTO workflows (id, tenant_id, project_id, name)
     VALUES (2, 2, 2, 'Foreign task workflow');
 
     INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, runtime_config)
@@ -38,7 +38,7 @@ async function createDb(): Promise<Db> {
       (11, 1, 'Runtime One', 'test', 'agent:one', 'claude-code', '{}'),
       (22, 2, 'Runtime Two', 'test', 'agent:two', 'claude-code', '{}');
 
-    INSERT INTO tasks (id, tenant_id, project_id, sprint_id, title, status, agent_id)
+    INSERT INTO tasks (id, tenant_id, project_id, workflow_id, title, status, agent_id)
     VALUES (20, 2, 2, 2, 'Foreign tenant task', 'in_progress', 22);
 
     INSERT INTO job_instances (id, tenant_id, agent_id, task_id, status, session_key, run_id)

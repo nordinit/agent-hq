@@ -9,29 +9,29 @@ Confirm or infer:
 - Internal or client project
 - One-line goal
 - Initial team / jobs needed
-- Whether an active sprint should be created now
+- Whether an active workflow should be created now
 - Whether assignment rules should be created now
 
 ## Minimum bootstrap sequence
 
 1. Create project
 2. Capture returned `project_id`
-3. Create initial sprint for that `project_id`
+3. Create initial workflow for that `project_id`
 4. Create required job templates for that `project_id`
 5. Capture returned `job_id` values
 6. Create assignment rules using those `job_id` values
 7. Verify the project by listing:
    - project
-   - sprints
+   - workflows
    - jobs
    - assignment rules
 
-## Suggested starter sprint names
+## Suggested starter workflow names
 
 Pick the smallest name that matches the phase:
-- `Launch Sprint`
-- `Sprint 1 — Setup`
-- `Sprint 1 — Implementation`
+- `Launch Workflow`
+- `Workflow 1 — Setup`
+- `Workflow 1 — Implementation`
 - `Client Onboarding`
 - `Initial Build`
 
@@ -78,7 +78,7 @@ Pick the smallest name that matches the phase:
 
 Before reporting success, verify all of these:
 - Project appears in Agent HQ
-- At least one sprint exists if expected
+- At least one workflow exists if expected
 - Every created job belongs to the new project
 - Assignment rules point at the intended jobs
 - The project has no obvious dispatch hole for the task types the user expects to use first
@@ -87,7 +87,7 @@ Before reporting success, verify all of these:
 
 Return a compact summary with:
 - project name + project_id
-- sprint name + sprint_id
+- workflow name + workflow_id
 - jobs created with job ids
 - assignment rules created
 - any assumptions made

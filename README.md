@@ -71,7 +71,7 @@ The same workflow model can also be used for:
 
 | Capability | What it does |
 |---|---|
-| **Task orchestration** | Organize work into projects, sprints/workflows, tasks, task types, statuses, and priorities. |
+| **Task orchestration** | Organize work into projects, workflows/workflows, tasks, task types, statuses, and priorities. |
 | **No-code workflow configuration** | Configure task types, custom fields, statuses, outcomes, assignment rules, transitions, and gates through the UI. |
 | **Deterministic task assignment** | Assign tasks to agents based on workflow, task type, and current status. |
 | **Outcome-driven transitions** | Map agent-posted outcomes to the next task status. |
@@ -172,7 +172,7 @@ Agent HQ separates work definition, workflow policy, and runtime execution.
 Work is organized into:
 
 ```text
-Project → Sprint / Workflow → Task → Agent Run
+Project → Workflow / Workflow → Task → Agent Run
 ```
 
 A task can include:
@@ -190,7 +190,7 @@ A task can include:
 - evidence fields
 - run history
 
-Today the app uses the term **Sprint** for the configurable workflow unit. In practice, a sprint can represent any workflow lifecycle, not just an agile software sprint.
+Today the app uses the term **Workflow** for the configurable workflow unit. In practice, a workflow can represent any workflow lifecycle, not just an agile software workflow.
 
 ---
 
@@ -205,7 +205,7 @@ Assignment rules decide which agent receives a task.
 A rule maps:
 
 ```text
-sprint/workflow + task type + current status -> agent
+workflow + task type + current status -> agent
 ```
 
 Example:
@@ -344,13 +344,13 @@ Agent HQ includes an operator UI for configuring and monitoring agent workflows.
 | Page | What it does |
 |---|---|
 | **Dashboard** | High-level project and run activity. |
-| **Tasks** | Kanban-style task board with sprint/workflow sections. |
+| **Tasks** | Kanban-style task board with workflow sections. |
 | **Recurring Tasks** | Schedule recurring task creation into fixed workflows. |
 | **Agents** | Configure agents, runtimes, instructions, tools, and skills. |
 | **Agent Detail** | Edit runtime settings, workspace paths, skills, logs, and docs. |
 | **Chat** | View agent conversations and linked task context. |
-| **Sprints** | Manage active workflow instances. |
-| **Sprint Definitions** | Configure reusable workflow types, task types, statuses, outcomes, gates, and fields. |
+| **Workflows** | Manage active workflow instances. |
+| **Workflow Definitions** | Configure reusable workflow types, task types, statuses, outcomes, gates, and fields. |
 | **Task Routing** | Edit assignment rules, automatic transitions, gate requirements, and external event mappings. |
 | **Model Routing** | Route by story points, model provider, reasoning level, turn budget, and cost policy. |
 | **Capabilities** | Manage skills, tools, MCP servers, and runtime capabilities. |
@@ -479,8 +479,8 @@ Agent HQ can route model behavior based on workflow scope and task complexity.
 For example, you can configure different models, reasoning levels, turn limits, or cost budgets based on:
 
 - project
-- sprint/workflow
-- sprint type
+- workflow
+- workflow type
 - story points
 - provider
 - task difficulty

@@ -8,7 +8,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     registerAgentHqMcpCatalog();
   });
 
-  it('advertises typed CRUD/read helpers for task routing, workflow mappings, contracts, and sprint definitions', () => {
+  it('advertises typed CRUD/read helpers for task routing, workflow mappings, contracts, and workflow definitions', () => {
     const catalog = getMcpCatalog();
     const byName = new Map(catalog.tools.map(tool => [tool.canonical_name, tool]));
     const expectedTools = [
@@ -105,10 +105,9 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
     expect(byName.get('agent_hq_upload_workflow_file')?.domain).toBe('workflow_files');
     expect(byName.get('agent_hq_replace_project_file')?.description).toContain('version-history');
     expect(byName.get('agent_hq_replace_workflow_file')?.description).toContain('version-history');
-    // The sprint-named board tools were removed: they shared their handlers with the
-    // workflow-named ones and their own descriptions told clients to prefer those.
-    expect(byName.get('agent_hq_get_sprints')).toBeUndefined();
-    expect(byName.get('agent_hq_get_sprint')).toBeUndefined();
+    // Workflow collections and detail have distinct canonical tools.
+    expect(byName.get('agent_hq_get_workflows')).toBeUndefined();
+    expect(byName.get('agent_hq_get_workflow')?.aliases).toEqual([]);
     expect(byName.get('agent_hq_get_task_instances')?.rest_paths).toEqual(['/api/v1/tasks/:id/instances']);
     expect(byName.get('agent_hq_get_task_instances')?.description).toContain('Read project task context');
     expect(byName.get('agent_hq_get_task_active_owner')?.rest_paths).toEqual(['/api/v1/tasks/:id/active-owner']);
@@ -168,7 +167,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
 
   it('keeps scoped routing-rule schemas aligned with the current routing API', () => {
     const catalog = getMcpCatalog();
-    const requiredScopeArgs = ['tenant_id', 'project_id', 'sprint_type', 'sprint_id', 'scope', 'status', 'task_type'];
+    const requiredScopeArgs = ['tenant_id', 'project_id', 'workflow_type', 'workflow_id', 'scope', 'status', 'task_type'];
 
     for (const toolName of ['agent_hq_list_assignment_rules', 'agent_hq_get_assignment_rule', 'agent_hq_delete_assignment_rule']) {
       const argNames = new Set(catalog.tools.find(tool => tool.canonical_name === toolName)?.args.map(arg => arg.name) ?? []);
@@ -211,8 +210,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
   });
 
   it('publishes workflow-type metadata tools under their workflow names only', () => {
-    // These were sprint-named with workflow-named aliases. The workflow spelling is now the
-    // only spelling, so what is worth pinning is that the sprint one did not survive.
+    // Definition metadata tools have one canonical name each.
     const catalog = getMcpCatalog();
     const names = new Set(catalog.tools.flatMap(tool => [tool.canonical_name, ...tool.aliases]));
 
@@ -226,7 +224,7 @@ describe('Agent HQ MCP admin-page catalog coverage', () => {
       expect(names.has(name)).toBe(true);
     }
 
-    expect([...names].filter(name => name.includes('sprint_type'))).toEqual([]);
+    expect(catalog.tools.filter(tool => tool.domain === 'workflows').every(tool => tool.aliases.length === 0)).toBe(true);
     expect([...names].filter(name => name.startsWith('atlas_'))).toEqual([]);
   });
 

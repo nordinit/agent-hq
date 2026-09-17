@@ -94,8 +94,8 @@ describe('toCanonicalTimestamp', () => {
     ).toBe('2026-06-03 20:05:53');
   });
 
-  it('shifts numeric offsets to UTC (the sprints.started_at case)', () => {
-    // Real production value from sprints.started_at.
+  it('shifts numeric offsets to UTC (the workflows.started_at case)', () => {
+    // Real production value from workflows.started_at.
     expect(toCanonicalTimestamp('2026-07-06T11:55:00-04:00')).toBe('2026-07-06 15:55:00');
     expect(toCanonicalTimestamp('2026-07-06T11:55:00+02:00')).toBe('2026-07-06 09:55:00');
     expect(toCanonicalTimestamp('2026-07-06T11:55:00-0400')).toBe('2026-07-06 15:55:00');
@@ -105,7 +105,7 @@ describe('toCanonicalTimestamp', () => {
     expect(toCanonicalTimestamp('2026-06-03T20:05:53')).toBe('2026-06-03 20:05:53');
   });
 
-  it('expands a date-only value to midnight UTC (the sprints.started_at case)', () => {
+  it('expands a date-only value to midnight UTC (the workflows.started_at case)', () => {
     expect(toCanonicalTimestamp('2026-03-09')).toBe('2026-03-09 00:00:00');
   });
 

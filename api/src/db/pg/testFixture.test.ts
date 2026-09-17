@@ -12,7 +12,7 @@ describe('pg testFixture probe', () => {
       `SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema()`);
     const names = tables.map((t) => t.table_name);
     expect(names).toContain('tasks');
-    expect(names).toContain('sprints');       // legacy name the app's SQL still uses
+    expect(names).toContain('workflows');       // legacy name the app's SQL still uses
     expect(names).toContain('job_instances');
     expect(names.length).toBeGreaterThan(60);
   });

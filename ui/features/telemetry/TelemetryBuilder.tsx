@@ -73,7 +73,7 @@ export default function TelemetryBuilder({ catalog, draftText, onChange, initial
         {guide.recipe !== 'count' && guide.recipe !== 'blocked' && !(guide.recipe === 'numeric' && guide.basis === 'current') && <Select label="Time buckets" value={guide.bucket} onChange={value => update({ bucket: value as TelemetryGuide['bucket'] })} options={[{ value: '', label: 'No time buckets' }, { value: 'hour', label: 'Hourly' }, { value: 'day', label: 'Daily' }, { value: 'week', label: 'Weekly' }, { value: 'month', label: 'Monthly' }]}/>}
         <p className="text-xs text-slate-500">Advanced JSON supports compound predicates, arithmetic, attempt limits, pause intervals, and explicit distributions.</p>
       </div></details>
-      <Link href="/sprint-definitions" className="inline-block text-xs text-amber-300 hover:underline">Manage canonical workflow fields and statuses →</Link>
+      <Link href="/workflow-definitions" className="inline-block text-xs text-amber-300 hover:underline">Manage canonical workflow fields and statuses →</Link>
     </>}
   </div>;
 }

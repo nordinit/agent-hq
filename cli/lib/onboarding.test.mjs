@@ -263,10 +263,10 @@ test('init previews editable ownership routing plan and applies starter template
           template: { key: body.template_key, label: 'Development' },
           templates: [{ key: body.template_key, label: 'Development' }],
           project: { name: body.project_name },
-          workflow: { name: body.workflow_name, sprint_type: 'dev' },
+          workflow: { name: body.workflow_name, workflow_type: 'dev' },
           workflows: [{
             template: { key: body.template_key, label: 'Development' },
-            workflow: { name: body.workflow_name, sprint_type: 'dev' },
+            workflow: { name: body.workflow_name, workflow_type: 'dev' },
             statuses: ['todo', 'ready', 'review', 'done'],
             task_types: ['backend', 'frontend', 'fullstack', 'qa'],
             fields: [{ key: 'review_branch' }, { key: 'review_commit' }],

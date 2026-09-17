@@ -181,12 +181,12 @@ describe('OpenClawRuntime terminal failure handling', () => {
                  t.project_id,
                  t.agent_id AS task_agent_id,
                  t.task_type,
-                 t.sprint_id,
-                 s.sprint_type,
+                 t.workflow_id,
+                 s.workflow_type,
                  t.custom_fields_json
           FROM job_instances ji
           LEFT JOIN tasks t ON t.id = ji.task_id
-          LEFT JOIN sprints s ON s.id = t.sprint_id
+          LEFT JOIN workflows s ON s.id = t.workflow_id
           WHERE ji.id = ?
         `,
         {
@@ -197,8 +197,8 @@ describe('OpenClawRuntime terminal failure handling', () => {
             project_id: 86,
             task_agent_id: 42,
             task_type: null,
-            sprint_id: 9,
-            sprint_type: 'enhancement',
+            workflow_id: 9,
+            workflow_type: 'enhancement',
             custom_fields_json: JSON.stringify(TASK_EVIDENCE_CUSTOM_FIELDS),
           }),
         },

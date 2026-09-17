@@ -16,7 +16,7 @@ function withoutCaptureFaultInjection(body: string): string {
     .replace(/\bALTER\s+TABLE\s+(?:telemetry_outbox|telemetry_observations)\s+(?:ADD|DROP)\s+CONSTRAINT\s+(?:capture|projection)_failure_fixture\b/gi, '')
     .replace(/\bALTER\s+TABLE\s+(?:runtime_executions|tasks)\s+(?:DISABLE|ENABLE)\s+TRIGGER\s+telemetry_capture\b/gi, '')
     .replace(/\bALTER\s+TABLE\s+tasks\s+(?:DISABLE|ENABLE)\s+TRIGGER\s+telemetry_task_status_identity\b/gi, '')
-    .replace(/\bALTER\s+TABLE\s+sprint_type_task_statuses\s+(?:DISABLE|ENABLE)\s+TRIGGER\s+telemetry_signal_generation\b/gi, '');
+    .replace(/\bALTER\s+TABLE\s+workflow_type_task_statuses\s+(?:DISABLE|ENABLE)\s+TRIGGER\s+telemetry_signal_generation\b/gi, '');
 }
 
 function code(source: string): string {

@@ -67,16 +67,16 @@ async function main() {
   console.log(`Smoke-testing ${PG_URL}\n`);
 
   // ---- the intentionally unrenamed current schema is queryable -----------------------
-  await check('sprints table exists and has rows', async () => {
-    const rows = await q(`SELECT COUNT(*)::int AS c FROM sprints`);
-    if (!rows[0].c) throw new Error('sprints is empty');
-    return `${rows[0].c} sprints`;
+  await check('workflows table exists and has rows', async () => {
+    const rows = await q(`SELECT COUNT(*)::int AS c FROM workflows`);
+    if (!rows[0].c) throw new Error('workflows is empty');
+    return `${rows[0].c} workflows`;
   });
 
-  await check('tasks.sprint_id resolves and joins to sprints', async () => {
+  await check('tasks.workflow_id resolves and joins to workflows', async () => {
     const rows = await q(`
       SELECT COUNT(*)::int AS c
-      FROM tasks t JOIN sprints s ON s.id = t.sprint_id
+      FROM tasks t JOIN workflows s ON s.id = t.workflow_id
     `);
     return `${rows[0].c} tasks joined`;
   });
@@ -106,7 +106,7 @@ async function main() {
     const rows = await q(`
       SELECT t.id, t.title, t.priority, t.status
         FROM tasks t
-       WHERE t.status = ? AND t.sprint_id IS NOT NULL
+       WHERE t.status = ? AND t.workflow_id IS NOT NULL
        ORDER BY CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, t.id
        LIMIT 5`, ['todo']);
     return `${rows.length} candidate task(s)`;
@@ -115,11 +115,11 @@ async function main() {
   await check('aggregate + GROUP BY over the current schema', async () => {
     const rows = await q(`
       SELECT s.id, s.name, COUNT(t.id)::int AS task_count
-        FROM sprints s LEFT JOIN tasks t ON t.sprint_id = s.id
+        FROM workflows s LEFT JOIN tasks t ON t.workflow_id = s.id
        GROUP BY s.id, s.name
        ORDER BY task_count DESC
        LIMIT 5`);
-    return `top sprint has ${rows[0]?.task_count ?? 0} tasks`;
+    return `top workflow has ${rows[0]?.task_count ?? 0} tasks`;
   });
 
   await check('string_agg replaces GROUP_CONCAT', async () => {
@@ -177,7 +177,7 @@ async function main() {
       let rejected = false;
       try {
         await client.query(
-          `INSERT INTO tasks (title, sprint_id, tenant_id) VALUES ($1, $2, $3)`,
+          `INSERT INTO tasks (title, workflow_id, tenant_id) VALUES ($1, $2, $3)`,
           ['smoke-test-orphan', 999999999, 1],
         );
       } catch { rejected = true; }

@@ -7,9 +7,9 @@ import {
   type ScopeAnnotated,
 } from './workflowGraphScope.ts';
 
-const override: ScopeAnnotated = { is_override: true, effective_for_sprint: true };
-const inherited: ScopeAnnotated = { is_override: false, effective_for_sprint: true };
-const superseded: ScopeAnnotated = { is_override: false, effective_for_sprint: false };
+const override: ScopeAnnotated = { is_override: true, effective_for_workflow: true };
+const inherited: ScopeAnnotated = { is_override: false, effective_for_workflow: true };
+const superseded: ScopeAnnotated = { is_override: false, effective_for_workflow: false };
 
 test('says nothing about scope when no workflow is selected', () => {
   // At workflow-type scope every row IS the default, so badging them all is pure noise.
@@ -25,7 +25,7 @@ test('distinguishes override, inherited and superseded with a workflow selected'
 });
 
 test('superseded wins over inherited, because doing nothing is the important fact', () => {
-  assert.equal(scopePresentation({ is_override: false, effective_for_sprint: false }, true), 'superseded');
+  assert.equal(scopePresentation({ is_override: false, effective_for_workflow: false }, true), 'superseded');
 });
 
 test('treats a row with no annotation as inherited rather than throwing', () => {

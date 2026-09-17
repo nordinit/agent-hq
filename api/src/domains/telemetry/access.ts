@@ -47,13 +47,13 @@ export async function resolveScope(db: Db, access: TelemetryAccess, raw: unknown
   }
   if (scope.project_id != null && !await db.get('SELECT id FROM projects WHERE id = ? AND tenant_id = ?', scope.project_id, access.tenantId)) throw new TelemetryError('not_found', 'Project not found.', 404);
   if (scope.workflow_id != null) {
-    const workflow = await db.get<{project_id:number;sprint_type:string}>('SELECT project_id, sprint_type FROM sprints WHERE id = ? AND tenant_id = ?', scope.workflow_id, access.tenantId);
+    const workflow = await db.get<{project_id:number;workflow_type:string}>('SELECT project_id, workflow_type FROM workflows WHERE id = ? AND tenant_id = ?', scope.workflow_id, access.tenantId);
     if (!workflow || (scope.project_id != null && Number(workflow.project_id) !== scope.project_id)) throw new TelemetryError('not_found', 'Workflow not found in this scope.', 404);
-    if (scope.workflow_type && scope.workflow_type !== workflow.sprint_type) throw new TelemetryError('invalid_definition', 'Workflow and workflow type disagree.');
-    scope.project_id = Number(workflow.project_id); scope.workflow_type = workflow.sprint_type;
+    if (scope.workflow_type && scope.workflow_type !== workflow.workflow_type) throw new TelemetryError('invalid_definition', 'Workflow and workflow type disagree.');
+    scope.project_id = Number(workflow.project_id); scope.workflow_type = workflow.workflow_type;
   }
   if (scope.workflow_type) {
-    const type = await db.get<{project_id:number|null}>('SELECT project_id FROM sprint_types WHERE tenant_id = ? AND key = ?', access.tenantId, scope.workflow_type);
+    const type = await db.get<{project_id:number|null}>('SELECT project_id FROM workflow_types WHERE tenant_id = ? AND key = ?', access.tenantId, scope.workflow_type);
     if (!type) throw new TelemetryError('unknown_reference', 'Workflow type not found.', 404);
     if (type.project_id != null) {
       if (scope.project_id != null && Number(type.project_id) !== scope.project_id) throw new TelemetryError('forbidden', 'Workflow type belongs to another project.', 403);
@@ -61,7 +61,7 @@ export async function resolveScope(db: Db, access: TelemetryAccess, raw: unknown
     }
   }
   if (write && scope.task_type && !scope.workflow_type && !scope.workflow_id) throw new TelemetryError('invalid_definition', 'Task type bindings require a workflow type or workflow.');
-  if (scope.task_type && scope.workflow_type && !await db.get('SELECT id FROM sprint_type_task_types WHERE tenant_id = ? AND sprint_type_key = ? AND task_type = ?', access.tenantId, scope.workflow_type, scope.task_type)) throw new TelemetryError('unknown_reference', 'Task type not found in this workflow type.');
+  if (scope.task_type && scope.workflow_type && !await db.get('SELECT id FROM workflow_type_task_types WHERE tenant_id = ? AND workflow_type_key = ? AND task_type = ?', access.tenantId, scope.workflow_type, scope.task_type)) throw new TelemetryError('unknown_reference', 'Task type not found in this workflow type.');
   return scope;
 }
 /** A definition may narrow its caller's population, never widen it. */

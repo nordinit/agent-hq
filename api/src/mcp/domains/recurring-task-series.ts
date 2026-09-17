@@ -5,7 +5,7 @@ import { McpDomainContext } from '../registrar';
 const overlapPolicySchema = z.enum(['skip_if_active', 'create_anyway']);
 const changedBySchema = z.string().min(1).optional().describe('Optional audit actor label; defaults to Agent HQ MCP');
 const seriesIdSchema = z.number().int().positive().describe('Recurring task series ID');
-const workflowIdSchema = z.number().int().positive().optional().describe('Workflow ID. Legacy sprint_id is also accepted by the API, but workflow_id is preferred for new MCP clients.');
+const workflowIdSchema = z.number().int().positive().optional().describe('Workflow ID.');
 const storyPointsSchema = z
   .union(
     VALID_TASK_STORY_POINTS.map((value) => z.literal(value)) as [
@@ -29,7 +29,7 @@ export function registerRecurringTaskSeriesTools(ctx: McpDomainContext) {
     {
       project_id: z.number().int().positive().optional().describe('Filter by project ID'),
       workflow_id: workflowIdSchema,
-      sprint_id: z.number().int().positive().optional().describe('Legacy alias for workflow_id'),
+
       enabled: z.boolean().optional().describe('Filter by enabled state'),
       next_run_from: z.string().optional().describe('Optional ISO lower bound for next_run_at'),
       next_run_to: z.string().optional().describe('Optional ISO upper bound for next_run_at'),

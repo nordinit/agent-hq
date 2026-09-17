@@ -62,7 +62,7 @@ async function setupDb(): Promise<void> {
       (86, 1, 'Hermes sessions')
   `);
   await db.run(`
-    INSERT INTO sprints (id, tenant_id, project_id, name)
+    INSERT INTO workflows (id, tenant_id, project_id, name)
     VALUES
       (1, 1, 1, 'Live sessions'),
       (86, 1, 86, 'Hermes sessions')
@@ -151,7 +151,7 @@ describe('POST /api/v1/sessions/import/instance/:instanceId completed reimport',
       VALUES (7, 1, 'Cinder', 'openclaw', 'agent:cinder')
     `);
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id)
+      INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id)
       VALUES (719, 1, 'Stream Agent Run chat events live', 1, 1)
     `);
     await db.run(`
@@ -218,7 +218,7 @@ describe('POST /api/v1/sessions/import/instance/:instanceId completed reimport',
       VALUES (17, 1, 'Hermes Cinder', 'hermes', 'agent:hermes-cinder')
     `);
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, project_id, sprint_id)
+      INSERT INTO tasks (id, tenant_id, title, project_id, workflow_id)
       VALUES (741, 1, 'Add Hermes live tool-call transcript capture', 86, 86)
     `);
     await db.run(`

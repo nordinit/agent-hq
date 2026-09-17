@@ -1,11 +1,11 @@
 import { assertTaskStatusDefinedForWorkflow, WorkflowAllowedValuesError } from './taskStatusValidation';
-import { resolveSprintTypeForSprintId, resolveTaskWorkflowContext } from '../domains/sprint-definitions/config';
+import { resolveWorkflowTypeForWorkflowId, resolveTaskWorkflowContext } from '../domains/workflow-definitions/config';
 import { getCanonicalTaskRecord } from '../domains/tasks/evidence';
 import { normalizedEvidenceValue } from './evidenceValidation';
 import {
-  listSprintTaskTransitions,
-  loadSprintTaskTransitionRequirements,
-  resolveSprintTaskTransition,
+  listWorkflowTaskTransitions,
+  loadWorkflowTaskTransitionRequirements,
+  resolveWorkflowTaskTransition,
 } from '../domains/routing/policy/statuses';
 import { type Db } from "../db/adapter/types";
 
@@ -44,8 +44,8 @@ export interface TaskReleaseRecord extends Partial<TaskReleaseEvidence> {
   id: number;
   status: string;
   task_type?: string | null;
-  sprint_id?: number | null;
-  sprint_type?: string | null;
+  workflow_id?: number | null;
+  workflow_type?: string | null;
   custom_fields_json?: string | null;
 }
 
@@ -53,7 +53,7 @@ export interface TaskReleaseRecord extends Partial<TaskReleaseEvidence> {
 // predicates lived here. Each one encoded a fixed opinion about which columns constitute
 // "evidence" for a stage, and each was consulted on read to decide whether a task looked wrong.
 // Which fields a transition requires — and whether a missing one blocks or merely warns — is
-// workflow configuration, held in sprint_task_transition_requirements and evaluated by
+// workflow configuration, held in workflow_task_transition_requirements and evaluated by
 // requireReleaseGate. Reintroducing a predicate here would put a second, unconfigurable answer
 // beside it.
 //
@@ -72,7 +72,6 @@ function isProductionLikeUrl(url: string | null | undefined): boolean {
     || value.includes('agent-hq-prod')
     || value.includes('nordinitiatives.com');
 }
-
 
 const PLACEHOLDER_VALUES = new Set(['-', '—', 'n/a', 'na', 'none', 'null', 'undefined', 'tbd', 'todo', 'pending', 'placeholder']);
 
@@ -118,7 +117,7 @@ function buildTaskRecord(task: TaskReleaseRecord): Record<string, unknown> {
 async function loadTransitionRequirements(
   db: Db,
   outcome: string,
-  sprintId?: number | null,
+  workflowId?: number | null,
   taskType?: string | null,
 ): Promise<TransitionRequirementRow[]> {
   // Workflow-scoped rows are the whole answer. There is deliberately no fallback: a global
@@ -127,8 +126,8 @@ async function loadTransitionRequirements(
   // outcome to block-severity rows nobody had configured. Migration 15 moved its contents to
   // the dev workflow default and dropped it. An outcome with no rows here is now ungated,
   // which is what the configuration says.
-  const sprintRows = await loadSprintTaskTransitionRequirements(db, sprintId ?? null, outcome, taskType);
-  return sprintRows.map((row) => ({
+  const workflowRows = await loadWorkflowTaskTransitionRequirements(db, workflowId ?? null, outcome, taskType);
+  return workflowRows.map((row) => ({
     field_name: row.field_name,
     requirement_type: row.requirement_type,
     match_field: row.match_field,
@@ -141,7 +140,7 @@ async function loadTransitionRequirements(
 // signature stay: three call sites pass a handle, and any future warning surfaced here has to be
 // read out of the workflow configuration rather than assumed, which will need both back.
 export async function evaluateTaskIntegrity(
-  task: { status?: string | null; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null } & Partial<TaskReleaseEvidence>,
+  task: { status?: string | null; task_type?: string | null; workflow_id?: number | null; workflow_type?: string | null } & Partial<TaskReleaseEvidence>,
   _db?: Db,
 ): Promise<IntegrityEvaluation> {
   const status = task.status ?? null;
@@ -155,7 +154,7 @@ export async function evaluateTaskIntegrity(
   // configuration task, which reached the same statuses with nothing to cite and got labelled
   // defective for it.
   //
-  // A workflow that does want evidence says so in sprint_task_transition_requirements, and
+  // A workflow that does want evidence says so in workflow_task_transition_requirements, and
   // requireReleaseGate below enforces it at the moment of the transition — blocking on
   // severity 'block' and warning on 'warn', per outcome and task type. That is the single place
   // an evidence rule is expressed, so a rule can be turned off by editing the workflow rather
@@ -194,8 +193,8 @@ export interface ReleaseGateResult {
  * Evaluate transition requirements for a given outcome.
  *
  * Resolution order for each requirement, all within this workflow's scope:
- *  1. sprint_task_transition_requirements WHERE task_type = ? (highest priority first)
- *  2. sprint_task_transition_requirements WHERE task_type IS NULL (defaults)
+ *  1. workflow_task_transition_requirements WHERE task_type = ? (highest priority first)
+ *  2. workflow_task_transition_requirements WHERE task_type IS NULL (defaults)
  *
  * There is no step 3. A global table used to sit there as a fallback; migration 15 moved it
  * to the dev workflow default and dropped it.
@@ -215,7 +214,7 @@ export async function requireReleaseGate(
   let reqs: TransitionRequirementRow[];
 
   try {
-    reqs = await loadTransitionRequirements(db, outcome, task.sprint_id ?? null, taskType);
+    reqs = await loadTransitionRequirements(db, outcome, task.workflow_id ?? null, taskType);
   } catch {
     return { errors: [], warnings: [] };
   }
@@ -327,25 +326,25 @@ export function assertTaskStatusUpdateAllowed(
   }
 }
 
-type SprintWorkflowRouteResolution = {
+type WorkflowModelRouteResolution = {
   nextStatus: string;
   allowedOutcomes: string[];
 };
 
-export async function resolveSprintWorkflowOutcome(
+export async function resolveWorkflowModelOutcome(
   db: Db,
-  task: { status: string; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null },
+  task: { status: string; task_type?: string | null; workflow_id?: number | null; workflow_type?: string | null },
   outcome: string,
-): Promise<SprintWorkflowRouteResolution | null> {
-  const sprintType = task.sprint_type ?? (await resolveSprintTypeForSprintId(db, task.sprint_id ?? null));
-  const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
+): Promise<WorkflowModelRouteResolution | null> {
+  const workflowType = task.workflow_type ?? (await resolveWorkflowTypeForWorkflowId(db, task.workflow_id ?? null));
+  const workflow = await resolveTaskWorkflowContext(db, { workflowType, taskType: task.task_type });
 
   if (workflow.taskType && workflow.allowedTaskTypes.length > 0 && !workflow.allowedTaskTypes.includes(workflow.taskType)) {
-    throw new Error(`Cannot move task because task_type "${workflow.taskType}" is not allowed for sprint type "${workflow.sprintType}". Allowed task types: ${workflow.allowedTaskTypes.join(', ')}`);
+    throw new Error(`Cannot move task because task_type "${workflow.taskType}" is not allowed for workflow type "${workflow.workflowType}". Allowed task types: ${workflow.allowedTaskTypes.join(', ')}`);
   }
 
-  const sprintTransitions = await listSprintTaskTransitions(db, task.sprint_id ?? null);
-  const matchingTransitions = sprintTransitions
+  const workflowTransitions = await listWorkflowTaskTransitions(db, task.workflow_id ?? null);
+  const matchingTransitions = workflowTransitions
     .filter((transition) => transition.enabled !== 0)
     .map((transition) => ({
     fromStatus: transition.from_status,
@@ -372,14 +371,14 @@ export async function resolveSprintWorkflowOutcome(
 
   if (!route) {
     throw new WorkflowAllowedValuesError({
-      message: `Cannot apply outcome "${outcome}" from "${task.status}" for sprint type "${workflow.sprintType}". Allowed outcomes: ${allowedOutcomes.length > 0 ? allowedOutcomes.join(', ') : 'none'}`,
+      message: `Cannot apply outcome "${outcome}" from "${task.status}" for workflow type "${workflow.workflowType}". Allowed outcomes: ${allowedOutcomes.length > 0 ? allowedOutcomes.join(', ') : 'none'}`,
       code: 'task_outcome_not_allowed_for_workflow',
       field: 'outcome',
       attemptedValue: outcome,
       allowedValues: allowedOutcomes,
       scope: {
-        sprintId: task.sprint_id ?? null,
-        sprintType: workflow.sprintType,
+        workflowId: task.workflow_id ?? null,
+        workflowType: workflow.workflowType,
         taskType: workflow.taskType,
         fromStatus: task.status,
       },
@@ -394,14 +393,14 @@ export async function resolveSprintWorkflowOutcome(
 
 async function resolveConfiguredOutcomeForDirectStatus(
   db: Db,
-  task: { status: string; task_type?: string | null; sprint_id?: number | null; sprint_type?: string | null },
+  task: { status: string; task_type?: string | null; workflow_id?: number | null; workflow_type?: string | null },
   targetStatus: string,
 ): Promise<{ outcome: string | null; allowedOutcomes: string[]; allowedStatuses: string[] }> {
-  const sprintType = task.sprint_type ?? (await resolveSprintTypeForSprintId(db, task.sprint_id ?? null));
-  const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
-  const sprintTransitions = await listSprintTaskTransitions(db, task.sprint_id ?? null);
+  const workflowType = task.workflow_type ?? (await resolveWorkflowTypeForWorkflowId(db, task.workflow_id ?? null));
+  const workflow = await resolveTaskWorkflowContext(db, { workflowType, taskType: task.task_type });
+  const workflowTransitions = await listWorkflowTaskTransitions(db, task.workflow_id ?? null);
 
-  const configuredSprintTransitions = sprintTransitions
+  const configuredWorkflowTransitions = workflowTransitions
     .filter((transition) => transition.enabled !== 0)
     .filter((transition) => transition.from_status === task.status)
     .map((transition) => ({
@@ -412,7 +411,7 @@ async function resolveConfiguredOutcomeForDirectStatus(
       order: transition.id,
     }));
 
-  const matchingTransitions = configuredSprintTransitions
+  const matchingTransitions = configuredWorkflowTransitions
     .filter((transition) => !transition.taskType || transition.taskType === workflow.taskType)
     .sort((a, b) => {
       const aSpecificity = a.taskType ? 1 : 0;
@@ -432,46 +431,46 @@ async function resolveConfiguredOutcomeForDirectStatus(
 
 export async function assertAtlasDirectStatusGate(
   db: Db,
-  task: TaskReleaseRecord & { task_type?: string | null; sprint_id?: number | null },
+  task: TaskReleaseRecord & { task_type?: string | null; workflow_id?: number | null },
   nextStatus: string | null | undefined,
 ): Promise<void> {
   if (!nextStatus || nextStatus === task.status) return;
 
-  const sprintType = await resolveSprintTypeForSprintId(db, task.sprint_id ?? null);
-  const workflow = await resolveTaskWorkflowContext(db, { sprintType, taskType: task.task_type });
+  const workflowType = await resolveWorkflowTypeForWorkflowId(db, task.workflow_id ?? null);
+  const workflow = await resolveTaskWorkflowContext(db, { workflowType, taskType: task.task_type });
 
   if (workflow.taskType && workflow.allowedTaskTypes.length > 0 && !workflow.allowedTaskTypes.includes(workflow.taskType)) {
-    throw new Error(`Cannot move task to "${nextStatus}" because task_type "${workflow.taskType}" is not allowed for sprint type "${workflow.sprintType}". Allowed task types: ${workflow.allowedTaskTypes.join(', ')}`);
+    throw new Error(`Cannot move task to "${nextStatus}" because task_type "${workflow.taskType}" is not allowed for workflow type "${workflow.workflowType}". Allowed task types: ${workflow.allowedTaskTypes.join(', ')}`);
   }
 
-  await assertTaskStatusDefinedForWorkflow(db, nextStatus, { sprintId: task.sprint_id, sprintType });
+  await assertTaskStatusDefinedForWorkflow(db, nextStatus, { workflowId: task.workflow_id, workflowType });
 }
 
 /**
  * Resolve the next status for a given (from_status, outcome) pair.
  *
- * Single canonical workflow model: explicit sprint-scoped transition rows are
+ * Single canonical workflow model: explicit workflow-scoped transition rows are
  * authoritative for runtime outcome→status routing.
  *
  * Resolution order:
- *  1. sprint_task_transitions for the active sprint (authoritative)
+ *  1. workflow_task_transitions for the active workflow (authoritative)
  */
 export async function canonicalOutcomeRoute(
   db: Db,
   priorStatus: string,
   outcome: string,
   taskType?: string | null,
-  sprintId?: number | null,
-  sprintType?: string | null,
+  workflowId?: number | null,
+  workflowType?: string | null,
 ): Promise<string | null> {
-  const workflow = await resolveTaskWorkflowContext(db, { sprintType: sprintType ?? null, taskType });
+  const workflow = await resolveTaskWorkflowContext(db, { workflowType: workflowType ?? null, taskType });
 
   try {
-    const sprintTransition = await resolveSprintTaskTransition(db, sprintId ?? null, priorStatus, outcome, workflow.taskType);
-    if (sprintTransition) return sprintTransition.to_status;
+    const workflowTransition = await resolveWorkflowTaskTransition(db, workflowId ?? null, priorStatus, outcome, workflow.taskType);
+    if (workflowTransition) return workflowTransition.to_status;
 
   } catch {
-    // sprint-scoped routing may not exist yet (old DB) — fall through
+    // workflow-scoped routing may not exist yet (old DB) — fall through
   }
 
   return null;

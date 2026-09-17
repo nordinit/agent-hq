@@ -28,8 +28,8 @@ export type DirectGatedTaskStatus = typeof DIRECT_GATED_TASK_STATUSES[number];
  * Seed data only — the terminal defaults a fresh install starts with.
  *
  * This is NOT the answer to "is this status terminal?". Terminality is operator
- * configuration held in task_statuses / sprint_type_task_statuses /
- * sprint_task_statuses, and is read through
+ * configuration held in task_statuses / workflow_type_task_statuses /
+ * workflow_task_statuses, and is read through
  * domains/tasks/terminality.ts (list form) or the dispatcher's
  * buildResolvedTaskTerminalityExpression (SQL form). Deciding terminality from
  * this constant would override what the user configured.

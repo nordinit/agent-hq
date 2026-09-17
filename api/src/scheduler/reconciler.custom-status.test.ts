@@ -32,7 +32,7 @@ async function setupDb(): Promise<Db> {
 
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default', 'default', 1)`);
   await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (86, 1, 'Elevation')`);
-  await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (10, 1, 86, 'Elevation Built', 'Goal', 'dev', 'active')`);
+  await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (10, 1, 86, 'Elevation Built', 'Goal', 'dev', 'active')`);
   await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, job_instructions, enabled, timeout_seconds, session_key, runtime_type) VALUES (1, 1, 'Old Agent', 'Old', 'Old', 1, 900, 'agent:old', 'openclaw')`);
   await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, job_instructions, enabled, timeout_seconds, session_key, runtime_type) VALUES (2, 1, 'Addison', 'PM', 'Review', 1, 900, 'agent:addison', 'openclaw')`);
   return db;
@@ -42,7 +42,7 @@ async function insertTask(db: Db, id: number, status: string): Promise<void> {
   await db.run(`
     INSERT INTO tasks (
       id, title, description, status, priority, agent_id, assigned_agent_id,
-      review_owner_agent_id, active_instance_id, project_id, tenant_id, sprint_id, task_type,
+      review_owner_agent_id, active_instance_id, project_id, tenant_id, workflow_id, task_type,
       updated_at
     ) VALUES (?, ?, 'Task', ?, 'high', 1, 1, NULL, NULL, 86, 1, 10, 'backend', '2026-06-04T12:00:00.000Z')
   `, id, `Task ${id}`, status);
@@ -56,7 +56,7 @@ describe('reconciler workflow-defined status routing', () => {
   it('reconciles ownership for a custom status with a matching routing rule', async () => {
     const db = await setupDb();
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'intake', 2, 10)
     `);
     await insertTask(db, 797, 'intake');
@@ -69,9 +69,9 @@ describe('reconciler workflow-defined status routing', () => {
 
   it('does not reconcile ownership for workflow terminal custom statuses', async () => {
     const db = await setupDb();
-    await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal) VALUES (10, 'archived', 'Archived', 1)`);
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'archived', 'Archived', 1)`);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'archived', 2, 10)
     `);
     await insertTask(db, 798, 'archived');
@@ -84,9 +84,9 @@ describe('reconciler workflow-defined status routing', () => {
 
   it('reconciles ownership for legacy failed when workflow configuration marks it non-terminal', async () => {
     const db = await setupDb();
-    await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
     `);
     await insertTask(db, 799, 'failed');
@@ -97,13 +97,13 @@ describe('reconciler workflow-defined status routing', () => {
     expect(task.assigned_agent_id).toBe(2);
   });
 
-  it('uses workflow-specific terminality before sprint-type and global fallbacks', async () => {
+  it('uses workflow-specific terminality before workflow-type and global fallbacks', async () => {
     const db = await setupDb();
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
-    await db.run(`INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
-    await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 1)`);
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 0)`);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
     `);
     await insertTask(db, 800, 'failed');
@@ -117,10 +117,10 @@ describe('reconciler workflow-defined status routing', () => {
   it('keeps workflow-specific terminal failed from reconciling before non-terminal fallbacks', async () => {
     const db = await setupDb();
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 0)`);
-    await db.run(`INSERT INTO sprint_type_task_statuses (tenant_id, sprint_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
-    await db.run(`INSERT INTO sprint_task_statuses (sprint_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 1)`);
+    await db.run(`INSERT INTO workflow_type_task_statuses (tenant_id, workflow_type_key, status_key, label, terminal) VALUES (1, 'dev', 'failed', 'Failed', 0)`);
+    await db.run(`INSERT INTO workflow_task_statuses (workflow_id, status_key, label, terminal) VALUES (10, 'failed', 'Failed', 1)`);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
     `);
     await insertTask(db, 804, 'failed');
@@ -131,15 +131,15 @@ describe('reconciler workflow-defined status routing', () => {
     expect(task.assigned_agent_id).toBe(1);
   });
 
-  it('uses tenant-specific sprint-type terminality before the global status fallback', async () => {
+  it('uses tenant-specific workflow-type terminality before the global status fallback', async () => {
     const db = await setupDb();
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
     await db.run(`
-      INSERT INTO sprint_type_task_statuses (sprint_type_key, status_key, label, tenant_id, terminal)
+      INSERT INTO workflow_type_task_statuses (workflow_type_key, status_key, label, tenant_id, terminal)
       VALUES ('dev', 'failed', 'Failed', 1, 0)
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (10, 86, 'dev', 'backend', 'failed', 2, 10)
     `);
     await insertTask(db, 801, 'failed');
@@ -158,7 +158,7 @@ describe('reconciler workflow-defined status routing', () => {
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('cancelled', 'Cancelled', 1)`);
     await db.run(`INSERT INTO task_statuses (name, label, terminal) VALUES ('failed', 'Failed', 1)`);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES
         (10, 86, 'dev', 'backend', 'done', 2, 10),
         (10, 86, 'dev', 'backend', 'cancelled', 2, 10),
@@ -182,17 +182,17 @@ describe('reconciler workflow-defined status routing', () => {
     const db = await setupDb();
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (2, 'Workspace Two', 'workspace-two', 0)`);
     await db.run(`INSERT INTO projects (id, tenant_id, name) VALUES (87, 2, 'Workspace Two Project')`);
-    await db.run(`INSERT INTO sprints (id, tenant_id, project_id, name, goal, sprint_type, status) VALUES (11, 2, 87, 'Workspace Two Review', 'Review', 'dev', 'active')`);
+    await db.run(`INSERT INTO workflows (id, tenant_id, project_id, name, goal, workflow_type, status) VALUES (11, 2, 87, 'Workspace Two Review', 'Review', 'dev', 'active')`);
     await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, job_instructions, enabled, timeout_seconds, session_key, runtime_type) VALUES (3, 2, 'Workspace Two Dev', 'Dev', 'Dev', 1, 900, 'agent:workspace-two-dev', 'openclaw')`);
     await db.run(`INSERT INTO agents (id, tenant_id, name, job_title, job_instructions, enabled, timeout_seconds, session_key, runtime_type) VALUES (4, 2, 'Workspace Two QA', 'QA', 'Review', 1, 900, 'agent:workspace-two-qa', 'openclaw')`);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (tenant_id, sprint_id, project_id, sprint_type, task_type, status, agent_id, priority)
+      INSERT INTO workflow_task_routing_rules (tenant_id, workflow_id, project_id, workflow_type, task_type, status, agent_id, priority)
       VALUES (2, 11, 87, 'dev', 'backend', 'review', 4, 10)
     `);
     await db.run(`
       INSERT INTO tasks (
         id, tenant_id, title, description, status, priority, agent_id, assigned_agent_id,
-        review_owner_agent_id, active_instance_id, project_id, sprint_id, task_type, updated_at
+        review_owner_agent_id, active_instance_id, project_id, workflow_id, task_type, updated_at
       ) VALUES (805, 2, 'Workspace Two Review', 'Task', 'review', 'high', 3, 3, NULL, NULL, 87, 11, 'backend', '2026-06-04T12:00:00.000Z')
     `);
 

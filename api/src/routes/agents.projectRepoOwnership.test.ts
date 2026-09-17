@@ -19,7 +19,6 @@ async function resetDb(): Promise<void> {
 
   const db = getDb();
 
-
   await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default Tenant', 'default', 1)`);
   await db.run(`INSERT INTO app_settings (key, value) VALUES ('default_tenant_id', '1'), ('active_tenant_id', '1')`);
   await db.run(`INSERT INTO provider_config (tenant_id, slug, status) VALUES (1, ?, ?)`, 'openai', 'connected');
@@ -210,7 +209,7 @@ describe('agent repo ownership enforcement', () => {
     }
   });
 
-  it('creates agents as project-scoped even when legacy sprint_id is submitted', async () => {
+  it('creates agents as project-scoped even when legacy workflow_id is submitted', async () => {
     const db = getDb();
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
@@ -228,38 +227,38 @@ describe('agent repo ownership enforcement', () => {
           session_key: 'agent:project-scoped:main',
           runtime_type: 'webhook',
           project_id: 86,
-          sprint_id: 123,
+          workflow_id: 123,
         }),
       });
       const body = await response.json() as Record<string, unknown>;
 
       expect(response.status).toBe(201);
       expect(body.project_id).toBe(86);
-      expect(body).not.toHaveProperty('sprint_id');
+      expect(body).not.toHaveProperty('workflow_id');
 
-      const created = await db.get(`SELECT project_id, sprint_id FROM agents WHERE session_key = 'agent:project-scoped:main'`) as {
+      const created = await db.get(`SELECT project_id, workflow_id FROM agents WHERE session_key = 'agent:project-scoped:main'`) as {
         project_id: number | null;
-        sprint_id: number | null;
+        workflow_id: number | null;
       };
-      expect(created).toEqual({ project_id: 86, sprint_id: null });
+      expect(created).toEqual({ project_id: 86, workflow_id: null });
     } finally {
       await stopTestServer(server);
     }
   });
 
-  it('ignores legacy sprint_id on agent update and hides it from responses', async () => {
+  it('ignores legacy workflow_id on agent update and hides it from responses', async () => {
     const db = getDb();
     await db.run(`
       INSERT INTO projects (id, tenant_id, name, repo_path, repo_url, repo_access_mode)
       VALUES (86, 1, 'Agent HQ', '/Users/nordini/agent-hq', NULL, 'worktree')
     `);
     await db.run(`
-      INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+      INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
       VALUES (12, 1, 86, 'Legacy Workflow', 'generic')
     `);
     await db.run(`
-      INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, preferred_provider, project_id, sprint_id)
-      VALUES (95, 1, 'Legacy Sprint Agent', 'Backend Engineer', 'agent:legacy-sprint:main', 'webhook', 'openai', 86, 12)
+      INSERT INTO agents (id, tenant_id, name, role, session_key, runtime_type, preferred_provider, project_id, workflow_id)
+      VALUES (95, 1, 'Legacy Workflow Agent', 'Backend Engineer', 'agent:legacy-workflow:main', 'webhook', 'openai', 86, 12)
     `);
 
     const { server, baseUrl } = await startTestServer();
@@ -269,20 +268,20 @@ describe('agent repo ownership enforcement', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: 'Still Project Scoped Agent',
-          sprint_id: 999,
+          workflow_id: 999,
         }),
       });
       const body = await response.json() as Record<string, unknown>;
 
       expect(response.status).toBe(200);
       expect(body.name).toBe('Still Project Scoped Agent');
-      expect(body).not.toHaveProperty('sprint_id');
+      expect(body).not.toHaveProperty('workflow_id');
 
-      const stored = await db.get(`SELECT project_id, sprint_id FROM agents WHERE id = 95`) as {
+      const stored = await db.get(`SELECT project_id, workflow_id FROM agents WHERE id = 95`) as {
         project_id: number | null;
-        sprint_id: number | null;
+        workflow_id: number | null;
       };
-      expect(stored).toEqual({ project_id: 86, sprint_id: 12 });
+      expect(stored).toEqual({ project_id: 86, workflow_id: 12 });
     } finally {
       await stopTestServer(server);
     }

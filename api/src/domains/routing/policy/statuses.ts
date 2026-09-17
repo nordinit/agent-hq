@@ -1,28 +1,28 @@
-import type { SprintTaskRoutingRuleRow, SprintTaskStatusMeta, SprintTaskTransitionRequirementRow, SprintTaskTransitionRow } from './types';
+import type { WorkflowTaskRoutingRuleRow, WorkflowTaskStatusMeta, WorkflowTaskTransitionRequirementRow, WorkflowTaskTransitionRow } from './types';
 import {
   buildCanonicalPolicyStatuses,
-  isSprintTypeStatusSeeded,
+  isWorkflowTypeStatusSeeded,
   parseJsonArray,
   parseJsonObject,
-  sprintTypeTenantPredicate,
+  workflowTypeTenantPredicate,
   tableExists,
   tableHasColumn,
   tenantPredicate,
-  normalizeSprintType,
+  normalizeWorkflowType,
 } from './metadata';
 import { type Db } from "../../../db/adapter/types";
 
-export async function listSprintTaskStatuses(
+export async function listWorkflowTaskStatuses(
   db: Db,
-  sprintId?: number | null,
-): Promise<SprintTaskStatusMeta[]> {
-  if (typeof sprintId === 'number' && Number.isFinite(sprintId) && await tableExists(db, 'sprint_task_statuses')) {
+  workflowId?: number | null,
+): Promise<WorkflowTaskStatusMeta[]> {
+  if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_statuses')) {
     const rows = await db.all(`
       SELECT status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
-      FROM sprint_task_statuses
-      WHERE sprint_id = ?
+      FROM workflow_task_statuses
+      WHERE workflow_id = ?
       ORDER BY stage_order ASC, id ASC
-    `, sprintId) as Array<{
+    `, workflowId) as Array<{
       status_key: string;
       label: string;
       color: string;
@@ -69,21 +69,21 @@ export async function listSprintTaskStatuses(
   }));
 }
 
-export async function listSprintTypeTaskStatuses(
+export async function listWorkflowTypeTaskStatuses(
   db: Db,
-  sprintType: string | null | undefined,
+  workflowType: string | null | undefined,
   options?: { tenantId?: number | null },
-): Promise<SprintTaskStatusMeta[]> {
-  const normalizedSprintType = normalizeSprintType(sprintType);
-  if (normalizedSprintType && await tableExists(db, 'sprint_type_task_statuses')) {
-    const tenant = await sprintTypeTenantPredicate(db, 'sprint_type_task_statuses', options?.tenantId);
+): Promise<WorkflowTaskStatusMeta[]> {
+  const normalizedWorkflowType = normalizeWorkflowType(workflowType);
+  if (normalizedWorkflowType && await tableExists(db, 'workflow_type_task_statuses')) {
+    const tenant = await workflowTypeTenantPredicate(db, 'workflow_type_task_statuses', options?.tenantId);
     const rows = await db.all(`
       SELECT status_key, label, color, terminal, is_system, allowed_transitions_json, stage_order, is_default_entry, metadata_json
-      FROM sprint_type_task_statuses
-      WHERE sprint_type_key = ?
+      FROM workflow_type_task_statuses
+      WHERE workflow_type_key = ?
         ${tenant.sql}
       ORDER BY stage_order ASC, id ASC
-    `, normalizedSprintType, ...tenant.params) as Array<{
+    `, normalizedWorkflowType, ...tenant.params) as Array<{
       status_key: string;
       label: string;
       color: string;
@@ -112,12 +112,12 @@ export async function listSprintTypeTaskStatuses(
         };
       });
     }
-    if (await isSprintTypeStatusSeeded(db, normalizedSprintType, options?.tenantId)) {
+    if (await isWorkflowTypeStatusSeeded(db, normalizedWorkflowType, options?.tenantId)) {
       return [];
     }
   }
 
-  return buildCanonicalPolicyStatuses(normalizedSprintType).map((row, index) => ({
+  return buildCanonicalPolicyStatuses(normalizedWorkflowType).map((row, index) => ({
     name: row.name,
     label: row.label,
     color: row.color,
@@ -131,65 +131,65 @@ export async function listSprintTypeTaskStatuses(
   }));
 }
 
-export async function listSprintTaskTransitions(
+export async function listWorkflowTaskTransitions(
   db: Db,
-  sprintId?: number | null,
-): Promise<SprintTaskTransitionRow[]> {
-  if (typeof sprintId === 'number' && Number.isFinite(sprintId) && await tableExists(db, 'sprint_task_transitions')) {
-    const hasScopeColumns = await tableHasColumn(db, 'sprint_task_transitions', 'project_id')
-      && await tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
+  workflowId?: number | null,
+): Promise<WorkflowTaskTransitionRow[]> {
+  if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_transitions')) {
+    const hasScopeColumns = await tableHasColumn(db, 'workflow_task_transitions', 'project_id')
+      && await tableHasColumn(db, 'workflow_task_transitions', 'workflow_type');
     if (hasScopeColumns) {
-      const sprint = await db.get(`SELECT project_id, sprint_type${await tableHasColumn(db, 'sprints', 'tenant_id') ? ', tenant_id' : ''} FROM sprints WHERE id = ?`, sprintId) as { project_id: number; sprint_type: string | null; tenant_id?: number | null } | undefined;
-      if (!sprint?.sprint_type) return [];
-      const tenant = await tenantPredicate(db, 'sprint_task_transitions', 'stt', sprint.tenant_id);
+      const workflow = await db.get(`SELECT project_id, workflow_type${await tableHasColumn(db, 'workflows', 'tenant_id') ? ', tenant_id' : ''} FROM workflows WHERE id = ?`, workflowId) as { project_id: number; workflow_type: string | null; tenant_id?: number | null } | undefined;
+      if (!workflow?.workflow_type) return [];
+      const tenant = await tenantPredicate(db, 'workflow_task_transitions', 'stt', workflow.tenant_id);
       const rows = await db.all(`
-        SELECT stt.id, stt.sprint_id, COALESCE(stt.project_id, s.project_id) as project_id,
-               COALESCE(stt.sprint_type, s.sprint_type) as sprint_type,
+        SELECT stt.id, stt.workflow_id, COALESCE(stt.project_id, s.project_id) as project_id,
+               COALESCE(stt.workflow_type, s.workflow_type) as workflow_type,
                stt.task_type, stt.from_status, stt.outcome, stt.to_status, stt.enabled,
                stt.priority, stt.is_protected, stt.created_at, stt.updated_at
-        FROM sprint_task_transitions stt
-        LEFT JOIN sprints s ON s.id = stt.sprint_id
+        FROM workflow_task_transitions stt
+        LEFT JOIN workflows s ON s.id = stt.workflow_id
         WHERE COALESCE(stt.project_id, s.project_id) = ?
-          AND COALESCE(stt.sprint_type, s.sprint_type) = ?
-          AND (stt.sprint_id IS NULL OR stt.sprint_id = ?)
+          AND COALESCE(stt.workflow_type, s.workflow_type) = ?
+          AND (stt.workflow_id IS NULL OR stt.workflow_id = ?)
           ${tenant.sql}
-        ORDER BY CASE WHEN stt.sprint_id = ? THEN 0 ELSE 1 END, stt.priority DESC, stt.id ASC
-      `, sprint.project_id, sprint.sprint_type, sprintId, ...tenant.params, sprintId) as SprintTaskTransitionRow[];
+        ORDER BY CASE WHEN stt.workflow_id = ? THEN 0 ELSE 1 END, stt.priority DESC, stt.id ASC
+      `, workflow.project_id, workflow.workflow_type, workflowId, ...tenant.params, workflowId) as WorkflowTaskTransitionRow[];
       const overrideKeys = new Set<string>();
       for (const row of rows) {
-        if (row.sprint_id === sprintId) {
+        if (row.workflow_id === workflowId) {
           overrideKeys.add(`${row.task_type ?? ''}::${row.from_status}::${row.outcome}`);
         }
       }
-      return rows.filter((row) => row.sprint_id === sprintId || !overrideKeys.has(`${row.task_type ?? ''}::${row.from_status}::${row.outcome}`));
+      return rows.filter((row) => row.workflow_id === workflowId || !overrideKeys.has(`${row.task_type ?? ''}::${row.from_status}::${row.outcome}`));
     }
     const rows = await db.all(`
-      SELECT id, sprint_id, task_type, from_status, outcome, to_status, enabled,
+      SELECT id, workflow_id, task_type, from_status, outcome, to_status, enabled,
              priority, is_protected, created_at, updated_at
-      FROM sprint_task_transitions
-      WHERE sprint_id = ?
+      FROM workflow_task_transitions
+      WHERE workflow_id = ?
       ORDER BY priority DESC, id ASC
-    `, sprintId) as SprintTaskTransitionRow[];
+    `, workflowId) as WorkflowTaskTransitionRow[];
     if (rows.length > 0) return rows;
   }
 
   return [];
 }
 
-export async function resolveSprintTaskTransition(
+export async function resolveWorkflowTaskTransition(
   db: Db,
-  sprintId: number | null | undefined,
+  workflowId: number | null | undefined,
   fromStatus: string,
   outcome: string,
   taskType?: string | null,
-): Promise<SprintTaskTransitionRow | null> {
-  if (typeof sprintId === 'number' && Number.isFinite(sprintId) && await tableExists(db, 'sprint_task_transitions')) {
-    const rows = (await listSprintTaskTransitions(db, sprintId))
+): Promise<WorkflowTaskTransitionRow | null> {
+  if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_transitions')) {
+    const rows = (await listWorkflowTaskTransitions(db, workflowId))
       .filter((row) => row.enabled === 1 && row.from_status === fromStatus && row.outcome === outcome)
       .filter((row) => taskType ? (row.task_type === taskType || row.task_type == null) : row.task_type == null)
       .sort((a, b) => {
-        const scopeA = a.sprint_id === sprintId ? 1 : 0;
-        const scopeB = b.sprint_id === sprintId ? 1 : 0;
+        const scopeA = a.workflow_id === workflowId ? 1 : 0;
+        const scopeB = b.workflow_id === workflowId ? 1 : 0;
         if (scopeA !== scopeB) return scopeB - scopeA;
         const typeA = a.task_type ? 1 : 0;
         const typeB = b.task_type ? 1 : 0;
@@ -199,78 +199,78 @@ export async function resolveSprintTaskTransition(
       });
     if (rows.length > 0) return rows[0];
 
-    const hasScopeColumns = await tableHasColumn(db, 'sprint_task_transitions', 'project_id')
-      && await tableHasColumn(db, 'sprint_task_transitions', 'sprint_type');
+    const hasScopeColumns = await tableHasColumn(db, 'workflow_task_transitions', 'project_id')
+      && await tableHasColumn(db, 'workflow_task_transitions', 'workflow_type');
     if (hasScopeColumns) return null;
 
     if (taskType) {
       const typeRow = await db.get(`
-        SELECT id, sprint_id, task_type, from_status, outcome, to_status, enabled,
+        SELECT id, workflow_id, task_type, from_status, outcome, to_status, enabled,
                priority, is_protected, created_at, updated_at
-        FROM sprint_task_transitions
-        WHERE sprint_id = ? AND task_type = ? AND from_status = ? AND outcome = ? AND enabled = 1
+        FROM workflow_task_transitions
+        WHERE workflow_id = ? AND task_type = ? AND from_status = ? AND outcome = ? AND enabled = 1
         ORDER BY priority DESC, id ASC
         LIMIT 1
-      `, sprintId, taskType, fromStatus, outcome) as SprintTaskTransitionRow | undefined;
+      `, workflowId, taskType, fromStatus, outcome) as WorkflowTaskTransitionRow | undefined;
       if (typeRow) return typeRow;
     }
 
     const defaultRow = await db.get(`
-      SELECT id, sprint_id, task_type, from_status, outcome, to_status, enabled,
+      SELECT id, workflow_id, task_type, from_status, outcome, to_status, enabled,
              priority, is_protected, created_at, updated_at
-      FROM sprint_task_transitions
-      WHERE sprint_id = ? AND task_type IS NULL AND from_status = ? AND outcome = ? AND enabled = 1
+      FROM workflow_task_transitions
+      WHERE workflow_id = ? AND task_type IS NULL AND from_status = ? AND outcome = ? AND enabled = 1
       ORDER BY priority DESC, id ASC
       LIMIT 1
-    `, sprintId, fromStatus, outcome) as SprintTaskTransitionRow | undefined;
+    `, workflowId, fromStatus, outcome) as WorkflowTaskTransitionRow | undefined;
     if (defaultRow) return defaultRow;
   }
 
   return null;
 }
 
-export async function loadSprintTaskTransitionRequirements(
+export async function loadWorkflowTaskTransitionRequirements(
   db: Db,
-  sprintId: number | null | undefined,
+  workflowId: number | null | undefined,
   outcome: string,
   taskType?: string | null,
-): Promise<SprintTaskTransitionRequirementRow[]> {
-  if (typeof sprintId === 'number' && Number.isFinite(sprintId) && await tableExists(db, 'sprint_task_transition_requirements')) {
-    const hasScopeColumns = await tableHasColumn(db, 'sprint_task_transition_requirements', 'project_id')
-      && await tableHasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
-    const sprint = hasScopeColumns
-      ? await db.get(`SELECT project_id, sprint_type${await tableHasColumn(db, 'sprints', 'tenant_id') ? ', tenant_id' : ''} FROM sprints WHERE id = ? LIMIT 1`, sprintId) as { project_id: number; sprint_type: string | null; tenant_id?: number | null } | undefined
+): Promise<WorkflowTaskTransitionRequirementRow[]> {
+  if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_transition_requirements')) {
+    const hasScopeColumns = await tableHasColumn(db, 'workflow_task_transition_requirements', 'project_id')
+      && await tableHasColumn(db, 'workflow_task_transition_requirements', 'workflow_type');
+    const workflow = hasScopeColumns
+      ? await db.get(`SELECT project_id, workflow_type${await tableHasColumn(db, 'workflows', 'tenant_id') ? ', tenant_id' : ''} FROM workflows WHERE id = ? LIMIT 1`, workflowId) as { project_id: number; workflow_type: string | null; tenant_id?: number | null } | undefined
       : undefined;
-    const tenant = await tenantPredicate(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', sprint?.tenant_id);
+    const tenant = await tenantPredicate(db, 'workflow_task_transition_requirements', 'workflow_task_transition_requirements', workflow?.tenant_id);
 
-    const loadRows = async (specificTaskType: string | null): Promise<SprintTaskTransitionRequirementRow[]> => {
-      if (hasScopeColumns && sprint?.sprint_type) {
+    const loadRows = async (specificTaskType: string | null): Promise<WorkflowTaskTransitionRequirementRow[]> => {
+      if (hasScopeColumns && workflow?.workflow_type) {
         return await db.all(`
-          SELECT id, sprint_id, task_type, outcome, field_name, requirement_type, match_field,
+          SELECT id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
                  severity, message, enabled, priority, created_at, updated_at
-          FROM sprint_task_transition_requirements
+          FROM workflow_task_transition_requirements
           WHERE project_id = ?
-            AND sprint_type = ?
-            AND (sprint_id = ? OR sprint_id IS NULL)
+            AND workflow_type = ?
+            AND (workflow_id = ? OR workflow_id IS NULL)
             AND ${specificTaskType == null ? 'task_type IS NULL' : 'task_type = ?'}
             AND outcome = ?
             AND enabled = 1
             ${tenant.sql}
-          ORDER BY CASE WHEN sprint_id = ? THEN 0 ELSE 1 END, priority DESC, id ASC
+          ORDER BY CASE WHEN workflow_id = ? THEN 0 ELSE 1 END, priority DESC, id ASC
         `, ...(specificTaskType == null
-                  ? [sprint.project_id, sprint.sprint_type, sprintId, outcome, ...tenant.params, sprintId]
-                  : [sprint.project_id, sprint.sprint_type, sprintId, specificTaskType, outcome, ...tenant.params, sprintId])) as SprintTaskTransitionRequirementRow[];
+                  ? [workflow.project_id, workflow.workflow_type, workflowId, outcome, ...tenant.params, workflowId]
+                  : [workflow.project_id, workflow.workflow_type, workflowId, specificTaskType, outcome, ...tenant.params, workflowId])) as WorkflowTaskTransitionRequirementRow[];
       }
       return await db.all(`
-        SELECT id, sprint_id, task_type, outcome, field_name, requirement_type, match_field,
+        SELECT id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
                severity, message, enabled, priority, created_at, updated_at
-        FROM sprint_task_transition_requirements
-        WHERE sprint_id = ?
+        FROM workflow_task_transition_requirements
+        WHERE workflow_id = ?
           AND ${specificTaskType == null ? 'task_type IS NULL' : 'task_type = ?'}
           AND outcome = ?
           AND enabled = 1
         ORDER BY priority DESC, id ASC
-      `, ...(specificTaskType == null ? [sprintId, outcome] : [sprintId, specificTaskType, outcome])) as SprintTaskTransitionRequirementRow[];
+      `, ...(specificTaskType == null ? [workflowId, outcome] : [workflowId, specificTaskType, outcome])) as WorkflowTaskTransitionRequirementRow[];
     };
 
     // Gates ACCUMULATE across the task-type dimension: a task-type row adds to the all-types
@@ -284,10 +284,10 @@ export async function loadSprintTaskTransitionRequirements(
     // Task-type rows are collected first so that dedupe keeps them: a task-type row naming the
     // same field and requirement type as an all-types row is still an override, it just now
     // overrides that one row instead of the whole set.
-    const rows: SprintTaskTransitionRequirementRow[] = [];
+    const rows: WorkflowTaskTransitionRequirementRow[] = [];
     if (taskType) rows.push(...await loadRows(taskType));
     rows.push(...await loadRows(null));
-    return dedupeSprintTaskTransitionRequirementRows(rows);
+    return dedupeWorkflowTaskTransitionRequirementRows(rows);
   }
 
   return [];
@@ -300,9 +300,9 @@ export async function loadSprintTaskTransitionRequirements(
  * naming different fields accumulate. It was in the key back when each call passed a single
  * task type's rows, where it was constant and so had no effect.
  */
-function dedupeSprintTaskTransitionRequirementRows(rows: SprintTaskTransitionRequirementRow[]): SprintTaskTransitionRequirementRow[] {
+function dedupeWorkflowTaskTransitionRequirementRows(rows: WorkflowTaskTransitionRequirementRow[]): WorkflowTaskTransitionRequirementRow[] {
   const seen = new Set<string>();
-  const result: SprintTaskTransitionRequirementRow[] = [];
+  const result: WorkflowTaskTransitionRequirementRow[] = [];
   for (const row of rows) {
     const key = [row.outcome, row.field_name, row.requirement_type, row.match_field ?? ''].join('\u0000');
     if (seen.has(key)) continue;
@@ -312,27 +312,27 @@ function dedupeSprintTaskTransitionRequirementRows(rows: SprintTaskTransitionReq
   return result;
 }
 
-export async function listSprintTaskTransitionRequirements(
+export async function listWorkflowTaskTransitionRequirements(
   db: Db,
-  sprintId?: number | null,
+  workflowId?: number | null,
   taskType?: string | null,
   outcome?: string | null,
-): Promise<SprintTaskTransitionRequirementRow[]> {
-  if (typeof sprintId === 'number' && Number.isFinite(sprintId) && await tableExists(db, 'sprint_task_transition_requirements')) {
-    const hasScopeColumns = await tableHasColumn(db, 'sprint_task_transition_requirements', 'project_id')
-      && await tableHasColumn(db, 'sprint_task_transition_requirements', 'sprint_type');
-    const sprint = hasScopeColumns
-      ? await db.get(`SELECT project_id, sprint_type${await tableHasColumn(db, 'sprints', 'tenant_id') ? ', tenant_id' : ''} FROM sprints WHERE id = ? LIMIT 1`, sprintId) as { project_id: number; sprint_type: string | null; tenant_id?: number | null } | undefined
+): Promise<WorkflowTaskTransitionRequirementRow[]> {
+  if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_transition_requirements')) {
+    const hasScopeColumns = await tableHasColumn(db, 'workflow_task_transition_requirements', 'project_id')
+      && await tableHasColumn(db, 'workflow_task_transition_requirements', 'workflow_type');
+    const workflow = hasScopeColumns
+      ? await db.get(`SELECT project_id, workflow_type${await tableHasColumn(db, 'workflows', 'tenant_id') ? ', tenant_id' : ''} FROM workflows WHERE id = ? LIMIT 1`, workflowId) as { project_id: number; workflow_type: string | null; tenant_id?: number | null } | undefined
       : undefined;
-    const tenant = await tenantPredicate(db, 'sprint_task_transition_requirements', 'sprint_task_transition_requirements', sprint?.tenant_id);
+    const tenant = await tenantPredicate(db, 'workflow_task_transition_requirements', 'workflow_task_transition_requirements', workflow?.tenant_id);
     let query = `
-      SELECT id, sprint_id, task_type, outcome, field_name, requirement_type, match_field,
+      SELECT id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
              severity, message, enabled, priority, created_at, updated_at
-      FROM sprint_task_transition_requirements
-      WHERE ${hasScopeColumns && sprint?.sprint_type ? 'project_id = ? AND sprint_type = ? AND (sprint_id = ? OR sprint_id IS NULL)' : 'sprint_id = ?'}
+      FROM workflow_task_transition_requirements
+      WHERE ${hasScopeColumns && workflow?.workflow_type ? 'project_id = ? AND workflow_type = ? AND (workflow_id = ? OR workflow_id IS NULL)' : 'workflow_id = ?'}
     `;
-    const params: unknown[] = hasScopeColumns && sprint?.sprint_type ? [sprint.project_id, sprint.sprint_type, sprintId] : [sprintId];
-    if (hasScopeColumns && sprint?.sprint_type && tenant.sql) {
+    const params: unknown[] = hasScopeColumns && workflow?.workflow_type ? [workflow.project_id, workflow.workflow_type, workflowId] : [workflowId];
+    if (hasScopeColumns && workflow?.workflow_type && tenant.sql) {
       query += tenant.sql;
       params.push(...tenant.params);
     }
@@ -344,96 +344,96 @@ export async function listSprintTaskTransitionRequirements(
       query += ` AND outcome = ?`;
       params.push(outcome);
     }
-    query += ` ORDER BY outcome ASC, task_type IS NULL ASC, CASE WHEN sprint_id IS NULL THEN 1 ELSE 0 END, priority DESC, id ASC`;
-    return await db.all(query, ...params) as SprintTaskTransitionRequirementRow[];
+    query += ` ORDER BY outcome ASC, task_type IS NULL ASC, CASE WHEN workflow_id IS NULL THEN 1 ELSE 0 END, priority DESC, id ASC`;
+    return await db.all(query, ...params) as WorkflowTaskTransitionRequirementRow[];
   }
 
-  // No sprint id means no scope, and gate requirements only exist inside one. This used to
+  // No workflow id means no scope, and gate requirements only exist inside one. This used to
   // list the global `transition_requirements` table instead, which migration 15 dropped.
   return [];
 }
 
-export async function listSprintTaskRoutingRules(
+export async function listWorkflowTaskRoutingRules(
   db: Db,
-  sprintId?: number | null,
-): Promise<SprintTaskRoutingRuleRow[]> {
-  if (typeof sprintId === 'number' && Number.isFinite(sprintId) && await tableExists(db, 'sprint_task_routing_rules')) {
-    const hasScopeColumns = await tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
-      && await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
-    const enabledSelect = await tableHasColumn(db, 'sprint_task_routing_rules', 'enabled') ? 'enabled' : '1 as enabled';
+  workflowId?: number | null,
+): Promise<WorkflowTaskRoutingRuleRow[]> {
+  if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_routing_rules')) {
+    const hasScopeColumns = await tableHasColumn(db, 'workflow_task_routing_rules', 'project_id')
+      && await tableHasColumn(db, 'workflow_task_routing_rules', 'workflow_type');
+    const enabledSelect = await tableHasColumn(db, 'workflow_task_routing_rules', 'enabled') ? 'enabled' : '1 as enabled';
 
     if (hasScopeColumns) {
-      const sprint = await db.get(`SELECT project_id, sprint_type${await tableHasColumn(db, 'sprints', 'tenant_id') ? ', tenant_id' : ''} FROM sprints WHERE id = ? LIMIT 1`, sprintId) as { project_id: number; sprint_type: string | null; tenant_id?: number | null } | undefined;
-      if (sprint?.sprint_type) {
-        const tenant = await tenantPredicate(db, 'sprint_task_routing_rules', 'sprint_task_routing_rules', sprint.tenant_id);
+      const workflow = await db.get(`SELECT project_id, workflow_type${await tableHasColumn(db, 'workflows', 'tenant_id') ? ', tenant_id' : ''} FROM workflows WHERE id = ? LIMIT 1`, workflowId) as { project_id: number; workflow_type: string | null; tenant_id?: number | null } | undefined;
+      if (workflow?.workflow_type) {
+        const tenant = await tenantPredicate(db, 'workflow_task_routing_rules', 'workflow_task_routing_rules', workflow.tenant_id);
         const rows = await db.all(`
-          SELECT id, sprint_id, task_type, status, agent_id, ${enabledSelect}, priority, is_system, created_at, updated_at
-          FROM sprint_task_routing_rules
+          SELECT id, workflow_id, task_type, status, agent_id, ${enabledSelect}, priority, is_system, created_at, updated_at
+          FROM workflow_task_routing_rules
           WHERE project_id = ?
-            AND sprint_type = ?
-            AND (sprint_id = ? OR sprint_id IS NULL)
+            AND workflow_type = ?
+            AND (workflow_id = ? OR workflow_id IS NULL)
             ${tenant.sql}
-          ORDER BY CASE WHEN sprint_id = ? THEN 0 ELSE 1 END,
+          ORDER BY CASE WHEN workflow_id = ? THEN 0 ELSE 1 END,
                    status ASC, task_type IS NULL ASC, task_type ASC, priority DESC, id ASC
-        `, sprint.project_id, sprint.sprint_type, sprintId, ...tenant.params, sprintId) as SprintTaskRoutingRuleRow[];
+        `, workflow.project_id, workflow.workflow_type, workflowId, ...tenant.params, workflowId) as WorkflowTaskRoutingRuleRow[];
         if (rows.length > 0) return rows;
       }
     }
 
     const rows = await db.all(`
-      SELECT id, sprint_id, task_type, status, agent_id, ${enabledSelect}, priority, is_system, created_at, updated_at
-      FROM sprint_task_routing_rules
-      WHERE sprint_id = ?
+      SELECT id, workflow_id, task_type, status, agent_id, ${enabledSelect}, priority, is_system, created_at, updated_at
+      FROM workflow_task_routing_rules
+      WHERE workflow_id = ?
       ORDER BY status ASC, task_type IS NULL ASC, task_type ASC, priority DESC, id ASC
-    `, sprintId) as SprintTaskRoutingRuleRow[];
+    `, workflowId) as WorkflowTaskRoutingRuleRow[];
     if (rows.length > 0) return rows;
   }
   return [];
 }
 
-export async function resolveSprintTaskRoutingAssignment(
+export async function resolveWorkflowTaskRoutingAssignment(
   db: Db,
-  sprintId: number | null | undefined,
+  workflowId: number | null | undefined,
   taskType: string | null,
   status: string,
 ): Promise<{ agent_id: number | null }> {
-  if (typeof sprintId === 'number' && Number.isFinite(sprintId) && await tableExists(db, 'sprint_task_routing_rules')) {
-    const hasScopeColumns = await tableHasColumn(db, 'sprint_task_routing_rules', 'project_id')
-      && await tableHasColumn(db, 'sprint_task_routing_rules', 'sprint_type');
-    const enabledPredicate = await tableHasColumn(db, 'sprint_task_routing_rules', 'enabled') ? 'AND enabled = 1' : '';
+  if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_routing_rules')) {
+    const hasScopeColumns = await tableHasColumn(db, 'workflow_task_routing_rules', 'project_id')
+      && await tableHasColumn(db, 'workflow_task_routing_rules', 'workflow_type');
+    const enabledPredicate = await tableHasColumn(db, 'workflow_task_routing_rules', 'enabled') ? 'AND enabled = 1' : '';
 
     if (hasScopeColumns) {
-      const sprint = await db.get(`SELECT project_id, sprint_type${await tableHasColumn(db, 'sprints', 'tenant_id') ? ', tenant_id' : ''} FROM sprints WHERE id = ? LIMIT 1`, sprintId) as { project_id: number; sprint_type: string | null; tenant_id?: number | null } | undefined;
-      if (sprint?.sprint_type) {
-        const tenant = await tenantPredicate(db, 'sprint_task_routing_rules', 'sprint_task_routing_rules', sprint.tenant_id);
+      const workflow = await db.get(`SELECT project_id, workflow_type${await tableHasColumn(db, 'workflows', 'tenant_id') ? ', tenant_id' : ''} FROM workflows WHERE id = ? LIMIT 1`, workflowId) as { project_id: number; workflow_type: string | null; tenant_id?: number | null } | undefined;
+      if (workflow?.workflow_type) {
+        const tenant = await tenantPredicate(db, 'workflow_task_routing_rules', 'workflow_task_routing_rules', workflow.tenant_id);
         const row = await db.get(`
           SELECT agent_id
-          FROM sprint_task_routing_rules
+          FROM workflow_task_routing_rules
           WHERE project_id = ?
-            AND sprint_type = ?
+            AND workflow_type = ?
             AND (task_type = ? OR task_type IS NULL)
             AND status = ?
-            AND (sprint_id = ? OR sprint_id IS NULL)
+            AND (workflow_id = ? OR workflow_id IS NULL)
             ${enabledPredicate}
             ${tenant.sql}
-          ORDER BY CASE WHEN sprint_id = ? THEN 0 ELSE 1 END,
+          ORDER BY CASE WHEN workflow_id = ? THEN 0 ELSE 1 END,
                    CASE WHEN task_type = ? THEN 0 ELSE 1 END,
                    priority DESC,
                    id ASC
           LIMIT 1
-        `, sprint.project_id, sprint.sprint_type, taskType, status, sprintId, ...tenant.params, sprintId, taskType) as { agent_id: number | null } | undefined;
+        `, workflow.project_id, workflow.workflow_type, taskType, status, workflowId, ...tenant.params, workflowId, taskType) as { agent_id: number | null } | undefined;
         if (row) return { agent_id: row.agent_id ?? null };
       }
     }
 
     const row = await db.get(`
       SELECT agent_id
-      FROM sprint_task_routing_rules
-      WHERE sprint_id = ? AND task_type = ? AND status = ?
+      FROM workflow_task_routing_rules
+      WHERE workflow_id = ? AND task_type = ? AND status = ?
         ${enabledPredicate}
       ORDER BY priority DESC, id ASC
       LIMIT 1
-    `, sprintId, taskType, status) as { agent_id: number | null } | undefined;
+    `, workflowId, taskType, status) as { agent_id: number | null } | undefined;
     if (row) return { agent_id: row.agent_id ?? null };
   }
   return { agent_id: null };

@@ -215,7 +215,7 @@ describe('teams API', () => {
   describe('workflow ownership', () => {
     async function createWorkflow(): Promise<number> {
       const result = await getDb().run(
-        `INSERT INTO sprints (tenant_id, project_id, name, sprint_type) VALUES (1, 1, 'Billing', 'delivery')`,
+        `INSERT INTO workflows (tenant_id, project_id, name, workflow_type) VALUES (1, 1, 'Billing', 'delivery')`,
       );
       return result.lastInsertId as number;
     }
@@ -231,7 +231,7 @@ describe('teams API', () => {
       expect(res.status).toBe(200);
 
       // Assignment alone must not have written routing configuration.
-      const rules = await getDb().all(`SELECT * FROM sprint_task_routing_rules WHERE sprint_id = ?`, workflowId);
+      const rules = await getDb().all(`SELECT * FROM workflow_task_routing_rules WHERE workflow_id = ?`, workflowId);
       expect(rules).toEqual([]);
     });
 
@@ -246,7 +246,7 @@ describe('teams API', () => {
       const plan = await (await post(`/api/v1/workflows/${workflowId}/team/apply-routing?dry_run=1`, {})).json() as any;
       expect(plan.applied).toBe(false);
       expect(plan.summary.create).toBe(1);
-      expect(await getDb().all(`SELECT * FROM sprint_task_routing_rules WHERE sprint_id = ?`, workflowId)).toEqual([]);
+      expect(await getDb().all(`SELECT * FROM workflow_task_routing_rules WHERE workflow_id = ?`, workflowId)).toEqual([]);
     });
 
     it('applies the routing template and records the actor', async () => {
@@ -266,7 +266,7 @@ describe('teams API', () => {
       expect(plan.applied).toBe(true);
       expect(plan.summary.create).toBe(1);
 
-      const rules = await getDb().all(`SELECT * FROM sprint_task_routing_rules WHERE sprint_id = ?`, workflowId);
+      const rules = await getDb().all(`SELECT * FROM workflow_task_routing_rules WHERE workflow_id = ?`, workflowId);
       expect(rules).toHaveLength(1);
       expect(Number(rules[0].agent_id)).toBe(nova);
 
@@ -285,7 +285,7 @@ describe('teams API', () => {
       await put(`/api/v1/workflows/${workflowId}/team`, { team_id: team.id });
       await put(`/api/v1/workflows/${workflowId}/team`, { team_id: null });
 
-      const workflow = await getDb().get(`SELECT team_id FROM sprints WHERE id = ?`, workflowId);
+      const workflow = await getDb().get(`SELECT team_id FROM workflows WHERE id = ?`, workflowId);
       expect(workflow?.team_id).toBeNull();
     });
   });

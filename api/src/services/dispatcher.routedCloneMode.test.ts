@@ -77,11 +77,11 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     await db.run(`INSERT INTO tenants (id, name, slug, is_default) VALUES (1, 'Default', 'default', 1)`);
     await db.run(`INSERT INTO projects (id, tenant_id, name, context_md) VALUES (1, 1, 'Agent HQ', 'Context')`);
     await db.run(`
-      INSERT INTO sprint_types (tenant_id, key, name, repo_required)
+      INSERT INTO workflow_types (tenant_id, key, name, repo_required)
       VALUES (1, 'generic', 'Generic', 0), (1, 'dev', 'Development', 1)
     `);
     await db.run(`
-      INSERT INTO sprints (id, tenant_id, project_id, name, sprint_type)
+      INSERT INTO workflows (id, tenant_id, project_id, name, workflow_type)
       VALUES (9, 1, 1, 'Repository modes', 'generic')
     `);
     await db.run(`
@@ -92,11 +92,11 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, 1, 1, 'Cinder', 'Backend Engineer', 1, 'Do the work', 1, 900, null, '[]', 'agent:cinder-backend:main', 'openclaw', null, null, null, workspaceRoot, 'anthropic', null, remotePath, 'clone', null, 'cinder-backend');
     await db.run(`
-      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, sprint_id, created_at, updated_at)
+      INSERT INTO tasks (id, tenant_id, title, description, status, priority, project_id, task_type, workflow_id, created_at, updated_at)
       VALUES (373, 1, 'Agent repo source modes', 'Test task', 'ready', 'high', 1, 'implementation', 9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `);
     await db.run(`
-      INSERT INTO sprint_task_routing_rules (id, tenant_id, project_id, sprint_id, agent_id, status, task_type, priority)
+      INSERT INTO workflow_task_routing_rules (id, tenant_id, project_id, workflow_id, agent_id, status, task_type, priority)
       VALUES (1, 1, 1, 9, 1, 'ready', 'implementation', 100)
     `);
 
@@ -157,9 +157,9 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       agent_id,
       project_id,
       task_type,
-      sprint_id,
-      NULL as sprint_name,
-      NULL as sprint_type,
+      workflow_id,
+      NULL as workflow_name,
+      NULL as workflow_type,
       created_at,
       0 as blocking_count,
       NULL as story_points
@@ -232,7 +232,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
 
   it('blocks repo-required workflows when only legacy agent repo config is available', async () => {
     const { dispatchTaskToJob } = await import('./dispatcher');
-    await db.run(`UPDATE sprints SET sprint_type = 'dev' WHERE id = 9`);
+    await db.run(`UPDATE workflows SET workflow_type = 'dev' WHERE id = 9`);
 
     const job = await db.get(`SELECT
       id,
@@ -269,9 +269,9 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
       agent_id,
       project_id,
       task_type,
-      sprint_id,
-      NULL as sprint_name,
-      'dev' as sprint_type,
+      workflow_id,
+      NULL as workflow_name,
+      'dev' as workflow_type,
       created_at,
       0 as blocking_count,
       NULL as story_points
@@ -365,7 +365,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
 
   it('finishes a language-independent custom setup before starting the agent and records its policy', async () => {
     const setup = { mode: 'custom', steps: [{ command: [process.execPath, '-e', "require('fs').writeFileSync('prepared.txt', 'ready')"], cwd: '.' }], timeoutSeconds: 30 };
-    await db.run('UPDATE sprints SET environment_setup = ? WHERE id = 9', JSON.stringify(setup));
+    await db.run('UPDATE workflows SET environment_setup = ? WHERE id = 9', JSON.stringify(setup));
     runtimeDispatch.mockImplementation(async () => {
       expect(fs.readFileSync(path.join(workspaceRoot, 'task-373/prepared.txt'), 'utf8')).toBe('ready');
       return { runId: 'prepared-run' };
@@ -378,7 +378,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
   });
 
   it('blocks dispatch and reports setup failures without creating a running instance', async () => {
-    await db.run('UPDATE sprints SET environment_setup = ? WHERE id = 9', JSON.stringify({ mode: 'custom', steps: [{ command: [process.execPath, '-e', 'process.exit(7)'] }] }));
+    await db.run('UPDATE workflows SET environment_setup = ? WHERE id = 9', JSON.stringify({ mode: 'custom', steps: [{ command: [process.execPath, '-e', 'process.exit(7)'] }] }));
     expect(await dispatchFixture()).toBe(false);
     expect(runtimeDispatch).not.toHaveBeenCalled();
     expect(await db.get('SELECT COUNT(*) AS n FROM job_instances WHERE task_id = 373')).toMatchObject({ n: 0 });
@@ -390,7 +390,7 @@ describe('dispatchTaskToJob preserves clone repo mode', () => {
     const dependencies = await import('./repoWorkspaceDependencies');
     const prepare = jest.spyOn(dependencies, 'prepareRepoWorkspaceDependencies').mockImplementation(async () => {
       if (target === 'task') await db.run("UPDATE tasks SET status = 'closed' WHERE id = 373");
-      else await db.run("UPDATE sprints SET status = 'paused' WHERE id = 9");
+      else await db.run("UPDATE workflows SET status = 'paused' WHERE id = 9");
       return [{ status: 'prepared', ecosystem: 'custom', strategy: 'install', packageRoot: '.' }];
     });
     try {

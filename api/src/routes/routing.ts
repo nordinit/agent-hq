@@ -5,14 +5,14 @@ import {
   CONTRACT_PLACEHOLDER_DEFINITIONS,
   getAvailableContractPlaceholders,
   normalizeContractTemplateKey,
-  readSprintTypeContractTemplate,
-  writeSprintTypeContractTemplate,
+  readWorkflowTypeContractTemplate,
+  writeWorkflowTypeContractTemplate,
 } from '../services/contracts';
 import { VALID_TASK_TYPES } from '../lib/taskTypes';
 import {
-  getAllowedTaskTypesForSprintType,
-  resolveSprintTypeForSprintId,
-} from '../domains/sprint-definitions/config';
+  getAllowedTaskTypesForWorkflowType,
+  resolveWorkflowTypeForWorkflowId,
+} from '../domains/workflow-definitions/config';
 import { getNeedsAttentionEligibleStatuses, setNeedsAttentionEligibleStatuses } from '../lib/reconcilerConfig';
 import { resolveTenantIdFromRequest } from '../lib/tenantContext';
 import { columnExists as sharedColumnExists } from "../db/introspection";
@@ -36,12 +36,12 @@ import {
   getWorkflowGraph,
   traceHypothetical,
   previewRoutingChange,
-  listRoutingRulesForSprint,
+  listRoutingRulesForWorkflow,
   listRoutingStatuses,
   listRoutingTransitions,
   listTransitionRequirementFields,
   listTransitionRequirements,
-  resolveRoutingRuleForSprint,
+  resolveRoutingRuleForWorkflow,
   updateRoutingRule,
   updateRoutingStatus,
   updateRoutingTransition,
@@ -71,22 +71,8 @@ function sendRoutingError(res: Response, err: unknown): Response {
   return res.status(status).json({ error: message, ...extras });
 }
 
-function normalizeWorkflowAliases(input: unknown): Record<string, unknown> {
-  const source = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
-  const normalized = { ...source };
-  if (normalized.workflow_id !== undefined) {
-    if (normalized.sprint_id !== undefined && String(normalized.sprint_id) !== String(normalized.workflow_id)) {
-      throw Object.assign(new Error('workflow_id conflicts with sprint_id'), { status: 400 });
-    }
-    normalized.sprint_id = normalized.workflow_id;
-  }
-  if (normalized.workflow_type !== undefined) {
-    if (normalized.sprint_type !== undefined && String(normalized.sprint_type) !== String(normalized.workflow_type)) {
-      throw Object.assign(new Error('workflow_type conflicts with sprint_type'), { status: 400 });
-    }
-    normalized.sprint_type = normalized.workflow_type;
-  }
-  return normalized;
+function normalizeRoutingInput(input: unknown): Record<string, unknown> {
+  return input && typeof input === 'object' ? { ...input as Record<string, unknown> } : {};
 }
 
 function isDryRunInput(input: unknown): boolean {
@@ -157,8 +143,8 @@ async function dryRunConfigWrite<T>(
   throw new Error('dry-run transaction committed without producing a preview');
 }
 
-function mergeWorkflowAliasInputs(query: unknown, body?: unknown): Record<string, unknown> {
-  return { ...normalizeWorkflowAliases(query), ...normalizeWorkflowAliases(body) };
+function mergeRoutingInputs(query: unknown, body?: unknown): Record<string, unknown> {
+  return { ...normalizeRoutingInput(query), ...normalizeRoutingInput(body) };
 }
 
 async function withRequestTenant<T extends Record<string, unknown>>(req: Request, input: T): Promise<T & { tenant_id: number }> {
@@ -313,7 +299,7 @@ router.put('/config/:job_id', async (req: Request, res: Response) => {
 // GET /statuses — all task statuses
 router.get('/statuses', async (_req: Request, res: Response) => {
   try {
-    return res.json(await listRoutingStatuses(getDb(), await withRequestTenant(_req, normalizeWorkflowAliases(_req.query))));
+    return res.json(await listRoutingStatuses(getDb(), await withRequestTenant(_req, normalizeRoutingInput(_req.query))));
   } catch (err) {
     return sendRoutingError(res, err);
   }
@@ -322,7 +308,7 @@ router.get('/statuses', async (_req: Request, res: Response) => {
 // PUT /statuses/:name — update a status
 router.put('/statuses/:name', async (req: Request, res: Response) => {
   try {
-    return res.json(await updateRoutingStatus(getDb(), await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), name: req.params.name })));
+    return res.json(await updateRoutingStatus(getDb(), await withRequestTenant(req, { ...mergeRoutingInputs(req.query, req.body), name: req.params.name })));
   } catch (err) {
     return sendRoutingError(res, err);
   }
@@ -331,7 +317,7 @@ router.put('/statuses/:name', async (req: Request, res: Response) => {
 // POST /statuses — add a new custom status
 router.post('/statuses', async (req: Request, res: Response) => {
   try {
-    return res.status(201).json(await createRoutingStatus(getDb(), await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body))));
+    return res.status(201).json(await createRoutingStatus(getDb(), await withRequestTenant(req, mergeRoutingInputs(req.query, req.body))));
   } catch (err) {
     return sendRoutingError(res, err);
   }
@@ -340,7 +326,7 @@ router.post('/statuses', async (req: Request, res: Response) => {
 // DELETE /statuses/:name — delete a custom status (with safety checks)
 router.delete('/statuses/:name', async (req: Request, res: Response) => {
   try {
-    return res.json(await deleteRoutingStatus(getDb(), await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), name: req.params.name })));
+    return res.json(await deleteRoutingStatus(getDb(), await withRequestTenant(req, { ...mergeRoutingInputs(req.query, req.body), name: req.params.name })));
   } catch (err) {
     return sendRoutingError(res, err);
   }
@@ -353,7 +339,7 @@ router.delete('/statuses/:name', async (req: Request, res: Response) => {
 // GET /transitions — all routing transition rules
 router.get('/transitions', async (req: Request, res: Response) => {
   try {
-    return res.json(await listRoutingTransitions(getDb(), await withRequestTenant(req, normalizeWorkflowAliases(req.query))));
+    return res.json(await listRoutingTransitions(getDb(), await withRequestTenant(req, normalizeRoutingInput(req.query))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -363,7 +349,7 @@ router.get('/transitions', async (req: Request, res: Response) => {
 // GET /transitions/:id — fetch a single routing transition
 router.get('/transitions/:id', async (req: Request, res: Response) => {
   try {
-    return res.json(await getRoutingTransition(getDb(), await withRequestTenant(req, { id: req.params.id, ...normalizeWorkflowAliases(req.query) })));
+    return res.json(await getRoutingTransition(getDb(), await withRequestTenant(req, { id: req.params.id, ...normalizeRoutingInput(req.query) })));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -373,8 +359,8 @@ router.get('/transitions/:id', async (req: Request, res: Response) => {
 // POST /transitions — add a new routing transition
 router.post('/transitions', async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body));
-    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'sprint_task_transitions', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transitions', action: 'created', input }, (t) => createRoutingTransition(t, input))));
+    const input = await withRequestTenant(req, mergeRoutingInputs(req.query, req.body));
+    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'workflow_task_transitions', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_transitions', action: 'created', input }, (t) => createRoutingTransition(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -384,8 +370,8 @@ router.post('/transitions', async (req: Request, res: Response) => {
 // PUT /transitions/:id — update a routing transition
 router.put('/transitions/:id', async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'update', 'sprint_task_transitions', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transitions', action: 'updated', input, id: input.id }, (t) => updateRoutingTransition(t, input))));
+    const input = await withRequestTenant(req, { ...mergeRoutingInputs(req.query, req.body), id: req.params.id });
+    return res.json(await dryRunConfigWrite(getDb(), 'update', 'workflow_task_transitions', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_transitions', action: 'updated', input, id: input.id }, (t) => updateRoutingTransition(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -395,8 +381,8 @@ router.put('/transitions/:id', async (req: Request, res: Response) => {
 // DELETE /transitions/:id — remove a routing transition
 router.delete('/transitions/:id', async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'sprint_task_transitions', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transitions', action: 'deleted', input, id: input.id }, (t) => deleteRoutingTransition(t, input))));
+    const input = await withRequestTenant(req, { ...mergeRoutingInputs(req.query, req.body), id: req.params.id });
+    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'workflow_task_transitions', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_transitions', action: 'deleted', input, id: input.id }, (t) => deleteRoutingTransition(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -412,7 +398,7 @@ router.delete('/transitions/:id', async (req: Request, res: Response) => {
 // re-derive the machine from the raw tables and reach a different answer.
 router.get('/graph', async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, normalizeWorkflowAliases(req.query));
+    const input = await withRequestTenant(req, normalizeRoutingInput(req.query));
     return res.json(await getWorkflowGraph(getDb(), input));
   } catch (err) {
     return sendRoutingError(res, err);
@@ -424,7 +410,7 @@ router.get('/graph', async (req: Request, res: Response) => {
 // GET is accepted too so a trace is linkable.
 const traceHandler = async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body ?? {}));
+    const input = await withRequestTenant(req, mergeRoutingInputs(req.query, req.body ?? {}));
     return res.json(await traceHypothetical(getDb(), input));
   } catch (err) {
     return sendRoutingError(res, err);
@@ -440,7 +426,7 @@ router.get('/trace', traceHandler);
 // capability: one says what a change would do, the other what changes were already made.
 router.get('/audit', async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, {}));
+    const input = await withRequestTenant(req, mergeRoutingInputs(req.query, {}));
     return res.json(await listRoutingAudit(getDb(), input));
   } catch (err) {
     return sendRoutingError(res, err);
@@ -449,7 +435,7 @@ router.get('/audit', async (req: Request, res: Response) => {
 
 router.post('/preview', async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body ?? {}));
+    const input = await withRequestTenant(req, mergeRoutingInputs(req.query, req.body ?? {}));
     return res.json(await previewRoutingChange(getDb(), input));
   } catch (err) {
     return sendRoutingError(res, err);
@@ -460,10 +446,10 @@ router.post('/preview', async (req: Request, res: Response) => {
 // TASK ROUTING RULES — deterministic task_type + status → job assignment
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// GET /rules?sprint_id=X — all assignment rules for a sprint
+// GET /rules?workflow_id=X — all assignment rules for a workflow
 const listAssignmentRulesHandler = async (req: Request, res: Response) => {
   try {
-    return res.json(await listRoutingRulesForSprint(getDb(), await withRequestTenant(req, normalizeWorkflowAliases(req.query))));
+    return res.json(await listRoutingRulesForWorkflow(getDb(), await withRequestTenant(req, normalizeRoutingInput(req.query))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -472,10 +458,10 @@ const listAssignmentRulesHandler = async (req: Request, res: Response) => {
 };
 router.get(['/rules', '/assignment-rules'], listAssignmentRulesHandler);
 
-// GET /rules/resolve — test assignment resolution for a given task_type + status + sprint
+// GET /rules/resolve — test assignment resolution for a given task_type + status + workflow
 const resolveAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
-    return res.json(await resolveRoutingRuleForSprint(getDb(), await withRequestTenant(req, normalizeWorkflowAliases(req.query))));
+    return res.json(await resolveRoutingRuleForWorkflow(getDb(), await withRequestTenant(req, normalizeRoutingInput(req.query))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -484,10 +470,10 @@ const resolveAssignmentRuleHandler = async (req: Request, res: Response) => {
 };
 router.get(['/rules/resolve', '/assignment-rules/resolve'], resolveAssignmentRuleHandler);
 
-// GET /rules/:id — fetch a single sprint assignment rule
+// GET /rules/:id — fetch a single workflow assignment rule
 const getAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
-    return res.json(await getRoutingRule(getDb(), await withRequestTenant(req, { id: req.params.id, ...normalizeWorkflowAliases(req.query) })));
+    return res.json(await getRoutingRule(getDb(), await withRequestTenant(req, { id: req.params.id, ...normalizeRoutingInput(req.query) })));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -496,11 +482,11 @@ const getAssignmentRuleHandler = async (req: Request, res: Response) => {
 };
 router.get(['/rules/:id', '/assignment-rules/:id'], getAssignmentRuleHandler);
 
-// POST /rules — create a new sprint assignment rule
+// POST /rules — create a new workflow assignment rule
 const createAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body));
-    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'sprint_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_routing_rules', action: 'created', input }, (t) => createRoutingRule(t, input))));
+    const input = await withRequestTenant(req, mergeRoutingInputs(req.query, req.body));
+    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'workflow_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_routing_rules', action: 'created', input }, (t) => createRoutingRule(t, input))));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -509,11 +495,11 @@ const createAssignmentRuleHandler = async (req: Request, res: Response) => {
 };
 router.post(['/rules', '/assignment-rules'], createAssignmentRuleHandler);
 
-// PUT /rules/:id — update a sprint assignment rule
+// PUT /rules/:id — update a workflow assignment rule
 const updateAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'update', 'sprint_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_routing_rules', action: 'updated', input, id: input.id }, (t) => updateRoutingRule(t, input))));
+    const input = await withRequestTenant(req, { ...mergeRoutingInputs(req.query, req.body), id: req.params.id });
+    return res.json(await dryRunConfigWrite(getDb(), 'update', 'workflow_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_routing_rules', action: 'updated', input, id: input.id }, (t) => updateRoutingRule(t, input))));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -522,11 +508,11 @@ const updateAssignmentRuleHandler = async (req: Request, res: Response) => {
 };
 router.put(['/rules/:id', '/assignment-rules/:id'], updateAssignmentRuleHandler);
 
-// DELETE /rules/:id — remove a sprint assignment rule
+// DELETE /rules/:id — remove a workflow assignment rule
 const deleteAssignmentRuleHandler = async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'sprint_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_routing_rules', action: 'deleted', input, id: input.id }, (t) => deleteRoutingRule(t, input))));
+    const input = await withRequestTenant(req, { ...mergeRoutingInputs(req.query, req.body), id: req.params.id });
+    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'workflow_task_routing_rules', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_routing_rules', action: 'deleted', input, id: input.id }, (t) => deleteRoutingRule(t, input))));
   } catch (err) {
     const status = typeof (err as { status?: unknown })?.status === 'number' ? Number((err as { status?: number }).status) : 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -543,7 +529,7 @@ router.get('/workflow-event-mappings', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    return res.json(await listWorkflowEventMappings(db, { ...normalizeWorkflowAliases(req.query), tenant_id: tenantId }));
+    return res.json(await listWorkflowEventMappings(db, { ...normalizeRoutingInput(req.query), tenant_id: tenantId }));
   } catch (err) {
     return sendRoutingError(res, err);
   }
@@ -563,7 +549,7 @@ router.post('/workflow-event-mappings', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    const input = { ...mergeWorkflowAliasInputs(req.query, req.body), tenant_id: tenantId };
+    const input = { ...mergeRoutingInputs(req.query, req.body), tenant_id: tenantId };
     return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(db, 'create', 'external_event_mappings', input, async (tx) => await createWorkflowEventMapping(tx, input)));
   } catch (err) {
     return sendRoutingError(res, err);
@@ -574,7 +560,7 @@ router.put('/workflow-event-mappings/:id', async (req: Request, res: Response) =
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    const input = { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id, tenant_id: tenantId };
+    const input = { ...mergeRoutingInputs(req.query, req.body), id: req.params.id, tenant_id: tenantId };
     return res.json(await dryRunConfigWrite(db, 'update', 'external_event_mappings', input, async (tx) => await updateWorkflowEventMapping(tx, input)));
   } catch (err) {
     return sendRoutingError(res, err);
@@ -597,7 +583,7 @@ router.get('/external-event-mappings', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    return res.json(await listExternalEventMappings(db, { ...normalizeWorkflowAliases(req.query), tenant_id: tenantId }));
+    return res.json(await listExternalEventMappings(db, { ...normalizeRoutingInput(req.query), tenant_id: tenantId }));
   } catch (err) {
     return sendRoutingError(res, err);
   }
@@ -617,7 +603,7 @@ router.post('/external-event-mappings', async (req: Request, res: Response) => {
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    const input = { ...mergeWorkflowAliasInputs(req.query, req.body), tenant_id: tenantId };
+    const input = { ...mergeRoutingInputs(req.query, req.body), tenant_id: tenantId };
     return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(db, 'create', 'external_event_mappings', input, (tx) => createExternalEventMapping(tx, input)));
   } catch (err) {
     return sendRoutingError(res, err);
@@ -628,7 +614,7 @@ router.put('/external-event-mappings/:id', async (req: Request, res: Response) =
   try {
     const db = getDb();
     const tenantId = await resolveTenantIdFromRequest(db, req);
-    const input = { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id, tenant_id: tenantId };
+    const input = { ...mergeRoutingInputs(req.query, req.body), id: req.params.id, tenant_id: tenantId };
     return res.json(await dryRunConfigWrite(db, 'update', 'external_event_mappings', input, (tx) => updateExternalEventMapping(tx, input)));
   } catch (err) {
     return sendRoutingError(res, err);
@@ -649,15 +635,15 @@ router.delete('/external-event-mappings/:id', async (req: Request, res: Response
 // GET /task-types — return workflow-specific task types when scoped.
 router.get('/task-types', async (req: Request, res: Response) => {
   const db = getDb();
-  const sprintType = req.query.sprint_type != null
-    ? String(req.query.sprint_type)
-    : await resolveSprintTypeForSprintId(db, req.query.sprint_id ?? null);
-  const taskTypes = await getAllowedTaskTypesForSprintType(db, sprintType);
+  const workflowType = req.query.workflow_type != null
+    ? String(req.query.workflow_type)
+    : await resolveWorkflowTypeForWorkflowId(db, req.query.workflow_id ?? null);
+  const taskTypes = await getAllowedTaskTypesForWorkflowType(db, workflowType);
   if (taskTypes.length > 0) {
-    return res.json({ sprint_type: sprintType, task_types: taskTypes, source: 'workflow_definition_config' });
+    return res.json({ workflow_type: workflowType, task_types: taskTypes, source: 'workflow_definition_config' });
   }
   return res.json({
-    sprint_type: sprintType,
+    workflow_type: workflowType,
     task_types: VALID_TASK_TYPES,
     source: 'legacy_default_seed_fallback',
   });
@@ -668,10 +654,10 @@ router.get('/task-types', async (req: Request, res: Response) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /transition-requirement-fields — fields available for gate requirements.
-// Field options come from the selected sprint type's task field schema.
+// Field options come from the selected workflow type's task field schema.
 router.get('/transition-requirement-fields', async (req: Request, res: Response) => {
   try {
-    return res.json(await listTransitionRequirementFields(getDb(), await withRequestTenant(req, normalizeWorkflowAliases(req.query))));
+    return res.json(await listTransitionRequirementFields(getDb(), await withRequestTenant(req, normalizeRoutingInput(req.query))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -681,7 +667,7 @@ router.get('/transition-requirement-fields', async (req: Request, res: Response)
 // GET /transition-requirements — all requirements, optionally filtered
 router.get('/transition-requirements', async (req: Request, res: Response) => {
   try {
-    return res.json(await listTransitionRequirements(getDb(), await withRequestTenant(req, normalizeWorkflowAliases(req.query))));
+    return res.json(await listTransitionRequirements(getDb(), await withRequestTenant(req, normalizeRoutingInput(req.query))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -692,8 +678,8 @@ router.get('/transition-requirements', async (req: Request, res: Response) => {
 // POST /transition-requirements — create a new requirement
 router.post('/transition-requirements', async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, mergeWorkflowAliasInputs(req.query, req.body));
-    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'sprint_task_transition_requirements', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transition_requirements', action: 'created', input }, (t) => createTransitionRequirement(t, input))));
+    const input = await withRequestTenant(req, mergeRoutingInputs(req.query, req.body));
+    return res.status(isDryRunInput(input) ? 200 : 201).json(await dryRunConfigWrite(getDb(), 'create', 'workflow_task_transition_requirements', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_transition_requirements', action: 'created', input }, (t) => createTransitionRequirement(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -703,8 +689,8 @@ router.post('/transition-requirements', async (req: Request, res: Response) => {
 // PUT /transition-requirements/:id — update a requirement
 router.put('/transition-requirements/:id', async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'update', 'sprint_task_transition_requirements', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transition_requirements', action: 'updated', input, id: input.id }, (t) => updateTransitionRequirement(t, input))));
+    const input = await withRequestTenant(req, { ...mergeRoutingInputs(req.query, req.body), id: req.params.id });
+    return res.json(await dryRunConfigWrite(getDb(), 'update', 'workflow_task_transition_requirements', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_transition_requirements', action: 'updated', input, id: input.id }, (t) => updateTransitionRequirement(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     return res.status(status).json({ error: String((err as Error).message ?? err) });
@@ -714,8 +700,8 @@ router.put('/transition-requirements/:id', async (req: Request, res: Response) =
 // DELETE /transition-requirements/:id — remove a requirement
 router.delete('/transition-requirements/:id', async (req: Request, res: Response) => {
   try {
-    const input = await withRequestTenant(req, { ...mergeWorkflowAliasInputs(req.query, req.body), id: req.params.id });
-    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'sprint_task_transition_requirements', input, async (tx) => await auditedRoutingWrite(tx, { table: 'sprint_task_transition_requirements', action: 'deleted', input, id: input.id }, (t) => deleteTransitionRequirement(t, input))));
+    const input = await withRequestTenant(req, { ...mergeRoutingInputs(req.query, req.body), id: req.params.id });
+    return res.json(await dryRunConfigWrite(getDb(), 'delete', 'workflow_task_transition_requirements', input, async (tx) => await auditedRoutingWrite(tx, { table: 'workflow_task_transition_requirements', action: 'deleted', input, id: input.id }, (t) => deleteTransitionRequirement(t, input))));
   } catch (err) {
     const status = (err as Error & { status?: number }).status ?? 500;
     const message = err instanceof Error ? err.message : String(err);
@@ -724,29 +710,29 @@ router.delete('/transition-requirements/:id', async (req: Request, res: Response
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// AGENT CONTRACTS — editable sprint-type dispatch SOP templates
+// AGENT CONTRACTS — editable workflow-type dispatch SOP templates
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // __dirname at runtime = api/dist/routes → 3 levels up = repo root.
 // Resolve lazily so tests and process managers can set env after import.
-function normalizeSprintTypeKey(raw: unknown): string {
+function normalizeWorkflowTypeKey(raw: unknown): string {
   return normalizeContractTemplateKey(typeof raw === 'string' ? raw : null);
 }
 
-async function ensureSprintTypeExists(db: ReturnType<typeof getDb>, sprintTypeKey: string): Promise<void> {
-  const row = await db.get(`SELECT key FROM sprint_types WHERE key = ? LIMIT 1`, sprintTypeKey) as { key: string } | undefined;
-  if (!row) throw new Error(`Unknown sprint type "${sprintTypeKey}"`);
+async function ensureWorkflowTypeExists(db: ReturnType<typeof getDb>, workflowTypeKey: string): Promise<void> {
+  const row = await db.get(`SELECT key FROM workflow_types WHERE key = ? LIMIT 1`, workflowTypeKey) as { key: string } | undefined;
+  if (!row) throw new Error(`Unknown workflow type "${workflowTypeKey}"`);
 }
 
-// GET /agent-contract — read the contract file for a sprint type
+// GET /agent-contract — read the contract file for a workflow type
 router.get('/agent-contract', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const sprintTypeKey = normalizeSprintTypeKey(req.query.sprint_type ?? req.query.sprint_type_key);
-    await ensureSprintTypeExists(db, sprintTypeKey);
-    const contract = readSprintTypeContractTemplate(sprintTypeKey);
+    const workflowTypeKey = normalizeWorkflowTypeKey(req.query.workflow_type ?? req.query.workflow_type_key);
+    await ensureWorkflowTypeExists(db, workflowTypeKey);
+    const contract = readWorkflowTypeContractTemplate(workflowTypeKey);
     res.json({
-      sprint_type: sprintTypeKey,
+      workflow_type: workflowTypeKey,
       content: contract.content,
       path: contract.path,
       inherited_from: contract.inheritedFrom,
@@ -756,26 +742,26 @@ router.get('/agent-contract', async (req: Request, res: Response) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const status = message.startsWith('Unknown sprint type') ? 404 : message.startsWith('No contract template found') ? 404 : 500;
+    const status = message.startsWith('Unknown workflow type') ? 404 : message.startsWith('No contract template found') ? 404 : 500;
     res.status(status).json({ error: message });
   }
 });
 
-// PUT /agent-contract — write the contract file for a sprint type
+// PUT /agent-contract — write the contract file for a workflow type
 router.put('/agent-contract', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const sprintTypeKey = normalizeSprintTypeKey(req.body?.sprint_type ?? req.body?.sprint_type_key);
-    await ensureSprintTypeExists(db, sprintTypeKey);
+    const workflowTypeKey = normalizeWorkflowTypeKey(req.body?.workflow_type ?? req.body?.workflow_type_key);
+    await ensureWorkflowTypeExists(db, workflowTypeKey);
     const { content } = req.body;
     if (typeof content !== 'string') {
       return res.status(400).json({ error: '`content` (string) is required' });
     }
-    const targetPath = writeSprintTypeContractTemplate(sprintTypeKey, content);
-    res.json({ ok: true, sprint_type: sprintTypeKey, path: targetPath });
+    const targetPath = writeWorkflowTypeContractTemplate(workflowTypeKey, content);
+    res.json({ ok: true, workflow_type: workflowTypeKey, path: targetPath });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const status = message.startsWith('Unknown sprint type') ? 404 : 500;
+    const status = message.startsWith('Unknown workflow type') ? 404 : 500;
     res.status(status).json({ error: message });
   }
 });

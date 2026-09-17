@@ -17,7 +17,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { api, type Agent, type Project, type RecurringTaskOverlapPolicy, type RecurringTaskRun, type RecurringTaskSeries, type RecurringTaskSeriesInput, type Sprint } from '@/lib/api';
+import { api, type Agent, type Project, type RecurringTaskOverlapPolicy, type RecurringTaskRun, type RecurringTaskSeries, type RecurringTaskSeriesInput, type Workflow } from '@/lib/api';
 import { formatDateTime, timeAgo } from '@/lib/date';
 import { AutoGrowTextarea } from '@/components/AutoGrowTextarea';
 import {
@@ -30,7 +30,7 @@ import {
   validateMinuteInterval,
   type RecurringScheduleKind,
 } from '@/lib/recurringTaskSchedule';
-import { formatSprintLabel } from '@/lib/sprintLabel';
+import { formatWorkflowLabel } from '@/lib/workflowLabel';
 import { useTaskTypes } from '@/lib/taskTypes';
 import { useWorkflowMetadata } from '@/lib/useWorkflowMetadata';
 import { useProjectFilterPreference } from '@/lib/projectFilterPreference';
@@ -40,7 +40,7 @@ type SeriesForm = {
   title_template: string;
   description_template: string;
   project_id: number | '';
-  sprint_id: number | '';
+  workflow_id: number | '';
   task_type: string;
   priority: 'low' | 'medium' | 'high';
   story_points: number;
@@ -64,7 +64,7 @@ function emptyForm(projectId: number | null): SeriesForm {
     title_template: '',
     description_template: '',
     project_id: projectId ?? '',
-    sprint_id: '',
+    workflow_id: '',
     task_type: '',
     priority: 'medium',
     story_points: 1,
@@ -87,7 +87,7 @@ function formFromSeries(series: RecurringTaskSeries): SeriesForm {
     title_template: series.title_template ?? '',
     description_template: series.description_template ?? '',
     project_id: series.project_id,
-    sprint_id: series.sprint_id,
+    workflow_id: series.workflow_id,
     task_type: series.task_type ?? '',
     priority: series.priority ?? 'medium',
     story_points: series.story_points ?? 1,
@@ -138,7 +138,7 @@ function ErrorText({ message }: { message?: string }) {
 function SeriesModal({
   form,
   projects,
-  sprints,
+  workflows,
   agents,
   saving,
   error,
@@ -148,7 +148,7 @@ function SeriesModal({
 }: {
   form: SeriesForm;
   projects: Project[];
-  sprints: Sprint[];
+  workflows: Workflow[];
   agents: Agent[];
   saving: boolean;
   error: string | null;
@@ -156,17 +156,17 @@ function SeriesModal({
   onClose: () => void;
   onSave: () => void;
 }) {
-  const { options: taskTypes, loading: taskTypesLoading } = useTaskTypes(form.sprint_id || null);
-  const { metadata, loading: workflowMetadataLoading } = useWorkflowMetadata(form.sprint_id || null, { taskType: form.task_type || null });
+  const { options: taskTypes, loading: taskTypesLoading } = useTaskTypes(form.workflow_id || null);
+  const { metadata, loading: workflowMetadataLoading } = useWorkflowMetadata(form.workflow_id || null, { taskType: form.task_type || null });
   const statuses = metadata.statuses;
   const taskTypeValues = useMemo(() => taskTypes.map(option => option.value), [taskTypes]);
   const statusValues = useMemo(() => statuses.map(status => status.name), [statuses]);
-  const selectedProjectSprints = sprints.filter(sprint => sprint.project_id === form.project_id);
+  const selectedProjectWorkflows = workflows.filter(workflow => workflow.project_id === form.project_id);
   const projectAgents = agents.filter(agent => !form.project_id || agent.project_id === form.project_id || agent.project_id == null);
   const validation = {
     title_template: form.title_template.trim() ? undefined : 'Task title template is required.',
     project_id: form.project_id ? undefined : 'Choose the project that will own generated tasks.',
-    sprint_id: form.sprint_id ? undefined : 'Choose a fixed workflow. Active-workflow selection is not available in v1.',
+    workflow_id: form.workflow_id ? undefined : 'Choose a fixed workflow. Active-workflow selection is not available in v1.',
     task_type: form.task_type ? undefined : 'Choose a task type for the selected workflow.',
     status_on_create: form.status_on_create ? undefined : 'Choose the initial status for generated tasks.',
     minute_interval: form.schedule_kind === 'minutes' ? validateMinuteInterval(form.minute_interval) : undefined,
@@ -218,7 +218,7 @@ function SeriesModal({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Project *</label>
-                <select className={fieldClass(Boolean(validation.project_id))} value={form.project_id} onChange={e => onChange({ ...form, project_id: e.target.value ? Number(e.target.value) : '', sprint_id: '', task_type: '', status_on_create: '', agent_id: '' })}>
+                <select className={fieldClass(Boolean(validation.project_id))} value={form.project_id} onChange={e => onChange({ ...form, project_id: e.target.value ? Number(e.target.value) : '', workflow_id: '', task_type: '', status_on_create: '', agent_id: '' })}>
                   <option value="">Select project</option>
                   {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
                 </select>
@@ -226,16 +226,16 @@ function SeriesModal({
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Fixed Workflow *</label>
-                <select className={fieldClass(Boolean(validation.sprint_id))} value={form.sprint_id} onChange={e => onChange({ ...form, sprint_id: e.target.value ? Number(e.target.value) : '', task_type: '', status_on_create: '' })} disabled={!form.project_id}>
+                <select className={fieldClass(Boolean(validation.workflow_id))} value={form.workflow_id} onChange={e => onChange({ ...form, workflow_id: e.target.value ? Number(e.target.value) : '', task_type: '', status_on_create: '' })} disabled={!form.project_id}>
                   <option value="">{form.project_id ? 'Select fixed workflow' : 'Select project first'}</option>
-                  {selectedProjectSprints.map(sprint => <option key={sprint.id} value={sprint.id}>{formatSprintLabel(sprint)} ({sprint.status})</option>)}
+                  {selectedProjectWorkflows.map(workflow => <option key={workflow.id} value={workflow.id}>{formatWorkflowLabel(workflow)} ({workflow.status})</option>)}
                 </select>
-                <ErrorText message={validation.sprint_id} />
+                <ErrorText message={validation.workflow_id} />
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Task Type *</label>
-                <select className={fieldClass(Boolean(validation.task_type))} value={form.task_type} onChange={e => onChange({ ...form, task_type: e.target.value, status_on_create: '' })} disabled={!form.sprint_id}>
-                  <option value="">{form.sprint_id ? 'Select task type' : 'Select workflow first'}</option>
+                <select className={fieldClass(Boolean(validation.task_type))} value={form.task_type} onChange={e => onChange({ ...form, task_type: e.target.value, status_on_create: '' })} disabled={!form.workflow_id}>
+                  <option value="">{form.workflow_id ? 'Select task type' : 'Select workflow first'}</option>
                   {form.task_type && !taskTypeValues.includes(form.task_type) && taskTypesLoading && <option value={form.task_type}>{form.task_type}</option>}
                   {taskTypes.map(taskType => <option key={taskType.value} value={taskType.value}>{taskType.label}</option>)}
                 </select>
@@ -243,8 +243,8 @@ function SeriesModal({
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Status On Create *</label>
-                <select className={fieldClass(Boolean(validation.status_on_create))} value={form.status_on_create} onChange={e => onChange({ ...form, status_on_create: e.target.value })} disabled={!form.sprint_id}>
-                  <option value="">{form.sprint_id ? 'Select initial status' : 'Select workflow first'}</option>
+                <select className={fieldClass(Boolean(validation.status_on_create))} value={form.status_on_create} onChange={e => onChange({ ...form, status_on_create: e.target.value })} disabled={!form.workflow_id}>
+                  <option value="">{form.workflow_id ? 'Select initial status' : 'Select workflow first'}</option>
                   {form.status_on_create && !statusValues.includes(form.status_on_create) && workflowMetadataLoading && <option value={form.status_on_create}>{form.status_on_create}</option>}
                   {statuses.map(status => <option key={status.name} value={status.name}>{status.label}</option>)}
                 </select>
@@ -409,7 +409,7 @@ function HistoryDrawer({ series, runs, loading, onClose }: { series: RecurringTa
 
 export default function RecurringTasksPage() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [sprints, setSprints] = useState<Sprint[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [series, setSeries] = useState<RecurringTaskSeries[]>([]);
   const defaultProjectId = useMemo(() => projects.find(project => Boolean(project.is_default))?.id ?? projects[0]?.id ?? null, [projects]);
@@ -443,10 +443,10 @@ export default function RecurringTasksPage() {
   }, [enabledFilter, selectedProject]);
 
   useEffect(() => {
-    Promise.all([api.getProjects(), api.getSprints(undefined, true), api.getAgents()])
-      .then(([projectList, sprintList, agentList]) => {
+    Promise.all([api.getProjects(), api.getWorkflows(undefined, true), api.getAgents()])
+      .then(([projectList, workflowList, agentList]) => {
         setProjects(projectList);
-        setSprints(sprintList);
+        setWorkflows(workflowList);
         setAgents(agentList);
       })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load recurring task inputs'));
@@ -456,7 +456,7 @@ export default function RecurringTasksPage() {
     loadSeries();
   }, [loadSeries]);
 
-  const projectSprints = useMemo(() => selectedProject ? sprints.filter(sprint => sprint.project_id === selectedProject) : sprints, [selectedProject, sprints]);
+  const projectWorkflows = useMemo(() => selectedProject ? workflows.filter(workflow => workflow.project_id === selectedProject) : workflows, [selectedProject, workflows]);
 
   const saveSeries = async () => {
     if (!modalForm) return;
@@ -464,7 +464,7 @@ export default function RecurringTasksPage() {
     setFormError(null);
     const payload: RecurringTaskSeriesInput = {
       project_id: Number(modalForm.project_id),
-      workflow_id: Number(modalForm.sprint_id),
+      workflow_id: Number(modalForm.workflow_id),
       title_template: modalForm.title_template.trim(),
       description_template: modalForm.description_template,
       task_type: modalForm.task_type,
@@ -609,7 +609,7 @@ export default function RecurringTasksPage() {
                   </div>
                   <div className="min-w-0 text-sm text-slate-300">
                     <div className="truncate">{item.project_name ?? `Project #${item.project_id}`}</div>
-                    <div className="truncate text-xs text-slate-500">{item.sprint_name ?? `Workflow #${item.sprint_id}`} {item.sprint_status ? `(${item.sprint_status})` : ''}</div>
+                    <div className="truncate text-xs text-slate-500">{item.workflow_name ?? `Workflow #${item.workflow_id}`} {item.workflow_status ? `(${item.workflow_status})` : ''}</div>
                   </div>
                   <div className="text-sm text-slate-300">{item.task_type}</div>
                   <div className="text-sm text-slate-300">
@@ -652,7 +652,7 @@ export default function RecurringTasksPage() {
         </div>
       </div>
 
-      {projectSprints.length === 0 && !loading && (
+      {projectWorkflows.length === 0 && !loading && (
         <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
           <Zap className="mt-0.5 h-4 w-4 shrink-0" />
           Create an active or planning workflow before adding a recurring series. V1 requires a fixed workflow.
@@ -663,7 +663,7 @@ export default function RecurringTasksPage() {
         <SeriesModal
           form={modalForm}
           projects={projects}
-          sprints={sprints}
+          workflows={workflows}
           agents={agents}
           saving={saving}
           error={formError}

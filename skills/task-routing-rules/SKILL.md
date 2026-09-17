@@ -19,8 +19,8 @@ changing Agent HQ Assignment Rules configuration on the Routing page:
   Each tool has exactly one name; the `agent_hq_*_routing_rule*` spellings have been removed.
 - Preferred REST paths are `/api/v1/routing/assignment-rules` (legacy `/api/v1/routing/rules`
   still works).
-- The backing table is still `sprint_task_routing_rules` during the compatibility window, and
-  payload fields still use `sprint_*` machine-readable names.
+- The backing table is still `workflow_task_routing_rules` during the compatibility window, and
+  payload fields still use `workflow_*` machine-readable names.
 
 ## Core Facts
 
@@ -36,8 +36,8 @@ changing Agent HQ Assignment Rules configuration on the Routing page:
 
 Before writing, decide the intended scope explicitly:
 
-- `sprint_type_default`: reusable default for a project + workflow type. This is the current machine-readable scope key.
-- `sprint_override`: one workflow-specific exception. This is the current machine-readable scope key.
+- `workflow_type_default`: reusable default for a project + workflow type. This is the current machine-readable scope key.
+- `workflow_override`: one workflow-specific exception. This is the current machine-readable scope key.
 
 Do not create a workflow override when the user asked for a reusable default.
 Do not edit a default when the user asked for one workflow only.
@@ -71,7 +71,7 @@ If the UI copy, docs, or memory conflict with this, trust the dispatcher/routing
 ## Safety Checks
 
 Before deleting:
-- Confirm whether the visible rules are actual `sprint_override` rows or inherited defaults.
+- Confirm whether the visible rules are actual `workflow_override` rows or inherited defaults.
 - Delete only the requested scope.
 - After deletion, verify the remaining rules in both override and default scopes when relevant.
 
@@ -80,5 +80,5 @@ Before adding:
 - If reordering two agents, update priority deliberately instead of adding ambiguous duplicates.
 
 Before editing:
-- Preserve `project_id`, `sprint_id`, `sprint_type`, `status`, and `task_type` unless the user asked to change them. `sprint_id` and `sprint_type` are currently the compatibility field names for workflow id and workflow type.
+- Preserve `project_id`, `workflow_id`, `workflow_type`, `status`, and `task_type` unless the user asked to change them. `workflow_id` and `workflow_type` are currently the compatibility field names for workflow id and workflow type.
 - Do not silently retarget the agent.

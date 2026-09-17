@@ -9,7 +9,6 @@ export function registerTasksTools(ctx: McpDomainContext) {
     .optional()
     .describe('Workflow/task-type custom fields. Resolve accepted keys with agent_hq_get_workflow_metadata or agent_hq_get_workflow_type_field_schema before create/update.');
 
-  
   const storyPointsSchema = z
     .union(
       VALID_TASK_STORY_POINTS.map((value) => z.literal(value)) as [
@@ -24,7 +23,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
     )
     .nullable()
     .optional();
-  
+
   registerTool(
     ['agent_hq_create_task'],
     'Create a new task in Agent HQ in a required workflow, with optional initial workflow status, assignment, and dry-run preview. Scoped non-admin MCP callers need Project task CRUD or legacy Create Tasks capability and may only create inside their assigned project. Legacy compatibility: blockers is deprecated for one release; prefer relationship-first tools for dispatch dependencies.',
@@ -32,7 +31,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
       title: z.string().min(1).describe('Task title (required)'),
       project_id: z.number().int().positive().describe('Project ID (required)'),
       description: z.string().optional().describe('Task description (markdown supported)'),
-      sprint_id: z.number().int().positive().describe('Sprint/workflow ID to place the task in (required)'),
+      workflow_id: z.number().int().positive().describe('Workflow ID to place the task in (required)'),
       status: z.string().min(1).optional().describe('Initial workflow status. When omitted, task creation uses the workflow/default creation status. Status values are resolved from the selected workflow; call agent_hq_get_workflow_metadata for allowed values.'),
       priority: z.enum(VALID_TASK_PRIORITIES).optional().describe('Priority (default: medium)'),
       task_type: taskTypeSchema.optional().describe('Task type (default: backend)'),
@@ -42,13 +41,13 @@ export function registerTasksTools(ctx: McpDomainContext) {
       blockers: z.array(z.number().int().positive()).optional().describe('Legacy compatibility only. Task IDs that block this task when the workflow still defines blocked_by as a dispatch-blocking relationship. Prefer agent_hq_get_task_relationship_types and agent_hq_create_task_relationship.'),
       dry_run: z.boolean().optional().describe('Return a mutation preview without writing data'),
     },
-    ({ title, project_id, description, sprint_id, status, priority, task_type, story_points, custom_fields, agent_id, blockers, dry_run }) =>
+    ({ title, project_id, description, workflow_id, status, priority, task_type, story_points, custom_fields, agent_id, blockers, dry_run }) =>
       wrap(() =>
         api.createTask({
           title,
           project_id,
           description,
-          sprint_id,
+          workflow_id,
           status,
           priority,
           task_type,
@@ -61,7 +60,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
       )(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks'] },
   );
-  
+
   registerTool(
     ['agent_hq_update_task'],
     'Update editable fields on an existing task, including workflow movement and assignment, with optional dry-run preview. Scoped non-admin MCP callers need Project task CRUD and may only update tasks, workflows, and assignments inside their assigned project.',
@@ -70,18 +69,18 @@ export function registerTasksTools(ctx: McpDomainContext) {
       title: z.string().min(1).optional().describe('New title'),
       description: z.string().optional().describe('New description'),
       priority: z.enum(VALID_TASK_PRIORITIES).optional().describe('New priority'),
-      sprint_id: z.number().int().positive().optional().describe('Move to a different sprint/workflow'),
+      workflow_id: z.number().int().positive().optional().describe('Move to a different workflow'),
       task_type: taskTypeSchema.optional().describe('New task type'),
       story_points: storyPointsSchema.describe('New story point estimate'),
       custom_fields: customFieldsSchema,
       agent_id: z.number().int().positive().nullable().optional().describe('Assign to a different agent, or null to clear'),
       dry_run: z.boolean().optional().describe('Return a mutation preview without writing data'),
     },
-    ({ task_id, title, description, priority, sprint_id, task_type, story_points, custom_fields, agent_id, dry_run }) =>
-      wrap(() => api.updateTask(task_id, { title, description, priority, sprint_id, task_type, story_points, custom_fields, agent_id, dry_run }))(),
+    ({ task_id, title, description, priority, workflow_id, task_type, story_points, custom_fields, agent_id, dry_run }) =>
+      wrap(() => api.updateTask(task_id, { title, description, priority, workflow_id, task_type, story_points, custom_fields, agent_id, dry_run }))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_move_task'],
     'Move a task to a new status. Uses outcome semantics for gated workflow states and supports dry-run preview.',
@@ -105,19 +104,19 @@ export function registerTasksTools(ctx: McpDomainContext) {
       )(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id', '/api/v1/tasks/:id/outcome'] },
   );
-  
+
   registerTool(
     ['agent_hq_list_tasks'],
     'List Agent HQ tasks with optional filtering. Includes recurring occurrence provenance: recurring_series_id, scheduled_for, schedule_run_id, and generated_from (null for ordinary tasks).',
     {
       project_id: z.number().int().positive().optional().describe('Filter by project ID'),
-      sprint_id: z.number().int().positive().optional().describe('Filter by sprint ID'),
+      workflow_id: z.number().int().positive().optional().describe('Filter by workflow ID'),
       status: z.string().optional().describe('Task status filter'),
       limit: z.number().int().min(1).max(100).optional().describe('Max results (default 50, max 100)'),
       offset: z.number().int().min(0).optional().describe('Pagination offset (default 0)'),
     },
-    ({ project_id, sprint_id, status, limit, offset }) =>
-      wrap(() => api.listTasks({ project_id, sprint_id, status, limit, offset }))(),
+    ({ project_id, workflow_id, status, limit, offset }) =>
+      wrap(() => api.listTasks({ project_id, workflow_id, status, limit, offset }))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks'] },
   );
 
@@ -125,8 +124,8 @@ export function registerTasksTools(ctx: McpDomainContext) {
     ['agent_hq_search_project_tasks'],
     'Search the authenticated agent\'s assigned project for existing tasks using bounded exact-match filters for safe follow-up deduplication. The project scope is derived from the MCP agent identity; caller-supplied project IDs are not accepted. Returns minimal task summaries including recurring_series_id, scheduled_for, schedule_run_id, and generated_from. Does not allow task mutation or broad listing.',
     {
-      workflow_id: z.number().int().positive().optional().describe('Optional workflow/sprint ID filter. Must belong to the authenticated agent\'s assigned project to match anything.'),
-      sprint_id: z.number().int().positive().optional().describe('Legacy alias for workflow_id.'),
+      workflow_id: z.number().int().positive().optional().describe('Optional workflow ID filter. Must belong to the authenticated agent\'s assigned project to match anything.'),
+
       statuses: z.array(z.string().min(1)).max(20).optional().describe('Optional status filters. Use nonterminal_only for active/nonterminal dedupe searches.'),
       active_only: z.boolean().optional().describe('Alias for nonterminal_only; excludes terminal tasks such as done, cancelled, and failed.'),
       nonterminal_only: z.boolean().optional().describe('When true, excludes terminal tasks such as done, cancelled, and failed.'),
@@ -135,19 +134,19 @@ export function registerTasksTools(ctx: McpDomainContext) {
       limit: z.number().int().min(1).max(50).optional().describe('Max results (default 20, max 50).'),
       offset: z.number().int().min(0).optional().describe('Pagination offset (default 0).'),
     },
-    ({ workflow_id, sprint_id, statuses, active_only, nonterminal_only, task_type, custom_fields, limit, offset }) =>
-      wrap(() => api.searchProjectTasks({ workflow_id, sprint_id, statuses, active_only, nonterminal_only, task_type, custom_fields, limit, offset }))(),
+    ({ workflow_id,  statuses, active_only, nonterminal_only, task_type, custom_fields, limit, offset }) =>
+      wrap(() => api.searchProjectTasks({ workflow_id,  statuses, active_only, nonterminal_only, task_type, custom_fields, limit, offset }))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/project-search'] },
   );
-  
+
   registerTool(
     ['agent_hq_get_task'],
-    'Get full task detail including blocker, sprint, assignment context, and recurring occurrence provenance (recurring_series_id, scheduled_for, schedule_run_id, generated_from). Scoped non-admin MCP callers need active task context, read project task context, or Project task CRUD for tasks in their assigned project.',
+    'Get full task detail including blocker, workflow, assignment context, and recurring occurrence provenance (recurring_series_id, scheduled_for, schedule_run_id, generated_from). Scoped non-admin MCP callers need active task context, read project task context, or Project task CRUD for tasks in their assigned project.',
     { task_id: z.number().int().positive().describe('Task ID') },
     ({ task_id }) => wrap(() => api.getTask(task_id))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_get_task_context'],
     'Get the canonical task context in summary or full mode, including truthful task state, meaningful notes/events, run state, blockers, and lease context.',
@@ -171,7 +170,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
     ({ task_id, mode, ...options }) => wrap(() => api.getTaskContext(task_id, mode, options))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id/context'] },
   );
-  
+
   registerTool(
     ['agent_hq_delete_task'],
     'Delete a generic task from Agent HQ. Scoped non-admin MCP callers need Project task CRUD and may only delete tasks inside their assigned project.',
@@ -182,7 +181,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
     ({ task_id, deleted_by }) => wrap(() => api.deleteTask(task_id, deleted_by))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id'] },
   );
-  
+
   registerTool(
     ['agent_hq_get_task_notes'],
     'Get notes/comments for a task.',
@@ -190,7 +189,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
     ({ task_id }) => wrap(() => api.getTaskNotes(task_id))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id/notes'] },
   );
-  
+
   registerTool(
     ['agent_hq_get_task_history'],
     'Get task history entries for a task.',
@@ -256,7 +255,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
     ({ task_id, relationship_id }) => wrap(() => api.deleteTaskRelationship(task_id, relationship_id))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id/relationships/:relationshipId'] },
   );
-  
+
   registerTool(
     ['agent_hq_add_blocker'],
     'Legacy compatibility for one release: mark a task as blocked by another task only when the workflow still defines blocked_by as a dispatch-blocking relationship. Prefer agent_hq_get_task_relationship_types and agent_hq_create_task_relationship.',
@@ -268,7 +267,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
     ({ task_id, blocked_by_task_id, dry_run }) => wrap(() => api.addBlocker(task_id, blocked_by_task_id, dry_run))(),
     { domain: 'tasks', rest_paths: ['/api/v1/tasks/:id/blockers'] },
   );
-  
+
   registerTool(
     ['agent_hq_remove_blocker'],
     'Legacy compatibility for one release: remove a blocked_by compatibility relationship/dependency. Prefer agent_hq_delete_task_relationship for new relationship-first callers.',

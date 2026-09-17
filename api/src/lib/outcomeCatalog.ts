@@ -1,10 +1,10 @@
-import { resolveSprintOutcomeMap, type SprintOutcomeDefinition, getLegacyOutcomeMeta } from '../domains/sprint-definitions/outcomes';
+import { resolveWorkflowOutcomeMap, type WorkflowOutcomeDefinition, getLegacyOutcomeMeta } from '../domains/workflow-definitions/outcomes';
 import { type Db } from "../db/adapter/types";
 
 export const RUNTIME_FAILED_OUTCOME = 'runtime_failed';
 export const BACKEND_SYSTEM_OUTCOMES = new Set([RUNTIME_FAILED_OUTCOME]);
 
-export interface ResolvedTaskOutcomeCatalogEntry extends SprintOutcomeDefinition {
+export interface ResolvedTaskOutcomeCatalogEntry extends WorkflowOutcomeDefinition {
   workflowPhaseHint: 'implementation' | 'review' | 'release' | 'pm' | 'generic';
   terminalForInstance: boolean;
   blockerLike: boolean;
@@ -32,7 +32,7 @@ export function isBackendSystemOutcome(outcomeKey: string): boolean {
   return BACKEND_SYSTEM_OUTCOMES.has(outcomeKey);
 }
 
-export function isFailureLikeOutcome(outcomeKey: string, configured?: Pick<SprintOutcomeDefinition, 'metadata'> | null): boolean {
+export function isFailureLikeOutcome(outcomeKey: string, configured?: Pick<WorkflowOutcomeDefinition, 'metadata'> | null): boolean {
   return metadataFlag(configured?.metadata, 'failure_like')
     || configured?.metadata?.runtime_failure === true
     || outcomeKey === 'failed'
@@ -43,7 +43,7 @@ export function isFailureLikeOutcome(outcomeKey: string, configured?: Pick<Sprin
     || outcomeKey.startsWith('failed:');
 }
 
-export function isBlockerLikeOutcome(outcomeKey: string, configured?: Pick<SprintOutcomeDefinition, 'metadata'> | null): boolean {
+export function isBlockerLikeOutcome(outcomeKey: string, configured?: Pick<WorkflowOutcomeDefinition, 'metadata'> | null): boolean {
   return metadataFlag(configured?.metadata, 'blocked_like')
     || outcomeKey === 'blocked'
     || outcomeKey === 'env_blocked'
@@ -60,12 +60,12 @@ export function isTerminalInstanceOutcome(outcomeKey: string): boolean {
 
 export async function resolveTaskOutcomeCatalog(
   db: Db,
-  options: { sprintId?: number | null; sprintType?: string | null; taskType?: string | null; fallbackOutcomes?: string[] },
+  options: { workflowId?: number | null; workflowType?: string | null; taskType?: string | null; fallbackOutcomes?: string[] },
 ): Promise<ResolvedTaskOutcomeCatalogEntry[]> {
   const taskType = normalizeTaskType(options.taskType);
-  return Array.from((await resolveSprintOutcomeMap(db, {
-          sprintId: options.sprintId,
-          sprintType: options.sprintType,
+  return Array.from((await resolveWorkflowOutcomeMap(db, {
+          workflowId: options.workflowId,
+          workflowType: options.workflowType,
           taskType,
           fallbackOutcomes: options.fallbackOutcomes,
         })).values()).map((entry) => ({
@@ -79,12 +79,12 @@ export async function resolveTaskOutcomeCatalog(
 
 export async function resolveTaskOutcomeCatalogEntries(
   db: Db,
-  options: { sprintId?: number | null; sprintType?: string | null; taskType?: string | null; fallbackOutcomes?: string[] },
+  options: { workflowId?: number | null; workflowType?: string | null; taskType?: string | null; fallbackOutcomes?: string[] },
 ): Promise<ResolvedTaskOutcomeCatalogEntry[]> {
   return await resolveTaskOutcomeCatalog(db, options);
 }
 
-export function getOutcomeDisplayMeta(outcomeKey: string, configured?: Pick<SprintOutcomeDefinition, 'label' | 'description' | 'badge_variant'> | null) {
+export function getOutcomeDisplayMeta(outcomeKey: string, configured?: Pick<WorkflowOutcomeDefinition, 'label' | 'description' | 'badge_variant'> | null) {
   if (outcomeKey === RUNTIME_FAILED_OUTCOME && !configured) {
     return {
       label: 'Runtime Failed',

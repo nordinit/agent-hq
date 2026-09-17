@@ -74,11 +74,11 @@ function parseCsv(value: string): string[] {
 }
 
 function workflowScopeValue(mapping: WorkflowEventMapping): string {
-  return mapping.scope_kind === 'sprint_override' ? 'sprint_override' : 'sprint_type_default';
+  return mapping.scope_kind === 'workflow_override' ? 'workflow_override' : 'workflow_type_default';
 }
 
 function workflowScopeLabel(mapping: WorkflowEventMapping): string {
-  return mapping.scope_kind === 'sprint_override' ? 'override' : 'default';
+  return mapping.scope_kind === 'workflow_override' ? 'override' : 'default';
 }
 
 function sourceFilterValue(mapping: WorkflowEventMapping): string {
@@ -118,11 +118,11 @@ function formFromMapping(mapping: WorkflowEventMapping, projectId: number | null
   };
 }
 
-function buildPayload(form: MappingFormState, projectId: number | null, sprintId: number | null, sprintType: string | null): Partial<WorkflowEventMapping> {
+function buildPayload(form: MappingFormState, projectId: number | null, workflowId: number | null, workflowType: string | null): Partial<WorkflowEventMapping> {
   return {
     project_id: form.project_scope === 'project' && projectId ? projectId : null,
-    sprint_id: sprintId,
-    sprint_type: sprintId ? null : sprintType,
+    workflow_id: workflowId,
+    workflow_type: workflowId ? null : workflowType,
     source: form.source.trim() || null,
     event_name: form.event_name.trim(),
     task_type: form.task_type || null,
@@ -176,7 +176,7 @@ function ActionTargetInput({
 }
 
 function ScopeBadge({ mapping }: { mapping: WorkflowEventMapping }) {
-  if (mapping.scope_kind === 'sprint_override') {
+  if (mapping.scope_kind === 'workflow_override') {
     return <Badge className="bg-amber-900/40 text-amber-300 text-xs">override</Badge>;
   }
   return <Badge className="bg-slate-700 text-slate-200 text-xs">default</Badge>;
@@ -185,13 +185,13 @@ function ScopeBadge({ mapping }: { mapping: WorkflowEventMapping }) {
 export function ExternalEventsRoutingSection({
   projectId,
   projectName,
-  sprintId,
-  sprintType,
+  workflowId,
+  workflowType,
 }: {
   projectId: number | null;
   projectName: string | null;
-  sprintId: number | null;
-  sprintType: string | null;
+  workflowId: number | null;
+  workflowType: string | null;
 }) {
   const [mappings, setMappings] = useState<WorkflowEventMapping[]>([]);
   const [statusOptions, setStatusOptions] = useState<TaskStatusMeta[]>([]);
@@ -219,8 +219,8 @@ export function ExternalEventsRoutingSection({
     setLoading(true);
     try {
       const [mappingResponse, workflowMetadata] = await Promise.all([
-        api.getWorkflowEventMappings(projectId ?? undefined, sprintId ?? undefined, sprintType ?? undefined),
-        sprintId || sprintType ? api.getWorkflowMetadata(sprintId ? { sprint_id: sprintId } : { sprint_type: sprintType }) : Promise.resolve({ statuses: [], outcomes: [], task_types: [] }),
+        api.getWorkflowEventMappings(projectId ?? undefined, workflowId ?? undefined, workflowType ?? undefined),
+        workflowId || workflowType ? api.getWorkflowMetadata(workflowId ? { workflow_id: workflowId } : { workflow_type: workflowType }) : Promise.resolve({ statuses: [], outcomes: [], task_types: [] }),
       ]);
       setMappings(mappingResponse.mappings ?? []);
       setStatusOptions(workflowMetadata.statuses ?? []);
@@ -236,7 +236,7 @@ export function ExternalEventsRoutingSection({
     } finally {
       setLoading(false);
     }
-  }, [projectId, sprintId, sprintType]);
+  }, [projectId, workflowId, workflowType]);
 
   useEffect(() => {
     void load();
@@ -245,7 +245,7 @@ export function ExternalEventsRoutingSection({
   useEffect(() => {
     setNewForm(emptyForm(projectId));
     setEditingId(null);
-  }, [projectId, sprintId, sprintType]);
+  }, [projectId, workflowId, workflowType]);
 
   const statusKeys = useMemo(
     () => Array.from(new Set(statusOptions.map(status => status.name).filter(Boolean))),
@@ -361,7 +361,7 @@ export function ExternalEventsRoutingSection({
   const handleAdd = async () => {
     setSaving(true);
     try {
-      await api.createWorkflowEventMapping(buildPayload(newForm, projectId, sprintId, sprintType));
+      await api.createWorkflowEventMapping(buildPayload(newForm, projectId, workflowId, workflowType));
       setShowAdd(false);
       setNewForm(emptyForm(projectId));
       await load();
@@ -375,7 +375,7 @@ export function ExternalEventsRoutingSection({
   const handleSaveEdit = async (id: number) => {
     setSaving(true);
     try {
-      await api.updateWorkflowEventMapping(id, buildPayload(editForm, projectId, sprintId, sprintType));
+      await api.updateWorkflowEventMapping(id, buildPayload(editForm, projectId, workflowId, workflowType));
       setEditingId(null);
       await load();
     } catch (err) {
@@ -425,7 +425,7 @@ export function ExternalEventsRoutingSection({
         </select>
       </td>
       <td className="px-3 py-2.5">
-        <div className="mb-1 text-[11px] text-slate-500">{sprintId ? 'Workflow override' : 'Workflow default'}</div>
+        <div className="mb-1 text-[11px] text-slate-500">{workflowId ? 'Workflow override' : 'Workflow default'}</div>
         <select
           value={form.project_scope}
           onChange={e => setForm({ ...form, project_scope: e.target.value as 'global' | 'project' })}

@@ -1,7 +1,7 @@
 import { buildWorkflowGraph, type GraphEdge } from './graph';
 
 // The hypothetical tracer must pick the same winner the dispatcher and
-// resolveRoutingRuleForSprint would. Rather than duplicate the tracer's private
+// resolveRoutingRuleForWorkflow would. Rather than duplicate the tracer's private
 // ranking here, these tests pin the ordering CONTRACT it depends on, so a change to
 // precedence in graph.ts/rules.ts/dispatcher.ts fails loudly here too.
 //

@@ -16,18 +16,18 @@ beforeEach(async()=>{
   db=await setupTestDb();
   await db.run("INSERT INTO tenants(id,name,slug) VALUES(1,'One','one'),(2,'Two','two')");
   await db.run("INSERT INTO projects(id,tenant_id,name) VALUES(1,1,'Editorial'),(3,1,'Proposals'),(2,2,'Private tenant')");
-  await db.run("INSERT INTO sprint_types(tenant_id,key,name) VALUES(1,'article','Article'),(1,'proposal','Proposal'),(2,'private','Private')");
-  await db.run("INSERT INTO sprints(id,tenant_id,project_id,name,sprint_type,status) VALUES(1,1,1,'Articles','article','active'),(3,1,3,'Proposals','proposal','active'),(2,2,2,'Private','private','active')");
+  await db.run("INSERT INTO workflow_types(tenant_id,key,name) VALUES(1,'article','Article'),(1,'proposal','Proposal'),(2,'private','Private')");
+  await db.run("INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type,status) VALUES(1,1,1,'Articles','article','active'),(3,1,3,'Proposals','proposal','active'),(2,2,2,'Private','private','active')");
   await db.run("INSERT INTO agents(id,tenant_id,project_id,name,session_key) VALUES(1,1,1,'Editor','agent:data-editor:main'),(3,1,3,'Writer','agent:data-writer:main'),(2,2,2,'Private','agent:data-private:main')");
   const schema=JSON.stringify({fields:[{key:'amount',type:'number',label:'Amount'},{key:'accepted',type:'checkbox',label:'Accepted'}]});
-  await db.run("INSERT INTO task_field_schemas(tenant_id,sprint_type_key,schema_json) VALUES(1,'article',?),(1,'proposal',?),(2,'private',?)",schema,schema,schema);
+  await db.run("INSERT INTO task_field_schemas(tenant_id,workflow_type_key,schema_json) VALUES(1,'article',?),(1,'proposal',?),(2,'private',?)",schema,schema,schema);
   // All producers are installed by the real migration. Explicit fixture boundaries
   // isolate semantic tests from the template database's metadata-reset behavior.
   for(const source of TELEMETRY_CAPTURE_SOURCES)await db.run("INSERT INTO telemetry_capture_sources(source,capture_started_at) VALUES(?,clock_timestamp()-interval '1 hour') ON CONFLICT(source) DO UPDATE SET capture_started_at=EXCLUDED.capture_started_at",source);
 });
 afterEach(async()=>{await teardownTestDb();});
 async function task(id=1,project=1,tenant=1,amount=10){
-  await db.run("INSERT INTO tasks(id,tenant_id,project_id,sprint_id,title,status,task_type,assigned_agent_id,custom_fields_json) VALUES(?,?,?,?,?,'draft','article',?,?)",id,tenant,project,project,`Task ${id}`,tenant===1?1:2,JSON.stringify({amount,accepted:false}));
+  await db.run("INSERT INTO tasks(id,tenant_id,project_id,workflow_id,title,status,task_type,assigned_agent_id,custom_fields_json) VALUES(?,?,?,?,?,'draft','article',?,?)",id,tenant,project,project,`Task ${id}`,tenant===1?1:2,JSON.stringify({amount,accepted:false}));
 }
 async function calculate(definition:MetricDefinition,scope:TelemetryScope={},access=operator){
   await drainTelemetryOutbox(db,{batchSize:1000});
@@ -40,7 +40,7 @@ async function calculate(definition:MetricDefinition,scope:TelemetryScope={},acc
 it('selects an old project event cohort using recorded scope after a task moves',async()=>{
   await task();
   await db.run("UPDATE tasks SET status='submitted',custom_fields_json=? WHERE id=1",JSON.stringify({amount:20,accepted:true}));
-  await db.run("UPDATE tasks SET project_id=3,sprint_id=3,status='draft',custom_fields_json=? WHERE id=1",JSON.stringify({amount:99,accepted:false}));
+  await db.run("UPDATE tasks SET project_id=3,workflow_id=3,status='draft',custom_fields_json=? WHERE id=1",JSON.stringify({amount:99,accepted:false}));
   const definition=milestoneRecipe({key:'submissions',name:'Submissions',milestone:status('submitted')});
   definition.group_by=[{field:'project_id'}];
   const {data,result}=await calculate(definition,{project_id:1,workflow_id:1,workflow_type:'article'});
@@ -51,7 +51,7 @@ it('selects an old project event cohort using recorded scope after a task moves'
 
 it('an entry cohort follows its complete journey through a later project/workflow move',async()=>{
   await task();
-  await db.run("UPDATE tasks SET project_id=3,sprint_id=3,status='working' WHERE id=1");
+  await db.run("UPDATE tasks SET project_id=3,workflow_id=3,status='working' WHERE id=1");
   await db.run("UPDATE tasks SET status='approved' WHERE id=1");
   const definition=firstPassRecipe({key:'approval',name:'Approval',start:created,success:status('approved'),rework:status('revision')});
   definition.group_by=[{field:'project_id'}];
@@ -63,7 +63,7 @@ it('an entry cohort follows its complete journey through a later project/workflo
 it('scoped credentials require current source access and never load another project history',async()=>{
   await task();
   await db.run("UPDATE tasks SET status='secret-old-stage' WHERE id=1");
-  await db.run("UPDATE tasks SET project_id=3,sprint_id=3,status='submitted' WHERE id=1");
+  await db.run("UPDATE tasks SET project_id=3,workflow_id=3,status='submitted' WHERE id=1");
   const definition=milestoneRecipe({key:'submissions',name:'Submissions',milestone:status('submitted')});
   const former=await calculate(definition,{project_id:1},{tenantId:1,projectId:1,actor:'former'});
   expect(former.data.entities).toHaveLength(0);
@@ -210,7 +210,7 @@ it('a dependency outside readable scope produces unknown rather than a false zer
 });
 
 it('retains closed workflows by default and rejects implicit task-value multiplication across runs',async()=>{
-  await task();await db.run("UPDATE tasks SET status='submitted' WHERE id=1");await db.run("UPDATE sprints SET status='closed' WHERE id=1");
+  await task();await db.run("UPDATE tasks SET status='submitted' WHERE id=1");await db.run("UPDATE workflows SET status='closed' WHERE id=1");
   const definition=milestoneRecipe({key:'submitted',name:'Submitted',milestone:status('submitted')});
   expect((await calculate(definition,{project_id:1})).result.value).toBe(1);
   expect((await calculate(definition,{project_id:1,include_archived:false})).result.value).toBe(0);

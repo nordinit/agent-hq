@@ -1,5 +1,5 @@
 import type { Db } from '../adapter/types';
-import { setupTestDb, teardownTestDb } from '../testDb';
+import { historicalTestFixture } from './historicalTestFixture';
 import { POSTGRES_MIGRATION_DIRS } from './migrationDirs';
 import { loadMigrations, migrationStatus, runMigrations } from './migrationRunner';
 
@@ -7,46 +7,29 @@ const MIGRATION_ID = '19-backfill-legacy-tenant-ownership.sql';
 
 describe('migration 19 legacy tenant ownership repair', () => {
   let db: Db;
+  let fixture: Awaited<ReturnType<typeof historicalTestFixture>>;
   const migration = loadMigrations(POSTGRES_MIGRATION_DIRS)
     .find(({ id }) => id === MIGRATION_ID);
 
   beforeEach(async () => {
     if (!migration) throw new Error(`${MIGRATION_ID} is missing from the release migration set`);
-    db = await setupTestDb();
+    fixture = await historicalTestFixture(31);
+    db = fixture.db;
   });
 
-  afterEach(async () => {
-    try {
-      if (!db) return;
-      // Keep the shared worker database current even if an assertion fails before the migration
-      // runs. Other suites reuse this schema and the ledger is deliberately not truncated by the
-      // ordinary fixture reset.
-      await db.exec(`
-        TRUNCATE tenants, app_settings RESTART IDENTITY CASCADE;
-      `);
-      await db.run(
-        `INSERT INTO schema_migrations (id, checksum)
-         VALUES (?, ?)
-         ON CONFLICT (id) DO UPDATE SET checksum = EXCLUDED.checksum`,
-        MIGRATION_ID,
-        migration!.checksum,
-      );
-    } finally {
-      await teardownTestDb();
-    }
-  });
+  afterEach(async () => { await fixture?.close(); });
 
   it('applies to a fresh uninstalled database without inventing tenant configuration', async () => {
     expect(Number(await db.value(`SELECT COUNT(*) FROM tenants`))).toBe(0);
     expect(Number(await db.value(`SELECT COUNT(*) FROM app_settings`))).toBe(0);
 
     await db.run(`DELETE FROM schema_migrations WHERE id = ?`, MIGRATION_ID);
-    const before = await migrationStatus(db, POSTGRES_MIGRATION_DIRS);
+    const before = await migrationStatus(db, fixture.dirs);
     expect(before.pending).toEqual([MIGRATION_ID]);
     expect(before.drifted).toEqual([]);
     expect(before.unexpected).toEqual([]);
 
-    await expect(runMigrations(db, POSTGRES_MIGRATION_DIRS)).resolves.toEqual([MIGRATION_ID]);
+    await expect(runMigrations(db, fixture.dirs)).resolves.toEqual([MIGRATION_ID]);
     expect(Number(await db.value(`SELECT COUNT(*) FROM tenants`))).toBe(0);
     expect(Number(await db.value(`SELECT COUNT(*) FROM app_settings`))).toBe(0);
     expect(await db.all(`
@@ -61,7 +44,7 @@ describe('migration 19 legacy tenant ownership repair', () => {
       { table_name: 'routing_config', is_nullable: 'YES' },
       { table_name: 'task_history', is_nullable: 'YES' },
     ]);
-    await expect(runMigrations(db, POSTGRES_MIGRATION_DIRS)).resolves.toEqual([]);
+    await expect(runMigrations(db, fixture.dirs)).resolves.toEqual([]);
   });
 
   it('applies only once, repairs ownership, and preserves baseline schema and operator routing config', async () => {
@@ -158,12 +141,12 @@ describe('migration 19 legacy tenant ownership repair', () => {
         (SELECT tenant_id FROM routing_config WHERE id = 600) AS routing_owner
     `)).toEqual({ fallback_owner: null, history_owner: null, routing_owner: null });
 
-    const before = await migrationStatus(db, POSTGRES_MIGRATION_DIRS);
+    const before = await migrationStatus(db, fixture.dirs);
     expect(before.pending).toEqual([MIGRATION_ID]);
     expect(before.drifted).toEqual([]);
     expect(before.unexpected).toEqual([]);
 
-    await expect(runMigrations(db, POSTGRES_MIGRATION_DIRS)).resolves.toEqual([MIGRATION_ID]);
+    await expect(runMigrations(db, fixture.dirs)).resolves.toEqual([MIGRATION_ID]);
 
     expect(await db.get(`
       SELECT
@@ -211,7 +194,7 @@ describe('migration 19 legacy tenant ownership repair', () => {
         (SELECT COUNT(*) FROM sprint_task_transitions) AS transition_count,
         (SELECT COUNT(*) FROM sprint_task_transitions WHERE id = 701) AS deleted_count
     `);
-    await expect(runMigrations(db, POSTGRES_MIGRATION_DIRS)).resolves.toEqual([]);
+    await expect(runMigrations(db, fixture.dirs)).resolves.toEqual([]);
     expect(await db.get(`
       SELECT
         (SELECT tenant_id FROM projects WHERE id = 100) AS fallback_owner,

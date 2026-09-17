@@ -59,14 +59,14 @@ export default function AssignmentComposer({
   const payload = useCallback((): Record<string, unknown> => ({
     ...(form.rule_id != null ? { id: form.rule_id } : {}),
     project_id: context.projectId,
-    sprint_type: graph.scope.workflow_type,
+    workflow_type: graph.scope.workflow_type,
     // scope_kind is sent explicitly: the rules API accepts it, and inferring scope from the
     // page selection is exactly how an inherited default gets silently converted.
     ...(isCreate
       ? (context.workflowId != null
-        ? { sprint_id: context.workflowId, scope_kind: 'sprint_override' }
-        : { scope_kind: 'sprint_type_default' })
-      : (form.is_override ? { sprint_id: context.workflowId } : {})),
+        ? { workflow_id: context.workflowId, scope_kind: 'workflow_override' }
+        : { scope_kind: 'workflow_type_default' })
+      : (form.is_override ? { workflow_id: context.workflowId } : {})),
     status: form.status,
     task_type: form.task_type,
     agent_id: form.agent_id,

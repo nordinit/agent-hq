@@ -14,14 +14,14 @@ beforeEach(async()=>{
   db=await setupTestDb();
   await db.run("INSERT INTO tenants(id,name,slug) VALUES(1,'One','one'),(2,'Two','two')");
   await db.run("INSERT INTO projects(id,tenant_id,name) VALUES(1,1,'Article'),(3,1,'Other'),(2,2,'Private')");
-  await db.run("INSERT INTO sprint_types(tenant_id,key,name,project_id) VALUES(1,'article','Article',1),(1,'other','Other',3),(2,'private','Private',2)");
-  await db.run("INSERT INTO sprints(id,tenant_id,project_id,name,sprint_type) VALUES(1,1,1,'Article','article'),(3,1,3,'Other','other'),(2,2,2,'Private','private')");
-  await db.run("INSERT INTO task_field_schemas(id,tenant_id,sprint_type_key,schema_json) VALUES(1,1,'article',?),(3,1,'other',?),(2,2,'private',?)",schema(),schema(),schema());
+  await db.run("INSERT INTO workflow_types(tenant_id,key,name,project_id) VALUES(1,'article','Article',1),(1,'other','Other',3),(2,'private','Private',2)");
+  await db.run("INSERT INTO workflows(id,tenant_id,project_id,name,workflow_type) VALUES(1,1,1,'Article','article'),(3,1,3,'Other','other'),(2,2,2,'Private','private')");
+  await db.run("INSERT INTO task_field_schemas(id,tenant_id,workflow_type_key,schema_json) VALUES(1,1,'article',?),(3,1,'other',?),(2,2,'private',?)",schema(),schema(),schema());
 });
 afterEach(async()=>{await teardownTestDb();});
 async function field(){return (await getTelemetryCatalog(db,access,{project_id:1,workflow_type:'article'})).fields.find(item=>item.source?.schema_id===1)!;}
 async function snapshot(){return await db.value<Record<string,any>>('SELECT telemetry_task_snapshot(to_jsonb(t)) FROM tasks t WHERE id=1');}
-async function task(){await db.run("INSERT INTO tasks(id,tenant_id,project_id,sprint_id,title,status,custom_fields_json) VALUES(1,1,1,1,'One','draft',?)",JSON.stringify({amount:12}));}
+async function task(){await db.run("INSERT INTO tasks(id,tenant_id,project_id,workflow_id,title,status,custom_fields_json) VALUES(1,1,1,1,'One','draft',?)",JSON.stringify({amount:12}));}
 
 it('changes only the descriptor revision when a label changes',async()=>{
   const old=await field();
@@ -71,7 +71,7 @@ it('type changes and key renames create new logical field identities',async()=>{
 it('a schema delete/recreate cannot revive the old field even if its numeric source ID is reused',async()=>{
   const old=await field();
   await db.run('DELETE FROM task_field_schemas WHERE id=1');
-  await db.run("INSERT INTO task_field_schemas(id,tenant_id,sprint_type_key,schema_json) VALUES(1,1,'article',?)",schema());
+  await db.run("INSERT INTO task_field_schemas(id,tenant_id,workflow_type_key,schema_json) VALUES(1,1,'article',?)",schema());
   expect((await field()).id).not.toBe(old.id);
 });
 

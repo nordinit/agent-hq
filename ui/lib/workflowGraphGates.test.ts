@@ -18,10 +18,10 @@ function gate(over: Partial<GraphGate> = {}): GraphGate {
     message: '',
     task_type: null,
     enabled: true,
-    scope_kind: 'sprint_type_default',
+    scope_kind: 'workflow_type_default',
     is_inherited: true,
     is_override: false,
-    effective_for_sprint: true,
+    effective_for_workflow: true,
     ...over,
   } as GraphGate;
 }
