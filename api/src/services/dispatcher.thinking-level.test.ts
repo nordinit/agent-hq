@@ -20,6 +20,13 @@ jest.mock('./worktreeManager', () => ({
   createTaskWorktree: jest.fn(() => ({ created: false, workspacePath: null, branch: null, error: null })),
 }));
 
+// These routing/path fixtures intentionally use synthetic filesystem paths.
+// Workspace lease behavior is exercised with real directories in its own suite.
+jest.mock('./workspaceLease', () => ({
+  ...(jest.requireActual('./workspaceLease') as object),
+  acquireWorkspaceLease: jest.fn(() => jest.fn()),
+}));
+
 jest.mock('../lib/taskNotifications', () => ({
   notifyTaskStatusChange: jest.fn(),
 }));

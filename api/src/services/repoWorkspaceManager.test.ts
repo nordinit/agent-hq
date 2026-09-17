@@ -121,7 +121,7 @@ describe('repoWorkspaceManager clone mode', () => {
     expect(fs.existsSync(result.workspacePath)).toBe(false);
   });
 
-  it('links local worktree dependencies from the source repo after creation', () => {
+  it('creates a worktree without installing or sharing source repository dependencies', () => {
     const apiRoot = path.join(seedPath, 'api');
     fs.mkdirSync(apiRoot, { recursive: true });
     fs.writeFileSync(path.join(apiRoot, 'package.json'), JSON.stringify({
@@ -148,15 +148,11 @@ describe('repoWorkspaceManager clone mode', () => {
     });
 
     expect(result.error).toBeUndefined();
-    expect(result.dependencySetup?.find((entry) => entry.packageRoot === 'api')).toMatchObject({
-      strategy: 'symlink',
-      status: 'prepared',
-      source: path.join(apiRoot, 'node_modules'),
-      target: path.join(result.workspacePath, 'api', 'node_modules'),
-    });
-    expect(fs.realpathSync(path.join(result.workspacePath, 'api', 'node_modules'))).toBe(
-      fs.realpathSync(path.join(apiRoot, 'node_modules')),
-    );
+    expect(result.created).toBe(true);
+    expect(result.dependencySetup).toBeUndefined();
+    expect(fs.existsSync(path.join(result.workspacePath, 'api', 'package.json'))).toBe(true);
+    expect(fs.existsSync(path.join(result.workspacePath, 'api', 'node_modules'))).toBe(false);
+    expect(fs.existsSync(path.join(apiRoot, 'node_modules'))).toBe(true);
   });
 });
 
