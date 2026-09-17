@@ -39,6 +39,13 @@ function normalizeRequestAliasObject(value: unknown): void {
 }
 
 export function normalizeWorkflowRequestAliases(req: Request, _res: Response, next: NextFunction): void {
+  // Mounted at /api/v1. Telemetry v2 already uses workflow names in its strict,
+  // versioned contracts, including nested scopes in reports and import bundles.
+  // Rewriting them would reject writes and silently discard GET scope filters.
+  if (req.path === '/telemetry/v2' || req.path.startsWith('/telemetry/v2/')) {
+    next();
+    return;
+  }
   normalizeRequestAliasObject(req.query);
   normalizeRequestAliasObject(req.body);
   next();

@@ -7,12 +7,14 @@ import {seedTelemetryScenario} from '../domains/telemetry/testScenario';
 import {numericRecipe,firstPassRecipe,milestoneRecipe,coreRuntimeRecipes} from '../domains/telemetry/recipes';
 import {runTelemetryQueryJobs} from '../domains/telemetry/queries';
 import {winningBinding} from '../domains/telemetry/definitions';
+import {normalizeWorkflowRequestAliases} from '../lib/workflowCompatibility';
 let db:Db;
 jest.mock('../db/client',()=>({getDb:()=>db}));
 import router from './telemetry-v2';
 let server:Server,base:string;
 beforeAll(async()=>{
   const app=express();app.use(express.json({limit:'10mb'}));
+  app.use('/api/v1',normalizeWorkflowRequestAliases);
   app.use((req,_res,next)=>{if(req.headers['x-test-project'])req.telemetryProjectId=Number(req.headers['x-test-project']);next();});
   app.use('/api/v1/telemetry/v2',router);
   server=app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));base=`http://127.0.0.1:${(server.address()as AddressInfo).port}/api/v1/telemetry/v2`;
@@ -40,6 +42,24 @@ test('catalog uses authorized canonical fields and has no fabricated business me
   expect(result.body.fields.map((field:any)=>field.key)).not.toContain('private_amount');
   expect(result.body.core_metrics.every((metric:any)=>metric.key.startsWith('core.'))).toBe(true);
   expect((await request('/catalog?project_id=22')).status).toBe(404);
+});
+test.each([
+  {project_id:11,workflow_type:'content'},
+  {project_id:11,workflow_id:111,workflow_type:'content',task_type:'article'},
+])('workflow-scoped previews survive production alias middleware: %j',async(scope)=>{
+  const definition=await amount();
+  const preview=await request('/queries/preview',{definition,scope});
+  expect(preview.status).toBe(200);
+  expect(preview.body).toMatchObject({value:210,sample_count:6});
+  expect((await request('/definitions/validate',{definition,scope})).status).toBe(200);
+});
+test('catalog preserves workflow query filters through production alias middleware',async()=>{
+  const selected=await request('/catalog?project_id=11&workflow_id=111&workflow_type=content');
+  expect(selected.status).toBe(200);
+  expect(selected.body.scope).toMatchObject({project_id:11,workflow_id:111,workflow_type:'content'});
+  expect(selected.body.workflows.map((workflow:any)=>workflow.id)).toEqual([111]);
+  expect((await request('/catalog?project_id=11&workflow_type=missing')).status).toBe(404);
+  expect((await request('/catalog?project_id=11&workflow_id=112')).status).toBe(404);
 });
 test('current numeric aggregate and retained contributors agree after values change',async()=>{
   const definition=await amount();const preview=await request('/queries/preview',{definition,scope:{project_id:11}});
