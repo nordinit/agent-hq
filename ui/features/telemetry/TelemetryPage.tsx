@@ -180,7 +180,8 @@ export default function TelemetryPage() {
     finally { if (queryGuard.current.isCurrent(token)) setBusy(false); }
   }
   function editMetric(metric: TelemetryMetric) {
-    const restored = telemetryGuideFromDefinition(metric.definition);
+    const signals = Object.fromEntries([...(catalog?.routing_transitions ?? []), ...(catalog?.event_mappings ?? [])].filter(entry => entry.enabled).map(entry => [entry.id, entry.predicate]));
+    const restored = telemetryGuideFromDefinition(metric.definition, signals);
     invalidate(true); setEditing(metric); setAdvanced(!restored); setGuide(restored ?? { ...newTelemetryGuide(), name: metric.name, key: metric.key }); setDraftText(JSON.stringify(metric.definition, null, 2)); setBuilderError(null); setBuilderVersion(version => version + 1); setTab('explore');
   }
   function newMetric() {
@@ -218,7 +219,7 @@ export default function TelemetryPage() {
     {loading ? <p role="status" className="py-8 text-sm text-slate-400">Loading the scoped catalog and saved definitions…</p> : <>
       {tab === 'explore' && <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)]"><Card>
         {editing && <p className="mb-4 rounded-lg border border-sky-500/20 bg-sky-950/20 p-3 text-xs text-sky-200">Editing {editing.name} from revision {editing.revision}. Preview compares the saved definition and your proposed revision over the same time boundary.</p>}
-        <TelemetryBuilder key={builderVersion} catalog={catalog} draftText={draftText} initialGuide={guide} editing={advanced} lockedKey={Boolean(editing)} onChange={changeDraft}/>
+        <TelemetryBuilder key={builderVersion} catalog={catalog} draftText={draftText} initialGuide={guide} editing={advanced} lockedKey={Boolean(editing)} onChange={changeDraft} onGuideChange={setGuide} onModeChange={setAdvanced} onValidationChange={setBuilderError}/>
         {builderError && <p className="mt-4 text-xs text-amber-200">{builderError}</p>}
         <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-700/60 pt-4"><Button variant="primary" size="sm" loading={busy} disabled={Boolean(builderError) || !draftText} onClick={preview}><Play className="h-3 w-3"/>Preview calculation</Button><Button size="sm" onClick={validate} disabled={Boolean(builderError) || !draftText}>Validate definition</Button><Button size="sm" loading={saving} disabled={Boolean(builderError) || !draftText} onClick={saveMetric}><Save className="h-3 w-3"/>{editing ? 'Save new revision' : 'Save metric'}</Button></div>
       </Card><div className="space-y-4"><Card><h3 className="text-sm font-medium text-white">Actual workflow configuration</h3><p className="mt-2 text-xs leading-relaxed text-slate-400">{catalog?.fields.length ?? 0} canonical fields · {catalog?.statuses.length ?? 0} statuses · {catalog?.outcomes.length ?? 0} outcomes available in this scope.</p><p className="mt-3 text-xs leading-relaxed text-slate-500">Success and rework are choices in each definition. Runtime failures remain independent facts.</p><p className="mt-3 text-xs leading-relaxed text-slate-500">Occurrence-time filters require a historical time basis. Current inventory measurements reject those filters; use an explicit field predicate for a creation cohort.</p></Card>

@@ -101,10 +101,13 @@ export function buildTelemetryDefinition(guide: TelemetryGuide, catalogSignals: 
 }
 
 /** Reopen a guided definition only when the form can represent it without dropping settings. */
-export function telemetryGuideFromDefinition(definition: MetricDefinition): TelemetryGuide | null {
+export function telemetryGuideFromDefinition(definition: MetricDefinition, catalogSignals: Record<string, Predicate> = {}): TelemetryGuide | null {
+  const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
   const guide: TelemetryGuide = { ...newTelemetryGuide(), key: definition.key, name: definition.name, unit: definition.unit ?? '', attribution: definition.attribution ?? 'assigned_agent_current', bucket: definition.bucket ?? '' };
   const signal = (predicate?: Predicate): string => {
     if (!predicate) return '';
+    const catalogSignal = Object.entries(catalogSignals).find(([, candidate]) => canonical(candidate) === canonical(predicate));
+    if (catalogSignal) return `catalog:${catalogSignal[0]}`;
     if (!('field' in predicate) || predicate.op !== 'eq') throw new Error('Advanced signal');
     if (predicate.field === 'event.to_status') return `status:${predicate.value}`;
     if (predicate.field === 'event.outcome') return `outcome:${predicate.value}`;
@@ -132,7 +135,18 @@ export function telemetryGuideFromDefinition(definition: MetricDefinition): Tele
     if (measure.kind === 'aggregate') {
       if (measure.value && 'duration' in measure.value) { guide.recipe = 'duration'; guide.start = signal(measure.value.duration.start); guide.success = signal(measure.value.duration.end); }
       else if (definition.grain === 'event' && measure.aggregate === 'distinct_count') { guide.recipe = 'milestone'; guide.success = signal(measure.where); }
-      else if (measure.value && 'field' in measure.value) { guide.recipe = 'numeric'; guide.field = measure.value.field; guide.basis = measure.value.basis ?? 'current'; if (definition.grain === 'event') guide.success = signal(population); }
+      else if (measure.value && 'field' in measure.value) {
+        guide.recipe = 'numeric'; guide.field = measure.value.field; guide.basis = measure.value.basis ?? 'current';
+        if (definition.grain === 'event') {
+          // at_event adds its milestone before the optional population filter.
+          // A catalog signal can itself be compound, so try it intact first.
+          try { guide.success = signal(population); population = undefined; }
+          catch {
+            if (!population || !('all' in population) || population.all.length !== 2) throw new Error('Advanced population');
+            guide.success = signal(population.all[0]); population = population.all[1];
+          }
+        }
+      }
       else guide.recipe = 'count';
       if (['sum', 'mean', 'min', 'max', 'percentile', 'distribution'].includes(measure.aggregate)) guide.aggregate = measure.aggregate as TelemetryGuide['aggregate'];
       guide.percentile = measure.percentile ?? 0.95;
@@ -141,13 +155,12 @@ export function telemetryGuideFromDefinition(definition: MetricDefinition): Tele
       const blocked = measure.numerator.where;
       guide.blocked = blocked && 'field' in blocked && blocked.field === 'status' && blocked.op === 'eq' ? `status:${blocked.value}` : signal(blocked);
     }
-    if (population && !(guide.recipe === 'numeric' && guide.basis === 'at_event')) {
+    if (population) {
       if (!('field' in population) || Array.isArray(population.value) || typeof population.value === 'object') return null;
       guide.filterField = population.field; guide.filterOp = population.op as TelemetryGuide['filterOp']; guide.filterValue = String(population.value ?? '');
       guide.filterType = typeof population.value === 'number' ? 'number' : typeof population.value === 'boolean' ? 'checkbox' : 'text';
     }
-    const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
-    return canonical(buildTelemetryDefinition(guide)) === canonical(definition) ? guide : null;
+    return canonical(buildTelemetryDefinition(guide, catalogSignals)) === canonical(definition) ? guide : null;
   } catch { return null; }
 }
 

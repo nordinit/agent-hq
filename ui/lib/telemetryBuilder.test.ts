@@ -93,3 +93,29 @@ test('guided routing and external mapping choices persist the exact scoped catal
   if (definition.measure.kind === 'aggregate') { assert.deepEqual(definition.measure.where, predicate); assert.notEqual(definition.measure.where, predicate); }
   assert.throws(() => buildTelemetryDefinition(guide), /unavailable in this catalog scope/);
 });
+
+test('saved event calculations with population, title regex and routing signals reopen losslessly', () => {
+  const predicate = { all: [{ field: 'event.outcome', op: 'eq' as const, value: 'approved' }, { field: 'event.from_status', op: 'eq' as const, value: 'review' }] };
+  const catalogSignals = { 'route:1': predicate };
+  for (const success of ['status:approved', 'catalog:route:1']) {
+    for (const filterField of ['', 'priority']) {
+      const guide = { ...newTelemetryGuide(), recipe: 'numeric' as const, field: 'story_points', basis: 'at_event' as const,
+        success, filterField, filterValue: 'high', titlePattern: '^Proposal', titleIgnoreCase: true };
+      const definition = buildTelemetryDefinition(guide, catalogSignals);
+      const restored = telemetryGuideFromDefinition(definition, catalogSignals);
+      assert.ok(restored);
+      assert.deepEqual(buildTelemetryDefinition(restored, catalogSignals), definition);
+    }
+  }
+});
+
+test('all guided recipes preserve population and title matching when reopened', () => {
+  for (const recipe of ['count', 'numeric', 'milestone', 'first_pass', 'duration', 'blocked', 'ever_blocked', 'percent_blocked', 'funnel'] as const) {
+    const guide = { ...newTelemetryGuide(), recipe, field: 'story_points', success: 'status:approved', blocked: 'status:blocked', unblocked: 'status:review',
+      steps: ['status:review', 'status:approved'], filterField: 'priority', filterValue: 'high', titlePattern: 'Lead|Proposal' };
+    const definition = buildTelemetryDefinition(guide);
+    const restored = telemetryGuideFromDefinition(definition);
+    assert.ok(restored, recipe);
+    assert.deepEqual(buildTelemetryDefinition(restored), definition);
+  }
+});
