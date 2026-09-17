@@ -7,6 +7,7 @@ import {seedTelemetryScenario} from '../domains/telemetry/testScenario';
 import {numericRecipe,firstPassRecipe,milestoneRecipe,coreRuntimeRecipes} from '../domains/telemetry/recipes';
 import {runTelemetryQueryJobs} from '../domains/telemetry/queries';
 import {winningBinding} from '../domains/telemetry/definitions';
+import {calendarBucket} from '../domains/telemetry/evaluator';
 let db:Db;
 jest.mock('../db/client',()=>({getDb:()=>db}));
 import router from './telemetry-v2';
@@ -29,6 +30,59 @@ async function amount(scope={project_id:11}){
   const field=catalog.fields.find((field:any)=>field.key==='amount');
   expect(field).toBeDefined();return numericRecipe({key:'amount',name:'Proposal amount',field:field.id});
 }
+
+test('entry attribution is rejected consistently by validation, preview, and save',async()=>{
+  const definition={...await amount(),attribution:'assigned_agent_at_entry'};
+  for(const path of ['/definitions/validate','/queries/preview']){
+    const response=await request(path,{definition,scope:{project_id:11}});
+    expect(response.status).toBe(400);expect(JSON.stringify(response.body)).toContain('defined entry');
+  }
+  expect((await request('/metrics',{key:'invalid_entry',name:'Invalid entry',scope:{project_id:11},definition})).status).toBe(400);
+});
+test('saved views and dashboard widgets preserve pins and filter contributor groups before pagination',async()=>{
+  const metric=await saveMetric({...await amount(),attribution:'assigned_agent_current'});
+  const widget={id:'agent_view',metric_id:metric.id,metric_revision_id:metric.latest_revision_id,title:'By agent',display:'bar',view:{group_by:[{field:'agent_id'}],bucket:null,sort:'value_desc'},layout:{width:6,height:'regular'}};
+  const view=await request('/reports',{key:'agent_view',name:'By agent',scope:{project_id:11},definition:{presentation:'view',metrics:[widget]}});
+  expect(view.status).toBe(201);expect(view.body.definition.metrics[0]).toEqual(widget);
+  const dashboard=await request('/reports',{key:'agent_dashboard',name:'Team',scope:{project_id:11},definition:{presentation:'dashboard',from:'2026-01-01T00:00:00Z',metrics:[widget,{...widget,id:'filtered',view:{...widget.view,filter:{field:'id',op:'eq',value:1002}},display:'table'}]}});
+  expect(dashboard.status).toBe(201);
+  const result=await request('/queries',{report_revision_id:dashboard.body.latest_revision_id});
+  expect(result.status).toBe(200);expect(result.body.results.map((item:any)=>item.value)).toEqual([210,20]);
+  expect(result.body.results[0].groups[0].key).toEqual([101]);
+  const group=encodeURIComponent(JSON.stringify([101]));
+  const proof=await request(`/queries/${result.body.query_id}/contributors?metric_index=1&metric_revision_id=${metric.latest_revision_id}&included=true&group=${group}&limit=1`);
+  expect(proof.body.total).toBe(1);expect(proof.body.contributors[0].entity_id).toBe(1002);
+  const absent=await request(`/queries/${result.body.query_id}/contributors?metric_index=0&included=true&group=${encodeURIComponent('[null]')}`);
+  expect(absent.body.total).toBe(0);
+  const restricted=await request('/queries',{report_revision_id:dashboard.body.latest_revision_id,filter:{field:'id',op:'eq',value:1001}});
+  expect(restricted.body.results.map((item:any)=>item.value)).toEqual([10,null]);
+  await request(`/metrics/${metric.id}`,undefined,{method:'DELETE'});
+  expect((await request('/queries',{report_revision_id:dashboard.body.latest_revision_id})).status).toBe(200);
+});
+test('views reject fabricated snapshot trends, duplicate widget IDs, and conflicting scope',async()=>{
+  const metric=await saveMetric(await amount());
+  const widget={id:'one',metric_id:metric.id,metric_revision_id:metric.latest_revision_id,display:'line',view:{bucket:'day'}};
+  const save=(metrics:any[])=>request('/reports',{key:'bad_view',name:'Bad view',scope:{project_id:11},definition:{presentation:'dashboard',metrics}});
+  expect((await save([widget])).status).toBe(400);
+  expect((await save([{...widget,display:'table',view:{}},{...widget,display:'table',view:{}}])).status).toBe(400);
+  expect((await save([{...widget,display:'table',view:{scope:{project_id:12}}}])).status).toBe(400);
+});
+test('archive filters intersect with saved view scopes instead of broadening or conflicting',async()=>{
+  const metric=await saveMetric(await amount(),{project_id:11,include_archived:true});
+  await db.run("UPDATE workflows SET status='closed' WHERE id=111");
+  const result=await request('/queries',{metric_revision_id:metric.latest_revision_id,scope:{project_id:11,include_archived:false}});
+  expect(result.status).toBe(200);expect(result.body.coverage.total).toBe(0);
+});
+test('a saved historical view preserves its own bucket timezone inside a dashboard',async()=>{
+  const metric=await saveMetric(milestoneRecipe({key:'created',name:'Created',milestone:{field:'event.type',op:'eq',value:'task.created'}}));
+  const widget={id:'created',metric_revision_id:metric.latest_revision_id,display:'line',view:{bucket:'hour',timezone:'America/New_York'}};
+  const saved=await request('/reports',{key:'local_time',name:'Local time',scope:{project_id:11},definition:{presentation:'dashboard',timezone:'UTC',metrics:[widget]}});
+  expect(saved.status).toBe(201);expect(saved.body.definition.metrics[0].metric_id).toBe(metric.id);
+  const response=await request('/queries',{report_revision_id:saved.body.latest_revision_id});
+  expect(response.status).toBe(200);expect(response.body.results[0].groups[0].key[0]).toBe(calendarBucket(response.body.as_of,'hour','America/New_York'));
+  const invalid=await request('/reports',{key:'bad_timezone',name:'Bad zone',scope:{project_id:11},definition:{presentation:'view',metrics:[{...widget,view:{...widget.view,timezone:'Nowhere'}}]}});
+  expect(invalid.status).toBe(400);
+});
 async function saveMetric(definition?:any,scope:any={project_id:11}){
   const actual=definition??await amount(scope);
   const saved=await request('/metrics',{key:actual.key,name:actual.name,scope,definition:actual});expect(saved.status).toBe(201);return saved.body;

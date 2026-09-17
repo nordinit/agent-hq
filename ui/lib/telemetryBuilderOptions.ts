@@ -1,5 +1,6 @@
 import type { TelemetryGuide } from './telemetryBuilder.ts';
 import type { TelemetryCatalog, TelemetryCatalogEntry, TelemetryScope } from './telemetryTypes.ts';
+import { metricAttributionIssues } from './telemetry-contracts/requirements.ts';
 
 export interface TelemetryChoice {
   value: string;
@@ -11,7 +12,7 @@ export interface TelemetryChoice {
 }
 
 export function telemetryGuideRequirements(guide: TelemetryGuide) {
-  const journey = ['first_pass', 'ever_blocked', 'percent_blocked', 'funnel'].includes(guide.recipe)
+  const journey = ['journey_count', 'first_pass', 'ever_blocked', 'percent_blocked', 'funnel'].includes(guide.recipe)
     || (guide.recipe === 'numeric' && ['at_entry', 'at_resolution'].includes(guide.basis));
   const start = journey || guide.recipe === 'duration';
   return {
@@ -123,6 +124,10 @@ export function telemetryFilterValues(field: TelemetryCatalogEntry | undefined, 
 /** Validate active choices without deleting settings when the measurement or scope changes. */
 export function telemetryGuideSelectionIssue(guide: TelemetryGuide, catalog: TelemetryCatalog): string | undefined {
   const requirements = telemetryGuideRequirements(guide);
+  const attributionIssue = metricAttributionIssues({ grain: requirements.grain as 'task'|'event'|'journey', attribution: guide.attribution, ...(requirements.journey ? { journey: { start: { field: 'event.type', op: 'eq', value: 'task.created' } } as import('./telemetryTypes.ts').MetricDefinition['journey'] } : {}) })[0];
+  if (attributionIssue) return attributionIssue.message;
+  if (requirements.start && !guide.start) return 'Choose when the journey or interval starts. This also establishes entry attribution.';
+  if (requirements.success && !guide.success) return 'Choose the milestone that finishes the journey or measurement.';
   if (guide.recipe === 'numeric' && guide.field && !telemetryNumericFields(catalog, guide).some(field => field.id === guide.field))
     return 'The selected numeric field is unavailable for this scope or value timing. Choose a compatible field.';
   if (guide.filterField) {

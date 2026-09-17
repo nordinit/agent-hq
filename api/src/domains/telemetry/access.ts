@@ -68,6 +68,7 @@ export async function resolveScope(db: Db, access: TelemetryAccess, raw: unknown
 export function intersectScopes(base: TelemetryScope, narrow: TelemetryScope): TelemetryScope {
   const merged = { ...base };
   for (const key of Object.keys(narrow) as (keyof TelemetryScope)[]) {
+    if(key==='include_archived') { merged.include_archived=base.include_archived===false||narrow.include_archived===false?false:narrow.include_archived??base.include_archived;continue; }
     if (base[key] !== undefined && base[key] !== narrow[key]) throw new TelemetryError('incompatible_scope', `Conflicting ${key} filters.`);
     Object.assign(merged, { [key]: narrow[key] });
   }

@@ -6,6 +6,7 @@ import {
 } from './contracts';
 import { Decimal, sumDecimals } from './decimal';
 import { compileTelemetryRegex } from './regex';
+import { metricAttributionIssues } from './requirements';
 
 const MAX_NODES = 500;
 const MAX_DEPTH = 12;
@@ -60,6 +61,8 @@ export function validateMetricDefinition(value: unknown, catalog?: CatalogDescri
     const descriptor = descriptors.get(snapshotField ?? node.field);
     if (catalog && !descriptor && !builtins[snapshotField ?? node.field]) issue(path, `Unknown field reference: ${node.field}`, 'unknown_reference');
     if (node.basis !== undefined && !bases.includes(node.basis)) issue(path, 'Unsupported value basis.');
+    if (record(value) && ['at_entry', 'at_resolution'].includes(node.basis) && value.grain !== 'journey') issue(path, 'Entry and resolution values require a defined journey.', 'insufficient_history');
+    if (record(value) && node.basis === 'at_event' && value.grain !== 'event' && !path.startsWith('journey.') && !/\.(duration|event_count|event_exists)\./.test(path)) issue(path, 'Event values require an event measurement or an explicit event condition.', 'insufficient_history');
     if (descriptor?.bases && node.basis && !descriptor.bases.includes(node.basis)) issue(path, `Field is unavailable at ${node.basis}.`, 'insufficient_history');
     if(descriptor?.supported_grains&&record(value)&&!descriptor.supported_grains.includes(value.grain))issue(path,`Field ${node.field} is unavailable for ${value.grain} grain. Select its supported entity grain.`,'incompatible_field_type');
     return { type: descriptor?.type ?? builtins[node.field] ?? 'unknown', unit: descriptor?.unit };
@@ -165,6 +168,7 @@ export function validateMetricDefinition(value: unknown, catalog?: CatalogDescri
   if (!['current', 'event_occurred_at', 'journey_started_at', 'journey_resolved_at'].includes(value.time_basis)) issue('time_basis', 'Select a supported time basis.');
   if (!['exclude_and_report', 'zero'].includes(value.missing_policy)) issue('missing_policy', 'Select an explicit missing-data policy.');
   if (value.attribution && !['assigned_agent_current', 'assigned_agent_at_entry', 'executing_agent', 'event_actor', 'outcome_agent'].includes(value.attribution)) issue('attribution', 'Unsupported attribution.');
+  for (const requirement of metricAttributionIssues(value as MetricDefinition)) issue(requirement.path, requirement.message, requirement.code);
   if (value.bucket && !['hour', 'day', 'week', 'month'].includes(value.bucket)) issue('bucket', 'Unsupported calendar bucket.');
   if (value.bucket && value.time_basis === 'current') issue('bucket', 'Current snapshots cannot be presented as a historical time series.');
   if (value.population) predicate(value.population, 'population', 1);
@@ -708,10 +712,14 @@ export function evaluateMetric(input: EvaluateMetricInput): MetricResult {
   const groups = groupBy.length || definition.bucket ? [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, rows]) => aggregateGroup(rows, definition, JSON.parse(key))) : [];
   if (coverage.unknown || coverage.missing || coverage.invalid) warnings.add('Missing, invalid, or incomplete evidence is excluded and disclosed; it is not zero.');
   const problemCount = coverage.unknown + coverage.missing + coverage.invalid;
+  const attributed = evaluated.filter(row => row.proof.included);
+  const unknownAttribution = attributed.filter(row => row.proof.agent_id == null).length;
+  if (definition.attribution && unknownAttribution) warnings.add(`${unknownAttribution} included records have unknown agent attribution. They remain in the total and are shown separately in agent breakdowns.`);
   return { definition_key: definition.key, value: total.value, ...(total.numerator !== undefined ? { numerator: total.numerator, denominator: total.denominator } : {}),
     unit: definition.unit ?? (definition.measure.kind === 'ratio' ? 'percent' : 'number'), sample_count: total.sample_count, groups,
     ...(total.distribution ? { distribution: total.distribution } : {}), ...(total.funnel ? { funnel: total.funnel } : {}), coverage,
     quality: problemCount ? coverage.included ? 'partial' : 'unavailable' : 'complete', warnings: [...warnings], contributors: evaluated.map(row => row.proof),
+    ...(definition.attribution ? { attribution_coverage: { known: attributed.length - unknownAttribution, unknown: unknownAttribution } } : {}),
     as_of: new Date(asOf).toISOString(), ...(input.data_revision ? { data_revision: input.data_revision } : {}), description: explain(definition) };
 }
 

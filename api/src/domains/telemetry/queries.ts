@@ -14,10 +14,10 @@ import type { MetricDefinition, MetricResult, Predicate, ValueExpression } from 
 export const telemetryQuerySchema=z.object({
   definition:z.unknown().optional(),metric_revision_id:z.string().optional(),report_revision_id:z.string().optional(),family_key:z.string().optional(),
   scope:scopeSchema.optional(),from:z.string().optional(),to:z.string().optional(),as_of:z.string().optional(),timezone:z.string().optional(),
-  group_by:z.array(z.unknown()).max(3).optional(),filter:z.unknown().optional(),background:z.boolean().optional(),profile_revision_id:z.string().optional(),
+  group_by:z.array(z.unknown()).max(3).optional(),bucket:z.enum(['hour','day','week','month']).nullable().optional(),filter:z.unknown().optional(),background:z.boolean().optional(),profile_revision_id:z.string().optional(),
 }).strict().refine(input=>[input.definition!==undefined,!!input.metric_revision_id,!!input.report_revision_id,!!input.family_key].filter(Boolean).length===1,'Choose one draft, metric revision, report revision, or metric family.');
 export type TelemetryQuery=z.infer<typeof telemetryQuerySchema>;
-type QueryPlan={definition:MetricDefinition;scope:TelemetryScope;dependencies:any;title:string;metric_revision_id?:string;binding_id?:string;fields:TelemetryField[];allowed_task_ids?:number[]};
+type QueryPlan={definition:MetricDefinition;scope:TelemetryScope;dependencies:any;title:string;metric_revision_id?:string;binding_id?:string;fields:TelemetryField[];allowed_task_ids?:number[];window?:{from?:string;to?:string;timezone?:string};display?:string};
 export const DEFAULT_TELEMETRY_SETTINGS={query_retention_hours:1,snapshot_retention_days:30,max_snapshots:100,interactive_entities:10000,background_entities:50000,history_retention_days:90};
 export async function getTelemetrySettings(db:Db,tenantId:number){
   const row=await db.get<any>('SELECT * FROM telemetry_settings WHERE tenant_id=?',tenantId);return {...DEFAULT_TELEMETRY_SETTINGS,...row};
@@ -44,7 +44,8 @@ function temporalQuery(input:TelemetryQuery):TelemetryQuery & {as_of:string;time
 async function planQuery(db:Db,access:TelemetryAccess,input:TelemetryQuery):Promise<{plans:QueryPlan[];input:TelemetryQuery;scope:TelemetryScope;comparison?:any;unbound?:number;disabled?:number}>{
   let scope=await resolveScope(db,access,input.scope??{});
   const plans:QueryPlan[]=[];
-  async function add(raw:any,metricScope:TelemetryScope,revision?:any,profileId?:string,extra?:Partial<QueryPlan>){
+  async function add(raw:any,metricScope:TelemetryScope,revision?:any,profileId?:string,extra?:Partial<QueryPlan>,view?:any){
+    const settings={...input,...view,filter:input.filter&&view?.filter?{all:[input.filter,view.filter]}:view?.filter??input.filter};
     const merged=await resolveScope(db,access,intersectScopes(scope,metricScope));
     const catalog=await getTelemetryCatalog(db,access,merged);
     const fields=[...catalog.fields];
@@ -56,14 +57,15 @@ async function planQuery(db:Db,access:TelemetryAccess,input:TelemetryQuery):Prom
     }
     const compiled=await compileDefinition(db,access,raw,merged,profileId,revision?[revision.id]:[],fields,revision?.dependencies?.signals);
     const definition={...compiled.definition};
-    if(input.filter){
+    if(settings.filter){
       // An ad-hoc filter is pinned for this calculation independently of the
       // saved definition's older signal identities.
-      const filter=compileSignalPredicates(input.filter,[...catalog.statuses,...catalog.outcomes],merged,definition.grain);
+      const filter=compileSignalPredicates(settings.filter,[...catalog.statuses,...catalog.outcomes],merged,definition.grain);
       definition.population=definition.population?{all:[definition.population,filter.value as Predicate]}:filter.value as Predicate;
       compiled.dependencies.signals=[...new Map([...(compiled.dependencies.signals??[]),...filter.signals].map(signal=>[signal.id,signal])).values()];
     }
-    if(input.group_by)definition.group_by=input.group_by as ValueExpression[];
+    if(settings.group_by)definition.group_by=settings.group_by as ValueExpression[];
+    if(settings.bucket!==undefined){if(settings.bucket===null)delete definition.bucket;else definition.bucket=settings.bucket;}
     parseMetricDefinition(definition,fields);
     plans.push({definition,scope:merged,dependencies:compiled.dependencies,title:revision?.name??definition.name,metric_revision_id:revision?.id,fields,...extra});
     if(plans.length>10)throw new TelemetryError('query_limit_exceeded','At most 10 definition partitions can be evaluated together. Narrow the scope.');
@@ -72,7 +74,11 @@ async function planQuery(db:Db,access:TelemetryAccess,input:TelemetryQuery):Prom
     const report=await getRevision(db,access,input.report_revision_id,'report');
     scope=await resolveScope(db,access,intersectScopes(scope,report.definition.scope??report.scope));
     input={...report.definition,...input,scope,from:input.from??report.definition.from,to:input.to??report.definition.to,timezone:input.timezone??report.definition.timezone,group_by:input.group_by??report.definition.group_by};
-    for(const card of report.definition.metrics){const metric=await getRevision(db,access,card.metric_revision_id,'metric');await add(metric.definition,metric.scope,metric,undefined,{title:card.title??metric.name});}
+    for(const card of report.definition.metrics){
+      const metric=await getRevision(db,access,card.metric_revision_id,'metric');
+      const window=report.definition.presentation||card.view ? temporalQuery({...input,timezone:card.view?.timezone??input.timezone,from:metric.definition.time_basis==='current'?undefined:card.view?.from??input.from,to:metric.definition.time_basis==='current'?undefined:card.view?.to??input.to}) : undefined;
+      await add(metric.definition,intersectScopes(metric.scope,card.view?.scope??{}),metric,undefined,{title:card.title??metric.name,display:card.display,...(window?{window:{from:window.from,to:window.to,timezone:window.timezone}}:{})},card.view);
+    }
     if(report.definition.comparison?.compatible)validateComparison(plans.map(plan=>plan.definition),report.definition.comparison);
     return {plans,input,scope,comparison:report.definition.comparison};
   }
@@ -149,19 +155,20 @@ async function evaluatePlans(db:Db,access:TelemetryAccess,planned:Awaited<Return
     if(!db.inTransaction)await tx.exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     await tx.get('SELECT set_config(?, ?, true)','statement_timeout',input.background?'30000':'5000');
     for(const plan of planned.plans){
+      const period=plan.window??input;
       if(plan.definition.time_basis==='current'&&input.as_of&&Date.now()-Date.parse(input.as_of)>5000)throw new TelemetryError('unsupported_operation','Historical as_of is unavailable for current inventory. Query recorded milestones or open the retained result.');
       const data=await loadMetricData(tx,access,plan.scope,plan.definition,plan.fields,input.as_of,entityLimit,plan.allowed_task_ids);
-      const result=evaluateMetric({definition:plan.definition,entities:data.entities,observations:data.observations,catalog:plan.fields,as_of:input.as_of,from:input.from,to:input.to,timezone:input.timezone,data_revision:data.dataRevision,max_samples:entityLimit,max_observations:Math.min(250000,entityLimit*20),filter:data.scopePredicate});
+      const result=evaluateMetric({definition:plan.definition,entities:data.entities,observations:data.observations,catalog:plan.fields,as_of:input.as_of,from:period.from,to:period.to,timezone:period.timezone??input.timezone,data_revision:data.dataRevision,max_samples:entityLimit,max_observations:Math.min(250000,entityLimit*20),filter:data.scopePredicate});
       // A positive observed event is usable evidence, but an empty projection
       // during an outage (or an uncovered old interval) cannot establish zero.
       let intervalComplete=true;
       if(plan.definition.time_basis!=='current'){
         const starts=new Map<string,number>();
         for(const observation of data.observations)if(observation.type==='task.created')starts.set(`${observation.entity_kind??'task'}:${observation.entity_id}`,Date.parse(observation.occurred_at));
-        intervalComplete=data.coverageWindow.complete&&(!input.from||Date.parse(input.from)>=Date.parse(data.coverageWindow.from));
+        intervalComplete=data.coverageWindow.complete&&(!period.from||Date.parse(period.from)>=Date.parse(data.coverageWindow.from));
         for(const entity of data.entities){
           const origin=starts.get(`${entity.kind}:${entity.id}`)??Date.parse(String(entity.fields.created_at??''));
-          const requiredStart=input.from?Date.parse(input.from):origin;
+          const requiredStart=period.from?Date.parse(period.from):origin;
           if(!entity.coverage?.complete||!Number.isFinite(requiredStart)||Date.parse(entity.coverage.from)>requiredStart)intervalComplete=false;
         }
         if(!intervalComplete){
@@ -174,7 +181,7 @@ async function evaluatePlans(db:Db,access:TelemetryAccess,planned:Awaited<Return
       // Preserve source identity alongside engine proofs for reauthorization.
       const entityMap=new Map(data.entities.map(entity=>[`${entity.kind}:${entity.id}`,entity]));
       for(const contribution of result.contributors){const entity=entityMap.get(`${contribution.entity_kind}:${contribution.entity_id}`);contribution.details={...contribution.details,title:entity?.fields.title??null,project_id:entity?.fields.project_id??null,task_id:entity?.kind==='task'?entity.id:entity?.fields.task_id??null};}
-      results.push({...result,title:plan.title,metric_revision_id:plan.metric_revision_id,binding_id:plan.binding_id,definition:plan.definition,scope:plan.scope,versions:plan.dependencies,explanation:result.description,history:{...data.history,interval_complete:intervalComplete,available_window:data.coverageWindow}});
+      results.push({...result,title:plan.title,display:plan.display,metric_revision_id:plan.metric_revision_id,binding_id:plan.binding_id,definition:plan.definition,scope:plan.scope,versions:plan.dependencies,explanation:result.description,history:{...data.history,interval_complete:intervalComplete,available_window:data.coverageWindow}});
     }
   });
   let rollup:any;
@@ -237,15 +244,17 @@ export async function readQuery(db:Db,access:TelemetryAccess,id:string){
   return row.result?publicResult({...row.result,expires_at:isoTimestamp(row.expires_at),snapshot:row.snapshot}):{query_id:id,state:row.state,status:row.state,error:row.error,expires_at:isoTimestamp(row.expires_at)};
 }
 export async function queryContributors(db:Db,access:TelemetryAccess,id:string,raw:Record<string,unknown>){
-  const query=z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(200).default(50),metric_revision_id:z.string().optional(),metric_index:z.coerce.number().int().min(0).optional(),included:z.enum(['true','false']).optional()}).strict().parse(raw);
+  const query=z.object({offset:z.coerce.number().int().min(0).default(0),limit:z.coerce.number().int().min(1).max(200).default(50),metric_revision_id:z.string().optional(),metric_index:z.coerce.number().int().min(0).optional(),included:z.enum(['true','false']).optional(),group:z.string().max(4096).optional()}).strict().parse(raw);
+  let group: unknown[] | undefined;
+  if(query.group!==undefined){try{group=JSON.parse(query.group);}catch{throw new TelemetryError('invalid_definition','Group must be a JSON array.');}if(!Array.isArray(group)||group.length>4)throw new TelemetryError('invalid_definition','Group must contain at most four dimensions.');}
   const row=await getQueryRecord(db,access,id);
   if(row.state!=='complete')throw new TelemetryError('query_not_complete','Wait for this query to finish.',409);
   let result=row.result;
   if(result.results){
-    result=query.metric_revision_id?result.results.find((item:any)=>item.metric_revision_id===query.metric_revision_id):result.results[query.metric_index??0];
+    result=query.metric_index!==undefined?result.results[query.metric_index]:query.metric_revision_id?result.results.find((item:any)=>item.metric_revision_id===query.metric_revision_id):result.results[0];
     if(!result)throw new TelemetryError('not_found','Metric result not found.',404);
   }
-  const contributors=(result.contributors??[]).filter((item:any)=>query.included===undefined||item.included===(query.included==='true'));
+  const contributors=(result.contributors??[]).filter((item:any)=>(query.included===undefined||item.included===(query.included==='true'))&&(group===undefined||JSON.stringify(item.group)===JSON.stringify(group)));
   return {query_id:id,contributors:contributors.slice(query.offset,query.offset+query.limit),total:contributors.length,offset:query.offset,limit:query.limit,has_more:query.offset+query.limit<contributors.length,as_of:row.result.as_of};
 }
 export async function cancelQuery(db:Db,access:TelemetryAccess,id:string){

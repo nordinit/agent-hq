@@ -28,7 +28,7 @@ export const telemetryClient = {
   queryTelemetry: (query: TelemetryQuery, signal?: AbortSignal) => post<TelemetryQueryResponse>('/queries', query, signal),
   getTelemetryQuery: (id: string, signal?: AbortSignal) => request<TelemetryQueryResponse>(`/queries/${encodeURIComponent(id)}`, { signal }),
   cancelTelemetryQuery: (id: string) => request<{ cancelled: boolean }>(`/queries/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  getTelemetryContributors: (id: string, options: { offset?: number; limit?: number; metric_revision_id?: string; metric_index?: number; included?: boolean } = {}, signal?: AbortSignal) => request<TelemetryContributors>(`/queries/${encodeURIComponent(id)}/contributors${telemetryScopeQuery(options)}`, { signal }),
+  getTelemetryContributors: (id: string, options: { offset?: number; limit?: number; metric_revision_id?: string; metric_index?: number; included?: boolean; group?: string } = {}, signal?: AbortSignal) => request<TelemetryContributors>(`/queries/${encodeURIComponent(id)}/contributors${telemetryScopeQuery(options)}`, { signal }),
   getTelemetryMetrics: (scope?: TelemetryScope, signal?: AbortSignal) => request<{ metrics: TelemetryMetric[] }>(`/metrics${scopeQuery(scope)}`, { signal }),
   getTelemetryReports: (scope?: TelemetryScope, signal?: AbortSignal) => request<{ reports: TelemetryReport[] }>(`/reports${scopeQuery(scope)}`, { signal }),
   getTelemetryProfiles: (scope?: TelemetryScope, signal?: AbortSignal) => request<{ profiles: TelemetryProfile[] }>(`/profiles${scopeQuery(scope)}`, { signal }),

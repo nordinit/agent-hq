@@ -176,6 +176,7 @@ export interface MetricResult {
   unit: string;
   sample_count: number;
   groups: GroupResult[];
+  attribution_coverage?: { known: number; unknown: number };
   distribution?: DistributionBucket[];
   funnel?: FunnelStepResult[];
   coverage: CoverageCounts;

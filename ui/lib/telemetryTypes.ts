@@ -59,8 +59,29 @@ export interface TelemetryResource<T> {
 }
 export type TelemetryMetric = TelemetryResource<MetricDefinition>;
 export type TelemetryProfile = TelemetryResource<{ signals: Record<string, Predicate> }>;
+export type TelemetryDisplay = 'card' | 'table' | 'bar' | 'line' | 'funnel' | 'distribution';
+export interface TelemetryView {
+  group_by?: ValueExpression[];
+  bucket?: MetricDefinition['bucket'] | null;
+  filter?: Predicate;
+  scope?: TelemetryScope;
+  from?: string;
+  to?: string;
+  timezone?: string;
+  sort?: 'value_desc' | 'value_asc' | 'label';
+}
+export interface TelemetryWidget {
+  id?: string;
+  metric_id?: string;
+  metric_revision_id: string;
+  title?: string;
+  display?: TelemetryDisplay;
+  view?: TelemetryView;
+  layout?: { width: 4 | 6 | 12; height: 'compact' | 'regular' | 'tall' };
+}
 export interface TelemetryReportDefinition {
-  metrics: { metric_id?: string; metric_revision_id: string; title?: string; display?: 'card' | 'table' | 'bar' | 'line' | 'funnel' }[];
+  metrics: TelemetryWidget[];
+  presentation?: 'report' | 'view' | 'dashboard';
   scope?: TelemetryScope;
   from?: string;
   to?: string;
@@ -80,6 +101,7 @@ export interface TelemetryQuery {
   timezone?: string;
   group_by?: ValueExpression[];
   filter?: Predicate;
+  bucket?: MetricDefinition['bucket'] | null;
   background?: boolean;
 }
 export interface TelemetryResult extends MetricResult {
@@ -92,7 +114,7 @@ export interface TelemetryResult extends MetricResult {
   versions?: Record<string, unknown>;
   state?: string;
   status?: string;
-  display?: 'card' | 'table' | 'bar' | 'line' | 'funnel';
+  display?: TelemetryDisplay;
   scope?: TelemetryScope;
   binding_id?: string;
 }

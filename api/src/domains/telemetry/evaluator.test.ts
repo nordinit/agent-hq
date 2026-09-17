@@ -35,6 +35,28 @@ function sixTasks(): { entities: TelemetryEntity[]; observations: TelemetryObser
 }
 function number(value: unknown): number | null { return value === null ? null : Decimal.parse(value)?.toNumber() ?? NaN; }
 
+describe('attribution requirements and coverage',()=>{
+  const count:MetricDefinition={version:1,key:'lead_count',name:'Lead count',grain:'task',time_basis:'current',missing_policy:'exclude_and_report',measure:{kind:'aggregate',aggregate:'count'},attribution:'assigned_agent_current',group_by:[{field:'agent_id'}]};
+  test('a snapshot cannot request a journey assignment or an event actor',()=>{
+    for(const attribution of ['assigned_agent_at_entry','event_actor','outcome_agent','executing_agent'] as const){
+      const invalid={...count,attribution};
+      expect(validateMetricDefinition(invalid).errors.some(error=>error.code==='incompatible_attribution')).toBe(true);
+      expect(()=>evaluateMetric({definition:invalid,entities:[],observations:[],as_of:asOf})).toThrow();
+    }
+  });
+  test('missing attribution is visible without removing records from the total',()=>{
+    const result=evaluateMetric({definition:count,entities:[entity('A'),entity('B',{assigned_agent_id:null})],observations:[],as_of:asOf});
+    expect(result.value).toBe(2);expect(result.attribution_coverage).toEqual({known:1,unknown:1});
+    expect(result.groups.map(group=>group.key)).toEqual([[7],[null]]);
+    expect(result.warnings.join(' ')).toContain('unknown agent attribution');
+  });
+  test('journey attribution uses entry assignment, even after reassignment',()=>{
+    const definition={...firstPass(),attribution:'assigned_agent_at_entry' as const,group_by:[{field:'agent_id'}]};
+    const result=evaluateMetric({definition,entities:[entity('A',{assigned_agent_id:99})],observations:[created('A'),transition('ok','A','approved',3)],as_of:asOf});
+    expect(result.groups[0].key).toEqual([7]);expect(result.attribution_coverage).toEqual({known:1,unknown:0});
+  });
+});
+
 describe('workflow metric definitions determine business meaning', () => {
   test('six-task first pass has explicit components and excluded pending/cancelled work', () => {
     const result = evaluateMetric({ definition: firstPass(), ...sixTasks(), as_of: asOf });

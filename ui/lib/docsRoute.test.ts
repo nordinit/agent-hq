@@ -68,7 +68,7 @@ test('logs are grouped under Settings and legacy route redirects', () => {
   const settingsLayoutSource = readFileSync(join(process.cwd(), 'app/settings/layout.tsx'), 'utf8');
   const settingsLogsPageSource = readFileSync(join(process.cwd(), 'app/settings/logs/page.tsx'), 'utf8');
   const legacyLogsPageSource = readFileSync(join(process.cwd(), 'app/logs/page.tsx'), 'utf8');
-  const dashboardSource = readFileSync(join(process.cwd(), 'features/dashboard/DashboardPage.tsx'), 'utf8');
+  const dashboardSource = readFileSync(join(process.cwd(), 'features/dashboard/OperationalDashboard.tsx'), 'utf8');
 
   assert.match(settingsLayoutSource, /label: 'Logs', href: '\/settings\/logs'/);
   assert.match(settingsLogsPageSource, /@\/features\/observability\/LogsPage/);

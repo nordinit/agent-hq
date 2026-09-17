@@ -13,6 +13,7 @@ import TelemetryChoicePicker from './TelemetryChoicePicker';
 
 const recipes: { value: TelemetryRecipe; label: string; help: string }[] = [
   { value: 'count', label: 'Count records', help: 'Count the tasks in your configured population.' },
+  { value: 'journey_count', label: 'Count journeys', help: 'Count recorded journeys with explicit entry and finish conditions. Choose whether open journeys are included.' },
   { value: 'numeric', label: 'Custom-field calculation', help: 'Sum, average, or inspect the distribution of a canonical numeric field.' },
   { value: 'milestone', label: 'Reached a milestone', help: 'Count distinct tasks with a recorded entry into the selected milestone.' },
   { value: 'first_pass', label: 'First pass', help: 'Choose what success and rework mean, and which journeys belong in the denominator.' },
@@ -100,6 +101,10 @@ export default function TelemetryBuilder({ catalog, draftText, onChange, onGuide
     const defaultKey = guide.key === guide.recipe || (guide.recipe === 'count' && guide.key === 'task_count');
     update({ recipe: recipe.value, ...(!lockedKey && defaultKey ? { key: recipe.value } : {}), ...(!lockedKey && defaultName ? { name: recipe.label } : {}) });
   }
+  function configureJourney() {
+    update({ recipe: guide.recipe === 'numeric' ? 'numeric' : 'journey_count', basis: 'at_entry', start: '', success: '', denominator: 'all_started' });
+    setAdjustment('Define entry and finish below. This measures recorded journeys; it may differ from today’s task inventory. Your saved metric changes only when you save.');
+  }
   function openGuided() {
     if (mode === 'guided') return;
     if (draftText === advancedInitialText) {
@@ -163,14 +168,21 @@ export default function TelemetryBuilder({ catalog, draftText, onChange, onGuide
       </Section>
 
       <Section title="Attribution" description="Choose which agent receives credit for the measured work.">
-        <Select label="Agent attribution" value={guide.attribution} onChange={value => update({ attribution: value as TelemetryGuide['attribution'] })} options={attributions} hint={attributions.find(option => option.value === guide.attribution)?.help}/>
+        <Select label="Agent attribution" value={guide.attribution} onChange={value => {
+          if (value === 'assigned_agent_at_entry' && (guide.recipe === 'count' || guide.recipe === 'numeric' && guide.basis === 'current')) {
+            update({ attribution: value, recipe: guide.recipe === 'count' ? 'journey_count' : 'numeric', basis: 'at_entry', start: '', success: '', denominator: 'all_started' });
+            setAdjustment('Entry attribution needs a recorded journey. Define its entry and finish conditions below; all started journeys are included by default.');
+          } else update({ attribution: value as TelemetryGuide['attribution'] });
+        }} options={attributions} hint={attributions.find(option => option.value === guide.attribution)?.help}/>
+        {guide.attribution === 'assigned_agent_at_entry' && !requirements.journey && <div role="alert" className="space-y-2 text-sm text-amber-200"><p>This measurement has no journey entry. Define a journey to credit the entry assignment, or use today’s assignment for a snapshot.</p><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="secondary" onClick={configureJourney}>Configure a journey</Button><Button type="button" size="sm" variant="ghost" onClick={() => update({ attribution: 'assigned_agent_current' })}>Use current assigned agent</Button></div></div>}
+        {guide.attribution === 'assigned_agent_at_entry' && requirements.journey && <TelemetryChoicePicker label="Journey entry (required for attribution)" value={guide.start} onChange={value => update({ start: value })} options={signals} hint="Use the assignment recorded at this moment. Missing historical assignments remain Unknown."/>}
         <p className="text-xs text-slate-500">Missing attribution is reported in the results; another agent is not substituted.</p>
       </Section>
 
       {guide.recipe !== 'count' && <Section title="Measurement details" description={recipes.find(recipe => recipe.value === guide.recipe)?.help}>
         {guide.recipe === 'numeric' && <div className="grid gap-3 sm:grid-cols-2"><TelemetryChoicePicker label="Canonical numeric field" value={guide.field} onChange={value => update({ field: value, unit: numericFields.find(field => field.id === value)?.unit ?? '' })} options={telemetryFieldChoices(numericFields, currentCatalog)} placeholder="Choose a numeric field"/><Select label="Value at" value={guide.basis} onChange={value => update({ basis: value as TelemetryGuide['basis'] })} options={timings} hint="Historical values require recorded snapshots; missing values are disclosed."/></div>}
         {['numeric', 'duration'].includes(guide.recipe) && <div className="grid gap-3 sm:grid-cols-2"><Select label="Calculation" value={guide.aggregate} onChange={value => update({ aggregate: value as TelemetryGuide['aggregate'] })} options={calculations}/>{guide.aggregate === 'percentile' ? <Field label="Percentile (0–1)"><input className={inputClass} type="number" min="0" max="1" step="0.01" value={guide.percentile} onChange={event => update({ percentile: Number(event.target.value) })}/></Field> : guide.recipe === 'numeric' && <Field label="Display unit" hint="Use only units actually compatible with the selected field."><input className={inputClass} value={guide.unit} onChange={event => update({ unit: event.target.value })} placeholder="number"/></Field>}</div>}
-        {requirements.success && <div className="grid gap-3 sm:grid-cols-2">{requirements.start && <TelemetryChoicePicker label="Journey / interval starts when" value={guide.start} onChange={value => update({ start: value })} options={signals}/>}<TelemetryChoicePicker label={guide.recipe === 'milestone' || (guide.recipe === 'numeric' && guide.basis === 'at_event') ? 'Measured milestone' : 'Success / interval ends when'} value={guide.success} onChange={value => update({ success: value })} options={signals}/></div>}
+        {requirements.success && <div className="grid gap-3 sm:grid-cols-2">{requirements.start && guide.attribution !== 'assigned_agent_at_entry' && <TelemetryChoicePicker label="Journey / interval starts when" value={guide.start} onChange={value => update({ start: value })} options={signals}/>}<TelemetryChoicePicker label={guide.recipe === 'milestone' || (guide.recipe === 'numeric' && guide.basis === 'at_event') ? 'Measured milestone' : 'Success / interval ends when'} value={guide.success} onChange={value => update({ success: value })} options={signals}/></div>}
         {requirements.journey && <div className="space-y-3"><p className="text-xs text-slate-400">Optional conditions</p>{guide.recipe !== 'ever_blocked' && optionalCondition('rework', 'Rework disqualifies first pass when', 'Add rework condition', 'Runtime failure is rework only if you explicitly choose it.')}{optionalCondition('unsuccessful', 'Final unsuccessful result', 'Add unsuccessful condition')}{optionalCondition('cancelled', 'Cancellation', 'Add cancellation condition')}</div>}
         {['blocked', 'ever_blocked', 'percent_blocked'].includes(guide.recipe) && <div className="grid gap-3 sm:grid-cols-2"><TelemetryChoicePicker label="Blocked condition" value={guide.blocked} onChange={value => update({ blocked: value })} options={blockedSignals}/>{guide.recipe === 'percent_blocked' && <TelemetryChoicePicker label="Blocked interval ends when" value={guide.unblocked} onChange={value => update({ unblocked: value })} options={signals}/>}</div>}
         {guide.recipe === 'funnel' && <div className="space-y-2"><p className="text-xs font-medium text-slate-300">Ordered steps</p>{guide.steps.map((step, index) => <div key={index} className="flex items-end gap-2"><div className="min-w-0 flex-1"><TelemetryChoicePicker label={`Step ${index + 1}`} value={step} onChange={value => update({ steps: guide.steps.map((item, itemIndex) => itemIndex === index ? value : item) })} options={signals}/></div><Button type="button" size="sm" variant="ghost" disabled={guide.steps.length <= 2} onClick={() => update({ steps: guide.steps.filter((_, itemIndex) => itemIndex !== index) })} aria-label={`Remove step ${index + 1}`}><Trash2 className="h-4 w-4"/></Button></div>)}<Button type="button" size="sm" variant="ghost" disabled={guide.steps.length >= 10} onClick={() => update({ steps: [...guide.steps, ''] })}><Plus className="h-3 w-3"/>Add step</Button></div>}

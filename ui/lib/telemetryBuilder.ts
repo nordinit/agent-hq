@@ -2,7 +2,7 @@ import type { MetricDefinition, Predicate, ValueBasis } from './telemetryTypes.t
 import { compileTelemetryRegex } from './telemetry-contracts/regex.ts';
 import { numericRecipe, milestoneRecipe, firstPassRecipe, durationRecipe, blockedSnapshotRecipe, everBlockedRecipe, percentTimeBlockedRecipe, funnelRecipe } from './telemetry-contracts/recipes.ts';
 
-export type TelemetryRecipe = 'numeric' | 'count' | 'milestone' | 'first_pass' | 'duration' | 'blocked' | 'ever_blocked' | 'percent_blocked' | 'funnel';
+export type TelemetryRecipe = 'numeric' | 'count' | 'journey_count' | 'milestone' | 'first_pass' | 'duration' | 'blocked' | 'ever_blocked' | 'percent_blocked' | 'funnel';
 export interface TelemetryGuide {
   recipe: TelemetryRecipe;
   key: string;
@@ -64,7 +64,10 @@ export function buildTelemetryDefinition(guide: TelemetryGuide, catalogSignals: 
     if (guide.basis === 'at_event') { definition.grain = 'event'; definition.time_basis = 'event_occurred_at'; definition.population = selectedSignal(guide.success); }
     else if (guide.basis !== 'current') { definition.grain = 'journey'; definition.time_basis = 'journey_started_at'; definition.journey = firstPassRecipe(journey()).journey; }
   } else if (guide.recipe === 'milestone') definition = milestoneRecipe({ ...named, milestone: selectedSignal(guide.success) });
-  else if (guide.recipe === 'first_pass') definition = firstPassRecipe(journey());
+  else if (guide.recipe === 'first_pass' || guide.recipe === 'journey_count') {
+    definition = firstPassRecipe(journey());
+    if (guide.recipe === 'journey_count') { definition.measure = { kind: 'aggregate', aggregate: 'count' }; definition.unit = 'count'; }
+  }
   else if (guide.recipe === 'duration') {
     definition = durationRecipe({ ...named, start: selectedSignal(guide.start), end: selectedSignal(guide.success), aggregate: guide.aggregate });
     if (definition.measure.kind === 'aggregate' && guide.aggregate === 'percentile') definition.measure.percentile = guide.percentile;
@@ -147,7 +150,7 @@ export function telemetryGuideFromDefinition(definition: MetricDefinition, catal
           }
         }
       }
-      else guide.recipe = 'count';
+      else guide.recipe = definition.journey ? 'journey_count' : 'count';
       if (['sum', 'mean', 'min', 'max', 'percentile', 'distribution'].includes(measure.aggregate)) guide.aggregate = measure.aggregate as TelemetryGuide['aggregate'];
       guide.percentile = measure.percentile ?? 0.95;
     } else if (measure.kind === 'ratio' && !definition.journey) {
