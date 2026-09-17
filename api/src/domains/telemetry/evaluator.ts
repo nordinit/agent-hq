@@ -5,6 +5,7 @@ import {
   TelemetryObservation, ValueExpression,
 } from './contracts';
 import { Decimal, sumDecimals } from './decimal';
+import { compileTelemetryRegex } from './regex';
 
 const MAX_NODES = 500;
 const MAX_DEPTH = 12;
@@ -73,6 +74,14 @@ export function validateMetricDefinition(value: unknown, catalog?: CatalogDescri
       return;
     }
     if ('not' in node) { keys(node, ['not'], path); predicate(node.not, `${path}.not`, depth + 1); return; }
+    if (node.op === 'matches_regex') {
+      keys(node, ['field', 'basis', 'op', 'value', 'flags'], path);
+      const descriptor = field(node, path);
+      if (!['text', 'textarea', 'url', 'select', 'unknown'].includes(descriptor.type)) issue(path, 'Regex matching requires a text field.', 'incompatible_field_type');
+      try { compileTelemetryRegex(node.value, node.flags); }
+      catch (error) { issue(`${path}.value`, error instanceof Error ? error.message : String(error)); }
+      return;
+    }
     keys(node, 'field' in node ? ['field', 'basis', 'op', 'value'] : ['left', 'op', 'right'], path);
     if (!comparisons.includes(node.op)) issue(path, 'Unknown comparison operator.', 'unsupported_operation');
     const left = 'field' in node ? field(node, path) : expression(node.left, `${path}.left`, depth + 1);
@@ -298,6 +307,9 @@ function test(predicate: Predicate, sample: Sample): Truth {
   if ('any' in predicate) { const values = predicate.any.map(child => test(child, sample)); return values.includes(true) ? true : values.includes(null) ? null : false; }
   if ('not' in predicate) { const value = test(predicate.not, sample); return value === null ? null : !value; }
   const left = 'field' in predicate ? readField(predicate.field, predicate.basis, sample) : expressionValue(predicate.left, sample);
+  if (predicate.op === 'matches_regex') {
+    return typeof left === 'string' ? compileTelemetryRegex(predicate.value, predicate.flags).matcher(left).find() : null;
+  }
   const comparisonType='field'in predicate?(sample.catalog.get(predicate.field)?.type??builtins[predicate.field]):undefined;
   const normalizeLiteral=(value:Scalar):Scalar=>['date','datetime'].includes(comparisonType??'')&&typeof value==='string'&&Number.isFinite(Date.parse(value))?new Date(value).toISOString():value;
   // Event envelopes are sparse: a runtime event does not have a destination task status.

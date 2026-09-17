@@ -22,7 +22,7 @@ const queryFields = {
   as_of: z.string().optional().describe('Fixed ISO evaluation instant. Historical as_of is unavailable for current-state inventory.'),
   timezone: z.string().optional().describe('IANA timezone for calendar buckets; defaults to UTC.'),
   group_by: z.array(expression).max(3).optional().describe('At most three catalog field/value expressions; applies consistently to the result and contributors.'),
-  filter: expression.optional().describe('An additional narrowing predicate; cannot broaden authorized project scope.'),
+  filter: expression.optional().describe('An additional narrowing predicate; cannot broaden authorized project scope. Task-title regex: {field:"title",op:"matches_regex",value:"^(Lead|Proposal):",flags:"i"}. Patterns use RE2 syntax; flags i/m/s are optional. Put the predicate in definition.population to save it with a metric.'),
   background: z.boolean().optional().describe('Queue bounded background evaluation; inspect status with agent_hq_get_telemetry_query.'),
   profile_revision_id: id.optional().describe('Pinned measurement profile for symbolic signal references.'),
 };

@@ -82,6 +82,22 @@ test('all global filters narrow the same numerator denominator and proof',async(
   expect(approved.status).toBe(200);expect(approved.body.value).toBe(60);
   expect((await request(`/queries/${approved.body.query_id}/contributors?included=true`)).body.contributors.map((item:any)=>item.entity_id)).toEqual([1001,1002,1003]);
 });
+test('title regex survives metric and report saves and filters retained contributors',async()=>{
+  const definition={...await amount(),population:{field:'title',op:'matches_regex',value:'^[ab] —',flags:'i'}};
+  const scope={project_id:11,workflow_type:'content',workflow_id:111};
+  const preview=await request('/queries/preview',{definition,scope});
+  expect(preview.status).toBe(200);expect(preview.body).toMatchObject({value:30,sample_count:2});
+  const proof=await request(`/queries/${preview.body.query_id}/contributors?included=true`);
+  expect(proof.body.contributors.map((row:any)=>row.entity_id)).toEqual([1001,1002]);
+  const metric=await saveMetric(definition,scope);
+  expect(metric.definition.population).toEqual(definition.population);
+  const report=await request('/reports',{key:'regex_report',name:'Matching titles',scope,definition:{scope,metrics:[{metric_id:metric.id,metric_revision_id:metric.latest_revision_id}]}});
+  expect(report.status).toBe(201);
+  const result=await request('/queries',{report_revision_id:report.body.latest_revision_id});
+  expect(result.status).toBe(200);expect(result.body.results[0].value).toBe(30);
+  const invalid=await request('/queries/preview',{definition:{...definition,population:{...definition.population,value:'['}},scope});
+  expect(invalid.status).toBe(400);expect(invalid.body.error).toContain('Invalid regex');
+});
 test('six-task configurable first pass is 2/4 and runtime opt-in is 1/4',async()=>{
   const definition=firstPass();const result=await request('/queries/preview',{definition,scope:{project_id:11}});
   expect(result.status).toBe(200);expect(result.body).toMatchObject({numerator:2,denominator:4,value:.5});

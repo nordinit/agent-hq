@@ -41,6 +41,27 @@ test('custom population filters are typed and never treat an invalid checkbox as
   assert.throws(() => buildTelemetryDefinition({ ...guide, filterValue: 'not a number' }), /valid number/);
   assert.throws(() => buildTelemetryDefinition({ ...guide, filterType: 'checkbox', filterValue: 'perhaps' }), /true or false/);
 });
+test('title regex combines with population filters and survives guided editing', () => {
+  const guide = {...newTelemetryGuide(), titlePattern: '^(Lead|Proposal):', titleIgnoreCase: true, filterField: 'priority', filterValue: 'high'};
+  const definition = buildTelemetryDefinition(guide);
+  assert.deepEqual(definition.population, {all: [{field: 'priority', op: 'eq', value: 'high'}, {field: 'title', op: 'matches_regex', value: '^(Lead|Proposal):', flags: 'i'}]});
+  const restored = telemetryGuideFromDefinition(definition);
+  assert.ok(restored);
+  assert.deepEqual(buildTelemetryDefinition(restored), definition);
+  assert.equal(buildTelemetryDefinition({...newTelemetryGuide(), titlePattern: ''}).population, undefined);
+  assert.throws(() => buildTelemetryDefinition({...guide, titlePattern: '['}), /Invalid regex/);
+});
+test('title regex preserves event population and journey definitions', () => {
+  for (const guide of [
+    {...newTelemetryGuide(), titlePattern: '^Lead', recipe: 'numeric' as const, field: 'story_points', basis: 'at_event' as const, success: 'status:submitted'},
+    {...newTelemetryGuide(), titlePattern: '^Lead', recipe: 'first_pass' as const, success: 'status:approved'},
+    {...newTelemetryGuide(), titlePattern: '^Lead'},
+  ]) {
+    const definition = buildTelemetryDefinition(guide), restored = telemetryGuideFromDefinition(definition);
+    assert.ok(restored);
+    assert.deepEqual(buildTelemetryDefinition(restored), definition);
+  }
+});
 test('reset needs an explicit configured signal and status labels are not inferred', () => {
   assert.throws(() => buildTelemetryDefinition({ ...newTelemetryGuide(), recipe: 'first_pass', success: 'status:approved', counting: 'per_reset' }), /required milestone/);
   assert.deepEqual(telemetrySignal('outcome:changes_requested'), { field: 'event.outcome', op: 'eq', value: 'changes_requested' });

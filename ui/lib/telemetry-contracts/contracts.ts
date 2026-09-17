@@ -9,6 +9,7 @@ export type Predicate =
   | { all: Predicate[] }
   | { any: Predicate[] }
   | { not: Predicate }
+  | { field: string; basis?: ValueBasis; op: 'matches_regex'; value: string; flags?: string }
   | { field: string; basis?: ValueBasis; op: Comparison; value?: Scalar | Scalar[] }
   | { left: ValueExpression; op: Comparison; right?: ValueExpression };
 export type ValueExpression =

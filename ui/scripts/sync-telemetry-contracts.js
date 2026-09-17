@@ -9,7 +9,7 @@ const outputDir = path.resolve(__dirname, '../lib/telemetry-contracts');
 const header = '// Generated from api/src/domains/telemetry; run node ui/scripts/sync-telemetry-contracts.js.\n';
 function generated(name) { return header + fs.readFileSync(path.join(sourceDir, name), 'utf8'); }
 function sync(check) {
-  for (const name of ['contracts.ts', 'recipes.ts']) {
+  for (const name of ['contracts.ts', 'recipes.ts', 'regex.ts']) {
     const expected = generated(name); const destination = path.join(outputDir, name);
     if (check) {
       if (!fs.existsSync(destination) || fs.readFileSync(destination, 'utf8') !== expected) throw new Error(`Generated telemetry ${name} is stale. Run node ui/scripts/sync-telemetry-contracts.js.`);

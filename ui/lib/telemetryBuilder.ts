@@ -1,4 +1,5 @@
 import type { MetricDefinition, Predicate, ValueBasis } from './telemetryTypes.ts';
+import { compileTelemetryRegex } from './telemetry-contracts/regex.ts';
 import { numericRecipe, milestoneRecipe, firstPassRecipe, durationRecipe, blockedSnapshotRecipe, everBlockedRecipe, percentTimeBlockedRecipe, funnelRecipe } from './telemetry-contracts/recipes.ts';
 
 export type TelemetryRecipe = 'numeric' | 'count' | 'milestone' | 'first_pass' | 'duration' | 'blocked' | 'ever_blocked' | 'percent_blocked' | 'funnel';
@@ -28,9 +29,11 @@ export interface TelemetryGuide {
   filterType: string;
   steps: string[];
   bucket: '' | 'hour' | 'day' | 'week' | 'month';
+  titlePattern: string;
+  titleIgnoreCase: boolean;
 }
 export function newTelemetryGuide(): TelemetryGuide {
-  return { recipe: 'count', key: 'task_count', name: 'Task count', field: '', aggregate: 'sum', percentile: 0.95, basis: 'current', unit: '', start: 'event:task.created', success: '', rework: '', unsuccessful: '', cancelled: '', blocked: '', unblocked: '', denominator: 'evaluated', counting: 'first_per_entity', reset: '', attribution: 'assigned_agent_current', filterField: '', filterOp: 'eq', filterValue: '', filterType: 'text', steps: ['', ''], bucket: '' };
+  return { recipe: 'count', key: 'task_count', name: 'Task count', field: '', aggregate: 'sum', percentile: 0.95, basis: 'current', unit: '', start: 'event:task.created', success: '', rework: '', unsuccessful: '', cancelled: '', blocked: '', unblocked: '', denominator: 'evaluated', counting: 'first_per_entity', reset: '', attribution: 'assigned_agent_current', filterField: '', filterOp: 'eq', filterValue: '', filterType: 'text', steps: ['', ''], bucket: '', titlePattern: '', titleIgnoreCase: false };
 }
 export function telemetrySignal(value: string, catalogSignals: Record<string, Predicate> = {}): Predicate {
   const separator = value.indexOf(':');
@@ -87,6 +90,12 @@ export function buildTelemetryDefinition(guide: TelemetryGuide, catalogSignals: 
     const population: Predicate = { field: guide.filterField, op: guide.filterOp, ...(['is_present', 'is_missing'].includes(guide.filterOp) ? {} : { value }) };
     definition.population = definition.population ? { all: [definition.population, population] } : population;
   }
+  if (guide.titlePattern) {
+    const flags = guide.titleIgnoreCase ? 'i' : '';
+    compileTelemetryRegex(guide.titlePattern, flags);
+    const title: Predicate = { field: 'title', op: 'matches_regex', value: guide.titlePattern, ...(flags ? { flags } : {}) };
+    definition.population = definition.population ? { all: [definition.population, title] } : title;
+  }
   if (guide.bucket) definition.bucket = guide.bucket;
   return definition;
 }
@@ -104,6 +113,13 @@ export function telemetryGuideFromDefinition(definition: MetricDefinition): Tele
     throw new Error('Advanced signal');
   };
   try {
+    // Peel off the optional title predicate before restoring the existing guided population.
+    let population = definition.population;
+    const title = population && 'all' in population && population.all.length === 2 ? population.all[1] : population;
+    if (title && 'field' in title && title.field === 'title' && title.op === 'matches_regex' && !title.basis && (!title.flags || title.flags === 'i')) {
+      guide.titlePattern = title.value; guide.titleIgnoreCase = title.flags === 'i';
+      population = population && 'all' in population ? population.all[0] : undefined;
+    }
     const measure = definition.measure;
     if (definition.journey) {
       const journey = definition.journey;
@@ -116,7 +132,7 @@ export function telemetryGuideFromDefinition(definition: MetricDefinition): Tele
     if (measure.kind === 'aggregate') {
       if (measure.value && 'duration' in measure.value) { guide.recipe = 'duration'; guide.start = signal(measure.value.duration.start); guide.success = signal(measure.value.duration.end); }
       else if (definition.grain === 'event' && measure.aggregate === 'distinct_count') { guide.recipe = 'milestone'; guide.success = signal(measure.where); }
-      else if (measure.value && 'field' in measure.value) { guide.recipe = 'numeric'; guide.field = measure.value.field; guide.basis = measure.value.basis ?? 'current'; if (definition.grain === 'event') guide.success = signal(definition.population); }
+      else if (measure.value && 'field' in measure.value) { guide.recipe = 'numeric'; guide.field = measure.value.field; guide.basis = measure.value.basis ?? 'current'; if (definition.grain === 'event') guide.success = signal(population); }
       else guide.recipe = 'count';
       if (['sum', 'mean', 'min', 'max', 'percentile', 'distribution'].includes(measure.aggregate)) guide.aggregate = measure.aggregate as TelemetryGuide['aggregate'];
       guide.percentile = measure.percentile ?? 0.95;
@@ -125,8 +141,7 @@ export function telemetryGuideFromDefinition(definition: MetricDefinition): Tele
       const blocked = measure.numerator.where;
       guide.blocked = blocked && 'field' in blocked && blocked.field === 'status' && blocked.op === 'eq' ? `status:${blocked.value}` : signal(blocked);
     }
-    if (definition.population && !(guide.recipe === 'numeric' && guide.basis === 'at_event')) {
-      const population = definition.population;
+    if (population && !(guide.recipe === 'numeric' && guide.basis === 'at_event')) {
       if (!('field' in population) || Array.isArray(population.value) || typeof population.value === 'object') return null;
       guide.filterField = population.field; guide.filterOp = population.op as TelemetryGuide['filterOp']; guide.filterValue = String(population.value ?? '');
       guide.filterType = typeof population.value === 'number' ? 'number' : typeof population.value === 'boolean' ? 'checkbox' : 'text';
