@@ -20,6 +20,17 @@ export const telemetryWidgetSchema = z.object({
   layout: z.object({ width: z.union([z.literal(4), z.literal(6), z.literal(12)]), height: z.enum(['compact', 'regular', 'tall']) }).strict().optional(),
 }).strict();
 
+export const reportSchema = z.object({
+  metrics: z.array(telemetryWidgetSchema).min(1).max(10),
+  presentation: z.enum(['report', 'view', 'dashboard']).optional(),
+  scope: scopeSchema.optional(), from: z.string().optional(), to: z.string().optional(), timezone: z.string().optional(), group_by: z.array(z.unknown()).max(3).optional(),
+  comparison: z.object({ compatible: z.boolean(), key: z.string().min(1), semantic_version: z.string().min(1) }).strict().optional(),
+}).strict().superRefine((report, ctx) => {
+  if (report.presentation === 'view' && report.metrics.length !== 1) ctx.addIssue({ code: 'custom', path: ['metrics'], message: 'A saved view contains exactly one metric.' });
+  const ids = report.metrics.map(metric => metric.id).filter(Boolean);
+  if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['metrics'], message: 'Widget IDs must be unique.' });
+});
+
 export function viewDisplayIssue(definition: {time_basis: string; bucket?: string; measure: {kind: string; aggregate?: string}}, display?: string) {
   if (display === 'line' && (definition.time_basis === 'current' || !definition.bucket)) return 'A time chart requires a historical measurement and a time bucket. Current snapshots cannot show a historical trend.';
   if (display === 'funnel' && definition.measure.kind !== 'funnel') return 'A funnel chart requires a funnel measurement.';

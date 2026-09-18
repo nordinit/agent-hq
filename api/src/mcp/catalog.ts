@@ -54,6 +54,7 @@ const resources: McpCatalogResource[] = [
 type JsonSchemaObject = {
   properties?: Record<string, unknown>;
   required?: string[];
+  $defs?: Record<string, unknown>;
 };
 
 function serializeArgs(schema: Record<string, ZodTypeAny>): McpCatalogArg[] {
@@ -74,7 +75,10 @@ function serializeArgs(schema: Record<string, ZodTypeAny>): McpCatalogArg[] {
       name,
       required: required.has(name),
       description,
-      schema: propertySchema,
+      // Recursive telemetry expressions reference $defs on the document root.
+      // Each catalog argument is its own document, so retain a standalone schema
+      // rather than detaching properties and leaving dangling references.
+      schema: jsonSchema.$defs ? toJSONSchema(value) : propertySchema,
     };
   });
 }

@@ -2,7 +2,8 @@ import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import type { Db } from '../../db/adapter/types';
 import { TelemetryError, type TelemetryAccess, type TelemetryScope, resolveScope, scopeKey, scopeMatches, bindingRank, scopeSchema, intersectScopes } from './access';
-import { telemetryWidgetSchema, viewDisplayIssue } from './views';
+import { reportSchema, viewDisplayIssue } from './views';
+export { reportSchema } from './views';
 import { contentHash, getTelemetryCatalog, type TelemetryField } from './catalog';
 import { parseMetricDefinition, validateMetricDefinition } from './evaluator';
 import type { CatalogDescriptor, MetricDefinition } from './contracts';
@@ -109,16 +110,6 @@ export async function compileDefinition(db:Db,access:TelemetryAccess,raw:any,sco
   return {definition,dependencies};
 }
 
-export const reportSchema=z.object({
-  metrics:z.array(telemetryWidgetSchema).min(1).max(10),
-  presentation:z.enum(['report','view','dashboard']).optional(),
-  scope:scopeSchema.optional(),from:z.string().optional(),to:z.string().optional(),timezone:z.string().optional(),group_by:z.array(z.unknown()).max(3).optional(),
-  comparison:z.object({compatible:z.boolean(),key:z.string().min(1),semantic_version:z.string().min(1)}).strict().optional(),
-}).strict().superRefine((report,ctx)=>{
-  if(report.presentation==='view'&&report.metrics.length!==1)ctx.addIssue({code:'custom',path:['metrics'],message:'A saved view contains exactly one metric.'});
-  const ids=report.metrics.map(metric=>metric.id).filter(Boolean);
-  if(new Set(ids).size!==ids.length)ctx.addIssue({code:'custom',path:['metrics'],message:'Widget IDs must be unique.'});
-});
 export async function validateStoredDefinition(db:Db,access:TelemetryAccess,kind:DefinitionKind,definition:any,scope:TelemetryScope,profileId?:string) {
   if(kind==='metric') {
     const compiled=await compileDefinition(db,access,definition,scope,profileId);

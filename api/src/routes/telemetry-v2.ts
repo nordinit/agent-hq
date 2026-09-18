@@ -9,6 +9,7 @@ import { compileDefinition, createDefinition, reviseDefinition, getDefinition, l
 import { queryTelemetry, readQuery, queryContributors, cancelQuery, freezeReport, listSnapshots, getTelemetrySettings, updateTelemetrySettings } from '../domains/telemetry/queries';
 import { backfillTelemetry, getTelemetryCoverage, TELEMETRY_BACKFILL_SOURCES } from '../domains/telemetry/capture';
 import { exportTelemetry, importTelemetry } from '../domains/telemetry/portability';
+import { getTelemetryDefinitionContract } from '../domains/telemetry/definitionContract';
 
 const router=Router();
 const handle=(fn:(req:Request,res:Response)=>Promise<unknown>)=>(req:Request,res:Response)=>{void fn(req,res).catch(error=>{
@@ -22,7 +23,7 @@ const handle=(fn:(req:Request,res:Response)=>Promise<unknown>)=>(req:Request,res
 });};
 router.get('/catalog',handle(async(req,res)=>{
   const db=getDb(),access=await telemetryAccess(db,req),scope=await resolveScope(db,access,queryScope(req.query));
-  res.json({...await getTelemetryCatalog(db,access,scope),recipes:recipeCatalog,core_metrics:coreRuntimeRecipes(),coverage:await getTelemetryCoverage(db,access.tenantId,scope.project_id==null?undefined:[scope.project_id]),operations:['count','distinct_count','count_if','sum','mean','min','max','percentile','distribution','ratio','duration','funnel'],scope});
+  res.json({...await getTelemetryCatalog(db,access,scope),definition_contract:getTelemetryDefinitionContract(),recipes:recipeCatalog,core_metrics:coreRuntimeRecipes(),coverage:await getTelemetryCoverage(db,access.tenantId,scope.project_id==null?undefined:[scope.project_id]),operations:['count','distinct_count','count_if','sum','mean','min','max','percentile','distribution','ratio','duration','funnel'],scope});
 }));
 router.post('/definitions/validate',handle(async(req,res)=>{
   const db=getDb(),access=await telemetryAccess(db,req),scope=await resolveScope(db,access,req.body.scope??{});

@@ -91,10 +91,26 @@ const firstPass=()=>firstPassRecipe({key:'first_pass',name:'First-pass approval'
 
 test('catalog uses authorized canonical fields and has no fabricated business metrics',async()=>{
   const result=await request('/catalog?project_id=11');expect(result.status).toBe(200);
+  expect(result.body.definition_contract.version).toBe(1);
+  expect(result.body.definition_contract.schemas.metric.properties).toHaveProperty('population');
+  expect(result.body.definition_contract.examples).toHaveProperty('first_pass_by_entry_agent');
   expect(result.body.fields.map((field:any)=>field.key)).toContain('amount');
   expect(result.body.fields.map((field:any)=>field.key)).not.toContain('private_amount');
   expect(result.body.core_metrics.every((metric:any)=>metric.key.startsWith('core.'))).toBe(true);
   expect((await request('/catalog?project_id=22')).status).toBe(404);
+});
+
+test('freezing with an expected report revision rejects mismatches without creating a snapshot',async()=>{
+  const metric=await saveMetric();
+  const report=(await request('/reports',{key:'revision_guard',name:'Revision guard',scope:{project_id:11},definition:{metrics:[{metric_revision_id:metric.latest_revision_id}]}})).body;
+  const query=(await request('/queries',{report_revision_id:report.latest_revision_id})).body;
+  const mismatched=await request(`/reports/${report.id}/snapshots`,{query_id:query.query_id,report_revision_id:'different-revision'});
+  expect(mismatched.status).toBe(400);
+  expect(mismatched.body.error).toContain('different report revision');
+  expect(await db.value('SELECT snapshot FROM telemetry_query_results WHERE id=?',query.query_id)).toBe(false);
+  const matched=await request(`/reports/${report.id}/snapshots`,{query_id:query.query_id,report_revision_id:report.latest_revision_id});
+  expect(matched.status).toBe(201);
+  expect(matched.body).toMatchObject({snapshot:true,report_revision_id:report.latest_revision_id});
 });
 test.each([
   {project_id:11,workflow_type:'content'},

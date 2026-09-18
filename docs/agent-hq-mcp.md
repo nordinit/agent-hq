@@ -250,6 +250,25 @@ Supported schedules are the same as the API/UI recurring task scheduler: `every 
 
 ---
 
+## Telemetry definitions and analysis
+
+Start with `agent_hq_list_telemetry_catalog` using the desired project, workflow/type, and task type. Its `definition_contract` contains self-contained JSON Schema documents for metrics, predicates, value expressions, journeys, profiles, reports, and scope, plus examples and guidance. Resolve each document's local `$ref` against that same document. MCP `tools/list` also publishes the corresponding structured input schemas for validation, previews, queries, saves, and revisions.
+
+The catalog examples cover title regex, combined AND/OR/NOT filters, custom-field arithmetic, agent grouping, journey-entry attribution, profile signals, component metric references, and dashboard widgets. Replace uppercase placeholders with IDs from the scoped catalog or saved revisions before submitting them.
+
+- Use `fields[].id` for custom-field references and `statuses[].id` / `outcomes[].id` for canonical workflow signals.
+- Store persistent conditions in `definition.population`. Query and widget `filter` overrides further narrow that population. Workflow type and task type can be selected together in `scope`.
+- Use `group_by: [{"field":"agent_id"}]` to group by the metric's attribution policy. `assigned_agent_at_entry` requires journey grain and an explicit `journey.start`; current task counts use `assigned_agent_current`.
+- The UI's **Journeys to include** setting uses the existing `journey.denominator` key (`evaluated`, `successful`, or `all_started`). It is separate from a ratio measure's numeric denominator.
+- `signal_ref` resolves a named signal through a pinned profile revision. `metric_ref` resolves a compatible saved aggregate metric revision. Profiles and query/widget filter overrides use explicit predicates.
+- Reports store saved views (`presentation: "view"`, one widget) and dashboards (`presentation: "dashboard"`, up to ten widgets). Widgets support display type, grouping, filters, time settings, and layout. Historical line charts require a historical measurement and a time bucket.
+
+The schemas describe structure. The shared REST compiler still checks scope, references, history, field types, attribution, expression limits, and display compatibility. Validate and preview a metric before saving it; neither structural validation nor a successful save establishes historical coverage.
+
+`agent_hq_freeze_telemetry_report` accepts an optional `report_revision_id` alongside `report_id` and `query_id`. It checks that the completed calculation belongs to that pinned revision before freezing it. A mismatch leaves the query unfrozen; omitting the revision retains the previous behavior. The guard compares against the query's revision, not whichever revision is currently latest.
+
+These contracts do not change tool profiles or permissions: telemetry tools are part of the full server surface; the curated remote profile controls which tools a connection discovers.
+
 ## File Scopes
 
 Use project files for material that applies across the whole project: product context, shared research, API references, brand assets, and reusable runbooks. Use workflow files for material owned by a single workflow: implementation specs, QA artifacts, handoff packages, and temporary working documents that should not clutter the broader project library.

@@ -8,6 +8,7 @@ import { McpRegistrar, McpToolResult } from './registrar';
 type JsonSchemaObject = {
   properties?: Record<string, unknown>;
   required?: string[];
+  $defs?: Record<string, unknown>;
 };
 
 function serializeArgs(schema: Record<string, ZodTypeAny>): McpCatalogArg[] {
@@ -28,7 +29,7 @@ function serializeArgs(schema: Record<string, ZodTypeAny>): McpCatalogArg[] {
       name,
       required: required.has(name),
       description,
-      schema: propertySchema,
+      schema: jsonSchema.$defs ? toJSONSchema(value) : propertySchema,
     };
   });
 }
