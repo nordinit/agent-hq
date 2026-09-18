@@ -77,6 +77,7 @@ type TaskOutcomeTaskRow = {
   deploy_target: string | null;
   evidence_json: string | null;
   custom_fields_json: string | null;
+  recurring_series_id?: number | null;
   previous_status?: string | null;
 };
 
@@ -316,6 +317,7 @@ async function reloadTaskOutcomeTaskRow(db: Db, taskId: number): Promise<TaskOut
       ${assignedAgentSelect},
       active_instance_id,
       ${await selectTaskColumnOrNull(db, 'review_owner_agent_id')},
+      ${await selectTaskColumnOrNull(db, 'recurring_series_id')},
       ${evidenceSelect},
       ${customFieldsSelect}
     FROM tasks
@@ -365,6 +367,7 @@ export async function applyTaskOutcome(db: Db, input: ApplyTaskOutcomeInput): Pr
       ${assignedAgentSelect},
       active_instance_id,
       ${await selectTaskColumnOrNull(db, 'review_owner_agent_id')},
+      ${await selectTaskColumnOrNull(db, 'recurring_series_id')},
       ${evidenceSelect},
       ${customFieldsSelect}
     FROM tasks

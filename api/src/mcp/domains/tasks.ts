@@ -63,7 +63,7 @@ export function registerTasksTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_update_task'],
-    'Update editable fields on an existing task, including workflow movement and assignment, with optional dry-run preview. Scoped non-admin MCP callers need Project task CRUD and may only update tasks, workflows, and assignments inside their assigned project.',
+    'Update editable fields on an existing task, including workflow movement and assignment, with optional dry-run preview. For a custom_fields-only update to the caller’s active task, tasks.write_active_custom_fields is sufficient. Other edits require Project task CRUD and must stay inside the assigned project.',
     {
       task_id: z.number().int().positive().describe('Task ID (required)'),
       title: z.string().min(1).optional().describe('New title'),

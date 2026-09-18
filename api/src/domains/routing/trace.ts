@@ -22,6 +22,7 @@ import { taskActorDisplayNames } from '../tasks/actorDisplay';
 // ── Shared ────────────────────────────────────────────────────────────────────
 
 export type TraceGate = {
+  recurring_series_id?: number | null;
   requirement_id: number;
   field_name: string;
   requirement_type: string;
@@ -154,6 +155,7 @@ export async function traceHypothetical(
     .filter((gate) => gate.task_type == null || taskType == null || gate.task_type === taskType)
     .map((gate) => ({
       requirement_id: gate.requirement_id,
+      recurring_series_id: gate.recurring_series_id,
       field_name: gate.field_name,
       requirement_type: gate.requirement_type,
       match_field: null,

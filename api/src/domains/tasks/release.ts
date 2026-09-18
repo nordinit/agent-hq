@@ -265,13 +265,15 @@ async function applyPostedTaskOutcome(
   const normalizedBody = normalizeOutcomeBody(body);
   const dryRun = normalizedBody.dry_run === true || normalizedBody.dry_run === 'true';
   const customFieldsSelect = await taskTableHasColumn(db, 'custom_fields_json') ? 'custom_fields_json' : 'NULL AS custom_fields_json';
-  const existing = await db.get(`SELECT id, status, task_type, workflow_id, ${customFieldsSelect}
+  const seriesSelect = await taskTableHasColumn(db, 'recurring_series_id') ? 'recurring_series_id' : 'NULL AS recurring_series_id';
+  const existing = await db.get(`SELECT id, status, task_type, workflow_id, ${seriesSelect}, ${customFieldsSelect}
      FROM tasks WHERE id = ?`, taskId) as {
     id: number;
     status: string;
     task_type: string | null;
     workflow_id: number | null;
     custom_fields_json: string | null;
+    recurring_series_id: number | null;
   } | undefined;
   if (!existing) {
     const error = new Error('Task not found') as Error & { status?: number };
@@ -290,7 +292,7 @@ async function applyPostedTaskOutcome(
 
   const inlineEvidence = await extractTaskOutcomeEvidence(db, existing, outcomePayload(body));
   const hasInline = Object.keys(inlineEvidence).length > 0;
-  const transitionRequirements = (await loadWorkflowTaskTransitionRequirements(db, existing.workflow_id ?? null, outcome, existing.task_type ?? null))
+  const transitionRequirements = (await loadWorkflowTaskTransitionRequirements(db, existing.workflow_id ?? null, outcome, existing.task_type ?? null, existing.recurring_series_id))
     .map((row): GateRequirement => ({
       field_name: row.field_name,
       requirement_type: row.requirement_type,
@@ -373,7 +375,7 @@ async function applyPostedTaskOutcome(
   const writeValidatedEvidence = async (tx: Db): Promise<void> => {
     // Serialize evidence+outcome writes and validate against the state actually
     // being updated, not the earlier preview snapshot.
-    const current = await tx.get(`SELECT id, status, task_type, workflow_id, ${customFieldsSelect}
+    const current = await tx.get(`SELECT id, status, task_type, workflow_id, ${seriesSelect}, ${customFieldsSelect}
       FROM tasks WHERE id = ? FOR UPDATE`, taskId) as typeof existing | undefined;
     if (!current) throw errorWithBody(404, { error: 'Task not found' });
     if (options.mcpIdentity) {
@@ -388,7 +390,7 @@ async function applyPostedTaskOutcome(
       if (failure) throw errorWithBody(failure.status, failure.body);
     }
     const evidence = await extractTaskOutcomeEvidence(tx, current, outcomePayload(body));
-    const requirements = await loadWorkflowTaskTransitionRequirements(tx, current.workflow_id, outcome, current.task_type);
+    const requirements = await loadWorkflowTaskTransitionRequirements(tx, current.workflow_id, outcome, current.task_type, current.recurring_series_id);
     const validation = validateInlineEvidenceForOutcome(outcome, evidence, {
       ...getCanonicalTaskRecord(current), status: current.status,
     }, requirements);

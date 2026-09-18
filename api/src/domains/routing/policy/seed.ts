@@ -60,6 +60,7 @@ export async function isStarterRequirementSeedForWorkflow(
   workflowId: number,
   row: RequirementSeedIdentity,
 ): Promise<boolean> {
+  if (row.recurring_series_id != null) return false;
   const workflow = await getWorkflowSeedRow(db, workflowId);
   if (!workflow) return false;
   const defaultKeys = new Set(

@@ -63,6 +63,7 @@ export type GraphRuleInput = GraphScopeAnnotation & {
 };
 
 export type GraphRequirementInput = GraphScopeAnnotation & {
+  recurring_series_id?: number | null;
   id: number;
   outcome: string;
   task_type: string | null;
@@ -178,6 +179,7 @@ export type GraphNode = {
 };
 
 export type GraphGate = {
+  recurring_series_id?: number | null;
   requirement_id: number;
   field_name: string;
   requirement_type: string;
@@ -411,7 +413,7 @@ export function buildWorkflowGraph(input: {
     const typed = candidates.filter((requirement) => requirement.task_type === taskType);
     // Superseded rows do not override anything, so only live ones claim a key.
     const overrideKey = (requirement: GraphRequirementInput): string =>
-      [requirement.field_name, requirement.requirement_type, requirement.match_field ?? ''].join('\u0000');
+      [requirement.field_name, requirement.requirement_type, requirement.match_field ?? '', requirement.recurring_series_id ?? ''].join('\u0000');
     const overridden = new Set(typed.filter(gateRuns).map(overrideKey));
     return [
       ...typed,
@@ -440,6 +442,7 @@ export function buildWorkflowGraph(input: {
     const gates = workflowGates
       .map((requirement): GraphGate => ({
         requirement_id: requirement.id,
+        recurring_series_id: requirement.recurring_series_id,
         field_name: requirement.field_name,
         requirement_type: requirement.requirement_type,
         severity: requirement.severity,
@@ -837,6 +840,7 @@ export async function getWorkflowGraph(
       outcome: String(row.outcome ?? ''),
       task_type: asNullableString(row.task_type),
       field_name: String(row.field_name ?? ''),
+      recurring_series_id: row.recurring_series_id == null ? null : Number(row.recurring_series_id),
       requirement_type: String(row.requirement_type ?? 'required'),
       match_field: asNullableString(row.match_field),
       severity: String(row.severity ?? 'block'),

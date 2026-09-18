@@ -47,6 +47,7 @@ export interface TaskReleaseRecord extends Partial<TaskReleaseEvidence> {
   workflow_id?: number | null;
   workflow_type?: string | null;
   custom_fields_json?: string | null;
+  recurring_series_id?: number | null;
 }
 
 // The hasImplementationEvidence / hasQaEvidence / hasDeployEvidence / hasLiveVerification
@@ -119,6 +120,7 @@ async function loadTransitionRequirements(
   outcome: string,
   workflowId?: number | null,
   taskType?: string | null,
+  recurringSeriesId?: number | null,
 ): Promise<TransitionRequirementRow[]> {
   // Workflow-scoped rows are the whole answer. There is deliberately no fallback: a global
   // `transition_requirements` table used to back this up, and because the fallback replaced
@@ -126,7 +128,7 @@ async function loadTransitionRequirements(
   // outcome to block-severity rows nobody had configured. Migration 15 moved its contents to
   // the dev workflow default and dropped it. An outcome with no rows here is now ungated,
   // which is what the configuration says.
-  const workflowRows = await loadWorkflowTaskTransitionRequirements(db, workflowId ?? null, outcome, taskType);
+  const workflowRows = await loadWorkflowTaskTransitionRequirements(db, workflowId ?? null, outcome, taskType, recurringSeriesId);
   return workflowRows.map((row) => ({
     field_name: row.field_name,
     requirement_type: row.requirement_type,
@@ -214,7 +216,7 @@ export async function requireReleaseGate(
   let reqs: TransitionRequirementRow[];
 
   try {
-    reqs = await loadTransitionRequirements(db, outcome, task.workflow_id ?? null, taskType);
+    reqs = await loadTransitionRequirements(db, outcome, task.workflow_id ?? null, taskType, task.recurring_series_id);
   } catch {
     return { errors: [], warnings: [] };
   }

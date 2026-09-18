@@ -102,6 +102,8 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
     required: z.boolean().optional().describe('Whether the field is required'),
     options: z.array(z.string().min(1)).optional().describe('Allowed values for select fields'),
     help_text: z.string().optional().describe('Optional helper text shown to users'),
+    minimum: z.number().finite().optional().describe('Minimum allowed numeric value'),
+    integer: z.boolean().optional().describe('Require whole numbers for a number field'),
   });
 
   const taskFieldSchemaDocumentSchema = z.object({
@@ -109,6 +111,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
   });
 
   const transitionRequirementSchema = z.object({
+    recurring_series_id: z.number().int().positive().nullable().optional().describe('Restrict this workflow-specific gate to occurrences of one recurring series'),
     ...tenantSelectorSchema,
     workflow_id: z.number().int().positive().optional().describe('Optional workflow-scoped override target'),
     project_id: z.number().int().positive().optional().describe('Optional project scope for workflow-type defaults'),

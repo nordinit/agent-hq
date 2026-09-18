@@ -46,6 +46,7 @@ export default function TransitionRequirementsSection({
   const [requirementFields, setRequirementFields] = useState<CustomFieldDefinition[]>([]);
   const [requirementFieldsLoading, setRequirementFieldsLoading] = useState(false);
   const [newForm, setNewForm] = useState({
+    recurring_series_id: '',
     task_type: '' as string,
     outcome: '',
     field_name: 'review_branch',
@@ -57,6 +58,7 @@ export default function TransitionRequirementsSection({
   });
   const [editingRequirementId, setEditingRequirementId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState({
+    recurring_series_id: '',
     task_type: '' as string,
     outcome: '',
     field_name: '',
@@ -173,6 +175,7 @@ export default function TransitionRequirementsSection({
         workflow_id: workflowId,
         workflow_type: workflowType,
         task_type: newForm.task_type || null,
+        recurring_series_id: newForm.recurring_series_id ? Number(newForm.recurring_series_id) : null,
         outcome: outcomeKey,
         field_name: newForm.field_name,
         requirement_type: newForm.requirement_type,
@@ -191,6 +194,7 @@ export default function TransitionRequirementsSection({
   const startEdit = (req: TransitionRequirement) => {
     setEditingRequirementId(req.id);
     setEditForm({
+      recurring_series_id: req.recurring_series_id ? String(req.recurring_series_id) : '',
       task_type: req.task_type ?? '',
       outcome: req.outcome,
       field_name: req.field_name,
@@ -226,6 +230,7 @@ export default function TransitionRequirementsSection({
         workflow_id: reqs.find(req => req.id === id)?.workflow_id ?? undefined,
         workflow_type: workflowType,
         task_type: editForm.task_type || null,
+        recurring_series_id: editForm.recurring_series_id ? Number(editForm.recurring_series_id) : null,
         outcome: editForm.outcome,
         field_name: editForm.field_name,
         requirement_type: editForm.requirement_type,
@@ -407,7 +412,7 @@ export default function TransitionRequirementsSection({
                       {taskTypeOptions.map(taskType => <option key={taskType.value} value={taskType.value}>{taskType.label}</option>)}
                     </select>
                   </td>
-                  <td className="px-3 py-2 text-xs text-slate-400">{workflowId ? 'override' : 'default'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-400">{workflowId ? 'override' : 'default'}{workflowId && <input aria-label="Recurring series ID" placeholder="All series" type="number" min="1" className="mt-1 w-28 rounded bg-slate-900 p-1" value={newForm.recurring_series_id} onChange={e => setNewForm({ ...newForm, recurring_series_id: e.target.value })} />}</td>
                   <td className="px-3 py-2">
                     <OutcomeKeySelect
                       id="new-requirement-outcome"
@@ -541,6 +546,7 @@ export default function TransitionRequirementsSection({
                     </td>
                     <td className="px-3 py-2">
                       <ScopeBadge kind={req.scope_kind === 'workflow_override' ? 'workflow_override' : 'default_scope'} />
+                      {editing && req.workflow_id ? <input aria-label="Recurring series ID" placeholder="All series" type="number" min="1" className="mt-1 w-28 rounded bg-slate-900 p-1" value={editForm.recurring_series_id} onChange={e => setEditForm({ ...editForm, recurring_series_id: e.target.value })} /> : req.recurring_series_id != null && <div className="mt-1 text-xs text-amber-300">Series #{req.recurring_series_id} only</div>}
                     </td>
                     <td className="px-3 py-2">
                       {editing ? (

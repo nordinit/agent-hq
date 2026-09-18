@@ -9,6 +9,7 @@ import {
   requireTransitionRequirementScope,
   selectRequirementScopeRows,
   tableHasRequirementScopeColumns,
+  tableHasColumn,
   tenantInsertFragment,
   tenantPredicateFor,
   withStatus,
@@ -94,6 +95,21 @@ function requireRequirementScope(
   );
 }
 
+async function recurringSeriesScope(db: Db, value: unknown, workflowId: number | null, tenantId?: number | null): Promise<number | null> {
+  if (value == null || value === '') return null;
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0 || !workflowId) {
+    throw withStatus('recurring_series_id requires a positive series id and a workflow-specific gate', 400);
+  }
+  const tenant = await tenantPredicateFor(db, 'recurring_task_series', 'recurring_task_series', tenantId);
+  const series = await db.get(`SELECT id FROM recurring_task_series WHERE id = ? AND workflow_id = ?${tenant.sql}`, id, workflowId, ...tenant.params);
+  if (!series) throw withStatus('Recurring series does not belong to this workflow', 400);
+  if (!await tableHasColumn(db, 'workflow_task_transition_requirements', 'recurring_series_id')) {
+    throw withStatus('Recurring series gates require the database migration', 400);
+  }
+  return id;
+}
+
 export async function createTransitionRequirement(db: Db, input: Record<string, unknown>) {
   const workflowId = parseWorkflowId(input.workflow_id);
   const hasDefaultScope = input.project_id != null || input.workflow_type != null;
@@ -122,6 +138,7 @@ export async function createTransitionRequirement(db: Db, input: Record<string, 
     if (!await tableHasRequirementScopeColumns(db)) {
       if (!workflowId) throw withStatus('workflow_id is required', 400);
       const tenantId = Number.isFinite(Number(input.tenant_id)) ? Number(input.tenant_id) : null;
+      if (input.recurring_series_id != null) throw withStatus('Recurring series gates require the current database schema', 400);
       await requireWorkflow(db, workflowId, tenantId);
       await requireTransitionRequirementFieldsForWorkflow(db, workflowId, task_type ?? null, field_name, match_field ?? null, requirement_type);
       const tenant = await tenantInsertFragment(db, 'workflow_task_transition_requirements', tenantId);
@@ -134,12 +151,14 @@ export async function createTransitionRequirement(db: Db, input: Record<string, 
     }
 
     const scope = await requireTransitionRequirementScope(db, input);
+    const seriesId = await recurringSeriesScope(db, input.recurring_series_id, scope.workflowId, scope.tenantId);
+    const hasSeriesScope = await tableHasColumn(db, 'workflow_task_transition_requirements', 'recurring_series_id');
     await requireTransitionRequirementFieldsForScope(db, { workflowId: scope.workflowId, workflowType: scope.workflowType }, task_type ?? null, field_name, match_field ?? null, requirement_type);
     const tenant = await tenantInsertFragment(db, 'workflow_task_transition_requirements', scope.tenantId);
     const result = await db.run(`
-      INSERT INTO workflow_task_transition_requirements (${tenant.columns}workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at)
-      VALUES (${tenant.placeholders}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
-    `, ...tenant.params, scope.workflowId, scope.projectId, scope.workflowType, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
+      INSERT INTO workflow_task_transition_requirements (${tenant.columns}${hasSeriesScope ? 'recurring_series_id, ' : ''}workflow_id, project_id, workflow_type, task_type, outcome, field_name, requirement_type, match_field, severity, message, enabled, priority, created_at, updated_at)
+      VALUES (${tenant.placeholders}${hasSeriesScope ? '?, ' : ''}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'), to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+    `, ...tenant.params, ...(hasSeriesScope ? [seriesId] : []), scope.workflowId, scope.projectId, scope.workflowType, task_type ?? null, outcome, field_name, requirement_type, match_field ?? null, severity, message, enabled ? 1 : 0, priority);
     const readTenant = await tenantPredicateFor(db, 'workflow_task_transition_requirements', 'workflow_task_transition_requirements', scope.tenantId);
     return await db.get(`SELECT * FROM workflow_task_transition_requirements WHERE id = ?${readTenant.sql}`, result.lastInsertId, ...readTenant.params);
   }
@@ -206,8 +225,11 @@ async function updateScopedTransitionRequirementRow(
   const nextRequirementType = requirement_type ?? existing.requirement_type;
   const nextMatchField = match_field !== undefined ? (match_field ?? null) : existing.match_field;
   await requireTransitionRequirementFieldsForScope(db, scope, nextTaskType, nextFieldName, nextMatchField, nextRequirementType);
+  const seriesId = await recurringSeriesScope(db, input.recurring_series_id === undefined ? existing.recurring_series_id : input.recurring_series_id, scope.workflowId, scope.tenantId);
+  const hasSeriesScope = await tableHasColumn(db, 'workflow_task_transition_requirements', 'recurring_series_id');
   await db.run(`
     UPDATE workflow_task_transition_requirements SET
+      ${hasSeriesScope ? 'recurring_series_id = ?,' : ''}
       task_type = ?,
       outcome = ?,
       field_name = ?,
@@ -219,7 +241,7 @@ async function updateScopedTransitionRequirementRow(
       priority = ?,
       updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')
     ${whereClause}
-  `, nextTaskType, outcome ?? existing.outcome, nextFieldName, nextRequirementType, nextMatchField, severity ?? existing.severity, message ?? existing.message, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, priority ?? existing.priority, ...whereParams);
+  `, ...(hasSeriesScope ? [seriesId] : []), nextTaskType, outcome ?? existing.outcome, nextFieldName, nextRequirementType, nextMatchField, severity ?? existing.severity, message ?? existing.message, enabled !== undefined ? (enabled ? 1 : 0) : existing.enabled, priority ?? existing.priority, ...whereParams);
   const readTenant = await tenantPredicateFor(db, 'workflow_task_transition_requirements', 'workflow_task_transition_requirements', scope.tenantId);
   return await db.get(`SELECT * FROM workflow_task_transition_requirements WHERE id = ?${readTenant.sql}`, id, ...readTenant.params);
 }
@@ -255,7 +277,7 @@ export async function deleteTransitionRequirement(db: Db, input: { id: unknown; 
     const scope = await requireTransitionRequirementScope(db, input);
     const tenant = await tenantPredicateFor(db, 'workflow_task_transition_requirements', 'req', scope.tenantId);
     const existing = await db.get(`
-      SELECT req.id, req.workflow_id, req.task_type, req.outcome, req.field_name, req.requirement_type, req.match_field
+      SELECT req.*
       FROM workflow_task_transition_requirements req
       LEFT JOIN workflows s ON s.id = req.workflow_id
       WHERE req.id = ?
@@ -266,6 +288,7 @@ export async function deleteTransitionRequirement(db: Db, input: { id: unknown; 
     `, id, scope.workflowId, scope.workflowId, scope.projectId, scope.workflowType, ...tenant.params) as {
       id: number;
       workflow_id: number | null;
+      recurring_series_id?: number | null;
       task_type: string | null;
       outcome: string;
       field_name: string;

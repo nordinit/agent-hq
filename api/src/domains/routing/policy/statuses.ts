@@ -234,6 +234,7 @@ export async function loadWorkflowTaskTransitionRequirements(
   workflowId: number | null | undefined,
   outcome: string,
   taskType?: string | null,
+  recurringSeriesId?: number | null,
 ): Promise<WorkflowTaskTransitionRequirementRow[]> {
   if (typeof workflowId === 'number' && Number.isFinite(workflowId) && await tableExists(db, 'workflow_task_transition_requirements')) {
     const hasScopeColumns = await tableHasColumn(db, 'workflow_task_transition_requirements', 'project_id')
@@ -243,10 +244,11 @@ export async function loadWorkflowTaskTransitionRequirements(
       : undefined;
     const tenant = await tenantPredicate(db, 'workflow_task_transition_requirements', 'workflow_task_transition_requirements', workflow?.tenant_id);
 
+    const hasSeriesScope = await tableHasColumn(db, 'workflow_task_transition_requirements', 'recurring_series_id');
     const loadRows = async (specificTaskType: string | null): Promise<WorkflowTaskTransitionRequirementRow[]> => {
       if (hasScopeColumns && workflow?.workflow_type) {
         return await db.all(`
-          SELECT id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
+          SELECT ${hasSeriesScope ? 'recurring_series_id' : 'NULL AS recurring_series_id'}, id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
                  severity, message, enabled, priority, created_at, updated_at
           FROM workflow_task_transition_requirements
           WHERE project_id = ?
@@ -262,7 +264,7 @@ export async function loadWorkflowTaskTransitionRequirements(
                   : [workflow.project_id, workflow.workflow_type, workflowId, specificTaskType, outcome, ...tenant.params, workflowId])) as WorkflowTaskTransitionRequirementRow[];
       }
       return await db.all(`
-        SELECT id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
+        SELECT ${hasSeriesScope ? 'recurring_series_id' : 'NULL AS recurring_series_id'}, id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
                severity, message, enabled, priority, created_at, updated_at
         FROM workflow_task_transition_requirements
         WHERE workflow_id = ?
@@ -287,7 +289,7 @@ export async function loadWorkflowTaskTransitionRequirements(
     const rows: WorkflowTaskTransitionRequirementRow[] = [];
     if (taskType) rows.push(...await loadRows(taskType));
     rows.push(...await loadRows(null));
-    return dedupeWorkflowTaskTransitionRequirementRows(rows);
+    return dedupeWorkflowTaskTransitionRequirementRows(rows.filter(row => row.recurring_series_id == null || row.recurring_series_id === recurringSeriesId));
   }
 
   return [];
@@ -304,7 +306,7 @@ function dedupeWorkflowTaskTransitionRequirementRows(rows: WorkflowTaskTransitio
   const seen = new Set<string>();
   const result: WorkflowTaskTransitionRequirementRow[] = [];
   for (const row of rows) {
-    const key = [row.outcome, row.field_name, row.requirement_type, row.match_field ?? ''].join('\u0000');
+    const key = [row.outcome, row.field_name, row.requirement_type, row.match_field ?? '', row.recurring_series_id ?? ''].join('\u0000');
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(row);
@@ -325,8 +327,9 @@ export async function listWorkflowTaskTransitionRequirements(
       ? await db.get(`SELECT project_id, workflow_type${await tableHasColumn(db, 'workflows', 'tenant_id') ? ', tenant_id' : ''} FROM workflows WHERE id = ? LIMIT 1`, workflowId) as { project_id: number; workflow_type: string | null; tenant_id?: number | null } | undefined
       : undefined;
     const tenant = await tenantPredicate(db, 'workflow_task_transition_requirements', 'workflow_task_transition_requirements', workflow?.tenant_id);
+    const seriesSelect = await tableHasColumn(db, 'workflow_task_transition_requirements', 'recurring_series_id') ? 'recurring_series_id' : 'NULL AS recurring_series_id';
     let query = `
-      SELECT id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
+      SELECT ${seriesSelect}, id, workflow_id, task_type, outcome, field_name, requirement_type, match_field,
              severity, message, enabled, priority, created_at, updated_at
       FROM workflow_task_transition_requirements
       WHERE ${hasScopeColumns && workflow?.workflow_type ? 'project_id = ? AND workflow_type = ? AND (workflow_id = ? OR workflow_id IS NULL)' : 'workflow_id = ?'}

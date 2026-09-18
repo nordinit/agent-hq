@@ -480,6 +480,7 @@ export function requirementOverrideKey(row: TransitionRequirementRecord): string
     String(row.field_name ?? ''),
     String(row.requirement_type ?? ''),
     String(row.match_field ?? ''),
+    String(row.recurring_series_id ?? ''),
   ].join('::');
 }
 

@@ -1049,6 +1049,8 @@ export interface TaskNote {
 }
 
 export interface CustomFieldDefinition {
+  minimum?: number;
+  integer?: boolean;
   key: string;
   label?: string;
   type?: string;
@@ -1526,6 +1528,7 @@ export interface TaskRoutingRule {
 }
 
 export interface TransitionRequirement {
+  recurring_series_id?: number | null;
   id: number;
   workflow_id?: number | null;
   workflow_name?: string | null;

@@ -458,7 +458,7 @@ export function TaskModal({ task, projects: providedProjects, title, relatedCont
                     ) : field.type === 'checkbox' ? (
                       <label className="inline-flex items-center gap-2 text-sm text-slate-200"><input type="checkbox" checked={Boolean(value)} onChange={e => updateCustomField(e.target.checked)} />Enabled</label>
                     ) : field.type === 'number' ? (
-                      <input type="number" className={baseClass} value={typeof value === 'number' ? value : ''} onChange={e => updateCustomField(e.target.value === '' ? '' : Number(e.target.value))} />
+                      <input type="number" min={field.minimum} step={field.integer ? 1 : 'any'} className={baseClass} value={typeof value === 'number' ? value : ''} onChange={e => updateCustomField(e.target.value === '' ? '' : Number(e.target.value))} />
                     ) : (
                       <input type={field.type === 'url' ? 'url' : 'text'} className={baseClass} value={typeof value === 'string' ? value : ''} onChange={e => updateCustomField(e.target.value)} />
                     )}

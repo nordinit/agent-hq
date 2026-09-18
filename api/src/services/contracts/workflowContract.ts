@@ -354,11 +354,12 @@ async function loadConfiguredGateRequirements(
   outcome: string,
   workflowId?: number | null,
   taskType?: string | null,
+  recurringSeriesId?: number | null,
 ): Promise<ContractGateRequirement[]> {
   // Mirrors loadTransitionRequirements in lib/taskRelease.ts: workflow-scoped rows only. The
   // global `transition_requirements` fallback this used to consult was dropped by migration 15
   // — see the note there for why a replace-not-accumulate fallback was worth removing.
-  const workflowRows = await loadWorkflowTaskTransitionRequirements(db, workflowId ?? null, outcome, taskType);
+  const workflowRows = await loadWorkflowTaskTransitionRequirements(db, workflowId ?? null, outcome, taskType, recurringSeriesId);
   return workflowRows.map((row) => ({
     outcome,
     field_name: row.field_name,
@@ -370,6 +371,7 @@ async function loadConfiguredGateRequirements(
 }
 
 export async function resolveEvidenceRequirements(options: {
+  taskId?: number;
   db?: Db | null;
   taskType?: string | null;
   workflowId?: number | null;
@@ -389,11 +391,15 @@ export async function resolveEvidenceRequirements(options: {
     };
   }
 
+  const task = options.taskId != null
+    ? await options.db.get('SELECT recurring_series_id FROM tasks WHERE id = ?', options.taskId) as { recurring_series_id?: number | null } | undefined
+    : undefined;
   const requirementGroups = await Promise.all(outcomes.map((outcome) => loadConfiguredGateRequirements(
       options.db as Db,
       outcome,
       options.workflowId ?? null,
       options.taskType ?? null,
+      task?.recurring_series_id,
     )));
   const requirements = requirementGroups.flat();
 

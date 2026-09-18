@@ -69,6 +69,7 @@ export type TaskCustomFieldValidationErrorCode =
   | 'invalid_type'
   | 'invalid_url'
   | 'invalid_select_value'
+  | 'invalid_number'
   | 'unsupported_value';
 
 export interface TaskCustomFieldValidationErrorDetail {
@@ -191,6 +192,12 @@ export function validateTaskCustomFields(
             'invalid_type',
             `custom field "${field.key}" must be a number`,
             { expected: 'number' },
+          ));
+        } else if ((field.integer && !Number.isInteger(value)) || (field.minimum !== undefined && value < field.minimum)) {
+          validationErrors.push(customFieldValidationError(
+            field.key,
+            'invalid_number',
+            `custom field "${field.key}" must be ${field.integer ? 'an integer' : 'a number'}${field.minimum !== undefined ? ` greater than or equal to ${field.minimum}` : ''}`,
           ));
         }
         break;

@@ -9,6 +9,8 @@ export interface TaskFieldDefinition {
   options?: string[];
   help_text?: string;
   system?: boolean;
+  minimum?: number;
+  integer?: boolean;
 }
 
 export interface ResolvedTaskFieldSchema {
@@ -115,6 +117,13 @@ export function parseFieldSchema(raw: unknown): { fields: TaskFieldDefinition[] 
       throw new Error(`schema.fields[${index}].options is required for select fields`);
     }
 
+    if (fieldRecord.minimum !== undefined && (type !== 'number' || typeof fieldRecord.minimum !== 'number' || !Number.isFinite(fieldRecord.minimum))) {
+      throw new Error(`schema.fields[${index}].minimum must be a finite number on a number field`);
+    }
+    if (fieldRecord.integer !== undefined && (type !== 'number' || typeof fieldRecord.integer !== 'boolean')) {
+      throw new Error(`schema.fields[${index}].integer must be a boolean on a number field`);
+    }
+
     return {
       key,
       label,
@@ -123,6 +132,8 @@ export function parseFieldSchema(raw: unknown): { fields: TaskFieldDefinition[] 
       options,
       help_text: normalizeOptionalText(fieldRecord.help_text),
       system: normalizeBooleanInt(fieldRecord.system) === 1,
+      ...(fieldRecord.minimum !== undefined ? { minimum: fieldRecord.minimum as number } : {}),
+      ...(fieldRecord.integer !== undefined ? { integer: fieldRecord.integer as boolean } : {}),
     } satisfies TaskFieldDefinition;
   });
 

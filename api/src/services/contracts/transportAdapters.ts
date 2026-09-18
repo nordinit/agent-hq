@@ -42,6 +42,7 @@ async function getConfiguredEvidenceRequirements(
 ): Promise<EvidenceRequirements> {
   return resolveEvidenceRequirements({
     db: ctx.db,
+    taskId: ctx.taskId,
     taskType: ctx.taskType,
     workflowId: ctx.workflowId,
     outcomes: promptOutcomes,

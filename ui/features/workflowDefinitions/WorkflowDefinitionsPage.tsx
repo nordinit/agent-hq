@@ -340,6 +340,8 @@ export default function WorkflowDefinitionsPage() {
               options: field.type === 'select' ? (field.options ?? []).map(option => option.trim()).filter(Boolean) : undefined,
               help_text: field.help_text?.trim(),
               system: Boolean(field.system),
+              minimum: field.type === 'number' ? field.minimum : undefined,
+              integer: field.type === 'number' ? field.integer : undefined,
             })),
         },
       };
@@ -528,6 +530,10 @@ export default function WorkflowDefinitionsPage() {
               <Button size="sm" variant="ghost" onClick={() => setSchemaEditor(editor => editor ? { ...editor, fields: editor.fields.filter((_, itemIndex) => itemIndex !== index).length ? editor.fields.filter((_, itemIndex) => itemIndex !== index) : [{ ...emptyField }] } : editor)}><Trash2 className="h-3.5 w-3.5" />Remove</Button>
             </div>
             <input className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white" placeholder="help text" value={field.help_text ?? ''} onChange={e => setSchemaEditor(editor => editor ? { ...editor, fields: editor.fields.map((item, itemIndex) => itemIndex === index ? { ...item, help_text: e.target.value } : item) } : editor)} />
+            {field.type === 'number' && <div className="flex gap-4">
+              <label className="text-sm text-slate-300">Minimum <input type="number" aria-label="Minimum numeric value" className="ml-2 w-24 rounded bg-slate-900 p-1" value={field.minimum ?? ''} onChange={e => setSchemaEditor(editor => editor ? { ...editor, fields: editor.fields.map((item, itemIndex) => itemIndex === index ? { ...item, minimum: e.target.value === '' ? undefined : Number(e.target.value) } : item) } : editor)} /></label>
+              <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={Boolean(field.integer)} onChange={e => setSchemaEditor(editor => editor ? { ...editor, fields: editor.fields.map((item, itemIndex) => itemIndex === index ? { ...item, integer: e.target.checked } : item) } : editor)} />Whole numbers only</label>
+            </div>}
             {field.type === 'select' && (
               <input className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white" placeholder="options, comma separated" value={(field.options ?? []).join(', ')} onChange={e => setSchemaEditor(editor => editor ? { ...editor, fields: editor.fields.map((item, itemIndex) => itemIndex === index ? { ...item, options: e.target.value.split(',').map(option => option.trim()).filter(Boolean) } : item) } : editor)} />
             )}

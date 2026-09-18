@@ -28,6 +28,7 @@ export interface WorkflowTaskTransitionRow {
 }
 
 export interface WorkflowTaskTransitionRequirementRow {
+  recurring_series_id?: number | null;
   id: number;
   workflow_id: number | null;
   task_type: string | null;
@@ -89,6 +90,7 @@ export type PolicyRequirementSeed = {
 };
 
 export type RequirementSeedIdentity = {
+  recurring_series_id?: number | null;
   task_type: string | null;
   outcome: string;
   field_name: string;
