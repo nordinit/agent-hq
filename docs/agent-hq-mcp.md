@@ -267,7 +267,7 @@ The schemas describe structure. The shared REST compiler still checks scope, ref
 
 `agent_hq_freeze_telemetry_report` accepts an optional `report_revision_id` alongside `report_id` and `query_id`. It checks that the completed calculation belongs to that pinned revision before freezing it. A mismatch leaves the query unfrozen; omitting the revision retains the previous behavior. The guard compares against the query's revision, not whichever revision is currently latest.
 
-These contracts do not change tool profiles or permissions: telemetry tools are part of the full server surface; the curated remote profile controls which tools a connection discovers.
+All 30 telemetry tools are exposed by both the full and mobile profiles. Permissions are configured under **Agents → [identity] → Agent HQ MCP Access → Telemetry**. Use **Enable all telemetry**, then **Save MCP Access**, to grant the five project-scoped permissions together; each remains individually selectable. Existing identities need an explicit permission update; exposing tools does not automatically grant access.
 
 ## File Scopes
 
@@ -728,16 +728,16 @@ Publishing the endpoint (TLS, a public hostname, tunnel or reverse proxy) is dep
 
 ### Tool profiles
 
-The full catalog registers ~186 tools. That is the right surface for a local client driving the whole product and the wrong one for a remote connector, which loads every tool definition into the conversation before the user has asked for anything.
+The full catalog covers every product domain. Remote connectors use a curated profile to limit the tool definitions they load.
 
 A profile is a named allow-list of exposed tool names (`api/src/mcp/toolProfiles.ts`):
 
 | Profile | Names exposed | Use |
 |---|---|---|
-| `full` | all ~186 | stdio server default; unchanged behaviour |
-| `mobile` | curated subset | HTTP transport default: board reads, task writes, project lifecycle outcomes, recurring task series |
+| `full` | all registered tools | stdio server default; unchanged behaviour |
+| `mobile` | 86 | HTTP transport default: project operations, routing, recurring tasks, and all 30 telemetry tools |
 
-The `mobile` profile includes project task and agent management, routing, recurring series, task evidence, and configured task outcomes. It exposes `agent_hq_post_task_outcome` for status transitions and `agent_hq_delete_task_relationship` for removing links. Generic status moves, run callbacks, workflow definition mutations, skills, teams, tool/server configuration, and file upload/download stay outside this profile.
+The `mobile` profile includes project task and agent management, routing, recurring series, task evidence, configured task outcomes, and full project telemetry (definitions, queries, profiles, reports, dashboards, bindings, snapshots, coverage, import and export). It exposes `agent_hq_post_task_outcome` for status transitions and `agent_hq_delete_task_relationship` for removing links. Generic status moves, run callbacks, workflow definition mutations, skills, teams, tool/server configuration, and file upload/download stay outside this profile.
 
 A profile narrows what a client can *see*. It is not an authorization boundary; the capability policy is.
 
@@ -760,6 +760,11 @@ The policy the `mobile` profile pairs with:
 
 | Capability | Grants |
 |---|---|
+| `telemetry.read` | catalog, saved definitions, results, contributors, coverage and snapshot reads |
+| `telemetry.query` | validate, preview, calculate and cancel project telemetry queries |
+| `telemetry.manage_metrics` | metrics, measurement profiles and bindings; imports also require report management |
+| `telemetry.manage_reports` | reports, saved views, dashboards and snapshots; imports also require metric management |
+| `telemetry.export` | export project telemetry definitions |
 | `discovery.read_catalog` | catalog/health discovery |
 | `projects.read_project_board` | the tenant project list, plus task/workflow/metadata collections scoped to the assigned project |
 | `projects.read_active_project` | project detail |

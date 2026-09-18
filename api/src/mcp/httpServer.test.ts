@@ -89,6 +89,7 @@ describe('MCP Streamable HTTP transport', () => {
       const names = new Set(listed.tools.map((tool) => tool.name));
 
       expect(names).toEqual(resolveMcpToolProfile('mobile').toolNames);
+      expect([...names].filter(name => name.includes('_telemetry_'))).toHaveLength(30);
       const trace = log.mock.calls.find(([label, entry]) => label === '[agent-hq-mcp-http] trace'
         && JSON.parse(entry).method === 'tools/list');
       expect(trace).toBeDefined();
@@ -143,7 +144,7 @@ describe('MCP Streamable HTTP transport', () => {
       const listed = await client.listTools();
       const mobileCount = resolveMcpToolProfile('mobile').toolNames?.size ?? 0;
 
-      expect(listed.tools.length).toBeGreaterThan(mobileCount * 3);
+      expect(listed.tools.length).toBeGreaterThan(mobileCount * 2);
     } finally {
       await client.close();
     }

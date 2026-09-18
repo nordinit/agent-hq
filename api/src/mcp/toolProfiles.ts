@@ -1,7 +1,7 @@
 /**
  * Agent HQ MCP Server — Tool Profiles
  *
- * The full Agent HQ catalog registers ~186 tools, one name each. That is the right surface for
+ * The full Agent HQ catalog registers tools across every product domain, one name each. That is the right surface for
  * a local stdio client driving the whole product and the wrong one for a remote connector:
  * Claude and ChatGPT load every tool definition into the conversation before the user has asked
  * for anything, so the full surface spends more context on the menu than on the work.
@@ -34,7 +34,7 @@ export interface McpToolProfile {
 /**
  * Phone-sized surface: read the board, file and update work, move a workflow through its
  * lifecycle, route tasks, manage the project's agents, run the recurring series that drive
- * scheduled automation. Deliberately excluded — the remaining configuration surfaces (skills,
+ * scheduled automation, and define/analyze project telemetry. Deliberately excluded — the remaining configuration surfaces (skills,
  * workflow definitions, teams, tools, MCP servers), agent provisioning and MCP capability
  * policies, file upload/download, and dispatched-run callbacks. Task evidence and configured
  * outcomes use the separate project lifecycle capability for supervisory interventions.
@@ -126,6 +126,39 @@ const MOBILE_TOOL_NAMES: readonly string[] = [
   'agent_hq_enable_recurring_task_series',
   'agent_hq_disable_recurring_task_series',
   'agent_hq_run_recurring_task_series_now',
+
+  // Project telemetry: definitions, analysis, saved views/dashboards and retained evidence.
+  // Permission grants are still required; exposing a name does not grant authority.
+  'agent_hq_list_telemetry_catalog',
+  'agent_hq_validate_telemetry_definition',
+  'agent_hq_preview_telemetry_metric',
+  'agent_hq_query_telemetry_metrics',
+  'agent_hq_get_telemetry_query',
+  'agent_hq_cancel_telemetry_query',
+  'agent_hq_get_telemetry_contributors',
+  'agent_hq_list_telemetry_metrics',
+  'agent_hq_get_telemetry_metric',
+  'agent_hq_save_telemetry_metric',
+  'agent_hq_revise_telemetry_metric',
+  'agent_hq_archive_telemetry_metric',
+  'agent_hq_list_telemetry_profiles',
+  'agent_hq_get_telemetry_profile',
+  'agent_hq_save_telemetry_profile',
+  'agent_hq_revise_telemetry_profile',
+  'agent_hq_archive_telemetry_profile',
+  'agent_hq_list_telemetry_reports',
+  'agent_hq_get_telemetry_report',
+  'agent_hq_save_telemetry_report',
+  'agent_hq_revise_telemetry_report',
+  'agent_hq_archive_telemetry_report',
+  'agent_hq_list_telemetry_bindings',
+  'agent_hq_preview_telemetry_binding',
+  'agent_hq_save_telemetry_binding',
+  'agent_hq_list_telemetry_snapshots',
+  'agent_hq_freeze_telemetry_report',
+  'agent_hq_get_telemetry_coverage',
+  'agent_hq_export_telemetry_definitions',
+  'agent_hq_import_telemetry_definitions',
 ];
 
 /**
@@ -166,6 +199,11 @@ const MOBILE_PROFILE_CAPABILITIES: readonly string[] = [
   'tasks.search_project_tasks',
   'recurring_task_series.read_project_scope',
   'recurring_task_series.manage_project_scope',
+  'telemetry.read',
+  'telemetry.query',
+  'telemetry.manage_metrics',
+  'telemetry.manage_reports',
+  'telemetry.export',
 ];
 
 export const MCP_TOOL_PROFILES: Readonly<Record<string, McpToolProfile>> = {
@@ -177,7 +215,7 @@ export const MCP_TOOL_PROFILES: Readonly<Record<string, McpToolProfile>> = {
   },
   mobile: {
     name: 'mobile',
-    description: 'Board reads, task writes, and recurring task series for a remote/phone MCP client.',
+    description: 'Project operations, routing, recurring tasks, and full project telemetry for a remote MCP client.',
     toolNames: new Set(MOBILE_TOOL_NAMES),
     capabilities: MOBILE_PROFILE_CAPABILITIES,
   },

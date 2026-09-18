@@ -1783,7 +1783,27 @@ export default function AgentDetailPage() {
               <div className="space-y-4">
                 {permissionGroups.map(([group, capabilities]) => (
                   <div key={group} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">{group}</div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{group}</div>
+                      {group === 'Telemetry' && (
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs text-slate-500">{capabilities.filter(capability => capability.enabled).length} of {capabilities.length} enabled</span>
+                          <Button
+                            variant="secondary"
+                            className="h-7 text-xs"
+                            disabled={mcpPermissionSaving}
+                            onClick={() => {
+                              const enabled = !capabilities.every(capability => capability.enabled);
+                              setMcpPermissionDraft(current => current.map(capability => (
+                                capability.group === 'Telemetry' ? { ...capability, enabled } : capability
+                              )));
+                            }}
+                          >
+                            {capabilities.every(capability => capability.enabled) ? 'Disable all telemetry' : 'Enable all telemetry'}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                     <div className="space-y-3">
                       {capabilities.map((capability) => (
                         <label key={capability.key} className="flex gap-3 rounded-md border border-slate-800/80 bg-slate-900/50 px-3 py-3 hover:border-slate-700 cursor-pointer">

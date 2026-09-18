@@ -55,6 +55,18 @@ describe('MCP tool profiles', () => {
     expect(mobile.capabilities).not.toContain('mcp_capability_policies.write');
   });
 
+  it('exposes every telemetry tool and pairs them with the complete UI permission group', () => {
+    registerAgentHqMcpCatalog();
+    const mobile = resolveMcpToolProfile('mobile');
+    const telemetry = getMcpCatalog().tools.filter(tool => tool.domain === 'telemetry').map(tool => tool.canonical_name);
+    expect(telemetry).toHaveLength(30);
+    expect([...mobile.toolNames!].filter(name => name.includes('_telemetry_')).sort()).toEqual(telemetry.sort());
+    const grants = AGENT_MCP_CAPABILITY_CATALOG.filter(capability => capability.group === 'Telemetry');
+    expect(grants).toHaveLength(5);
+    expect(mobile.capabilities!.filter(key => key.startsWith('telemetry.')).sort()).toEqual(grants.map(capability => capability.key).sort());
+    expect(grants.every(capability => !capability.defaultEnabled.scoped_runtime)).toBe(true);
+  });
+
   it('gives the mobile profile the workflow lifecycle controls but not workflow configuration', () => {
     // The board's pause/resume/complete buttons are the point of the phone surface; defining a
     // workflow type is design work that wants the canvas.
@@ -136,12 +148,10 @@ describe('profile-scoped registrar', () => {
     expect(new Set(mobileNames)).toEqual(mobile.toolNames);
     // Duplicate registrations would mean a name appears in two domains.
     expect(mobileNames.length).toBe(new Set(mobileNames).size);
-    // The bound is a smell test on profile creep, not a fixed budget. It was a quarter of the
-    // full surface when the profile held board reads and task writes alone; workflow lifecycle,
-    // routing and project agent management have since roughly doubled it. Widen it only when the
-    // additions were asked for, and read a failure here as a prompt to check the profile still
-    // describes a phone rather than an admin console.
-    expect(mobileNames.length).toBeLessThan(registeredToolNames('full').length / 3);
+    // Project telemetry adds 30 explicitly requested tools to the previous 56.
+    // The profile still excludes provisioning and administrative configuration.
+    expect(mobileNames).toHaveLength(86);
+    expect(mobileNames.length).toBeLessThan(registeredToolNames('full').length / 2);
   });
 
   it('does not let a profile-scoped server rewrite the process-wide catalog', () => {
