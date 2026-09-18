@@ -70,7 +70,7 @@ export function getFailureSummary(task: Pick<FailureTaskLike, 'failure_detail' |
 export function getFailureActor(history: TaskHistory[]): string | null {
   for (const entry of history) {
     if (entry.field === 'status') {
-      return entry.changed_by;
+      return entry.changed_by_display_name || entry.changed_by;
     }
   }
   return null;

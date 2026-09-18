@@ -16,7 +16,7 @@ const recipes: { value: TelemetryRecipe; label: string; help: string }[] = [
   { value: 'journey_count', label: 'Count journeys', help: 'Count recorded journeys with explicit entry and finish conditions. Choose whether open journeys are included.' },
   { value: 'numeric', label: 'Custom-field calculation', help: 'Sum, average, or inspect the distribution of a canonical numeric field.' },
   { value: 'milestone', label: 'Reached a milestone', help: 'Count distinct tasks with a recorded entry into the selected milestone.' },
-  { value: 'first_pass', label: 'First pass', help: 'Choose what success and rework mean, and which journeys belong in the denominator.' },
+  { value: 'first_pass', label: 'First pass', help: 'Choose what success and rework mean, and which journeys to include in the calculation.' },
   { value: 'duration', label: 'Time between milestones', help: 'Measure elapsed time from the first recorded start to its matching finish.' },
   { value: 'blocked', label: 'Blocked at snapshot', help: 'Choose a status or checkbox that defines blocked work right now.' },
   { value: 'ever_blocked', label: 'Ever blocked', help: 'Measure journeys that entered the configured blocked condition.' },
@@ -42,7 +42,7 @@ const countingRules = [
   { value: 'first_per_entity', label: 'One journey per task' }, { value: 'per_reset', label: 'New journey after explicit reset' },
   { value: 'per_stage_visit', label: 'Each non-overlapping stage visit' },
 ];
-const denominators = [
+const journeyInclusionOptions = [
   { value: 'evaluated', label: 'Evaluated successes and failures' }, { value: 'successful', label: 'Successful journeys only' },
   { value: 'all_started', label: 'All started journeys' },
 ];
@@ -191,7 +191,7 @@ export default function TelemetryBuilder({ catalog, draftText, onChange, onGuide
       {requirements.journey && <Section title="Journey policy" description="Define how repeated starts and unfinished work affect the measurement.">
         <Select label="Repeated starts and reopenings" value={guide.counting} onChange={value => update({ counting: value as TelemetryGuide['counting'] })} options={countingRules}/>
         {guide.counting === 'per_reset' && <TelemetryChoicePicker label="Reset condition" value={guide.reset} onChange={value => update({ reset: value })} options={signals} scopeCatalog={currentCatalog}/>}
-        <Select label="Denominator" value={guide.denominator} onChange={value => update({ denominator: value as TelemetryGuide['denominator'] })} options={denominators} hint="Open, cancelled, and unknown work appears separately in result coverage."/>
+        <Select label="Journeys to include" value={guide.denominator} onChange={value => update({ denominator: value as TelemetryGuide['denominator'] })} options={journeyInclusionOptions} hint="Open, cancelled, and unknown work appears separately in result coverage."/>
       </Section>}
       {requirements.bucket && <Select label="Time buckets" value={guide.bucket} onChange={value => update({ bucket: value as TelemetryGuide['bucket'] })} options={[{ value: '', label: 'No time buckets' }, { value: 'hour', label: 'Hourly' }, { value: 'day', label: 'Daily' }, { value: 'week', label: 'Weekly' }, { value: 'month', label: 'Monthly' }]}/>}
 
@@ -203,7 +203,7 @@ export default function TelemetryBuilder({ catalog, draftText, onChange, onGuide
             {guide.recipe !== 'ever_blocked' && guide.rework && <div><dt className="inline font-medium text-slate-400">Rework: </dt><dd className="inline">{signalLabel(guide.rework)}.</dd></div>}
             {guide.unsuccessful && <div><dt className="inline font-medium text-slate-400">Unsuccessful: </dt><dd className="inline">{signalLabel(guide.unsuccessful)}.</dd></div>}
             {guide.cancelled && <div><dt className="inline font-medium text-slate-400">Cancellation: </dt><dd className="inline">{signalLabel(guide.cancelled)}.</dd></div>}
-            <div><dt className="inline font-medium text-slate-400">Denominator: </dt><dd className="inline">{denominators.find(item => item.value === guide.denominator)?.label}.</dd></div></>}
+            <div><dt className="inline font-medium text-slate-400">Journeys to include: </dt><dd className="inline">{journeyInclusionOptions.find(item => item.value === guide.denominator)?.label}.</dd></div></>}
           {['ever_blocked', 'percent_blocked'].includes(guide.recipe) && <div><dt className="inline font-medium text-slate-400">Blocked: </dt><dd className="inline">{signalLabel(guide.blocked)}{guide.recipe === 'percent_blocked' ? ` → ${signalLabel(guide.unblocked)}` : ''}.</dd></div>}
           {guide.recipe === 'funnel' && <div><dt className="inline font-medium text-slate-400">Steps: </dt><dd className="inline">{guide.steps.map(signalLabel).join(' → ')}.</dd></div>}
           <div><dt className="inline font-medium text-slate-400">Attribution: </dt><dd className="inline">{attributions.find(option => option.value === guide.attribution)?.label}.</dd></div>

@@ -451,7 +451,7 @@ export default function WorkflowGraphSection({
                       }`}>
                         {step.match === 'off_graph' ? 'manual' : step.match === 'no_current_edge' ? 'not configured' : step.outcome ?? step.move_type}
                       </span>
-                      <span className="truncate text-slate-600">{step.moved_by}</span>
+                      <span className="truncate text-slate-600">{step.moved_by_display_name || step.moved_by}</span>
                       <span className="ml-auto shrink-0 text-slate-600">{step.created_at.slice(0, 16)}</span>
                     </button>
                   </li>

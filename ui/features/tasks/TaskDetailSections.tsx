@@ -71,7 +71,7 @@ export function NotesSection({ taskId }: { taskId: number }) {
             >
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs text-slate-400 font-medium">
-                  {note.author} <span className="text-slate-600">·</span> <span className="text-slate-500">{timeAgo(note.created_at)}</span>
+                  {note.author_display_name || note.author} <span className="text-slate-600">·</span> <span className="text-slate-500">{timeAgo(note.created_at)}</span>
                 </span>
                 {hovered === note.id && (
                   <button
@@ -212,7 +212,7 @@ export function AttachmentsSection({ taskId }: { taskId: number }) {
                 <span className="text-xs text-slate-600 shrink-0">{formatFileSize(att.size)}</span>
               </div>
               <div className="flex items-center gap-2 shrink-0 ml-2">
-                <span className="text-xs text-slate-500">{att.uploaded_by}</span>
+                <span className="text-xs text-slate-500">{att.uploaded_by_display_name || att.uploaded_by}</span>
                 {hovered === att.id && (
                   <button
                     onClick={() => handleDelete(att.id)}
@@ -264,7 +264,7 @@ export function HistorySection({ taskId }: { taskId: number }) {
                 ) : null}
                 <span className="text-white">{entry.new_value ?? '—'}</span>
               </span>
-              <span className="text-slate-600 ml-2">by {entry.changed_by} · {timeAgo(entry.created_at)}</span>
+              <span className="text-slate-600 ml-2">by {entry.changed_by_display_name || entry.changed_by} · {timeAgo(entry.created_at)}</span>
             </div>
           </div>
         );

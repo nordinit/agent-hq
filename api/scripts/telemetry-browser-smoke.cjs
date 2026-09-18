@@ -81,7 +81,7 @@ async function main() {
     await select('Final unsuccessful result','status:rejected');
     await select('Cancellation','status:cancelled');
     await action('Preview calculation','/queries/preview',body=>{assert.equal(body.numerator,2);assert.equal(body.denominator,4);assert.equal(body.value,.5);});
-    await select('Denominator','successful');
+    await select('Journeys to include','successful');
     await action('Preview calculation','/queries/preview',body=>{assert.equal(body.numerator,2);assert.equal(body.denominator,3);});
     await page.screenshot({path:'/private/tmp/telemetry-browser-smoke.png',fullPage:true});
     await page.getByRole('heading',{name:'Results',exact:true}).scrollIntoViewIfNeeded();

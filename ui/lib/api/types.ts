@@ -1043,6 +1043,7 @@ export interface TaskNote {
   id: number;
   task_id: number;
   author: string;
+  author_display_name?: string;
   content: string;
   created_at: string;
 }
@@ -1072,6 +1073,7 @@ export interface TaskAttachment {
   mime_type: string;
   size: number;
   uploaded_by: string;
+  uploaded_by_display_name?: string;
   created_at: string;
 }
 
@@ -1079,6 +1081,7 @@ export interface TaskHistory {
   id: number;
   task_id: number;
   changed_by: string;
+  changed_by_display_name?: string;
   field: string;
   old_value: string | null;
   new_value: string | null;
@@ -1834,6 +1837,7 @@ export interface TraceStep {
   to_status: string;
   move_type: string;
   moved_by: string;
+  moved_by_display_name?: string;
   agent_id: number | null;
   instance_id: number | null;
   outcome: string | null;

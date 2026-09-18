@@ -28,6 +28,7 @@ import { enrichTask, getTaskById, TASK_SELECT, type TaskRecord } from './readMod
 import { resolveRuntimeTenantId, tenantInsertColumns } from '../../lib/runtimeTenantScope';
 import { TASK_LIFECYCLE_EVIDENCE_FIELD_KEYS } from './evidence';
 import { type Db } from "../../db/adapter/types";
+import { taskActorDisplayNames } from './actorDisplay';
 
 export interface CreateTaskInput {
   title: string;
@@ -699,7 +700,9 @@ export async function createTaskNoteRecord(db: Db, taskId: number, author: strin
     INSERT INTO task_notes (${tenant.columnSql}task_id, author, content) VALUES (${tenant.valueSql}?, ?, ?)
   `, ...tenant.values, taskId, author, content);
 
-  return await db.get('SELECT * FROM task_notes WHERE id = ?', result.lastInsertId);
+  const note = await db.get<TaskRecord & { id: number; author: string }>('SELECT * FROM task_notes WHERE id = ?', result.lastInsertId);
+  const displayName = await taskActorDisplayNames(db, taskId);
+  return note ? { ...note, author_display_name: displayName(note.author) } : note;
 }
 
 export async function addTaskBlockerRecord(db: Db, taskId: number, blockerId: number): Promise<TaskRecord> {

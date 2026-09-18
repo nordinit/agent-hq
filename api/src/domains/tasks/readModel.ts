@@ -7,6 +7,7 @@ import { getTaskRelationshipsForEnrichment } from './relationships';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists } from "../../db/introspection";
 import { nowTimestamp, timestampFromEpochMs } from '../../lib/timestamps';
 import { TASK_RECURRENCE_SELECT, taskRecurrenceMetadata, type TaskRecurrenceMetadata } from './recurrence';
+import { taskActorDisplayNames } from './actorDisplay';
 
 export type TaskRecord = Record<string, unknown>;
 
@@ -714,9 +715,11 @@ export async function listTaskHistory(db: ReturnType<typeof getDb>, taskId: numb
     error.status = 404;
     throw error;
   }
-  return await db.all(`
+  const rows = await db.all(`
     SELECT * FROM task_history WHERE task_id = ? ORDER BY created_at DESC
   `, taskId);
+  const displayName = await taskActorDisplayNames(db, taskId);
+  return rows.map(row => ({ ...row, changed_by_display_name: displayName(row.changed_by) }));
 }
 
 export async function listTaskNotes(db: ReturnType<typeof getDb>, taskId: number) {
@@ -726,13 +729,17 @@ export async function listTaskNotes(db: ReturnType<typeof getDb>, taskId: number
     error.status = 404;
     throw error;
   }
-  return await db.all(`
+  const rows = await db.all(`
     SELECT * FROM task_notes WHERE task_id = ? ORDER BY created_at ASC
   `, taskId);
+  const displayName = await taskActorDisplayNames(db, taskId);
+  return rows.map(row => ({ ...row, author_display_name: displayName(row.author) }));
 }
 
 export async function listTaskAttachments(db: ReturnType<typeof getDb>, taskId: number) {
-  return await db.all('SELECT * FROM task_attachments WHERE task_id = ? ORDER BY created_at ASC', taskId);
+  const rows = await db.all('SELECT * FROM task_attachments WHERE task_id = ? ORDER BY created_at ASC', taskId);
+  const displayName = await taskActorDisplayNames(db, taskId);
+  return rows.map(row => ({ ...row, uploaded_by_display_name: displayName(row.uploaded_by) }));
 }
 
 export async function listTaskInstances(db: ReturnType<typeof getDb>, taskId: number) {

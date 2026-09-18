@@ -17,6 +17,7 @@
 import { type Db } from '../../db/adapter/types';
 import { getWorkflowGraph, type GraphEdge, type WorkflowGraph } from './graph';
 import { withStatus } from './scope';
+import { taskActorDisplayNames } from '../tasks/actorDisplay';
 
 // ── Shared ────────────────────────────────────────────────────────────────────
 
@@ -232,6 +233,7 @@ export type TraceStep = {
   to_status: string;
   move_type: string;
   moved_by: string;
+  moved_by_display_name: string;
   agent_id: number | null;
   instance_id: number | null;
   outcome: string | null;
@@ -307,6 +309,7 @@ export async function traceTaskHistory(
   `, taskId) as Array<Record<string, unknown>>;
 
   const taskType = typeof task.task_type === 'string' ? task.task_type : null;
+  const displayName = await taskActorDisplayNames(db, taskId);
   const visits: Record<string, number> = {};
   const drift: HistoricalTrace['drift'] = [];
 
@@ -373,6 +376,7 @@ export async function traceTaskHistory(
       to_status: toStatus,
       move_type: moveType,
       moved_by: String(row.moved_by ?? 'system'),
+      moved_by_display_name: displayName(row.moved_by ?? 'system'),
       agent_id: row.agent_id == null ? null : Number(row.agent_id),
       instance_id: row.instance_id == null ? null : Number(row.instance_id),
       outcome,
