@@ -1,15 +1,19 @@
 # Agency recurring search run fields
 
-The approved rollout targets Agency project 99, Lead Generation workflow 114,
-recurring series 3, task type `ops`. It preserves the task type, existing outcome
-keys (`ready_for_review` and `close`), assignments, and external-action boundaries.
+Agency project 99, Lead Generation workflow 114, recurring series 3 uses a batch
+run contract on its existing `ops` task type. Existing outcomes (`ready_for_review`
+and `close`), assignments, and external-action boundaries are preserved.
 
 ## Definition and instructions
 
-`scripts/agency-lead-search-contract.mjs` contains the exact 23 field definitions,
-producer/reviewer instruction block, and conservative CRM mapping. Fields are
-optional at task creation. Numeric fields enforce a minimum of zero and whole
-numbers. Existing single-lead fields remain separate from batch results.
+The production workflow definition contains 23 run fields: CRM run ID and status;
+search family and queries; raw hits, reviewed candidates, recent-ledger skips and
+same-run overlaps; qualified/upserted/rejected/duplicate counts; discovery records;
+client identity unavailable; drafted/refused proposals; errors and duration;
+lead/proposal/external project ID lists; and start/completion timestamps.
+
+Fields are optional at task creation. Numeric fields enforce a minimum of zero and
+whole numbers. Existing single-lead fields remain separate from batch results.
 
 James must persist CRM metrics, read the run back, copy the structured snapshot to
 his active task, and verify task readback before handoff. Casper compares that
@@ -25,39 +29,15 @@ The API validates gate ownership against its workflow and tenant. Series scope i
 preserved in CRUD, resolution, dispatch evidence prompts, graphs, traces, and UI
 editing. Deleting a series removes its gates rather than making them global.
 
-## Historical backfill
+## One-time historical repair
 
-The mapping uses one CRM run with explicit matching Agent HQ task, project, and
-workflow identifiers. Conflicting recurrence identifiers, multiple runs, active
-or nonterminal tasks, and existing field conflicts are skipped. Only present,
-valid values are copied. Missing measurements and ID lists stay empty; no comment
-parsing, guessed zeros, sums across retries, or `discovered`/`filtered` inference.
-In particular, historical `fresh_candidates_reviewed` is populated only from that
-explicit metadata field, not inferred from `searched`.
+The historical backfill was an operator-run, temporary script outside the product.
+It is not part of Agent HQ's runtime or recurring behavior. It filled 137 tasks
+from uniquely matched CRM run records and skipped 8 tasks with multiple runs.
+Only explicit, valid values were copied. Missing values stayed empty; no comments
+were parsed and no retry counts were combined. Existing task lifecycle and
+assignment were preserved, and field writes were read back for verification.
 
-The task's custom fields are merged and read back; lifecycle and assignment remain
-unchanged. CRM is read-only. Existing comments and unrelated fields are preserved.
-Each backfill records its source run, source update time, import time, and missing
-fields. This updates current task values; it does not recreate historical
+Each populated task records the source CRM run and import provenance in its sync
+fields. This changes current task values; it does not recreate historical
 journey-entry telemetry snapshots.
-
-## Operational procedure
-
-1. Build/test and deploy the API/UI with migration 33 before configuring gates.
-2. Read `list_lead_gen_runs` from the configured Agency CRM MCP server (maximum 200)
-   into a protected JSON file. This operation returned 160 runs during preparation,
-   so pagination or a direct database export was unnecessary.
-3. Save the series task inventory, including current custom fields, in a protected
-   JSON file. The initial preview matched 137 tasks uniquely and skipped 8 with
-   multiple CRM runs out of 145 closed occurrences.
-4. Run `node scripts/apply-agency-lead-search-contract.mjs --config` against the
-   intended Agent HQ API to install fields, verify instructions, and enable gates.
-5. Run `node scripts/apply-agency-lead-search-contract.mjs --backfill <crm-runs.json> <task-snapshot.json>`.
-   The script re-reads every task, skips concurrent changes, saves before snapshots,
-   performs field-only writes, and verifies every result.
-
-The scripts print their protected `/private/tmp/agency-lead-search-rollout-*`
-backup/report directory. They are explicit operator commands, not startup hooks.
-Restore field values/configuration from those snapshots only after checking for
-subsequent edits. Re-running the backfill against refreshed task snapshots is
-idempotent: already populated records are skipped.
