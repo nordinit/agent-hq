@@ -544,11 +544,11 @@ export class AgentHqApiClient {
   telemetryGet(path: string, params: Record<string, unknown> = {}): Promise<unknown> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null) query.set(key, String(value));
-    return this.request('GET', `/telemetry/v2${path}${query.size ? `?${query}` : ''}`);
+    return this.request('GET', `/api/v1/telemetry/v2${path}${query.size ? `?${query}` : ''}`);
   }
 
   telemetryWrite(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<unknown> {
-    return this.request(method, `/telemetry/v2${path}`, body);
+    return this.request(method, `/api/v1/telemetry/v2${path}`, body);
   }
 
   private async requestMultipart<T>(

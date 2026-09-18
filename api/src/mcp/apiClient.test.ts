@@ -10,6 +10,46 @@ function jsonResponse(body: unknown): Response {
   } as Response;
 }
 
+describe('AgentHqApiClient telemetry routes', () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => { global.fetch = originalFetch; });
+
+  it('reads from the versioned API mount with scoped credentials and encoded filters', async () => {
+    const catalog = { fields: [], definition_contract: { version: 1 } };
+    const fetchMock = jest.fn(async () => jsonResponse(catalog));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const client = new AgentHqApiClient('http://agent-hq.test', 'test-scoped-key');
+
+    await expect(client.telemetryGet('/catalog', {
+      project_id: 99, workflow_type: 'lead search', include_archived: false, task_type: undefined,
+    })).resolves.toEqual(catalog);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://agent-hq.test/api/v1/telemetry/v2/catalog?project_id=99&workflow_type=lead+search&include_archived=false',
+      expect.objectContaining({ method: 'GET', headers: expect.objectContaining({ Authorization: 'Bearer test-scoped-key' }) }),
+    );
+  });
+
+  it.each([
+    ['POST', '/definitions/validate'],
+    ['PUT', '/bindings'],
+    ['DELETE', '/queries/retained'],
+  ] as const)('sends %s telemetry calls to the versioned API mount', async (method, path) => {
+    const fetchMock = jest.fn(async () => jsonResponse({ ok: true }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const client = new AgentHqApiClient('http://agent-hq.test', 'test-scoped-key');
+    const body = method === 'DELETE' ? undefined : { scope: { project_id: 99 } };
+
+    await client.telemetryWrite(method, path, body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://agent-hq.test/api/v1/telemetry/v2${path}`,
+      expect.objectContaining({ method, headers: expect.objectContaining({ Authorization: 'Bearer test-scoped-key' }) }),
+    );
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(init.body).toBe(body === undefined ? undefined : JSON.stringify(body));
+  });
+});
+
 function installMoveTaskFetchMock() {
   const postedBodies: unknown[] = [];
   const fetchMock = jest.fn(async (input: string | URL, init?: RequestInit) => {
