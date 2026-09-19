@@ -1071,8 +1071,9 @@ export async function replaceAgentMcpServerToolAllowlist(
   return await getAgentMcpServerToolAllowlists(db, agentId);
 }
 
-export async function getAgentMcpPermissionPolicy(db: Db, agentId: number): Promise<AgentMcpPermissionPolicySnapshot> {
+export async function getAgentMcpPermissionPolicy(db: Db, agentId: number, keyRole?: McpKeyRole): Promise<AgentMcpPermissionPolicySnapshot> {
   const context = await loadAgentPermissionContext(db, agentId);
+  if (keyRole) context.defaultPolicy = resolveAgentMcpDefaultPolicy(roleIsTrusted(keyRole));
   return await buildAgentMcpPermissionPolicySnapshot(db, context);
 }
 
@@ -1113,7 +1114,7 @@ export async function resetAgentMcpPermissionPolicy(db: Db, agentId: number): Pr
   return await buildAgentMcpPermissionPolicySnapshot(db, context);
 }
 
-async function resolveEffectiveAgentMcpPermissionState(db: Db, identity: McpApiIdentity): Promise<{
+export async function resolveEffectiveAgentMcpPermissionState(db: Db, identity: McpApiIdentity): Promise<{
   policyMode: 'default' | 'explicit';
   defaultPolicy: AgentMcpDefaultPolicy;
   enabledCapabilities: Set<AgentMcpCapabilityKey>;
@@ -2145,6 +2146,10 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     throw err;
   }
 
+  // Self discovery is part of authentication, including for identities with zero grants.
+  // It never accepts an agent/key selector and does not depend on discovery.read_catalog.
+  if (requestPath === '/mcp/access' && method === 'GET') return next();
+
   const permissionState = await resolveEffectiveAgentMcpPermissionState(db, identity);
   const taskScopes = await getScopedTaskContexts(db, identity);
   const instanceScopes = await getScopedInstanceContexts(db, identity);
@@ -2382,10 +2387,10 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     });
   }
 
-  const agentMcpPolicyMatch = requestPath.match(/^\/agents\/(\d+)\/mcp-permissions$/);
+  const agentMcpPolicyMatch = requestPath.match(/^\/agents\/(\d+)\/mcp-permissions(\/preview)?$/);
   if (agentMcpPolicyMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
     const targetAgentId = Number(agentMcpPolicyMatch[1]);
-    const isWrite = method !== 'GET';
+    const isWrite = method !== 'GET' && !agentMcpPolicyMatch[2];
     const requiredCapability: AgentMcpCapabilityKey = isWrite
       ? 'mcp_capability_policies.write'
       : permissionState.enabledCapabilities.has('mcp_capability_policies.read')

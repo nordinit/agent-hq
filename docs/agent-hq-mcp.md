@@ -718,30 +718,25 @@ Accept: application/json, text/event-stream
 
 Properties worth knowing before pointing a connector at it:
 
-- **The transport authenticates; it does not authorize.** Every tool call still travels through `/api/v1` carrying the caller's own MCP key, so `authorizeMcpApiRequestIfPresent` and the agent's capability policy apply exactly as they do for a local stdio client. A key that cannot move a task over stdio cannot move it from a phone.
+- **Discovery and execution use the same identity permissions.** Every tool call still travels through `/api/v1` carrying the caller's own MCP key, so `authorizeMcpApiRequestIfPresent` and the agent's capability policy apply exactly as they do for a local stdio client. A key that cannot move a task over stdio cannot move it from a phone.
 - **Servers are built per request** (stateless transport, no session id). Remote connectors reconnect freely, and per-request construction keeps one client's identity from outliving its request.
 - **Keys are read from `Authorization: Bearer` or `x-api-key` directly.** Unlike `/api/v1`, this route does not require the `x-agent-hq-mcp-client` marker header — remote connectors send a plain bearer token and nothing else.
 - **Rate limiting is per key**, defaulting to 120 requests/minute.
-- **Authenticated requests emit `[agent-hq-mcp-http] trace` logs** with UTC time, agent/key ID, profile, method, tool name, HTTP status, protocol/API result, and duration. Tool-list responses include the actual count and a catalog fingerprint. Arguments, credentials, resource URIs, and result text are excluded. A tool failure can have HTTP 200; inspect `result` as well as `http_status`.
+- **Authenticated requests emit `[agent-hq-mcp-http] trace` logs** with UTC time, agent/key ID, policy fingerprint, method, tool name, HTTP status, protocol/API result, and duration. Tool-list responses include the actual count and a catalog fingerprint. Arguments, credentials, resource URIs, and result text are excluded. A tool failure can have HTTP 200; inspect `result` as well as `http_status`.
 
 Publishing the endpoint (TLS, a public hostname, tunnel or reverse proxy) is deployment work outside this document. Both major clients connect from the vendor's cloud rather than from your device, so `localhost` and VPN-only hosts are unreachable to them.
 
-### Tool profiles
+### Identity permissions and tool discovery
 
-The full catalog covers every product domain. Remote connectors use a curated profile to limit the tool definitions they load.
+There is no MCP profile selection. Each identity's saved capability policy controls both tool discovery and execution over HTTP and stdio. `tools/list` includes tools whose explicit permission requirements are met; the API still checks the requested task, project, tenant, active run, and writable fields on every call. A visible tool can support only some arguments under a narrow permission, such as updating custom fields on the active task.
 
-A profile is a named allow-list of exposed tool names (`api/src/mcp/toolProfiles.ts`):
+Edit **Agent → Agent HQ MCP Access** to change permissions. The tool preview shows available and unavailable tools, their required permissions, and the effect of unsaved changes. For identities with different key roles, select the key authority to preview: scoped credentials never inherit another key's administrative defaults.
 
-| Profile | Names exposed | Use |
-|---|---|---|
-| `full` | all registered tools | stdio server default; unchanged behaviour |
-| `mobile` | 86 | HTTP transport default: project operations, routing, recurring tasks, and all 30 telemetry tools |
+`GET /api/v1/mcp/access` returns the authenticated caller's effective capabilities, tool names, scope descriptions, identity, and policy fingerprint. It requires a valid MCP credential but no optional discovery capability. It cannot select another identity. Stdio requests this endpoint before tool listing, calls, and resource reads; HTTP resolves access for each request. Failed permission lookups fail closed. Changed policies trigger a tool-list notification on connected transports when supported. Clients that cache tool metadata may still need a refresh or a new conversation; revoked access is enforced even with a stale list.
 
-The `mobile` profile includes project task and agent management, routing, recurring series, task evidence, configured task outcomes, and full project telemetry (definitions, queries, profiles, reports, dashboards, bindings, snapshots, coverage, import and export). It exposes `agent_hq_post_task_outcome` for status transitions and `agent_hq_delete_task_relationship` for removing links. Generic status moves, run callbacks, workflow definition mutations, skills, teams, tool/server configuration, and file upload/download stay outside this profile.
+The REST `/api/v1/mcp/catalog` is the complete product documentation catalog. The MCP `agent-hq://catalog` resource is filtered for the caller. Tool requirements are declared in `api/src/mcp/toolPermissions.ts` as alternatives of required capability sets; new tools without declarations fail registration. `admin.full_access` grants the full declared surface. The generic `agent_hq_api_request` escape hatch is administrative; scoped identities use typed tools.
 
-A profile narrows what a client can *see*. It is not an authorization boundary; the capability policy is.
-
-When changing a remote profile, refresh the connection's tool metadata and start a new conversation. Reconnecting OAuth renews authentication but is not evidence that the tool catalog refreshed. For ChatGPT developer-mode connections, use the connection's **Refresh** action and verify the discovered tool names ([OpenAI instructions](https://developers.openai.com/plugins/deploy/connect-chatgpt#refresh-metadata)). If a client still offers `agent_hq_move_task` while omitting the outcome and relationship-delete tools, compare its metadata with `/mcp` `tools/list`. The REST `/api/v1/mcp/catalog` describes the full server and is not the mobile profile. The transport trace shows whether a refresh actually requested `tools/list` and whether a failed invocation reached Agent HQ.
+Legacy `AGENT_HQ_MCP_TOOL_PROFILE` and `AGENT_HQ_MCP_HTTP_TOOL_PROFILE` values emit a deprecation warning and are ignored, including `full`. Remove them from old client configurations. An existing stdio process needs one restart when upgrading to this implementation; subsequent permission changes need no server restart. OAuth identities, keys and saved capability policies are preserved.
 
 ### Scoped identity
 
@@ -749,14 +744,16 @@ Give a remote client its own agent identity with a scoped key. A separate identi
 
 ```bash
 cd api
-npx tsx src/bin/provision-remote-mcp-identity.ts --project-id <id>
+npx tsx src/bin/provision-remote-mcp-identity.ts --project-id <id> \
+  --capability projects.read_project_board \
+  --capability tasks.read_project_context
 ```
 
-The script is idempotent. It creates (or updates) an agent named `Claude Mobile`, writes the capability policy paired with the tool profile, and issues an MCP key, printing it once. Re-run with `--rotate-key` to replace a key and revoke the old ones — Agent HQ stores only hashes, so a lost key cannot be printed again.
+The script creates (or updates) an identity named `Claude Mobile` and issues a scoped MCP key, printing it once. Repeated `--capability <key>` arguments or `--permissions-file <path>` explicitly replace its policy. The JSON file accepts an array of keys or `{"enabled_capabilities": [...]}`. Omitting both preserves an existing policy; a new identity receives an explicit empty policy until permissions are granted. The old `--profile` flag returns a migration error. Re-run with `--rotate-key` to replace a key and revoke the old ones — Agent HQ stores only hashes, so a lost key cannot be printed again.
 
 The identity is created enabled because `resolveMcpApiIdentityForKey` refuses a key mapped to a disabled agent; a disabled identity is one whose connector can never authenticate. Nothing dispatches to it regardless — automatic assignment runs through assignment rules, and none names this agent. Keep it out of assignment rules and teams and it stays a credential rather than a worker.
 
-The policy the `mobile` profile pairs with:
+Available permissions for project operators include:
 
 | Capability | Grants |
 |---|---|
@@ -768,11 +765,12 @@ The policy the `mobile` profile pairs with:
 | `discovery.read_catalog` | catalog/health discovery |
 | `projects.read_project_board` | the tenant project list, plus task/workflow/metadata collections scoped to the assigned project |
 | `projects.read_active_project` | project detail |
-| `sprints.read_active_sprint` | workflow detail |
-| `sprints.pause_active_sprint` | pause, resume, and reopen a workflow in the assigned project |
-| `sprints.complete_active_sprint` | complete or close a workflow in the assigned project |
+| `workflows.read_active_workflow` | workflow detail |
+| `workflows.pause_active_workflow` | pause, resume, and reopen a workflow in the assigned project |
+| `workflows.complete_active_workflow` | complete or close a workflow in the assigned project |
 | `agents.manage_project_agents` | list/read/create/update/delete agents in the assigned project, including job instructions |
 | `workflow_definitions.read_project_scope` | workflow definition reads — type, task types, field schemas, statuses, outcomes, relationship types |
+| `workflow_definitions.manage_project_scope` | create/update/delete workflow definitions and their task types, field schemas, statuses, outcomes, and relationship types inside the assigned project |
 | `tasks.read_project_context` | task detail, notes, history, relationships |
 | `tasks.manage_project_tasks` | create/update/delete tasks and relationships in the assigned project |
 | `tasks.write_project_notes` | notes on any task in the assigned project |
@@ -780,9 +778,7 @@ The policy the `mobile` profile pairs with:
 | `tasks.search_project_tasks` | bounded exact-match dedupe search |
 | `recurring_task_series.*` | read and manage scheduled task automation in the assigned project |
 
-Absent by design: every `admin.*` key and `tasks.write_active_lifecycle`. The project lifecycle grant authorizes supervisory outcomes; it does not allow callbacks on another agent's run.
-
-`tasks.write_project_lifecycle` is off by default for scoped runtime keys and must be granted administratively. Existing mobile identities need their stored capability policy updated to the current profile (re-run the provisioning command above; key rotation is unnecessary). The profile exposes tools but does not automatically change an existing identity's permissions.
+Grant only the permissions the identity needs. `tasks.write_project_lifecycle` and `workflow_definitions.manage_project_scope` are off by default for scoped runtime keys and require an authorized policy edit. Existing mobile identities retain their saved grants; upgrading does not enable administrative access or rewrite policies. The project lifecycle grant authorizes supervisory outcomes without permitting callbacks on another agent's run.
 
 Every project-wide outcome requires a nonblank `summary` explaining the intervention, for example `"Closed completed stuck occurrence after validating CRM evidence"`. Use `payload` for the workflow evidence. The server derives project scope and actor from the authenticated key, resolves the task's current instance itself, and rechecks scope and instance linkage under the task lock. Caller-supplied actor/capability/instance values cannot elevate authority. Configured transitions and evidence gates still apply; `tasks.manage_project_tasks` cannot edit `status` through generic updates. If both lifecycle grants are held, an owned active run uses the narrower active lifecycle permission.
 
@@ -794,7 +790,7 @@ To remove a relationship, list it with `agent_hq_list_task_relationships`, then 
 
 Several capabilities were added for this shape of client. `projects.read_project_board` covers the collection reads a board view needs; every other read capability resolves to a single record or to the agent's own dispatched task, which is right for a runtime agent and leaves a remote client unable to answer "what is on my board" without an admin key. Each collection that can name a project must name the assigned one. `tasks.write_project_notes` lets an identity comment on work it is not executing, and stops at notes.
 
-The two `sprints.*_active_sprint` writes back `agent_hq_set_workflow_status`. Both resolve scope the same way — the workflow attached to the caller's active dispatched task, or any workflow inside its assigned project — and both are off by default for scoped runtime keys, so a dispatched agent gets workflow lifecycle control only when an operator grants it. They are separate because the transitions are not equivalent: pausing is a reversible hold, while completing stamps the end date and stands the workflow's agents down, so an agent that may say "hold on" does not thereby get to say "this cycle is finished."
+The two `workflows.*_active_workflow` writes back `agent_hq_set_workflow_status`. Both resolve scope the same way — the workflow attached to the caller's active dispatched task, or any workflow inside its assigned project — and both are off by default for scoped runtime keys, so a dispatched agent gets workflow lifecycle control only when an operator grants it. They are separate because the transitions are not equivalent: pausing is a reversible hold, while completing stamps the end date and stands the workflow's agents down, so an agent that may say "hold on" does not thereby get to say "this cycle is finished."
 
 Neither is in `SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES`, so a scoped policy editor cannot grant workflow lifecycle control to itself or another agent; that stays an administrative act.
 
@@ -866,7 +862,7 @@ Reads have a second door regardless: `agent_hq_get_workflow_metadata` returns th
 
 Setting `active` on a `complete` or `closed` workflow reopens it — there is deliberately no terminal-state guard, matching what the canvas allows.
 
-`PUT /api/v1/workflows/:id` under `sprints.pause_active_sprint` accepts a body of `status` and `note` and nothing else, and only a non-terminal `status`. A patch that also carries `name`, `goal`, `repo_url`, `ended_at`, or `project_id` falls through to the administrative deny, so the pause grant cannot rename a workflow, rewrite its repo configuration, or move it to another project. Reaching `complete` or `closed` through the field write is refused for the same reason the tool routes them elsewhere: it would leave a workflow that reads as finished but never ended. General workflow editing remains `agent_hq_update_workflow` on an administrative key.
+`PUT /api/v1/workflows/:id` under `workflows.pause_active_workflow` accepts a body of `status` and `note` and nothing else, and only a non-terminal `status`. A patch that also carries `name`, `goal`, `repo_url`, `ended_at`, or `project_id` falls through to the administrative deny, so the pause grant cannot rename a workflow, rewrite its repo configuration, or move it to another project. Reaching `complete` or `closed` through the field write is refused for the same reason the tool routes them elsewhere: it would leave a workflow that reads as finished but never ended. General workflow editing remains `agent_hq_update_workflow` on an administrative key.
 
 ### OAuth for connectors
 
@@ -960,7 +956,7 @@ curl -sS -X POST http://127.0.0.1:3501/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-A valid key returns the profile's tool list. No key returns HTTP 401 with a JSON-RPC error and a `WWW-Authenticate` header.
+A valid key returns the identity's permitted tool list. No key returns HTTP 401 with a JSON-RPC error and a `WWW-Authenticate` header.
 
 ---
 
@@ -975,14 +971,12 @@ The MCP server supports config via environment variables and optional local conf
 | `AGENT_HQ_API_URL` | `http://localhost:3501` | Agent HQ API base URL |
 | `AGENT_HQ_MCP_API_KEY` | none | Required agent-bound MCP API key |
 | `MCP_RATE_LIMIT_RPM` | `60` | Max requests per minute |
-| `AGENT_HQ_MCP_TOOL_PROFILE` | `full` | stdio server tool profile |
 
 The HTTP transport is configured on the API process, not the stdio server:
 
 | Variable | Default | Description |
 |---|---|---|
 | `AGENT_HQ_MCP_HTTP_ENABLED` | `1` | Set to `0` to unmount `/mcp` |
-| `AGENT_HQ_MCP_HTTP_TOOL_PROFILE` | `mobile` | Tool profile exposed to remote clients |
 | `AGENT_HQ_MCP_HTTP_RATE_LIMIT_RPM` | `120` | Per-key request ceiling |
 | `AGENT_HQ_MCP_HTTP_ALLOWED_HOSTS` | none | Comma-separated Host allow-list; enables DNS rebinding protection |
 | `AGENT_HQ_INTERNAL_BASE_URL` | `http://127.0.0.1:<port>` | Base URL the tool handlers call back into |

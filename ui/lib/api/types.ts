@@ -189,6 +189,15 @@ export interface AgentMcpPermissionCapability {
   explicit_enabled: boolean | null;
 }
 
+export interface AgentMcpToolAccessPreview {
+  agent_id: number;
+  key_role: string;
+  key_roles: string[];
+  draft: boolean;
+  available_count: number;
+  tools: Array<{ name: string; available: boolean; requires_any: string[][]; reason: string }>;
+}
+
 export interface AgentMcpPermissionPolicy {
   agent_id: number;
   agent_name: string;

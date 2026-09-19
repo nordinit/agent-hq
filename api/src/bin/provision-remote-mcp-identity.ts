@@ -4,11 +4,11 @@
  * A remote connector's key lives outside this machine — in Anthropic's or OpenAI's connector
  * config — which makes it the key most likely to leak and the one least worth granting broadly.
  * So it gets its own agent rather than borrowing Atlas's: a separate identity is separately
- * revocable, shows up on its own in the audit trail, and (unlike anything named Atlas, which
- * isTrustedMcpIdentity resolves to trusted-admin defaults) starts from the scoped-runtime policy.
+ * revocable and shows up on its own in the audit trail. Keys are issued with scoped authority.
  *
  * The identity is a permission holder, not a worker, and its capability policy is written
- * explicitly from the tool profile's paired capability list rather than left to the defaults.
+ * explicitly from --capability or --permissions-file. New identities default to no grants;
+ * existing policies are preserved unless a replacement was requested.
  *
  * It is created enabled, which is not an oversight: resolveMcpApiIdentityForKey refuses a key
  * mapped to a disabled agent, so a disabled identity is one whose connector can never authenticate.
@@ -25,8 +25,9 @@ import '../config/loadRootEnv';
 import { closeDb, getDb } from '../db/client';
 import type { Db } from '../db/adapter/types';
 import { getDefaultTenantId } from '../lib/tenantContext';
-import { issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
-import { resolveMcpToolProfile } from '../mcp/toolProfiles';
+import { AGENT_MCP_CAPABILITY_CATALOG, getAgentMcpPermissionPolicy, issueMcpApiKeyForAgent, replaceAgentMcpPermissionPolicy } from '../lib/mcpApiAuth';
+import { readFileSync } from 'fs';
+import { describeToolAccess } from '../mcp/accessView';
 import { REMOTE_MCP_CLIENT_ROLE } from '../mcp/oauth/identities';
 
 interface Options {
@@ -34,17 +35,19 @@ interface Options {
   slug: string;
   projectId: number | null;
   tenantId: number | null;
-  profileName: string;
+  capabilities: string[] | null;
+  permissionsFile: string | null;
   rotateKey: boolean;
 }
 
-function parseArgs(argv: string[]): Options {
+export function parseArgs(argv: string[]): Options {
   const options: Options = {
     name: 'Claude Mobile',
     slug: 'claude-mobile',
     projectId: null,
     tenantId: null,
-    profileName: 'mobile',
+    capabilities: null,
+    permissionsFile: null,
     rotateKey: false,
   };
 
@@ -62,11 +65,13 @@ function parseArgs(argv: string[]): Options {
       case '--slug': options.slug = value(); break;
       case '--project-id': options.projectId = Number.parseInt(value(), 10); break;
       case '--tenant-id': options.tenantId = Number.parseInt(value(), 10); break;
-      case '--profile': options.profileName = value(); break;
+      case '--profile': throw new Error('--profile has been removed. Use repeated --capability <key> or --permissions-file <JSON path>. Omit both to preserve an existing policy.');
+      case '--capability': (options.capabilities ??= []).push(value()); break;
+      case '--permissions-file': options.permissionsFile = value(); break;
       case '--rotate-key': options.rotateKey = true; break;
       case '--help':
       case '-h':
-        console.log('Usage: provision-remote-mcp-identity --project-id <id> [--name <name>] [--slug <slug>] [--tenant-id <id>] [--profile <name>] [--rotate-key]');
+        console.log('Usage: provision-remote-mcp-identity --project-id <id> [--name <name>] [--slug <slug>] [--tenant-id <id>] [--capability <key> ... | --permissions-file <path>] [--rotate-key]');
         process.exit(0);
         break;
       default:
@@ -74,6 +79,17 @@ function parseArgs(argv: string[]): Options {
     }
   }
 
+  if (options.capabilities && options.permissionsFile) throw new Error('Use either --capability or --permissions-file, not both.');
+  if (options.permissionsFile) {
+    const value = JSON.parse(readFileSync(options.permissionsFile, 'utf8'));
+    const capabilities = Array.isArray(value) ? value : value?.enabled_capabilities;
+    if (!Array.isArray(capabilities) || capabilities.some(key => typeof key !== 'string')) {
+      throw new Error('Permissions file must contain an array of capability keys or {enabled_capabilities: [...]}');
+    }
+    options.capabilities = capabilities;
+  }
+  const known = new Set<string>(AGENT_MCP_CAPABILITY_CATALOG.map(capability => capability.key));
+  for (const key of options.capabilities ?? []) if (!known.has(key)) throw new Error(`Unknown Agent HQ MCP capability: ${key}`);
   return options;
 }
 
@@ -94,14 +110,15 @@ async function assertProjectInTenant(db: Db, projectId: number, tenantId: number
   if (!row) throw new Error(`Project #${projectId} was not found in tenant #${tenantId}.`);
 }
 
+export async function resolveProvisionedIdentityPolicy(db: Db, agentId: number, created: boolean, capabilities: string[] | null) {
+  // Never let credential re-provisioning silently replace an existing access policy.
+  return capabilities !== null || created
+    ? replaceAgentMcpPermissionPolicy(db, agentId, capabilities ?? [])
+    : getAgentMcpPermissionPolicy(db, agentId, 'scoped');
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const profile = resolveMcpToolProfile(options.profileName);
-  if (!profile.capabilities) {
-    throw new Error(
-      `Tool profile "${profile.name}" has no paired capability policy, so there is nothing to scope this identity to. Use a narrower profile such as "mobile".`,
-    );
-  }
 
   const db = getDb();
   const tenantId = options.tenantId ?? await getDefaultTenantId(db);
@@ -139,7 +156,9 @@ async function main(): Promise<void> {
     created = true;
   }
 
-  const policy = await replaceAgentMcpPermissionPolicy(db, agentId, profile.capabilities);
+  // Existing identities keep their saved policy unless replacement was explicitly requested.
+  // New identities start with an explicit empty policy, not inherited runtime/admin defaults.
+  const policy = await resolveProvisionedIdentityPolicy(db, agentId, created, options.capabilities);
 
   const existingKeys = await db.all(
     `SELECT id, key_prefix, last_used_at FROM mcp_api_keys WHERE agent_id = ? AND enabled = 1 AND revoked_at IS NULL ORDER BY id DESC`,
@@ -173,8 +192,7 @@ async function main(): Promise<void> {
     created,
     tenant_id: tenantId,
     project_id: projectId,
-    tool_profile: profile.name,
-    exposed_tool_count: profile.toolNames ? profile.toolNames.size : null,
+    exposed_tool_count: describeToolAccess(enabledCapabilities).filter(tool => tool.available).length,
     policy_mode: policy.policy_mode,
     enabled_capabilities: enabledCapabilities,
     key_id: issuedKeyId,
@@ -194,7 +212,7 @@ async function main(): Promise<void> {
   }
 }
 
-void main()
+if (require.main === module) void main()
   .catch((error) => {
     console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
     process.exitCode = 1;

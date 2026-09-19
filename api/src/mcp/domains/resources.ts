@@ -59,6 +59,6 @@ export function registerResourcesTools(ctx: McpDomainContext) {
   
   registerResource(
     [{ id: 'agent-hq-catalog', uri: 'agent-hq://catalog' }],
-    () => JSON.stringify(getMcpCatalog()),
+    async () => JSON.stringify(ctx.getCatalog ? await ctx.getCatalog() : getMcpCatalog()),
   );
 }

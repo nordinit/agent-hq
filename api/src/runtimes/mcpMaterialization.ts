@@ -643,6 +643,10 @@ async function buildDesiredServerConfig(
                   name: 'Agent HQ MCP materialized key',
                 })).apiKey;
     const env = isRecord(merged.env) ? { ...(merged.env as Record<string, unknown>) } : {};
+    if (row.slug === 'agent-hq') {
+      delete env.AGENT_HQ_MCP_TOOL_PROFILE;
+      delete env.AGENT_HQ_MCP_HTTP_TOOL_PROFILE;
+    }
     env.AGENT_HQ_MCP_API_KEY = apiKey;
     merged.env = Object.fromEntries(
       Object.entries(env)

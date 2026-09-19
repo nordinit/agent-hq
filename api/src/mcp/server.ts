@@ -18,22 +18,22 @@ import { loadConfig } from './config';
 import { AgentHqApiClient } from './apiClient';
 import { RateLimiter } from './rateLimiter';
 import { createAgentHqMcpServer } from './serverFactory';
-import { resolveMcpToolProfile } from './toolProfiles';
 
 const cfg = loadConfig();
 const api = new AgentHqApiClient(cfg.apiUrl, cfg.apiKey);
 const limiter = new RateLimiter(cfg.rateLimitRpm);
-const profile = resolveMcpToolProfile(process.env.AGENT_HQ_MCP_TOOL_PROFILE);
+if (process.env.AGENT_HQ_MCP_TOOL_PROFILE) {
+  console.error('[agent-hq-mcp] AGENT_HQ_MCP_TOOL_PROFILE is deprecated and ignored; tools follow identity permissions.');
+}
 
 console.error(
-  `[agent-hq-mcp] Starting, API: ${cfg.apiUrl} | Rate limit: ${cfg.rateLimitRpm} req/min | Auth: ${cfg.apiKey ? 'configured' : 'missing'} | Profile: ${profile.name}`,
+  `[agent-hq-mcp] Starting, API: ${cfg.apiUrl} | Rate limit: ${cfg.rateLimitRpm} req/min | Auth: ${cfg.apiKey ? 'configured' : 'missing'} | Access: identity permissions`,
 );
 
 const server = createAgentHqMcpServer({
   api,
   hasApiKey: Boolean(cfg.apiKey),
   rateLimiter: limiter,
-  profile: profile.toolNames ? profile : null,
 });
 
 async function main() {

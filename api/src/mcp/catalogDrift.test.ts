@@ -1,3 +1,4 @@
+import { getToolPermissionRequirement } from './toolPermissions';
 import { toJSONSchema, type ZodTypeAny, z } from 'zod';
 import { AgentHqApiClient } from './apiClient';
 import { getMcpCatalog, type McpCatalogArg, type McpCatalogTool } from './catalog';
@@ -51,6 +52,7 @@ function collectLiveRegistry() {
       const [canonical_name, ...aliases] = names;
       tools.push({
         canonical_name,
+        requires_any: getToolPermissionRequirement(canonical_name),
         aliases,
         description,
         args: serializeArgs(schema),

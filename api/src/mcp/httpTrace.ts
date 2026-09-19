@@ -15,7 +15,7 @@ export function traceMcpHttpRequest(
   res: Response,
   transport: StreamableHTTPServerTransport,
   identity: McpApiIdentity,
-  profile: string,
+  policyFingerprint: string,
 ): void {
   const started = Date.now();
   const body = record(req.body);
@@ -64,7 +64,7 @@ export function traceMcpHttpRequest(
       timestamp: new Date().toISOString(),
       agent: identity.agentSlug,
       key_id: identity.keyId,
-      profile,
+      policy_fingerprint: policyFingerprint,
       method,
       tool,
       result: res.writableFinished ? result : 'disconnected',

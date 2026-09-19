@@ -52,6 +52,7 @@ import recurringTaskSeriesRouter from './routes/recurring-task-series';
 import runtimeDriversRouter from './routes/runtime-drivers';
 import { shutdownPool as shutdownBrowserPool } from './services/browserPool';
 import { getMcpCatalog } from './mcp/catalog';
+import { mcpAccessRouter } from './mcp/accessRouter';
 import { registerAgentHqMcpCatalog } from './mcp/registerCatalog';
 import { createMcpHttpRouter, resolveMcpHttpConfigFromEnv } from './mcp/httpServer';
 import { createMcpOAuthRouter, resolveMcpOAuthConfigFromEnv } from './mcp/oauth/router';
@@ -95,6 +96,7 @@ app.use(openApiRouter);
 app.use('/api/v1', openApiRouter);
 
 // API routes
+app.use('/api/v1/mcp', mcpAccessRouter);
 app.get('/api/v1/mcp/catalog', (_req, res) => {
   res.json(getMcpCatalog());
 });
@@ -126,12 +128,11 @@ if (mcpHttpConfig.enabled && mcpOAuthConfig.enabled) {
 if (mcpHttpConfig.enabled) {
   app.use('/mcp', createMcpHttpRouter({
     apiBaseUrl: mcpHttpConfig.apiBaseUrl,
-    profileName: mcpHttpConfig.profileName,
     rateLimitRpm: mcpHttpConfig.rateLimitRpm,
     allowedHosts: mcpHttpConfig.allowedHosts,
     resourceMetadataUrl: mcpResourceMetadataUrl,
   }));
-  console.log(`[mcp-http] Streamable HTTP MCP transport mounted at /mcp (profile: ${mcpHttpConfig.profileName})`);
+  console.log(`[mcp-http] Streamable HTTP MCP transport mounted at /mcp (access: identity permissions)`);
 }
 
 app.get('/api/v1/mcp/catalog/health', (_req, res) => {

@@ -832,6 +832,10 @@ export class AgentHqApiClient {
     return this.request<unknown>('POST', '/api/v1/tasks/project-search', params).then(shapeProjectTaskSearchResponse);
   }
 
+  getEffectiveAccess() {
+    return this.request<import('./accessView').McpEffectiveAccess>('GET', '/api/v1/mcp/access');
+  }
+
   getTask(id: number) {
     return this.request<unknown>('GET', `/api/v1/tasks/${id}`).then(shapeTaskDetail);
   }

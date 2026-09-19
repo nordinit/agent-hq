@@ -63,7 +63,6 @@ async function startHarness(): Promise<Harness> {
   app.use(oauth.router);
   app.use('/mcp', createMcpHttpRouter({
     apiBaseUrl: 'http://127.0.0.1:1',
-    profileName: 'mobile',
     resourceMetadataUrl: oauth.resourceMetadataUrl,
   }));
 

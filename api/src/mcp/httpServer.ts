@@ -29,7 +29,8 @@ import { AgentHqApiClient } from './apiClient';
 import { RateLimiter } from './rateLimiter';
 import { createAgentHqMcpServer } from './serverFactory';
 import { traceMcpHttpRequest } from './httpTrace';
-import { DEFAULT_MCP_TOOL_PROFILE, resolveMcpToolProfile, type McpToolProfile } from './toolProfiles';
+import { resolveMcpEffectiveAccess } from './effectiveAccess';
+import type { McpEffectiveAccess } from './accessView';
 import { getDb } from '../db/client';
 import {
   McpApiAuthError,
@@ -44,8 +45,6 @@ const JSONRPC_INTERNAL_ERROR = -32603;
 export interface McpHttpRouterOptions {
   /** Base URL the tool handlers call back into. Normally this process's own API. */
   apiBaseUrl: string;
-  /** Tool profile name exposed to remote clients. Defaults to `mobile`. */
-  profileName?: string | null;
   /** Per-key request ceiling. Defaults to 120/min. */
   rateLimitRpm?: number;
   /** Server instructions returned during initialize. */
@@ -62,6 +61,7 @@ export interface McpHttpRouterOptions {
   resourceMetadataUrl?: string;
   /** Seam for tests; defaults to resolving the key against the live database. */
   resolveIdentity?: (apiKey: string) => Promise<McpApiIdentity>;
+  resolveAccess?: (identity: McpApiIdentity) => Promise<McpEffectiveAccess>;
 }
 
 /**
@@ -118,7 +118,6 @@ function sendJsonRpcError(res: Response, status: number, code: number, message: 
 
 export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
   const router = Router();
-  const profile = resolveMcpToolProfile(options.profileName ?? 'mobile');
   const rateLimitRpm = options.rateLimitRpm && options.rateLimitRpm > 0 ? options.rateLimitRpm : 120;
   const resolveIdentity = options.resolveIdentity
     ?? ((apiKey: string) => resolveMcpApiIdentityForKey(getDb(), apiKey));
@@ -140,8 +139,10 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
     }
 
     let identity: McpApiIdentity;
+    let access: McpEffectiveAccess;
     try {
       identity = await resolveIdentity(key);
+      access = await (options.resolveAccess ?? (identity => resolveMcpEffectiveAccess(getDb(), identity)))(identity);
     } catch (err) {
       if (err instanceof McpApiAuthError) {
         console.warn(`[agent-hq-mcp-http] rejected ${req.method} (${err.code})`);
@@ -166,7 +167,7 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
       hasApiKey: true,
       // Limiting already happened per key above; a second bucket would double-count.
       rateLimiter: null,
-      profile: profile.toolNames ? profile : null,
+      resolveAccess: async () => access,
       instructions: options.instructions,
     });
 
@@ -177,7 +178,7 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
         ? { allowedHosts: options.allowedHosts, enableDnsRebindingProtection: true }
         : {}),
     });
-    traceMcpHttpRequest(req, res, transport, identity, profile.name);
+    traceMcpHttpRequest(req, res, transport, identity, access.policy_fingerprint);
 
     // The transport writes the response; both objects are per-request and must not outlive it.
     res.on('close', () => {
@@ -201,15 +202,16 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions): Router {
 export function resolveMcpHttpConfigFromEnv(env: NodeJS.ProcessEnv, apiPort: string | number): {
   enabled: boolean;
   apiBaseUrl: string;
-  profileName: string;
   rateLimitRpm: number;
   allowedHosts: string[];
 } {
   const rawRpm = Number.parseInt(env.AGENT_HQ_MCP_HTTP_RATE_LIMIT_RPM ?? '', 10);
+  if (env.AGENT_HQ_MCP_HTTP_TOOL_PROFILE) {
+    console.warn('[agent-hq-mcp-http] AGENT_HQ_MCP_HTTP_TOOL_PROFILE is deprecated and ignored; tools follow identity permissions.');
+  }
   return {
     enabled: (env.AGENT_HQ_MCP_HTTP_ENABLED ?? '1').trim() !== '0',
     apiBaseUrl: env.AGENT_HQ_INTERNAL_BASE_URL?.trim() || `http://127.0.0.1:${apiPort}`,
-    profileName: env.AGENT_HQ_MCP_HTTP_TOOL_PROFILE?.trim() || 'mobile',
     rateLimitRpm: Number.isInteger(rawRpm) && rawRpm > 0 ? rawRpm : 120,
     allowedHosts: (env.AGENT_HQ_MCP_HTTP_ALLOWED_HOSTS ?? '')
       .split(',')
@@ -217,5 +219,3 @@ export function resolveMcpHttpConfigFromEnv(env: NodeJS.ProcessEnv, apiPort: str
       .filter(Boolean),
   };
 }
-
-export { DEFAULT_MCP_TOOL_PROFILE, type McpToolProfile };

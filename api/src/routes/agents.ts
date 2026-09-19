@@ -1,3 +1,4 @@
+import { describeToolAccess } from '../mcp/accessView';
 import { Router, Request, Response } from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1232,6 +1233,35 @@ router.post('/provision-full', async (req: Request, res: Response) => {
     };
     return res.status(500).json({ ok: false, report });
   }
+});
+
+router.post('/:id/mcp-permissions/preview', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const tenantId = await resolveTenantIdFromRequest(db, req);
+    const agentId = Number(req.params.id);
+    if (!Number.isInteger(agentId) || agentId <= 0) return res.status(400).json({ error: 'Invalid agent id' });
+    if (!await requireAgentVisibleForTenant(db, agentId, tenantId)) return res.status(404).json({ error: 'Agent not found' });
+    const keys = await db.all(`SELECT DISTINCT role AS key_role FROM mcp_api_keys WHERE agent_id = ? AND enabled = 1
+      AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at::timestamptz > now())`, agentId) as Array<{ key_role: string }>;
+    const keyRoles = keys.length ? [...new Set(keys.map(key => key.key_role))].sort() : ['scoped'];
+    const keyRole = req.body?.key_role ?? (keyRoles.includes('scoped') ? 'scoped' : keyRoles[0]);
+    if (!keyRoles.includes(keyRole) || !['scoped', 'admin', 'super_admin'].includes(keyRole)) {
+      return res.status(400).json({ error: 'key_role must identify a live key role for this identity' });
+    }
+    const policy = await getAgentMcpPermissionPolicy(db, agentId, keyRole);
+    const draft = req.body?.enabled_capabilities;
+    const validKeys = new Set(policy.capabilities.map(capability => capability.key));
+    if (draft !== undefined && (!Array.isArray(draft) || draft.some(key => typeof key !== 'string' || !validKeys.has(key)))) {
+      return res.status(400).json({ error: 'enabled_capabilities must contain known capability keys' });
+    }
+    const enabled = draft ?? policy.capabilities.filter(capability => capability.enabled).map(capability => capability.key);
+    const tools = describeToolAccess(enabled);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ agent_id: agentId, key_role: keyRole, key_roles: keyRoles, draft: draft !== undefined,
+      policy_mode: draft !== undefined ? 'explicit' : policy.policy_mode, default_policy: policy.default_policy,
+      available_count: tools.filter(tool => tool.available).length, tools });
+  } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
 router.get('/:id/mcp-permissions', async (req: Request, res: Response) => {

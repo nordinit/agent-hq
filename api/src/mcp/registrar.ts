@@ -2,7 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { AgentHqApiClient, AgentHqApiError } from './apiClient';
 import { registerCatalogTool } from './catalog';
-import { McpToolProfile, selectProfileToolNames } from './toolProfiles';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { getToolPermissionRequirement } from './toolPermissions';
 
 export type McpToolResult = { content: Array<{ type: 'text'; text: string }> };
 export type McpToolHandler = (args: any) => Promise<McpToolResult>;
@@ -21,6 +22,7 @@ export interface McpRegistrar {
 
 export interface McpDomainContext extends McpRegistrar {
   api: AgentHqApiClient;
+  getCatalog?: () => Promise<unknown>;
   wrap<T>(fn: () => Promise<T>): () => Promise<McpToolResult>;
 }
 
@@ -44,32 +46,28 @@ export function formatMcpToolError(err: unknown): Record<string, unknown> {
 }
 
 export interface McpRegistrarOptions {
-  /** Restricts which tools are exposed. Defaults to every tool. */
-  profile?: McpToolProfile | null;
-  /**
-   * Whether to describe registered tools in the process-wide MCP catalog.
-   *
-   * The catalog is a single static map served from /api/v1/mcp/catalog, and it documents the
-   * whole product rather than one client's view of it. A profile-scoped server therefore stays
-   * out of it — otherwise a narrow remote connector would rewrite the catalog for every reader,
-   * and the per-request servers behind the HTTP transport would do it on every request.
-   */
   catalog?: boolean;
+  authorizeTool: (name: string) => Promise<void>;
+  authenticateResource: () => Promise<void>;
 }
 
-export function createMcpRegistrar(server: McpServer, options: McpRegistrarOptions = {}): McpRegistrar {
-  const profile = options.profile ?? null;
-  const describeInCatalog = options.catalog ?? profile == null;
+export function createMcpRegistrar(server: McpServer, options: McpRegistrarOptions): McpRegistrar & { tools: Tool[] } {
+  const tools: Tool[] = [];
 
   return {
+    tools,
     registerTool(names, description, schema, handler, toolOptions) {
-      const exposed = profile ? selectProfileToolNames(profile, names) : names;
-      if (exposed.length === 0) return;
-
-      for (const name of exposed) {
-        server.tool(name, description, schema, handler);
+      for (const name of names) {
+        getToolPermissionRequirement(name); // Missing metadata fails registration, including for admins.
+        tools.push({ name, description, inputSchema: z.toJSONSchema(z.object(schema), { io: 'input' }) as Tool['inputSchema'] });
+        server.tool(name, description, schema, async (args) => {
+          try { await options.authorizeTool(name); } catch (error) {
+            return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify(formatMcpToolError(error)) }] };
+          }
+          return handler(args);
+        });
       }
-      if (!describeInCatalog) return;
+      if (!options.catalog) return;
       registerCatalogTool({
         names,
         description,
@@ -80,7 +78,9 @@ export function createMcpRegistrar(server: McpServer, options: McpRegistrarOptio
     },
     registerResource(names, textFactory) {
       for (const { id, uri } of names) {
-        server.resource(id, uri, async () => ({
+        server.resource(id, uri, async () => {
+          await options.authenticateResource();
+          return {
           contents: [
             {
               uri,
@@ -88,7 +88,8 @@ export function createMcpRegistrar(server: McpServer, options: McpRegistrarOptio
               text: await textFactory(),
             },
           ],
-        }));
+          };
+        });
       }
     },
   };

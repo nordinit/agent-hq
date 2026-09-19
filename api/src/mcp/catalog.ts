@@ -4,6 +4,7 @@ import {
   VALID_TASK_STORY_POINTS,
 } from './apiClient';
 import { toJSONSchema, type ZodTypeAny, z } from 'zod';
+import { getToolPermissionRequirement, type ToolPermissionRequirement } from './toolPermissions';
 
 export interface McpCatalogArg {
   name: string;
@@ -19,6 +20,7 @@ export interface McpCatalogTool {
   args: McpCatalogArg[];
   domain: string;
   rest_paths?: string[];
+  requires_any: ToolPermissionRequirement;
 }
 
 export interface McpCatalogResource {
@@ -91,6 +93,7 @@ export function registerCatalogTool(def: {
   rest_paths?: string[];
 }) {
   const [canonical_name, ...aliases] = def.names;
+  for (const name of def.names) getToolPermissionRequirement(name);
   tools.set(canonical_name, {
     canonical_name,
     aliases,
@@ -98,6 +101,7 @@ export function registerCatalogTool(def: {
     args: serializeArgs(def.schema),
     domain: def.domain,
     rest_paths: def.rest_paths,
+    requires_any: getToolPermissionRequirement(canonical_name),
   });
 }
 

@@ -4,9 +4,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpApiAuthError, type McpApiIdentity } from '../lib/mcpApiAuth';
 import { createMcpHttpRouter, resolveMcpHttpConfigFromEnv } from './httpServer';
-import { resolveMcpToolProfile } from './toolProfiles';
+import { buildEffectiveAccess } from './accessView';
+import { describeToolAccess } from './accessView';
 
 const VALID_KEY = 'ahq_mcp_valid_test_key';
+const DEFAULT_GRANTS = ['tasks.read_project_context', 'workflow_definitions.read_project_scope', 'workflow_definitions.manage_project_scope'];
 
 function identityFor(agentSlug: string): McpApiIdentity {
   return {
@@ -33,13 +35,13 @@ interface Harness {
   close(): Promise<void>;
 }
 
-async function startHarness(options: { profileName?: string; rateLimitRpm?: number } = {}): Promise<Harness> {
+async function startHarness(options: { capabilities?: string[]; rateLimitRpm?: number } = {}): Promise<Harness> {
   const app = express();
   app.use(express.json());
   app.use('/mcp', createMcpHttpRouter({
     // No tool call in these tests reaches the API; an unroutable base URL keeps it that way.
     apiBaseUrl: 'http://127.0.0.1:1',
-    profileName: options.profileName ?? 'mobile',
+    resolveAccess: async identity => buildEffectiveAccess({ identity: { agent_id: identity.agentId, agent_slug: identity.agentSlug, key_id: identity.keyId, key_role: identity.keyRole, tenant_id: identity.tenantId, project_id: 1 }, policy_mode: 'explicit', default_policy: 'scoped_runtime', scopes: [], enabled_capabilities: options.capabilities ?? DEFAULT_GRANTS }),
     rateLimitRpm: options.rateLimitRpm,
     resolveIdentity,
   }));
@@ -80,7 +82,7 @@ describe('MCP Streamable HTTP transport', () => {
     log.mockRestore();
   });
 
-  it('serves the profile tool list to an authenticated MCP client', async () => {
+  it('serves tools permitted for the authenticated identity', async () => {
     harness = await startHarness();
     const client = await connectClient(harness.baseUrl, VALID_KEY);
 
@@ -88,13 +90,14 @@ describe('MCP Streamable HTTP transport', () => {
       const listed = await client.listTools();
       const names = new Set(listed.tools.map((tool) => tool.name));
 
-      expect(names).toEqual(resolveMcpToolProfile('mobile').toolNames);
-      expect([...names].filter(name => name.includes('_telemetry_'))).toHaveLength(30);
+      expect(names).toEqual(new Set(describeToolAccess(DEFAULT_GRANTS).filter(tool => tool.available).map(tool => tool.name)));
+      expect(names).toContain('agent_hq_create_workflow_type_field_schema');
+      expect(names).not.toContain('agent_hq_api_request');
       const trace = log.mock.calls.find(([label, entry]) => label === '[agent-hq-mcp-http] trace'
         && JSON.parse(entry).method === 'tools/list');
       expect(trace).toBeDefined();
       expect(JSON.parse(trace![1])).toMatchObject({
-        agent: 'claude-mobile', key_id: 1, profile: 'mobile', result: 'success',
+        agent: 'claude-mobile', key_id: 1, policy_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/), result: 'success',
         tool_count: names.size, catalog_hash: expect.stringMatching(/^[a-f0-9]{16}$/),
       });
     } finally {
@@ -136,15 +139,14 @@ describe('MCP Streamable HTTP transport', () => {
     }
   });
 
-  it('serves the full surface when configured with the full profile', async () => {
-    harness = await startHarness({ profileName: 'full' });
+  it('serves the full surface only with admin.full_access', async () => {
+    harness = await startHarness({ capabilities: ['admin.full_access'] });
     const client = await connectClient(harness.baseUrl, VALID_KEY);
 
     try {
       const listed = await client.listTools();
-      const mobileCount = resolveMcpToolProfile('mobile').toolNames?.size ?? 0;
-
-      expect(listed.tools.length).toBeGreaterThan(mobileCount * 2);
+      expect(listed.tools).toHaveLength(describeToolAccess(['admin.full_access']).length);
+      expect(listed.tools.map(tool => tool.name)).toContain('agent_hq_provision_full_agent');
     } finally {
       await client.close();
     }
@@ -204,11 +206,10 @@ describe('MCP Streamable HTTP transport', () => {
 });
 
 describe('resolveMcpHttpConfigFromEnv', () => {
-  it('defaults to the mobile profile on the local API', () => {
+  it('defaults to identity permissions on the local API', () => {
     expect(resolveMcpHttpConfigFromEnv({}, 3501)).toEqual({
       enabled: true,
       apiBaseUrl: 'http://127.0.0.1:3501',
-      profileName: 'mobile',
       rateLimitRpm: 120,
       allowedHosts: [],
     });
@@ -224,7 +225,6 @@ describe('resolveMcpHttpConfigFromEnv', () => {
     }, 3501)).toEqual({
       enabled: false,
       apiBaseUrl: 'http://127.0.0.1:3511',
-      profileName: 'full',
       rateLimitRpm: 30,
       allowedHosts: ['hq.example.com', 'localhost'],
     });

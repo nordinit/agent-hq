@@ -28,6 +28,10 @@ deleteAgent: (id: number) =>
   apiFetch<DeleteAgentResponse>(`/api/v1/agents/${id}`, { method: 'DELETE' }),
 getAgentMcpPermissions: (id: number) =>
   apiFetch<AgentMcpPermissionPolicy>(`/api/v1/agents/${id}/mcp-permissions`),
+previewAgentMcpPermissions: (id: number, enabledCapabilities?: string[], keyRole?: string) =>
+  apiFetch<import('./types').AgentMcpToolAccessPreview>(`/api/v1/agents/${id}/mcp-permissions/preview`, {
+    method: 'POST', body: JSON.stringify({ enabled_capabilities: enabledCapabilities, key_role: keyRole }),
+  }),
 updateAgentMcpPermissions: (id: number, enabledCapabilities: string[]) =>
   apiFetch<AgentMcpPermissionPolicy>(`/api/v1/agents/${id}/mcp-permissions`, {
     method: 'PUT',

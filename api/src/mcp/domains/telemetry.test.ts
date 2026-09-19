@@ -1,3 +1,4 @@
+import { buildEffectiveAccess } from '../accessView';
 import { z } from 'zod';
 import { registerTelemetryTools } from './telemetry';
 import type { McpToolHandler, McpToolResult } from '../registrar';
@@ -110,7 +111,7 @@ describe('telemetry MCP uses the shared REST API', () => {
   });
   test('MCP tools/list and catalog publish usable recursive schemas, and tools/call preserves inputs', async () => {
     const { api } = registry();
-    const server = createAgentHqMcpServer({ api: api as unknown as AgentHqApiClient, hasApiKey: true });
+    const server = createAgentHqMcpServer({ api: api as unknown as AgentHqApiClient, hasApiKey: true, resolveAccess: async () => buildEffectiveAccess({ identity: { agent_id: 1, agent_slug: 'test', key_id: 1, key_role: 'scoped', tenant_id: 1, project_id: 1 }, policy_mode: 'explicit', default_policy: 'scoped_runtime', scopes: [], enabled_capabilities: ['telemetry.read', 'telemetry.query', 'telemetry.manage_metrics', 'telemetry.manage_reports', 'telemetry.export'] }) });
     const client = new Client({ name: 'telemetry-contract-test', version: '1' });
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     try {

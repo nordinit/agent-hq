@@ -1,4 +1,5 @@
 'use client';
+import { McpToolAccessPreview } from '@/components/agents/McpToolAccessPreview';
 import { formatDateTime, formatTime } from '@/lib/date';
 
 import { useEffect, useRef, useState } from 'react';
@@ -1753,7 +1754,7 @@ export default function AgentDetailPage() {
             <div>
               <h3 className="text-sm font-semibold flex items-center gap-2"><Shield className="w-4 h-4 text-cyan-300" />Agent HQ MCP Access</h3>
               <p className="text-xs text-slate-400 mt-1 max-w-3xl">
-                Control which Agent HQ MCP capability groups this agent can call with its API key. Denied calls return a scoped 403 with the required capability for debugging.
+                Choose this identity’s permissions. These control both the tools it can discover and the actions it can perform.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -1837,6 +1838,10 @@ export default function AgentDetailPage() {
                   </div>
                 ))}
               </div>
+
+              <McpToolAccessPreview agentId={id} unsaved={hasMcpPermissionChanges}
+                enabledCapabilities={mcpPermissionDraft.filter(capability => capability.enabled).map(capability => capability.key)}
+                revision={`${mcpPermissionPolicy.policy_mode}:${mcpPermissionPolicy.updated_at ?? ''}`} />
 
               <div className="flex flex-wrap items-center gap-2">
                 <Button

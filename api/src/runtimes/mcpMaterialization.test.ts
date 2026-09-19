@@ -77,6 +77,7 @@ describe('materializeAgentMcpConfig', () => {
     await getDb().run(`INSERT INTO mcp_servers (id, tenant_id, name, slug, command, args) VALUES (31, 1, 'Lease Manager', 'dev-environment-lease-manager', '.venv/bin/dev-env-lease-mcp', '["--config","config/environments.json"]')`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 30)`);
     await getDb().run(`INSERT INTO agent_mcp_assignments (agent_id, mcp_server_id) VALUES (1, 31)`);
+    await getDb().run(`UPDATE mcp_servers SET env = ? WHERE id = 30`, JSON.stringify({ AGENT_HQ_MCP_TOOL_PROFILE: 'full', AGENT_HQ_MCP_HTTP_TOOL_PROFILE: 'mobile' }));
     const workingDirectory = makeTempDir('agent-hq-mcp-servers-');
     fs.mkdirSync(path.dirname(process.env.OPENCLAW_CONFIG_PATH!), { recursive: true });
     fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify({
@@ -106,6 +107,8 @@ describe('materializeAgentMcpConfig', () => {
     expect(config.mcpServers['dev-environment-lease-manager__agent-1']).toMatchObject({ command: '.venv/bin/dev-env-lease-mcp', args: ['--config', 'config/environments.json'] });
     expect(bundleConfig.mcpServers['agent-hq__agent-1']).toMatchObject({ command: 'node', args: ['server.js'] });
     expect(config.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY).toMatch(/^ahq_mcp_/);
+    expect(config.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_TOOL_PROFILE).toBeUndefined();
+    expect(config.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_HTTP_TOOL_PROFILE).toBeUndefined();
     expect(config.mcpServers['dev-environment-lease-manager__agent-1'].env.AGENT_HQ_MCP_API_KEY).toBe(config.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY);
     expect(bundleConfig.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY).toBe(config.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY);
     expect(bundleConfig.mcpServers['dev-environment-lease-manager__agent-1'].env.AGENT_HQ_MCP_API_KEY).toBe(config.mcpServers['agent-hq__agent-1'].env.AGENT_HQ_MCP_API_KEY);
