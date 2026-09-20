@@ -6,7 +6,7 @@
  * The dispatcher now calls this via the AgentRuntime interface.
  */
 
-import { spawnSync } from 'child_process';
+import { execFile } from 'child_process';
 import type {
   AgentRuntime,
   DispatchParams,
@@ -146,43 +146,41 @@ function formatCommandFailure(command: string, args: string[], status: number | 
     (detail ? `: ${detail}` : '');
 }
 
-function reloadOpenClawMcpRuntimeCache(workingDirectory: string): void {
+function runOpenClawMcpCommand(args: string[], workingDirectory: string, timeoutMs: number, failureMessage: string): Promise<string> {
   const command = process.env.OPENCLAW_BIN?.trim() || 'openclaw';
-  const args = ['mcp', 'reload'];
-  const result = spawnSync(command, args, {
-    cwd: workingDirectory,
-    encoding: 'utf8',
-    timeout: 30_000,
+  // MCP discovery calls back into this API for permissions, so the event loop
+  // must remain available while the child process is running.
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { cwd: workingDirectory, encoding: 'utf8', timeout: timeoutMs }, (error, stdout, stderr) => {
+      const output = [stderr, stdout].filter(part => part?.trim()).join('\n');
+      if (error) {
+        const detail = typeof error.code === 'number' || error.signal
+          ? formatCommandFailure(command, args, typeof error.code === 'number' ? error.code : null, error.signal ?? null, output)
+          : error.message;
+        reject(new Error(`${failureMessage}: ${detail}`));
+        return;
+      }
+      resolve(output);
+    });
   });
-  const output = [result.stderr, result.stdout].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('\n');
-  if (result.error) {
-    throw new Error(`OpenClaw MCP runtime cache reload failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(`OpenClaw MCP runtime cache reload failed: ${formatCommandFailure(command, args, result.status, result.signal, output)}`);
-  }
+}
+
+async function reloadOpenClawMcpRuntimeCache(workingDirectory: string): Promise<void> {
+  await runOpenClawMcpCommand(['mcp', 'reload'], workingDirectory, 30_000, 'OpenClaw MCP runtime cache reload failed');
   console.log(`[OpenClawRuntime] MCP runtime cache reload complete: cwd=${workingDirectory}`);
 }
 
-function probeOpenClawMcpServer(params: {
+async function probeOpenClawMcpServer(params: {
   serverName: string;
   workingDirectory: string;
   requiredToolNames: string[];
-}): void {
-  const command = process.env.OPENCLAW_BIN?.trim() || 'openclaw';
-  const args = ['mcp', 'probe', params.serverName, '--json'];
-  const result = spawnSync(command, args, {
-    cwd: params.workingDirectory,
-    encoding: 'utf8',
-    timeout: 60_000,
-  });
-  const output = [result.stderr, result.stdout].filter((part): part is string => typeof part === 'string' && part.trim().length > 0).join('\n');
-  if (result.error) {
-    throw new Error(`OpenClaw MCP server "${params.serverName}" startup probe failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(`OpenClaw MCP server "${params.serverName}" startup probe failed: ${formatCommandFailure(command, args, result.status, result.signal, output)}`);
-  }
+}): Promise<void> {
+  const output = await runOpenClawMcpCommand(
+    ['mcp', 'probe', params.serverName, '--json'],
+    params.workingDirectory,
+    60_000,
+    `OpenClaw MCP server "${params.serverName}" startup probe failed`,
+  );
 
   let parsed: unknown;
   try {
@@ -228,10 +226,10 @@ async function waitForOpenClawMcpReadiness(params: {
 
   const workingDirectory = params.readiness.workingDirectory?.trim();
   if (workingDirectory) {
-    reloadOpenClawMcpRuntimeCache(workingDirectory);
+    await reloadOpenClawMcpRuntimeCache(workingDirectory);
     const requiredByServer = params.readiness.requiredToolsByServerName ?? {};
     for (const serverName of params.readiness.serverNames) {
-      probeOpenClawMcpServer({
+      await probeOpenClawMcpServer({
         serverName,
         workingDirectory,
         requiredToolNames: requiredByServer[serverName] ?? [],

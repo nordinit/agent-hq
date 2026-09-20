@@ -1,3 +1,10 @@
+import type { ExecFileException } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { createServer } from 'http';
+import type { AddressInfo } from 'net';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
 type SentRequest = {
   method: string;
   params: Record<string, unknown>;
@@ -11,7 +18,13 @@ const mockDropBeforeResponseCounts = new Map<string, number>();
 const mockNeverRespondMethods = new Set<string>();
 const mockResponseDelays = new Map<string, number>();
 const mockToolsEffectivePayloads: Array<Record<string, unknown>> = [];
-const mockSpawnSync = jest.fn();
+const mockExecFile = jest.fn();
+
+function commandResult(stdout: string, error: ExecFileException | null = null, stderr = '') {
+  return (_command: string, _args: string[], _options: unknown, callback: (error: ExecFileException | null, stdout: string, stderr: string) => void) => {
+    setImmediate(() => callback(error, stdout, stderr));
+  };
+}
 
 const mockSyncOAuthProviderForOpenClawAgent = jest.fn();
 const ORIGINAL_MCP_READINESS_TIMEOUT_MS = process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS;
@@ -127,7 +140,7 @@ jest.mock('ws', () => {
 });
 
 jest.mock('child_process', () => ({
-  spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
+  execFile: (...args: unknown[]) => mockExecFile(...args),
 }));
 
 jest.mock('../lib/openclawOAuthProfiles', () => ({
@@ -175,8 +188,8 @@ describe('OpenClawRuntime gateway dispatch', () => {
     mockNeverRespondMethods.clear();
     mockResponseDelays.clear();
     mockToolsEffectivePayloads.length = 0;
-    mockSpawnSync.mockReset();
-    mockSpawnSync.mockReturnValue({ status: 0, signal: null, stdout: '', stderr: '' });
+    mockExecFile.mockReset();
+    mockExecFile.mockImplementation(commandResult(''));
     process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_TIMEOUT_MS = '20';
     process.env.AGENT_HQ_OPENCLAW_MCP_READINESS_POLL_MS = '1';
     mockSyncOAuthProviderForOpenClawAgent.mockResolvedValue({
@@ -287,21 +300,16 @@ describe('OpenClawRuntime gateway dispatch', () => {
   });
 
   it('accepts a cold tools.effective catalog after connecting assigned MCP servers with probe', async () => {
-    mockSpawnSync
-      .mockReturnValueOnce({ status: 0, signal: null, stdout: 'reloaded', stderr: '' })
-      .mockReturnValueOnce({
-        status: 0,
-        signal: null,
-        stdout: JSON.stringify({
-          servers: {
-            'dev-environment-lease-manager__agent-94': { tools: 24 },
-          },
-          tools: [
-            'dev-environment-lease-manager___dev_env_deploy_worktree',
-          ],
-        }),
-        stderr: '',
-      });
+    mockExecFile
+      .mockImplementationOnce(commandResult('reloaded'))
+      .mockImplementationOnce(commandResult(JSON.stringify({
+        servers: {
+          'dev-environment-lease-manager__agent-94': { tools: 24 },
+        },
+        tools: [
+          'dev-environment-lease-manager___dev_env_deploy_worktree',
+        ],
+      })));
     mockToolsEffectivePayloads.push({
       groups: [
         { id: 'core', tools: [{ id: 'exec_command' }] },
@@ -326,12 +334,14 @@ describe('OpenClawRuntime gateway dispatch', () => {
     }));
 
     expect(result.runId).toBe('run-123');
-    expect(mockSpawnSync).toHaveBeenNthCalledWith(1, 'openclaw', ['mcp', 'reload'], expect.objectContaining({
+    expect(mockExecFile).toHaveBeenNthCalledWith(1, 'openclaw', ['mcp', 'reload'], expect.objectContaining({
       cwd: '/workspace',
-    }));
-    expect(mockSpawnSync).toHaveBeenNthCalledWith(2, 'openclaw', ['mcp', 'probe', 'dev-environment-lease-manager__agent-94', '--json'], expect.objectContaining({
+      timeout: 30_000,
+    }), expect.any(Function));
+    expect(mockExecFile).toHaveBeenNthCalledWith(2, 'openclaw', ['mcp', 'probe', 'dev-environment-lease-manager__agent-94', '--json'], expect.objectContaining({
       cwd: '/workspace',
-    }));
+      timeout: 60_000,
+    }), expect.any(Function));
     expect(mockSentRequests.map((request) => request.method)).toEqual([
       'connect',
       'sessions.patch',
@@ -340,17 +350,84 @@ describe('OpenClawRuntime gateway dispatch', () => {
     ]);
   });
 
-  it('fails before chat.send when an assigned MCP server probe lacks a required tool', async () => {
-    mockSpawnSync
-      .mockReturnValueOnce({ status: 0, signal: null, stdout: 'reloaded', stderr: '' })
-      .mockReturnValueOnce({
-        status: 0,
-        signal: null,
-        stdout: JSON.stringify({
-          tools: ['dev-environment-lease-manager___dev_env_status'],
-        }),
-        stderr: '',
+  it('serves API callbacks from MCP child processes before dispatching the agent', async () => {
+    const requests: string[] = [];
+    const server = createServer((req, res) => {
+      requests.push(req.url ?? '');
+      res.end(req.url === '/reload' ? 'reloaded' : JSON.stringify({ tools: ['agent_hq_start_task_run'] }));
+    });
+    const directory = mkdtempSync(join(tmpdir(), 'openclaw-mcp-async-'));
+    const originalBin = process.env.OPENCLAW_BIN;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
       });
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const bin = join(directory, 'openclaw');
+      writeFileSync(bin, `#!${process.execPath}
+fetch(${JSON.stringify(url)} + '/' + process.argv[3], { signal: AbortSignal.timeout(3000) })
+  .then(response => response.text())
+  .then(output => console.log(output))
+  .catch(error => { console.error(error.message); process.exitCode = 1; });
+`, { mode: 0o700 });
+      process.env.OPENCLAW_BIN = bin;
+      mockExecFile.mockImplementation(jest.requireActual<typeof import('child_process')>('child_process').execFile);
+      mockToolsEffectivePayloads.push({
+        groups: [{ id: 'mcp', tools: [{ id: 'agent_hq_start_task_run' }] }],
+      });
+
+      const result = await new OpenClawRuntime().dispatch(dispatchParams({
+        openClawMcpReadiness: {
+          serverNames: ['agent-hq'],
+          requiredToolNames: ['agent_hq_start_task_run'],
+          requiredToolsByServerName: { 'agent-hq': ['agent_hq_start_task_run'] },
+          materializedCount: 1,
+          workingDirectory: directory,
+        },
+      }));
+
+      expect(result.runId).toBe('run-123');
+      expect(requests).toEqual(['/reload', '/probe']);
+      expect(mockSentRequests.map(request => request.method)).toEqual([
+        'connect', 'sessions.patch', 'tools.effective', 'chat.send',
+      ]);
+    } finally {
+      if (originalBin === undefined) delete process.env.OPENCLAW_BIN;
+      else process.env.OPENCLAW_BIN = originalBin;
+      if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['reload', Object.assign(new Error('not found'), { code: 'ENOENT' }), 'runtime cache reload failed: not found'],
+    ['probe', Object.assign(new Error('exit 1'), { code: 1 }), 'startup probe failed: openclaw mcp probe agent-hq --json failed with status 1: diagnostic detail'],
+    ['probe', Object.assign(new Error('timed out'), { signal: 'SIGTERM' as const, killed: true }), 'startup probe failed: openclaw mcp probe agent-hq --json failed signal SIGTERM'],
+  ])('stops dispatch on MCP %s command failure (%s)', async (stage, error, message) => {
+    if (stage === 'probe') mockExecFile.mockImplementationOnce(commandResult('reloaded'));
+    mockExecFile.mockImplementationOnce(commandResult('', error, 'diagnostic detail'));
+
+    await expect(new OpenClawRuntime().dispatch(dispatchParams({
+      openClawMcpReadiness: {
+        serverNames: ['agent-hq'],
+        requiredToolNames: ['agent_hq_start_task_run'],
+        requiredToolsByServerName: { 'agent-hq': ['agent_hq_start_task_run'] },
+        materializedCount: 1,
+        workingDirectory: '/workspace',
+      },
+    }))).rejects.toThrow(message);
+
+    expect(mockExecFile).toHaveBeenCalledTimes(stage === 'reload' ? 1 : 2);
+    expect(mockSentRequests.some(request => request.method === 'chat.send')).toBe(false);
+  });
+
+  it('fails before chat.send when an assigned MCP server probe lacks a required tool', async () => {
+    mockExecFile
+      .mockImplementationOnce(commandResult('reloaded'))
+      .mockImplementationOnce(commandResult(JSON.stringify({
+        tools: ['dev-environment-lease-manager___dev_env_status'],
+      })));
     const runtime = new OpenClawRuntime();
 
     await expect(runtime.dispatch(dispatchParams({
