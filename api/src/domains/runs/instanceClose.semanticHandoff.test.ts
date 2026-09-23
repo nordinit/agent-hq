@@ -2,8 +2,8 @@ import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { closeActiveInstanceAfterSemanticHandoff } from './instanceClose';
 import { type Db } from "../../db/adapter/types";
 
-jest.mock('../../runtimes/OpenClawRuntime', () => ({
-  abortChatRunBySessionKey: jest.fn(() => ({ ok: true, status: 'aborted' })),
+jest.mock('./stopInstanceExecution', () => ({
+  abortInstanceExecutionTransport: jest.fn(async () => ({ result: { ok: true, status: 'succeeded' } })),
 }));
 
 jest.mock('../../services/browserPool', () => ({

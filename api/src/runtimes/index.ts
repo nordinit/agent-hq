@@ -51,8 +51,7 @@ export type {
   MaterializationContext,
   MaterializationResult,
 } from './skillMaterialization';
-export { OpenClawRuntime, abortChatRunBySessionKey } from './openclaw';
-export type { AbortChatRunResult, AbortChatRunStatus } from './openclaw';
+export { OpenClawRuntime } from './openclaw';
 export { ClaudeCodeRuntime } from './claudeCode';
 export type {
   ClaudeCodeRuntimeConfig,

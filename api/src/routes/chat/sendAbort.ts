@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { getDb } from '../../db/client';
 import { runtimeTenantInsertColumns } from '../../lib/runtimeTenantScope';
-import { gatewayWsSend } from '../../runtimes/openclaw/gatewayClient';
-import { abortChatRunBySessionKey } from '../../runtimes/openclaw';
+import { sendOpenClawTurn } from '../../runtimes/openclaw/sendTurn';
+import { resolveOpenClawSessionKey } from '../../runtimes/openclaw/abort';
 import { resolveInstanceAbortTransport, stopInstanceExecution } from '../../domains/runs/stopInstanceExecution';
 import { resolveTenantIdFromRequest } from '../../lib/tenantContext';
 import { dispatchInstance } from '../../services/dispatcher';
@@ -19,6 +19,7 @@ import { nowTimestamp } from '../../lib/timestamps';
  */
 interface ChatInstanceRow {
   session_key: string;
+  agent_session_key: string;
   agent_id: number;
   tenant_id: number | null;
   runtime_type: string | null;
@@ -36,7 +37,7 @@ interface ChatInstanceRow {
 async function loadChatInstance(instanceId: number): Promise<ChatInstanceRow | undefined> {
   const db = getDb();
   return await db.get(`
-    SELECT ji.session_key, ji.agent_id, ji.tenant_id,
+    SELECT ji.session_key, ji.agent_id, ji.tenant_id, a.session_key AS agent_session_key,
            a.runtime_type, a.runtime_config, a.name AS agent_name, a.job_title,
            a.openclaw_agent_id, a.preferred_provider, a.provider_connection_id,
            a.model, a.timeout_seconds, a.project_id
@@ -176,9 +177,14 @@ async function sendToInstance(
         return res.json({ ok: true, instance_id: dispatched.instanceId, transport: 'runtime' });
       }
 
-      const result = await gatewayWsSend({
-        sessionKey: inst.session_key,
+      const canonicalKey = resolveOpenClawSessionKey(inst.session_key, inst.agent_session_key);
+      if (!canonicalKey || inst.tenant_id == null) {
+        return res.status(409).json({ ok: false, error: 'Chat runtime target is unavailable' });
+      }
+      const result = await sendOpenClawTurn({
+        sessionKey: canonicalKey,
         message: fullMessage,
+        instance: { db, id: instanceId, tenantId: inst.tenant_id },
       });
 
       if (!result.ok) {
@@ -274,16 +280,14 @@ export function registerSendAbortRoutes(router: Router): void {
         return res.status(404).json({ ok: false, error: 'Instance not found' });
       }
 
-      // Same seam as send. Routing a claude-code/codex/hermes session key to
-      // OpenClaw's chat.abort aborts nothing and reports success.
-      if (resolveInstanceAbortTransport(inst.runtime_type) === 'runtime') {
-        const tenantId = await resolveTenantIdFromRequest(db, req);
-        const stopped = await stopInstanceExecution(db, instanceId, tenantId, 'stop');
-        return res.json({ ok: true, status: stopped.result, transport: 'runtime' });
-      }
-
-      const result = abortChatRunBySessionKey(inst.session_key);
-      res.json({ ok: result.ok, status: result.status, transport: 'openclaw-gateway' });
+      const tenantId = await resolveTenantIdFromRequest(db, req);
+      const stopped = await stopInstanceExecution(db, instanceId, tenantId, 'stop');
+      return res.json({
+        ok: stopped.abortOk === true,
+        status: stopped.result,
+        runtimeUncertain: stopped.runtimeUncertain,
+        transport: resolveInstanceAbortTransport(inst.runtime_type),
+      });
     } catch (err) {
       res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }

@@ -96,6 +96,8 @@ jest.mock('ws', () => ({
 }));
 
 import { setupChatProxy } from './chat';
+import { __resetGatewayConnectionPoolForTests } from '../runtimes/openclaw/gatewayClient';
+import { stopInstanceExecution } from '../domains/runs/stopInstanceExecution';
 import { type Db } from "../db/adapter/types";
 
 class MockClientSocket {
@@ -204,6 +206,7 @@ describe('chat websocket live structured persistence', () => {
   });
 
   afterEach(async () => {
+    __resetGatewayConnectionPoolForTests();
     for (const client of proxyClients) {
       if (client.readyState === MockGatewaySocket.OPEN) await client.close();
     }
@@ -356,6 +359,38 @@ describe('chat websocket live structured persistence', () => {
     const rotation = client.sent.find((msg) => msg.type === 'chat.new') as { sessionKey?: string } | undefined;
     expect(rotation?.sessionKey).toMatch(/^agent:atlas:web:direct:/);
     expect(rotation?.sessionKey).not.toBe(sessionKey);
+  });
+
+  it('stops WebSocket chat through the durable exact target and preserves a subsequent turn', async () => {
+    const sessionKey = 'agent:atlas:web:direct:stop-regression';
+    const client = connectProxyClient();
+    await waitForAsyncFrames();
+    await client.emit('message', Buffer.from(JSON.stringify({ type: 'chat.send', sessionKey, message: 'first' })));
+    await waitForAsyncFrames();
+    const first = await db.get<{ id: number; runtime_abort_target: { runId: string; sessionKey: string; endpoint: string } }>(
+      'SELECT id, runtime_abort_target FROM job_instances WHERE session_key = ? ORDER BY id DESC LIMIT 1', sessionKey,
+    );
+    expect(first?.runtime_abort_target).toMatchObject({ sessionKey, endpoint: 'ws://gateway.test' });
+    await client.emit('message', Buffer.from(JSON.stringify({ type: 'chat.abort', sessionKey })));
+    expect(sentGatewayRequests.filter(request => request.method === 'chat.abort')).toEqual([
+      { method: 'chat.abort', params: { runId: first!.runtime_abort_target.runId, sessionKey } },
+    ]);
+    // This mock gateway acknowledges the RPC without asserting aborted=true.
+    expect(client.sent).toContainEqual({ type: 'chat.abort', ok: false, status: 'stopped_runtime_uncertain' });
+    expect(await db.get('SELECT status, runtime_ended_at FROM job_instances WHERE id = ?', first!.id)).toEqual({
+      status: 'failed', runtime_ended_at: null,
+    });
+    await client.emit('message', Buffer.from(JSON.stringify({ type: 'chat.send', sessionKey, message: 'second' })));
+    await waitForAsyncFrames();
+    const second = await db.get<{ id: number; run_id: string }>(
+      'SELECT id, run_id FROM job_instances WHERE session_key = ? ORDER BY id DESC LIMIT 1', sessionKey,
+    );
+    expect(second!.id).not.toBe(first!.id);
+    expect(second!.run_id).not.toBe(first!.runtime_abort_target.runId);
+    await stopInstanceExecution(db, first!.id, TENANT_ID, 'stop');
+    expect(sentGatewayRequests.filter(request => request.method === 'chat.abort').at(-1)?.params.runId)
+      .toBe(first!.runtime_abort_target.runId);
+    expect(await db.get('SELECT status FROM job_instances WHERE id = ?', second!.id)).toEqual({ status: 'running' });
   });
 
   it('creates a fresh chat-stage job_instance for each direct chat send on one websocket', async () => {

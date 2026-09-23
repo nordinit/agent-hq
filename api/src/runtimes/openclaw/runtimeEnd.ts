@@ -131,11 +131,12 @@ export async function handleOpenClawRuntimeEnd(
   try {
     const db = getDb();
     const existing = await db.get(`
-        SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key
+        SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key, stop_requested_at
         FROM job_instances
         WHERE id = ?
       `, instanceId) as {
       status: string;
+      stop_requested_at: string | null;
       lifecycle_outcome_posted_at: string | null;
       task_outcome: string | null;
       task_id: number | null;
@@ -152,6 +153,21 @@ export async function handleOpenClawRuntimeEnd(
         ` (${rawEvaluation.decision.deferReason ?? 'not_terminal'}); retrying in ${Math.ceil(retryAfterMs / 1000)}s`,
       );
       scheduleDeferredRuntimeEndRetry(instanceId, event, onRuntimeEnd, retryAfterMs);
+      return;
+    }
+
+    if (existing.stop_requested_at) {
+      // Logical stop revokes access immediately; a later runtime event is still
+      // useful evidence of physical completion and must not restart task lifecycle.
+      await db.run(`
+        UPDATE job_instances SET runtime_ended_at = COALESCE(runtime_ended_at, ?),
+          runtime_end_success = COALESCE(runtime_end_success, 0),
+          runtime_end_source = COALESCE(runtime_end_source, 'runtime_abort'),
+          runtime_end_error = COALESCE(runtime_end_error, 'Run stopped')
+        WHERE id = ? AND stop_requested_at IS NOT NULL
+      `, event.endedAt, instanceId);
+      stopDeferredRuntimeEndRetry(instanceId);
+      stopOpenClawRawSessionTerminalPoll(instanceId);
       return;
     }
 

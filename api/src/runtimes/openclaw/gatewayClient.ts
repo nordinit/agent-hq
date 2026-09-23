@@ -47,6 +47,7 @@ class GatewayConnectionDropError extends Error {
 }
 
 class GatewayConnectionPool {
+  constructor(private readonly url = GATEWAY_WS_URL) {}
   private ws: WebSocket | null = null;
   private authenticated = false;
   private authPromise: Promise<void> | null = null;
@@ -142,7 +143,7 @@ class GatewayConnectionPool {
     if (this.authPromise) return this.authPromise;
 
     this.authenticated = false;
-    const ws = new WebSocket(GATEWAY_WS_URL, openClawGatewayWsOptions(GATEWAY_WS_URL));
+    const ws = new WebSocket(this.url, openClawGatewayWsOptions(this.url));
     this.ws = ws;
 
     this.authPromise = new Promise((resolve, reject) => {
@@ -234,9 +235,19 @@ class GatewayConnectionPool {
 }
 
 const gatewayConnectionPool = new GatewayConnectionPool();
+const endpointPools = new Map<string, GatewayConnectionPool>();
+
+function poolForEndpoint(url?: string): GatewayConnectionPool {
+  if (!url || url === GATEWAY_WS_URL) return gatewayConnectionPool;
+  let pool = endpointPools.get(url);
+  if (!pool) { pool = new GatewayConnectionPool(url); endpointPools.set(url, pool); }
+  return pool;
+}
 
 export function __resetGatewayConnectionPoolForTests(): void {
   gatewayConnectionPool.reset();
+  for (const pool of endpointPools.values()) pool.reset();
+  endpointPools.clear();
 }
 
 export function readGatewayTokenFromConfig(): string | null {
@@ -359,12 +370,13 @@ export function buildOpenClawGatewayConnectParams(params: {
 }
 
 export function gatewayRpcCall(params: {
+  gatewayUrl?: string;
   method: string;
   rpcParams?: Record<string, unknown>;
   timeoutMs?: number;
   displayName?: string;
 }): Promise<GatewayRpcCallResult> {
-  return gatewayConnectionPool.call(params)
+  return poolForEndpoint(params.gatewayUrl).call(params)
     .then((rpcResult) => {
       if (rpcResult.error) {
         return { ok: false, error: `${params.method} failed: ${formatGatewayRpcError(rpcResult.error)}` };
@@ -567,6 +579,11 @@ export async function gatewayWsSend(params: {
   sessionKey: string;
   message: string;
   timeoutMs?: number;
+  /** Persist this ID before sending so cancellation can also address a starting run. */
+  runId?: string;
+  gatewayUrl?: string;
+  cwd?: string;
+  metadata?: Record<string, unknown>;
 }): Promise<{ ok: boolean; runId?: string; error?: string }> {
   const { sessionKey, message, timeoutMs } = params;
   // systemInputProvenance is omitted because OpenClaw restricts it to ACP
@@ -575,12 +592,16 @@ export async function gatewayWsSend(params: {
   const sendParams: Record<string, unknown> = {
     sessionKey,
     message,
-    idempotencyKey: crypto.randomUUID(),
+    deliver: false,
+    idempotencyKey: params.runId ?? crypto.randomUUID(),
     timeoutMs: timeoutMs ?? 900_000,
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    ...(params.metadata ? { metadata: params.metadata } : {}),
   };
 
   const sendResult = await gatewayRpcCall({
     method: 'chat.send',
+    gatewayUrl: params.gatewayUrl,
     rpcParams: sendParams,
     timeoutMs: 30_000,
     displayName: 'Agent HQ Runtime',

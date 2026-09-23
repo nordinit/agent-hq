@@ -156,7 +156,22 @@ export function skippedRuntimeAuthProfileSync(reason: string): RuntimeAuthProfil
   };
 }
 
-export type RuntimeAbortStatus = 'signalled' | 'already_gone' | 'not_found' | 'failed';
+export interface RuntimeAbortTarget {
+  runtimeType: string;
+  runId: string;
+  sessionKey: string;
+  /** Trusted provider endpoint captured at dispatch, when it differs from the default. */
+  endpoint?: string;
+}
+
+export interface RuntimeAbortContext {
+  /** Compatibility routing for runs created before durable abort targets existed. */
+  agentSessionKey?: string | null;
+  agentRuntimeSlug?: string | null;
+  target?: RuntimeAbortTarget | null;
+}
+
+export type RuntimeAbortStatus = 'signalled' | 'already_gone' | 'not_found' | 'timed_out' | 'failed';
 
 export interface RuntimeAbortResult {
   attempted: boolean;
@@ -186,7 +201,8 @@ export interface AgentRuntime {
 
   /**
    * abort — request cancellation of a running agent turn.
-   * Implementations should treat "already gone" as a success.
+   * Confirm only an exact-target cancellation acknowledgement or evidence that
+   * that target has ended. A successful transport or missing handle is not proof.
    */
-  abort(runId: string, sessionKey: string): Promise<RuntimeAbortResult | void>;
+  abort(runId: string, sessionKey: string, context?: RuntimeAbortContext): Promise<RuntimeAbortResult | void>;
 }

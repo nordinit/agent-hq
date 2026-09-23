@@ -1,4 +1,6 @@
 import { IncomingMessage } from 'http';
+import { sendOpenClawTurn } from '../../runtimes/openclaw/sendTurn';
+import { stopInstanceExecution } from '../../domains/runs/stopInstanceExecution';
 import { randomUUID } from 'crypto';
 import { WebSocket as WsClient, WebSocketServer } from 'ws';
 import { getDb } from '../../db/client';
@@ -309,22 +311,6 @@ export function setupChatProxy(wss: WebSocketServer): void {
           return;
         }
 
-        if (method === 'chat.send') {
-          if (ok) {
-            pendingAssistantResponse = true;
-            streamText = '';
-            clientWs.send(JSON.stringify({ type: 'chat.send' }));
-          } else {
-            pendingAssistantResponse = false;
-            const errMsg = (frame.error as Record<string, unknown>)?.message ?? 'chat.send failed';
-            clientWs.send(JSON.stringify({
-              type: 'error',
-              message: summarizeGatewayErrorForUi(frame.error ?? errMsg),
-            }));
-          }
-          return;
-        }
-
         if (method === 'chat.history') {
           if (ok) {
             const payload = frame.payload as Record<string, unknown> ?? {};
@@ -341,13 +327,6 @@ export function setupChatProxy(wss: WebSocketServer): void {
           } else {
             clientWs.send(JSON.stringify({ type: 'chat.history', messages: [] }));
           }
-          return;
-        }
-
-        if (method === 'chat.abort') {
-          pendingAssistantResponse = false;
-          streamText = '';
-          // Nothing to do for abort ack
           return;
         }
 
@@ -526,43 +505,49 @@ export function setupChatProxy(wss: WebSocketServer): void {
           await persistUserChatMessage(sessionCtx, fullMessage);
         }
         const gatewaySessionKey = toGatewaySessionKey(msg.sessionKey as string | null | undefined, await resolveAgentRowForSessionKey(msg.sessionKey as string | null | undefined));
-        const reqId = randomUUID();
-        pending.set(reqId, 'chat.send');
-        const chatSendParams: Record<string, unknown> = {
-          sessionKey: gatewaySessionKey ?? msg.sessionKey,
-          message: fullMessage || msg.message,
-          deliver: false,
-          idempotencyKey: msg.idempotencyKey ?? randomUUID(),
-        };
-        if (typeof msg.cwd === 'string' && msg.cwd.trim()) {
-          chatSendParams.cwd = msg.cwd.trim();
+        const turnContext = sessionCtx;
+        if (!gatewaySessionKey || turnContext?.instanceId == null || turnContext.tenantId == null) {
+          clientWs.send(JSON.stringify({ type: 'error', message: 'Chat runtime target is unavailable' }));
+          return;
         }
-        if (msg.metadata && typeof msg.metadata === 'object' && !Array.isArray(msg.metadata)) {
-          chatSendParams.metadata = msg.metadata;
+        const result = await sendOpenClawTurn({
+          sessionKey: gatewaySessionKey,
+          message: fullMessage,
+          gatewayUrl: currentGatewayUrl,
+          runId: typeof msg.idempotencyKey === 'string' && msg.idempotencyKey.trim() ? msg.idempotencyKey : undefined,
+          cwd: typeof msg.cwd === 'string' ? msg.cwd.trim() : undefined,
+          metadata: msg.metadata && typeof msg.metadata === 'object' && !Array.isArray(msg.metadata)
+            ? msg.metadata as Record<string, unknown> : undefined,
+          instance: { db: getDb(), id: turnContext.instanceId, tenantId: turnContext.tenantId },
+        });
+        if (clientWs.readyState === WsClient.OPEN) {
+          if (result.ok) {
+            pendingAssistantResponse = true;
+            streamText = '';
+            clientWs.send(JSON.stringify({ type: 'chat.send' }));
+          } else {
+            clientWs.send(JSON.stringify({ type: 'error', message: result.error ?? 'Chat send failed' }));
+          }
         }
-        gatewayWs.send(JSON.stringify({
-          type: 'req',
-          id: reqId,
-          method: 'chat.send',
-          params: chatSendParams,
-        }));
         return;
       }
 
       if (type === 'chat.abort') {
         pendingAssistantResponse = false;
         streamText = '';
-        const gatewaySessionKey = toGatewaySessionKey(msg.sessionKey as string | null | undefined, await resolveAgentRowForSessionKey(msg.sessionKey as string | null | undefined));
-        const reqId = randomUUID();
-        pending.set(reqId, 'chat.abort');
-        gatewayWs.send(JSON.stringify({
-          type: 'req',
-          id: reqId,
-          method: 'chat.abort',
-          params: {
-            sessionKey: gatewaySessionKey ?? msg.sessionKey,
-          },
-        }));
+        const targetContext = sessionCtx;
+        if (targetContext?.instanceId == null || targetContext.tenantId == null
+          || (typeof msg.sessionKey === 'string' && msg.sessionKey !== targetContext.sessionKey)) {
+          clientWs.send(JSON.stringify({ type: 'error', message: 'No exact chat turn is available to stop' }));
+          return;
+        }
+        const stopped = await stopInstanceExecution(getDb(), targetContext.instanceId, targetContext.tenantId, 'stop');
+        if (clientWs.readyState === WsClient.OPEN) {
+          clientWs.send(JSON.stringify({ type: 'chat.abort', ok: stopped.abortOk === true, status: stopped.result }));
+          if (stopped.runtimeUncertain) {
+            clientWs.send(JSON.stringify({ type: 'error', message: stopped.message }));
+          }
+        }
         return;
       }
 

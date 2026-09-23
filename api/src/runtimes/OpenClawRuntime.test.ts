@@ -82,7 +82,7 @@ describe('OpenClawRuntime terminal failure handling', () => {
     const statementEntries: Array<[string, { get?: jest.Mock; run?: jest.Mock; all?: jest.Mock }]> = [
       [
         `
-        SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key
+        SELECT status, lifecycle_outcome_posted_at, task_outcome, task_id, session_key, stop_requested_at
         FROM job_instances
         WHERE id = ?
       `,

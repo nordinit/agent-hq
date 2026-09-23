@@ -1,12 +1,7 @@
 import { setupTestDb, teardownTestDb } from '../../db/testDb';
 import { closeInstance } from './instanceClose';
-import { abortChatRunBySessionKey } from '../../runtimes/OpenClawRuntime';
 import { abortInstanceExecutionTransport } from './stopInstanceExecution';
 import { type Db } from '../../db/adapter/types';
-
-jest.mock('../../runtimes/OpenClawRuntime', () => ({
-  abortChatRunBySessionKey: jest.fn(() => ({ ok: true, status: 'aborted' })),
-}));
 
 jest.mock('../../services/browserPool', () => ({
   destroyAgentContext: jest.fn(() => Promise.resolve()),
@@ -28,7 +23,6 @@ jest.mock('./stopInstanceExecution', () => {
 });
 
 const TENANT_ID = 9101;
-const gatewayAbortMock = abortChatRunBySessionKey as jest.MockedFunction<typeof abortChatRunBySessionKey>;
 const runtimeAbortMock = abortInstanceExecutionTransport as jest.MockedFunction<typeof abortInstanceExecutionTransport>;
 
 let db: Db;
@@ -54,7 +48,6 @@ async function flushDeferredWork(): Promise<void> {
 
 beforeEach(async () => {
   db = await setupTestDb();
-  gatewayAbortMock.mockClear();
   runtimeAbortMock.mockClear();
 });
 
@@ -71,7 +64,6 @@ describe('closeInstance abort transport', () => {
 
     expect(runtimeAbortMock).toHaveBeenCalledTimes(1);
     expect(runtimeAbortMock.mock.calls[0][2]).toMatchObject({ instanceId: 700, tenantId: TENANT_ID });
-    expect(gatewayAbortMock).not.toHaveBeenCalled();
   });
 
   it('still stops an OpenClaw run through the gateway', async () => {
@@ -80,9 +72,8 @@ describe('closeInstance abort transport', () => {
     await closeInstance({ db, instanceId: 700, outcome: 'completed', status: 'done' });
     await flushDeferredWork();
 
-    expect(gatewayAbortMock).toHaveBeenCalledTimes(1);
-    expect(gatewayAbortMock.mock.calls[0][0]).toBe('run:700');
-    expect(runtimeAbortMock).not.toHaveBeenCalled();
+    expect(runtimeAbortMock).toHaveBeenCalledTimes(1);
+    expect(runtimeAbortMock.mock.calls[0][1]).toMatchObject({ session_key: 'run:700', runtime_type: 'openclaw' });
   });
 
   // agents.runtime_type is NOT NULL defaulting to 'openclaw', so a blank value
@@ -93,7 +84,6 @@ describe('closeInstance abort transport', () => {
     await closeInstance({ db, instanceId: 700, outcome: 'completed', status: 'done' });
     await flushDeferredWork();
 
-    expect(gatewayAbortMock).toHaveBeenCalledTimes(1);
-    expect(runtimeAbortMock).not.toHaveBeenCalled();
+    expect(runtimeAbortMock).toHaveBeenCalledTimes(1);
   });
 });

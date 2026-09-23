@@ -1,5 +1,5 @@
 import { spawnSync } from 'child_process';
-import { abortChatRunBySessionKey } from '../../runtimes/OpenClawRuntime';
+import { readLegacyRuntimeRunId, readRuntimeAbortTarget } from '../../runtimes/runtimeAbortTarget';
 import { applyStopBehavior, type StopBehavior } from './instanceStop';
 import { writeTaskRuntimeEndHistory } from '../tasks/history';
 import { resolveRuntime } from '../../runtimes';
@@ -43,10 +43,7 @@ function resolveInstanceSessionKey(instance: Record<string, unknown>): string | 
     : null;
   if (direct) return direct;
 
-  const fallback = typeof instance.agent_session_key === 'string' && instance.agent_session_key.trim()
-    ? instance.agent_session_key.trim()
-    : null;
-  return fallback;
+  return null;
 }
 
 function configuredKillGraceMs(value: unknown): number {
@@ -117,12 +114,26 @@ export async function abortInstanceExecutionTransport(
   options: { instanceId: number; tenantId: number; reason: string },
 ): Promise<InstanceAbortAttempt> {
   const { instanceId, tenantId, reason } = options;
-  const sessionKey = resolveInstanceSessionKey(instance);
-  const runtimeType = typeof instance.runtime_type === 'string' && instance.runtime_type.trim()
+  const target = readRuntimeAbortTarget(instance.runtime_abort_target);
+  const sessionKey = target?.sessionKey ?? resolveInstanceSessionKey(instance);
+  const runtimeType = target?.runtimeType ?? (typeof instance.runtime_type === 'string' && instance.runtime_type.trim()
     ? instance.runtime_type.trim()
-    : 'openclaw';
+    : 'openclaw');
   const transport = resolveInstanceAbortTransport(runtimeType);
   let result: InstanceAbortResult | null = null;
+
+  await db.run(`
+    UPDATE job_instances SET stop_requested_at = COALESCE(stop_requested_at,
+      to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+    WHERE id = ? AND tenant_id = ?
+  `, instanceId, tenantId);
+
+  // Only the new exact-target path can establish this evidence. Legacy abort
+  // records may contain the false positive this implementation fixes.
+  if (target && instance.stop_requested_at && instance.abort_status === 'succeeded') {
+    return { transport, runtimeType, sessionKey,
+      result: { attempted: false, ok: true, status: 'succeeded' } };
+  }
 
   try {
     await interruptRuntimeExecution(db, { instanceId, tenantId, reason });
@@ -135,17 +146,19 @@ export async function abortInstanceExecutionTransport(
     );
   }
 
-  if (transport === 'openclaw-gateway' && sessionKey) {
-    result = await Promise.resolve(abortChatRunBySessionKey(sessionKey, reason));
-  } else if (transport === 'runtime') {
-    const storedRunId = typeof instance.run_id === 'string' ? instance.run_id.trim() : '';
-    const runId = storedRunId || fallbackRunId(runtimeType, instanceId);
+  {
+    const storedRunId = target?.runId || readLegacyRuntimeRunId(instance);
+    const runId = storedRunId || (transport === 'runtime' ? fallbackRunId(runtimeType, instanceId) : '');
     try {
       const runtime = resolveRuntime({
         runtime_type: runtimeType,
         runtime_config: instance.runtime_config ?? null,
       });
-      const runtimeResult = await runtime.abort(runId, sessionKey ?? '');
+      const runtimeResult = await runtime.abort(runId, sessionKey ?? '', {
+        target,
+        agentRuntimeSlug: typeof instance.openclaw_agent_id === 'string' ? instance.openclaw_agent_id : null,
+        agentSessionKey: typeof instance.agent_session_key === 'string' ? instance.agent_session_key : null,
+      });
       if (!runtimeResult) {
         result = {
           attempted: true,
@@ -173,7 +186,7 @@ export async function abortInstanceExecutionTransport(
         result = {
           attempted: runtimeResult.attempted,
           ok: false,
-          status: 'failed',
+          status: runtimeResult.status === 'timed_out' ? 'timed_out' : 'failed',
           error: runtimeResult.error ?? `${runtimeType} abort target was not found`,
         };
       }
@@ -181,7 +194,7 @@ export async function abortInstanceExecutionTransport(
       // A signal accepted by the in-memory supervisor is not yet proof that
       // the complete process group exited. Confirm through the identity-bound
       // durable handle; this also covers API restart and another replica.
-      if (!result.ok) {
+      if (!result.ok && transport === 'runtime') {
         const durableAbort = await stopPersistedLocalProcess(
           db,
           instanceId,
@@ -283,7 +296,7 @@ export async function stopInstanceExecution(
     throw new Error('Tenant-scoped instance stop is unavailable');
   }
   const instance = await db.get(`
-    SELECT ji.*, a.session_key AS agent_session_key, a.runtime_type, a.runtime_config
+    SELECT ji.*, a.session_key AS agent_session_key, a.openclaw_agent_id, a.runtime_type, a.runtime_config
     FROM job_instances ji
     LEFT JOIN agents a ON a.id = ji.agent_id AND a.tenant_id = ?
     WHERE ji.id = ? AND ji.tenant_id = ?
@@ -298,6 +311,18 @@ export async function stopInstanceExecution(
     OPENCLAW_SUPPRESS_NOTES: '1',
   };
 
+  // Revoke task authority in a committed transaction before any remote I/O.
+  // Retain the original instance above as the immutable cancellation target.
+  const stopResult = await db.withTransaction(async tx => {
+    await tx.run(`
+      UPDATE job_instances SET status = 'failed',
+        stop_requested_at = COALESCE(stop_requested_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
+        completed_at = COALESCE(completed_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
+      WHERE id = ? AND tenant_id = ?
+    `, id, tenantId);
+    return applyStopBehavior(tx, id, tenantId, behavior);
+  });
+
   const stopReason = `Agent HQ manual stop for instance ${id} (${behavior})`;
   const abortAttempt = await abortInstanceExecutionTransport(db, instance, {
     instanceId: id,
@@ -306,22 +331,21 @@ export async function stopInstanceExecution(
   });
   const { transport: abortTransport, sessionKey, result: abortResult } = abortAttempt;
 
-  if (abortResult?.attempted) {
+  if (abortResult) {
     await db.run(`
       UPDATE job_instances
       SET abort_attempted_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
           abort_status = ?,
           abort_error = ?
       WHERE id = ? AND tenant_id = ?
-    `, abortResult.status, abortResult.ok ? null : abortResult.error ?? 'abort failed', id, tenantId);
+        AND (runtime_abort_target IS NULL OR abort_status IS DISTINCT FROM 'succeeded' OR ? = 'succeeded')
+    `, abortResult.status, abortResult.ok ? null : abortResult.error ?? 'abort failed', id, tenantId, abortResult.status);
   }
 
   const cronResult = removeQueuedCronJob(instance, env);
 
-  const abortConfirmed = abortResult
-    ? (abortResult.ok || abortResult.status === 'already_gone')
-    : abortTransport === 'openclaw-gateway' && !sessionKey;
-  const runtimeUncertain = Boolean(abortResult && !abortConfirmed);
+  const abortConfirmed = abortResult?.ok === true;
+  const runtimeUncertain = !abortConfirmed;
 
   if (abortResult?.status === 'timed_out') {
     await insertRuntimeLog(db, {
@@ -353,7 +377,6 @@ export async function stopInstanceExecution(
           });
   }
 
-  const stopResult = await applyStopBehavior(db, id, tenantId, behavior);
   const stopRuntimeMessage = runtimeUncertain
     ? `Run stopped in Agent HQ (authoritative). Underlying runtime abort ${abortResult?.status === 'timed_out' ? 'timed out' : 'failed'} — runtime state is uncertain but Agent HQ has resolved the run.`
     : abortResult?.status === 'already_gone'
@@ -363,13 +386,13 @@ export async function stopInstanceExecution(
   await db.run(`
     UPDATE job_instances
     SET status = 'failed',
-        completed_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'),
-        runtime_ended_at = COALESCE(runtime_ended_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
+        completed_at = COALESCE(completed_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')),
+        runtime_ended_at = CASE WHEN ? THEN COALESCE(runtime_ended_at, to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')) ELSE runtime_ended_at END,
         runtime_end_success = COALESCE(runtime_end_success, 0),
         runtime_end_error = COALESCE(runtime_end_error, ?),
         runtime_end_source = COALESCE(runtime_end_source, 'manual_stop')
     WHERE id = ? AND tenant_id = ?
-  `, stopRuntimeMessage, id, tenantId);
+  `, abortConfirmed, stopRuntimeMessage, id, tenantId);
 
   if (stopResult.taskId) {
     await writeTaskRuntimeEndHistory(db, stopResult.taskId, 'instance_stop', {

@@ -1,142 +1,66 @@
-import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'child_process';
-import { OPENCLAW_BIN, OPENCLAW_PATH } from '../../config';
-import { getGatewayAuthToken } from './gatewayClient';
+import type { RuntimeAbortContext, RuntimeAbortResult } from '../types';
+import { gatewayRpcCall } from './gatewayClient';
 
-export type OpenClawAbortRunner = (
-  command: string,
-  args: readonly string[],
-  options: SpawnSyncOptionsWithStringEncoding,
-) => SpawnSyncReturns<string>;
-
-export type AbortChatRunStatus = 'succeeded' | 'already_gone' | 'timed_out' | 'failed';
-
-export interface AbortChatRunResult {
-  attempted: boolean;
-  ok: boolean;
-  status: AbortChatRunStatus;
-  sessionKey: string;
-  stopReason?: string | null;
-  stdout: string;
-  stderr: string;
-  response: unknown;
-  error?: string;
+export function resolveOpenClawSessionKey(sessionKey: string, agentSessionKey?: string | null): string | null {
+  const key = sessionKey.trim();
+  if (/^agent:[^:]+:.+/.test(key)) return key;
+  // Never fall back to the agent's main session when the instance has no target.
+  const slug = agentSessionKey?.match(/^agent:([^:]+)(?::|$)/)?.[1];
+  return key && slug ? `agent:${slug}:${key}` : null;
 }
 
-function makeAbortSpawnEnv(): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    PATH: OPENCLAW_PATH,
-    OPENCLAW_HIDE_BANNER: '1',
-    OPENCLAW_SUPPRESS_NOTES: '1',
-  };
-}
-
-export function parseAbortJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function collectAbortText(stdout: string, stderr: string, response: unknown, error?: string): string {
-  const responseText =
-    typeof response === 'string'
-      ? response
-      : response && typeof response === 'object'
-        ? JSON.stringify(response)
-        : '';
-  return [stdout, stderr, responseText, error ?? '']
-    .filter(Boolean)
-    .join('\n')
-    .toLowerCase();
-}
-
-export function isMissingAbortTarget(stdout: string, stderr: string, response: unknown, error?: string): boolean {
-  const haystack = collectAbortText(stdout, stderr, response, error);
-  if (!haystack) return false;
-  const missingSignals = [
-    'session not found', 'session missing', 'unknown session', 'no session',
-    'run not found', 'unknown run', 'no active run', 'not running',
-    'no live session', 'abort target', 'not found', 'missing',
-  ];
-  const hasTargetNoun =
-    haystack.includes('session') || haystack.includes('run') || haystack.includes('target');
-  return hasTargetNoun && missingSignals.some(signal => haystack.includes(signal));
-}
-
-/**
- * abortChatRunBySessionKey — low-level OpenClaw gateway abort helper.
- *
- * Status compatibility is intentionally stable for stop/close callers:
- * succeeded, already_gone, timed_out, failed.
- */
-export function abortChatRunBySessionKey(
+/** RPC acceptance is not cancellation: OpenClaw can return ok with aborted=false. */
+export async function abortOpenClawRun(
+  runId: string,
   sessionKey: string,
-  stopReason?: string,
-  runner: OpenClawAbortRunner = spawnSync,
-): AbortChatRunResult {
-  const args = [
-    'gateway', 'call', 'chat.abort',
-    '--json',
-    '--timeout', '10000',
-    '--params', JSON.stringify({ sessionKey }),
-  ];
-
-  const gatewayAuthToken = getGatewayAuthToken();
-  if (gatewayAuthToken) {
-    args.push('--token', gatewayAuthToken);
-  }
-
-  const result = runner(OPENCLAW_BIN, args, {
-    encoding: 'utf-8',
-    timeout: 15000,
-    env: makeAbortSpawnEnv(),
-  });
-
-  const stdout = result.stdout ?? '';
-  const stderr = result.stderr ?? '';
-  const response = parseAbortJson(stdout);
-
-  if (result.error) {
-    const timedOut = result.error.message.includes('ETIMEDOUT');
+  context?: RuntimeAbortContext,
+): Promise<RuntimeAbortResult> {
+  const canonicalKey = resolveOpenClawSessionKey(sessionKey,
+    context?.agentRuntimeSlug ? `agent:${context.agentRuntimeSlug}:main` : context?.agentSessionKey);
+  if (!runId.trim() || !canonicalKey) {
     return {
-      attempted: true,
-      ok: false,
-      status: timedOut ? 'timed_out' : 'failed',
-      sessionKey,
-      stopReason,
-      stdout,
-      stderr,
-      response,
-      error: result.error.message,
+      attempted: false, ok: false, confirmed: false, status: 'not_found',
+      error: 'OpenClaw cancellation requires an exact run ID and agent-scoped session key',
     };
   }
-
-  if (result.status !== 0) {
-    const error = stderr.trim() || `openclaw exited with code ${result.status}`;
-    const missingAbortTarget = isMissingAbortTarget(stdout, stderr, response, error);
+  try {
+    const result = await gatewayRpcCall({
+      method: 'chat.abort',
+      rpcParams: { sessionKey: canonicalKey, runId },
+      timeoutMs: 10_000,
+      displayName: 'Agent HQ Runtime',
+      ...(context?.target?.endpoint ? { gatewayUrl: context.target.endpoint } : {}),
+    });
+    if (!result.ok) throw new Error(result.error ?? 'chat.abort failed');
+    const payload = (result.payload ?? result.result) as Record<string, unknown> | undefined;
+    if (payload?.ok === true && payload.aborted === true
+      && Array.isArray(payload.runIds) && payload.runIds.includes(runId)) {
+      return { attempted: true, ok: true, confirmed: true, status: 'signalled' };
+    }
+    if (payload?.ok === true && payload.aborted === false && Array.isArray(payload.runIds) && payload.runIds.length === 0) {
+      // A no-op abort alone proves nothing. Ask for an exact-run terminal
+      // snapshot; gateway cache misses/timeouts remain explicitly uncertain.
+      const inspection = await gatewayRpcCall({
+        method: 'agent.wait', rpcParams: { runId, timeoutMs: 0 }, timeoutMs: 2_000,
+        ...(context?.target?.endpoint ? { gatewayUrl: context.target.endpoint } : {}),
+      });
+      const terminal = (inspection.payload ?? inspection.result) as Record<string, unknown> | undefined;
+      if (inspection.ok && terminal?.runId === runId
+        && (terminal.status === 'ok' || terminal.status === 'error')
+        && typeof terminal.endedAt === 'number' && Number.isFinite(terminal.endedAt) && terminal.endedAt > 0) {
+        return { attempted: true, ok: true, confirmed: true, status: 'already_gone' };
+      }
+    }
     return {
-      attempted: true,
-      ok: missingAbortTarget,
-      status: missingAbortTarget ? 'already_gone' : 'failed',
-      sessionKey,
-      stopReason,
-      stdout,
-      stderr,
-      response,
+      attempted: true, ok: false, confirmed: false, status: 'not_found',
+      error: 'OpenClaw did not confirm cancellation of the requested run; runtime state is uncertain',
+    };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return {
+      attempted: true, ok: false, confirmed: false,
+      status: /timed?\s*out|timeout|ETIMEDOUT/i.test(error) ? 'timed_out' : 'failed',
       error,
     };
   }
-
-  return {
-    attempted: true,
-    ok: true,
-    status: 'succeeded',
-    sessionKey,
-    stopReason,
-    stdout,
-    stderr,
-    response,
-  };
 }

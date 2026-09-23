@@ -2733,7 +2733,8 @@ export async function dispatchInstance(params: DispatchInstanceParams): Promise<
       SET status = 'running',
           response = ?,
           run_id = COALESCE(?, run_id)
-      WHERE id = ?
+      WHERE id = ? AND stop_requested_at IS NULL
+        AND status IN ('queued', 'dispatched', 'running')
     `, JSON.stringify({ runId }), runId, params.instanceId);
 
     await insertRuntimeLog(db, {

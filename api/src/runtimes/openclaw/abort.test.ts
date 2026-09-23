@@ -1,71 +1,76 @@
-import { jest } from '@jest/globals';
-import {
-  abortChatRunBySessionKey,
-  isMissingAbortTarget,
-  parseAbortJson,
-  type OpenClawAbortRunner,
-} from './abort';
+import { abortOpenClawRun } from './abort';
+import { gatewayRpcCall } from './gatewayClient';
 
-jest.mock('./gatewayClient', () => ({
-  getGatewayAuthToken: jest.fn(() => null),
-}));
+jest.mock('./gatewayClient', () => ({ gatewayRpcCall: jest.fn() }));
+const rpc = jest.mocked(gatewayRpcCall);
 
-function runnerResult(overrides: Partial<ReturnType<OpenClawAbortRunner>>): ReturnType<OpenClawAbortRunner> {
-  return {
-    pid: 123,
-    output: [],
-    stdout: '',
-    stderr: '',
-    status: 0,
-    signal: null,
-    ...overrides,
-  } as ReturnType<OpenClawAbortRunner>;
-}
+beforeEach(() => rpc.mockReset());
 
-describe('openclaw abort helpers', () => {
-  it('parses abort JSON safely', () => {
-    expect(parseAbortJson('{"ok":true}')).toEqual({ ok: true });
-    expect(parseAbortJson('not-json')).toBeNull();
+describe('OpenClaw exact-run cancellation', () => {
+  it('routes the Harlow short key to its agent and supplies the gateway run ID', async () => {
+    rpc.mockResolvedValue({ ok: true, payload: { ok: true, aborted: true, runIds: ['gateway-run'] } });
+    await expect(abortOpenClawRun('gateway-run', 'run:99983474:durable', {
+      agentSessionKey: 'agent:agency-tooling-pm:main',
+    })).resolves.toMatchObject({ ok: true, confirmed: true, status: 'signalled' });
+    expect(rpc).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'chat.abort',
+      rpcParams: { sessionKey: 'agent:agency-tooling-pm:run:99983474:durable', runId: 'gateway-run' },
+    }));
   });
 
-  it('detects missing abort targets from canonical session/run signals', () => {
-    expect(isMissingAbortTarget('', 'session not found', null)).toBe(true);
-    expect(isMissingAbortTarget('', '', { error: 'unknown run' })).toBe(true);
-    expect(isMissingAbortTarget('', 'gateway unavailable', null)).toBe(false);
+  it.each([
+    { ok: true, aborted: false, runIds: [] },
+    { ok: true },
+    { ok: true, aborted: true, runIds: ['newer-run'] },
+    { ok: false, aborted: true, runIds: ['old-run'] },
+    null,
+  ])('does not confuse RPC success with cancellation: %j', async payload => {
+    rpc.mockResolvedValue({ ok: true, payload });
+    await expect(abortOpenClawRun('old-run', 'agent:harlow:run:1')).resolves.toMatchObject({
+      attempted: true, ok: false, confirmed: false,
+    });
+    expect(rpc.mock.calls.filter(([request]) => request.method === 'chat.abort')).toHaveLength(1);
+    expect(rpc.mock.calls[0][0].rpcParams).toEqual({ sessionKey: 'agent:harlow:run:1', runId: 'old-run' });
   });
 
-  it('returns succeeded for a successful gateway abort', () => {
-    const runner = jest.fn<OpenClawAbortRunner>(() => runnerResult({ stdout: '{"ok":true}' }));
-
-    const result = abortChatRunBySessionKey('run:123', 'manual stop', runner);
-
-    expect(result.status).toBe('succeeded');
-    expect(result.ok).toBe(true);
-    expect(result.response).toEqual({ ok: true });
-    expect(runner).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['gateway', 'call', 'chat.abort']), expect.objectContaining({ timeout: 15000 }));
+  it('accepts already gone only with an exact-run terminal snapshot', async () => {
+    rpc.mockResolvedValueOnce({ ok: true, payload: { ok: true, aborted: false, runIds: [] } });
+    rpc.mockResolvedValueOnce({ ok: true, payload: { runId: 'old-run', status: 'error', endedAt: 1234, stopReason: 'rpc' } });
+    await expect(abortOpenClawRun('old-run', 'agent:harlow:run:1')).resolves.toMatchObject({
+      confirmed: true, status: 'already_gone',
+    });
+    expect(rpc.mock.calls[1][0]).toMatchObject({ method: 'agent.wait', rpcParams: { runId: 'old-run', timeoutMs: 0 } });
   });
 
-  it('maps missing abort target exits to already_gone', () => {
-    const runner = jest.fn<OpenClawAbortRunner>(() => runnerResult({ status: 1, stderr: 'session not found' }));
-
-    const result = abortChatRunBySessionKey('run:missing', undefined, runner);
-
-    expect(result.status).toBe('already_gone');
-    expect(result.ok).toBe(true);
-    expect(result.error).toBe('session not found');
+  it.each([
+    { runId: 'new-run', status: 'error', endedAt: 1234 },
+    { runId: 'old-run', status: 'timeout', endedAt: 1234 },
+    { runId: 'old-run', status: 'ok' },
+  ])('rejects inconclusive terminal evidence: %j', async terminal => {
+    rpc.mockResolvedValueOnce({ ok: true, payload: { ok: true, aborted: false, runIds: [] } });
+    rpc.mockResolvedValueOnce({ ok: true, payload: terminal });
+    await expect(abortOpenClawRun('old-run', 'agent:harlow:run:1')).resolves.toMatchObject({ ok: false, confirmed: false });
   });
 
-  it('maps spawn timeout errors to timed_out and other errors to failed', () => {
-    const timedOut = abortChatRunBySessionKey('run:slow', undefined, jest.fn<OpenClawAbortRunner>(() => runnerResult({
-      error: new Error('spawnSync openclaw ETIMEDOUT'),
-    })));
-    const failed = abortChatRunBySessionKey('run:fail', undefined, jest.fn<OpenClawAbortRunner>(() => runnerResult({
-      error: new Error('spawnSync openclaw failed'),
-    })));
+  it.each(['', 'run:1'])('refuses unknown routing without falling back to main: %s', async key => {
+    await expect(abortOpenClawRun('run-id', key)).resolves.toMatchObject({ attempted: false, confirmed: false });
+    expect(rpc).not.toHaveBeenCalled();
+  });
 
-    expect(timedOut.status).toBe('timed_out');
-    expect(timedOut.ok).toBe(false);
-    expect(failed.status).toBe('failed');
-    expect(failed.ok).toBe(false);
+  it('requires an exact run ID even with a canonical session key', async () => {
+    await expect(abortOpenClawRun('', 'agent:harlow:main')).resolves.toMatchObject({ attempted: false, ok: false });
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['request timed out', 'timed_out'],
+    ['ETIMEDOUT', 'timed_out'],
+    ['unauthorized', 'failed'],
+    ['session not found', 'failed'],
+  ])('reports %s without claiming already gone', async (error, status) => {
+    rpc.mockResolvedValue({ ok: false, error });
+    await expect(abortOpenClawRun('run-id', 'agent:harlow:run:1')).resolves.toMatchObject({
+      ok: false, confirmed: false, status,
+    });
   });
 });

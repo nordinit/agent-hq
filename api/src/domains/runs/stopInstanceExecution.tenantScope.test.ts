@@ -12,10 +12,6 @@ jest.mock('../../runtimes/durableLocalProcessControl', () => ({
   stopDurableLocalProcess: jest.fn(),
 }));
 
-jest.mock('../../runtimes/OpenClawRuntime', () => ({
-  abortChatRunBySessionKey: jest.fn(),
-}));
-
 const mockedResolveRuntime = resolveRuntime as jest.MockedFunction<typeof resolveRuntime>;
 const mockedStopDurableLocalProcess = stopDurableLocalProcess as jest.MockedFunction<typeof stopDurableLocalProcess>;
 

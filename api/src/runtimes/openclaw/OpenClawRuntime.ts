@@ -13,17 +13,19 @@ import type {
   PrepareAuthProfilesParams,
   RuntimeAuthProfileSyncResult,
   RuntimeEndEvent,
+  RuntimeAbortContext,
+  RuntimeAbortResult,
 } from '../types';
 import { skippedRuntimeAuthProfileSync } from '../types';
 import { getDb } from '../../db/client';
-import { startTranscriptCapture, stopTranscriptCapture } from '../../lib/gatewayTranscriptCapture';
+import { startTranscriptCapture } from '../../lib/gatewayTranscriptCapture';
 import { tableHasColumn } from '../../lib/durableRunIdentity';
 import { syncOAuthProviderForOpenClawAgent } from '../../lib/openclawOAuthProfiles';
-import { abortChatRunBySessionKey } from './abort';
+import { abortOpenClawRun } from './abort';
+import { sendOpenClawTurn } from './sendTurn';
 import {
   gatewayWsGetEffectiveTools,
   gatewayWsPatchSession,
-  gatewayWsSend,
   reloadOpenClawSecretsRuntimeForAuthSync,
 } from './gatewayClient';
 import { handleOpenClawRuntimeEnd } from './runtimeEnd';
@@ -419,10 +421,15 @@ export class OpenClawRuntime implements AgentRuntime {
     await this.persistUserPrompt(params, dispatchMessage);
     await this.startCapture(params, undefined, routedSessionKey);
 
-    const wsResult = await gatewayWsSend({
+    const dispatchDb = params.instanceId != null ? params.db ?? getDb() : undefined;
+    const wsResult = await sendOpenClawTurn({
       sessionKey: routedSessionKey,
       message: dispatchMessage,
       timeoutMs: (params.timeoutSeconds ?? 900) * 1000,
+      instance: dispatchDb && params.instanceId != null ? {
+        db: dispatchDb, id: params.instanceId,
+        tenantId: await requireRuntimeTenantId(dispatchDb, { instanceId: params.instanceId }),
+      } : undefined,
     });
 
     if (!wsResult.ok) {
@@ -541,25 +548,9 @@ export class OpenClawRuntime implements AgentRuntime {
     }
   }
 
-  /**
-   * abort — cancel a running agent turn via the OpenClaw gateway CLI.
-   *
-   * Mirrors the previous abortChatRunBySessionKey logic in integrations/openclaw.ts.
-   * "Already gone" (session not found) is treated as a success.
-   */
-  async abort(runId: string, sessionKey: string): Promise<void> {
-    // Stop any active background transcript capture for this session. Awaited so the final
-    // transcript flush completes before the run is aborted below — otherwise the abort tears
-    // down the session while the capture is still writing, and the tail of the transcript for
-    // the very run being cancelled is the part most likely to be lost.
-    await stopTranscriptCapture(sessionKey);
-
-    const result = abortChatRunBySessionKey(sessionKey);
-    if (!result.ok) {
-      throw new Error(
-        `OpenClawRuntime.abort failed (${result.status}): ${result.error ?? result.stderr}`,
-      );
-    }
+  /** Cancel the exact gateway turn and keep transcript observation alive. */
+  async abort(runId: string, sessionKey: string, context?: RuntimeAbortContext): Promise<RuntimeAbortResult> {
+    return abortOpenClawRun(runId, sessionKey, context);
   }
 
   private async handleTurnEnd(instanceId: number, event: RuntimeEndEvent, onRuntimeEnd?: DispatchParams['onRuntimeEnd']): Promise<void> {
