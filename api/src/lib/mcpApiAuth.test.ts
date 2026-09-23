@@ -955,6 +955,37 @@ describe('mcpApiAuth scoped Agent HQ permissions', () => {
       }
     });
 
+    it.each([null, 87])('authorizes shared definition children on both route spellings with stored project %s', async projectId => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ, MANAGE]);
+      // The assigned project uses dev through workflows 42 and 45, regardless of its origin.
+      await getDb().run(`UPDATE workflow_types SET project_id = ? WHERE key = 'dev'`, projectId);
+      for (const prefix of SPELLINGS) {
+        for (const sub of [...SUBS, 'field-schemas']) {
+          for (const [method, suffix, expected] of [['GET', '', 200], ['POST', '', 201], ['PUT', '/child-1', 200], ['DELETE', '/child-1', 200]] as const) {
+            const result = await call(method, `${prefix}/types/dev/${sub}${suffix}`);
+            expect({ prefix, sub, method, status: result.status }).toEqual({ prefix, sub, method, status: expected });
+          }
+        }
+        expect((await call('PUT', `${prefix}/types/dev/task-types`)).status).toBe(200);
+        // A mismatched explicit project remains denied even when the definition is shared.
+        expect((await call('PUT', `${prefix}/types/dev?project_id=87`)).status).toBe(403);
+      }
+    });
+
+    it('rejects conflicting project selectors and query-only creation scope', async () => {
+      await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ, MANAGE]);
+      for (const prefix of SPELLINGS) {
+        const conflict = await fetch(`${baseUrl}${prefix}/types/dev?project_id=87`, {
+          method: 'PUT', headers: authHeaders(normalKey), body: JSON.stringify({ project_id: 86, name: 'Conflicting' }),
+        });
+        expect(conflict.status).toBe(403);
+        const queryOnly = await fetch(`${baseUrl}${prefix}/types?project_id=86`, {
+          method: 'POST', headers: authHeaders(normalKey), body: JSON.stringify({ key: 'unscoped', name: 'Unscoped' }),
+        });
+        expect(queryOnly.status).toBe(403);
+      }
+    });
+
     it('refuses a definition outside the assigned project or tenant', async () => {
       await replaceAgentMcpPermissionPolicy(getDb(), 7, [READ, MANAGE]);
 

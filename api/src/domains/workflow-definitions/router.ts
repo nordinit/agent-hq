@@ -13,6 +13,7 @@ import { resolveWorkflowOutcomeVocabulary } from './outcomes';
 import { resolveWorkflowMetadata } from './workflowMetadata';
 import { listRelationshipTypesForWorkflowType } from '../tasks/relationships';
 import { resolveTenantIdFromRequest } from '../../lib/tenantContext';
+import { workflowDefinitionProjectPredicate } from '../../lib/workflowDefinitionScope';
 import { RELATIONSHIP_DIRECTION_SEMANTICS } from '../../lib/workflowVocabulary';
 import { tableExists as sharedTableExists, columnExists as sharedColumnExists, tableColumns as sharedTableColumns, indexExists as sharedIndexExists } from "../../db/introspection";
 
@@ -186,11 +187,11 @@ async function workflowTypeTenantInsertFragment(db: ReturnType<typeof getDb>, te
   return { columns: 'tenant_id, ', placeholders: '?, ', params: [tenantId] };
 }
 
-async function workflowTypeProjectPredicate(db: ReturnType<typeof getDb>, rawProjectId: unknown, alias = 'workflow_types'): Promise<{ sql: string; params: unknown[]; projectId: number | null }> {
-  if (!await tableHasColumn(db, 'workflow_types', 'project_id')) return { sql: '', params: [], projectId: null };
+async function workflowTypeProjectPredicate(db: ReturnType<typeof getDb>, rawProjectId: unknown): Promise<{ sql: string; params: unknown[]; projectId: number | null }> {
   const projectId = Number(rawProjectId);
   if (!Number.isInteger(projectId) || projectId <= 0) return { sql: '', params: [], projectId: null };
-  return { sql: ` AND ${alias}.project_id = ?`, params: [projectId], projectId };
+  const project = await workflowDefinitionProjectPredicate(db, projectId);
+  return { sql: ` AND ${project.sql}`, params: project.params, projectId };
 }
 
 async function workflowTypeProjectInsertFragment(db: ReturnType<typeof getDb>, rawProjectId: unknown): Promise<{ columns: string; placeholders: string; params: unknown[]; projectId: number | null }> {
@@ -448,7 +449,7 @@ async function getOutcomesForWorkflowType(db: ReturnType<typeof getDb>, workflow
 }
 
 async function getResolvedOutcomesForWorkflowType(db: ReturnType<typeof getDb>, workflowTypeKey: string, tenantId?: number | null) {
-  const taskTypes = (await getTaskTypesForWorkflowType(db, workflowTypeKey)).map((row) => row.task_type);
+  const taskTypes = (await getTaskTypesForWorkflowType(db, workflowTypeKey, tenantId)).map((row) => row.task_type);
   const base = (await resolveWorkflowOutcomeVocabulary(db, { workflowType: workflowTypeKey, tenantId })).map((row) => ({
     ...row,
     source: row.id ? 'configured' : 'fallback',
@@ -577,9 +578,9 @@ async function buildWorkflowConfigSnapshot(db: ReturnType<typeof getDb>, tenantI
     workflow_types: await Promise.all(visibleWorkflowTypes.map(async (workflowType) => ({
       ...workflowType,
       deletion: await getWorkflowTypeDeletionSummary(db, workflowType.key, tenantId),
-      task_types: await getTaskTypesForWorkflowType(db, workflowType.key),
+      task_types: await getTaskTypesForWorkflowType(db, workflowType.key, tenantId),
       statuses: await getStatusesForWorkflowType(db, workflowType.key, tenantId),
-      field_schemas: await getFieldSchemasForWorkflowType(db, workflowType.key),
+      field_schemas: await getFieldSchemasForWorkflowType(db, workflowType.key, tenantId),
       outcomes: await getOutcomesForWorkflowType(db, workflowType.key, tenantId),
       resolved_outcomes: await getResolvedOutcomesForWorkflowType(db, workflowType.key, tenantId),
       relationship_types: await listRelationshipTypesForWorkflowType(db, workflowType.key, tenantId),
@@ -825,7 +826,9 @@ router.put('/types/:key', async (req: Request, res: Response) => {
     const name = req.body?.name !== undefined ? normalizeOptionalText(req.body.name) : existing.name;
     if (!name) return res.status(400).json({ error: 'name is required' });
     const description = req.body?.description !== undefined ? normalizeOptionalText(req.body.description) : existing.description;
-    const project = await workflowTypeProjectInsertFragment(db, req.body?.project_id);
+    // Scoped MCP callers pass their project as access context. Editing a shared definition
+    // must not move it from its creating project (or assign a tenant-wide definition to one).
+    const project = await workflowTypeProjectInsertFragment(db, req.mcpIdentity?.keyRole === 'scoped' ? undefined : req.body?.project_id);
 
     const tenant = await workflowTypeTenantPredicate(db, tenantId);
     await db.run(`

@@ -11,6 +11,7 @@ import {
 import { resolveRuntimeAgentSlug } from './sessionKeys';
 import { ensureTenantSchema, resolveTenantIdFromRequest, verifyTenantSchemaForStartup } from './tenantContext';
 import { resolveRuntimeTenantId, tenantInsertColumns } from './runtimeTenantScope';
+import { workflowDefinitionProjectPredicate } from './workflowDefinitionScope';
 import { type Db } from "../db/adapter/types";
 import { columnExists as sharedColumnExists, tableExists as sharedTableExists } from "../db/introspection";
 
@@ -553,7 +554,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'workflow_definitions.read_project_scope',
     group: 'Workflow',
     label: 'Read project workflow definitions',
-    description: 'Allows reading a whole workflow definition — the type, its task types, field schemas, statuses, outcomes, and relationship types — only when scoped to the MCP agent\'s assigned project and tenant. Does not allow tenant-wide, cross-project, cross-tenant, or mutation access.',
+    description: 'Allows reading a whole workflow definition — the type, its task types, field schemas, statuses, outcomes, and relationship types — when it exists in the MCP agent\'s tenant and was created for or is used by a workflow in the assigned project. Shared definitions are accessible to each project using them. Does not allow unused tenant-wide definitions, global definitions, cross-tenant access, or mutations.',
     endpoints: [
       'GET /api/v1/workflows/config',
       'GET /api/v1/workflows/types/list',
@@ -589,7 +590,7 @@ export const AGENT_MCP_CAPABILITY_CATALOG = [
     key: 'workflow_definitions.manage_project_scope',
     group: 'Workflow',
     label: 'Edit project workflow definitions',
-    description: 'Allows creating, updating, and deleting every part of a workflow definition — the type itself, its task types, field schemas, statuses and their metadata, outcomes, and relationship types — only inside the MCP agent\'s assigned project and tenant. Statuses and outcomes shape the transition graph an agent moves tasks through, so this grants real authority over how work flows, not just how it is labelled. Does not allow tenant-wide definitions, global definitions, cross-project edits, cross-tenant edits, or unrelated admin routes.',
+    description: 'Allows creating workflow definitions for the assigned project and updating or deleting every part of a definition in the MCP agent\'s tenant when it was created for or is used by a workflow in that project. Covers task types, field schemas, statuses and their metadata, outcomes, and relationship types. Edits to shared definitions affect every project using them. Statuses and outcomes shape the transition graph, so this grants authority over how work flows. Does not allow unused tenant-wide definitions, global definitions, cross-tenant edits, or unrelated admin routes.',
     endpoints: [
       'POST /api/v1/workflows/types',
       'PUT /api/v1/workflows/types/:key',
@@ -1834,44 +1835,22 @@ function routingTransitionScopeMatchesAssignedProject(scope: RoutingTransitionSc
     && scope.projectId === canonicalAgentProjectId;
 }
 
-type WorkflowDefinitionScopeContext = {
-  projectId: number | null;
-  key: string | null;
-  source: 'request' | 'existing_definition';
-};
-
 async function getWorkflowDefinitionScopeFromKey(
   db: Db,
   workflowDefinitionKey: string,
   tenantId: number,
-): Promise<WorkflowDefinitionScopeContext | null> {
-  if (!await hasTable(db, 'workflow_types')) return null;
+  projectId: number,
+): Promise<{ in_project_scope: number } | undefined> {
+  if (!await hasTable(db, 'workflow_types')) return undefined;
   const hasTenant = await hasColumn(db, 'workflow_types', 'tenant_id');
-  const hasProject = await hasColumn(db, 'workflow_types', 'project_id');
-  const row = await db.get(`
-    SELECT key, ${hasProject ? 'project_id' : 'NULL'} AS project_id
+  const project = await workflowDefinitionProjectPredicate(db, projectId);
+  return await db.get(`
+    SELECT CASE WHEN ${project.sql} THEN 1 ELSE 0 END AS in_project_scope
     FROM workflow_types
     WHERE key = ?
       ${hasTenant ? 'AND tenant_id = ?' : ''}
     LIMIT 1
-  `, workflowDefinitionKey, ...(hasTenant ? [tenantId] : [])) as Record<string, unknown> | undefined;
-  if (!row) return null;
-  return {
-    projectId: parsePositiveInt(row.project_id),
-    key: normalizeScopeString(row.key),
-    source: 'existing_definition',
-  };
-}
-
-function getWorkflowDefinitionScopeFromRequest(input: Record<string, unknown>): WorkflowDefinitionScopeContext | null {
-  const projectId = parsePositiveInt(input.project_id);
-  const key = normalizeScopeString(firstPresent(input.key, input.workflow_type_key, input.workflow_type_key, input.workflow_definition_key));
-  if (projectId == null && key == null) return null;
-  return {
-    projectId,
-    key,
-    source: 'request',
-  };
+  `, ...project.params, workflowDefinitionKey, ...(hasTenant ? [tenantId] : [])) as { in_project_scope: number } | undefined;
 }
 
 /**
@@ -1931,12 +1910,6 @@ async function getRecurringTaskSeriesProjectId(db: Db, seriesId: number): Promis
   } catch {
     return null;
   }
-}
-
-function workflowDefinitionScopeMatchesAssignedProject(scope: WorkflowDefinitionScopeContext | null, canonicalAgentProjectId: number | null): boolean {
-  return canonicalAgentProjectId != null
-    && scope?.projectId != null
-    && scope.projectId === canonicalAgentProjectId;
 }
 
 type TransitionRequirementScopeContext = {
@@ -2923,7 +2896,7 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
   // A workflow definition is the type plus everything hanging off it: its task types, its field
   // schemas, its statuses (and their metadata), the outcomes that drive transitions, and the
   // relationship types its tasks can use. All of it is one editable object on the canvas and all
-  // of it resolves to the project that owns the type, so the whole tree is authorized here.
+  // of it is shared by the projects using the type, so the whole tree is authorized here.
   // task-types is listed separately because it is a collection PUT with no child rows.
   const workflowDefinitionMatch = requestPath.match(/^\/(?:workflows|workflow-definitions)\/(?:config|types(?:\/list)?|types\/([^/]+)(?:\/(?:task-types|(?:field-schemas|statuses|outcomes|relationship-types)(?:\/[^/]+)?))?)$/);
   if (workflowDefinitionMatch && ['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
@@ -2945,19 +2918,14 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
       ? req.body as Record<string, unknown>
       : {};
-    const requestInput = { ...req.query, ...body } as Record<string, unknown>;
     const encodedKey = workflowDefinitionMatch[1];
-    const workflowDefinitionKey = encodedKey ? decodeURIComponent(encodedKey) : null;
-    const existingScope = workflowDefinitionKey ? await getWorkflowDefinitionScopeFromKey(db, workflowDefinitionKey, identity.tenantId) : null;
-    const requestScope = getWorkflowDefinitionScopeFromRequest(requestInput);
-    const scopesToAuthorize = [
-      ...(existingScope ? [existingScope] : []),
-      ...(requestScope ? [requestScope] : []),
-    ].filter((scope) => (
-      scope.projectId != null
-      || scope.source !== 'existing_definition'
-      || requestScope == null
-    ));
+    const workflowDefinitionKey = encodedKey ? decodeURIComponent(encodedKey).trim().toLowerCase() : null;
+    const existingScope = workflowDefinitionKey
+      ? await getWorkflowDefinitionScopeFromKey(db, workflowDefinitionKey, identity.tenantId, canonicalAgentProjectId)
+      : null;
+    // A caller-supplied project is context, never proof that a shared definition is used there.
+    // Check query and body independently so one cannot hide an out-of-scope selector in the other.
+    const requestedProjects = [req.query.project_id, body.project_id].filter((value) => value !== undefined);
 
     // A key in the path must resolve to a definition in this tenant whatever the method. POST is
     // no longer the exception it was when the only keyless create was POST /types: creating a
@@ -2972,23 +2940,24 @@ export async function authorizeMcpApiRequestIfPresent(req: Request, res: Respons
 
     // Only the keyless create — POST /types, which brings a definition into being — has to name
     // its project explicitly. A child row inherits the scope of the type in its path.
-    if (method === 'POST' && workflowDefinitionKey == null && requestScope == null) {
+    if (method === 'POST' && workflowDefinitionKey == null && parsePositiveInt(body.project_id) !== canonicalAgentProjectId) {
       return deny({
         reason: `Workflow definition creation requires project_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }
 
-    if (method === 'GET' && requestPath.match(/^\/(?:workflows|workflow-definitions)\/(?:config|types(?:\/list)?)$/) && requestScope == null) {
+    if (method === 'GET' && workflowDefinitionKey == null && parsePositiveInt(req.query.project_id) !== canonicalAgentProjectId) {
       return deny({
         reason: `Workflow definition readback requires project_id within the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }
 
-    if (scopesToAuthorize.length === 0 || scopesToAuthorize.some((scope) => !workflowDefinitionScopeMatchesAssignedProject(scope, canonicalAgentProjectId))) {
+    if ((workflowDefinitionKey ? existingScope?.in_project_scope !== 1 : requestedProjects.length === 0)
+      || requestedProjects.some((value) => parsePositiveInt(value) !== canonicalAgentProjectId)) {
       return deny({
-        reason: `Normal Agent HQ MCP keys can only access workflow definitions inside the assigned project for ${identity.agentSlug}.`,
+        reason: `Normal Agent HQ MCP keys can only access workflow definitions created for or used by the assigned project for ${identity.agentSlug}.`,
         requiredCapability,
       });
     }

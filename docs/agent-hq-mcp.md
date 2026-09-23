@@ -769,8 +769,8 @@ Available permissions for project operators include:
 | `workflows.pause_active_workflow` | pause, resume, and reopen a workflow in the assigned project |
 | `workflows.complete_active_workflow` | complete or close a workflow in the assigned project |
 | `agents.manage_project_agents` | list/read/create/update/delete agents in the assigned project, including job instructions |
-| `workflow_definitions.read_project_scope` | workflow definition reads — type, task types, field schemas, statuses, outcomes, relationship types |
-| `workflow_definitions.manage_project_scope` | create/update/delete workflow definitions and their task types, field schemas, statuses, outcomes, and relationship types inside the assigned project |
+| `workflow_definitions.read_project_scope` | read definitions created for or used by the assigned project — type, task types, field schemas, statuses, outcomes, relationship types |
+| `workflow_definitions.manage_project_scope` | create definitions for the assigned project; update/delete definitions and their children when created for or used by that project in the same tenant |
 | `tasks.read_project_context` | task detail, notes, history, relationships |
 | `tasks.manage_project_tasks` | create/update/delete tasks and relationships in the assigned project |
 | `tasks.write_project_notes` | notes on any task in the assigned project |
@@ -844,7 +844,9 @@ A workflow definition is the type plus everything hanging off it, and `workflow_
 
 All three path spellings (`/sprints`, `/workflows`, `/workflow-definitions`) resolve identically.
 
-Scope comes from the type named in the path: it must exist in the caller's tenant and belong to the assigned project. A child row inherits that scope, so only the keyless `POST /types` — which brings a definition into being — has to name a `project_id` explicitly. A key that does not resolve is refused as absent whatever the method, including POST, so a request-supplied scope can never stand in for a definition that is not there.
+Scope comes from the type named in the path: it must exist in the caller's tenant and either have the assigned project as its stored `project_id` or be referenced by a workflow in that project and tenant. A shared definition can have no stored project, or a different creating project. Operators from every project using it can read or edit it with the corresponding capability, and edits affect all projects using that definition. Workflow usage counts regardless of workflow status and requires no dispatched task. Removing the last use removes usage-based access; the creating project retains access.
+
+A child row inherits the definition's scope. The keyless `POST /types` must name the assigned `project_id` in its body; list and config reads must name it in the query. Explicit project selectors must match the caller's assigned project. On scoped MCP updates, `project_id` is access context and does not reassign the definition's stored project. Supplying it never grants access to an unused definition, a global definition, or another tenant's definition. A key that does not resolve is refused for every method, including child creation. Existing protection against deleting definitions with open workflows still applies.
 
 `manage_project_scope` is off by default for scoped runtime keys and is not in `SCOPED_MCP_POLICY_MUTABLE_CAPABILITIES`, so an agent cannot grant it to itself. That default is worth keeping deliberately: statuses and outcomes are the transition graph, so this capability decides how work is allowed to flow, not just how it is labelled.
 

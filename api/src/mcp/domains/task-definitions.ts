@@ -18,10 +18,10 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_list_workflow_types'],
-    'List workflow types. Optional tenant_id is super-admin MCP only.',
+    'List workflow types created for or used by the selected project. Non-admin MCP keys must pass their assigned project_id. Optional tenant_id is super-admin MCP only.',
     {
       ...tenantSelectorSchema,
-      project_id: z.number().int().positive().optional().describe('Optional project scope for project-owned workflow definitions'),
+      project_id: z.number().int().positive().optional().describe('Project scope for definitions created for or used by the project'),
     },
     (args) => wrap(() => api.listWorkflowTypes(args))(),
     { domain: 'task_definitions', rest_paths: ['/api/v1/workflows/types/list', '/api/v1/task-definitions/workflow-types'] },
@@ -29,7 +29,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_get_workflow_type'],
-    'Read one project-scoped workflow definition and its configurable metadata. Non-admin MCP keys must pass their assigned project_id.',
+    'Read one workflow definition and its configurable metadata. Non-admin MCP keys must pass their assigned project_id; the definition must be created for or used by that project in the same tenant.',
     {
       key: z.string().min(1).describe('Workflow definition key'),
       project_id: z.number().int().positive().describe('Project scope for least-privilege readback'),
@@ -73,7 +73,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_update_workflow_type'],
-    'Update a workflow type. Non-admin MCP keys require project_id matching the definition and their assigned project.',
+    'Update a workflow type created for or used by the assigned project in the same tenant. Shared edits affect all projects using the definition. Non-admin MCP keys may pass their assigned project_id as access context; this does not reassign the definition.',
     {
       key: z.string().min(1).describe('Workflow type key'),
       project_id: z.number().int().positive().optional().describe('Project scope for least-privilege workflow-definition updates'),
@@ -86,7 +86,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
 
   registerTool(
     ['agent_hq_delete_workflow_type'],
-    'Delete a workflow type. Non-admin MCP keys require project_id matching the definition and their assigned project.',
+    'Delete a workflow type created for or used by the assigned project in the same tenant. Non-admin MCP keys may pass their assigned project_id as access context. Definitions with open workflows remain protected from deletion.',
     {
       key: z.string().min(1).describe('Workflow type key'),
       project_id: z.number().int().positive().optional().describe('Project scope for least-privilege workflow-definition deletion'),
@@ -272,7 +272,7 @@ export function registerTaskDefinitionsTools(ctx: McpDomainContext) {
     ['agent_hq_get_workflow_config'],
     'Read the Workflow Definitions configuration snapshot. Non-admin MCP keys must pass project_id for project-scoped readback.',
     {
-      project_id: z.number().int().positive().optional().describe('Optional project scope for project-owned workflow definitions'),
+      project_id: z.number().int().positive().optional().describe('Project scope for definitions created for or used by the project'),
       ...tenantSelectorSchema,
     },
     (args) => wrap(() => api.getWorkflowConfig(args))(),
